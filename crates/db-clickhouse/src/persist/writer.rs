@@ -83,6 +83,7 @@ struct TableInserts {
     accounts: Option<Insert<AccountRow>>,
     wasm: Option<Insert<WasmInterfaceMetadataRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
+    metadata: Option<Insert<SorobanContractMetadataRow>>,
     transactions: Option<Insert<TransactionRow>>,
     hash_index: Option<Insert<TransactionHashIndexRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
@@ -93,6 +94,7 @@ struct TableInserts {
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
     assets: Option<Insert<AssetRow>>,
+    asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
     nft_ownership: Option<Insert<NftOwnershipRow>>,
     /// Task 0217 / 0220 — quarantine inserts. Lazy-opened only when the
@@ -102,7 +104,9 @@ struct TableInserts {
     /// HTTP request, keeping the part economy unchanged from PR #180.
     nfts_pending: Option<Insert<NftPendingRow>>,
     nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
-    balances: Option<Insert<AccountBalanceRow>>,
+    /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
+    /// legacy `account_balances_current` insert was removed (single-write).
+    unified_balances: Option<Insert<BalanceRow>>,
 }
 
 impl PartitionWriter {
@@ -119,6 +123,13 @@ impl PartitionWriter {
             inserts: TableInserts::default(),
             ledger_rows: Vec::new(),
         }
+    }
+
+    /// The CH client this writer holds. Lets the backfill `Run` path issue
+    /// side queries (e.g. the ADR 0051 `asset_sac` SAC→classic prefetch)
+    /// on the same connection without threading a second handle through.
+    pub fn client(&self) -> &Client {
+        &self.client
     }
 
     /// Stream one ledger's staged rows into the open inserts.
@@ -150,6 +161,13 @@ impl PartitionWriter {
             &mut self.inserts.contracts,
             "soroban_contracts",
             &staged.contract_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.metadata,
+            "soroban_contract_metadata",
+            &staged.metadata_rows,
         )
         .await?;
         write_rows(
@@ -225,6 +243,13 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
+            &mut self.inserts.asset_sac,
+            "asset_sac",
+            &staged.asset_sac_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
             &mut self.inserts.nfts,
             "nfts",
             &staged.nft_rows,
@@ -257,9 +282,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.balances,
-            "account_balances_current",
-            &staged.balance_rows,
+            &mut self.inserts.unified_balances,
+            "balances",
+            &staged.unified_balance_rows,
         )
         .await?;
 
@@ -284,6 +309,7 @@ impl PartitionWriter {
         end(self.inserts.accounts).await?;
         end(self.inserts.wasm).await?;
         end(self.inserts.contracts).await?;
+        end(self.inserts.metadata).await?;
         end(self.inserts.transactions).await?;
         end(self.inserts.hash_index).await?;
         end(self.inserts.participants).await?;
@@ -294,6 +320,7 @@ impl PartitionWriter {
         end(self.inserts.events).await?;
         end(self.inserts.invocations).await?;
         end(self.inserts.assets).await?;
+        end(self.inserts.asset_sac).await?;
         end(self.inserts.nfts).await?;
         end(self.inserts.nft_ownership).await?;
         // Task 0217 / 0220 — drain quarantine inserts in the same
@@ -304,7 +331,7 @@ impl PartitionWriter {
         // dedupes the orphan rows on the next merge.
         end(self.inserts.nfts_pending).await?;
         end(self.inserts.nft_ownership_pending).await?;
-        end(self.inserts.balances).await?;
+        end(self.inserts.unified_balances).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every
         // buffered row, end the request.

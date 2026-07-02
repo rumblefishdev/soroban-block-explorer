@@ -16,7 +16,10 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 moka = { version = "0.12", features = ["sync", "future"] }
-sqlx = { workspace = true }
+# Enrichment writes land in ClickHouse side tables (asset_enrichment /
+# nft_enrichment, ADR 0050) — the indexer-owned tables stay untouched.
+clickhouse = { workspace = true }
+db-clickhouse = { path = "../db-clickhouse" }
 # Soroban RPC token_uri pipeline (task 0195 §2d Phase E): builds the
 # `InvokeContract` envelope, decodes the ScVal result string. Same
 # version as the rest of the workspace.
@@ -27,6 +30,11 @@ stellar-strkey = "0.0.16"
 # Base64 encode/decode for the `transaction` param + `xdr` result of
 # simulateTransaction.
 base64 = { workspace = true }
+# Public Suffix List (embedded) for eTLD+1 comparison in the SEP-1 fetcher's
+# redirect policy (task 0200): follow `circle.com` → `www.circle.com` (same
+# registrable domain) but never `circle.com` → `evil.com`. `domain_str` returns
+# the registrable domain; the list is compiled in, so there is no runtime fetch.
+psl = "2"
 
 [dev-dependencies]
 # Mock Soroban RPC + IPFS gateway for fetcher integration tests

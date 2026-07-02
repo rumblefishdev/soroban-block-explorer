@@ -37,18 +37,21 @@ use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{EventCursor, EventItem};
+use super::dto::{ContractStats, EventCursor, EventItem};
 use super::queries::{
     ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
     ResolvedContractsListParams, STATS_WINDOW,
 };
 
 /// `contract_type` SMALLINT → label, matching the PG `contract_type_name`
-/// function. `None` for an out-of-range code (PG `CASE` returns NULL).
+/// function (migration `20260422000100_contract_type_add_nft_fungible`).
+/// `None` for an out-of-range code (PG `CASE` returns NULL).
 fn contract_type_name(contract_type: i16) -> Option<String> {
     match contract_type {
         0 => Some("token".to_string()),
         1 => Some("other".to_string()),
+        2 => Some("nft".to_string()),
+        3 => Some("fungible".to_string()),
         _ => None,
     }
 }
@@ -63,7 +66,9 @@ struct ContractListChRow {
     contract_id: String,
     contract_type: Option<i16>,
     is_sac: bool,
-    deployer: Option<String>,
+    /// `accounts` surrogate of the deployer (`Nullable(Int64)`); resolved to the
+    /// StrKey in step 2 (task 0319). `NULL` / `0` / no match ⇒ no deployer.
+    deployer_id: Option<i64>,
     deployed_at_ledger: Option<i64>,
 }
 
@@ -71,6 +76,14 @@ struct ContractListChRow {
 struct InvocationCountChRow {
     contract_id: i64,
     recent_invocations: u64,
+}
+
+/// Step-2 resolve row: `accounts.id` (surrogate) → `account_id` StrKey, via the
+/// `idx_acc_id` bloom-pruned key-seek (task 0319).
+#[derive(Debug, Row, Deserialize)]
+struct ContractDeployerRow {
+    id: i64,
+    account_id: String,
 }
 
 /// CH equivalent of the PG `queries::fetch_contract_list` (task 0275). Same
@@ -124,16 +137,18 @@ pub async fn fetch_contract_list(
         ""
     };
 
+    // Deployer is NOT joined here (task 0319): `LEFT JOIN accounts` built the
+    // hash side from the whole `accounts` table (~18M rows on prod) — the
+    // reverse-id lookup is resolved per-page below by a bloom-pruned key-seek.
     let list_sql = format!(
         "SELECT \
             sc.id                           AS id, \
             sc.contract_id                  AS contract_id, \
             sc.contract_type                AS contract_type, \
             sc.is_sac                       AS is_sac, \
-            nullIf(deployer.account_id, '') AS deployer, \
+            sc.deployer_id                  AS deployer_id, \
             sc.deployed_at_ledger           AS deployed_at_ledger \
          FROM soroban_contracts sc FINAL \
-         LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
          WHERE 1{cursor_clause}{type_clause}{q_clause} \
          ORDER BY sc.id {order} \
          LIMIT ?"
@@ -163,12 +178,9 @@ pub async fn fetch_contract_list(
         .map(|r| r.id.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let days: i64 = STATS_WINDOW
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    let ledger_floor = days.saturating_mul(LEDGERS_PER_DAY);
+    // List recent_invocations only; recent_events is detail-only (the list DTO
+    // has no events field), so this path keeps the single windowed count.
+    let (days, ledger_floor) = stats_window_bounds(STATS_WINDOW);
     let count_sql = format!(
         "SELECT \
             sia.contract_id                  AS contract_id, \
@@ -189,16 +201,54 @@ pub async fn fetch_contract_list(
         .map(|r| (r.contract_id, r.recent_invocations as i64))
         .collect();
 
+    // Resolve the page's deployer surrogates → StrKeys by a bloom-pruned
+    // key-seek (`accounts.idx_acc_id`), replacing the full-table `accounts`
+    // join (task 0319). `deployer_id = 0` means no deployer → skip.
+    let deployers: HashMap<i64, String> = {
+        let deployer_ids = list_rows
+            .iter()
+            .filter_map(|r| r.deployer_id)
+            .filter(|&d| d != 0)
+            .collect::<BTreeSet<_>>();
+        if deployer_ids.is_empty() {
+            HashMap::new()
+        } else {
+            let in_list = deployer_ids
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            client
+                .query(&format!(
+                    // `LIMIT 1 BY id`: one row per surrogate (accounts has
+                    // un-merged ReplacingMergeTree versions). `account_id` is
+                    // immutable across versions, so no ordering is needed here
+                    // (review 0319; mirrors the transactions resolve pattern).
+                    "SELECT id AS id, account_id AS account_id \
+                     FROM accounts WHERE id IN ({in_list}) LIMIT 1 BY id"
+                ))
+                .fetch_all::<ContractDeployerRow>()
+                .await?
+                .into_iter()
+                .map(|r| (r.id, r.account_id))
+                .collect()
+        }
+    };
+
     Ok(list_rows
         .into_iter()
         .map(|r| ContractListRow {
             recent_invocations: counts.get(&r.id).copied().unwrap_or(0),
             contract_type_name: r.contract_type.and_then(contract_type_name),
+            deployer: r
+                .deployer_id
+                .and_then(|d| deployers.get(&d))
+                .filter(|s| !s.is_empty())
+                .cloned(),
             id: r.id,
             contract_id: r.contract_id,
             contract_type: r.contract_type,
             is_sac: r.is_sac,
-            deployer: r.deployer,
             deployed_at_ledger: r.deployed_at_ledger,
         })
         .collect())
@@ -218,25 +268,43 @@ struct ContractHeaderChRow {
     deployed_at_ledger: Option<i64>,
     contract_type: Option<i16>,
     is_sac: bool,
+    // Task 0327 — mutability as a tri-state Int8 from the joined WASM metadata:
+    // 1 = self-upgradeable, 0 = frozen, -1 = Unknown (no key / no row). See the
+    // SQL expression in `fetch_contract` and `map_upgradeable`.
+    upgradeable: i8,
 }
 
 pub async fn fetch_contract(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<ContractRow>, clickhouse::error::Error> {
+    // Two FINAL/aliasing pitfalls, both 500'd every contract detail (regression
+    // from task 0327):
+    //   1. `wasm_interface_metadata` is a plain `MergeTree`, so it must NOT carry
+    //      `FINAL` — CH rejects `FINAL` on a non-replacing engine with
+    //      `Code: 181 (ILLEGAL_FINAL)`. Only `soroban_contracts` (Replacing)
+    //      takes `FINAL`. (The events stats query below already joins `wim`
+    //      FINAL-free.)
+    //   2. `sc.id` MUST be aliased `AS id`: `id` is ambiguous across the joined
+    //      tables (`soroban_contracts`, `accounts`), so CH names the result
+    //      column `sc.id`, which the `clickhouse` row deserialiser can't match
+    //      to the `ContractHeaderChRow.id` field → "schema mismatch".
     let row = client
         .query(
             "SELECT \
-                sc.id, \
+                sc.id                                  AS id, \
                 sc.contract_id, \
                 lower(hex(sc.wasm_hash))               AS wasm_hash, \
                 nullIf(sc.wasm_uploaded_at_ledger, 0)  AS wasm_uploaded_at_ledger, \
                 nullIf(deployer.account_id, '')        AS deployer, \
                 sc.deployed_at_ledger                  AS deployed_at_ledger, \
                 sc.contract_type                       AS contract_type, \
-                sc.is_sac                              AS is_sac \
+                sc.is_sac                              AS is_sac, \
+                toInt8(if(JSONHas(wim.metadata, 'upgradeable'), \
+                          JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable \
              FROM soroban_contracts sc FINAL \
              LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
+             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
@@ -245,6 +313,7 @@ pub async fn fetch_contract(
         .await?;
 
     Ok(row.map(|r| ContractRow {
+        upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable),
         id: r.id,
         contract_id: r.contract_id,
         wasm_hash: r.wasm_hash,
@@ -257,6 +326,23 @@ pub async fn fetch_contract(
     }))
 }
 
+/// Task 0327 — map the tri-state Int8 from `fetch_contract` into `upgradeable`:
+/// - no WASM (SAC / `wasm_hash IS NULL`) → `Some(false)` (cannot self-upgrade),
+///   regardless of the join (SAC has no metadata row).
+/// - `1` → `Some(true)` (self-upgradeable), `0` → `Some(false)` (frozen).
+/// - `-1` → `None` (Unknown: no metadata row, or a row predating task 0327 →
+///   the frontend renders no chip).
+fn map_upgradeable(has_wasm: bool, code: i8) -> Option<bool> {
+    if !has_wasm {
+        return Some(false);
+    }
+    match code {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bounded-window stats — canonical 11 Statement B
 // ---------------------------------------------------------------------------
@@ -267,52 +353,169 @@ pub async fn fetch_contract(
 /// history is never scanned for the 7-day stat.
 const LEDGERS_PER_DAY: i64 = 17_280;
 
+/// Parse a stats-window label (e.g. `"7 days"`) into `(days, ledger_floor)`. The
+/// leading integer is the day count (default 7 for a malformed label);
+/// `ledger_floor = days * LEDGERS_PER_DAY` widens the `(contract_id,
+/// ledger_sequence)` seek to ~that many days of ledgers before the exact
+/// `closed_at` predicate refines it. Shared by the list and detail stat paths so
+/// their windows can never drift apart.
+fn stats_window_bounds(window: &str) -> (i64, i64) {
+    let days: i64 = window
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(7);
+    (days, days.saturating_mul(LEDGERS_PER_DAY))
+}
+
 #[derive(Debug, Row, Deserialize)]
 struct StatsChRow {
     recent_invocations: u64,
     recent_unique_callers: u64,
+    recent_events: u64,
 }
 
 /// `window` is the echoed label (e.g. `"7 days"`); its leading integer is the
 /// day count. CH `soroban_invocations_appearances` has no `created_at`, so the
 /// window is applied via a JOIN to `ledgers.closed_at`, bounded first by a
 /// `ledger_sequence` floor so the seek stays on the primary-key prefix.
+///
+/// `recent_events` is computed as a scalar subquery over `soroban_events` in the
+/// SAME window. Parity with PG is by construction, NOT by event-type filtering:
+/// both `soroban_events` (CH) and `soroban_events_appearances` (PG) are written
+/// from the one parser `ExtractedEvent` stream, which drops `diagnostic_events`
+/// at parse time (`xdr-parser::types`; ADR 0033) but keeps System + Contract
+/// events. CH unfolds one row per event (no appearance-fold `amount` on CH), so a
+/// plain `count()` equals PG's `SUM(amount)` over the same population — measured
+/// global mix is ~9.25B Contract (`event_type = 1`) + ~4.7K System (`= 0`), zero
+/// Diagnostic. Do NOT add an `event_type = 1` filter here: PG counts System too,
+/// so filtering would break parity rather than tighten it.
+///
+/// `count()` (not `uniqExact` over the event key) is load-bearing: the hottest
+/// contract has ~76M events in the 7-day window, and `uniqExact` builds a hash
+/// set of every key → blows the `api_reader` per-query cap (Code 241, measured
+/// OOM at 3.73 GiB). `count()` streams: measured on that contract it reads
+/// ~99.5M rows / 1.39 GiB in 0.24 s at 89 MiB peak — far under the `read_only`
+/// 30 s / 4 GB per-query cap, and the 45 s detail-response cache bounds the
+/// `api_throttle` 50 B-rows/h aggregate draw. We also skip `FINAL` — re-ingest
+/// duplicates are absent in practice (`count()` and `count() FINAL` agree, and
+/// `count() == uniqExact` on every sampled contract from 1.2M to 4.8M events)
+/// and `FINAL`-on-`soroban_events` is the documented OOM path ([`fetch_events`]).
+//
+// ponytail: `now64()` window zeros out the whole stats trio when ingest lag
+// exceeds the window (inherited from recent_invocations); a staleness-aware
+// window is a separate concern, not fixed here.
+// ponytail: plain count() can over-count a re-ingested ledger range; swap to a
+// deduped subquery (or FINAL) only if a re-ingest ever skews the 7-day figure.
 pub async fn fetch_contract_stats(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, i64, String), clickhouse::error::Error> {
-    let days: i64 = window
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    let ledger_floor = days.saturating_mul(LEDGERS_PER_DAY);
+) -> Result<ContractStats, clickhouse::error::Error> {
+    let (days, ledger_floor) = stats_window_bounds(window);
+    let sql = contract_stats_sql(days, ledger_floor);
+    let row = client
+        .query(&sql)
+        .bind(contract_surrogate_id)
+        .bind(contract_surrogate_id)
+        .fetch_one::<StatsChRow>()
+        .await?;
 
-    // `days` / `ledger_floor` are derived from the operator-controlled window
-    // label, not user input — safe to interpolate.
-    let sql = format!(
+    Ok(ContractStats {
+        recent_invocations: row.recent_invocations as i64,
+        recent_unique_callers: row.recent_unique_callers as i64,
+        recent_events: row.recent_events as i64,
+        stats_window: window.to_string(),
+    })
+}
+
+/// SQL for [`fetch_contract_stats`]. `days` / `ledger_floor` derive from the
+/// operator-controlled window label (not user input) — safe to interpolate.
+/// Two `?` placeholders bind `contract_surrogate_id` (events subquery, then the
+/// outer invocations seek), in source order.
+///
+/// The `recent_events` scalar subquery is wrapped in `ifNull(…, 0)`:
+/// ClickHouse types a `(SELECT …)` scalar as `Nullable(UInt64)`, which
+/// mismatches the non-nullable `u64` in `StatsChRow` and fails RowBinary decode
+/// → `db_error` 500 on every contract detail. `count()` never actually yields
+/// NULL, so the `0` branch is unreachable; it only fixes the static type.
+fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
+    format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
-            toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers \
+            toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers, \
+            ifNull(( \
+                SELECT toUInt64(count()) \
+                FROM soroban_events se \
+                INNER JOIN ledgers le ON le.sequence = se.ledger_sequence \
+                WHERE se.contract_id = ? \
+                  AND se.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
+                  AND le.closed_at >= now64() - INTERVAL {days} DAY \
+            ), 0)                                   AS recent_events \
          FROM soroban_invocations_appearances sia FINAL \
          INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
          WHERE sia.contract_id = ? \
            AND sia.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
            AND l.closed_at >= now64() - INTERVAL {days} DAY"
-    );
-    let row = client
-        .query(&sql)
-        .bind(contract_surrogate_id)
-        .fetch_one::<StatsChRow>()
-        .await?;
+    )
+}
 
-    Ok((
-        row.recent_invocations as i64,
-        row.recent_unique_callers as i64,
-        0,
-        window.to_string(),
-    ))
+#[cfg(test)]
+mod stats_sql_tests {
+    use super::{LEDGERS_PER_DAY, contract_stats_sql, stats_window_bounds};
+
+    #[test]
+    fn stats_window_bounds_parses_label_and_falls_back() {
+        assert_eq!(stats_window_bounds("7 days"), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_bounds("30 days"), (30, 30 * LEDGERS_PER_DAY));
+        // Malformed / empty label → default 7-day window, never a panic.
+        assert_eq!(stats_window_bounds("garbage"), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_bounds(""), (7, 7 * LEDGERS_PER_DAY));
+    }
+
+    // Regression guard for task 0300: CH `recent_events` was hardcoded `0`.
+    // The stats SQL MUST select a real windowed event count off `soroban_events`
+    // (parity with PG's appearance-fold SUM), not a literal.
+    #[test]
+    fn stats_sql_computes_recent_events_from_events_table() {
+        let sql = contract_stats_sql(7, 7 * 17_280);
+
+        assert!(
+            sql.contains("AS recent_events"),
+            "recent_events column missing: {sql}"
+        );
+        assert!(
+            sql.contains("FROM soroban_events se"),
+            "recent_events must read soroban_events: {sql}"
+        );
+        // The bug shape: a bare literal aliased to recent_events. Collapse
+        // whitespace first so the guard is alignment-independent.
+        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            !normalized.contains("0 AS recent_events"),
+            "recent_events still hardcoded to a literal: {sql}"
+        );
+        // Window parity: both the invocations seek and the events subquery
+        // apply the same ledger floor + INTERVAL N DAY bound.
+        assert_eq!(
+            sql.matches("INTERVAL 7 DAY").count(),
+            2,
+            "events window must mirror the invocations window: {sql}"
+        );
+        // Two binds: events-subquery contract_id, then outer contract_id.
+        assert_eq!(
+            sql.matches("contract_id = ?").count(),
+            2,
+            "expected two `contract_id = ?` binds: {sql}"
+        );
+        // The scalar subquery MUST be `ifNull(…, 0)`-wrapped: CH types a bare
+        // `(SELECT …)` as Nullable(UInt64), which fails the non-nullable `u64`
+        // decode → 500 on every contract detail.
+        assert!(
+            normalized.contains("ifNull(( SELECT toUInt64(count())"),
+            "recent_events subquery must be ifNull-wrapped: {sql}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +639,7 @@ pub async fn fetch_invocation_appearances(
             SELECT ledger_sequence, transaction_id, caller_id, amount \
             FROM soroban_invocations_appearances \
             WHERE contract_id = ? \
+              AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
               AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
             ORDER BY ledger_sequence {order}, transaction_id {order} \
             LIMIT ? \
@@ -531,6 +735,35 @@ struct EventChRow {
     created_at: i64,
 }
 
+/// Step-1 page row: the event payload off `soroban_events` alone (no joins).
+/// `transaction_hash` / `successful` / `created_at` are resolved in step 2 (task
+/// 0317).
+#[derive(Debug, Row, Deserialize)]
+struct EventPageRow {
+    ledger_sequence: i64,
+    transaction_id: i64,
+    event_index: i16,
+    event_type: i16,
+    topics_xdr: String,
+    data_xdr: String,
+}
+
+/// Step-2 resolve row: `transactions.id` → `(hash, successful)`.
+#[derive(Debug, Row, Deserialize)]
+struct EventTxRow {
+    id: i64,
+    /// Already `lower(hex())` in the query.
+    hash: String,
+    successful: bool,
+}
+
+/// Step-2 resolve row: `ledgers.sequence` → `closed_at` (millis).
+#[derive(Debug, Row, Deserialize)]
+struct EventLedgerRow {
+    sequence: i64,
+    closed_at: i64,
+}
+
 /// A decoded event row + its `event_index` (the cursor tie-break, which is not
 /// carried on the `EventItem` wire). The handler finalises the page over these,
 /// builds the `EventCursor::Ch` from the boundary row, then maps to `EventItem`.
@@ -606,35 +839,115 @@ pub async fn fetch_events(
         _ => String::new(),
     };
 
-    let sql = format!(
+    // Step 1: page the events via the `contract_id` PK seek — NO joins (task
+    // 0317). The previous form `JOIN transactions t` / `INNER JOIN ledgers l`
+    // made ClickHouse build the join hash side from the WHOLE `transactions`
+    // table (billions of rows) → `MEMORY_LIMIT_EXCEEDED` (Code 241).
+    //
+    // `FINAL` is also DROPPED here — and that is load-bearing, not cosmetic. On a
+    // hot contract (millions of events across many parts) `FINAL` merges the
+    // whole per-contract range, reading the heavy `topics_xdr`/`data_xdr`
+    // columns, and OOMs (Code 241) under the prod `api_reader` 4 GB cap
+    // (reproduced: FINAL OOMs at 500 MB–2 GB, only barely survives 4 GB). The
+    // full-key `LIMIT 1 BY (ledger_sequence, transaction_id, event_index)`
+    // already collapses re-ingest duplicates, and every projected column is
+    // immutable across ReplacingMergeTree versions, so a non-FINAL read returns
+    // identical rows — the read-in-order page then short-circuits at `LIMIT`
+    // instead of merging the whole contract. Same rationale as transactions
+    // Statement A (task 0290).
+    let page_sql = format!(
         "SELECT \
             se.ledger_sequence              AS ledger_sequence, \
             se.transaction_id               AS transaction_id, \
             se.event_index                  AS event_index, \
             se.event_type                   AS event_type, \
             se.topics_xdr                   AS topics_xdr, \
-            se.data_xdr                     AS data_xdr, \
-            lower(hex(t.hash))              AS transaction_hash, \
-            t.successful                    AS successful, \
-            l.closed_at                     AS created_at \
-         FROM soroban_events se FINAL \
-         JOIN transactions t \
-              ON t.id = se.transaction_id AND t.ledger_sequence = se.ledger_sequence \
-         INNER JOIN ledgers l ON l.sequence = se.ledger_sequence \
-         WHERE se.contract_id = ?{cursor_clause} \
+            se.data_xdr                     AS data_xdr \
+         FROM soroban_events se \
+         WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
          ORDER BY se.ledger_sequence {order}, se.transaction_id {order}, se.event_index {order} \
          LIMIT 1 BY se.ledger_sequence, se.transaction_id, se.event_index \
          LIMIT ?"
     );
 
-    let rows = client
-        .query(&sql)
+    let raw = client
+        .query(&page_sql)
         .bind(contract_surrogate_id)
         .bind(limit)
-        .fetch_all::<EventChRow>()
+        .fetch_all::<EventPageRow>()
         .await?;
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    Ok(rows.into_iter().map(map_event_row).collect())
+    // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
+    // with PK-prefix key-seeks instead of full-table hash joins (mirrors
+    // `transactions::queries_ch::resolve_source_and_closed_at`, task 0290).
+    // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
+    // the handful of ledgers on this page, then filters `id IN (...)`; no
+    // `FINAL` (a transaction is immutable, so a dup version is identical).
+    // `ledgers WHERE sequence IN (...)` is a plain PK seek.
+    let in_list = |vals: &[i64]| {
+        vals.iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let dedup = |f: fn(&EventPageRow) -> i64| -> Vec<i64> {
+        let mut v: Vec<i64> = raw.iter().map(f).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let ledger_seqs = dedup(|r| r.ledger_sequence);
+    let tx_ids = dedup(|r| r.transaction_id);
+
+    let txs: std::collections::HashMap<i64, (String, bool)> = client
+        .query(&format!(
+            "SELECT id AS id, lower(hex(hash)) AS hash, successful AS successful \
+             FROM transactions WHERE ledger_sequence IN ({}) AND id IN ({}) LIMIT 1 BY id",
+            in_list(&ledger_seqs),
+            in_list(&tx_ids),
+        ))
+        .fetch_all::<EventTxRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, (r.hash, r.successful)))
+        .collect();
+
+    let closed_ats: std::collections::HashMap<i64, i64> = client
+        .query(&format!(
+            "SELECT sequence AS sequence, closed_at AS closed_at FROM ledgers WHERE sequence IN ({})",
+            in_list(&ledger_seqs),
+        ))
+        .fetch_all::<EventLedgerRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.sequence, r.closed_at))
+        .collect();
+
+    // Rebuild full event rows in page order, then map. A missing tx/ledger
+    // lookup defaults rather than drops the row, so the page count (and the
+    // peek `+1` next-page detection) is preserved.
+    Ok(raw
+        .into_iter()
+        .map(|r| {
+            let (transaction_hash, successful) =
+                txs.get(&r.transaction_id).cloned().unwrap_or_default();
+            let created_at = closed_ats.get(&r.ledger_sequence).copied().unwrap_or(0);
+            map_event_row(EventChRow {
+                ledger_sequence: r.ledger_sequence,
+                transaction_id: r.transaction_id,
+                event_index: r.event_index,
+                event_type: r.event_type,
+                topics_xdr: r.topics_xdr,
+                data_xdr: r.data_xdr,
+                transaction_hash,
+                successful,
+                created_at,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -645,7 +958,21 @@ mod tests {
     fn contract_type_name_matches_pg_function() {
         assert_eq!(contract_type_name(0).as_deref(), Some("token"));
         assert_eq!(contract_type_name(1).as_deref(), Some("other"));
-        assert_eq!(contract_type_name(2), None);
+        assert_eq!(contract_type_name(2).as_deref(), Some("nft"));
+        assert_eq!(contract_type_name(3).as_deref(), Some("fungible"));
+        assert_eq!(contract_type_name(4), None);
+    }
+
+    #[test]
+    fn map_upgradeable_three_state() {
+        // SAC / no WASM → Immutable regardless of the join code.
+        assert_eq!(map_upgradeable(false, -1), Some(false));
+        assert_eq!(map_upgradeable(false, 1), Some(false));
+        // WASM present: 1 → upgradeable, 0 → frozen.
+        assert_eq!(map_upgradeable(true, 1), Some(true));
+        assert_eq!(map_upgradeable(true, 0), Some(false));
+        // WASM present, -1 (no metadata row / pre-0327 key absent) → Unknown.
+        assert_eq!(map_upgradeable(true, -1), None);
     }
 
     fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {

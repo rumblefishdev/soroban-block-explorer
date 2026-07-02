@@ -289,6 +289,7 @@
           {
             "name": "filter[type]",
             "in": "query",
+            "description": "`native | classic_credit | soroban` (ADR 0051 — `sac` is no longer a\ntype; use `filter[sac]` for the SAC view).",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -298,6 +299,15 @@
             "name": "filter[code]",
             "in": "query",
             "description": "Substring match against `asset_code`; SQL wraps in `%...%`.\nCaller MUST NOT pass `%` / `_` literals.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[sac]",
+            "in": "query",
+            "description": "SAC property filter (ADR 0051): `true` restricts the list to assets whose\nStellar Asset Contract is deployed on-chain (`sac_deployed`) — the old\n`filter[type]=sac` view, now a facet predicate over classic_credit /\nnative rows. Reserved (un-deployed) SAC addresses are excluded. Any other\nvalue is ignored.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -883,6 +893,9 @@
               }
             }
           },
+          "304": {
+            "description": "Not Modified — `If-None-Match` matched the current chain head (live first page only)"
+          },
           "400": {
             "description": "Invalid query parameter",
             "content": {
@@ -1409,7 +1422,7 @@
       "get": {
         "tags": ["network"],
         "summary": "Get top-level chain overview stats.",
-        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`\nestimates for accounts / contracts) and caches the assembled\nresponse for 30s in process memory. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N Postgres round-trips.",
+        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`\nestimates for accounts / contracts) and caches the assembled\nresponse **keyed on the chain head** (`latest_ledger_sequence`) in\nprocess memory — see `network/cache.rs`. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
         "operationId": "get_network_stats",
         "responses": {
           "200": {
@@ -1421,6 +1434,9 @@
                 }
               }
             }
+          },
+          "304": {
+            "description": "Not Modified — `If-None-Match` matched the current chain head"
           },
           "500": {
             "description": "Database error",
@@ -1818,6 +1834,9 @@
               }
             }
           },
+          "304": {
+            "description": "Not Modified — `If-None-Match` matched the current chain head (live first page only)"
+          },
           "400": {
             "description": "Invalid query parameter",
             "content": {
@@ -1907,8 +1926,8 @@
     "schemas": {
       "AccountBalance": {
         "type": "object",
-        "description": "Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.",
-        "required": ["type", "balance", "last_updated_ledger"],
+        "description": "Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have\nboth; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`\ninstead (the account portfolio includes Soroban balances, task 0331 Option C).",
+        "required": ["type", "balance", "decimals", "last_updated_ledger"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -1918,15 +1937,33 @@
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "`native` | `credit_alphanum4` | `credit_alphanum12`."
+            "description": "Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`\n| `credit_alphanum12` for classic. Soroban (type-3) rows are also returned\n— identify them via `contract_id`, not this label."
           },
           "balance": {
             "type": "string",
-            "description": "`NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros)."
+            "description": "RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331\nOption C: one convention for all asset types; classic `decimals` = 7). The\naccount portfolio now includes Soroban (type-3) token balances too."
+          },
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "C-strkey of the Soroban token's contract (type-3 only) — the identity +\nlink target (`/assets/${contract_id}`). `null` for native / classic."
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.",
+            "minimum": 0
           },
           "last_updated_ledger": {
             "type": "integer",
             "format": "int64"
+          },
+          "name": {
+            "type": ["string", "null"],
+            "description": "Asset display `name`, from two disjoint sources by asset type: classic /\nnative → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic\nassets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. \"USDC-EURC\nSoroswap LP Token\", 100% coverage). Distinct from the `symbol` ticker.\n`null` when neither source has a name."
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "On-chain token `symbol` (type-3, from `METADATA`, e.g. \"SMOL\") — the short\nticker. `null` for native / classic (they carry `asset_code`)."
           },
           "type": {
             "type": "integer",
@@ -1942,7 +1979,8 @@
           "sequence_number",
           "balances",
           "first_seen_ledger",
-          "last_seen_ledger"
+          "last_seen_ledger",
+          "deleted"
         ],
         "properties": {
           "account_id": {
@@ -1953,6 +1991,10 @@
             "items": {
               "$ref": "#/components/schemas/AccountBalance"
             }
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "`true` when the account was removed from the ledger via `account_merge`\nand never re-funded (its last lifecycle event is the merge). Derived,\nnot stored. CH-only — the PG fallback always reports `false`."
           },
           "first_seen_ledger": {
             "type": "integer",
@@ -1973,7 +2015,7 @@
       },
       "AccountListItem": {
         "type": "object",
-        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from the unified `balances` table; `null` if no native row exists.",
         "required": ["account_id", "last_seen_ledger", "first_seen_ledger"],
         "properties": {
           "account_id": {
@@ -1992,7 +2034,7 @@
           },
           "xlm_balance": {
             "type": ["string", "null"],
-            "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+            "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
           }
         }
       },
@@ -2060,7 +2102,7 @@
           {
             "type": "object",
             "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
-            "required": ["id", "asset_type"],
+            "required": ["id", "asset_type", "decimals"],
             "properties": {
               "asset_code": {
                 "type": ["string", "null"]
@@ -2068,26 +2110,33 @@
               "asset_type": {
                 "type": "integer",
                 "format": "int32",
-                "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+                "description": "Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired."
               },
               "asset_type_name": {
                 "type": ["string", "null"],
-                "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+                "description": "`native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`\nonly on schema drift."
               },
               "contract_id": {
-                "type": ["string", "null"]
+                "type": ["string", "null"],
+                "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
+              },
+              "decimals": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                "minimum": 0
               },
               "holder_count": {
                 "type": ["integer", "null"],
                 "format": "int32",
-                "description": "May be `null` / stale until task 0135 ships."
+                "description": "Active-holder count (`amount > 0`) from the unified `balances` aggregate\n(all asset types — trustline holders + contract holders). `null` = no data."
               },
               "icon_url": {
                 "type": ["string", "null"]
               },
               "id": {
                 "type": "string",
-                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
+                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
               },
               "issuer": {
                 "type": ["string", "null"]
@@ -2095,8 +2144,21 @@
               "name": {
                 "type": ["string", "null"]
               },
+              "sac_contract_id": {
+                "type": ["string", "null"],
+                "description": "SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey\nfor a native / classic_credit asset that has one, re-derived on read from\n`code:issuer` (never stored). `null` when the asset has no observed SAC."
+              },
+              "sac_deployed": {
+                "type": ["boolean", "null"],
+                "description": "Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`\nwhen the asset has no SAC; `false` = reserved-but-un-deployed address\n(render the contract link non-clickable)."
+              },
+              "symbol": {
+                "type": ["string", "null"],
+                "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
+              },
               "total_supply": {
-                "type": ["string", "null"]
+                "type": ["string", "null"],
+                "description": "Total supply as a RAW integer string (`Int128`) — scale by `decimals` for\ndisplay (task 0331 Option C: one convention for ALL asset types; classic\n`decimals` is 7). E.g. `\"63836094715548\"`. `null` = no balance data\n(a token/asset with no holders). Sourced from `balance_aggregates` over the\nunified `balances` table."
               }
             }
           },
@@ -2122,7 +2184,7 @@
       "AssetItem": {
         "type": "object",
         "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
-        "required": ["id", "asset_type"],
+        "required": ["id", "asset_type", "decimals"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2130,26 +2192,33 @@
           "asset_type": {
             "type": "integer",
             "format": "int32",
-            "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+            "description": "Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired."
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+            "description": "`native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`\nonly on schema drift."
           },
           "contract_id": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+            "minimum": 0
           },
           "holder_count": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "May be `null` / stale until task 0135 ships."
+            "description": "Active-holder count (`amount > 0`) from the unified `balances` aggregate\n(all asset types — trustline holders + contract holders). `null` = no data."
           },
           "icon_url": {
             "type": ["string", "null"]
           },
           "id": {
             "type": "string",
-            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
+            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
           },
           "issuer": {
             "type": ["string", "null"]
@@ -2157,8 +2226,21 @@
           "name": {
             "type": ["string", "null"]
           },
+          "sac_contract_id": {
+            "type": ["string", "null"],
+            "description": "SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey\nfor a native / classic_credit asset that has one, re-derived on read from\n`code:issuer` (never stored). `null` when the asset has no observed SAC."
+          },
+          "sac_deployed": {
+            "type": ["boolean", "null"],
+            "description": "Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`\nwhen the asset has no SAC; `false` = reserved-but-un-deployed address\n(render the contract link non-clickable)."
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
+          },
           "total_supply": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Total supply as a RAW integer string (`Int128`) — scale by `decimals` for\ndisplay (task 0331 Option C: one convention for ALL asset types; classic\n`decimals` is 7). E.g. `\"63836094715548\"`. `null` = no balance data\n(a token/asset with no holders). Sourced from `balance_aggregates` over the\nunified `balances` table."
           }
         }
       },
@@ -2293,6 +2375,10 @@
           "stats": {
             "$ref": "#/components/schemas/ContractStats"
           },
+          "upgradeable": {
+            "type": ["boolean", "null"],
+            "description": "Task 0327: contract mutability, 3-state.\n- `Some(true)` → **Upgradeable**: the current WASM imports\n  `update_current_contract_wasm` (a self-upgrade path).\n- `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC\n  has no WASM and is always `Some(false)`).\n- `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /\n  pre-0327 row) — the frontend renders no chip.\n\nDerived from the WASM at parse time\n(`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag\n(none exists). ClickHouse-sourced; always `None` on the retired PG path."
+          },
           "wasm_hash": {
             "type": ["string", "null"]
           },
@@ -2409,7 +2495,7 @@
           "recent_events": {
             "type": "integer",
             "format": "int64",
-            "description": "Sum of `soroban_events_appearances.amount` over the same window\nas `recent_invocations`. One appearance row can represent multiple\nactual events (`amount > 1`) so we sum rather than COUNT(*) — the\nfigure matches what `GET /v1/contracts/:id/events` would return\nover the window."
+            "description": "Event count in the same window as `recent_invocations` (NOT the full\n`/events` history — that endpoint pages all events with no time bound).\nPG sums `soroban_events_appearances.amount` (one appearance row folds\nmultiple events, `amount > 1`); CH has no appearance-fold table, so it\n`count()`s the unfolded `soroban_events` (one row per event). Both tables\nare written from the same parser event stream (diagnostics dropped at\nparse, System + Contract kept), so the two figures match by construction."
           },
           "recent_invocations": {
             "type": "integer",
@@ -2924,8 +3010,8 @@
         "allOf": [
           {
             "type": "object",
-            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
-            "required": ["id", "contract_id", "token_id"],
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+            "required": ["contract_id", "token_id"],
             "properties": {
               "collection_name": {
                 "type": ["string", "null"]
@@ -2933,10 +3019,6 @@
               "contract_id": {
                 "type": "string",
                 "description": "Contract C-StrKey resolved via `soroban_contracts` join."
-              },
-              "id": {
-                "type": "integer",
-                "format": "int32"
               },
               "last_seen_ledger": {
                 "type": ["integer", "null"],
@@ -2977,8 +3059,8 @@
       },
       "NftItem": {
         "type": "object",
-        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
-        "required": ["id", "contract_id", "token_id"],
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+        "required": ["contract_id", "token_id"],
         "properties": {
           "collection_name": {
             "type": ["string", "null"]
@@ -2986,10 +3068,6 @@
           "contract_id": {
             "type": "string",
             "description": "Contract C-StrKey resolved via `soroban_contracts` join."
-          },
-          "id": {
-            "type": "integer",
-            "format": "int32"
           },
           "last_seen_ledger": {
             "type": ["integer", "null"],
@@ -3187,7 +3265,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from the unified `balances` table; `null` if no native row exists.",
               "required": [
                 "account_id",
                 "last_seen_ledger",
@@ -3210,7 +3288,7 @@
                 },
                 "xlm_balance": {
                   "type": ["string", "null"],
-                  "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+                  "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
                 }
               }
             }
@@ -3302,7 +3380,7 @@
             "items": {
               "type": "object",
               "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
-              "required": ["id", "asset_type"],
+              "required": ["id", "asset_type", "decimals"],
               "properties": {
                 "asset_code": {
                   "type": ["string", "null"]
@@ -3310,26 +3388,33 @@
                 "asset_type": {
                   "type": "integer",
                   "format": "int32",
-                  "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+                  "description": "Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired."
                 },
                 "asset_type_name": {
                   "type": ["string", "null"],
-                  "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+                  "description": "`native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`\nonly on schema drift."
                 },
                 "contract_id": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
+                },
+                "decimals": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                  "minimum": 0
                 },
                 "holder_count": {
                   "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "May be `null` / stale until task 0135 ships."
+                  "description": "Active-holder count (`amount > 0`) from the unified `balances` aggregate\n(all asset types — trustline holders + contract holders). `null` = no data."
                 },
                 "icon_url": {
                   "type": ["string", "null"]
                 },
                 "id": {
                   "type": "string",
-                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
+                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
                 },
                 "issuer": {
                   "type": ["string", "null"]
@@ -3337,8 +3422,21 @@
                 "name": {
                   "type": ["string", "null"]
                 },
+                "sac_contract_id": {
+                  "type": ["string", "null"],
+                  "description": "SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey\nfor a native / classic_credit asset that has one, re-derived on read from\n`code:issuer` (never stored). `null` when the asset has no observed SAC."
+                },
+                "sac_deployed": {
+                  "type": ["boolean", "null"],
+                  "description": "Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`\nwhen the asset has no SAC; `false` = reserved-but-un-deployed address\n(render the contract link non-clickable)."
+                },
+                "symbol": {
+                  "type": ["string", "null"],
+                  "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
+                },
                 "total_supply": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Total supply as a RAW integer string (`Int128`) — scale by `decimals` for\ndisplay (task 0331 Option C: one convention for ALL asset types; classic\n`decimals` is 7). E.g. `\"63836094715548\"`. `null` = no balance data\n(a token/asset with no holders). Sourced from `balance_aggregates` over the\nunified `balances` table."
                 }
               }
             }
@@ -3630,8 +3728,8 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
-              "required": ["id", "contract_id", "token_id"],
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+              "required": ["contract_id", "token_id"],
               "properties": {
                 "collection_name": {
                   "type": ["string", "null"]
@@ -3639,10 +3737,6 @@
                 "contract_id": {
                   "type": "string",
                   "description": "Contract C-StrKey resolved via `soroban_contracts` join."
-                },
-                "id": {
-                  "type": "integer",
-                  "format": "int32"
                 },
                 "last_seen_ledger": {
                   "type": ["integer", "null"],
@@ -4047,7 +4141,7 @@
       },
       "PoolAssetLeg": {
         "type": "object",
-        "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.\n\nLinkable identifiers (task 0263 / F-K-9). All link targets are the\n**asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic\nand accepts both C-strkey (SAC) and `code-issuer` composite, so all\nnon-native legs resolve to the same asset row.\n\n  * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain\n    address in classic Stellar protocol; SAC mirror is network-dependent).\n  * `contract_id` — C-strkey of the SAC mirror for a classic credit\n    leg (populated when an `assets` row with `asset_type = 2`\n    exists for `(asset_code, issuer)` and carries a\n    `soroban_contracts.contract_id`). `None` for legs without an\n    SAC mirror. Pool legs only carry XDR `AssetType` (native /\n    credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,\n    so SAC / Soroban legs are not directly representable here;\n    `contract_id` surfaces the SAC mirror look-up so the FE can\n    route to the asset detail page via `/assets/${contract_id}`.\n  * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE\n    routes to `/assets/${asset_code}-${issuer}` (composite form\n    accepted by `parse_asset_id`).",
+        "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.\n\nLinkable identifiers (task 0263 / F-K-9). All link targets are the\n**asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic\nand accepts both C-strkey (SAC) and `code-issuer` composite, so all\nnon-native legs resolve to the same asset row.\n\n  * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain\n    address in classic Stellar protocol; SAC mirror is network-dependent).\n  * `contract_id` — C-strkey of the SAC mirror for a classic credit\n    leg (populated when the leg's `(asset_code, issuer)` classic_credit /\n    native `assets` row carries a deployed SAC facet — `sac_contract_id`\n    resolving a `soroban_contracts.contract_id`, ADR 0051). `None` for legs\n    without a deployed SAC mirror. Pool legs only carry XDR `AssetType` (native /\n    credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,\n    so SAC / Soroban legs are not directly representable here;\n    `contract_id` surfaces the SAC mirror look-up so the FE can\n    route to the asset detail page via `/assets/${contract_id}`.\n  * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE\n    routes to `/assets/${asset_code}-${issuer}` (composite form\n    accepted by `parse_asset_id`).",
         "required": ["asset_type"],
         "properties": {
           "asset_code": {
@@ -4056,15 +4150,15 @@
           "asset_type": {
             "type": "integer",
             "format": "int32",
-            "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+            "description": "Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired."
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+            "description": "`native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`\nonly on schema drift."
           },
           "contract_id": {
             "type": ["string", "null"],
-            "description": "C-strkey of the SAC mirror, when a matching `assets` row\n(`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for\nnative legs and for classic credit legs without an SAC mirror."
+            "description": "C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`\nclassic_credit / native asset (ADR 0051 — resolved via the row's\n`sac_contract_id` facet). `None` for native legs and for classic credit\nlegs without a deployed SAC."
           },
           "icon_url": {
             "type": ["string", "null"],

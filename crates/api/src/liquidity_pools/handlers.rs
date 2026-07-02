@@ -69,7 +69,7 @@ pub async fn list_participants(
         DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
-        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+        DataSource::Ch => queries_ch::pool_exists(&state.ch(), &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
     };
@@ -98,7 +98,7 @@ pub async fn list_participants(
         .await
         .map_err(|e| e.to_string()),
         DataSource::Ch => queries_ch::fetch_participants(
-            state.ch(),
+            &state.ch(),
             &pool_id_hex,
             pagination.cursor.as_ref(),
             fetch_limit,
@@ -335,7 +335,7 @@ pub async fn list_pools(
         DataSource::Pg => fetch_pool_list(&state.db, &resolved, direction)
             .await
             .map_err(|e| e.to_string()),
-        DataSource::Ch => queries_ch::fetch_pool_list(state.ch(), &resolved, direction)
+        DataSource::Ch => queries_ch::fetch_pool_list(&state.ch(), &resolved, direction)
             .await
             .map_err(|e| e.to_string()),
     };
@@ -397,7 +397,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         DataSource::Pg => fetch_pool_by_id(&state.db, &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
-        DataSource::Ch => queries_ch::fetch_pool_by_id(state.ch(), &pool_id_hex)
+        DataSource::Ch => queries_ch::fetch_pool_by_id(&state.ch(), &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
     };
@@ -488,7 +488,7 @@ pub async fn list_pool_transactions(
         DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
-        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+        DataSource::Ch => queries_ch::pool_exists(&state.ch(), &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
     };
@@ -512,7 +512,7 @@ pub async fn list_pool_transactions(
         .await
         .map_err(|e| e.to_string()),
         DataSource::Ch => queries_ch::fetch_pool_transactions(
-            state.ch(),
+            &state.ch(),
             &pool_id_hex,
             pagination.fetch_limit(),
             pagination.cursor.as_ref(),
@@ -693,7 +693,7 @@ pub async fn get_pool_chart(
         DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
-        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+        DataSource::Ch => queries_ch::pool_exists(&state.ch(), &pool_id_hex)
             .await
             .map_err(|e| e.to_string()),
     };
@@ -711,7 +711,7 @@ pub async fn get_pool_chart(
             .await
             .map_err(|e| e.to_string()),
         DataSource::Ch => {
-            queries_ch::fetch_pool_chart(state.ch(), &pool_id_hex, &interval, from, to)
+            queries_ch::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
                 .await
                 .map_err(|e| e.to_string())
         }

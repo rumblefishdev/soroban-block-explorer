@@ -17,7 +17,7 @@ import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta } from './assets/assetType.js';
+import { assetTypeMeta, SAC_TAG } from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -43,8 +43,10 @@ export default function AssetDetailPage() {
   }
 
   const data = asset.data;
-  const code = data?.asset_code ?? 'Asset';
-  const meta = data ? assetTypeMeta(data.asset_type_name) : null;
+  // Soroban-native tokens have no classic asset_code; fall back to the on-chain
+  // SEP-41 symbol for the title + breadcrumb before the generic label (0304).
+  const code = data?.asset_code ?? data?.symbol ?? 'Asset';
+  const typeMeta = data ? assetTypeMeta(data.asset_type_name) : null;
 
   let summary: ReactNode = null;
   let metadata: ReactNode = null;
@@ -82,7 +84,12 @@ export default function AssetDetailPage() {
               <Typography variant="heading5SemiBold" component="h1">
                 {code}
               </Typography>
-              {meta && <Chip size="sm" color={meta.color} label={meta.label} />}
+              {typeMeta && (
+                <Chip size="sm" color={typeMeta.color} label={typeMeta.label} />
+              )}
+              {data?.sac_deployed && (
+                <Chip size="sm" color={SAC_TAG.color} label={SAC_TAG.label} />
+              )}
             </Stack>
             {data?.name && (
               <Typography

@@ -16,8 +16,11 @@ indexer = { path = "../indexer", features = ["pg-persist"] }
 xdr-parser = { path = "../xdr-parser" }
 db = { path = "../db" }
 # ClickHouse pilot sink (task 0205, ADR 0044). Persist path currently
-# stubbed; flag-gated via `--target clickhouse`.
-db-clickhouse = { path = "../db-clickhouse" }
+# stubbed; flag-gated via `--target clickhouse`. `aws-mtls` exposes the
+# reusable `client_with_mtls` builder for the mTLS sink path (task 0307,
+# `--ch-cert`/`--ch-key`/`--ch-ca`); the Lambda-only extension fetch in that
+# feature compiles unused here (harmless — pub fns).
+db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
 clickhouse = { workspace = true }
 # `LedgerCloseMeta` is the input type to the sink's `persist_ledger`
 # (task 0205). Already in the workspace via `indexer` and `xdr-parser`.
@@ -57,8 +60,18 @@ stellar-strkey = "0.0.16"
 # can be unit-tested with a mock without spinning an `aws s3 ls`
 # subprocess. Single use site in sync.rs.
 async-trait = "0.1"
+# `pool-ids-backfill` (task 0266): pool-id hex encode/decode for the
+# gross_volume_a aggregation keyed by raw 32-byte pool id.
+hex = { workspace = true }
+# Task 0296: `ContractEventType::Contract` to build `ExtractedEvent`s for the
+# CH-direct NFT re-parse (`nft_reparse`). Runtime dep of the main bin, not just
+# tests — the dev-dependency below is for pool-ids-backfill tests only.
+domain = { path = "../domain" }
 
 [dev-dependencies]
 # Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture
 # directories without polluting the developer's filesystem.
 tempfile = "3"
+# `pool-ids-backfill` tests construct `ExtractedOperation` whose `op_type`
+# field is a `domain::OperationType`.
+domain = { path = "../domain" }

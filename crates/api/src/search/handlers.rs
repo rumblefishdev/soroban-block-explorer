@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use crate::common::cache_control;
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
@@ -15,6 +16,7 @@ use crate::state::AppState;
 use super::classifier;
 use super::dto::{EntityType, SearchGroups, SearchHit, SearchResults};
 use super::queries::{self, IncludeFlags};
+use super::queries_ch;
 
 /// Default per-group cap when caller omits `?limit=` (matches
 /// `22_get_search.sql` recommendation).
@@ -129,15 +131,26 @@ pub async fn get_search(
     //    feed the WHERE-gated CTE branches inside `fetch_search`.
     let classified = classifier::classify(q_raw);
 
-    // 5. Broad search — single SQL path covering all six entity types.
-    let rows =
-        match queries::fetch_search(&state.db, q_raw, &classified, &include, limit as i32).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::error!("DB error in get_search broad: {e}");
-                return errors::internal_error(errors::DB_ERROR, "Unable to perform search.");
-            }
-        };
+    // 5. Broad search — dispatched per the `search` datasource flag (task
+    //    0318). PG is the legacy path (local-dev only — disabled in prod, ADR
+    //    0047); CH is the production read path. Both return the same
+    //    `Vec<(String, SearchHit)>`, so grouping below is backend-agnostic.
+    let fetched = match DataSource::for_module(Module::Search) {
+        DataSource::Pg => {
+            queries::fetch_search(&state.db, q_raw, &classified, &include, limit as i32)
+                .await
+                .map_err(|e| tracing::error!("PG error in get_search broad: {e}"))
+        }
+        DataSource::Ch => {
+            queries_ch::fetch_search(&state.ch(), q_raw, &classified, &include, limit as i32)
+                .await
+                .map_err(|e| tracing::error!("CH error in get_search broad: {e}"))
+        }
+    };
+    let rows = match fetched {
+        Ok(rows) => rows,
+        Err(()) => return errors::internal_error(errors::DB_ERROR, "Unable to perform search."),
+    };
 
     // 6. Group rows into per-entity buckets. FE inspects the result
     //    and routes directly when the total row count is exactly 1

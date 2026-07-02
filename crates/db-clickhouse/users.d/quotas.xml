@@ -29,18 +29,67 @@
              100GiB caps tripped under normal filter use (CH Code: 201). The
              partition prune bounds any single query to ~one partition, so this
              higher cap still backstops an unpruned-scan regression. Lower back
-             toward ~1-2B once the skip-index makes filters seek. -->
+             toward ~1-2B once the skip-index makes filters seek.
+
+             read_rows 10B→50B: normal traffic hit exactly 10.02B/10B in a
+             single hour window (api_reader, 2026-06-15) and 201-ed every CH
+             endpoint. read_bytes is the real IO ceiling (~105 GB observed at
+             10B rows → ~525 GB at 50B, still under the 1 TiB cap), so 50B gives
+             ~5x headroom on the row proxy without loosening the byte guard.
+
+             errors 1000→0 (unlimited): a QUOTA_EXCEEDED rejection counts as an
+             error, so once read_rows tripped, the errors counter (1051/1000)
+             also blew and self-reinforced the lockout for the rest of the
+             window. An error cap on a single trusted read-only service is a
+             footgun, not a throttle — read_rows/read_bytes are the real
+             resource guards. -->
         <api_throttle>
             <interval>
                 <duration>3600</duration>
                 <queries>10000</queries>
-                <errors>1000</errors>
+                <errors>0</errors>
                 <result_rows>10000000000</result_rows>
-                <read_rows>10000000000</read_rows>
+                <read_rows>50000000000</read_rows>
                 <read_bytes>1099511627776</read_bytes>
                 <execution_time>1000</execution_time>
             </interval>
         </api_throttle>
+
+        <!-- Human ad-hoc read access (`dev_read` user). Kept
+             SEPARATE from `api_throttle` on purpose so a teammate's ad-hoc
+             query can never exhaust the production API's budget (the 0290
+             failure mode) — quotas are per-user, so a generous dev_read cap
+             cannot touch the API. The `read_only` profile already caps any
+             single query (30s exec / 4 GB mem); this quota is the hourly
+             aggregate backstop.
+
+             read_rows 2B→50B, read_bytes 100GiB→1TiB (2026-06-16): the
+             original 2B was below even ONE full scan — `SELECT count() FROM
+             transactions` (~3.6B rows) alone tripped it (QUOTA_EXCEEDED) for a
+             dev. 50B gives ~14 full transactions-scans/hour of headroom; the
+             30s/4GB per-query cap remains the real per-query guard. Still
+             isolated from the API. queries/errors/execution_time left at 0
+             (unbounded): never throttle a human on query count, and `errors`
+             as a throttle is a footgun (see api_throttle).
+
+             read_rows 50B→100B, read_bytes 1TiB→2TiB (2026-06-23, task 0314):
+             doubled on dev request — devs hit the 50B aggregate on heavier
+             multi-scan sessions. Both fields raised together so read_bytes
+             (the real IO ceiling) does not become the binding cap and negate
+             the row bump. Still per-user and fully isolated from api_throttle
+             (the 0290 failure mode cannot be reintroduced by a dev_read bump);
+             the read_only 30s/4GB per-query cap remains the real guard. -->
+        <dev_read>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>100000000000</read_rows>
+                <read_bytes>2199023255552</read_bytes>
+                <execution_time>0</execution_time>
+            </interval>
+        </dev_read>
 
         <!-- write-side quotas: queries / read intentionally
              unbounded (ingestion does both heavily); written_bytes
@@ -57,6 +106,34 @@
                 <written_bytes>1125899906842624</written_bytes>
             </interval>
         </high_write>
+
+        <!-- prices tenant (prices-api task 0063, BE task 0314). Caps copied
+             verbatim from high_write / api_throttle; dedicated names so prices
+             traffic can never draw down a BE service's per-user budget — same
+             isolation reasoning behind the dev_read vs api_throttle split. -->
+        <prices_write>   <!-- mirrors high_write -->
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+                <written_bytes>1125899906842624</written_bytes>
+            </interval>
+        </prices_write>
+
+        <prices_read>    <!-- mirrors api_throttle -->
+            <interval>
+                <duration>3600</duration>
+                <queries>10000</queries>
+                <errors>0</errors>
+                <result_rows>10000000000</result_rows>
+                <read_rows>50000000000</read_rows>
+                <read_bytes>1099511627776</read_bytes>
+                <execution_time>1000</execution_time>
+            </interval>
+        </prices_read>
 
         <!-- low_volume quota removed in task 0241 — its only consumers
              (migration_admin + partition_admin) were removed with the

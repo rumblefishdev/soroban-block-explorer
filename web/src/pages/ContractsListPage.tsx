@@ -36,10 +36,8 @@ export default function ContractsListPage() {
     return filters;
   }, [q, type]);
 
-  const { data, isLoading, isError, error, refetch } = useContractsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useContractsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -74,11 +72,15 @@ export default function ContractsListPage() {
         }
         columnCount={CONTRACT_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <ContractsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <ContractsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="contracts"
         emptyNoun="contracts"

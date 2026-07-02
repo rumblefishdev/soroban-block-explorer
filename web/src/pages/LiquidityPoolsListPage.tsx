@@ -39,10 +39,8 @@ export default function LiquidityPoolsListPage() {
     return filters;
   }, [asset, minTvl]);
 
-  const { data, isLoading, isError, error, refetch } = usePoolsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    usePoolsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -77,11 +75,15 @@ export default function LiquidityPoolsListPage() {
         }
         columnCount={POOL_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <PoolsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <PoolsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="pools"
         emptyNoun="pools"

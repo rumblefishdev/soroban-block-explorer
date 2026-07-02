@@ -201,10 +201,14 @@ pub struct ExtractedContractInterface {
     pub functions: Vec<ContractFunction>,
     /// Raw WASM byte length (informational).
     pub wasm_byte_len: usize,
+    /// Task 0327: the WASM imports `update_current_contract_wasm` (a self-upgrade
+    /// path). See `wasm_imports_upgrade_fn` for how, and the API
+    /// `ContractDetailResponse::upgradeable` for the user-facing 3-state.
+    pub upgradeable: bool,
 }
 
 /// A single public function signature extracted from a contract's WASM spec.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContractFunction {
     /// Function name.
     pub name: String,
@@ -217,7 +221,7 @@ pub struct ContractFunction {
 }
 
 /// A function parameter with name and type.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionParam {
     pub name: String,
     pub type_name: String,
@@ -272,6 +276,57 @@ pub struct ExtractedLedgerEntryChange {
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds).
     pub created_at: i64,
+    /// Token metadata (`name` / `symbol` / `decimals`) recovered from the
+    /// instance-storage `Symbol("METADATA")` struct, for a **non-SAC**
+    /// contract-instance entry that carries one; `None` for every other entry
+    /// type/change AND for SACs (skipped at extraction — a SAC's name/symbol/
+    /// decimals derive from the asset identity, so no row is stored). Populated
+    /// on entry-bearing changes (created / updated / state / restored); the
+    /// producer consumes it on created / updated / restored.
+    ///
+    /// Chain-verified location (task 0297) — distinct from, and replaces, the
+    /// dead standalone `Symbol("name")` path. Derived in-memory only; NOT
+    /// serialized into `data` JSON, so it does not bloat persisted entry rows.
+    pub token_metadata: Option<crate::token_metadata::TokenMetadata>,
+}
+
+/// One token-metadata write for a contract, derived from a contract-instance
+/// `created` / `updated` / `restored` change carrying a `Symbol("METADATA")`
+/// struct.
+///
+/// Maps to a `soroban_contract_metadata` side-table row (task 0297): a separate
+/// per-contract table, written by the indexer, composed at read time — never
+/// mixed into `soroban_contracts` (RMT whole-row clobber + different update
+/// clocks). SACs never reach here — `entry_token_metadata` returns `None` for
+/// them at extraction (their name/symbol/decimals derive from the asset
+/// identity).
+#[derive(Debug, Clone)]
+pub struct ExtractedContractMetadata {
+    pub contract_id: String,
+    pub metadata: crate::token_metadata::TokenMetadata,
+    /// Ledger the metadata was observed — the side table's RMT version slot.
+    pub ledger: u32,
+}
+
+/// A per-holder Soroban token balance recovered from a `ContractData`
+/// `Balance(Address)` ledger-entry change (task 0331).
+///
+/// Persisted into the unified `balances` table (task 0331 Option C; the in-memory
+/// `soroban_token_balances` identifiers are leftover Option-A naming — there is no
+/// table of that name): one row per `(holder, asset_id)`, RMT-versioned by `ledger`.
+/// Reading ledger STATE is
+/// correct-by-construction for vault / rebasing / non-SEP-41-event tokens, where
+/// an event-fold under-counts (see task README DECISION 2026-06-29).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedSorobanBalance {
+    /// Token contract StrKey (`C…`). Hashed to the surrogate id at persistence.
+    pub contract_id: String,
+    /// Holder address StrKey — `G…` account OR `C…` contract (34% are contracts).
+    pub holder: String,
+    /// Current balance (i128; tokens can exceed i64 / use >7 decimals).
+    pub balance: i128,
+    /// Ledger the balance was observed — the side table's RMT version slot.
+    pub ledger: u32,
 }
 
 /// Extracted contract deployment from LedgerEntryChanges.
@@ -377,7 +432,19 @@ pub struct ExtractedAsset {
     pub asset_type: TokenAssetType,
     pub asset_code: Option<String>,
     pub issuer_address: Option<String>,
+    /// Soroban contract identity (`C…` StrKey) — set ONLY for `soroban`
+    /// (type=3) assets, where the contract IS the asset. `None` for
+    /// native / classic_credit (a SAC handle rides in `sac_contract_id`).
     pub contract_id: Option<String>,
+    /// SAC facet (ADR 0051): the wrapping Stellar-Asset-Contract's `C…`
+    /// StrKey for a `native` / `classic_credit` asset. `None` when the asset
+    /// has no SAC. Persisted as a cityhash64 surrogate on `asset_sac.sac_contract_id`
+    /// (a side table — not a column on `assets`).
+    pub sac_contract_id: Option<String>,
+    /// Whether `sac_contract_id`'s SAC is actually deployed on-chain (ADR 0051).
+    /// `true` from a SAC deploy sighting; `false` for an un-deployed SAC seen
+    /// only via events. Meaningless (and `false`) when `sac_contract_id` is `None`.
+    pub sac_deployed: bool,
     pub name: Option<String>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,

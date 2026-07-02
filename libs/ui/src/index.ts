@@ -26,10 +26,13 @@ export { Dash } from './components/Dash.js';
 export { StatusChip } from './components/StatusChip.js';
 
 export {
+  AnimatedNumber,
   formatAmount,
   formatCompactAmount,
+  scaleByDecimals,
   formatFee,
   formatStroops,
+  formatTokenAmount,
   formatInteger,
   formatTps,
   formatPercent,
@@ -67,10 +70,13 @@ export {
   PollingIndicator,
   formatRelative,
   useNow,
+  LiveNowProvider,
 } from './timestamps/index.js';
 
 export {
   ExplorerTable,
+  EXPLORER_TABLE_ROW_HEIGHT,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   PaginationControls,
   TableSectionHeader,
   TableEmptyState,

@@ -1,20 +1,17 @@
-import { Box, Card, Typography } from '@mui/material';
+import { Box, Card, Skeleton, Typography } from '@mui/material';
 import {
+  LiveNowProvider,
   PollingIndicator,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
-  TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { useLatestTransactions } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
 
-import {
-  LATEST_TX_COLUMN_COUNT,
-  LatestTransactionsTable,
-} from './LatestTransactionsTable.js';
+import { LatestTransactionsTable } from './LatestTransactionsTable.js';
 import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
 
@@ -23,18 +20,18 @@ import { ViewAllLink } from './ViewAllLink.js';
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const { data, isLoading, isError, error, refetch } = useLatestTransactions();
+  const { data, dataUpdatedAt, isLoading, isError, error, refetch } =
+    useLatestTransactions();
   const rows = data?.data ?? [];
-  // "Updated …" is anchored to the newest transaction's own close time, NOT
-  // react-query's `dataUpdatedAt`. The adaptive live poll refetches every few
-  // seconds and `dataUpdatedAt` bumps on every successful fetch even when the
-  // rows are identical — so it would read "just now" forever and never reveal
-  // a stalled feed. The newest row's `created_at` is the real data freshness.
-  const lastUpdated = rows[0]?.created_at;
+  // "Updated …" is anchored to react-query's `dataUpdatedAt` — the moment of
+  // the last successful poll — so it resets toward "just now" on every
+  // refetch (its literal meaning). A genuinely stalled feed still surfaces:
+  // a failed poll stops bumping `dataUpdatedAt`, and a feed returning the
+  // same rows shows its age in every row's relative time.
 
   let body: ReactNode;
   if (isLoading) {
-    body = <TableSkeleton rows={10} columns={LATEST_TX_COLUMN_COUNT} />;
+    body = <LatestTransactionsTable rows={[]} loading skeletonRows={10} />;
   } else if (isError) {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
@@ -42,7 +39,11 @@ export function LatestTransactions() {
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="transactions" />;
   } else {
-    body = <LatestTransactionsTable rows={rows} />;
+    body = (
+      <LiveNowProvider dataUpdatedAt={dataUpdatedAt}>
+        <LatestTransactionsTable rows={rows} />
+      </LiveNowProvider>
+    );
   }
 
   return (
@@ -50,11 +51,14 @@ export function LatestTransactions() {
       <TableSectionHeader
         title="Latest transactions"
         badge={<LiveIndicator />}
-        description={<PollingIndicator lastUpdated={lastUpdated} />}
+        description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>
-      {rows.length > 0 && (
+      {/* Footer is rendered during loading too (with a skeleton count) so its
+          height is reserved — otherwise the card jumps when the "N latest
+          records" row appears with the data. */}
+      {(rows.length > 0 || isLoading) && (
         <Box
           sx={{
             px: 2,
@@ -63,13 +67,17 @@ export function LatestTransactions() {
             backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
           }}
         >
-          <Typography
-            component="span"
-            variant="bodySmRegular"
-            sx={(theme) => ({ color: theme.palette.text.tertiary })}
-          >
-            {rows.length} latest records
-          </Typography>
+          {isLoading ? (
+            <Skeleton variant="text" width={120} />
+          ) : (
+            <Typography
+              component="span"
+              variant="bodySmRegular"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              {rows.length} latest records
+            </Typography>
+          )}
         </Box>
       )}
     </Card>

@@ -149,15 +149,17 @@ pub async fn fetch_pool_by_id(
     // across RMT versions, `any()` is safe) scans the id column but builds a
     // ≤2-row hash. Same shape as `fetch_pool_list`'s `iss` CTE.
     //
-    // SAC mirror + icon_url (task 0263 + 0274 gap #5): the `sac` CTE resolves
-    // `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
+    // SAC mirror + icon_url (task 0263 + 0274 gap #5 → ADR 0051): the `sac` CTE
+    // resolves `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
     // deduped by GROUP BY so a leg cannot fan the result out (the inline-join
-    // form did, masked only by the outer LIMIT 1). `contract_id` comes from the
-    // `asset_type = 2` (SAC) row via `soroban_contracts`; `icon_url` from either
-    // the classic (`asset_type = 1`) or SAC row — hence `asset_type IN (1, 2)`,
-    // matching PG's `uidx_assets_classic_asset` predicate. Native legs
-    // (`asset_code = ''`) are excluded from the join (PG parity: NULL code → no
-    // assets match → NULL contract_id + NULL icon_url).
+    // form did, masked only by the outer LIMIT 1). Post-ADR 0051 the SAC handle
+    // is a FACET in the `asset_sac` side table (not a column on `assets`, and not
+    // a separate `asset_type = 2`) — so the deployed SAC's `C…` StrKey resolves by
+    // two hops: leg `(code, issuer)` → `asset_sac.sac_contract_id` (surrogate) →
+    // `soroban_contracts.contract_id` (un-deployed SACs have no contract row →
+    // NULL, as before). The classic carrier is `asset_type IN (0, 1)`. Native legs
+    // (`asset_code = ''`) are excluded from the join (NULL code → no assets match →
+    // NULL contract_id + NULL icon_url).
     let row = client
         .query(
             "WITH legs AS ( \
@@ -175,8 +177,14 @@ pub async fn fetch_pool_by_id(
                         max(sc.contract_id) AS contract_id, \
                         max(a.icon_url)     AS icon_url \
                  FROM assets a \
-                 LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
-                 WHERE a.asset_type IN (1, 2) \
+                 LEFT JOIN ( \
+                     SELECT asset_type, asset_code, issuer_id, contract_id, \
+                            max(sac_contract_id) AS sac_contract_id \
+                     FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
+                       AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
+                 LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+                 WHERE a.asset_type IN (0, 1) \
                    AND (a.asset_code, a.issuer_id) IN ( \
                        SELECT asset_a_code, asset_a_issuer_id FROM legs WHERE asset_a_code != '' \
                        UNION ALL \
@@ -467,40 +475,75 @@ pub async fn fetch_pool_transactions(
         _ => String::new(),
     };
 
-    // STEP 1 — page keys. HISTORY: the scalar-`pool_id` era seeked via the
-    // `oa_pool_seek` projection with a **bare** filter (the long rationale —
-    // auto-optimizer, Code 164, `:ro` users.d — lives in 0243 / git history).
-    // Task 0261/0268 swapped the column to `pool_ids Array(FixedString(32))`
-    // and the filter to `has(...)` — array membership cannot prefix-seek that
-    // projection, so the seek strategy is being redesigned in the 0281-window
-    // task (skip index / arrayJoin projection / helper table; re-validate the
-    // read cost there). The subquery-wrap shape is kept: it stays correct and
-    // bounded (≤ limit keys transferred) regardless of which seek lands.
-    // `GROUP BY (ls, tid)` is the
-    // `LIMIT 1 BY (ledger_sequence, transaction_id)` dedupe (ops → one row/tx).
+    // STEP 1 — page keys, bounded by a read-in-order seek. HISTORY: the scalar
+    // `pool_id` era seeked via the `oa_pool_seek` projection with a bare filter
+    // (rationale — auto-optimizer, Code 164, `:ro` users.d — in 0243 / git
+    // history). Task 0261/0268 swapped to `pool_ids Array(FixedString(32))` +
+    // `has(...)`; array membership cannot prefix-seek, and the `idx_oa_pool_ids`
+    // bloom only prunes SPARSE pools — a popular pool sits in ~every granule, so
+    // no prune → 6.75B-row scan (box-measured 2026-06-17).
+    //
+    // FIX (0281 C): give the inner read its own `ORDER BY ledger {order} + LIMIT`
+    // so CH's `optimize_read_in_order` reads from the tip and EARLY-TERMINATES —
+    // 6.75B → 7.4M (~900x) on the top pool. The LIMIT counts RAW op-rows, not
+    // distinct txs, so we dedup `(ls, tid)` in Rust (consecutive runs — read-in-
+    // order keeps a tx's op-rows adjacent), NOT via an outer `GROUP BY`. That lets
+    // us tell a CAPPED page (raw rows hit the over-fetch LIMIT → more txs exist)
+    // from an EXHAUSTED one (fewer raw rows → the pool's tail). A pool whose txs
+    // cross it via many op-rows can starve the `limit*4` budget below `limit`
+    // distinct; the earlier outer-GROUP-BY shape silently dropped the peek row and
+    // `finalize_page` read that as the last page (next_cursor=None) → lost-tail
+    // data loss (caught in 0281-C review). On a capped under-delivery we re-fetch
+    // ONCE with the hard bound `limit*128`: a Stellar tx carries <=100 ops, so
+    // `limit*128` raw op-rows always cover `limit` distinct txs. Exhausted / last
+    // pages never re-query. `LIMIT 1 BY` and `DISTINCT` inside the inner both
+    // DEFEAT read-in-order (box-measured 1.13B / 0.97B) — hence raw + Rust dedup.
     //
     // `toFixedString(unhex(?), 32)`: `pool_ids` is `Array(FixedString(32))` and
     // `unhex` yields `String`; the explicit cast makes the needle's type match
     // the element type so `has` compares as fixed bytes (the input is a
     // validated 64-char hex → exactly 32 bytes, so the cast never pads/truncates).
-    let driver_sql = format!(
-        "SELECT ls, tid FROM ( \
-            SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
-            FROM operations_appearances oa \
-            WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) {keyset} \
-         ) \
-         GROUP BY ls, tid \
-         ORDER BY ls {order}, tid {order} \
-         LIMIT {limit}",
-        keyset = keyset,
-        order = order,
-        limit = limit,
-    );
-    let keys = client
-        .query(&driver_sql)
-        .bind(pool_id_hex)
-        .fetch_all::<DriverKeyRow>()
-        .await?;
+    let mut overfetch = limit.saturating_mul(4);
+    let keys = loop {
+        let driver_sql = format!(
+            "SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
+             FROM operations_appearances oa \
+             WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) \
+               AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
+             ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
+             LIMIT {overfetch}",
+            keyset = keyset,
+            order = order,
+            overfetch = overfetch,
+        );
+        let raw = client
+            .query(&driver_sql)
+            .bind(pool_id_hex)
+            .fetch_all::<DriverKeyRow>()
+            .await?;
+        let capped = raw.len() as i64 >= overfetch;
+
+        // A tx's op-rows are adjacent in read-in-order, so collapsing consecutive
+        // equal `(ls, tid)` is exactly the outer GROUP BY we replaced.
+        let mut distinct: Vec<DriverKeyRow> = Vec::with_capacity(raw.len());
+        for r in raw {
+            if distinct
+                .last()
+                .is_none_or(|l| l.ls != r.ls || l.tid != r.tid)
+            {
+                distinct.push(r);
+            }
+        }
+
+        // Enough distinct txs, OR the pool is exhausted (raw under the cap), OR we
+        // already spent the hard bound → finalize. Otherwise it was a capped
+        // under-delivery: re-fetch once with the `limit*128` guarantee.
+        if (distinct.len() as i64) >= limit || !capped || overfetch >= limit.saturating_mul(128) {
+            distinct.truncate(limit.max(0) as usize);
+            break distinct;
+        }
+        overfetch = limit.saturating_mul(128);
+    };
     if keys.is_empty() {
         return Ok(Vec::new());
     }
@@ -840,8 +883,14 @@ pub async fn fetch_pool_list(
                     max(sc.contract_id) AS contract_id, \
                     max(a.icon_url)     AS icon_url \
              FROM assets a \
-             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
-             WHERE a.asset_type IN (1, 2) \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        max(sac_contract_id) AS sac_contract_id \
+                 FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
+                   AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
+             LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+             WHERE a.asset_type IN (0, 1) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
                    UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \

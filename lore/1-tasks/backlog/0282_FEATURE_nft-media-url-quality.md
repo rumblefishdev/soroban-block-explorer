@@ -61,6 +61,12 @@ the image CID under `url`, not `image`). Two quality gaps remain:
   `crates/enrichment-shared/src/nft_token_uri/client.rs` — and resolve/guard
   the returned URI the same way. Gate behind "image + url both absent" so the
   extra RPC only fires for the minority that need it.
+- **SSRF / network safety (both probes):** the content-type HEAD/GET and the
+  `token_image()` fetch are NEW outbound requests to attacker-influenced URLs,
+  so they MUST go through the existing fetcher's protections — host allow-list /
+  SSRF guard (`is_safe_https_url` + the private-range block), redirect-chain
+  limit, and per-request timeout — exactly as the current `image`/`url` resolve
+  path does. Do NOT hand-roll a bare `reqwest` call that bypasses these guards.
 - **Prerequisite:** a real mainnet NFT sample (>1 contract). Blocked on NFT
   discovery (see 0231 notes — Soroban NFTs are structurally scarce; the
   Meridian 2025 SEP-50 collection is the best lead but its contract id is

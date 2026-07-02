@@ -6,7 +6,10 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { RustFunction } from 'cargo-lambda-cdk';
 import type { Construct } from 'constructs';
 
@@ -324,8 +327,8 @@ export class ComputeStack extends cdk.Stack {
         // Network (pilot, PR #221), Ledgers (PR #226), Transactions
         // (PR #235), Accounts (PR #236), Contracts (PR #237), LiquidityPools
         // (task 0243; PRs #246/#248/#250 — all 5 LP endpoints on CH, validated
-        // live on prod). The remaining modules (Assets, NFTs, Search) have no
-        // CH path yet.
+        // live on prod), Assets (task 0243; PR #260), NFTs (task 0243; PR #274).
+        // The remaining module (Search) has no CH path yet.
         //
         // PRECONDITIONS before this deploy goes live (see PR checklist):
         //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
@@ -344,6 +347,34 @@ export class ComputeStack extends cdk.Stack {
         API_DATASOURCE_ACCOUNTS: 'ch',
         API_DATASOURCE_CONTRACTS: 'ch',
         API_DATASOURCE_LIQUIDITY_POOLS: 'ch',
+        // Assets list + detail were orphaned on the PG default after the
+        // CH cutover (PG is no longer the live store), so both endpoints
+        // served nothing. The CH path (`assets/queries_ch.rs`) mirrors the
+        // contracts/accounts modules already on CH. Operator must run the
+        // CH read-rows smoke (per `queries_ch.rs` header) before relying on
+        // this in prod.
+        API_DATASOURCE_ASSETS: 'ch',
+        // NFTs read path (task 0243 NFT slice, PR #274). Same precondition as
+        // Assets: prod CH must carry `nft_enrichment` (else NULL name/media —
+        // ~84% enriched per task 0306) and the operator CH read-rows smoke must
+        // pass (`nfts/queries_ch.rs`) before relying on this in prod.
+        API_DATASOURCE_NFTS: 'ch',
+        // Search read path (task 0318) — the last PG-only module. On PG the
+        // endpoint 504'd (~29s) since PG was disabled in prod (ADR 0047).
+        // `search/queries_ch.rs` fires classification-gated, concurrent
+        // per-entity buckets (no full-table hash joins → no CH Code 241).
+        // Preconditions before relying on this in prod: prod CH must carry
+        // `soroban_contract_metadata` + `nft_enrichment` (else contract/NFT
+        // name search returns empty, not an error), and the operator CH
+        // read-rows/memory smoke must pass (bounded full-scans: asset_code
+        // substring + contract-name/nft metadata).
+        API_DATASOURCE_SEARCH: 'ch',
+        // Load-test correlation (task 0338): arm the `common::request_id`
+        // middleware + CH `log_comment` stamping ONLY in a load-test deploy.
+        // Tied to the SAME `loadTesting` flag that lifts the API Gateway
+        // throttle/WAF (api-gateway-stack.ts), so one switch sets the whole
+        // load-test posture. Unset in normal deploys → the mechanism is inert.
+        ...(config.loadTesting && { LOAD_TESTING: 'true' }),
       },
     });
     this.apiFunction = apiFunction;
@@ -373,14 +404,64 @@ export class ComputeStack extends cdk.Stack {
     this.processorFunction = processorFunction;
     grantMtlsSecretRead(this, processorFunction, processorSecretName);
 
-    // S3 `ObjectCreated` → SQS. Always wired (not gated on concurrency) so a
-    // paused indexer (`indexerLambdaConcurrency = 0`) still captures events
-    // durably in the queue instead of dropping them on the floor.
+    // ---------------------
+    // Ledger events fan-out topic (task 0306)
+    // ---------------------
+    // A second tenant (prices-api, same AWS account) needs the same
+    // `ObjectCreated` doorbells. S3 allows only ONE destination per overlapping
+    // `event + suffix`, so we fan out through SNS: the bucket publishes to this
+    // topic, and each consumer subscribes its own SQS queue. prices-api owns the
+    // subscribe side via its own deploy-role IAM (no cross-account policy needed
+    // while we share an account); it reads the topic ARN from SSM below.
+    const ledgerEventsTopic = new sns.Topic(this, 'LedgerEventsTopic', {
+      topicName: `${config.envName}-ledger-events`,
+    });
+
+    // S3 `ObjectCreated` → SNS (was `SqsDestination(ingestQueue)`). Always wired
+    // (not gated on concurrency) so a paused indexer
+    // (`indexerLambdaConcurrency = 0`) still captures events durably in the
+    // queue instead of dropping them on the floor. `SnsDestination` auto-adds
+    // the topic policy letting S3 publish.
     ledgerBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
-      new s3n.SqsDestination(ingestQueue),
+      new s3n.SnsDestination(ledgerEventsTopic),
       { suffix: '.xdr.zst' }
     );
+
+    // SNS → indexer's ingest queue. Our indexer treats the SQS message as a
+    // content-free doorbell — `SqsMessage` (crates/indexer/src/handler/mod.rs)
+    // deserializes only `messageId` and ignores the body — so the SNS envelope
+    // vs raw-event body shape does NOT affect ingestion either way.
+    // `rawMessageDelivery: true` is kept because (a) it leaves the SQS body
+    // byte-identical to the legacy direct `S3 → SQS` event and (b) it is the
+    // shape the prices-api consumer expects (it DOES read the S3 object key from
+    // the body). The indexer's ESM and `messageId` extraction are unchanged
+    // regardless of this flag.
+    ledgerEventsTopic.addSubscription(
+      new subs.SqsSubscription(ingestQueue, { rawMessageDelivery: true })
+    );
+
+    // ---------------------
+    // Cross-team SSM hand-off (task 0306)
+    // ---------------------
+    // prices-api's CDK reads these at ITS deploy time (never at Lambda runtime)
+    // to subscribe its own queue to the topic and locate the ledger bucket. The
+    // `/platform/{env}/*` namespace is the contract its stack already references
+    // (distinct from our own `/soroban-explorer/{env}/*` keys). The network
+    // passphrase is the public mainnet/testnet value, not a secret.
+    const platformParams: Record<string, string> = {
+      'ledger-events-topic-arn': ledgerEventsTopic.topicArn,
+      'stellar-ledger-data-bucket-name': ledgerBucketName,
+      'stellar-ledger-data-bucket-arn': ledgerBucketArn,
+      'ch-domain': config.chDomainName,
+      'stellar-network-passphrase': config.stellarNetworkPassphrase,
+    };
+    for (const [key, value] of Object.entries(platformParams)) {
+      new ssm.StringParameter(this, `Platform-${key}`, {
+        parameterName: `/platform/${config.envName}/${key}`,
+        stringValue: value,
+      });
+    }
 
     // SQS → indexer event-source-mapping. Gated on concurrency so a
     // `concurrency = 0` pause leaves messages waiting in the queue with no
@@ -423,6 +504,19 @@ export class ComputeStack extends cdk.Stack {
           ...sharedEnv,
           RUST_LOG: 'info',
           MTLS_SECRET_NAME: enrichmentSecretName,
+          // Task 0311 — multi-provider Soroban RPC pool (round-robin +
+          // failover-on-transient). WITHOUT this the worker's
+          // NftTokenUriFetcher::new() falls back to the single SDF default and
+          // hits the per-second 429 wall under enrichment bursts (the bug 0311
+          // fixes). Keyless, in-sync endpoints from the 2026-06-22 box sieve.
+          // IPFS gateways intentionally left to DEFAULT_IPFS_GATEWAYS
+          // (ipfs.io + pinata) — already the good list in code.
+          SOROBAN_RPC_URLS: [
+            'https://mainnet.sorobanrpc.com',
+            'https://soroban-rpc.mainnet.stellar.gateway.fm/',
+            'https://rpc.ankr.com/stellar_soroban',
+            'https://stellar.api.onfinality.io/public',
+          ].join(','),
         },
       }
     );

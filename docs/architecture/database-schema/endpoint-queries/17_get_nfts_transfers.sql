@@ -42,6 +42,22 @@
 --     remaining is the actual mint event (oldest row, no row below it in
 --     either the page or the table), which is exactly the intended
 --     "(mint)" rendering. No API-side stitching required.
+--
+-- ClickHouse read path (task 0243 — MIGRATED; see crates/api/src/nfts/queries_ch.rs):
+--   • CH `nft_ownership` is keyed `(contract_id, token_id, ledger_sequence,
+--     event_order)`, so the path-scoped `(contract_id, token_id)` predicate is
+--     the leading PK prefix → one granule-pruned seek per page. The PG
+--     `nft_id` surrogate indirection is gone.
+--   • `nft_ownership` is plain RMT (no version col): `LIMIT 1 BY
+--     (ledger_sequence, event_order)` dedups re-ingest BEFORE the `LEAD`
+--     window (a duplicate would corrupt from_account).
+--   • No `created_at` column on CH → JOIN `ledgers.closed_at` (millis). The
+--     keyset keys on `(ledger_sequence, event_order)` — NOT the lossy
+--     closed_at; `created_at` stays in the cursor payload for wire parity.
+--   • transaction hash: the `txs` join is a `(ledger_sequence, id)` tuple seek
+--     (transactions is keyed on ledger_sequence; a bare `id IN` can't prune)
+--     and is `GROUP BY id`-deduped to stay 1:1. owner_id → G-StrKey via a
+--     restricted `accounts` CTE. event_type label mapped in Rust.
 
 SELECT
     no.created_at,

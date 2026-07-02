@@ -724,14 +724,11 @@ async fn assets_filter_type_native_returns_singleton_against_real_db() {
 /// touching the DB. No DATABASE_URL needed.
 #[tokio::test]
 async fn assets_detail_numeric_id_rejected_with_400() {
-    let pool = match std::env::var("DATABASE_URL") {
-        Ok(url) => match PgPool::connect(&url).await {
-            Ok(p) => p,
-            Err(_) => return,
-        },
-        // The 400 is emitted before any DB access; a lazy pool is fine.
-        Err(_) => return,
-    };
+    // The 400 is emitted before any DB access, so a lazy pool that never
+    // connects exercises the path without a live DB (matches `build_app`'s
+    // contract for validation-only tests). No DATABASE_URL required.
+    let pool =
+        PgPool::connect_lazy("postgres://localhost/test_unused").expect("connect_lazy never fails");
     let router = build_app(pool);
     let resp = router
         .oneshot(
@@ -2061,7 +2058,7 @@ async fn ledgers_list_returns_paginated_envelope_against_real_db() {
     assert_eq!(status, StatusCode::OK, "expected 200, got {status}: {json}");
     assert_eq!(
         cc.as_deref(),
-        Some("public, max-age=10"),
+        Some("public, max-age=0, must-revalidate"),
         "list Cache-Control: {cc:?}"
     );
     assert!(json["data"].is_array(), "data not array: {json}");
@@ -4000,9 +3997,9 @@ async fn handler_404_returns_no_store_against_real_db() {
     assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
 }
 
-/// `GET /v1/transactions` → SHORT (10s).
+/// `GET /v1/transactions` → LIVE (max-age=0).
 #[tokio::test]
-async fn transactions_list_cache_control_short_against_real_db() {
+async fn transactions_list_cache_control_live_against_real_db() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
         return;
     };
@@ -4019,7 +4016,10 @@ async fn transactions_list_cache_control_short_against_real_db() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=10"));
+    assert_eq!(
+        cache_control(&resp).as_deref(),
+        Some("public, max-age=0, must-revalidate")
+    );
 }
 
 /// `GET /v1/transactions/:hash` → conditional.

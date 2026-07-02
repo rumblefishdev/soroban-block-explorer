@@ -138,18 +138,37 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 19 CREATE TABLE + 1 CREATE DICTIONARY = 20. Task 0217 added
-        // `nfts_pending` + `nft_ownership_pending` to the 17-table base
-        // as schema-only landing zones. The CH writer
-        // (`crates/db-clickhouse/src/persist/*`) does NOT yet stage or
-        // INSERT into either pending table — that parity work is a
-        // follow-up to PR #180 (different atomicity model required:
-        // no per-row UPDATE on RMT). Row structs + column-order tests
-        // for the pending tables will land alongside the writer work.
+        // Current: 25 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY
+        // = 27 (matches the assertion below). Historical derivation:
+        // 17-table base; task 0217 added `nfts_pending` + `nft_ownership_pending`
+        // as schema-only landing zones (the CH writer does NOT yet stage/INSERT
+        // into either — follow-up to PR #180); task 0231 (ADR 0050) added the
+        // `asset_enrichment` + `nft_enrichment` side tables; lore-0293 added the
+        // `asset_aggregates` table + its refreshable `asset_aggregates_mv` for
+        // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
+        // now served from `asset_aggregates`; the dead columns' drop is deferred
+        // to task 0310); task 0297 added the `soroban_contract_metadata` side
+        // table (on-chain token name/symbol/decimals); ADR 0051 / task 0339 added
+        // the `asset_sac` SAC-facet side table; task 0331 FIRST added an INTERIM
+        // `soroban_token_balances` per-holder side table (asset_type=3 balances
+        // from ContractData `Balance(Address)` ledger state), then
+        // task 0331 Option C: unified `balances` + `balance_aggregates`
+        // (+ its refreshable MV) REPLACED that interim `soroban_token_balances` +
+        // `soroban_asset_aggregates` (+ MV) — net one fewer table, same MV count.
+        // (The interim `addresses` resolution table was dropped — holder→StrKey
+        // resolves via `accounts` (G) / `soroban_contracts` (C), no dimension.)
+        // task 0331 simplification: DROPPED the legacy `asset_aggregates` table +
+        // `asset_aggregates_mv` (classic supply over `account_balances_current`) —
+        // superseded by `balance_aggregates` over `balances`. 29 → 27.
+        // task 0331 Option A: DROPPED `soroban_token_supply` (the per-token
+        // `TotalSupply` key read) — `balance_aggregates` (Σ amount) is the sole
+        // supply source; one universal method, no seed-only staleness. 27 → 26.
+        // ADR 0051 / task 0339 (merged): added the `asset_sac` SAC-facet side table
+        // (SAC-ness of a classic/native asset, not a distinct row). 26 → 27.
         assert_eq!(
             stmts.len(),
-            20,
-            "expected 19 tables + 1 dictionary, got {}",
+            27,
+            "expected 25 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

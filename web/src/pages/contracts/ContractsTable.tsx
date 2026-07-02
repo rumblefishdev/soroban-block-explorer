@@ -4,6 +4,7 @@ import {
   Chip,
   ExplorerTable,
   IdentifierDisplay,
+  IdentifierWithCopy,
   Dash,
   formatAmount,
   type ExplorerTableColumn,
@@ -17,8 +18,9 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
   {
     id: 'contract',
     header: 'Contract',
+    width: 160,
     cell: (row) => (
-      <IdentifierDisplay
+      <IdentifierWithCopy
         value={row.contract_id}
         type="contract"
         href={routes.contract(row.contract_id)}
@@ -28,6 +30,7 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
   {
     id: 'type',
     header: 'Type',
+    width: 120,
     cell: (row) => {
       const meta = contractTypeMeta(row.contract_type_name);
       return (
@@ -42,6 +45,7 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     id: 'deployed',
     header: 'Deployed at ledger',
     align: 'right',
+    width: 120,
     cell: (row) =>
       row.deployed_at_ledger != null ? (
         <IdentifierDisplay
@@ -55,6 +59,7 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
   {
     id: 'deployer',
     header: 'Deployer',
+    width: 160,
     cell: (row) =>
       row.deployer ? (
         <IdentifierDisplay
@@ -70,6 +75,7 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     id: 'recent_invocations',
     header: 'Invocations (7d)',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography variant="bodySmRegular">
         {formatAmount(row.recent_invocations)}
@@ -83,16 +89,24 @@ export const CONTRACT_COLUMN_COUNT = columns.length;
 
 interface ContractsTableProps {
   rows: readonly ContractListItem[];
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 /** The contracts list table — contract id, type, deploy ledger,
  *  deployer, and a 7-day invocation count. */
-export function ContractsTable({ rows }: ContractsTableProps) {
+export function ContractsTable({
+  rows,
+  loading,
+  skeletonRows,
+}: ContractsTableProps) {
   return (
     <ExplorerTable
       columns={columns}
       rows={rows}
       rowKey={(row) => row.contract_id}
+      loading={loading}
+      skeletonRows={skeletonRows}
     />
   );
 }

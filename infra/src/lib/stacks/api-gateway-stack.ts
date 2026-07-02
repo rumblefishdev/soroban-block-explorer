@@ -11,6 +11,13 @@ import type { Construct } from 'constructs';
 import { WafWebAcl } from '../constructs/waf-web-acl.js';
 import { relativeRecordName, type EnvironmentConfig } from '../types.js';
 
+// API Gateway account-level default throttle (rps / burst). Used as the
+// "lifted" ceiling when `config.loadTesting` is set, so the per-stage 50/100
+// cap stops being the bottleneck during a load test. The account limit still
+// backstops genuine abuse, and the WAF rate rule is dropped separately.
+const LOAD_TEST_THROTTLE_RATE = 10_000;
+const LOAD_TEST_THROTTLE_BURST = 5_000;
+
 export interface ApiGatewayStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
   readonly apiFunction: lambda.IFunction;
@@ -39,6 +46,17 @@ export class ApiGatewayStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, apiFunction } = props;
+
+    // Load-test window (task 0338): lift the per-stage + usage-plan throttle to
+    // the account ceiling and drop the WAF per-IP rate rule (below), so a load
+    // test measures backend capacity rather than edge throttling. Managed WAF
+    // rules, edge_lock, API-key auth, and Lambda↔Hetzner mTLS are untouched.
+    const throttleRate = config.loadTesting
+      ? LOAD_TEST_THROTTLE_RATE
+      : config.apiGatewayThrottleRate;
+    const throttleBurst = config.loadTesting
+      ? LOAD_TEST_THROTTLE_BURST
+      : config.apiGatewayThrottleBurst;
 
     // ---------------------
     // API mTLS truststore (Cloudflare origin lockdown — ADR 0048, Path B)
@@ -75,8 +93,8 @@ export class ApiGatewayStack extends cdk.Stack {
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,
-        throttlingRateLimit: config.apiGatewayThrottleRate,
-        throttlingBurstLimit: config.apiGatewayThrottleBurst,
+        throttlingRateLimit: throttleRate,
+        throttlingBurstLimit: throttleBurst,
         cacheClusterEnabled: config.apiGatewayCacheEnabled,
         ...(config.apiGatewayCacheEnabled && {
           cacheClusterSize: config.apiGatewayCacheSize,
@@ -94,6 +112,15 @@ export class ApiGatewayStack extends cdk.Stack {
         // are non-safelisted request headers — without them the preflight is
         // rejected and the armed SPA cannot send a Bearer / partner key.
         allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
+        // Cache the preflight so the browser does NOT re-`OPTIONS` before every
+        // `/v1` request (task 0317). Each `/v1` call carries `Authorization`, a
+        // non-safelisted header, so without `Access-Control-Max-Age` Chrome
+        // re-runs the preflight on every request — an extra edge round-trip per
+        // call. The preflight is answered here by API Gateway's MOCK
+        // integration (not the Lambda), so the max-age MUST be set on the
+        // gateway, not on the axum `CorsLayer`. 1h is within Chromium's 2h cap;
+        // CORS config rarely changes, so a stale cached preflight is low-risk.
+        maxAge: cdk.Duration.hours(1),
       },
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });
@@ -111,6 +138,8 @@ export class ApiGatewayStack extends cdk.Stack {
           scope: 'REGIONAL',
           name: `${config.envName}-soroban-explorer-api`,
           rateLimit: config.apiWafRateLimit,
+          // Drop the per-IP rate rule during a load-test window; managed rules stay.
+          includeRateLimit: !config.loadTesting,
         })
       : undefined;
 
@@ -136,13 +165,21 @@ export class ApiGatewayStack extends cdk.Stack {
     const usagePlan = api.addUsagePlan('UsagePlan', {
       name: `${config.envName}-partner-plan`,
       throttle: {
-        rateLimit: config.apiGatewayThrottleRate,
-        burstLimit: config.apiGatewayThrottleBurst,
+        rateLimit: throttleRate,
+        burstLimit: throttleBurst,
       },
-      quota: {
-        limit: config.apiGatewayPartnerDailyQuota,
-        period: apigateway.Period.DAY,
-      },
+      // Daily quota is dropped during a load-test window: with the throttle
+      // lifted, a key'd run would otherwise burn the per-day limit in ~1s and
+      // 429 for the rest of the day, masking backend capacity. Restored (and
+      // the only volumetric cap on key'd traffic) when loadTesting is off.
+      ...(config.loadTesting
+        ? {}
+        : {
+            quota: {
+              limit: config.apiGatewayPartnerDailyQuota,
+              period: apigateway.Period.DAY,
+            },
+          }),
     });
     usagePlan.addApiStage({ stage: api.deploymentStage });
 

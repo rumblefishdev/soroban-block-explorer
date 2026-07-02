@@ -38,10 +38,8 @@ export default function NftsListPage() {
     return filters;
   }, [collection, contract]);
 
-  const { data, isLoading, isError, error, refetch } = useNftsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useNftsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -67,11 +65,15 @@ export default function NftsListPage() {
         }
         columnCount={NFT_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <NftsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <NftsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="nft"
         emptyNoun="NFTs"

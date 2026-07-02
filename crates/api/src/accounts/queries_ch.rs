@@ -57,7 +57,15 @@ struct AccountListChRow {
     last_seen_ledger: i64,
     first_seen_ledger: i64,
     home_domain: Option<String>,
-    xlm_balance: Option<String>,
+}
+
+/// Step-2 resolve row: `accounts.id` (surrogate) → native (`asset_type=0`) XLM
+/// `balance` as text. Keyed on `account_balances_current.account_id`, which is
+/// the same surrogate as `accounts.id` (task 0319).
+#[derive(Debug, Row, Deserialize)]
+struct AccountListBalanceRow {
+    account_id: i64,
+    balance: String,
 }
 
 /// CH equivalent of the PG `queries::fetch_list` (task 0274). Same response
@@ -110,37 +118,70 @@ pub async fn fetch_list(
         ""
     };
 
-    let sql = format!(
+    // Step 1: page the accounts — NO native-balance join (task 0319). The old
+    // `LEFT JOIN (… account_balances_current FINAL WHERE asset_type=0)` built
+    // the join side from EVERY account's native balance (~1.5M of the 2.09M
+    // rows this query read), driving the ~2.2s prod TTFB. (The `accounts FINAL`
+    // + non-PK `last_seen_ledger` scan+sort still costs — that needs a
+    // projection, deliberately out of scope here.)
+    let page_sql = format!(
         "SELECT \
             a.id                AS id, \
             a.account_id        AS account_id, \
             a.last_seen_ledger  AS last_seen_ledger, \
             a.first_seen_ledger AS first_seen_ledger, \
-            a.home_domain       AS home_domain, \
-            if(abc.matched = 1, toString(abc.balance), NULL) AS xlm_balance \
+            a.home_domain       AS home_domain \
          FROM accounts a FINAL \
-         LEFT JOIN ( \
-             SELECT account_id, balance, 1 AS matched \
-             FROM account_balances_current FINAL \
-             WHERE asset_type = 0 \
-         ) abc ON abc.account_id = a.id \
          WHERE 1{cursor_clause}{domain_filter} \
          ORDER BY a.last_seen_ledger {order}, a.id {order} \
          LIMIT ?"
     );
 
     let rows = client
-        .query(&sql)
+        .query(&page_sql)
         .bind(params.limit)
         .fetch_all::<AccountListChRow>()
         .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Step 2: resolve each page account's native (XLM) balance from the unified
+    // `balances` table by a PK-prefix key-seek. `balances` is ORDER BY
+    // (holder_id, asset_id), so `holder_id IN (…)` seeks the prefix; `FINAL` is
+    // bounded to the ≤limit page keys. The IN-list is i64 surrogates (no injection
+    // surface), bounded by the page limit.
+    let ids = {
+        let mut v: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+    };
+    let balances: HashMap<i64, String> = client
+        .query(&format!(
+            // task 0331 read-cutover: native (XLM) balance now from the unified
+            // `balances` table (RAW Int128 = stroops). The frontend scales by
+            // `decimals` (7 for native) — same raw-amount contract as the
+            // account-detail balances. Resolve native via `assets.asset_type = 0`
+            // (the native asset_id is a Rust cityhash, which CH `cityHash64`
+            // cannot recompute, so we join rather than hardcode a literal).
+            "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
+             FROM balances b FINAL \
+             INNER JOIN assets a FINAL ON a.id = b.asset_id \
+             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0"
+        ))
+        .fetch_all::<AccountListBalanceRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.account_id, r.balance))
+        .collect();
 
     Ok(rows
         .into_iter()
         .map(|r| AccountListRow {
+            xlm_balance: balances.get(&r.id).cloned(),
             id: r.id,
             account_id: r.account_id,
-            xlm_balance: r.xlm_balance,
             last_seen_ledger: r.last_seen_ledger,
             first_seen_ledger: r.first_seen_ledger,
             home_domain: r.home_domain,
@@ -196,6 +237,65 @@ pub async fn fetch_account(
 }
 
 // ---------------------------------------------------------------------------
+// Derived `deleted` status (account_merge) — task 0324
+// ---------------------------------------------------------------------------
+
+/// `true` ⟺ the account was the `source` of a **successful** `account_merge`
+/// (`type = 8`) in its last-seen ledger — its ledger entry was merged into
+/// another account and removed. `last_seen_ledger` is the `GREATEST` of every
+/// appearance, so a deleting merge necessarily sits in that ledger and nothing
+/// follows it: a later re-create would push `last_seen_ledger` higher and this
+/// query would find no merge there → `false`. That makes the check a plain
+/// EXISTS — no chronological "last op" ordering needed.
+///
+/// Two corrections over the original derivation (both were live bugs):
+/// - **`successful` filter (join `transactions`).** `operations_appearances`
+///   carries failed-tx ops too (no status column of its own); a *failed*
+///   `account_merge` does NOT delete the account. The join restricts to
+///   `t.successful`, which the single-table query could not express.
+/// - **No `argMax` over `transaction_id`.** `transaction_id` is a cityhash
+///   surrogate, NOT chronological, so ordering by it never picked the real last
+///   op (and returned `Nullable(UInt8)`, which mismatched the `u8` decode → the
+///   original 500). EXISTS sidesteps ordering and nullability entirely.
+///
+/// The `ledger_sequence = ?` literal on BOTH tables is load-bearing: both are
+/// `PARTITION BY intDiv(ledger_sequence, 500000)` and key on `ledger_sequence`,
+/// so the equality prunes each side to that one ledger (~hundreds of tx rows,
+/// ~1 matching op). Without it the planner scans the 6.2B + 3.6B-row tables and
+/// trips the query memory limit.
+///
+/// ponytail: drops the same-ledger merge-then-`create_account` re-create case
+/// (merged out then recreated within the SAME ledger → still live, but EXISTS
+/// reports deleted). Measured zero across 6.2B ops. To close it, anchor on the
+/// real chronological key `(t.application_order, oa.application_order)` via
+/// `argMax` instead of EXISTS.
+pub async fn fetch_deleted_status(
+    client: &clickhouse::Client,
+    account_surrogate_id: i64,
+    last_seen_ledger: i64,
+) -> Result<bool, clickhouse::error::Error> {
+    let deleted = client
+        .query(
+            "SELECT count() > 0 \
+             FROM operations_appearances oa \
+             INNER JOIN transactions t \
+               ON t.id = oa.transaction_id AND t.ledger_sequence = oa.ledger_sequence \
+             WHERE oa.ledger_sequence = ? \
+               AND t.ledger_sequence = ? \
+               AND oa.type = 8 \
+               AND oa.source_id = ? \
+               AND t.successful",
+        )
+        .bind(last_seen_ledger)
+        .bind(last_seen_ledger)
+        .bind(account_surrogate_id)
+        .fetch_one::<u8>()
+        .await?;
+
+    Ok(deleted != 0)
+}
+
+// ---------------------------------------------------------------------------
 // Detail balances — canonical 06 Statement B
 // ---------------------------------------------------------------------------
 
@@ -204,12 +304,20 @@ struct AccountBalanceChRow {
     asset_type: i16,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
+    contract_id: Option<String>,
+    name: Option<String>,
+    symbol: Option<String>,
     balance: String,
+    decimals: u32,
     last_updated_ledger: i64,
 }
 
-/// `account_id` is the surrogate from [`fetch_account`]. Leading-PK seek on
-/// `account_balances_current` (ORDER BY `(account_id, …)`).
+/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
+/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
+/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
+/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
+/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
+/// Soroban from on-chain `METADATA`).
 pub async fn fetch_balances(
     client: &clickhouse::Client,
     account_id: i64,
@@ -217,16 +325,31 @@ pub async fn fetch_balances(
     let rows = client
         .query(
             "SELECT \
-                abc.asset_type                  AS asset_type, \
-                nullIf(abc.asset_code, '')      AS asset_code, \
-                nullIf(iss.account_id, '')      AS asset_issuer, \
-                toString(abc.balance)           AS balance, \
-                abc.last_updated_ledger         AS last_updated_ledger \
-             FROM account_balances_current abc FINAL \
-             LEFT JOIN accounts iss ON iss.id = abc.issuer_id \
-             WHERE abc.account_id = ? \
-             ORDER BY abc.asset_type, abc.asset_code, iss.account_id \
-             LIMIT 1 BY (abc.asset_type, abc.asset_code, abc.issuer_id)",
+                a.asset_type                  AS asset_type, \
+                nullIf(a.asset_code, '')      AS asset_code, \
+                nullIf(iss.account_id, '')    AS asset_issuer, \
+                nullIf(sc.contract_id, '')    AS contract_id, \
+                coalesce(nullIf(ae.name, ''), nullIf(m.name, '')) AS name, \
+                nullIf(m.symbol, '')          AS symbol, \
+                toString(b.amount)            AS balance, \
+                coalesce(m.decimals, 7)       AS decimals, \
+                b.last_updated_ledger         AS last_updated_ledger \
+             FROM balances b FINAL \
+             INNER JOIN assets a FINAL ON a.id = b.asset_id \
+             LEFT JOIN accounts iss ON iss.id = a.issuer_id \
+             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+             LEFT JOIN ( \
+                 SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
+             ) m ON m.contract_id = sc.contract_id \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        argMax(name, version) AS name \
+                 FROM asset_enrichment \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
+                 AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
+             WHERE b.holder_id = ? AND b.amount != 0 \
+             ORDER BY a.asset_type, a.asset_code",
         )
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
@@ -239,7 +362,11 @@ pub async fn fetch_balances(
             asset_type: r.asset_type,
             asset_code: r.asset_code,
             asset_issuer: r.asset_issuer,
+            contract_id: r.contract_id,
+            name: r.name,
+            symbol: r.symbol,
             balance: r.balance,
+            decimals: r.decimals,
             last_updated_ledger: r.last_updated_ledger,
         })
         .collect())
@@ -310,6 +437,7 @@ pub async fn fetch_transactions(
         "SELECT tp.ledger_sequence AS ledger_sequence, tp.transaction_id AS transaction_id \
          FROM transaction_participants tp \
          WHERE tp.account_id = ? \
+           AND tp.ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
            AND ({cl} IS NULL OR (tp.ledger_sequence, tp.transaction_id) {op} ({cl}, {ct})) \
          ORDER BY tp.ledger_sequence {order}, tp.transaction_id {order} \
          LIMIT 1 BY tp.ledger_sequence, tp.transaction_id \

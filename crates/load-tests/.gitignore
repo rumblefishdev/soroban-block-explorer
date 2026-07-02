@@ -1,0 +1,3 @@
+# Load-test run artifacts (client.csv, client_summary.csv, query_log/results
+# CSVs) — one timestamped subdir per run. Never committed.
+/out/

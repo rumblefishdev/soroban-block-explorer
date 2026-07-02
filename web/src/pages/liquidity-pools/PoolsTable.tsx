@@ -2,8 +2,10 @@ import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   Dash,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatAmount,
+  formatCompactAmount,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -65,6 +67,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'pool',
     header: 'Pool',
+    width: 260,
     cell: (row) => {
       const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
         row.asset_b
@@ -97,11 +100,13 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'fee',
     header: 'Fee',
+    width: 120,
     cell: (row) => <FeePill raw={row.fee_percent} />,
   },
   {
     id: 'reserves',
     header: 'Reserves',
+    width: 150,
     cell: (row) => {
       // Stale pools (no fresh snapshot) come back with null reserves —
       // render an em-dash rather than "0".
@@ -111,14 +116,14 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           <Stack direction="row" spacing={1} alignItems="center">
             <AssetDot color={reserveDotColor(row.asset_a)} />
             <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_a != null ? formatAmount(row.reserve_a) : '—'}{' '}
+              {row.reserve_a != null ? formatCompactAmount(row.reserve_a) : '—'}{' '}
               {assetCodeNode(row.asset_a)}
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
             <AssetDot color={reserveDotColor(row.asset_b)} />
             <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_b != null ? formatAmount(row.reserve_b) : '—'}{' '}
+              {row.reserve_b != null ? formatCompactAmount(row.reserve_b) : '—'}{' '}
               {assetCodeNode(row.asset_b)}
             </Typography>
           </Stack>
@@ -135,6 +140,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     // unit label below.
     header: 'Total shares',
     align: 'right',
+    width: 150,
     cell: (row) => {
       if (row.total_shares == null) return <Dash />;
       return (
@@ -143,7 +149,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
             variant="bodySmMedium"
             sx={(theme) => ({ color: theme.palette.text.primary })}
           >
-            {formatAmount(row.total_shares)}
+            {formatCompactAmount(row.total_shares)}
           </Typography>
           <Typography
             variant="bodyXsRegular"
@@ -159,6 +165,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     id: 'participants',
     header: 'Participants',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography
         variant="bodySmMedium"
@@ -172,6 +179,8 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
 
 interface PoolsTableProps {
   rows: readonly PoolItem[];
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 /**
@@ -180,12 +189,15 @@ interface PoolsTableProps {
  * truncated id) / Fee (success pill) / Reserves (per-leg) / Total
  * shares (right-aligned, unit label) / Participants.
  */
-export function PoolsTable({ rows }: PoolsTableProps) {
+export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (
     <ExplorerTable
       columns={columns}
       rows={rows}
       rowKey={(row) => row.pool_id}
+      rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      loading={loading}
+      skeletonRows={skeletonRows}
     />
   );
 }

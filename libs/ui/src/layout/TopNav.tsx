@@ -2,7 +2,9 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
 
-import { formatInteger, formatTps } from '../format/index.js';
+import type { Format } from '@number-flow/react';
+
+import { AnimatedNumber } from '../format/index.js';
 import { grid } from '../theme/grid.js';
 import { SearchInput } from './SearchInput.js';
 
@@ -29,6 +31,7 @@ export interface TopNavProps {
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
   onSearchClear?: () => void;
+  onSearchFocus?: () => void;
   searchOverlaySlot?: ReactNode;
 }
 
@@ -51,7 +54,7 @@ function Stat({
   valueColor = 'text.primary',
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   valueColor?: string;
 }) {
   return (
@@ -67,12 +70,28 @@ function Stat({
   );
 }
 
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) {
-    const value = n / 1_000_000;
-    return Number.isInteger(value) ? `${value}M` : `${value.toFixed(1)}M`;
-  }
-  return formatInteger(n);
+/** One fixed decimal, matching `formatTps` ("12.3"). */
+const TPS_FORMAT: Format = {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+};
+
+/** ≥1M compacts to a one-decimal compact suffix (the slim header has no
+ *  room for nine grouped digits); below that, plain grouped integer.
+ *  Expressed as Intl options so NumberFlow can animate the digits. Close to
+ *  the old string `formatNumber` but not identical: whole millions keep one
+ *  decimal here ("5.0M" vs the old "5M"), and ≥1e9 uses Intl's `B` unit
+ *  ("2.0B" vs the old M-only "2000M"). Both are intentional — the chain
+ *  counters are well under 1e9 and the forced decimal reads consistently. */
+function countFormat(n: number): Format {
+  return n >= 1_000_000
+    ? {
+        notation: 'compact',
+        compactDisplay: 'short',
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }
+    : { useGrouping: true };
 }
 
 export function TopNav({
@@ -81,6 +100,7 @@ export function TopNav({
   onSearchChange,
   onSearchSubmit,
   onSearchClear,
+  onSearchFocus,
   searchOverlaySlot,
 }: TopNavProps) {
   return (
@@ -136,23 +156,40 @@ export function TopNav({
           >
             <Stat
               label="TPS"
-              value={stats ? formatTps(stats.tps_60s) : '—'}
+              value={
+                <AnimatedNumber value={stats?.tps_60s} format={TPS_FORMAT} />
+              }
               valueColor="text.success"
             />
             <StatDivider />
             <Stat
               label="Ledger"
-              value={stats ? formatNumber(stats.latest_ledger_sequence) : '—'}
+              value={
+                <AnimatedNumber
+                  value={stats?.latest_ledger_sequence}
+                  format={countFormat}
+                />
+              }
             />
             <StatDivider />
             <Stat
               label="Accounts"
-              value={stats ? formatNumber(stats.total_accounts) : '—'}
+              value={
+                <AnimatedNumber
+                  value={stats?.total_accounts}
+                  format={countFormat}
+                />
+              }
             />
             <StatDivider />
             <Stat
               label="Contracts"
-              value={stats ? formatNumber(stats.total_contracts) : '—'}
+              value={
+                <AnimatedNumber
+                  value={stats?.total_contracts}
+                  format={countFormat}
+                />
+              }
             />
           </Box>
         </Box>
@@ -170,6 +207,7 @@ export function TopNav({
             onChange={onSearchChange}
             onSubmit={onSearchSubmit}
             onClear={onSearchClear}
+            onFocus={onSearchFocus}
           />
           {searchOverlaySlot && (
             <Box

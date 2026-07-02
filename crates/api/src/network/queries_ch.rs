@@ -28,45 +28,49 @@ struct StatsRow {
 
 pub async fn fetch_stats(
     client: &clickhouse::Client,
+    head: i64,
 ) -> Result<NetworkStats, clickhouse::error::Error> {
     // `ledgers` is ORDER BY `sequence`, NOT `closed_at`. Ordering or filtering
     // by `closed_at` forces a full 12M-row table scan (measured) — and this
     // endpoint is polled, so that scan recurs and eats the `read_rows` quota.
-    // `sequence` is monotonic with `closed_at` (a later ledger closes later),
-    // so we drive both reads off `sequence`: the latest ledger via
-    // `ORDER BY sequence DESC LIMIT 1` (primary-key read-in-order, one
-    // granule), and the 60s TPS window via a `sequence > max-200` prune that
-    // bounds the scan to the most recent ~200 ledgers (~20 min of headroom for
-    // a 60s window) before the `closed_at` predicate refines it.
-    let row_opt = client
-        .query(
-            "SELECT \
-                latest.sequence AS latest_ledger_sequence, \
-                latest.closed_at AS latest_ledger_closed_at, \
-                now64() AS generated_at, \
-                toFloat64(ifNull( \
-                    (SELECT sum(transaction_count) \
-                            / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0) \
-                     FROM ledgers \
-                     WHERE sequence > (SELECT max(sequence) FROM ledgers) - 200 \
-                       AND closed_at >= now64() - INTERVAL 60 SECOND), \
-                    0 \
-                )) AS tps_60s, \
-                ifNull((SELECT total_rows FROM system.tables \
-                    WHERE database = currentDatabase() AND name = 'accounts'), 0) \
-                    AS total_accounts, \
-                ifNull((SELECT total_rows FROM system.tables \
-                    WHERE database = currentDatabase() AND name = 'soroban_contracts'), 0) \
-                    AS total_contracts \
-             FROM ( \
-                 SELECT sequence, closed_at \
+    // We drive both reads off `sequence`, pinned to the caller's `head` (the
+    // chain head the cache version-keys on — `crate::common::head`):
+    //   * the latest ledger via `WHERE sequence = head` (primary-key point
+    //     read, one granule) — so `latest_ledger_sequence` always equals the
+    //     cache key (no TOCTOU, no re-derivation of "latest" here);
+    //   * the 60s TPS window via a `sequence > head - 200` prune that bounds
+    //     the scan to the most recent ~200 ledgers (~20 min of headroom for a
+    //     60s window) before the `closed_at` predicate refines it.
+    // `head` is a trusted i64 from our own head probe, so it is inlined (no
+    // injection surface) — matching the i64-inlining convention in
+    // `crates/api/src/common/ch.rs`. This also drops the previous inner
+    // `(SELECT max(sequence) FROM ledgers)` subquery — one fewer read.
+    let sql = format!(
+        "SELECT \
+            latest.sequence AS latest_ledger_sequence, \
+            latest.closed_at AS latest_ledger_closed_at, \
+            now64() AS generated_at, \
+            toFloat64(ifNull( \
+                (SELECT sum(transaction_count) \
+                        / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0) \
                  FROM ledgers \
-                 ORDER BY sequence DESC \
-                 LIMIT 1 \
-             ) AS latest",
-        )
-        .fetch_optional::<StatsRow>()
-        .await?;
+                 WHERE sequence > {head} - 200 \
+                   AND closed_at >= now64() - INTERVAL 60 SECOND), \
+                0 \
+            )) AS tps_60s, \
+            ifNull((SELECT total_rows FROM system.tables \
+                WHERE database = currentDatabase() AND name = 'accounts'), 0) \
+                AS total_accounts, \
+            ifNull((SELECT total_rows FROM system.tables \
+                WHERE database = currentDatabase() AND name = 'soroban_contracts'), 0) \
+                AS total_contracts \
+         FROM ( \
+             SELECT sequence, closed_at \
+             FROM ledgers \
+             WHERE sequence = {head} \
+         ) AS latest"
+    );
+    let row_opt = client.query(&sql).fetch_optional::<StatsRow>().await?;
 
     let Some(row) = row_opt else {
         return Ok(NetworkStats {

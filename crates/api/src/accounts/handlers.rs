@@ -166,7 +166,7 @@ pub async fn get_account(
         }
     };
 
-    let balances = match fetch_balances_for_source(&state, source, header.id).await {
+    let balances = match fetch_account_balances(&state, header.id).await {
         Ok(rows) => rows
             .into_iter()
             .map(|r| AccountBalance {
@@ -174,12 +174,26 @@ pub async fn get_account(
                 asset_type: r.asset_type,
                 asset_code: r.asset_code,
                 asset_issuer: r.asset_issuer,
+                contract_id: r.contract_id,
+                name: r.name,
+                symbol: r.symbol,
                 balance: r.balance,
+                decimals: r.decimals,
                 last_updated_ledger: r.last_updated_ledger,
             })
             .collect(),
         Err(e) => {
             tracing::error!(source = ?source, "DB error fetching balances for {account_id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let deleted = match fetch_deleted_for_source(&state, source, header.id, header.last_seen_ledger)
+        .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!(source = ?source, "DB error deriving deleted status for {account_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -191,6 +205,7 @@ pub async fn get_account(
         home_domain: header.home_domain,
         first_seen_ledger: header.first_seen_ledger,
         last_seen_ledger: header.last_seen_ledger,
+        deleted,
     };
 
     let mut resp = Json(body).into_response();
@@ -325,7 +340,7 @@ async fn fetch_list_for_source(
         DataSource::Pg => fetch_list(&state.db, params, sort, direction)
             .await
             .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, sort, direction)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, sort, direction)
             .await
             .map_err(AcctFetchError::Ch),
     }
@@ -340,25 +355,40 @@ async fn fetch_account_for_source(
         DataSource::Pg => queries::fetch_account(&state.db, account_strkey)
             .await
             .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_account(state.ch(), account_strkey)
+        DataSource::Ch => queries_ch::fetch_account(&state.ch(), account_strkey)
             .await
             .map_err(AcctFetchError::Ch),
     }
 }
 
-async fn fetch_balances_for_source(
+/// Derived `deleted` status (task 0324). CH-only: prod serves accounts from
+/// CH, so the PG branch returns `false` rather than carrying a duplicate
+/// derivation. See `queries_ch::fetch_deleted_status`.
+async fn fetch_deleted_for_source(
     state: &AppState,
     source: DataSource,
+    account_surrogate_id: i64,
+    last_seen_ledger: i64,
+) -> Result<bool, AcctFetchError> {
+    match source {
+        DataSource::Pg => Ok(false),
+        DataSource::Ch => {
+            queries_ch::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger)
+                .await
+                .map_err(AcctFetchError::Ch)
+        }
+    }
+}
+
+async fn fetch_account_balances(
+    state: &AppState,
     account_id: i64,
 ) -> Result<Vec<AccountBalanceRow>, AcctFetchError> {
-    match source {
-        DataSource::Pg => queries::fetch_balances(&state.db, account_id)
-            .await
-            .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_balances(state.ch(), account_id)
-            .await
-            .map_err(AcctFetchError::Ch),
-    }
+    // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331);
+    // the legacy PG portfolio path was cut (PG retired).
+    queries_ch::fetch_balances(&state.ch(), account_id)
+        .await
+        .map_err(AcctFetchError::Ch)
 }
 
 async fn fetch_account_tx_for_source(
@@ -391,7 +421,7 @@ async fn fetch_account_tx_for_source(
             .map_err(AcctFetchError::Pg)
         }
         DataSource::Ch => {
-            queries_ch::fetch_transactions(state.ch(), account_id, limit, cursor, sort, direction)
+            queries_ch::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction)
                 .await
                 .map_err(AcctFetchError::Ch)
         }

@@ -79,18 +79,27 @@ ends at ClickHouse on Hetzner via the mTLS proxy:
 Stellar Network peers / history archives
   -> Galexie on ECS Fargate (eu-central-1)
   -> S3 bucket: stellar-ledger-data
-  -> SQS queue: ledger-ingest          (S3 ObjectCreated notification)
+  -> SNS topic: {env}-ledger-events    (S3 ObjectCreated notification; fan-out, task 0306)
+  -> SQS queue: ledger-ingest          (SNS subscription, rawMessageDelivery=true)
   -> Lambda: Ledger Processor (eu-central-1, ARM64, out-of-VPC; SQS event-source-mapping)
   -> Caddy mTLS reverse proxy (Hetzner AX52)
   -> ClickHouse 26.x (Hetzner AX52)
 ```
 
-The S3 → SQS → Lambda hop (not a direct S3 → Lambda trigger) is deliberate
+The S3 → SNS → SQS → Lambda hop (not a direct S3 → Lambda trigger) is deliberate
 (task 0241), and the SQS message is treated as a **content-free doorbell**, not
 as "process this object":
 
-- S3 `ObjectCreated` → the `ledger-ingest` SQS queue. The message body is
-  ignored by the Lambda.
+- S3 `ObjectCreated` → the `{env}-ledger-events` SNS topic → the `ledger-ingest`
+  SQS queue (via an SNS subscription with `rawMessageDelivery=true`). The message
+  body is ignored by the Lambda either way — the doorbell is content-free, so the
+  SNS-envelope-vs-raw body shape does not affect ingestion. `rawMessageDelivery`
+  is set so the SQS body stays byte-identical to the legacy direct `S3 → SQS`
+  shape and matches what the prices-api consumer expects (it _does_ read the S3
+  object key from the body). The SNS topic exists to fan the same doorbells out
+  to a second tenant (prices-api, same AWS account) on its own queue — S3 permits
+  only one destination per overlapping `event + suffix`, so the topic replaces
+  the direct wiring (task 0306).
 - Each invocation runs a **reconcile**: read the durable cursor
   `max(sequence)` from CH, then persist the **contiguous** run of ledgers from
   `max + 1` upward — deriving each object key from the ledger number (Galexie's
@@ -104,7 +113,7 @@ as "process this object":
 - A reconcile that hits a gap or the time budget acks the doorbell; a hard
   CH/S3 failure fails the doorbell → SQS redelivers (per `maxReceiveCount`) →
   DLQ (`ledger-processor-dlq`), recoverable via SQS redrive-to-source.
-- The S3 → SQS notification stays wired even when the Lambda is paused
+- The S3 → SNS → SQS notification stays wired even when the Lambda is paused
   (`indexerLambdaConcurrency = 0`), so a paused indexer still captures events
   durably (visible `ApproximateNumberOfMessages`, multi-day retention) instead
   of dropping them.
@@ -122,13 +131,16 @@ workstations and lands directly into the same Hetzner ClickHouse (the
 
 ### 3.2 Main Runtime Components
 
-The pipeline depends on six primary runtime components:
+The pipeline depends on seven primary runtime components:
 
 - **Galexie on ECS Fargate (eu-central-1)** for canonical ledger export
 - **S3** for transient `LedgerCloseMeta` object storage
-- **`ledger-ingest` SQS queue** as the durable buffer between S3 and the
-  Lambda (S3 `ObjectCreated` → SQS; redrive → `ledger-processor-dlq` after
-  `maxReceiveCount`)
+- **`{env}-ledger-events` SNS topic** as the fan-out point so S3 doorbells reach
+  both the indexer's queue and a second tenant (prices-api) on its own queue
+  (task 0306)
+- **`ledger-ingest` SQS queue** as the durable buffer between the topic and the
+  Lambda (S3 `ObjectCreated` → SNS → SQS with `rawMessageDelivery`; redrive →
+  `ledger-processor-dlq` after `maxReceiveCount`)
 - **Ledger Processor Lambda** for event-driven parsing and persistence (ARM64,
   out-of-VPC, AWS Parameters and Secrets Lambda Extension for mTLS cert
   retrieval; driven by an SQS event-source-mapping with
@@ -370,6 +382,24 @@ look like skeletons. Without the flag the bootstrap step is skipped
 (participants-driven skeleton rows persist as-is). The mechanism
 closes the 2026-05-12 CH-pilot audit §E06 gap and is documented in
 [`docs/architecture/database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism`](../database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism).
+
+The same `--soroban-rpc-url` flag drives the **`balance-seed`** one-shot pass
+(task [0331](../../../lore/1-tasks/active/0331_FEATURE_soroban-token-supply-holders-event-fold/README.md))
+for bespoke Soroban-token (`asset_type = 3`) per-holder balances. The live
+parser writes the unified `balances` table only when it observes a
+`ContractData` `Balance(Address)` change, so dormant holders are absent and
+`total_supply` (`sum(amount)`) + `holder_count` (`countIf(amount > 0)`)
+under-count. `balance-seed` enumerates each type-3 token's holder candidates
+from its `soroban_events` topics/data (the event SET — value comes from ledger
+STATE, never an event-fold), reads their current `Balance(Address)` entries via
+`getLedgerEntries`, and upserts `balances`. Supply is then the single
+`balance_aggregates` `sum(amount)` (task 0331 Option A — no per-token
+`TotalSupply` key read; a mint always credits a holder balance, contract
+treasuries summed because holders include `C…`, so the sum equals real supply;
+residue = TTL-archived tail + true rebasing). It reads CURRENT chain state, so the snapshot is correct
+regardless of indexer lag; live ingest supersedes it on catch-up
+(`ReplacingMergeTree` by `last_updated_ledger`). CH-only, idempotent, `--dry-run`
+supported.
 
 ### 6.3 Backfill Scope and Execution Model
 

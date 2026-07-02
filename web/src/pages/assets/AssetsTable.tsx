@@ -3,24 +3,30 @@ import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
   Dash,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
+  scaleByDecimals,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetTypeMeta } from './assetType.js';
+import { assetTypeMeta, SAC_TAG } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
     id: 'token',
     header: 'Token',
+    width: 240,
     cell: (row) => {
-      const meta = assetTypeMeta(row.asset_type_name);
+      const typeMeta = assetTypeMeta(row.asset_type_name);
+      // Soroban-native tokens have no classic asset_code; fall back to the
+      // on-chain SEP-41 symbol as the token label (task 0304).
+      const label = row.asset_code ?? row.symbol;
       return (
         <Stack
           direction="row"
@@ -31,9 +37,9 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
-              {row.asset_code ? (
+              {label ? (
                 <IdentifierDisplay
-                  value={row.asset_code}
+                  value={label}
                   type="asset"
                   truncate={false}
                   href={routes.asset(row.id)}
@@ -41,7 +47,10 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
               ) : (
                 <Dash />
               )}
-              <Chip size="sm" color={meta.color} label={meta.label} />
+              <Chip size="sm" color={typeMeta.color} label={typeMeta.label} />
+              {row.sac_deployed && (
+                <Chip size="sm" color={SAC_TAG.color} label={SAC_TAG.label} />
+              )}
             </Stack>
             {row.name && (
               <Typography
@@ -59,9 +68,19 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
   {
     id: 'issuer',
     header: 'Issuer / Contract ID',
+    width: 160,
+    // Soroban contract identity → always linked. A SAC facet (`sac_contract_id`)
+    // links to its contract page only when deployed — an un-deployed SAC is a
+    // reserved address, not a live contract (ADR 0051, subsumes 0337).
     cell: (row) =>
       row.contract_id ? (
         <IdentifierWithCopy value={row.contract_id} type="contract" />
+      ) : row.sac_contract_id ? (
+        <IdentifierWithCopy
+          value={row.sac_contract_id}
+          type="contract"
+          linked={row.sac_deployed ?? false}
+        />
       ) : row.issuer ? (
         <IdentifierWithCopy value={row.issuer} type="account" />
       ) : (
@@ -72,26 +91,33 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     id: 'supply',
     header: 'Total supply',
     align: 'right',
-    cell: (row) => (
-      <Stack sx={{ alignItems: 'flex-end' }}>
-        <Typography variant="bodySmRegular">
-          {formatAmount(row.total_supply)}
-        </Typography>
-        {row.asset_code && (
-          <Typography
-            variant="bodyXsRegular"
-            sx={(theme) => ({ color: theme.palette.text.tertiary })}
-          >
-            {row.asset_code}
+    width: 150,
+    cell: (row) => {
+      // Supply unit: classic asset_code, else the Soroban SEP-41 symbol so
+      // the amount reads e.g. "1.5 USDC" instead of bare (task 0304).
+      const unit = row.asset_code ?? row.symbol;
+      return (
+        <Stack sx={{ alignItems: 'flex-end' }}>
+          <Typography variant="bodySmRegular">
+            {formatAmount(scaleByDecimals(row.total_supply, row.decimals))}
           </Typography>
-        )}
-      </Stack>
-    ),
+          {unit && (
+            <Typography
+              variant="bodyXsRegular"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              {unit}
+            </Typography>
+          )}
+        </Stack>
+      );
+    },
   },
   {
     id: 'holders',
     header: 'Holders',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography variant="bodySmRegular">
         {formatAmount(row.holder_count)}
@@ -105,15 +131,20 @@ export const ASSET_COLUMN_COUNT = columns.length;
 
 interface AssetsTableProps {
   rows: readonly AssetItem[];
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 /** The assets list table — token, issuer/contract, supply and holder count. */
-export function AssetsTable({ rows }: AssetsTableProps) {
+export function AssetsTable({ rows, loading, skeletonRows }: AssetsTableProps) {
   return (
     <ExplorerTable
       columns={columns}
       rows={rows}
-      rowKey={(row) => String(row.id)}
+      rowKey={(row) => row.id}
+      rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      loading={loading}
+      skeletonRows={skeletonRows}
     />
   );
 }

@@ -45,11 +45,13 @@ pub struct ContractListItem {
 pub struct ContractStats {
     pub recent_invocations: i64,
     pub recent_unique_callers: i64,
-    /// Sum of `soroban_events_appearances.amount` over the same window
-    /// as `recent_invocations`. One appearance row can represent multiple
-    /// actual events (`amount > 1`) so we sum rather than COUNT(*) — the
-    /// figure matches what `GET /v1/contracts/:id/events` would return
-    /// over the window.
+    /// Event count in the same window as `recent_invocations` (NOT the full
+    /// `/events` history — that endpoint pages all events with no time bound).
+    /// PG sums `soroban_events_appearances.amount` (one appearance row folds
+    /// multiple events, `amount > 1`); CH has no appearance-fold table, so it
+    /// `count()`s the unfolded `soroban_events` (one row per event). Both tables
+    /// are written from the same parser event stream (diagnostics dropped at
+    /// parse, System + Contract kept), so the two figures match by construction.
     pub recent_events: i64,
     /// Echoed window label (e.g. `"7 days"`) so the UI can label "last N days".
     pub stats_window: String,
@@ -64,15 +66,18 @@ pub struct ContractDetailResponse {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
-    // `name` (ADR 0042) is intentionally NOT projected — it exists only to
-    // feed `search_vector` (search by name/contract_id); no endpoint
-    // surfaces it as a response field.
-    // `metadata` field removed per ADR 0042 / task 0156. The
-    // underlying `soroban_contracts.metadata JSONB` was replaced by
-    // typed `name VARCHAR(256)`; the field was always `{}` in
-    // practice and carried no information for the detail view.
-    // Frontend already handled the empty-object case as "no
-    // metadata"; absent field has the same effect.
+    /// Task 0327: contract mutability, 3-state.
+    /// - `Some(true)` → **Upgradeable**: the current WASM imports
+    ///   `update_current_contract_wasm` (a self-upgrade path).
+    /// - `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC
+    ///   has no WASM and is always `Some(false)`).
+    /// - `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /
+    ///   pre-0327 row) — the frontend renders no chip.
+    ///
+    /// Derived from the WASM at parse time
+    /// (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
+    /// (none exists). ClickHouse-sourced; always `None` on the retired PG path.
+    pub upgradeable: Option<bool>,
     pub stats: ContractStats,
 }
 

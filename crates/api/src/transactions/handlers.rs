@@ -9,20 +9,23 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use domain::OperationType;
 
 use crate::common::cache_control;
+use crate::common::conditional;
 use crate::common::cursor::{self, Direction};
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
+use crate::common::head;
 use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
-use crate::runtime_enrichment::stellar_archive::dto::HeavyFieldsStatus;
+use crate::runtime_enrichment::stellar_archive::dto::{E3HeavyFields, HeavyFieldsStatus};
 use crate::runtime_enrichment::stellar_archive::extractors::extract_e3_heavy;
 use crate::runtime_enrichment::stellar_archive::merge::merge_e3_response;
 use crate::state::AppState;
@@ -66,6 +69,7 @@ enum TxFetchError {
     responses(
         (status = 200, description = "Paginated transaction list",
          body = Paginated<TransactionListItem>),
+        (status = 304, description = "Not Modified — `If-None-Match` matched the current chain head (live first page only)"),
         (status = 400, description = "Invalid query parameter", body = ErrorEnvelope),
         (status = 500, description = "Internal server error",   body = ErrorEnvelope),
     ),
@@ -74,6 +78,7 @@ pub async fn list_transactions(
     State(state): State<AppState>,
     pagination: Pagination<TxListCursor>,
     Query(params): Query<ListParams>,
+    headers: HeaderMap,
 ) -> Response {
     // Shape-validate filters before touching DB. Without these checks an
     // invalid StrKey would silently produce an empty result set, and an
@@ -113,6 +118,24 @@ pub async fn list_transactions(
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
+    // Conditional GET on the LIVE first page only (task 0292): the list is
+    // always newest-first, so with no cursor its content is a pure function of
+    // the chain head → the head is a valid `ETag`. Filtered first pages are
+    // included (a filter narrows the rows but they still only change when a new
+    // ledger lands, so head-keying is correct, never stale). Cursored
+    // (historical) pages are excluded — head-independent. The head probe is
+    // therefore paid only on the polled live request.
+    let live_head = if pagination.cursor.is_none() {
+        head::current_head_opt(&state, source).await
+    } else {
+        None
+    };
+    if let Some(head) = live_head
+        && conditional::if_none_match_satisfied(&headers, head)
+    {
+        return conditional::not_modified(head);
+    }
+
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
@@ -125,7 +148,7 @@ pub async fn list_transactions(
 
     // Fetch limit+1 rows — extra peek drives forward-continuation detection.
     let mut rows: Vec<TxListRow> =
-        match fetch_list_for_source(&state, source, &resolved, direction).await {
+        match fetch_list_for_source(&state, source, &resolved, direction, live_head).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(source = ?source, "DB error in list_transactions: {e}");
@@ -168,8 +191,24 @@ pub async fn list_transactions(
         })
         .collect();
 
+    // ETag on the live first page so the next poll can revalidate to `304`
+    // (task 0292). Derive it from the BODY (the newest returned row's
+    // `ledger_sequence`), not the pre-query `live_head`: if a ledger landed
+    // between the head probe and the query, the page reflects that newer head,
+    // and a strong validator must equal the bytes sent. Falls back to
+    // `live_head` for an empty page. The CH path already caps the scan at
+    // `live_head`, so there body_head == live_head. (Rows are newest-first on
+    // the live page, so `first()` is the max sequence.)
+    let body_head = data.first().map(|r| r.ledger_sequence);
+
     let mut resp = Json(into_envelope(data, page)).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
+    // LIVE (max-age=0): the home feed polls this list once per ledger; any
+    // browser-cache TTL ≥ the ~5.8s cadence would batch 2-3 ledgers per
+    // visible update (see common::cache_control).
+    cache_control::attach(&mut resp, cache_control::LIVE);
+    if let Some(h) = live_head {
+        conditional::attach_etag(&mut resp, body_head.unwrap_or(h));
+    }
     resp
 }
 
@@ -274,63 +313,20 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
         }
     };
 
-    let op_rows: Vec<OpRow> = match fetch_operations_for_source(&state, source, &tx).await {
+    // Overlap the DB operations query with the heavy archive fetch (task 0330).
+    // Both depend only on `tx` (resolved above) and are independent of each
+    // other; the heavy path is the dominant cost (cross-region archive fetch +
+    // XDR parse), so running the ops query concurrently hides its round-trip
+    // under the archive latency instead of paying both serially.
+    let (op_rows_res, heavy) = tokio::join!(
+        fetch_operations_for_source(&state, source, &tx),
+        compute_heavy(&state, &hash, &tx),
+    );
+    let op_rows: Vec<OpRow> = match op_rows_res {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(source = ?source, "DB error fetching operations: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    // ADR 0029 read path: fetch the parent ledger from the public Stellar
-    // archive. On upstream failure → graceful degradation: heavy = None,
-    // merge_e3_response sets heavy_fields_status = "unavailable" while still
-    // returning the light slice from DB. Out-of-range BIGINT → u32 also
-    // degrades to heavy = None rather than wrapping silently.
-    //
-    // Task 0190: when `tx.parse_error = true` in the DB, the indexer
-    // already failed to parse the XDR for this transaction. Re-fetching
-    // and re-parsing from the public archive can either (a) succeed and
-    // produce fresh heavy fields, masking the historical DB flag, or
-    // (b) fail again with the same conditions, in which case
-    // `extract_e3_heavy` returns an `E3HeavyFields` struct with mostly
-    // empty values via `filter(!is_empty)` — which serializes as
-    // `heavy_fields_status: "ok"` with NULL XDR fields, violating the
-    // lore-0046 / lore-0044 contract that parse_error transactions
-    // serve `heavy: null` + `heavy_fields_status: "unavailable"`.
-    //
-    // The DB flag is the ground-truth signal of "we know this tx had
-    // an XDR parsing problem"; surfacing it explicitly via the
-    // `unavailable` status preserves that signal end-to-end and saves
-    // the S3 round-trip on degraded rows.
-    let heavy = if tx.parse_error {
-        tracing::debug!(
-            tx_hash = %hash,
-            "skipping archive fetch for parse_error transaction; \
-             surfacing heavy_fields_status = unavailable per lore-0046 contract"
-        );
-        None
-    } else {
-        match u32::try_from(tx.ledger_sequence) {
-            Ok(seq) => match state
-                .runtime_enrichment
-                .stellar_archive
-                .fetch_ledger(seq)
-                .await
-            {
-                Ok(meta) => extract_e3_heavy(&meta, &hash, &state.network_id),
-                Err(e) => {
-                    tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
-                    None
-                }
-            },
-            Err(_) => {
-                tracing::warn!(
-                    "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
-                    tx.ledger_sequence
-                );
-                None
-            }
         }
     };
 
@@ -411,6 +407,54 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     resp
 }
 
+/// Resolve the E3 heavy block for `tx` via the ADR 0029 read path: fetch the
+/// parent ledger from the public Stellar archive, then `extract_e3_heavy`. Kept
+/// as its own future so the handler can `tokio::join!` it with the DB ops query
+/// (the overlap hides the ops round-trip under the archive latency).
+///
+/// Returns `None` (→ `heavy_fields_status: "unavailable"`, graceful
+/// degradation per ADR 0029) for:
+///   - `tx.parse_error` rows: the indexer already failed to parse this tx's
+///     XDR (lore-0190); re-fetching could mask the historical flag or emit an
+///     `ok` status with NULL fields, violating the lore-0046/0044 contract
+///     that such rows serve `heavy: null`. Skipping it also saves the S3
+///     round-trip;
+///   - an out-of-u32-range `ledger_sequence` (cannot address the archive);
+///   - an archive fetch failure or a ledger that does not contain the tx.
+async fn compute_heavy(state: &AppState, hash: &str, tx: &TxDetailRow) -> Option<E3HeavyFields> {
+    if tx.parse_error {
+        tracing::debug!(
+            tx_hash = %hash,
+            "skipping archive fetch for parse_error transaction; \
+             surfacing heavy_fields_status = unavailable per lore-0046 contract"
+        );
+        return None;
+    }
+    let seq = match u32::try_from(tx.ledger_sequence) {
+        Ok(seq) => seq,
+        Err(_) => {
+            tracing::warn!(
+                "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
+                tx.ledger_sequence
+            );
+            return None;
+        }
+    };
+
+    match state
+        .runtime_enrichment
+        .stellar_archive
+        .fetch_ledger(seq)
+        .await
+    {
+        Ok(meta) => extract_e3_heavy(&meta, hash, &state.network_id),
+        Err(e) => {
+            tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+            None
+        }
+    }
+}
+
 fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
     op_rows
         .iter()
@@ -444,12 +488,23 @@ async fn fetch_list_for_source(
     source: DataSource,
     params: &ResolvedListParams,
     direction: Direction,
+    // Known chain head for the live first page (task 0292 §6) — lets the CH
+    // statement inline it instead of re-deriving `max(sequence)` and pins the
+    // candidate scan to the ETag'd head. `None` for cursored pages / when the
+    // head was not read.
+    head: Option<i64>,
 ) -> Result<Vec<TxListRow>, TxFetchError> {
+    // Test-only audit: count actual heavy-query executions so the
+    // conditional-GET tests can prove a 304 short-circuits BEFORE this runs.
+    #[cfg(test)]
+    state
+        .list_query_count
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match source {
         DataSource::Pg => queries::fetch_list(&state.db, params, direction)
             .await
             .map_err(TxFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, direction)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, direction, head)
             .await
             .map_err(TxFetchError::Ch),
     }
@@ -478,13 +533,13 @@ async fn lookup_detail_for_source(
                 .map_err(TxFetchError::Pg)
         }
         DataSource::Ch => {
-            let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(state.ch(), hash_hex)
+            let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(&state.ch(), hash_hex)
                 .await
                 .map_err(TxFetchError::Ch)?
             else {
                 return Ok(None);
             };
-            queries_ch::fetch_detail(state.ch(), hash_hex, ledger_sequence)
+            queries_ch::fetch_detail(&state.ch(), hash_hex, ledger_sequence)
                 .await
                 .map_err(TxFetchError::Ch)
         }
@@ -500,7 +555,7 @@ async fn fetch_operations_for_source(
         DataSource::Pg => queries::fetch_operations(&state.db, tx.id, tx.created_at)
             .await
             .map_err(TxFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_operations(state.ch(), tx.id, tx.ledger_sequence)
+        DataSource::Ch => queries_ch::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence)
             .await
             .map_err(TxFetchError::Ch),
     }
@@ -515,7 +570,7 @@ async fn fetch_participants_for_source(
         DataSource::Pg => queries::fetch_participants(&state.db, tx.id, tx.created_at)
             .await
             .map_err(TxFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_participants(state.ch(), tx.id, tx.ledger_sequence)
+        DataSource::Ch => queries_ch::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence)
             .await
             .map_err(TxFetchError::Ch),
     }
@@ -531,7 +586,7 @@ async fn fetch_events_for_source(
             .await
             .map_err(TxFetchError::Pg),
         DataSource::Ch => {
-            queries_ch::fetch_event_appearances(state.ch(), tx.id, tx.ledger_sequence)
+            queries_ch::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence)
                 .await
                 .map_err(TxFetchError::Ch)
         }
@@ -548,9 +603,113 @@ async fn fetch_invocations_for_source(
             .await
             .map_err(TxFetchError::Pg),
         DataSource::Ch => {
-            queries_ch::fetch_invocation_appearances(state.ch(), tx.id, tx.ledger_sequence)
+            queries_ch::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence)
                 .await
                 .map_err(TxFetchError::Ch)
         }
+    }
+}
+
+#[cfg(test)]
+mod conditional_tests {
+    //! `DATABASE_URL`-gated conditional-GET tests for `GET /v1/transactions`.
+    //! Skips cleanly when the env var is unset/unreachable (mirrors the
+    //! network-stats integration test). Runs against the PG datasource (the
+    //! `for_tests` default), so it needs only a migrated DB — empty is fine.
+    use std::sync::atomic::Ordering;
+
+    use axum::body::{self, Body};
+    use axum::http::{Request, StatusCode, header};
+    use sqlx::PgPool;
+    use tower::ServiceExt;
+    use utoipa_axum::router::OpenApiRouter;
+
+    use crate::runtime_enrichment::RuntimeEnrichment;
+    use crate::runtime_enrichment::sep1::Sep1Fetcher;
+    use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
+    use crate::state::AppState;
+
+    fn test_state(db: PgPool) -> AppState {
+        let runtime_enrichment = RuntimeEnrichment {
+            stellar_archive: StellarArchiveFetcher::new(
+                crate::runtime_enrichment::stellar_archive::test_client(),
+            ),
+            sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
+            nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
+                .expect("build nft_token_uri fetcher"),
+        };
+        AppState::for_tests(db, runtime_enrichment)
+    }
+
+    fn app(state: AppState) -> axum::Router {
+        let (router, _spec) = OpenApiRouter::new()
+            .nest("/v1", crate::transactions::router())
+            .with_state(state)
+            .split_for_parts();
+        router
+    }
+
+    /// The load-bearing acceptance criterion (task 0292): a matching
+    /// `If-None-Match` on the live first page returns `304` with an empty body
+    /// **without** running the heavy list query — asserted via the shared
+    /// `list_query_count` audit counter, which only the heavy path increments.
+    #[tokio::test]
+    async fn live_list_304_short_circuits_before_heavy_query() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset — skipping tx conditional-GET test");
+            return;
+        };
+        let pool = match PgPool::connect(&database_url).await {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("DATABASE_URL unreachable ({err}) — skipping tx conditional-GET test");
+                return;
+            }
+        };
+        let state = test_state(pool);
+
+        // 1) Live first page → 200 + ETag; the heavy query runs exactly once.
+        let resp = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/transactions?limit=5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let etag = resp
+            .headers()
+            .get(header::ETAG)
+            .expect("ETag on live 200")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            state.list_query_count.load(Ordering::Relaxed),
+            1,
+            "first live request must run the heavy query"
+        );
+
+        // 2) Same head via If-None-Match → 304, empty body, heavy query NOT run.
+        let resp = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/transactions?limit=5")
+                    .header(header::IF_NONE_MATCH, &etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(bytes.is_empty(), "304 body must be empty");
+        assert_eq!(
+            state.list_query_count.load(Ordering::Relaxed),
+            1,
+            "304 short-circuit must NOT run the heavy query"
+        );
     }
 }

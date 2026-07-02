@@ -166,6 +166,14 @@ The backend serves data from the block explorer's own database, adding:
     [ADR 0034](../../../lore/2-adrs/0034_soroban-invocations-appearances-read-time-detail.md))
     and E14 `/contracts/:id/events` (full event detail). List endpoints never
     call the archive and answer from typed summary columns + appearance indexes only.
+    The S3 GET is **cross-region** (the API Lambda runs in eu-central-1; the
+    public archive bucket is in us-east-2), which dominates E3 latency (~2–3 s).
+    For E3 the zstd-decompress + XDR parse runs on `spawn_blocking` and overlaps
+    the DB ops query (`tokio::join!`); a per-Lambda in-process cache of the heavy
+    block was trialled (task 0330) but **removed** after it showed a 0% hit rate
+    in production (request scatter across the Lambda fleet). The remaining
+    server-side latency lever is edge caching (the response is already
+    `public, max-age=300`).
   - **`runtime_enrichment::sep1`** — issues HTTPS GETs to
     `https://{issuer.home_domain}/.well-known/stellar.toml`, parses the SEP-1
     schema, and merges `[[CURRENCIES]]` per-token fields plus
@@ -206,6 +214,27 @@ The backend serves data from the block explorer's own database, adding:
   the natural identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)`,
   which is why `/assets/:id` and the list cursor use the composite token /
   composite keyset rather than the dropped `assets.id`.
+  **SAC is a facet, not a type** ([ADR 0051](../../../lore/2-adrs/0051_sac-as-facet-of-classic-credit.md),
+  task 0339): `asset_type_name` / `filter[type]` no longer carry `sac`; the asset
+  DTO surfaces `sac_contract_id` (the SAC's `C…`, **re-derived on read** from
+  `code:issuer` via `derive_sac_strkey` — never stored) + `sac_deployed`, both
+  read from the indexer-owned `asset_sac` side table (`AggregatingMergeTree`,
+  `max`-merged) LEFT-JOINed at read — NOT columns on `assets` (which is
+  re-written whole every ledger and would clobber them). The canonical `id` of a
+  SAC-wrap is its `CODE-ISSUER`, and the "SAC" view is the property filter
+  `filter[sac]=true` (`sac.sac_deployed` — deployed SACs only; reserved
+  un-deployed addresses are excluded). `/assets/{C…}` deep-links
+  resolve either a soroban contract OR a SAC — `fetch_by_contract_id` hashes the
+  input `C…` to its surrogate and matches it against the (small, whole-table
+  aggregated) `asset_sac` join.
+  The `nfts` table on ClickHouse is likewise **surrogate-free** (keyed on
+  `(contract_id, token_id)`): the wire `NftItem.id` is dropped, the list cursor
+  keys on `(minted_at_ledger, contract_id, token_id)`, and the transfers
+  timeline keys on `(contract_id, token_id)` directly (no `nft_id`). NFT
+  `name` / `media_url` / `collection_name` are read from the `nft_enrichment`
+  side table (`argMax(_, version)`), since the indexer-owned `nfts.*` copies are
+  vestigial NULL on CH; full enrichment coverage is a prod-flip prerequisite,
+  the same gate as `assets` ↔ task 0231.
 
 ### 4.2 What the Backend Must Not Do
 
@@ -372,6 +401,15 @@ carries no composite identity). The response `id` field echoes that same canonic
 (contract StrKey → else `CODE-ISSUER` → else `native`), so a client routes by echoing it
 verbatim. A bare numeric is rejected with `400 invalid_id`.
 
+The displayed `name`, `symbol`, and `decimals` are **read-composed from side
+tables**, not from the `assets` row — `assets.name` has had no writer since task 0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
+(classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
+SEP-41 `METADATA`, task 0297) → `'Stellar Lumen'` for native; `symbol` /
+`decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
+classic/SAC). The Postgres read path still reads the legacy `assets.name` and
+surfaces no symbol/decimals until the assets module ports to ClickHouse (task
+0243). See `endpoint-queries-clickhouse/{08,09}_get_assets*.sql`.
+
 **`GET /assets/:id/transactions`** - Paginated transactions involving this asset
 (addressed by the same `:id` token forms).
 
@@ -386,7 +424,7 @@ Soroban-native assets while still serving all through a unified explorer API.
 the same window as the contract-detail stats). Filters: `filter[type]` (token | other |
 nft | fungible) and `filter[q]` (full-text over name + contract_id).
 
-**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), and per-contract activity stats. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with typed `name VARCHAR(256)` consumed only by the search query (`COALESCE(sc.name, '')` in `22_get_search.sql`); the detail page previously returned `{}` for every row and lost no information when the field was dropped.
+**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with typed `name VARCHAR(256)` consumed only by the search query (`COALESCE(sc.name, '')` in `22_get_search.sql`); the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has itself had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts) and is dropped pending the 0243 CH cutover.
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
@@ -509,12 +547,13 @@ Per task 0055, every public endpoint sets an explicit `Cache-Control` header
 that the API Gateway stage cache (CDK config — task 0097) honours. Constants
 live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
 
-| Tier             | `Cache-Control`       | Endpoints                                                                                                                                                                                                           |
-| ---------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Long** (300s)  | `public, max-age=300` | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                      |
-| **Medium** (60s) | `public, max-age=60`  | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                   |
-| **Short** (10s)  | `public, max-age=10`  | `GET /network/stats`, list endpoints, `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, etc. |
-| **No-store**     | `no-store`            | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                              |
+| Tier             | `Cache-Control`                      | Endpoints                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Long** (300s)  | `public, max-age=300`                | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                                                                                                                                                                                 |
+| **Medium** (60s) | `public, max-age=60`                 | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                                                                                                                                                                              |
+| **Short** (10s)  | `public, max-age=10`                 | `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, non-live lists, etc.                                                                                                                                                                                  |
+| **Live** (0s)    | `public, max-age=0, must-revalidate` | `GET /network/stats`, `GET /ledgers` (list), `GET /transactions` (list) — the per-ledger live polls. Any browser-cache TTL ≥ the ~5.8 s ledger cadence re-serves a stale payload to the adaptive poll and the feed batches 2-3 ledgers per visible update, so these endpoints opt out of HTTP caching entirely; request coalescing is the in-process moka layer's job instead. |
+| **No-store**     | `no-store`                           | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                                                                                                                                                                                         |
 
 Two endpoints carry **conditional** logic:
 
@@ -536,6 +575,71 @@ The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
 `infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
 clamps to its configured floor); raising above 10s would expose stale data
 past one Stellar ledger cycle (~5s).
+
+#### Conditional GET — `ETag` / `304` on the Live tier (task 0292)
+
+The Live tier already carries `must-revalidate`, so every poll round-trips to
+the origin. Task 0292 makes those round-trips cheap with a conditional GET
+keyed on the chain head, implemented in
+[`crates/api/src/common/conditional.rs`](../../../crates/api/src/common/conditional.rs):
+
+- **`ETag` value is the chain head** (`latest_ledger_sequence`) from
+  `crate::common::head` — the same cheap single-row probe the version-keyed
+  cache uses (see §8.1). Emitted on `200` by `GET /network/stats` and the
+  **live first page** of `GET /transactions` and `GET /ledgers`. Two validator
+  strengths (`crate::common::conditional`):
+  - **Lists → strong** (`"<head>"`). The list envelope is byte-stable for a
+    given head, so a strong tag is correct. It is derived from the **returned
+    body** (the newest row's `ledger_sequence`/`sequence`), not the pre-query
+    head, so the validator always equals the bytes sent even if a ledger lands
+    between the head probe and the query.
+  - **`/network/stats` → weak** (`W/"<head>"`). The stats body carries a
+    per-SELECT `generated_at` wall-clock, so two `200`s at the same head can
+    differ byte-for-byte (also via a cache recompute or the last-good
+    fallback); a strong validator would violate RFC 7232 §2.1. `If-None-Match`
+    uses weak comparison regardless, so the `304` short-circuit is identical.
+- **`If-None-Match` short-circuits to `304 Not Modified` _before_ the heavy
+  query.** On a request whose `If-None-Match` already names the current head,
+  the handler returns an empty-body `304` after only the cheap head probe — the
+  35M-row list / stats statement never runs. This is the load-bearing
+  condition: if the tag were computed by running the query, only egress would
+  be saved, not the warehouse read. An idle poll therefore costs one head probe
+  and nothing else, and external API clients (task 0277), whose polling we do
+  not control, stop re-reading the warehouse every tick.
+- **Scope — live first page only.** The head is a valid validator only for a
+  response that is a pure function of the latest ledger: `GET /network/stats`,
+  and the lists when there is **no cursor** (for `GET /ledgers`, additionally
+  only newest-first — `?order=asc` returns the immutable oldest page). Cursored
+  (historical) pages are head-independent, so a head-keyed `ETag` would just
+  revalidate to `200` on every poll; they are excluded and keep their existing
+  behaviour, and the extra head probe is paid only on the polled live request.
+  Filtered first pages are included — a filter narrows the rows but they still
+  change only when a new ledger lands, so head-keying is never stale.
+- **`304` is not an error.** It carries the same `ETag` and the `LIVE`
+  `Cache-Control` the matching `200` would, and is explicitly exempted from the
+  `enforce_no_store_on_errors` middleware (which otherwise stamps `no-store` on
+  every non-2xx) — stamping `no-store` on a `304` would break the
+  conditional-GET contract.
+- **Edge passthrough.** Cloudflare (edge auth, task 0277) and API Gateway
+  (proxy integration) forward `If-None-Match` / `ETag` / `304` untouched — the
+  edge only injects `X-Edge-Secret` and does not strip cache validators.
+- **Shared caches never store the `304`.** The `304` carries
+  `Cache-Control: public, max-age=0, must-revalidate`, so a compliant shared
+  cache (CDN / API Gateway stage cache) never stores it, and an RFC 7234 cache
+  never serves a stored `304` to a request lacking matching validators. This
+  matters because the gateway cache key is path+query only (no `Vary` on
+  `If-None-Match` / `Authorization`; see
+  [`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md)) — `max-age=0`
+  plus the spec's defensive "cache-only-200" guidance keeps an empty-body
+  `304` from ever being replayed to another client. Cross-tenant safety does
+  not rely on this anyway: the list/stats bodies are chain-wide public data
+  with no per-caller content, so `public` is data-correct even behind the auth
+  gate. (A future change that puts any per-caller data in these bodies MUST
+  drop `public` or add `Vary`.)
+- **Not a replacement for 0290.** Conditional GET cuts _how often_ a client
+  fetches, not the cost of one fetch: when a client must fetch (new ledger,
+  first paint), the list statement still reads its rows. The load-bearing
+  warehouse-query fix remains task 0290.
 
 Cache-key requirements (consumed by CDK task 0097): full path + every query
 parameter, including `cursor`. Different filter combinations produce
@@ -600,9 +704,12 @@ Caching operates at two levels:
   transactions, closed ledgers) are cached with long TTLs at the API ingress layer. Mutable
   data (recent transactions, network stats) uses short TTLs (5-15 seconds). CloudFront is
   reserved for static frontend/document delivery in the initial topology.
-- **Backend in-memory caching** - frequently accessed reference data (contract metadata,
-  network stats) is cached in the Lambda execution environment with TTLs of 30-60 seconds
-  to reduce database round-trips. All in-process caches are built on the
+- **Backend in-memory caching** - frequently accessed reference data is cached in the
+  Lambda execution environment to reduce database round-trips. Reference data
+  (contract metadata) uses TTLs of 30-60 seconds; live-polled data (network stats)
+  is **version-keyed on the chain head** rather than a pure TTL, so a new ledger
+  is visible on the first request after it is written (see below). All
+  TTL-based in-process caches are built on the
   `moka` crate via the shared `crate::cache::ttl_cache` helper in
   `crates/api/src/cache.rs`, which fixes the TTL + `max_capacity` bound
   and yields lock-free reads, TinyLFU eviction and stampede protection
@@ -610,9 +717,27 @@ Caching operates at two levels:
   - `ContractMetadataCache` (`crates/api/src/contracts/cache.rs`,
     45 s TTL, 10 000 entries) — keyed by contract StrKey, populated on
     `GET /v1/contracts/{contract_id}`.
-  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`, 30 s TTL,
-    single-entry; uses `moka::future::Cache::try_get_with` so concurrent
-    cold-cache requests deduplicate down to a single Postgres query).
+  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`) — **version-keyed
+    on `latest_ledger_sequence`** (task 0291), not a pure TTL. Each request
+    first reads the head cheaply via `crate::common::head` (a single-row read
+    over the `ledgers` ordering key — PG `max(sequence)` over the PK, CH
+    `ORDER BY sequence DESC LIMIT 1`; see §6.4 "Live" tier) and looks the cache
+    up under that sequence: an unchanged head is a HIT, an advanced head misses
+    and recomputes once. This eliminates the up-to-TTL window where the
+    previous head was served, while `moka::future::Cache::try_get_with` still
+    collapses concurrent misses on the same head down to a single DB query. The
+    stats statement **pins** its latest-ledger row to the head it was keyed on
+    (`WHERE sequence = head`), so the response's `latest_ledger_sequence`
+    always equals the cache key (no TOCTOU / key-vs-body divergence) and the
+    head is read once per miss, not twice. A generous backstop `time_to_live`
+    (60 s) plus a small `max_capacity` only reclaim dead head keys — they are
+    not the freshness mechanism. Because the head read is now a hard dependency
+    in front of the cache (a warm HIT no longer means zero DB round-trips), a
+    head-read failure falls back to the **last good snapshot** (`AppState
+.network_last_good`, written on each miss) rather than a 500, preserving
+    the old "warm cache survives a transient DB/CH blip" property. The same
+    cheap head source is reused by the `ETag`/`304` conditional-GET layer
+    (task 0292).
     Every cache is a field of `AppState` and shared across handler
     invocations on the same warm Lambda container; cold starts begin with
     empty caches and rebuild on demand.

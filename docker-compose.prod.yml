@@ -10,12 +10,11 @@
 #   (`!override` is mandatory — without it Compose appends the new
 #   bindings to the public ones from the base file).
 # - Replaces the dev named volume with bind mounts under `/srv/`
-#   so the data, logs, and backup-staging directories survive
-#   container recreation and are reachable for the Borg backup
-#   cron entry on the host.
+#   so the data and logs directories survive container recreation
+#   and the data dir (where FREEZE writes `shadow/`) is reachable
+#   for the Borg backup cron on the host.
 # - Layers in the production-only ClickHouse XML overrides
-#   (`config.d/memory.xml`, `config.d/prometheus.xml`,
-#   `config.d/backups.xml`).
+#   (`config.d/memory.xml`, `config.d/prometheus.xml`).
 # - Switches the schema sidecar to a shell-wrapped entrypoint that
 #   reads the prod password from the container env at runtime
 #   (keeps it out of the rendered Compose spec and `docker inspect`
@@ -90,6 +89,17 @@ services:
       start_period: 10s
 
   clickhouse:
+    # Cap container log size so an error loop can never fill the disk.
+    # Task 0236 incident: an ENOSPC logging spiral grew this container's
+    # json log to ~209 GiB because the running container predated the
+    # daemon.json default (and `live-restore` kept it across reloads).
+    # Setting it explicitly here guarantees bounded logs on recreate,
+    # independent of daemon.json timing.
+    logging:
+      driver: json-file
+      options:
+        max-size: '100m'
+        max-file: '5'
     # `!override` replaces the inherited port list from the base
     # file. Without this tag Compose APPENDS, which would silently
     # leave the public `0.0.0.0:8123` and `0.0.0.0:9000` bindings
@@ -116,7 +126,15 @@ services:
     volumes: !override
       - /srv/clickhouse-data:/var/lib/clickhouse
       - /srv/clickhouse-logs:/var/log/clickhouse-server
+      # Local backup disk target for ad-hoc operational snapshots
+      # (`BACKUP … TO Disk('backups', …)`) — the manual pre-op checkpoint
+      # path, distinct from the maintained weekly Borg→Storage Box backup.
+      # /backups is bind-mounted to the host so a snapshot survives a
+      # container recreate; the `backups` disk itself is defined in
+      # config.d/backups.xml (mounted just below). Prod-only: dev has no
+      # /srv/backups host path.
       - /srv/backups:/backups
+      - ./crates/db-clickhouse/config.d/backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro
       # Read-only credentials file for clickhouse-client invocations
       # from the host-side backup script. Delivered by Ansible's
       # `app` role (not backup — must land before this compose
@@ -150,7 +168,11 @@ services:
       # Production-only overrides.
       - ./crates/db-clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
       - ./crates/db-clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
-      - ./crates/db-clickhouse/config.d/backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro
+      # Enables the `changeable_in_readonly` settings-constraint type (task
+      # 0338) so the read_only profile can whitelist `log_comment` under
+      # readonly=1 (B2 per-request correlation). Without this mount the flag
+      # never reaches the container and the constraint is silently ignored.
+      - ./crates/db-clickhouse/config.d/access-control.xml:/etc/clickhouse-server/config.d/access-control.xml:ro
     environment:
       CLICKHOUSE_USER: default
       # Fail-fast pattern — Compose refuses to start if the env

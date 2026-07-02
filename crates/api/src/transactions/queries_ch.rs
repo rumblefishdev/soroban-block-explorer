@@ -110,6 +110,120 @@ impl TxPageChRow {
     }
 }
 
+/// Raw page row for Statement A's two-step path: base columns plus the
+/// `source_id` surrogate and `ledger_sequence`, with NO join to `accounts` /
+/// `ledgers`. `source_account` + `created_at` are resolved by key-seek in
+/// [`resolve_source_and_closed_at`]. The old `LEFT JOIN accounts` + `INNER
+/// JOIN ledgers` hash-joins built over the FULL tables (~23M + ~13M) and were
+/// the real cost behind the polled list's 35M-rows/page (task 0290) — NOT the
+/// partition scan, which reads ~2e5 in primary-key order (`InReverseOrder`).
+#[derive(Debug, Row, Deserialize)]
+struct TxPageRawRow {
+    hash: String,
+    ledger_sequence: i64,
+    application_order: i16,
+    source_id: i64,
+    fee_charged: i64,
+    inner_tx_hash: Option<String>,
+    successful: bool,
+    operation_count: i16,
+    has_soroban: bool,
+    id: i64,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct PageAccountRow {
+    id: i64,
+    account_id: String,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct LedgerClosedAtRow {
+    sequence: i64,
+    closed_at: i64,
+}
+
+/// Resolve `source_account` + `created_at` for a page of raw rows via key
+/// seeks instead of full-table hash joins (task 0290). `accounts WHERE id IN
+/// (...)` rides the `idx_acc_id` bloom skip-index (accounts is ORDER BY
+/// account_id, so the surrogate `id` is not the sort key — a plain join
+/// full-scans ~23M); `ledgers WHERE sequence IN (...)` is a primary-key seek.
+/// Both inline `i64` literals (no injection surface — same as
+/// `ch::fetch_tx_list_aggregates`). Preserves input order.
+async fn resolve_source_and_closed_at(
+    client: &clickhouse::Client,
+    raw: Vec<TxPageRawRow>,
+) -> Result<Vec<TxPageChRow>, clickhouse::error::Error> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let in_list = |vals: &[i64]| {
+        vals.iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let dedup_keys = |f: fn(&TxPageRawRow) -> i64| -> Vec<i64> {
+        let mut v: Vec<i64> = raw.iter().map(f).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let source_ids = dedup_keys(|r| r.source_id);
+    let ledger_seqs = dedup_keys(|r| r.ledger_sequence);
+
+    // accounts: id -> account_id. `LIMIT 1 BY id` collapses ReplacingMergeTree
+    // versions (account_id is immutable across versions, so no FINAL needed).
+    let accounts: std::collections::HashMap<i64, String> = client
+        .query(&format!(
+            "SELECT id, account_id FROM accounts WHERE id IN ({}) LIMIT 1 BY id",
+            in_list(&source_ids),
+        ))
+        .fetch_all::<PageAccountRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.account_id))
+        .collect();
+
+    // ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
+    let closed_ats: std::collections::HashMap<i64, i64> = client
+        .query(&format!(
+            "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
+            in_list(&ledger_seqs),
+        ))
+        .fetch_all::<LedgerClosedAtRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.sequence, r.closed_at))
+        .collect();
+
+    // Build page rows in input order. The old `INNER JOIN ledgers` dropped
+    // rows whose ledger row was not present yet; the `ledger_sequence <=
+    // max(sequence)` cap in the candidate scan already prevents that, but the
+    // `?` here preserves the inner semantics defensively (skip a row missing
+    // its ledger).
+    Ok(raw
+        .into_iter()
+        .filter_map(|r| {
+            let created_at = *closed_ats.get(&r.ledger_sequence)?;
+            Some(TxPageChRow {
+                hash: r.hash,
+                ledger_sequence: r.ledger_sequence,
+                application_order: r.application_order,
+                source_account: accounts.get(&r.source_id).cloned(),
+                fee_charged: r.fee_charged,
+                inner_tx_hash: r.inner_tx_hash,
+                successful: r.successful,
+                operation_count: r.operation_count,
+                has_soroban: r.has_soroban,
+                id: r.id,
+                created_at,
+            })
+        })
+        .collect())
+}
+
 #[derive(Debug, Row, Deserialize)]
 struct TxDetailChRow {
     id: i64,
@@ -281,6 +395,7 @@ pub async fn fetch_list(
     client: &clickhouse::Client,
     params: &ResolvedListParams,
     direction: Direction,
+    head: Option<i64>,
 ) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
     // Resolve StrKey filters to the CH surrogate ids up front. The writer's
     // `cityhash_102_128` surrogate is NOT bit-equivalent to CH's builtin
@@ -334,6 +449,25 @@ pub async fn fetch_list(
     let lim_over = params.limit * 4;
     let lim_peek = params.limit + 1;
 
+    // Head substitution (task 0292 §5/6). On the live first page (`cl` IS NULL)
+    // the partition prune and the `<= head` cap below otherwise each re-derive
+    // the head with a `(SELECT max(sequence) FROM ledgers)` subquery — work the
+    // caller has *already* done via `common::head` (the value compared for the
+    // 304 short-circuit). When that head is known we inline it as a literal:
+    // fewer subqueries in the heavy statement, and the candidate scan is capped
+    // at exactly the head the response is ETag'd with (so body == validator,
+    // closing the probe-vs-query race on this path). When `head` is `None`
+    // (cursored page — the head is irrelevant to the partition) we keep the
+    // subquery form. `head` is an `i64`, no injection surface.
+    let head_partition = head.map_or_else(
+        || "(SELECT intDiv(max(sequence), 500000) FROM ledgers)".to_string(),
+        |h| format!("intDiv({h}, 500000)"),
+    );
+    let head_max = head.map_or_else(
+        || "(SELECT max(sequence) FROM ledgers)".to_string(),
+        |h| h.to_string(),
+    );
+
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
@@ -354,7 +488,7 @@ pub async fn fetch_list(
                     "SELECT ledger_sequence, transaction_id FROM {table} \
                      WHERE contract_id = {cid} \
                        AND intDiv(ledger_sequence, 500000) \
-                           = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                           = ifNull(intDiv({cl}, 500000), {head_partition}) \
                        AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
                 )
             };
@@ -363,12 +497,13 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
                  ) t \
                  INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
                     ) u \
+                    WHERE ledger_sequence <= {head_max} \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT {lim_over} \
                  ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
@@ -424,14 +559,15 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
                  ) t \
                  INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id \
                     FROM operations_appearances \
                     WHERE type = {op_type} \
                       AND intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                      AND ledger_sequence <= {head_max} \
                       AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT {lim_over} \
@@ -473,22 +609,51 @@ pub async fn fetch_list(
             // sort key — also the correct in-ledger apply order, which the old
             // `id`-hash tie-break did NOT preserve), not the `id` surrogate.
             // See `handlers::list_cursor_for`.
+            // Cap the candidate scan at the newest ledger actually present in
+            // `ledgers`. The indexer can make a transaction visible slightly
+            // ahead of its ledger row; without this bound the inner LIMIT picks
+            // those head transactions, and the `INNER JOIN ledgers` below then
+            // drops the entire page (their `l` row does not exist yet) — the
+            // poll returns an empty list even though the feed is healthy. The
+            // join is load-bearing (`created_at = l.closed_at`), so the fix is
+            // to never page past the ledgers we have rather than to LEFT JOIN.
+            // The bound is the PK prefix, so it prunes via the index and is a
+            // no-op except at the live head.
+            // The `accounts` / `ledgers` projections are NOT joined here. A
+            // hash-join over those tables builds the hash side from the WHOLE
+            // table (~23M accounts + ~13M ledgers) regardless of the 11-row
+            // page — that, not the partition scan, was the 35M rows/page the
+            // polled list read (task 0290). Instead project the raw
+            // `source_id` + `ledger_sequence` and resolve `source_account` /
+            // `created_at` by key-seek in `resolve_source_and_closed_at`
+            // (`accounts.id` rides the idx_acc_id bloom; `ledgers.sequence` is
+            // a PK seek).
             let sql = format!(
-                "SELECT {SLIM_PROJECTION} \
+                "SELECT \
+                    lower(hex(t.hash)) AS hash, \
+                    t.ledger_sequence AS ledger_sequence, \
+                    t.application_order AS application_order, \
+                    t.source_id AS source_id, \
+                    t.fee_charged AS fee_charged, \
+                    lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+                    t.successful AS successful, \
+                    t.operation_count AS operation_count, \
+                    t.has_soroban AS has_soroban, \
+                    t.id AS id \
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                      AND ledger_sequence <= {head_max} \
                       AND ({cl} IS NULL OR (ledger_sequence, toInt64(application_order)) {op} ({cl}, {ct})) \
                       AND ({src} IS NULL OR source_id = {src}) \
                     ORDER BY ledger_sequence {order}, application_order {order} \
                     LIMIT {lim_peek} \
                  ) t \
-                 LEFT JOIN accounts src ON src.id = t.source_id \
-                 INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
                  ORDER BY t.ledger_sequence {order}, t.application_order {order}",
             );
-            client.query(&sql).fetch_all::<TxPageChRow>().await?
+            let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
+            resolve_source_and_closed_at(client, raw).await?
         }
     };
 
@@ -648,18 +813,18 @@ pub async fn fetch_event_appearances(
     let rows = client
         .query(
             "SELECT \
-                sc.contract_id, \
+                any(sc.contract_id) AS contract_id, \
                 se.ledger_sequence, \
                 toInt64(count()) AS amount, \
                 any(l.closed_at) AS created_at \
              FROM soroban_events se FINAL \
-             JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
+             LEFT JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
              JOIN ledgers l ON l.sequence = se.ledger_sequence \
              WHERE se.transaction_id = ? \
                AND se.ledger_sequence = ? \
                AND intDiv(se.ledger_sequence, 500000) = intDiv(?, 500000) \
-             GROUP BY sc.contract_id, se.ledger_sequence \
-             ORDER BY se.ledger_sequence, sc.contract_id",
+             GROUP BY se.contract_id, se.ledger_sequence \
+             ORDER BY se.ledger_sequence, contract_id",
         )
         .bind(transaction_id)
         .bind(ledger_sequence)
@@ -683,7 +848,7 @@ pub async fn fetch_invocation_appearances(
                 sia.amount, \
                 l.closed_at AS created_at \
              FROM soroban_invocations_appearances sia FINAL \
-             JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \
+             LEFT JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \
              LEFT JOIN accounts caller FINAL ON caller.id = sia.caller_id \
              INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
              WHERE sia.transaction_id = ? \

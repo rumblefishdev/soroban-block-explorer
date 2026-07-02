@@ -18,7 +18,8 @@ vi.mock('../api/hooks/useAccountsList.js', () => ({
 function makeRow(overrides: Partial<AccountListItem> = {}): AccountListItem {
   return {
     account_id: 'G' + 'A'.repeat(55),
-    xlm_balance: '1000.0000000',
+    // RAW stroops (Int128) — 1000 XLM × 10⁷; the table scales by 7 decimals.
+    xlm_balance: '10000000000',
     first_seen_ledger: 10_000_000,
     last_seen_ledger: 54_000_000,
     home_domain: null,
@@ -52,7 +53,8 @@ describe('AccountsListPage', () => {
     mockOk([
       makeRow({
         account_id: 'G' + 'B'.repeat(55),
-        xlm_balance: '4107709533.0000000',
+        // RAW stroops — 4,107,709,533 XLM × 10⁷.
+        xlm_balance: '41077095330000000',
         home_domain: 'stellar.org',
       }),
       // Null native balance ⇒ the XLM cell renders a dash.

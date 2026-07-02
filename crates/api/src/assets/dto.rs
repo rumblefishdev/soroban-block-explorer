@@ -10,12 +10,21 @@ use utoipa::{IntoParams, ToSchema};
 /// extractor and are intentionally absent here.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct ListParams {
+    /// `native | classic_credit | soroban` (ADR 0051 — `sac` is no longer a
+    /// type; use `filter[sac]` for the SAC view).
     #[serde(rename = "filter[type]")]
     pub filter_type: Option<String>,
     /// Substring match against `asset_code`; SQL wraps in `%...%`.
     /// Caller MUST NOT pass `%` / `_` literals.
     #[serde(rename = "filter[code]")]
     pub filter_code: Option<String>,
+    /// SAC property filter (ADR 0051): `true` restricts the list to assets whose
+    /// Stellar Asset Contract is deployed on-chain (`sac_deployed`) — the old
+    /// `filter[type]=sac` view, now a facet predicate over classic_credit /
+    /// native rows. Reserved (un-deployed) SAC addresses are excluded. Any other
+    /// value is ignored.
+    #[serde(rename = "filter[sac]")]
+    pub filter_sac: Option<String>,
 }
 
 /// Asset row returned by list and detail. Surfaces both the decoded
@@ -24,22 +33,47 @@ pub struct ListParams {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetItem {
     /// Canonical identifier — the single token usable as `/assets/{id}`:
-    /// the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
-    /// native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
-    /// e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
-    /// PG→CH composite move): CH keys assets on
-    /// `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+    /// the reserved `native` token for native XLM, the contract StrKey
+    /// (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+    /// `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+    /// the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+    /// CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+    /// with no surrogate.
     pub id: String,
-    /// `native | classic_credit | sac | soroban`. `null` only on schema drift.
+    /// `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
+    /// only on schema drift.
     pub asset_type_name: Option<String>,
-    /// Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).
+    /// Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
+    /// Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where
+    /// the contract IS the asset. `null` for native / classic_credit (a wrapping
+    /// SAC's address rides in `sac_contract_id`).
     pub contract_id: Option<String>,
+    /// SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey
+    /// for a native / classic_credit asset that has one, re-derived on read from
+    /// `code:issuer` (never stored). `null` when the asset has no observed SAC.
+    pub sac_contract_id: Option<String>,
+    /// Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`
+    /// when the asset has no SAC; `false` = reserved-but-un-deployed address
+    /// (render the contract link non-clickable).
+    pub sac_deployed: Option<bool>,
     pub name: Option<String>,
+    /// On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+    /// (use `asset_code`) and native.
+    pub symbol: Option<String>,
+    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+    /// (Stellar classic precision). Load-bearing for amount rendering.
+    pub decimals: u32,
+    /// Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+    /// display (task 0331 Option C: one convention for ALL asset types; classic
+    /// `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+    /// (a token/asset with no holders). Sourced from `balance_aggregates` over the
+    /// unified `balances` table.
     pub total_supply: Option<String>,
-    /// May be `null` / stale until task 0135 ships.
+    /// Active-holder count (`amount > 0`) from the unified `balances` aggregate
+    /// (all asset types — trustline holders + contract holders). `null` = no data.
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
 }

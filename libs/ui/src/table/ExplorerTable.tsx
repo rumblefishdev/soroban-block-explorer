@@ -2,6 +2,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import {
   Box,
   ButtonBase,
+  Skeleton,
   Table,
   TableBody,
   TableCell,
@@ -9,7 +10,25 @@ import {
   TableHead,
   TableRow,
 } from '@mui/material';
-import type { ReactNode } from 'react';
+import { type ReactNode } from 'react';
+
+/**
+ * Fixed body-row height (px). Single source of truth shared with
+ * `TableSkeleton` so the loading skeleton is pixel-for-pixel the same height as
+ * the populated table — no layout jump when swapping data ↔ skeleton on
+ * pagination / filter changes.
+ */
+export const EXPLORER_TABLE_ROW_HEIGHT = 44;
+
+/**
+ * Row height (px) for tables whose cells render two-line content (e.g. the
+ * two-line `TransactionTime`), a 40px media thumbnail (NFTs), or a stacked
+ * asset pair (liquidity pools). These rows are taller than the single-line
+ * default; pinning them to one value (≥ the tallest cell content, so nothing
+ * clips) keeps every such row uniform AND lets the loading skeleton match the
+ * populated table pixel-for-pixel — no layout jump on data ↔ skeleton.
+ */
+export const EXPLORER_TABLE_ROW_HEIGHT_TALL = 56;
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -30,6 +49,24 @@ export interface ExplorerTableProps<T> {
   sortDir?: SortDirection;
   onSortChange?: (id: string, dir: SortDirection) => void;
   emptyState?: ReactNode;
+  /**
+   * Fixed body-row height (px). Defaults to the single-line
+   * [`EXPLORER_TABLE_ROW_HEIGHT`]; pass [`EXPLORER_TABLE_ROW_HEIGHT_TALL`] for
+   * tables with two-line / media cells so every row is uniform.
+   */
+  rowHeight?: number;
+  /**
+   * Render the loading skeleton INSTEAD of `rows`: the real `<TableHead>` plus
+   * `skeletonRows` placeholder body rows, in this exact same table / container /
+   * column layout. Reusing the real structure (not a separate skeleton
+   * component) is what makes the skeleton the same height as the populated
+   * table at EVERY viewport — headers wrap identically, the horizontal-scroll
+   * container behaves identically — so there is no layout jump on data ↔
+   * skeleton, responsively.
+   */
+  loading?: boolean;
+  /** Placeholder row count while `loading`. */
+  skeletonRows?: number;
 }
 
 interface SortableHeaderProps {
@@ -108,15 +145,33 @@ export function ExplorerTable<T>({
   sortDir = 'desc',
   onSortChange,
   emptyState,
+  rowHeight = EXPLORER_TABLE_ROW_HEIGHT,
+  loading = false,
+  skeletonRows = 10,
 }: ExplorerTableProps<T>) {
   const isEmpty = rows.length === 0;
+
+  // `tableLayout: fixed` → column widths come from the per-column `width`s, NOT
+  // the cell content. This makes the loading skeleton's columns identical to the
+  // populated table's (content no longer shifts the columns) AND lets columns
+  // keep a content-sized PIXEL width that never compresses below the data. The
+  // table's `minWidth` is the sum of those pixel widths, so on a narrow screen
+  // the container scrolls horizontally instead of squeezing/truncating cells
+  // (cols are sized in px in each table; falls back to a sane default if a
+  // table only uses % / no widths).
+  const minWidth =
+    columns.reduce(
+      (sum, c) => sum + (typeof c.width === 'number' ? c.width : 0),
+      0
+    ) || 720;
+
   return (
     <TableContainer
       sx={{
         overflowX: 'auto',
       }}
     >
-      <Table>
+      <Table sx={{ tableLayout: 'fixed', minWidth }}>
         <TableHead
           sx={(theme) => ({
             backgroundColor: theme.palette.surface.backgroundAlt,
@@ -131,6 +186,11 @@ export function ExplorerTable<T>({
                   align={col.align ?? 'left'}
                   width={col.width}
                   sortDirection={isSorted ? sortDir : false}
+                  sx={{
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
                 >
                   {col.sortable ? (
                     <SortableHeader
@@ -153,7 +213,51 @@ export function ExplorerTable<T>({
           </TableRow>
         </TableHead>
         <TableBody>
-          {isEmpty
+          {loading
+            ? // Skeleton placeholder rows in the EXACT same row/cell layout as
+              // the data rows (same `rowHeight`, same `py`, same column widths),
+              // under the real `<TableHead>` above — so the loading state is the
+              // same height as the populated table at every viewport.
+              Array.from({ length: skeletonRows }).map((_, r) => (
+                <TableRow
+                  key={`skeleton-${r}`}
+                  // Same alternating row background as the data rows below, so
+                  // the skeleton looks like the populated table (not a flat block).
+                  sx={(theme) => ({
+                    height: rowHeight,
+                    backgroundColor:
+                      r % 2 === 1
+                        ? theme.palette.surface.grayMainAlt
+                        : theme.palette.surface.grayMain,
+                  })}
+                  data-testid="explorer-table-skeleton-row"
+                >
+                  {columns.map((col, c) => (
+                    <TableCell
+                      key={col.id}
+                      align={col.align ?? 'left'}
+                      width={col.width}
+                      sx={{
+                        py: 0.5,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {/* `inline-block` so the bar follows the cell's
+                          `text-align` (= the column `align`): right-aligned
+                          columns (balances, counts) get the bar on the right,
+                          where the real data sits — not stuck on the left. */}
+                      <Skeleton
+                        variant="text"
+                        width={c === 0 ? '70%' : '50%'}
+                        sx={{ display: 'inline-block' }}
+                      />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            : isEmpty
             ? // No `emptyState` → render nothing rather than an empty 96px-tall
               // placeholder row. Callers that want a placeholder pass one in.
               emptyState !== undefined && (
@@ -183,7 +287,7 @@ export function ExplorerTable<T>({
                         ? theme.palette.surface.grayMainAlt
                         : theme.palette.surface.grayMain,
 
-                    height: 44,
+                    height: rowHeight,
                   })}
                 >
                   {columns.map((col) => (
@@ -191,7 +295,12 @@ export function ExplorerTable<T>({
                       key={col.id}
                       align={col.align ?? 'left'}
                       width={col.width}
-                      sx={{ py: 0.5 }}
+                      sx={{
+                        py: 0.5,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
                     >
                       {col.cell(row, idx)}
                     </TableCell>

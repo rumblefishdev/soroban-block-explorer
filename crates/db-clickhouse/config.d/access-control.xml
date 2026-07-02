@@ -1,0 +1,23 @@
+<!--
+  Enable the `changeable_in_readonly` settings-constraint type (task 0338).
+  Mounted at /etc/clickhouse-server/config.d/access-control.xml.
+
+  Required so the `read_only` profile (users.d/profiles.xml) can whitelist
+  `log_comment` as changeable under readonly=1 — the API stamps it per request
+  for ClickHouse `system.query_log` correlation (B2). WITHOUT this flag the
+  `<changeable_in_readonly/>` constraint is silently ignored and every query the
+  API sends with a `log_comment` (i.e. every load-test request carrying an
+  `X-Request-Id`) fails with a db_error.
+
+  Blast radius: the flag changes how a profile's constraints combine with an
+  inherited profile's (replace vs. merge). Our profiles intentionally do NOT
+  inherit (see users.d/profiles.xml header), so there is nothing to replace —
+  the only observable effect is enabling `changeable_in_readonly`.
+
+  Applies only on a CH container recreate (bind-mounted config, stale inode).
+-->
+<clickhouse>
+    <access_control_improvements>
+        <settings_constraints_replace_previous>true</settings_constraints_replace_previous>
+    </access_control_improvements>
+</clickhouse>

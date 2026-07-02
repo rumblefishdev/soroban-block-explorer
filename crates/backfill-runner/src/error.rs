@@ -21,6 +21,16 @@ pub enum BackfillError {
     #[error("indexer: {0}")]
     Indexer(#[from] indexer::handler::HandlerError),
 
+    /// Soroban RPC failure during the `upgradeable-backfill` WASM fetch
+    /// (task 0327). Constructed via `#[from]`.
+    #[error("rpc: {0}")]
+    Rpc(#[from] crate::rpc_snapshot::RpcError),
+
+    /// A backfill pass could not resolve every target it set out to (task 0327
+    /// `upgradeable-backfill` hard-fails rather than silently leaving gaps).
+    #[error("backfill incomplete: {0}")]
+    Incomplete(String),
+
     /// Local filesystem / subprocess I/O failure (create_dir_all, File::create,
     /// read_dir, spawning `aws`, etc.). Constructed via `#[from]`.
     #[error("io: {0}")]

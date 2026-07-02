@@ -56,7 +56,18 @@ pub struct ParseOutput {
     pub nfts: Vec<ExtractedNft>,
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
+    /// Legacy `Symbol("name")` writes for the PG `soroban_contracts.name`
+    /// retroactive UPDATE path (ADR 0042 / task 0156). Full removal deferred
+    /// to task 0304; coexists with the metadata side table below.
     pub contract_name_writes: Vec<(String, String)>,
+    /// On-chain Soroban token metadata (name/symbol/decimals) from
+    /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
+    /// table (task 0297). SACs already excluded by the producer.
+    pub contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata>,
+    /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
+    /// ledger entries, persisted into the unified `balances` table (task 0331; the
+    /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
+    pub soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance>,
     /// Per-transaction operation tree JSON, collected by `extract_invocations`.
     /// Neither write path reads it today (CH writer skips it, PG flow
     /// took it as `_operation_trees`). Kept on `ParseOutput` so the
@@ -80,11 +91,6 @@ pub struct ParseOutput {
 }
 
 static NETWORK_ID: OnceLock<[u8; 32]> = OnceLock::new();
-/// Trimmed passphrase string behind `NETWORK_ID`. Cached alongside the
-/// hash so SAC-override derivation (which takes the passphrase string,
-/// not the hash) uses the SAME network source as `network_id`, instead
-/// of a hard-coded mainnet constant.
-static NETWORK_PASSPHRASE: OnceLock<String> = OnceLock::new();
 
 /// Error returned by [`init_network_id`] when the
 /// `STELLAR_NETWORK_PASSPHRASE` env var is missing or empty. Mirrors
@@ -139,34 +145,9 @@ pub fn init_network_id() -> Result<&'static [u8; 32], NetworkIdError> {
     let id = xdr_parser::network_id(trimmed);
     // `set` may race with another thread that beat us; either way the
     // value is identical (same env), so we discard the race-loser
-    // result and return the actually-installed one. Cache the trimmed
-    // passphrase string too, so `network_passphrase()` and `network_id`
-    // always describe the same network.
-    let _ = NETWORK_PASSPHRASE.set(trimmed.to_string());
+    // result and return the actually-installed one.
     let _ = NETWORK_ID.set(id);
     Ok(NETWORK_ID.get().expect("just set"))
-}
-
-/// Trimmed network passphrase string from `STELLAR_NETWORK_PASSPHRASE`
-/// — the source of truth for SAC contract_id derivation. Mirrors
-/// [`network_id`]'s lazy fallback so non-Lambda callers (tests, dev
-/// tools) that skipped `init_network_id` still resolve it from the
-/// same env value, trimmed identically. Production pre-inits via
-/// `init_network_id`, so the lazy branch is dead in the hot path.
-fn network_passphrase() -> &'static str {
-    NETWORK_PASSPHRASE
-        .get_or_init(|| {
-            std::env::var("STELLAR_NETWORK_PASSPHRASE")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "STELLAR_NETWORK_PASSPHRASE env not set; call \
-                         `init_network_id()` from the binary's cold-start path \
-                         before any `parse_ledger` invocation."
-                    )
-                })
-        })
-        .as_str()
 }
 
 /// Network identifier hash. Falls back to lazy init from
@@ -327,7 +308,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
         if let Some(tm) = tx_meta {
             let events = xdr_parser::extract_events(tm, &ext_tx.hash, ledger_sequence, closed_at);
-            let nft_events = xdr_parser::detect_nft_events(&events);
+            let nft_events = xdr_parser::detect_nft_events(&events, net_id);
             all_nft_events.extend(nft_events);
             all_events.push((ext_tx.hash.clone(), events));
 
@@ -404,6 +385,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         })
         .collect();
 
+    let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
+    let mut all_soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance> = Vec::new();
     let mut all_contract_name_writes: Vec<(String, String)> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
         let deployments = xdr_parser::extract_contract_deployments(
@@ -433,20 +416,24 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let lp_pos = xdr_parser::extract_lp_positions(changes);
         all_lp_positions.extend(lp_pos);
 
-        let name_writes = xdr_parser::extract_contract_data_name_writes(changes);
-        all_contract_name_writes.extend(name_writes);
+        all_contract_metadata_writes.extend(xdr_parser::extract_contract_metadata_writes(changes));
+        all_soroban_token_balances.extend(xdr_parser::extract_soroban_token_balances(changes));
+        all_contract_name_writes.extend(xdr_parser::extract_contract_data_name_writes(changes));
     }
 
     all_assets.push(xdr_parser::native_asset_singleton());
 
     let all_nfts = xdr_parser::detect_nfts(&all_nft_events);
 
-    // Derive SAC overrides from the SAME network passphrase as
-    // `network_id` above (not a hard-coded mainnet constant) — on a
-    // non-mainnet stack a mainnet-pinned passphrase would compute
-    // wrong SAC contract_ids and corrupt SAC identity fixing.
-    let sac_overrides =
-        xdr_parser::derive_sac_overrides_from_assets(&all_assets, network_passphrase());
+    // Un-deployed-SAC overrides, sourced from the ledger's EVENTS (task 0323).
+    // An un-deployed SAC emits a CAP-67 unified event under its reserved C…
+    // address; the crypto gate (`derive_sac(asset) == emitter`) proves it, and
+    // staging then models it as an ASSET, not a `soroban_contracts` row (the
+    // override id suppresses the Pass-2 FK stub; its identity seeds the assets
+    // row). Replaces the trustline-sourced `derive_sac_overrides_from_assets`:
+    // an un-deployed SAC matters once it has activity (an event), not at the
+    // trustline — and trustline-only SACs keep their classic-credit asset row.
+    let sac_overrides = xdr_parser::detect_undeployed_sac_overrides(&all_events, net_id);
 
     let parse_ms = parse_timer.elapsed().as_millis();
 
@@ -468,6 +455,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nft_events,
         lp_positions: all_lp_positions,
         contract_name_writes: all_contract_name_writes,
+        contract_metadata_writes: all_contract_metadata_writes,
+        soroban_token_balances: all_soroban_token_balances,
         operation_trees: all_operation_trees,
         parse_ms,
         tx_parse_errors,

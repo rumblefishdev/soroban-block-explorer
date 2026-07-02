@@ -9,6 +9,8 @@ import AssetDetailPage from './AssetDetailPage.js';
 // A real G-strkey issuer so `/assets/CODE-ISSUER` URLs pass the page's
 // `isAssetId` pre-validation (the route param is canonical post-0243).
 const ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+// A SAC contract StrKey (`C…`) for exercising the SAC facet tag/link.
+const SAC_CONTRACT = 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75';
 
 const hookMocks = vi.hoisted(() => ({
   useAssetDetail: vi.fn(),
@@ -28,10 +30,12 @@ function makeAsset(
     asset_code: 'XLM',
     asset_type: 0,
     asset_type_name: 'native',
+    decimals: 7,
     issuer: null,
     contract_id: null,
     holder_count: 1_000_000,
-    total_supply: '50000000.0000000',
+    // RAW Int128 (task 0331 Option C) — 50,000,000 scaled by decimals=7.
+    total_supply: '500000000000000',
     icon_url: null,
     name: null,
     description: null,
@@ -83,7 +87,6 @@ describe('AssetDetailPage', () => {
 
   it.each([
     ['classic_credit', 'Classic'],
-    ['sac', 'SAC'],
     ['soroban', 'Soroban'],
   ])('renders the "%s" type with badge "%s"', (typeName, label) => {
     mockOk(
@@ -103,9 +106,57 @@ describe('AssetDetailPage', () => {
     expect(screen.getByText(label)).toBeInTheDocument();
   });
 
+  it('adds a separate "SAC" tag next to the type badge for a deployed SAC', () => {
+    mockOk(
+      makeAsset({
+        id: `USDC-${ISSUER}`,
+        asset_code: 'USDC',
+        asset_type: 1,
+        asset_type_name: 'classic_credit',
+        issuer: ISSUER,
+        sac_contract_id: SAC_CONTRACT,
+        sac_deployed: true,
+      })
+    );
+
+    renderWithProviders(<AssetDetailPage />, {
+      initialEntries: [`/assets/USDC-${ISSUER}`],
+      routePath: '/assets/:id',
+    });
+
+    // Two orthogonal axes (ADR 0051): the type badge AND the SAC property tag.
+    expect(screen.getByText('Classic')).toBeInTheDocument();
+    expect(screen.getByText('SAC')).toBeInTheDocument();
+  });
+
+  it('shows no "SAC" tag for a reserved (un-deployed) SAC', () => {
+    mockOk(
+      makeAsset({
+        id: `ZK-${ISSUER}`,
+        asset_code: 'ZK',
+        asset_type: 1,
+        asset_type_name: 'classic_credit',
+        issuer: ISSUER,
+        sac_contract_id: SAC_CONTRACT,
+        sac_deployed: false,
+      })
+    );
+
+    renderWithProviders(<AssetDetailPage />, {
+      initialEntries: [`/assets/ZK-${ISSUER}`],
+      routePath: '/assets/:id',
+    });
+
+    // Reserved SAC: type badge stays, but no SAC property tag (chip label
+    // "SAC"). "SAC contract" in the summary row is different exact text.
+    expect(screen.getByText('Classic')).toBeInTheDocument();
+    expect(screen.queryByText('SAC')).not.toBeInTheDocument();
+  });
+
   it('renders the asset name sub-line when present', () => {
     mockOk(
       makeAsset({
+        id: 'USDC-XYZ',
         asset_code: 'USDC',
         asset_type: 1,
         asset_type_name: 'classic_credit',
@@ -126,6 +177,7 @@ describe('AssetDetailPage', () => {
   it('renders cleanly when TOML metadata fields are null (partial-metadata tolerance)', () => {
     mockOk(
       makeAsset({
+        id: 'EURC-XYZ',
         asset_code: 'EURC',
         asset_type: 1,
         asset_type_name: 'classic_credit',

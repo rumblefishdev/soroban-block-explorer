@@ -1,10 +1,5 @@
 import { keepPreviousData } from '@tanstack/react-query';
 
-export const homePolicy = {
-  staleTime: 10_000,
-  refetchInterval: 12_000,
-} as const;
-
 /**
  * Cadence knob for the poll target (`1.5 × cadence` after the last close).
  * Observed mainnet close interval is ~5.8s, but this is set deliberately
@@ -22,13 +17,17 @@ const LIVE_MIN_MS = 4_000;
 const LIVE_MAX_MS = 8_250;
 
 /**
- * Policy for the home "latest activity" feeds (ledgers + transactions).
- * `staleTime` sits at the poll floor so any focus/mount trigger between
- * ticks also refetches fresh. The cadence itself is the adaptive
+ * Policy for every per-ledger live poll: the home activity feeds
+ * (ledgers + transactions) and `useNetworkStats` (KPIs, TopNav, LIVE
+ * badge). `staleTime` sits at the poll floor so any focus/mount trigger
+ * between ticks also refetches fresh. The cadence itself is the adaptive
  * `midpointPollDelay` below — set it per hook as `refetchInterval`, since
- * each feed reads its newest row's timestamp from a different field.
- * Scoped to the two home tables only; the global `useNetworkStats` poll
- * (LIVE badge) stays on the cheaper `homePolicy` 12s cadence.
+ * each query reads its newest timestamp from a different field. The
+ * server side cooperates: these endpoints ship `Cache-Control:
+ * max-age=0` so every tick actually consults the origin (a browser-cache
+ * TTL ≥ the cadence would re-serve a stale payload and the feed would
+ * batch 2-3 ledgers per visible update), and the stats moka cache TTL
+ * sits below the cadence for the same reason.
  */
 export const livePolicy = {
   staleTime: LIVE_MIN_MS,

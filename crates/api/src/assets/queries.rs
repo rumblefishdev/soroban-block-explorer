@@ -26,6 +26,12 @@ pub struct AssetRow {
     /// Already resolved through `soroban_contracts.contract_id` join.
     pub contract_id: Option<String>,
     pub name: Option<String>,
+    /// On-chain SEP-41 token symbol from `soroban_contract_metadata` (task 0297);
+    /// `None` on the PG path and for classic/native.
+    pub symbol: Option<String>,
+    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+    /// (Stellar classic precision).
+    pub decimals: u32,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
@@ -43,6 +49,13 @@ pub struct AssetRow {
     /// no issuer_id, classic-credit has no contract_id), matching CH defaults.
     pub issuer_id: i64,
     pub contract_surrogate_id: i64,
+    /// SAC facet (ADR 0051): the surrogate of the wrapping SAC's `C…` StrKey,
+    /// or `0` when the asset has no observed SAC. Never on the wire — the
+    /// handler re-derives the display StrKey from `code:issuer` when non-zero.
+    /// (PG path leaves this `0`: the legacy schema has no facet column.)
+    pub sac_contract_surrogate: i64,
+    /// Whether the `sac_contract_surrogate` SAC is deployed on-chain (ADR 0051).
+    pub sac_deployed: bool,
 }
 
 #[derive(Debug)]
@@ -80,6 +93,9 @@ pub struct ResolvedListParams {
     /// Raw substring (no `%` / `_` from the caller). The SQL builder
     /// wraps it in `%...%` for the trigram match.
     pub asset_code: Option<String>,
+    /// SAC property filter (ADR 0051): restrict to assets with a SAC
+    /// (`sac_contract_id != 0`) — the old `filter[type]=sac` view.
+    pub sac_only: bool,
 }
 
 fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bool) {
@@ -113,6 +129,10 @@ fn map_asset_row(r: &PgRow) -> AssetRow {
         issuer: r.get("issuer"),
         contract_id: r.get("contract_id"),
         name: r.get("name"),
+        // soroban_contract_metadata is CH-only (task 0297); PG path: no symbol,
+        // decimals default 7 (classic precision).
+        symbol: None,
+        decimals: 7,
         total_supply: r.get("total_supply"),
         holder_count: r.get("holder_count"),
         icon_url: r.get("icon_url"),
@@ -120,6 +140,10 @@ fn map_asset_row(r: &PgRow) -> AssetRow {
         issuer_home_domain: r.get("issuer_home_domain"),
         issuer_id: r.get("issuer_id_key"),
         contract_surrogate_id: r.get("contract_id_key"),
+        // SAC facet (ADR 0051) is CH-only — the legacy PG schema has no facet
+        // columns, so the (non-live) PG path never surfaces a SAC.
+        sac_contract_surrogate: 0,
+        sac_deployed: false,
     }
 }
 

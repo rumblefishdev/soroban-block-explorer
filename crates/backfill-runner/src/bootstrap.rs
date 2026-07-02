@@ -34,8 +34,9 @@
 //!    accounts, build `LedgerKey::Account` keys and POST to Soroban
 //!    RPC's `getLedgerEntries`. Decode each returned `AccountEntry`
 //!    via [`crate::rpc_snapshot::decode_account_snapshot`].
-//! 3. Stage the decoded `AccountSnapshot`s into the CH writer's
-//!    `accounts` / `account_balances_current` insert paths.
+//! 3. Stage the decoded `AccountSnapshot`s into the CH writer's `accounts`
+//!    insert path + the unified `balances` table (native row per snapshot;
+//!    task 0331 Option A single-write — `account_balances_current` retired).
 //!
 //! ## How the snapshot wins under `ReplacingMergeTree`
 //!
@@ -367,23 +368,22 @@ async fn stage_account_snapshots(
     }
     accounts_insert.end().await.map_err(BackfillError::Ch)?;
 
-    // account_balances_current insert — native row per snapshot.
+    // Unified `balances` insert — native row per snapshot (lore-0331 Option A
+    // single-write; `account_balances_current` is no longer written).
+    let native_asset_id = db_clickhouse::persist::ids::asset_id(0, "", 0, 0);
     let mut balances_insert = client
-        .insert::<db_clickhouse::persist::rows::AccountBalanceRow>("account_balances_current")
+        .insert::<db_clickhouse::persist::rows::BalanceRow>("balances")
         .await
         .map_err(BackfillError::Ch)?;
     for s in snapshots {
         let account_id = db_clickhouse::persist::ids::account_id(&s.account_id);
-        // Native XLM balance: stroops → Decimal128(7) raw is exactly
-        // the i64 stroop value cast to i128 (same 10⁷ scale).
+        // Native XLM balance: stroops → raw i128 (same 10⁷ scale, decimals=7 at read).
         let balance: i128 = i128::from(s.balance);
         balances_insert
-            .write(&db_clickhouse::persist::rows::AccountBalanceRow {
-                account_id,
-                asset_type: 0, // AssetType::Native
-                asset_code: String::new(),
-                issuer_id: 0,
-                balance,
+            .write(&db_clickhouse::persist::rows::BalanceRow {
+                holder_id: account_id,
+                asset_id: native_asset_id,
+                amount: balance,
                 last_updated_ledger: watermark,
             })
             .await
@@ -623,7 +623,7 @@ mod tests {
         // Cleanup any prior rows.
         for q in [
             "ALTER TABLE accounts DELETE WHERE id = ?",
-            "ALTER TABLE account_balances_current DELETE WHERE account_id = ?",
+            "ALTER TABLE balances DELETE WHERE holder_id = ?",
         ] {
             let _ = client
                 .query(q)
@@ -684,17 +684,19 @@ mod tests {
             "snapshot last_seen_ledger must be `end + 1` to win RMT version",
         );
 
-        // Read back the native balance row.
+        // Read back the native balance row (unified `balances`, Option A).
         #[derive(Deserialize, clickhouse::Row)]
         struct BalReadback {
             balance: i128,
         }
+        let native_asset_id = db_clickhouse::persist::ids::asset_id(0, "", 0, 0);
         let bal: BalReadback = client
             .query(
-                "SELECT balance FROM account_balances_current FINAL \
-                 WHERE account_id = ? AND asset_type = 0 LIMIT 1",
+                "SELECT amount AS balance FROM balances FINAL \
+                 WHERE holder_id = ? AND asset_id = ? LIMIT 1",
             )
             .bind(id)
+            .bind(native_asset_id)
             .fetch_one()
             .await
             .expect("read balance row");
@@ -703,7 +705,7 @@ mod tests {
         // Cleanup.
         for q in [
             "ALTER TABLE accounts DELETE WHERE id = ?",
-            "ALTER TABLE account_balances_current DELETE WHERE account_id = ?",
+            "ALTER TABLE balances DELETE WHERE holder_id = ?",
         ] {
             let _ = client
                 .query(q)

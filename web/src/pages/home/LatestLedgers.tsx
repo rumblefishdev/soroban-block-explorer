@@ -1,15 +1,15 @@
-import { Box, Card, Typography } from '@mui/material';
+import { Box, Card, Skeleton, Typography } from '@mui/material';
 import {
+  LiveNowProvider,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
-  TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { useLatestLedgers } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
-import { LEDGER_COLUMN_COUNT, LedgersTable } from '../ledgers/LedgersTable.js';
+import { LedgersTable } from '../ledgers/LedgersTable.js';
 
 import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
@@ -20,12 +20,16 @@ import { ViewAllLink } from './ViewAllLink.js';
  * the Figma home design: sequence, hash, closed-at, protocol, tx count).
  */
 export function LatestLedgers() {
-  const { data, isLoading, isError, error, refetch } = useLatestLedgers();
+  const { data, dataUpdatedAt, isLoading, isError, error, refetch } =
+    useLatestLedgers();
   const rows = data?.data ?? [];
 
+  // Rows first: a transient failed poll must not blank a populated table —
+  // keep showing the last good rows; the full-size error state is reserved
+  // for "no data at all".
   let body: ReactNode;
   if (isLoading) {
-    body = <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />;
+    body = <LedgersTable rows={[]} loading skeletonRows={10} />;
   } else if (isError) {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
@@ -33,7 +37,11 @@ export function LatestLedgers() {
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="ledgers" />;
   } else {
-    body = <LedgersTable rows={rows} />;
+    body = (
+      <LiveNowProvider dataUpdatedAt={dataUpdatedAt}>
+        <LedgersTable rows={rows} />
+      </LiveNowProvider>
+    );
   }
 
   return (
@@ -44,7 +52,10 @@ export function LatestLedgers() {
         action={<ViewAllLink to={routes.ledgers} />}
       />
       <Box>{body}</Box>
-      {rows.length > 0 && (
+      {/* Footer is rendered during loading too (with a skeleton count) so its
+          height is reserved — otherwise the card jumps when the "N latest
+          records" row appears with the data. */}
+      {(rows.length > 0 || isLoading) && (
         <Box
           sx={{
             px: 2,
@@ -53,13 +64,17 @@ export function LatestLedgers() {
             backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
           }}
         >
-          <Typography
-            component="span"
-            variant="bodySmRegular"
-            sx={(theme) => ({ color: theme.palette.text.tertiary })}
-          >
-            {rows.length} latest records
-          </Typography>
+          {isLoading ? (
+            <Skeleton variant="text" width={120} />
+          ) : (
+            <Typography
+              component="span"
+              variant="bodySmRegular"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              {rows.length} latest records
+            </Typography>
+          )}
         </Box>
       )}
     </Card>
