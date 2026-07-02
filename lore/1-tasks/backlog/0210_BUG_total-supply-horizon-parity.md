@@ -47,6 +47,21 @@ history:
       (only ops parsed, no state table) + #3 native protocol LP reserves
       (`LiquidityPoolEntry`, not a contract). Rewritten scope: write synthetic `balances`
       rows for those two. Still backlog. See the dated status section in the body.
+  - date: '2026-07-02'
+    status: backlog
+    who: claude
+    note: >
+      Faza-3 item folded here from the 0331 OPS close-out (2026-07-02): a per-protocol decoder
+      for CUSTOM-STORAGE Soroban LP pools. ~264 type-3 LP-share tokens (Comet `CPAL` x136,
+      `Pool Share Token`/Soroswap x128) render `—` for supply because their LP-share balances
+      live in custom u32-keyed instance storage, NOT the standard SEP-41 `Balance(Address)`
+      ContractData key the 0331 seed reads. Needs one decoder per protocol (Comet / Soroswap /
+      Phoenix layouts). SCOPE FLAG: this is a SOROBAN (type-3) LP-SHARE SUPPLY gap, distinct
+      from 0210's classic Horizon-parity core (#2 claimable + #3 native-LP) — parked here per
+      operator; a standalone task or 0199 (LP analytics) may be a cleaner home if it muddies
+      0210. The pool's HELD reserves are already captured by 0331 (contract-held); only the
+      LP-SHARE token supply is missing. External check (StellarExpert live, 2026-07-02)
+      confirmed the type-3 coverage is otherwise complete — no indexing gap, just this decoder.
 ---
 
 # BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources

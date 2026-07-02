@@ -110,6 +110,18 @@ history:
       data path serves both contract-held balances AND Soroban-LP reserves. Proof: one pool
       (`CATUJXDU…`) holds ~1.2M XLM + ~194k EURC contract-held, invisible to the explorer
       today. Classic Phase 1/2 unaffected.
+  - date: '2026-07-02'
+    status: blocked
+    who: claude
+    note: >
+      0331 OPS run COMPLETE in prod (2026-07-02) — the contract-held reserve data path is
+      now LIVE. Soroban-DEX pool reserves live in the unified `balances` table (contract-held
+      `Balance(Address)` STATE read + SAC->classic re-key, ADR 0051), validated on-chain: pool
+      `CATUJXDU...` reads 1,158,166 XLM + 203,657 EURC (matches `get_reserves` within ~1%). So
+      0199's Soroban-DEX RESERVE-DATA prerequisite is SATISFIED — read reserves as
+      `balances WHERE holder_id = <pool contract surrogate>`. 0199 stays `blocked-on-oracle`
+      for the USD price API (Oskar); that gate is separate + unaffected. Custom-storage pools
+      (Soroswap/Phoenix/Comet) still need a per-protocol reserve decoder (parked in 0210 Faza-3).
 ---
 
 # LP analytics: TVL + volume + fee_revenue

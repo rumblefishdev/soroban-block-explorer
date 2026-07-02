@@ -329,14 +329,56 @@ indexer (freshness decay). Near tip, seed (historical holders via `soroban_event
 (recent holders) cover everything, RMT-convergent, either order. Seed run with indexer stopped for clean
 isolation. **REAL seed launched 2026-07-02, indexer stopped.**
 
-## Steps 6, 8–11 — remaining
+**REAL seed ✅ DONE + VALIDATED (2026-07-02):** `balances_decoded=115425` (funnel identical to dry-run).
 
-| #   | Step                                                         | Status                                            |
-| --- | ------------------------------------------------------------ | ------------------------------------------------- |
-| 4b  | START indexer (operator-controlled; ESM recreated on deploy) | ◧ ran uncontrolled → re-stopped; config back to 0 |
-| 7   | `balance-seed` REAL                                          | ◧ dry-run ✅ / real running                       |
-| 6   | catch-up to tip (`max(sequence)` ≈ RPC latestLedger)         | ⬜ (after operator starts indexer)                |
-| 8   | validate vs on-chain getters + measure leaks + MV cost       | ⬜                                                |
-| 9   | deploy API (done via Step 2) + FE (delivery stack)           | ◧ API done / FE pending                           |
-| 10  | drop `account_balances_current` (not written since Step 4)   | ⬜                                                |
-| 11  | feed 0199                                                    | ⬜                                                |
+- **All rows landed:** `balances` 48,855,095 → **48,970,520** (+115,425 exact).
+- **🎯 AMM pool `CATUJXDU` contract-held reserves captured** (the flagship 0331 win — Soroban-LP
+  reserves invisible to Horizon/trustline-sum/StellarExpert): native **1,158,166.09 XLM** + **203,656.95
+  EURC** — matches the 2026-07-01 on-chain (`get_reserves`) 1,166,805.7 XLM / 202,080.76 EURC within ~1%
+  (pool traded 1.5 days). Re-keyed onto native+EURC `asset_id` via `asset_sac` (ADR 0051).
+- **type-3 supply coverage: 11 → 1,167 tokens** now have a positive balance (~80% of the ~1448 meaningful
+  set; the rest are currently zero/empty).
+- **Every asset_type held by BOTH C-contracts AND G-accounts** (unified holder model, the core 0331
+  goal): native 873 C / 12.58M G; classic 36,932 C / 7.85M G; soroban 844 C / 32k G.
+
+## Step 8 — validation — ✅ PASSED (2026-07-02)
+
+- **AMM pool `CATUJXDU` reserves** 1.158M XLM + 203.7k EURC = on-chain `get_reserves` ~1% (flagship).
+- **type-3 supply coverage 11 → 1,167** tokens.
+- **Every asset_type held by BOTH C + G** (native 873C/12.58M G · classic 36,932C/7.85M G · soroban 844C/32k G).
+- **USDC full supply 259.2M** (trustline ~220M + ~40M contract-held) — captures what Horizon/trustline-sum miss.
+- **Vault MERU 13.59M** (≈ README `TotalSupply` +7% growth) + rebasing **EUTBL 386.6M / eurSAFO 436.9M** (were `—`).
+- **Account portfolio vs Horizon** (GC5LF63G VELO/XLM/USDC) matches; delta = live lag (indexer stopped).
+- **Integrity** 0 neg / 0 orphan; **MV cost** 50M rows / 1.3 s per 2-min refresh (keep 2-min).
+
+### Coverage deep-dive (operator was skeptical — externally verified, NOT hand-waved)
+
+`balance_aggregates` coverage: native 100% · classic 69.6% · type-3 28.2% with positive supply. Verified:
+
+- **type-3 empty is REAL, not a gap.** 4,132 total; **1,506 ever emitted events**, **2,626 (63.6%) never**
+  (event-verified, matches README's 2,623). Of the 339 event-but-no-supply: ~264 are custom-storage LP-share
+  tokens (Comet `CPAL` 136 + `Pool Share` 128) → honest `—` (Faza-3 deferred), rest meme/spent-to-zero.
+- **type-3 is SAC-free** (0 is_sac, 4,132 all real WASM) — count not inflated by SAC-wrapped.
+- **EXTERNAL (StellarExpert live API, background research agent):** recent ~480 Soroban contracts = only 15%
+  ever-active (85% dead template/factory deploys, 1 wasm = 80%); classic oldest-3000 = 68.2% funded ≈ our
+  69.6%; 459,506 total mainnet assets. **Verdict: our 28%/70%/63% are mainnet-consistent, NO indexing gap.**
+
+## Step 10 — drop `account_balances_current` — ✅ DONE (2026-07-02)
+
+Pre-drop safety (`chq`): API reads `balance_aggregates` (41 reads/30 min), **0 abc reads, 0 old
+`asset_aggregates` reads**; only the old `asset_aggregates_mv` still read abc. Dropped in order (operator, `chw`):
+`asset_aggregates_mv` (reader) → `asset_aggregates` (old target) → `account_balances_current` (abc). Validated:
+3 objects gone; `balances`/`balance_aggregates`/MV intact; USDC supply still reads 259.2M. Data safe (migration
+was complete: 0 orphans, all 226,355 identities matched).
+
+## Steps 6, 9, 11 + close-out
+
+| #   | Step                                        | Status                                           |
+| --- | ------------------------------------------- | ------------------------------------------------ |
+| 6   | catch-up to tip (indexer restart)           | ⬜ config 0→1 set; operator deploys when ready   |
+| 9   | API (Step 2) + FE                           | ✅ both deployed                                 |
+| 11  | feed 0199                                   | ✅ cross-linked (Soroban reserve data satisfied) |
+| —   | close 0331 + follow-ups (0342, 0210 Faza-3) | ✅ task done + archived                          |
+
+**OPS RUN COMPLETE.** Only Step 6 (operator-controlled indexer restart → freshness) remains; the model is
+live + validated. `assets.id` incident (uncontrolled restart from a premature config push) recorded; no data harm.

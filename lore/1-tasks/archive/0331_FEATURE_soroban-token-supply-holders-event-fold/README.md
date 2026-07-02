@@ -2,9 +2,10 @@
 id: '0331'
 title: 'FEATURE: bespoke Soroban-token total_supply + holder_count via event-fold MV'
 type: FEATURE
-status: active
-related_adr: ['0043', '0044']
-related_tasks: ['0304', '0194', '0210', '0138', '0243', '0323']
+status: done
+related_adr: ['0043', '0044', '0051']
+related_tasks:
+  ['0304', '0194', '0210', '0138', '0243', '0323', '0339', '0199', '0342']
 tags: [clickhouse, soroban, assets, enrichment, effort-medium, milestone-2]
 milestone: 2
 links:
@@ -26,6 +27,27 @@ history:
     status: active
     who: karolkow
     note: Promoted to active to start implementation.
+  - date: '2026-07-02'
+    status: done
+    who: karolkow
+    note: >
+      OPS run executed + validated in prod (operator-driven, Claude-guided; full log in
+      `ops-run-log.md`). Sequence: `assets.id` ALTER + Rust backfill (329,278 rows, 0
+      collisions) -> stop indexer (single-write cutover) -> create `balances` /
+      `balance_aggregates` / `balance_aggregates_mv` (indexer does NOT run `apply_init_sql`,
+      so explicit CREATE was required) -> migrate `account_balances_current` -> `balances`
+      (48.5M rows, 0 orphans, Circle USDC value+holder parity EXACT) -> `balance-seed`
+      (115,425 rows: type-3 G+C holders + contract-held SAC re-keyed to classic/native via
+      ADR 0051) -> drop `account_balances_current` + old `asset_aggregates(_mv)`. VALIDATED
+      on-chain: AMM pool `CATUJXDU` reserves 1.158M XLM + 203.7k EURC (=get_reserves ~1%);
+      type-3 supply coverage 11 -> 1,167 tokens; every asset_type held by BOTH contracts and
+      accounts; MERU vault + EUTBL/eurSAFO rebasing populated; account portfolio vs Horizon
+      matches (delta = live lag). Coverage EXTERNALLY verified vs StellarExpert (28% active
+      type-3 / 70% funded classic / 63% dead Soroban deploys = mainnet-consistent, NO
+      indexing gap). Follow-ups: 0342 (supply display convention: XLM burn-void + spam
+      ceiling), 0210 Faza-3 (custom-storage LP-pool decoder), 0199 unblocked on Soroban
+      reserve data. Deferred: original event-fold approach REFUTED (title stale) -> shipped
+      Option-C unified `balances` from ledger STATE.
 ---
 
 # FEATURE: bespoke Soroban-token total_supply + holder_count via event-fold MV
@@ -964,11 +986,15 @@ Two unbiased agents (no access to this task) audited the data. Net:
 - [x] **Docs (ADR 0032):** `clickhouse-pilot.md §4f` (balance family) + `indexing-pipeline §6.2`
       (balance-seed). **API types:** the `decimals` field was added to the assets + account-balance
       DTOs (steps 1–6, regenerated then); the step-7 read/seed + PG-cut changes produced no further diff.
-- [ ] **Prod validation:** run `balance-seed` under the catch-up gate; supply/holders match
-      on-chain getters on a ≥10-token sample incl. a vault (MERU) + a rebasing token (EUTBL/eurSAFO).
+- [x] **Prod validation (2026-07-02):** `balance-seed` ran in prod (115,425 rows); supply/holders
+      validated on-chain — AMM pool `CATUJXDU` reserves = `get_reserves` (~1%), MERU vault + EUTBL/
+      eurSAFO rebasing populated, account portfolio vs Horizon matches, coverage externally verified
+      vs StellarExpert (no indexing gap). Full record: `ops-run-log.md`.
 - [x] **Frontend** raw-amount rendering (`scaleByDecimals` by `decimals`) — AssetsTable + AssetSummary
       (`total_supply`) **and** AccountBalances (account portfolio). PG balance path cut (CH-only).
-- [ ] **(deferred)** SAC type-2 independent supply/holders — step 9, spike-gated.
+- [x] **SAC / contract-held supply** — DONE via ADR 0051 re-key (contract-held type-0/1 folded onto
+      the classic/native `asset_id`), superseding the old "step 9 type-2 independent" plan. Custom-storage
+      Soroban LP-pool decoder deferred → 0210 Faza-3.
 
 ## Investigation 2026-06-30 (karolkow) — contract-as-holder coverage across ALL asset types (whole-project sweep)
 
