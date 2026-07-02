@@ -102,11 +102,11 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // `join_use_nulls = 0` defaults a Nullable to NULL) renders "—", not a fake 0.
 // Refreshed by the MV on a cadence (eventually consistent). Requires `assets.id`
 // populated (prod: ALTER + backfill — see init.sql).
-// NOTE: unlike the retired `asset_aggregates` (keyed `(asset_code, issuer_id)`),
-// a classic asset and its SAC wrap have DISTINCT `assets.id` here (surrogate keyed
-// per type), so they do NOT share an aggregate row. Contract-held SAC balances are
-// not summed yet (accounts hold the underlying classic; the SAC contract-held leg
-// is deferred), so a SAC reads "—" until task 0339 folds SAC into classic.
+// NOTE: post-ADR-0051 (task 0339, merged) a SAC is a FACET of its classic/native
+// asset, not a separate `assets` row (type-2 retired). Contract-held SAC balances are
+// re-keyed onto the WRAPPED classic id in `build_balance_rows`, so they sum INTO that
+// classic asset's `balance_aggregates` row — ONE unified supply per asset. (Replaces
+// the retired `asset_aggregates`, which keyed `(asset_code, issuer_id)`.)
 /// Accounts-join-free SELECT, shared by the list (task 0319) AND the detail
 /// paths (task 0334). It drops the `LEFT JOIN accounts iss` (and the two `issuer`
 /// columns it produced) that built its hash side from the whole `accounts` table

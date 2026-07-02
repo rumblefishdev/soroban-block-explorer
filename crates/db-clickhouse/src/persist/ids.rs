@@ -123,9 +123,15 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
 /// 1 classic_credit, 2 sac, 3 soroban):
 /// - native: `cityhash64("native")`
 /// - classic_credit: `cityhash64("CODE:<issuer_id>")`
-/// - SAC + soroban: **the `contract_id` surrogate itself** — so `asset_id ==
-///   contract_id` for these (a type-3 token's `balances.asset_id` equals its
-///   contract surrogate). A SAC is a SEPARATE asset from its classic → distinct id.
+/// - soroban (type-3): **the `contract_id` surrogate itself** — a token's
+///   `balances.asset_id` equals its own contract surrogate.
+///
+/// The `_` arm also covers the **RETIRED type-2 (SAC)**: post-ADR-0051 / task 0339
+/// a SAC is a FACET of its classic/native asset, NOT a separate asset. Its
+/// contract-held balances are re-keyed onto the WRAPPED classic/native id in
+/// [`crate::persist::stage::build_balance_rows`], so NO type-2 `asset_id` is ever
+/// persisted. `_ => contract_id` is kept only so the fn stays total on an
+/// unexpected legacy type-2 input; `TokenAssetType::TryFrom` already rejects 2.
 ///
 /// Deterministic (replay-idempotent), no central counter.
 #[inline]
@@ -133,7 +139,9 @@ pub fn asset_id(asset_type: i16, asset_code: &str, issuer_id: i64, contract_id: 
     match asset_type {
         0 => hash64(b"native"),
         1 => hash64(format!("{asset_code}:{issuer_id}").as_bytes()),
-        // 2 (SAC) + 3 (soroban): the contract surrogate IS the asset id.
+        // soroban (type-3): the contract surrogate IS the asset id. The retired
+        // type-2 (SAC) also lands here, but its balances are re-keyed to the classic
+        // id (ADR 0051), so a type-2 result is never stored.
         _ => contract_id,
     }
 }
@@ -197,20 +205,24 @@ mod tests {
         assert_eq!(asset_id(3, "", 0, contract_id(c)), contract_id(c));
     }
 
-    /// `asset_id` (task 0331) — SEP-11 canonical surrogate for the unified
-    /// `balances.asset_id`. native→"native"; classic→"CODE:ISSUER"; SAC (legacy
-    /// type-2) AND soroban (type-3)→the contract surrogate itself (identity, no
-    /// re-hash).
+    /// `asset_id` (task 0331) — surrogate for the unified `balances.asset_id`.
+    /// native→"native"; classic→"CODE:ISSUER"; soroban (type-3)→the contract
+    /// surrogate itself. The fn is TOTAL, so the retired type-2 (SAC) input also maps
+    /// to the contract surrogate — but ADR 0051 re-keys SAC balances onto the classic
+    /// id, so no type-2 id is ever stored; the type-2 cases below only pin the raw fn.
     #[test]
     fn asset_id_canonical() {
         let iss = account_id("GISSUER");
         let csac = contract_id("CSAC");
         let ctok = contract_id("CTOKEN1");
-        // soroban (3) AND SAC (2): asset_id == their OWN contract surrogate.
+        // soroban (3): asset_id == its OWN contract surrogate.
         assert_eq!(asset_id(3, "", 0, ctok), ctok);
+        // type-2 (SAC) is RETIRED (ADR 0051): the total fn still maps it to the
+        // contract surrogate, but a SAC balance is re-keyed to its classic id, so this
+        // value is never persisted — asserted only to document the raw fn.
         assert_eq!(asset_id(2, "USDC", iss, csac), csac);
-        // SAC and its underlying classic are DISTINCT assets → DISTINCT ids
-        // (different rows, different holders — not the same asset for us).
+        // The raw fn gives classic and the (retired) type-2 surrogate DISTINCT values —
+        // which is exactly WHY the re-key exists: map that surrogate → the classic id.
         assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(2, "USDC", iss, csac));
         // Distinct classics differ; native is its own thing; deterministic.
         assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(1, "EURC", iss, 0));

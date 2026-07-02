@@ -149,11 +149,11 @@ mod tests {
         // now served from `asset_aggregates`; the dead columns' drop is deferred
         // to task 0310); task 0297 added the `soroban_contract_metadata` side
         // table (on-chain token name/symbol/decimals); ADR 0051 / task 0339 added
-        // the `asset_sac` SAC-facet side table; task 0331 added the
+        // the `asset_sac` SAC-facet side table; task 0331 FIRST added an INTERIM
         // `soroban_token_balances` per-holder side table (asset_type=3 balances
-        // from ContractData `Balance(Address)` ledger state) + the
+        // from ContractData `Balance(Address)` ledger state), then
         // task 0331 Option C: unified `balances` + `balance_aggregates`
-        // (+ its refreshable MV) REPLACED the interim `soroban_token_balances` +
+        // (+ its refreshable MV) REPLACED that interim `soroban_token_balances` +
         // `soroban_asset_aggregates` (+ MV) — net one fewer table, same MV count.
         // (The interim `addresses` resolution table was dropped — holder→StrKey
         // resolves via `accounts` (G) / `soroban_contracts` (C), no dimension.)

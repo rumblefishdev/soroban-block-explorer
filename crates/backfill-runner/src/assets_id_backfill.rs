@@ -36,6 +36,7 @@ use tracing::info;
 use crate::ch_staging::{create_staging_like, drop_if_exists, finalize};
 use crate::error::BackfillError;
 use crate::sink::Sink;
+use crate::util::insert_rows;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AssetsIdBackfillStats {
@@ -107,7 +108,7 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<AssetsIdBackfillStats
     // ---- Phase 2: push the map to a temp table for the SQL join ----
     drop_if_exists(client, MAP_TABLE).await?;
     create_map_table(client, MAP_TABLE).await?;
-    insert_map(client, MAP_TABLE, &map).await?;
+    insert_rows(client, MAP_TABLE, &map).await?;
 
     // ---- Phase 3: build staging `assets` with `id` overridden from the map ----
     drop_if_exists(client, STAGING_TABLE).await?;
@@ -149,29 +150,12 @@ async fn create_map_table(client: &ClickhouseClient, table: &str) -> Result<(), 
     Ok(())
 }
 
-async fn insert_map(
-    client: &ClickhouseClient,
-    table: &str,
-    map: &[IdMapRow],
-) -> Result<(), BackfillError> {
-    if map.is_empty() {
-        return Ok(());
-    }
-    let mut insert = client
-        .insert::<IdMapRow>(table)
-        .await
-        .map_err(BackfillError::Ch)?;
-    for row in map {
-        insert.write(row).await.map_err(BackfillError::Ch)?;
-    }
-    insert.end().await.map_err(BackfillError::Ch)?;
-    Ok(())
-}
-
-/// Passthrough every `assets` column, override `id` from the map. `toString` on the
-/// `LowCardinality(String)` `asset_code` so it compares to the plain-`String` map
-/// key. `if(m.id != 0, …)` keeps any already-correct id on a LEFT-JOIN miss (e.g. a
-/// row a newer indexer already stamped) instead of zeroing it.
+/// Passthrough every `assets` column via `a.* REPLACE`, overriding only `id` — no
+/// hardcoded column list, so an `assets` schema change can't silently misalign the
+/// staged rows before the `EXCHANGE`. `toString` on the `LowCardinality(String)`
+/// `asset_code` so it compares to the plain-`String` map key. `if(m.id != 0, …)`
+/// keeps any already-correct id on a LEFT-JOIN miss (e.g. a row a newer indexer
+/// already stamped) instead of zeroing it.
 async fn build_staging(
     client: &ClickhouseClient,
     staging: &str,
@@ -179,10 +163,7 @@ async fn build_staging(
 ) -> Result<(), BackfillError> {
     let sql = format!(
         "INSERT INTO {staging} \
-         SELECT \
-           a.asset_type, a.asset_code, a.issuer_id, a.contract_id, \
-           a.name, a.total_supply, a.holder_count, a.icon_url, \
-           if(m.id != 0, m.id, a.id) AS id \
+         SELECT a.* REPLACE (if(m.id != 0, m.id, a.id) AS id) \
          FROM assets AS a FINAL \
          LEFT JOIN {map} AS m \
            ON  m.asset_type  = a.asset_type \
