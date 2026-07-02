@@ -694,27 +694,31 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // instead of orphaning on its surrogate. Guarded: the common ledger (no new SAC,
     // or no balances) skips the clone; the DB map wins on conflict (`or_insert`).
     let effective_sac_classic;
-    let sac_map: &HashMap<i64, i64> =
-        if !soroban_token_balances.is_empty() && assets.iter().any(|t| t.sac_contract_id.is_some())
-        {
-            let mut m = sac_classic.clone();
-            for t in assets {
-                if let Some(sac) = t.sac_contract_id.as_deref() {
-                    let issuer_id = t.issuer_address.as_deref().map(ids::account_id).unwrap_or(0);
-                    let classic = ids::asset_id(
-                        t.asset_type as i16,
-                        t.asset_code.as_deref().unwrap_or(""),
-                        issuer_id,
-                        0,
-                    );
-                    m.entry(ids::contract_id(sac)).or_insert(classic);
-                }
+    let sac_map: &HashMap<i64, i64> = if !soroban_token_balances.is_empty()
+        && assets.iter().any(|t| t.sac_contract_id.is_some())
+    {
+        let mut m = sac_classic.clone();
+        for t in assets {
+            if let Some(sac) = t.sac_contract_id.as_deref() {
+                let issuer_id = t
+                    .issuer_address
+                    .as_deref()
+                    .map(ids::account_id)
+                    .unwrap_or(0);
+                let classic = ids::asset_id(
+                    t.asset_type as i16,
+                    t.asset_code.as_deref().unwrap_or(""),
+                    issuer_id,
+                    0,
+                );
+                m.entry(ids::contract_id(sac)).or_insert(classic);
             }
-            effective_sac_classic = m;
-            &effective_sac_classic
-        } else {
-            sac_classic
-        };
+        }
+        effective_sac_classic = m;
+        &effective_sac_classic
+    } else {
+        sac_classic
+    };
     out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.

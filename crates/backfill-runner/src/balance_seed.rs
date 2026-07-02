@@ -361,7 +361,11 @@ mod tests {
                 ] {
                     // `mutations_sync=1` so the DELETE completes before the test
                     // proceeds — an async mutation could leave stale rows visible.
-                    let _ = c.query(&q).with_setting("mutations_sync", "1").execute().await;
+                    let _ = c
+                        .query(&q)
+                        .with_setting("mutations_sync", "1")
+                        .execute()
+                        .await;
                 }
             }
         };
@@ -446,7 +450,11 @@ mod tests {
                 ] {
                     // `mutations_sync=1` so the DELETE completes before the test
                     // proceeds — an async mutation could leave stale rows visible.
-                    let _ = cl.query(&q).with_setting("mutations_sync", "1").execute().await;
+                    let _ = cl
+                        .query(&q)
+                        .with_setting("mutations_sync", "1")
+                        .execute()
+                        .await;
                 }
             }
         };

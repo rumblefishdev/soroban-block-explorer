@@ -157,7 +157,10 @@ async fn insert_map(
     if map.is_empty() {
         return Ok(());
     }
-    let mut insert = client.insert::<IdMapRow>(table).await.map_err(BackfillError::Ch)?;
+    let mut insert = client
+        .insert::<IdMapRow>(table)
+        .await
+        .map_err(BackfillError::Ch)?;
     for row in map {
         insert.write(row).await.map_err(BackfillError::Ch)?;
     }
@@ -292,7 +295,11 @@ mod tests {
                 .expect("id row")
             }
         };
-        assert_eq!(id_of(0, "", 0, 0).await, ids::asset_id(0, "", 0, 0), "native");
+        assert_eq!(
+            id_of(0, "", 0, 0).await,
+            ids::asset_id(0, "", 0, 0),
+            "native"
+        );
         assert_eq!(
             id_of(1, "USDC", usdc_issuer, 0).await,
             ids::asset_id(1, "USDC", usdc_issuer, 0),
