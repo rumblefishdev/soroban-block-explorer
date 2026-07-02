@@ -17,7 +17,7 @@ with subcommands per kind plus a `status` aggregator.
 
 | Subcommand     | Kind                                | Function called                                           | Columns written                            |
 | -------------- | ----------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
-| `sep1-assets`  | `Sep1Assets` (wire `"sep1_assets"`) | `enrich_and_persist::sep1_assets::enrich_asset_from_sep1` | `assets.icon_url` (all types) and `assets.name` (ClassicCredit + SAC, `asset_type IN (1, 2)`) — both from the issuer's SEP-1 TOML `CURRENCIES[]` entry |
+| `sep1-assets`  | `Sep1Assets` (wire `"sep1_assets"`) | `enrich_and_persist::sep1_assets::enrich_asset_from_sep1` | `assets.icon_url` (all types) and `assets.name` (ClassicCredit, `asset_type = 1` — a SAC is a facet, ADR 0051) — both from the issuer's SEP-1 TOML `CURRENCIES[]` entry |
 | `nft-metadata` | `NftTokenUri`                       | `enrich_and_persist::nft_token_uri::enrich_nft_token_uri` | `nfts.name`, `nfts.media_url`, `nfts.collection_name` |
 | `status`       | (read-only)                         | inline `COUNT(*) FILTER` query                            | none — prints a Markdown table             |
 
@@ -48,7 +48,7 @@ the predicate and walks every row.
 
 | Subcommand     | Standard filter                                                        | Producer-aligned? |
 | -------------- | ---------------------------------------------------------------------- | ----------------- |
-| `sep1-assets`  | `WHERE icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)`    | Yes — bit-identical to the indexer's per-batch dedup query |
+| `sep1-assets`  | `WHERE icon_url IS NULL OR (asset_type = 1 AND name IS NULL)`          | Yes — bit-identical to the indexer's per-batch dedup query |
 | `nft-metadata` | `WHERE name IS NULL AND media_url IS NULL AND collection_name IS NULL` | No — **stricter** than the producer (see below) |
 
 **`sep1-assets`** mirrors the indexer's per-batch dedup query exactly:

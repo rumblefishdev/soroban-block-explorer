@@ -501,13 +501,10 @@ pub async fn list_asset_transactions(
         }
     };
 
-    // ADR 0051 / task 0339: discriminant 2 (retired `sac`) is now rejected by
-    // `try_from`, but un-migrated prod SAC rows still carry it during the Phase-2
-    // writer-first window. Treat a type=2 row as a valid classic-like asset (the
-    // transactions predicate below keys on code/issuer/contract identity, not the
-    // enum), not a corrupt row — otherwise every SAC's /transactions 500s until
-    // the relabel pass runs. Drop this `!= 2` carve-out once Phase 2 completes.
-    if row.asset_type != 2 && TokenAssetType::try_from(row.asset_type).is_err() {
+    // ADR 0051 / task 0339: discriminant 2 (retired `sac`) no longer exists in
+    // prod (Phase-2 relabel complete) and is rejected by `try_from` like any
+    // other unknown discriminant.
+    if TokenAssetType::try_from(row.asset_type).is_err() {
         tracing::error!(
             asset_type = row.asset_type,
             contract_id = ?row.contract_id,
