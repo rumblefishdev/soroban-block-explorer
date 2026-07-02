@@ -115,13 +115,33 @@ SELECT count() FROM assets FINAL WHERE asset_type = 0 AND id = 0;               
 SELECT id, issuer_id FROM assets FINAL WHERE asset_type = 1 AND asset_code = 'USDC' ORDER BY id LIMIT 3; -- all non-zero
 ```
 
-## Step 4 — [deploy] the new indexer (single-write cutover)
+## Step 4 — [deploy/start] the new indexer (single-write cutover)
 
-`init.sql` (idempotent) creates `balances`, `balance_aggregates`, `balance_aggregates_mv`.
-From here: live writes go to `balances`; `account_balances_current` is frozen; `assets.id` is
-stamped on every new/rewritten row; contract-held 0/1 balances are re-keyed via `asset_sac`.
+⚠️ **CORRECTION (2026-07-02): the deploy does NOT create the balance tables.** `apply_init_sql`
+is called ONLY by the `db-clickhouse-init` binary (setup) + tests — **NOT by the indexer Lambda**
+(grep-verified). And there is no schema-apply hook in the CDK deploy. So a deploy/start of the new
+indexer over a missing `balances` table makes its `BalanceRow` INSERT fail every ledger. **Create the
+three balance objects EXPLICITLY first** (this run did it via `chw`, verbatim init.sql DDL — see the
+run log Step 4a; or pipe init.sql through `clickhouse-client` on the box), THEN start the indexer.
 
-**VALIDATE — tables exist + live writes flowing + new indexer stamps `id`:**
+**4a — create tables** (`chw`, verbatim from init.sql): `balance_aggregates` (MergeTree),
+`balances` (RMT(last_updated_ledger)), `balance_aggregates_mv` (refreshable MV, full-replace → MT
+target is correct, not RMT). **4b — start the indexer:** `indexerLambdaConcurrency` → 1 in
+`infra/envs/production.json`, commit/push develop, `make -C infra deploy-production-compute`
+(the concurrency-0 deploy DESTROYED the SQS event-source-mapping, so a bare `put-function-concurrency`
+is NOT enough — the deploy RECREATES the ESM). From here: live writes go to `balances`;
+`account_balances_current` is frozen; `assets.id` is stamped on every new/rewritten row.
+
+**VALIDATE 4a — 3 tables exist + empty + MV scheduled:**
+
+```sql
+SELECT name, engine FROM system.tables
+WHERE database = currentDatabase() AND name IN ('balances','balance_aggregates','balance_aggregates_mv'); -- 3
+SELECT count() FROM balances;                                                         -- 0 before start
+SELECT status, exception FROM system.view_refreshes WHERE view = 'balance_aggregates_mv'; -- Scheduled, no exception
+```
+
+**VALIDATE 4b — live writes flowing + new indexer stamps `id`:**
 
 ```sql
 SELECT count() FROM system.tables
@@ -154,7 +174,11 @@ SELECT count() FROM account_balances_current FINAL WHERE balance != 0;          
 ```
 
 **Migration** (`Decimal128(7)` → raw `Int128 ×10⁷`; join reads `assets.id` directly — do NOT
-hash in SQL; RMT-idempotent, safe to re-run):
+hash in SQL; RMT-idempotent, safe to re-run). **`WHERE balance != 0` is load-bearing** — without it
+the migration copies ~29M retained closed/zero trustlines (measured: 59.87M raw = 30.87M nonzero +
+29.0M zero) that add 0 to `sum(amount)` and are excluded from `countIf(amount>0)` anyway — pure bloat
+on `balances` + the 2-min MV scan. Nonzero-at-cutover rows are the baseline; zero = absent = zero, and
+catch-up overrides anything that later changes.
 
 ```sql
 INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger)
@@ -163,8 +187,13 @@ FROM account_balances_current abc FINAL
 INNER JOIN assets a FINAL
    ON a.asset_code = abc.asset_code
   AND a.issuer_id  = abc.issuer_id
-  AND a.asset_type = if(abc.asset_type = 0, 0, 1);   -- Horizon native/alphanum → project native/classic-credit
+  AND a.asset_type = if(abc.asset_type = 0, 0, 1)    -- Horizon native/alphanum → project native/classic-credit
+WHERE abc.balance != 0;                              -- skip ~29M retained zero/closed trustlines
 ```
+
+**Transport:** ~31M-row INSERT+JOIN. Try `chw`; if it hits a timeout/mem cap, run the same SQL on the
+Hetzner box via `clickhouse-client` (no HTTP timeout) or chunk by `holder_id` range. RMT-idempotent →
+a partial failure is fixed by re-running, never a partial-state hazard.
 
 **VALIDATE — no orphans, no version regression, value parity on a known holder:**
 

@@ -201,19 +201,72 @@ cargo run --release -p backfill-runner --bin backfill-runner -- \
 - Builds staging + reports + drops; live `assets` untouched (dry-run). **Step 3 de-risked.**
 - REAL run (drop `--dry-run`; does `EXCHANGE`) pending — requires indexer STOPPED (Step 2 first).
 
-## Steps 2, 4–11 — remaining
+**Independent simulation (Claude, `chq` — proves the dry-run, doesn't just trust it):** `ids::asset_id` =
+`0→hash64("native")`, `1→hash64("code:issuer_id")`, `2/3→contract_id`. The only way to yield `id=0` is a
+type-2/3 (or unknown type) with `contract_id=0`. Measured on prod `assets FINAL`:
 
-Per [`ops-runbook.md`](./ops-runbook.md). Each filled here as executed:
+| check                                  | value   | meaning                                                |
+| -------------------------------------- | ------- | ------------------------------------------------------ |
+| total                                  | 329,278 | matches dry-run                                        |
+| native (type 0)                        | 1       | → one `hash64("native")`                               |
+| classic (type 1)                       | 325,145 | → `hash64("code:issuer")`, unique (no dup code+issuer) |
+| soroban (type 3)                       | 4,132   | → `contract_id`                                        |
+| **type-2/3 with contract_id=0**        | **0**   | ⭐ the only `id=0` risk — none                         |
+| unknown types (∉0,1,3)                 | 0       | no `_ => contract_id` surprises                        |
+| malformed classic (issuer=0 / code='') | 0       | none                                                   |
 
-| #   | Step                                                              | Status                      |
-| --- | ----------------------------------------------------------------- | --------------------------- |
-| 2   | STOP indexer (Lambda concurrency→0; `max(sequence)` stable ≥30 s) | ⬜ next                     |
-| 3   | `assets-id-backfill` REAL (`count(id=0)=0`)                       | ◧ dry-run ✅ / real pending |
-| 4   | deploy new indexer (creates `balances*`; writes rising)           | ⬜                          |
-| 5   | migrate `account_balances_current` → `balances` (value parity)    | ⬜                          |
-| 6   | catch-up to tip (`max(sequence)` ≈ RPC latestLedger)              | ⬜                          |
-| 7   | `balance-seed` (dry-run benchmark → real)                         | ⬜                          |
-| 8   | validate vs on-chain getters + measure leaks + MV cost            | ⬜                          |
-| 9   | deploy API + FE (endpoints non-empty)                             | ⬜                          |
-| 10  | drop `account_balances_current` (not written since Step 4)        | ⬜                          |
-| 11  | feed 0199                                                         | ⬜                          |
+1 + 325,145 + 4,132 = 329,278 = total ✓ (zero type-2, consistent with 0339). **Every row → deterministic
+nonzero id; collision ~2⁻⁶⁴ (negligible).** Downstream-consistent: Step 5 migration takes `assets.id =
+hash64("code:issuer")`, the live indexer computes the same via `ids::asset_id` → migrated + live balances
+share the `asset_id` by construction. Unit + real-CH e2e tests cover native/classic/soroban + idempotency.
+**Verdict: Step 3 real run is safe + correct; it adds only the atomic EXCHANGE (needs indexer stopped).**
+
+## Step 2 — STOP indexer — ✅ DONE (2026-07-02)
+
+IaC stop: `indexerLambdaConcurrency 1→0` committed `cbe92d57` + pushed develop, then
+`make -C infra deploy-production-compute`. Deploy diff: ProcessorFunction `ReservedConcurrentExecutions
+1→0` + **SQS EventSourceMapping DESTROYED** (concurrency 0 → CDK removes the trigger — stronger than a
+throttle) + new code S3Key (new indexer binary). `get-function-concurrency` → **0**. Deploy
+`Explorer-production-Compute` ✅ 33 s. **Freeze validated:** `max(sequence)` = 63,294,116 == 63,294,116
+across 35 s → indexer stopped. NOTE: compute-stack also holds ApiFunction → the API is now on new code
+(reads `balances`, empty until Step 5/7) — operator accepts API breakage; part of Step 9 already done.
+
+## Step 3 — REAL run — ✅ DONE (2026-07-02)
+
+`assets_id_backfill completed (dry_run=false): total_rows=329278 id_zero_before=329278 id_zero_after=0`.
+**Validated (`chq`):** `id=0` → 0; `uniqExact(id)` = 329,278 = total → **zero collisions** (materialized
+ids let me confirm empirically what was ~2⁻⁶⁴ theory); soroban `id==contract_id` 4132/4132; native id =
+`-6959166271784855184`. Every asset uniquely keyed.
+
+## Step 4a — create balance tables — ✅ DONE (2026-07-02)
+
+Root cause found: the indexer does NOT run `apply_init_sql` (only `db-clickhouse-init` + tests do), and
+no CDK schema hook → the tables had to be created explicitly BEFORE starting the indexer (else its
+`BalanceRow` INSERT fails). Created via `chw` (verbatim init.sql): `balance_aggregates` (MergeTree),
+`balances` (RMT(last_updated_ledger)), `balance_aggregates_mv` (refreshable MV). Validated: 3 objects,
+correct engines + schemas, `balances` empty, MV `status=Scheduled`, no exception.
+
+## Step 5 — migrate `account_balances_current` → `balances` — PENDING (indexer stays stopped)
+
+**Ordering decision:** run Step 5 with the indexer STILL stopped (deviation from runbook's start-then-
+migrate), then start the indexer (4b/6). Rationale: no concurrent writes → clean, deterministic
+migration validation (count/parity/orphans) without catch-up noise; RMT guarantees correctness either
+order; backlog cost negligible (~hundreds of ledgers).
+
+**Benchmark (`chq`, raw):** abc = 59.87M rows → **30.87M nonzero** (19.39M native + 11.49M classic) +
+29.0M zero; 13.97M distinct holders. **Finding: add `WHERE balance != 0`** — the runbook INSERT lacked
+it → would copy 29M zero/closed trustlines (0 to supply, excluded from holder_count) = pure bloat.
+Runbook fixed. Pre-check `countIf(type∈{0,1} AND id=0)` = **0** ✓. Transport: try `chw`; box
+`clickhouse-client` or `holder_id` chunking as fallback (RMT-idempotent → re-run safe).
+
+## Steps 4b, 6–11 — remaining
+
+| #   | Step                                                           | Status                  |
+| --- | -------------------------------------------------------------- | ----------------------- |
+| 4b  | START indexer (`concurrency→1` + deploy-compute recreates ESM) | ⬜                      |
+| 6   | catch-up to tip (`max(sequence)` ≈ RPC latestLedger)           | ⬜                      |
+| 7   | `balance-seed` (dry-run benchmark → real)                      | ⬜                      |
+| 8   | validate vs on-chain getters + measure leaks + MV cost         | ⬜                      |
+| 9   | deploy API (done via Step 2) + FE (delivery stack)             | ◧ API done / FE pending |
+| 10  | drop `account_balances_current` (not written since Step 4)     | ⬜                      |
+| 11  | feed 0199                                                      | ⬜                      |
