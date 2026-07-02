@@ -138,7 +138,7 @@ async fn fetch_contract_list_for_source(
         DataSource::Pg => fetch_contract_list(&state.db, params, direction)
             .await
             .map_err(CtrFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_contract_list(state.ch(), params, direction)
+        DataSource::Ch => queries_ch::fetch_contract_list(&state.ch(), params, direction)
             .await
             .map_err(CtrFetchError::Ch),
     }
@@ -572,7 +572,7 @@ pub async fn list_events(
         // 3-component `(ledger_sequence, id, event_index)`.
         DataSource::Ch => {
             let mut rows = match queries_ch::fetch_events(
-                state.ch(),
+                &state.ch(),
                 contract.id,
                 pagination.fetch_limit(),
                 pagination.cursor.as_ref(),
@@ -690,7 +690,7 @@ async fn fetch_contract_for_source(
         DataSource::Pg => fetch_contract(&state.db, contract_id)
             .await
             .map_err(CtrFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_contract(state.ch(), contract_id)
+        DataSource::Ch => queries_ch::fetch_contract(&state.ch(), contract_id)
             .await
             .map_err(CtrFetchError::Ch),
     }
@@ -707,7 +707,7 @@ async fn fetch_stats_for_source(
             .await
             .map_err(CtrFetchError::Pg),
         DataSource::Ch => {
-            queries_ch::fetch_contract_stats(state.ch(), contract_surrogate_id, window)
+            queries_ch::fetch_contract_stats(&state.ch(), contract_surrogate_id, window)
                 .await
                 .map_err(CtrFetchError::Ch)
         }
@@ -723,7 +723,7 @@ async fn fetch_interface_for_source(
         DataSource::Pg => fetch_wasm_interface(&state.db, contract_id)
             .await
             .map_err(CtrFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_wasm_interface(state.ch(), contract_id)
+        DataSource::Ch => queries_ch::fetch_wasm_interface(&state.ch(), contract_id)
             .await
             .map_err(CtrFetchError::Ch),
     }
@@ -756,7 +756,7 @@ async fn fetch_invocations_for_source(
             .map_err(CtrFetchError::Pg)
         }
         DataSource::Ch => queries_ch::fetch_invocation_appearances(
-            state.ch(),
+            &state.ch(),
             contract_surrogate_id,
             limit,
             cursor,

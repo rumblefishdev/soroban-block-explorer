@@ -340,7 +340,7 @@ async fn fetch_list_for_source(
         DataSource::Pg => fetch_list(&state.db, params, sort, direction)
             .await
             .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, sort, direction)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, sort, direction)
             .await
             .map_err(AcctFetchError::Ch),
     }
@@ -355,7 +355,7 @@ async fn fetch_account_for_source(
         DataSource::Pg => queries::fetch_account(&state.db, account_strkey)
             .await
             .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_account(state.ch(), account_strkey)
+        DataSource::Ch => queries_ch::fetch_account(&state.ch(), account_strkey)
             .await
             .map_err(AcctFetchError::Ch),
     }
@@ -373,7 +373,7 @@ async fn fetch_deleted_for_source(
     match source {
         DataSource::Pg => Ok(false),
         DataSource::Ch => {
-            queries_ch::fetch_deleted_status(state.ch(), account_surrogate_id, last_seen_ledger)
+            queries_ch::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger)
                 .await
                 .map_err(AcctFetchError::Ch)
         }
@@ -386,7 +386,7 @@ async fn fetch_account_balances(
 ) -> Result<Vec<AccountBalanceRow>, AcctFetchError> {
     // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331);
     // the legacy PG portfolio path was cut (PG retired).
-    queries_ch::fetch_balances(state.ch(), account_id)
+    queries_ch::fetch_balances(&state.ch(), account_id)
         .await
         .map_err(AcctFetchError::Ch)
 }
@@ -421,7 +421,7 @@ async fn fetch_account_tx_for_source(
             .map_err(AcctFetchError::Pg)
         }
         DataSource::Ch => {
-            queries_ch::fetch_transactions(state.ch(), account_id, limit, cursor, sort, direction)
+            queries_ch::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction)
                 .await
                 .map_err(AcctFetchError::Ch)
         }

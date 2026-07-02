@@ -54,6 +54,13 @@ pub struct AppConfig {
     /// and need `Access-Control-Allow-Origin` for the browser to read them.
     /// `None` (env unset/empty) = no CORS layer (same-origin / non-browser use).
     pub cors_allow_origin: Option<String>,
+    /// Load-test correlation switch (task 0338). `true` (env `LOAD_TESTING=true`,
+    /// set by `compute-stack.ts` only when `config.loadTesting` — the SAME flag
+    /// that lifts the API Gateway throttle/WAF) arms the
+    /// [`crate::common::request_id`] middleware so CH queries stamp
+    /// `system.query_log.log_comment` with the inbound `X-Request-Id` (B2).
+    /// `false` (default) leaves the mechanism fully inert.
+    pub load_testing: bool,
 }
 
 impl AppConfig {
@@ -86,6 +93,10 @@ impl AppConfig {
             cors_allow_origin: std::env::var("CORS_ALLOW_ORIGIN")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            // Exact `"true"` only — any other value (unset, "false", "1") leaves
+            // the load-test correlation off. Matches the `'true'` literal set by
+            // `compute-stack.ts`.
+            load_testing: std::env::var("LOAD_TESTING").as_deref() == Ok("true"),
         }
     }
 }

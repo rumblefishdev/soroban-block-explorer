@@ -49,7 +49,7 @@ async fn fetch_list_for_source(
         DataSource::Pg => fetch_list(&state.db, params, direction)
             .await
             .map_err(AssetFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, direction)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, direction)
             .await
             .map_err(AssetFetchError::Ch),
     }
@@ -66,10 +66,10 @@ async fn fetch_asset_row_for_source(
     match source {
         DataSource::Pg => fetch_with(state, parsed).await.map_err(AssetFetchError::Pg),
         DataSource::Ch => match parsed {
-            AssetIdRef::Native => queries_ch::fetch_native(state.ch()).await,
-            AssetIdRef::Contract(c) => queries_ch::fetch_by_contract_id(state.ch(), c).await,
+            AssetIdRef::Native => queries_ch::fetch_native(&state.ch()).await,
+            AssetIdRef::Contract(c) => queries_ch::fetch_by_contract_id(&state.ch(), c).await,
             AssetIdRef::CodeIssuer(code, issuer) => {
-                queries_ch::fetch_by_code_issuer(state.ch(), code, issuer).await
+                queries_ch::fetch_by_code_issuer(&state.ch(), code, issuer).await
             }
         }
         .map_err(AssetFetchError::Ch),
@@ -404,7 +404,7 @@ async fn fetch_asset_tx_for_source(
                 .map_err(AssetFetchError::Pg)
         }
         DataSource::Ch => queries_ch::fetch_transactions(
-            state.ch(),
+            &state.ch(),
             row.asset_code.as_deref(),
             row.issuer_id,
             row.contract_surrogate_id,

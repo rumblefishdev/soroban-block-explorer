@@ -65,7 +65,7 @@ pub async fn current_head_opt(state: &AppState, source: DataSource) -> Option<i6
         DataSource::Pg => latest_sequence_pg(&state.db)
             .await
             .map_err(|e| e.to_string()),
-        DataSource::Ch => latest_sequence_ch(state.ch())
+        DataSource::Ch => latest_sequence_ch(&state.ch())
             .await
             .map_err(|e| e.to_string()),
     };

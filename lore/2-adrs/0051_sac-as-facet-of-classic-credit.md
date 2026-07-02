@@ -241,14 +241,14 @@ stays reserved for `soroban` identity.
 The decision is `accepted`; the `docs/architecture/**` updates land WITH the implementation
 (task 0339) and are ticked when 0339 lands.
 
-- [ ] `docs/architecture/technical-design-general-overview.md` — N/A (no top-level shape change).
-- [ ] `docs/architecture/database-schema/database-schema-overview.md` — **on implementation** (assets columns + asset_type taxonomy).
-- [ ] `docs/architecture/backend/backend-overview.md` — **on implementation** (asset DTO / resolvers / filter).
-- [ ] `docs/architecture/frontend/frontend-overview.md` — **on implementation** (SAC filter → property; link rendering).
-- [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — N/A (asset-shape, not pipeline-topology).
-- [ ] `docs/architecture/infrastructure/infrastructure-overview.md` — N/A.
-- [ ] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` — **on implementation** (write-path convergence: SAC folds into classic/native row).
-- [ ] This ADR linked from each updated doc — on implementation.
+- [x] `docs/architecture/technical-design-general-overview.md` — N/A (no top-level shape change).
+- [x] `docs/architecture/database-schema/database-schema-overview.md` — done in #298 (assets facet + asset_type taxonomy).
+- [x] `docs/architecture/backend/backend-overview.md` — done (#298; `filter[sac]` narrowed to deployed-only in #303).
+- [x] `docs/architecture/frontend/frontend-overview.md` — done (#298; two-axis badges + "Has SAC" toggle in #303).
+- [x] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — N/A (asset-shape, not pipeline-topology).
+- [x] `docs/architecture/infrastructure/infrastructure-overview.md` — N/A.
+- [x] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` — done in #298 (write-path convergence: SAC folds into classic/native row).
+- [x] This ADR linked from each updated doc — done (backend / frontend / schema / xdr overviews link ADR 0051).
 
 ---
 

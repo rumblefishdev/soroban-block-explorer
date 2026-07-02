@@ -260,8 +260,8 @@ export class IngestionStack extends cdk.Stack {
         ...sharedContainerEnv,
         // TEST VALUE (task 0241 SQS smoke) — start near tip so captive-core
         // catches up in minutes and the live tail flows fast. REVERT to
-        // '62528000' before the real cutover / snapshot-restore re-run.
-        START: '62528000',
+        // '63230777' before the real cutover / snapshot-restore re-run.
+        START: '63230777',
       },
       secrets: sharedContainerSecrets,
       healthCheck: {

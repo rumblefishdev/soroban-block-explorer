@@ -66,6 +66,18 @@ fn app(config: &AppConfig, state: AppState) -> Router {
 
     let router = mount_swagger_ui(router, spec_arc.as_ref());
 
+    // Load-test correlation (task 0338): capture `X-Request-Id` into a
+    // task-local so CH queries stamp `system.query_log.log_comment` with it
+    // (B2). Added ONLY when armed (`load_testing`) — double-gated with the
+    // header-presence check inside the middleware, so normal production never
+    // sets a `log_comment`. Innermost of the security layers (it only needs to
+    // wrap the handlers, where CH queries run).
+    let router = if config.load_testing {
+        router.layer(axum::middleware::from_fn(common::request_id::capture))
+    } else {
+        router
+    };
+
     // ── Access layer (task 0277 paid-API; docs/paid-api/plan-platne-api.md):
     // free tier via Turnstile → session JWT, paid tier via X-API-Key. Built only
     // when ARMED (jwt_secret set) so it deploys "dark"; sits INSIDE the edge-secret
@@ -231,6 +243,7 @@ mod tests {
             turnstile_secret: None,
             api_keys: Vec::new(),
             cors_allow_origin: None,
+            load_testing: false,
         }
     }
 

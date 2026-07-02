@@ -142,7 +142,7 @@ pub async fn get_search(
                 .map_err(|e| tracing::error!("PG error in get_search broad: {e}"))
         }
         DataSource::Ch => {
-            queries_ch::fetch_search(state.ch(), q_raw, &classified, &include, limit as i32)
+            queries_ch::fetch_search(&state.ch(), q_raw, &classified, &include, limit as i32)
                 .await
                 .map_err(|e| tracing::error!("CH error in get_search broad: {e}"))
         }

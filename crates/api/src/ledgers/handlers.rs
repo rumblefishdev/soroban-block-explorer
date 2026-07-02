@@ -288,7 +288,7 @@ async fn fetch_list_for_source(
         DataSource::Pg => queries::fetch_list(&state.db, limit, cursor, sort, direction)
             .await
             .map_err(LedgerFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), limit, cursor, sort, direction)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), limit, cursor, sort, direction)
             .await
             .map_err(LedgerFetchError::Ch),
     }
@@ -303,7 +303,7 @@ async fn fetch_by_sequence_for_source(
         DataSource::Pg => queries::fetch_by_sequence(&state.db, sequence)
             .await
             .map_err(LedgerFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_by_sequence(state.ch(), sequence)
+        DataSource::Ch => queries_ch::fetch_by_sequence(&state.ch(), sequence)
             .await
             .map_err(LedgerFetchError::Ch),
     }
@@ -330,7 +330,7 @@ async fn fetch_transactions_for_source(
         .await
         .map_err(LedgerFetchError::Pg),
         DataSource::Ch => queries_ch::fetch_transactions(
-            state.ch(),
+            &state.ch(),
             ledger_sequence,
             closed_at,
             cursor,

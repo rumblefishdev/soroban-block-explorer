@@ -168,6 +168,11 @@ services:
       # Production-only overrides.
       - ./crates/db-clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
       - ./crates/db-clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      # Enables the `changeable_in_readonly` settings-constraint type (task
+      # 0338) so the read_only profile can whitelist `log_comment` under
+      # readonly=1 (B2 per-request correlation). Without this mount the flag
+      # never reaches the container and the constraint is silently ignored.
+      - ./crates/db-clickhouse/config.d/access-control.xml:/etc/clickhouse-server/config.d/access-control.xml:ro
     environment:
       CLICKHOUSE_USER: default
       # Fail-fast pattern — Compose refuses to start if the env

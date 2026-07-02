@@ -135,7 +135,7 @@ pub async fn list_nfts(
         DataSource::Pg => queries::fetch_list(&state.db, &resolved, direction)
             .await
             .map_err(NftFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), &resolved, direction)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), &resolved, direction)
             .await
             .map_err(NftFetchError::Ch),
     };
@@ -201,7 +201,7 @@ pub async fn get_nft(
         DataSource::Pg => queries::fetch_by_composite(&state.db, &contract_id, &token_id)
             .await
             .map_err(NftFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_by_composite(state.ch(), &contract_id, &token_id)
+        DataSource::Ch => queries_ch::fetch_by_composite(&state.ch(), &contract_id, &token_id)
             .await
             .map_err(NftFetchError::Ch),
     };
@@ -334,21 +334,23 @@ pub async fn list_nft_transfers(
                 Err(e) => Err(NftFetchError::Pg(e)),
             }
         }
-        DataSource::Ch => match queries_ch::nft_exists(state.ch(), &contract_id, &token_id).await {
-            Ok(true) => queries_ch::fetch_transfers(
-                state.ch(),
-                &contract_id,
-                &token_id,
-                pagination.cursor.as_ref(),
-                fetch_limit,
-                direction,
-            )
-            .await
-            .map(Some)
-            .map_err(NftFetchError::Ch),
-            Ok(false) => Ok(None),
-            Err(e) => Err(NftFetchError::Ch(e)),
-        },
+        DataSource::Ch => {
+            match queries_ch::nft_exists(&state.ch(), &contract_id, &token_id).await {
+                Ok(true) => queries_ch::fetch_transfers(
+                    &state.ch(),
+                    &contract_id,
+                    &token_id,
+                    pagination.cursor.as_ref(),
+                    fetch_limit,
+                    direction,
+                )
+                .await
+                .map(Some)
+                .map_err(NftFetchError::Ch),
+                Ok(false) => Ok(None),
+                Err(e) => Err(NftFetchError::Ch(e)),
+            }
+        }
     };
     let mut rows = match fetched {
         Ok(Some(r)) => r,

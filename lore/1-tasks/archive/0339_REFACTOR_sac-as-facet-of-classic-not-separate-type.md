@@ -2,7 +2,7 @@
 id: '0339'
 title: 'REFACTOR: SAC is a facet of classic_credit, not a separate `asset_type` — collapse the classic↔SAC entity split'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0051']
 related_tasks: ['0336', '0337', '0323', '0154', '0219']
 tags:
@@ -69,6 +69,22 @@ history:
       Remaining: **Phase 2** prod data-pass (seed `asset_sac` + insert missing type=1/0
       identities + DELETE type=2), writer-first — runbook: `0339_phase2-migration-runbook.md`.
       Status stays `active` until Phase 2 runs; ACs ticked then.
+  - date: '2026-07-02'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Phase 2 prod data-pass EXECUTED 2026-07-01 (asset_sac seeded, 208 identity
+      rows inserted, type=2 DELETEd; prod assets now in {0,1,3}; gates + Step 4
+      green; 2 runbook bugs found+fixed → commit ab632264). Final cleanup + SAC-UX
+      landed via PR #303 (base develop): dropped the transitional `!= 2` carve-out
+      in the api transactions handler; aligned the enrichment-runner candidate
+      predicate `IN (1,2)` → `= 1` (both drain modes + status count + module doc +
+      README + ignored CH smoke test); narrowed `filter[sac]=true` to deployed-only
+      (`sac.sac_deployed`) so reserved SACs stop showing under "SAC"; FE re-modelled
+      SAC as a property axis orthogonal to type (type badge always + a separate
+      "SAC" tag when deployed; "Has SAC" filter toggle); api-types regen (only the
+      filter[sac] description text). All 9 ACs met; ADR 0051 Delivery Checklist
+      ticked. Backup `assets_pre0339` kept (soak). 0336/0337 already archived.
 ---
 
 # REFACTOR: SAC is a facet of classic_credit, not a separate asset_type
@@ -159,19 +175,21 @@ NOT NULL` / `sac_deployed`), preserved without a separate type.
 
 ## Acceptance Criteria
 
-- [ ] `asset_type` has no distinct `sac` value; a classic asset with a SAC is
-      `classic_credit` + `contract_id` (+ deployed flag).
-- [ ] One `assets` row per economic asset (no classic↔SAC duplication) — verified
+- [x] `asset_type` has no distinct `sac` value; a classic asset with a SAC is
+      `classic_credit` + `sac_contract_id` (+ `sac_deployed` flag).
+- [x] One `assets` row per economic asset (no classic↔SAC duplication) — verified
       on a prod cohort; by-code-issuer resolver deterministic.
-- [ ] "SAC" UI filter works as a property filter.
-- [ ] Deployed SAC still links to its contract page; un-deployed SAC's
-      `contract_id` rendered non-linked + marked (subsumes 0337).
-- [ ] `soroban` (type=3) unaffected.
-- [ ] Activity under a SAC's `C…` resolves to the single classic asset.
-- [ ] Migration folds existing ~31k type=2 rows into `classic_credit`; no asset lost.
-- [ ] **Docs updated** — new ADR + `docs/architecture/database-schema/*` (asset_type
-      taxonomy) + `xdr-parsing/*` (SAC → classic facet). Required (shape change).
-- [ ] **API types regenerated** — Required (`asset_type`/DTO change).
+- [x] "SAC" UI filter works as a property filter (deployed-only "Has SAC" toggle, #303).
+- [x] Deployed SAC still links to its contract page; un-deployed SAC's
+      `sac_contract_id` rendered non-linked + marked (subsumes 0337).
+- [x] `soroban` (type=3) unaffected.
+- [x] Activity under a SAC's `C…` resolves to the single classic asset
+      (`fetch_by_contract_id` matches the `asset_sac` facet).
+- [x] Migration folds existing type=2 rows into `classic_credit` / native; no asset
+      lost (Phase 2, 2026-07-01: 208 identity rows inserted, type=2 DELETEd).
+- [x] **Docs updated** — ADR 0051 + database-schema / backend / frontend / xdr-parsing
+      overviews. Required (shape change).
+- [x] **API types regenerated** — done (#298 DTO change; #303 filter description).
 
 ## Supersedes / relations
 
@@ -190,3 +208,37 @@ NOT NULL` / `sac_deployed`), preserved without a separate type.
   vs rebuild), the CH keying change (one row per `(code,issuer)` with native /
   soroban carve-outs), and the canonical-id wire change (`C…` deep-links).
 - When this lands, archive 0336 + 0337 as `superseded by: [0339]`.
+
+## Completion Notes (2026-07-02, PR #303)
+
+Phase 1 (#298 / #299) + the Phase 2 prod data-pass (executed 2026-07-01) already
+landed. This final session did the mechanical cleanup + SAC-UX polish and closed
+the task.
+
+### Design Decisions — Emerged
+
+1. **`filter[sac]` deployed-only** (user-approved 2026-07-01): reserved
+   (un-deployed) SACs matched the old `sac_contract_id != 0` and read as confusing
+   ("SAC / not deployed", e.g. zkUNP). Narrowed to `sac.sac_deployed`.
+2. **Two-axis FE badges**: the SAC badge previously _replaced_ the type badge; now
+   the type badge is always shown and SAC is an additive property tag, shown only
+   when `sac_deployed`. Un-deployed SACs get no tag (the reserved-address note stays
+   on the detail page only). The list filter row splits SAC into a "Has SAC" toggle.
+3. **Also fixed the ignored runner smoke test**: the runbook enumerated 3 predicate
+   spots, but the `#[ignore]` `select_sep1_chunk_*` test seeded a synthetic `type=2`
+   row and asserted its inclusion — a lie post-relabel. Reseeded to `type=1`
+   (SAC-as-facet) and tightened the assertion.
+4. **Fixed a stale doc**: `frontend-overview.md` §7 listed type badges with wrong
+   colors (Classic=blue, SAC=violet); corrected to match `assetType.ts` and the
+   two-axis model.
+
+**Modified tests:** `assetType.test.ts` (`sac` no longer a type; added `SAC_TAG` +
+filter-list assertions); `AssetDetailPage.test.tsx` (dropped the `['sac','SAC']`
+case; added deployed / reserved SAC-tag cases); `AssetsListPage.test.tsx`
+(`?type=sac` → `?sac=true`; added a `filter[sac]` mapping test); runner smoke-test
+seeds.
+
+**Intentionally deferred:** `assets_pre0339` backup NOT dropped (soak ongoing);
+`lore/README.md` index not regenerated in this direct-to-develop commit (the MCP
+`generate-index` targets the feature-branch worktree — regen on the next
+develop-side lore session).

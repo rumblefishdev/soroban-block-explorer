@@ -72,6 +72,9 @@ services:
       # the directory writable for entrypoint while still pinning our
       # overrides.
       - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
+      # Enables `changeable_in_readonly` (task 0338) — read_only profile
+      # whitelists `log_comment` under readonly=1 for B2 correlation.
+      - ./crates/db-clickhouse/config.d/access-control.xml:/etc/clickhouse-server/config.d/access-control.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
       # `dict_reader` user definition. Required because init.sql's
       # `transaction_hash_dict` SOURCE clause references it.
