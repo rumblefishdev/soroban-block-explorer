@@ -61,11 +61,27 @@ WHERE database = currentDatabase() AND table = 'assets' AND name = 'id';  -- MUS
 Required for the whole-table `EXCHANGE` in Step 3 (a concurrent write between staging-build
 and swap is lost) and so the old (no-`id`) binary stops re-introducing `id=0` rows.
 
+**Mechanism (AWS, operator):** the indexer is the `production-soroban-explorer-indexer` Lambda
+(eu-central-1); its S3 trigger is live only while `reservedConcurrentExecutions > 0` (per the 0241
+cutover runbook). STOP = set reserved concurrency to **0**. **Capture the current value first** so
+Step 4/6 can restore it exactly. No events are lost — S3 keeps the backlog; it drains on restart.
+
+```bash
+# 1) capture current (record N for restore):
+aws lambda get-function-concurrency --region eu-central-1 \
+  --function-name production-soroban-explorer-indexer
+# 2) stop:
+aws lambda put-function-concurrency --region eu-central-1 \
+  --function-name production-soroban-explorer-indexer \
+  --reserved-concurrent-executions 0
+```
+
 **VALIDATE — writes have stopped:** capture `m1`, wait ≥30 s, capture `m2`; they must be
-equal, and the Lambda/worker must show no in-flight invocations.
+equal, and the Lambda must show no in-flight invocations (`aws logs tail` quiet). NOTE: `assets`
+has NO ledger column — use `ledgers.sequence` (one row per ledger, the live-ingest heartbeat).
 
 ```sql
-SELECT max(last_updated_ledger) FROM assets FINAL;   -- run twice, ≥30s apart → m1 == m2
+SELECT max(sequence) FROM ledgers;   -- run twice, ≥30s apart → m1 == m2 (drained)
 ```
 
 ## Step 3 — [run] backfill `assets.id` (indexer STOPPED)
@@ -93,8 +109,10 @@ a temp map, builds a staging `assets` via `a.* REPLACE (… AS id)` (no hardcode
 ```sql
 SELECT count() FROM assets FINAL WHERE id = 0;                                        -- MUST be 0
 SELECT count() FROM assets FINAL WHERE asset_type = 0 AND id = 0;                     -- native MUST be 0
--- Spot-check a known classic (USDC): its id must be non-zero AND stable across a re-run.
-SELECT id FROM assets FINAL WHERE asset_type = 1 AND asset_code = 'USDC' LIMIT 1;     -- non-zero
+-- Spot-check a known classic: id must be non-zero AND stable across a re-run. NOTE: `USDC` is
+-- NOT unique — many issuers share the code (verified on prod); pin the issuer for a meaningful
+-- check (Circle USDC = issuer strkey GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN).
+SELECT id, issuer_id FROM assets FINAL WHERE asset_type = 1 AND asset_code = 'USDC' ORDER BY id LIMIT 3; -- all non-zero
 ```
 
 ## Step 4 — [deploy] the new indexer (single-write cutover)
@@ -109,7 +127,10 @@ stamped on every new/rewritten row; contract-held 0/1 balances are re-keyed via 
 SELECT count() FROM system.tables
 WHERE database = currentDatabase() AND name IN ('balances','balance_aggregates','balance_aggregates_mv'); -- MUST be 3
 SELECT count() FROM balances;                    -- run twice, ~1 min apart → strictly INCREASING
-SELECT countIf(id = 0) FROM assets FINAL WHERE last_updated_ledger > (…Step-3 max…);  -- new rows: 0
+-- assets has NO ledger column → cannot filter "new rows" by ledger. Instead assert the whole
+-- table stays fully keyed: the new indexer stamps `id` on every insert, so any id=0 = a stray
+-- old-binary write or a bug.
+SELECT countIf(id = 0) FROM assets FINAL;        -- MUST stay 0 (was 0 after Step 3)
 ```
 
 ## Step 5 — [DB] migrate classic `account_balances_current` → `balances`
@@ -121,6 +142,12 @@ SELECT count() FROM assets FINAL WHERE asset_type IN (0, 1) AND id = 0;         
 ```
 
 **BENCHMARK the source size (this INSERT scans `account_balances_current FINAL`):**
+
+⚠️ **SCALE (measured 2026-07-02):** `account_balances_current` = **~59.8M raw rows** (~21M native
+type-0 + ~39M classic). This INSERT (`abc FINAL` streamed against `assets FINAL` hash side, 329k rows)
+is the **heaviest DB op in the runbook** — expect minutes + a large read. FINAL collapses RMT dups +
+`balance != 0` prunes retained closed/zero trustlines, so the migrated count is < 59.8M; measure it
+first. If it approaches the 30 s / 4 GB single-query cap via `chw`, chunk by `holder_id` range.
 
 ```sql
 SELECT count() FROM account_balances_current FINAL WHERE balance != 0;                -- rows to migrate
@@ -237,7 +264,12 @@ claim 100% enumeration.**
 ```
 
 **BENCHMARK the MV cost at prod scale** (the `REFRESH EVERY 2 MINUTE` full `GROUP BY asset_id`
-over `balances FINAL` recurs forever — confirm it fits the read quota):
+over `balances FINAL` recurs forever — confirm it fits the read quota). ⚠️ **CONCERN:** after Step 5,
+`balances` holds ~tens of millions of rows (~60M account-held + type-3 + contract-held); a full
+`balances FINAL` scan every 2 min = ~30 scans/h. At ~60M+ rows that is ~1.8B+ rows/h from the MV
+ALONE — near the 2B rows/h quota. If Step-8 query-log shows the refresh scan is heavy, **relax the
+cadence to `REFRESH EVERY 5 MINUTE`** (edit init.sql `balance_aggregates_mv`; 2-min freshness is not
+load-bearing for supply/holders). Measure before deciding.
 
 ```sql
 -- After the MV runs once post-migration, read its cost from the query log:
@@ -291,7 +323,7 @@ if Step 8 fails, the old `account_balances_current` still holds the pre-cutover 
 | #   | Where    | Command / SQL                                           | Gate (MUST hold)                           |
 | --- | -------- | ------------------------------------------------------- | ------------------------------------------ |
 | 1   | `chq`    | `ALTER TABLE assets ADD COLUMN IF NOT EXISTS id …`      | `system.columns` id → 1                    |
-| 2   | ops      | stop indexer                                            | `max(last_updated_ledger)` stable 30s      |
+| 2   | ops      | stop indexer (Lambda concurrency → 0)                   | `max(sequence)` (ledgers) stable 30s       |
 | 3   | shell    | `assets-id-backfill [--dry-run]` (benchmark, then real) | `count(id=0)=0`; USDC id ≠ 0               |
 | 4   | ops      | deploy new indexer (creates `balances`)                 | 3 tables exist; `count(balances)` rising   |
 | 5   | `chq`    | classic `account_balances_current` → `balances`         | pre `id=0`→0; no orphan; USDC value parity |
