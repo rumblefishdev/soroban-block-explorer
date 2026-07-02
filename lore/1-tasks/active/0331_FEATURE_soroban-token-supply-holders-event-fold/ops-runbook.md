@@ -216,6 +216,13 @@ SELECT b.amount FROM balances b FINAL
 Let the indexer reach chain head before seeding (the seed reads current state and must not be
 superseded by a lagging live writer).
 
+**CAVEAT (2026-07-02): catch-up-before-seed is only load-bearing when the indexer is FAR behind.**
+It was written for a ~12-day / ~190k-ledger lag (the seed's tip snapshot would sit stale until the
+lagging indexer reached it, ~2 weeks). When the indexer is NEAR tip (minutes), it is NOT required:
+the seed enumerates historical holders from `soroban_events` and the live indexer captures recent
+holders, and RMT (`last_updated_ledger` max) converges regardless of order. The seed may run with the
+indexer stopped (cleaner isolation for validation) — it was on this run.
+
 **VALIDATE — at tip (compare to RPC `latestLedger`):**
 
 ```sql
@@ -226,12 +233,20 @@ SELECT max(sequence) FROM ledgers;   -- MUST be within a few ledgers of Soroban 
 
 **Cost + failure policy (measured 2026-07-02 via `chq` on prod):**
 
-- **SAC candidate scan ≈ ~2.64B rows → ~2 min wall-clock, ~600 GiB read** (throughput
-  ~22.5M rows/s; benchmarked on one 500k-ledger partition: 451M rows / ~20 s / ~104 GiB,
-  extrapolated). NOT the dominant cost — the earlier "~4.46B / 15–45 min" note was wrong.
-- **RPC phase ≈ ~3–8 min** — ~100–200k `(contract, holder)` keys, fetched SEQUENTIALLY in
+- **SAC candidate scan ≈ ~9.5B rows → ~6 min wall-clock, ~2 TiB read** (MEASURED live 2026-07-02 via
+  `system.processes`: 2.1B rows = 22% at 74 s). The earlier "~2.64B / ~2 min" partition-extrapolation
+  was LOW by ~4×. This is a genuinely heavy scan of the SAC event bulk.
+- **⚠️ Caddy `response_header_timeout` (Caddyfile) MUST exceed the scan wall-clock.** Default is **30 s**;
+  the scan buffers (no response header until done) → Caddy returns **504** at 30 s while the CH query
+  keeps running orphaned. FIX: raise it (this run used **10 min**) + reload Caddy, OR run on the box via
+  `clickhouse-client` (no proxy). (A URL-param `send_progress_in_http_headers=1` does NOT work — the
+  `clickhouse` 0.15.0 crate `pairs.clear()`s base-URL params; only `.with_option()` in code would.)
+- **RPC phase ≈ ~3–8 min** — measured funnel: **122,704 keys** requested, fetched SEQUENTIALLY in
   200-key batches (no concurrency, `DEFAULT_CONCURRENCY` is unused). This is the biggest slice.
-- **Total ≈ ~5–12 min.**
+- **Funnel (dry-run, 2026-07-02):** `tokens=5285 holders_enumerated=122704 keys_requested=122704
+entries_returned=115438 balances_decoded=115425` → 0 malformed; 94.1% keys have a live entry (5.9% =
+  spent-to-zero/removed); 99.99% decode. Seed inserts ~115k rows.
+- **Total ≈ ~10–15 min.**
 - **⚠️ QUOTA:** the ~600 GiB scan exceeds the 100 GB/h read quota (~6×). It's a one-time cost —
   run with quota headroom, or chunk per `intDiv(ledger_sequence, 500000)` partition (~27 chunks
   of ~22 GiB) to stay under.
@@ -241,19 +256,30 @@ SELECT max(sequence) FROM ledgers;   -- MUST be within a few ledgers of Soroban 
   whole command. (If the RPC phase ever grows large enough that a re-run hurts, add per-batch
   retry + streaming insert — the `sync.rs` / `upgradeable_backfill` patterns already in-repo.)
 
-**BENCHMARK first — `--dry-run` runs the candidate scan and reports the funnel WITHOUT writing:**
+**CLI note:** `--soroban-rpc-url` is a GLOBAL arg (before the subcommand), NOT a `balance-seed` arg
+(which only takes `--dry-run`). Prod connection is mTLS (`--ch-cert/--ch-key/--ch-ca` = the operator's
+write cert; CN → `dev_shared`). RPC used 2026-07-02: `https://mainnet.sorobanrpc.com`.
+
+**BENCHMARK first — `--dry-run` runs the candidate scan + RPC + reports the funnel WITHOUT writing:**
 
 ```bash
-time backfill-runner --target clickhouse balance-seed --soroban-rpc-url <url> --dry-run
-# Records: tokens, holders_enumerated, keys_requested, entries_returned, balances_decoded.
-# Read the drops between levels (keyed<enumerated = malformed; returned<keyed = no live entry;
-# decoded<returned = unknown value shape). `keys_requested` confirms the ~100–200k RPC estimate.
+cargo run --release -p backfill-runner --bin backfill-runner -- \
+  --target clickhouse --clickhouse-url https://ch.sorobanscan.rumblefish.dev \
+  --ch-cert "$WRITE_CERT" --ch-key "$WRITE_KEY" --ch-ca "$WRITE_CA" \
+  --soroban-rpc-url https://mainnet.sorobanrpc.com \
+  balance-seed --dry-run
+# Funnel: tokens, holders_enumerated, keys_requested, entries_returned, balances_decoded.
+# Drops: keyed<enumerated = malformed; returned<keyed = no live entry; decoded<returned = odd shape.
 ```
 
-**For real:**
+**For real** (drop `--dry-run`; writes ~115k rows once at the end):
 
 ```bash
-backfill-runner --target clickhouse balance-seed --soroban-rpc-url <url>
+cargo run --release -p backfill-runner --bin backfill-runner -- \
+  --target clickhouse --clickhouse-url https://ch.sorobanscan.rumblefish.dev \
+  --ch-cert "$WRITE_CERT" --ch-key "$WRITE_KEY" --ch-ca "$WRITE_CA" \
+  --soroban-rpc-url https://mainnet.sorobanrpc.com \
+  balance-seed
 ```
 
 Seeds **type-3** (`read_seed_candidates`, G+C holders) **and contract-held 0/1**

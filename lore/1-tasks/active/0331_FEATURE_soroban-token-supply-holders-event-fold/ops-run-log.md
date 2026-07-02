@@ -287,22 +287,56 @@ Cost: ~2× MV scan (may relax MV to 5 min, Step 8). Correct — reads filter `am
   ceiling → spam lands on its own spam `asset_id`, real assets untouched. Old `asset_aggregates` shows
   the same absurd spam supplies → **not a regression.** Real on-chain balances of spam tokens.
 - **Native XLM = 104.78B (NOT an artifact — I falsely alarmed first):** top account
-  `GALAXYVOIDAOPZTDLHILAJQKCVVFMD4IKLXLSZV5YHO7VY74IWZILUTO` (home_domain "…stare into the abyss…")
+  `GALAXYVOIDAOPZTDLHILAJQKCVVFMD4IKLXLSZV5YHO7VY74IWZILUTO` (home*domain "…stare into the abyss…")
   holds **55.44B XLM** — **Horizon-confirmed EXACT** (`55442115247.4347086`). It's the XLM **burn/void
   address** (2019 "burn" sent ~55B here, not protocol-destroyed). On-chain native total = ~105B;
-  CMC/StellarExpert cite ~50B _circulating_ by excluding it. Our sum is CHAIN-FAITHFUL. My "55B > 50B =
+  CMC/StellarExpert cite ~50B \_circulating* by excluding it. Our sum is CHAIN-FAITHFUL. My "55B > 50B =
   impossible" was wrong — I conflated circulating (~50B) with on-chain total (~105B).
 - **→ Spawned [0342] (backlog):** supply DISPLAY convention (exclude burn-void for native; flag/hide
   spam-ceiling tokens). Read/display only — `balances` stays chain-faithful. Not a blocker.
 
-## Steps 4b, 6–11 — remaining
+## Step 4b — indexer restart — (2026-07-02), then re-stopped
 
-| #   | Step                                                           | Status                  |
-| --- | -------------------------------------------------------------- | ----------------------- |
-| 4b  | START indexer (`concurrency→1` + deploy-compute recreates ESM) | ⬜                      |
-| 6   | catch-up to tip (`max(sequence)` ≈ RPC latestLedger)           | ⬜                      |
-| 7   | `balance-seed` (dry-run benchmark → real)                      | ⬜                      |
-| 8   | validate vs on-chain getters + measure leaks + MV cost         | ⬜                      |
-| 9   | deploy API (done via Step 2) + FE (delivery stack)             | ◧ API done / FE pending |
-| 10  | drop `account_balances_current` (not written since Step 4)     | ⬜                      |
-| 11  | feed 0199                                                      | ⬜                      |
+- **Resumed indexer = the NEW single-write code:** writes `balances` (not `account_balances_current`);
+  `account_balances_current` stayed FROZEN (59,869,428 rows, max_ledger 63,294,116, 0 rows after cutover).
+  `assets.id` stayed clean (`countIf(id=0)=0`).
+- **350,215 real balance rows** written live in the window (last_updated_ledger 63,294,117–685; 348,803
+  nonzero; 0 negatives; 0 orphans). Cross-checked a live-indexed holder (G-account `GC5LF63G…`) vs
+  Horizon: ours 24,249,174.27 USDC @ ledger 63,294,633 vs Horizon 24,411,441.26 @ tip — matches (the
+  ~0.67% gap = an active account trading between our ledger and tip). **Scaling correct.**
+- **Circle USDC supply moved 219.7M → 245.9M** — REAL + GOOD: the live indexer captures contract-held
+  SAC USDC (72.5M contract-held in the window) that the trustline-only migration missed → supply trends
+  toward Circle's true ~250M. No double-count (G-trustline vs C-contract = distinct holder_id). This is
+  exactly 0331's purpose (surface what Horizon/trustline-sum can't see).
+
+## Step 7 — balance-seed — DRY-RUN ✅ / REAL running (2026-07-02)
+
+**Transport blocker found + fixed:** the seed's SAC candidate scan is HEAVY (~9.5B rows / ~6 min / ~2 TiB)
+and streams no response header until done → Caddy's `response_header_timeout 30s` (Caddyfile) → **504**.
+Operator raised it **30s → 10 min** on the box + reloaded Caddy → seed runs. (Tried a URL-param
+`send_progress_in_http_headers=1` first — DEAD: clickhouse 0.15.0 `query.rs:211` `pairs.clear()` wipes
+base-URL params; only `.with_option()` works, which is a code change. So Caddy bump was the fix.) Also
+fixed the CLI: `--soroban-rpc-url` is a GLOBAL arg (before the subcommand), not a `balance-seed` arg.
+RPC used: `https://mainnet.sorobanrpc.com` (project's 0311 pool primary).
+
+**DRY-RUN funnel (healthy):** `tokens=5285 holders_enumerated=122704 keys_requested=122704
+entries_returned=115438 balances_decoded=115425`. → 0 malformed holders; 94.1% keys have a live entry
+(5.9% = spent-to-zero/removed, correctly excluded); 99.99% of returned decode (13 edge shapes). Seed
+inserts ~115k rows (type-3 G∪C + contract-held SAC), one write at the end (`insert_rows`).
+
+**Catch-up-before-seed — NOT required here** (corrected): the runbook rule was for a ~12-day-behind
+indexer (freshness decay). Near tip, seed (historical holders via `soroban_events`) + live indexer
+(recent holders) cover everything, RMT-convergent, either order. Seed run with indexer stopped for clean
+isolation. **REAL seed launched 2026-07-02, indexer stopped.**
+
+## Steps 6, 8–11 — remaining
+
+| #   | Step                                                         | Status                                            |
+| --- | ------------------------------------------------------------ | ------------------------------------------------- |
+| 4b  | START indexer (operator-controlled; ESM recreated on deploy) | ◧ ran uncontrolled → re-stopped; config back to 0 |
+| 7   | `balance-seed` REAL                                          | ◧ dry-run ✅ / real running                       |
+| 6   | catch-up to tip (`max(sequence)` ≈ RPC latestLedger)         | ⬜ (after operator starts indexer)                |
+| 8   | validate vs on-chain getters + measure leaks + MV cost       | ⬜                                                |
+| 9   | deploy API (done via Step 2) + FE (delivery stack)           | ◧ API done / FE pending                           |
+| 10  | drop `account_balances_current` (not written since Step 4)   | ⬜                                                |
+| 11  | feed 0199                                                    | ⬜                                                |
