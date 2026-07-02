@@ -81,24 +81,59 @@ no contract can hold it → no contract-held balance → nothing to index (our i
 before our ingest window / with missed detection has no `asset_sac` row → its contract-held orphans
 (same completeness dependency as the seed/backfill).
 
+### Decisions 2026-07-02 (karolkow) — DEV close-out + OPS shape
+
+- **D3** (NFT contract-owner) — verified DONE.
+- **D4** (holders VIEW) — WON'T DO.
+- **D5** (surfacing read/UI) — WON'T DO (covered via `total_supply` / existing reads).
+- **Faza 3** (per-protocol custom-storage pool decoder, e.g. Soroswap/Phoenix) — DEFER
+  (future-work; those pools honestly render `—` until then; does NOT block 0331).
+- **Frozen-balance policy** (`authorized=false`) — DECIDED: **count normally**, like every other
+  balance. No code (flags stay decoded-but-not-threaded); no re-backfill needed if this is ever revisited.
+- **OPS home** — the execution **runbook lives IN this task**: [`ops-runbook.md`](./ops-runbook.md).
+  No separate task. (option b, in-task)
+- **`assets.id` backfill** — a **small Rust one-shot** (`ids::asset_id`, mirrors `AssetRow::staged`);
+  NOT SQL (`cityHash64` ≠ Rust cityhash → id mismatch). (option a) — BUILT (`assets-id-backfill`).
+- **Historical balances** — the **extended `balance-seed`** (already built), `--dry-run` first. (option a)
+- **Snapshot** — already taken (DB + host). No pre-window snapshot step needed.
+
 ### Remaining DEV
-- [ ] Commit the Proposal-A re-key + P1/P4 (awaiting signal).
-- [ ] (cosmetic) refresh stale "Path X" labels in comments (behaviour still correct; label outdated).
-- [ ] Frozen-balance policy (`authorized=false`) — decision, not code (flags decoded, not threaded).
-- Type-3 core + contract-held 0/1 keying are otherwise DONE.
+- [x] Proposal-A re-key + P1/P4 — committed + pushed (`dde40154`, `b8ee1085`).
+- [x] "Path X" comment labels refreshed to ADR-0051 wording; `sink.rs` Run path re-keys too.
+- [x] Frozen policy — decided (count normally); no code.
+- [x] **`assets.id` backfill one-shot** — `backfill-runner assets-id-backfill` (staging + EXCHANGE,
+      Rust `ids::asset_id`, `--dry-run`, idempotent). Written + tested (PG short-circuit + gated e2e).
+- Type-3 core + contract-held 0/1 keying — DONE.
 - Dead PG paths (`db-merge`, `indexer/persist/write.rs`, `accounts/queries.rs`) still reference
-  `asset_type=2` / `account_balances_current` — pre-existing dead code (PG retired), a separate cleanup.
+  `asset_type=2` / `account_balances_current` — pre-existing dead code (PG retired), WON'T TOUCH.
 
 ### Remaining OPS
-- [ ] `asset_sac` must be populated for HISTORICAL SACs (0339 writes it live on SAC-sighting; historical
-      backfill is 0339's phase-2 runbook — needed so the re-key resolves old SACs).
-- [ ] **C5** — migrate/delete existing prod `assets` rows with `asset_type=2` BEFORE the reader that
-      rejects `2` goes live (0339 phase-2 runbook — verify it runs first). 0339-blocker, not just ours.
-- [ ] `ALTER TABLE assets ADD COLUMN id` + backfill (before the indexer deploy; `count(id=0)=0`).
-- [ ] Deploy indexer (our re-key + 0339) → migrations (`assets.id`, classic→`balances`) → catch-up →
-      `balance-seed --dry-run` (benchmark) → live seed → validate (contract-held USDC on the classic
-      row via `get_reserves` cross-check) → API + FE deploy → drop `account_balances_current`.
-- [ ] Coordinate with 0339's own prod rollout (on develop; phase-2 runbook pending).
+**Full step-by-step execution plan: [`ops-runbook.md`](./ops-runbook.md).** Summary below.
+
+Verified against prod CH 2026-07-02 (`chq`): `assets` `asset_type=2` rows = **0** (folded/deleted);
+`asset_sac` = **46,712 rows, 3,780 deployed** (populated); `assets.id` column = **absent** (pending).
+
+- [x] **0339 phase-2 DONE in prod** — `asset_sac` seeded for historical SACs + `type=2` rows deleted.
+      (Was our "asset_sac historical" + "C5 type-2 migrate" items; both satisfied. Only the 0339 doc's
+      own "mark complete" housekeeping remains.) So Phase 1 reader is also live (tolerates `type=2` = 0).
+- [ ] **`assets.id`** — `ALTER TABLE assets ADD COLUMN id` + **Rust one-shot backfill** (before indexer
+      deploy; verify `count(id=0)=0`). Blocker C1. The ONE pre-deploy step.
+- [ ] Deploy indexer (our re-key, single-write cutover) → migrations (`assets.id` verify, classic
+      `account_balances_current`→`balances` via `chq`) → catch-up to tip → `balance-seed --dry-run`
+      (benchmark) → live `balance-seed` (type-3 + contract-held 0/1) → validate (`get_reserves`
+      cross-check; measure frozen magnitude) → API + FE deploy → drop `account_balances_current`.
+- Snapshot: DONE (DB + host).
+
+### balance-seed post-merge coverage — VERIFIED OK (2026-07-02, karolkow)
+The merge broke the seed (P2: SAC balances keyed by the removed type-2 surrogate → orphan; P3:
+`read_sac_seed_candidates` scoped `asset_type=2` → returned nothing). **Both fixed + confirmed in code:**
+- `read_seed_candidates` — type-3 tokens (`assets asset_type=3`), scrapes G+C holders.
+- `read_sac_seed_candidates` — contract-held 0/1, scoped **`soroban_contracts.is_sac = true`** (reverted
+  from `asset_type=2`), scrapes **C-only** holders (G trustlines come via the classic→`balances`
+  migration, not the seed).
+- `build_balance_rows` re-keys SAC surrogate → wrapped classic/native id via the `asset_sac` map.
+There is NO third candidate function by design: account-held 0/1 is the migration; contract-held 0/1 is
+the SAC path; type-3 is its own path. Coverage is complete for the seed's scope.
 
 ## Path X 2026-07-01 (karolkow) — contract-held 0/1 LIVE via symmetric keying (SUPERSEDED by the 0339 merge above)
 

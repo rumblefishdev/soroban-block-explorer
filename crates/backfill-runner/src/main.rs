@@ -4,6 +4,7 @@
 //! Sink:   Postgres, ADR 0027 schema, via
 //!         `indexer::handler::process::process_ledger` (parse-and-persist).
 
+mod assets_id_backfill;
 mod balance_seed;
 mod bootstrap;
 mod ch_staging;
@@ -225,16 +226,29 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder Soroban
-    /// token balances (bespoke type-3 tokens) into the unified `balances`
-    /// table. Enumerates holders from each token's `soroban_events` stream,
-    /// reads their current `Balance(Address)` ledger entries from Soroban RPC
-    /// (`getLedgerEntries`), and upserts `balances` (ReplacingMergeTree).
-    /// Reads CURRENT chain state, so it is correct
-    /// regardless of indexer lag; live ingest supersedes it on catch-up.
-    /// Requires `--soroban-rpc-url`. Idempotent. `--dry-run` reports without
-    /// writing. CH-only.
+    /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
+    /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
+    /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
+    /// wrapped asset via `asset_sac`, ADR 0051). Enumerates holders from the
+    /// `soroban_events` stream, reads their current `Balance(Address)` ledger
+    /// entries from Soroban RPC (`getLedgerEntries`), and upserts `balances`
+    /// (ReplacingMergeTree). Reads CURRENT chain state, so it is correct regardless
+    /// of indexer lag; live ingest supersedes it on catch-up. Requires
+    /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
+    /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Task 0331 — one-shot backfill of `assets.id` (the `ids::asset_id` surrogate)
+    /// for rows written before the column existed (all `id = 0` after
+    /// `ALTER TABLE assets ADD COLUMN id`). Computes the id in Rust (CH `cityHash64`
+    /// differs, so it can't be done in SQL), builds a staging table, and
+    /// `EXCHANGE TABLES`-swaps it. Must run BEFORE the classic→`balances` migration
+    /// and the balance-seed (both join on `assets.id`), with the indexer STOPPED
+    /// (whole-table swap). Idempotent. `--dry-run` reports without swapping. CH-only.
+    AssetsIdBackfill {
         #[arg(long)]
         dry_run: bool,
     },
@@ -373,6 +387,24 @@ async fn main() {
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
+        Command::AssetsIdBackfill { dry_run } => {
+            let stats = assets_id_backfill::execute(&sink, dry_run).await.expect(
+                "assets_id_backfill failed — the pass is idempotent (staging + \
+                     EXCHANGE, deterministic id), safe to re-run",
+            );
+            println!(
+                "assets_id_backfill completed (dry_run={}): total_rows={} id_zero_before={} id_zero_after={}",
+                stats.dry_run, stats.total_rows, stats.id_zero_before, stats.id_zero_after,
+            );
+            if !stats.dry_run && stats.id_zero_after > 0 {
+                eprintln!(
+                    "assets_id_backfill: {} rows still have id=0 (a row escaped the map — likely a \
+                     concurrent indexer write) — STOP the indexer and re-run",
+                    stats.id_zero_after,
+                );
+                std::process::exit(1);
+            }
+        }
         Command::WasmUpgradeBackfill { dry_run } => {
             let stats = wasm_upgrade_backfill::execute(&sink, dry_run).await.expect(
                 "wasm_upgrade_backfill failed — the pass is idempotent, safe to re-run \
@@ -414,8 +446,8 @@ async fn main() {
             }
         }
         Command::BalanceSeed { dry_run } => {
-            // rpc_url required only on the CH path; `execute` enforces it after
-            // the Postgres no-op short-circuits, so pass it through.
+            // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse
+            // target, then enforces `--soroban-rpc-url`, so just pass it through.
             let stats = balance_seed::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
                 .await
                 .expect("balance_seed failed — idempotent, safe to re-run");
