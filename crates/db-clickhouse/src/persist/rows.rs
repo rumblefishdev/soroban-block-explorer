@@ -73,19 +73,18 @@ pub struct AccountRow {
 
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
-/// `total_supply`, `holder_count`, `icon_url` are DEAD columns — the
+/// `name`, `total_supply`, `holder_count`, `icon_url` are DEAD columns — the
 /// indexer writes them `None` and NO read touches them: supply/holders come from
 /// `balance_aggregates` (lore-0293), display name/icon from `asset_enrichment`
-/// coalesced over `soroban_contract_metadata`. `total_supply`/`holder_count`
-/// `ALTER … DROP COLUMN` batched in task 0310. The dead `name` column was
-/// removed from this struct + `init.sql` in task 0304 (empty in prod, reader-less);
-/// the prod `DROP COLUMN name` runs in 0310's `assets` deploy-drain window.
+/// coalesced over `soroban_contract_metadata`. `name` is 0/367321-populated in
+/// prod. Kept for backward-compat; `ALTER … DROP COLUMN` batched in task 0310.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,
     pub asset_code: String,
     pub issuer_id: i64,
     pub contract_id: i64,
+    pub name: Option<String>,
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
@@ -95,17 +94,24 @@ pub struct AssetRow {
 }
 
 impl AssetRow {
-    /// Build a staging `AssetRow` from its identity, computing the `id`
+    /// Build a staging `AssetRow` from its identity + name, computing the `id`
     /// surrogate ONCE from the identity so no build site can forget it or diverge.
     /// The aggregate columns are dead at write time (lore-0293 → `balance_aggregates`)
     /// so they are always `None` here.
-    pub fn staged(asset_type: i16, asset_code: String, issuer_id: i64, contract_id: i64) -> Self {
+    pub fn staged(
+        asset_type: i16,
+        asset_code: String,
+        issuer_id: i64,
+        contract_id: i64,
+        name: Option<String>,
+    ) -> Self {
         Self {
             id: super::ids::asset_id(asset_type, &asset_code, issuer_id, contract_id),
             asset_type,
             asset_code,
             issuer_id,
             contract_id,
+            name,
             total_supply: None,
             holder_count: None,
             icon_url: None,
@@ -172,6 +178,7 @@ pub struct SorobanContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    pub name: Option<String>,
 }
 
 /// `soroban_contract_metadata` — on-chain Soroban token metadata

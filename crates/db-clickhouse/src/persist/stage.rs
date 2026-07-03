@@ -675,6 +675,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             deployed_at_ledger: Some(deployed),
             contract_type: Some(contract_type as i16),
             is_sac: dep.is_sac,
+            name: dep.name.clone(),
         });
     }
 
@@ -1135,6 +1136,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             t.asset_code.clone().unwrap_or_default(),
             issuer_id,
             contract_id_int,
+            t.name.clone(),
         );
         // SAC facet carried by `detect_assets`' SAC branch (the classic/native
         // carrier for a deploy). Emitted to `asset_sac`, never onto `assets`.
@@ -1182,6 +1184,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code,
                 issuer_id,
                 0, // key reserved for soroban identity
+                None,
             ),
         );
     }
@@ -1218,6 +1221,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code,
                 issuer_id,
                 0, // key reserved for soroban identity
+                None,
             ),
         );
     }
@@ -1226,7 +1230,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     push_asset(
         &mut out,
         &mut asset_seen,
-        AssetRow::staged(domain::TokenAssetType::Native as i16, String::new(), 0, 0),
+        AssetRow::staged(
+            domain::TokenAssetType::Native as i16,
+            String::new(),
+            0,
+            0,
+            Some("Stellar Lumen".to_string()),
+        ),
     );
 
     // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
@@ -1256,6 +1266,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 String::new(),
                 0,
                 contract_id,
+                None,
             ),
         );
     }
@@ -1578,6 +1589,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 deployed_at_ledger: None,
                 contract_type: None,
                 is_sac: false,
+                name: None,
             });
         }
     }
