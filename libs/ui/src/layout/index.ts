@@ -12,8 +12,6 @@ export type { TopNavProps, NetworkStats } from './TopNav.js';
 export { SecondaryNav } from './SecondaryNav.js';
 export type { SecondaryNavProps, NavItem } from './SecondaryNav.js';
 
-export { ThemeToggle } from './ThemeToggle.js';
-
 export { Footer } from './Footer.js';
 export type { FooterProps, FooterNavItem } from './Footer.js';
 

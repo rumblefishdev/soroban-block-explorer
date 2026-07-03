@@ -2,7 +2,7 @@
 id: '0348'
 title: 'Frontend UX sweep — consolidated fixes (19 findings across all pages)'
 type: FEATURE # bundle of bug-fixes + UX polish from a full-page audit
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0341', '0351']
 tags: ['frontend', 'ux', 'phase-polish', 'effort-large', 'priority-medium']
@@ -24,6 +24,11 @@ history:
       for the milestone-2 frontend video: F3, F4, F5, F6, F7, F8, F10, F11,
       F14, F17, F18, F19. 0348 stays the full record; 0351 is the curated
       punch-list. Fix each finding once — mark it done in both when landed.
+  - date: 2026-07-03
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active to begin the consolidated fix pass.
 ---
 
 # Frontend UX sweep — consolidated fixes (19 findings)
