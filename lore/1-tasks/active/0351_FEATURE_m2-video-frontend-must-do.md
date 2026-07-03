@@ -2,7 +2,7 @@
 id: '0351'
 title: 'M2 video prep — frontend must-do (eye-catching UX fixes only)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0348']
 tags:
@@ -18,6 +18,10 @@ history:
       causes + file refs live in 0348 (finding numbers referenced as F#).
       Deliberately excludes subtle/backend items (deleted-account, truncation,
       native link, ledger-as-time, etc.).
+  - date: 2026-07-03
+    status: active
+    who: karolkow
+    note: Promoted to active — starting M2 video frontend fixes.
 ---
 
 # M2 video prep — frontend must-do
