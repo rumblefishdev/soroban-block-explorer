@@ -59,8 +59,9 @@ Core lists / detail:
       user; see memory). Commit `1dd13b6b`.
 - [~] **F5 — SKIPPED (misdiagnosed).** The Time column is NOT clipped — DOM
   shows the full `… UTC` timestamp intact. The table (1100px) is just wider
-  than its container on narrow windows → a horizontal scrollbar (`overflow-x:
-    auto`); content is fully reachable and there is no scroll on wider screens.
+  than its container on narrow windows → a horizontal scrollbar
+  (`overflow-x: auto`); content is fully reachable and there is no scroll on
+  wider screens.
   Cosmetic, not data-loss. Dropped by decision (2026-07-03).
 - [ ] **F11 — accounts list "Last Seen"/"First Seen" show raw ledger numbers,
       identical every row** → reads as broken. Relabel + pair with human time.
