@@ -1,0 +1,37 @@
+%%{init: {"flowchart": {"curve": "basis"}}}%%
+flowchart TB
+    USER["<b>Browser</b><br/><i>sorobanscan.rumblefish.dev</i>"]
+
+    CFLARE["<b>Cloudflare edge</b><br/>api-sorobanscan.rumblefishdev.com<br/><i>DNS · API origin lock (AOP) · ADR 0048</i>"]
+
+    subgraph AWS["AWS — eu-central-1"]
+        direction TB
+        CF["<b>CloudFront CDN</b><br/><i>React SPA delivery · CLOUDFRONT-scoped WAF (us-east-1)</i>"]
+        S3["<b>S3 bucket</b><br/><i>React SPA static assets · private (OAC)</i>"]
+        APIGW["<b>API Gateway · REST</b><br/><i>throttling · response caching · REGIONAL WAF</i><br/><i>x-api-key usage plan · CORS</i>"]
+        API["<b>API Lambda (Rust · axum)</b><br/>production-soroban-explorer-api<br/><i>reads typed rows, serves REST / JSON</i>"]
+    end
+
+    subgraph HET[" "]
+        CH[("<b>ClickHouse</b><br/><i>Hetzner · ch-prod-01</i><br/>ch.sorobanscan.rumblefish.dev<br/><i>single-node MergeTree · Caddy mTLS</i>")]
+    end
+
+    USER -->|"load SPA (HTTPS)"| CF
+    CF -->|"origin fetch (OAC)"| S3
+    USER -->|"REST /v1 calls · x-api-key"| CFLARE
+    CFLARE -->|"authenticated origin pull"| APIGW
+    APIGW -->|"Lambda proxy"| API
+    API -->|"read over mTLS"| CH
+
+    classDef aws      fill:#FFE0B2,stroke:#E65100,stroke-width:1.5px,color:#BF360C
+    classDef external fill:#E3F2FD,stroke:#1565C0,stroke-width:1.5px,color:#0D47A1
+    classDef database fill:#FFCDD2,stroke:#B71C1C,stroke-width:2px,color:#B71C1C
+    classDef edge     fill:#E8EAF6,stroke:#3949AB,stroke-width:1.5px,color:#1A237E
+
+    class USER external
+    class CFLARE edge
+    class CF,S3,APIGW,API aws
+    class CH database
+
+    style AWS fill:#FFF8E1,stroke:#FF8F00,stroke-width:2px,color:#E65100
+    style HET fill:#FFEBEE,stroke:#C62828,stroke-width:2px,color:#B71C1C
