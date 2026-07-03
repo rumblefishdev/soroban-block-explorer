@@ -1,4 +1,3 @@
-import { Box } from '@mui/material';
 import type { AssetTransactionItem } from '@rumblefish/api-types';
 import {
   Dash,
@@ -117,7 +116,7 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
 
   return (
     <SectionCard title="Latest transactions">
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

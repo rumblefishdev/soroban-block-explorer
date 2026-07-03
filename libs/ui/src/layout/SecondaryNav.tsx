@@ -8,6 +8,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import { grid } from '../theme/grid.js';
 
 import { NavButton } from './NavButton.js';
+import { ThemeToggle } from './ThemeToggle.js';
 
 /** Below this width the inline nav collapses behind a hamburger drawer. */
 const NAV_COLLAPSE_BREAKPOINT = 'md';
@@ -76,45 +77,61 @@ export function SecondaryNav({
           {logo}
         </Box>
 
-        {/* Inline nav — desktop only (≥md). */}
+        {/* Right cluster — nav links (desktop), theme toggle (all sizes),
+            hamburger (mobile) — kept together so the toggle sits at the far
+            right edge on every breakpoint. */}
         <Box
-          display="flex"
-          alignItems="stretch"
-          gap={1}
           sx={{
+            display: 'flex',
+            alignItems: 'center',
             alignSelf: 'stretch',
             minWidth: 0,
-            display: { xs: 'none', [NAV_COLLAPSE_BREAKPOINT]: 'flex' },
+            gap: 1,
           }}
         >
-          {navItems.map((item) => (
-            <NavButton
-              key={item.label}
-              label={item.label}
-              active={activePage === item.label}
-              href={item.href}
-              onClick={onNavClick ? () => onNavClick(item) : undefined}
-            />
-          ))}
-        </Box>
+          {/* Inline nav — desktop only (≥md). */}
+          <Box
+            display="flex"
+            alignItems="stretch"
+            gap={1}
+            sx={{
+              alignSelf: 'stretch',
+              minWidth: 0,
+              display: { xs: 'none', [NAV_COLLAPSE_BREAKPOINT]: 'flex' },
+            }}
+          >
+            {navItems.map((item) => (
+              <NavButton
+                key={item.label}
+                label={item.label}
+                active={activePage === item.label}
+                href={item.href}
+                onClick={onNavClick ? () => onNavClick(item) : undefined}
+              />
+            ))}
+          </Box>
 
-        {/* Hamburger toggle — mobile/tablet only (<md). */}
-        <IconButton
-          aria-label={
-            menuOpen ? 'Close navigation menu' : 'Open navigation menu'
-          }
-          aria-expanded={menuOpen}
-          onClick={() => setMenuOpen((open) => !open)}
-          sx={(theme) => ({
-            display: { xs: 'inline-flex', [NAV_COLLAPSE_BREAKPOINT]: 'none' },
-            // ≥44px touch target (WCAG 2.5.5 / card 11.6).
-            width: 44,
-            height: 44,
-            color: theme.palette.text.primary,
-          })}
-        >
-          {menuOpen ? <CloseIcon /> : <MenuIcon />}
-        </IconButton>
+          {/* Theme switch — visible on every breakpoint (task 0351 F19). */}
+          <ThemeToggle />
+
+          {/* Hamburger toggle — mobile/tablet only (<md). */}
+          <IconButton
+            aria-label={
+              menuOpen ? 'Close navigation menu' : 'Open navigation menu'
+            }
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            sx={(theme) => ({
+              display: { xs: 'inline-flex', [NAV_COLLAPSE_BREAKPOINT]: 'none' },
+              // ≥44px touch target (WCAG 2.5.5 / card 11.6).
+              width: 44,
+              height: 44,
+              color: theme.palette.text.primary,
+            })}
+          >
+            {menuOpen ? <CloseIcon /> : <MenuIcon />}
+          </IconButton>
+        </Box>
       </Box>
 
       {/* Slim right drawer (<md). Backdrop + Escape close it — no separate

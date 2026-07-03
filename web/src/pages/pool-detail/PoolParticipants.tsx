@@ -1,5 +1,5 @@
 import GroupIcon from '@mui/icons-material/GroupOutlined';
-import { Box, Typography } from '@mui/material';
+import { Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
   EmptyState,
@@ -134,7 +134,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
 
   return (
     <SectionCard title="Pool participants">
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

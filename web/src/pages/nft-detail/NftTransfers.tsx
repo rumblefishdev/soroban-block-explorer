@@ -1,5 +1,5 @@
 import SwapHorizIcon from '@mui/icons-material/SwapHorizOutlined';
-import { Box, Card } from '@mui/material';
+import { Card } from '@mui/material';
 import type { NftTransferItem } from '@rumblefish/api-types';
 import {
   Dash,
@@ -134,7 +134,7 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
   return (
     <Card>
       <TableSectionHeader title="Transfer history" />
-      <Box sx={{ minHeight: 200 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

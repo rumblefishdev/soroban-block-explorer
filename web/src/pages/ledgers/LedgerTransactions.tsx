@@ -5,7 +5,7 @@ import {
   TableEmptyState,
   TableSectionHeader,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Box, Card } from '@mui/material';
+import { Card } from '@mui/material';
 
 import { TransactionsTable } from '../transactions/TransactionsTable.js';
 
@@ -30,17 +30,15 @@ export function LedgerTransactions({
   return (
     <Card>
       <TableSectionHeader title="Transactions in this ledger" />
-      <Box sx={{ minHeight: 200 }}>
-        {rows.length === 0 ? (
-          <TableEmptyState
-            kind="transactions"
-            title="No transactions in this ledger"
-            description="This ledger closed without any transactions."
-          />
-        ) : (
-          <TransactionsTable rows={rows} />
-        )}
-      </Box>
+      {rows.length === 0 ? (
+        <TableEmptyState
+          kind="transactions"
+          title="No transactions in this ledger"
+          description="This ledger closed without any transactions."
+        />
+      ) : (
+        <TransactionsTable rows={rows} />
+      )}
       <PaginationControls
         caption={`${formatInteger(totalCount)} transactions`}
         canPrev={canPrev}
