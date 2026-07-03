@@ -32,7 +32,7 @@ function shape(balance: AccountBalance): BalanceShape {
       code: 'XLM',
       subline: 'Native asset',
       chipLabel: null,
-      href: undefined,
+      href: routes.asset('native'),
     };
   }
   // Soroban token (type-3): no classic code/issuer — its identity is the token
