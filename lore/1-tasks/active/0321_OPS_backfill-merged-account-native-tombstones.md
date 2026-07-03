@@ -2,9 +2,9 @@
 id: '0321'
 title: 'OPS: backfill native=0 tombstones for merged-account ghosts (DB-only, no S3 re-parse)'
 type: OPS
-status: backlog
+status: active
 related_adr: []
-related_tasks: ['0295']
+related_tasks: ['0295', '0349']
 tags: [ops, clickhouse, layer-data, accountmerge, priority-medium, effort-small]
 links: []
 history:
@@ -15,6 +15,21 @@ history:
       Spawned from 0295. The parser tombstone (bug-2) fixes new merges
       fix-forward; the ~522k already-merged-not-recreated accounts in prod CH
       need a one-shot backfill.
+  - date: 2026-07-03
+    status: active
+    who: karolkow
+    note: >
+      Activated. Re-verified live vs prod CH during the 0349 devil's-advocate
+      pass (sampled windows early/mid/recent). Two findings that sharpen scope:
+      (1) NATIVE-ONLY is provably sufficient — a deleted account can never hold
+      a non-native balance (merge requires all trustlines closed,
+      HAS_SUB_ENTRIES), measured 0 non-native across every window. No trustline
+      work needed. (2) RECYCLE-SAFE confirmed — recycling (merge→recreate) is
+      common (~47% of a mid-era window's merge-source set is currently alive);
+      the RMT zero at the merge ledger is correctly superseded by the recreated
+      account's higher-ledger row, so the backfill must NOT special-case them.
+      Post-0295 truly-deleted native ghosts already ≈0 (fix-forward works); this
+      backfill is purely the pre-fix historical tail.
 ---
 
 # OPS: backfill native=0 tombstones for merged ghosts
