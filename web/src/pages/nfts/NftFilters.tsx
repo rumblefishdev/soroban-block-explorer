@@ -4,6 +4,8 @@ import {
   isContractId,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { COLLECTION_COLUMN_ENABLED } from './NftsTable.js';
+
 interface NftFiltersProps {
   collection: string;
   contractId: string;
@@ -35,13 +37,15 @@ export function NftFilters({
         backgroundColor: theme.palette.surface.grayMainAlt,
       })}
     >
-      <DebouncedField
-        value={collection}
-        placeholder="Filter by collection..."
-        ariaLabel="Filter by collection"
-        width={400}
-        onCommit={onCollectionChange}
-      />
+      {COLLECTION_COLUMN_ENABLED && (
+        <DebouncedField
+          value={collection}
+          placeholder="Filter by collection..."
+          ariaLabel="Filter by collection"
+          width={400}
+          onCommit={onCollectionChange}
+        />
+      )}
       <DebouncedField
         value={contractId}
         placeholder="Search by contract ID..."

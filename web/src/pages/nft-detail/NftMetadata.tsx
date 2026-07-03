@@ -95,7 +95,7 @@ function TraitCard({ label, value, rarityPercent }: Attribute) {
         {label}
       </Typography>
       <Typography
-        variant="heading5SemiBold"
+        variant="bodyMdBold"
         sx={(theme) => ({
           color: theme.palette.text.primary,
           textAlign: 'center',

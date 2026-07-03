@@ -23,7 +23,12 @@ function SupplyValue({
     <Stack>
       <Typography
         variant="bodySmBold"
-        sx={(theme) => ({ color: theme.palette.text.primary })}
+        sx={(theme) => ({
+          color: theme.palette.text.primary,
+          // A long supply is one unbroken token — let it wrap instead of
+          // overflowing into the adjacent "Holders" cell (F4).
+          overflowWrap: 'anywhere',
+        })}
       >
         {formatAmount(scaleByDecimals(supply, decimals))}
       </Typography>
