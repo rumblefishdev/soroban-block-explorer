@@ -108,11 +108,15 @@ served from CH.
 - [x] Test covering the CH path — offline SQL-shape regression
       (`stats_sql_computes_recent_events_from_events_table`); no CH
       integration harness exists in the repo (PG-only `tests_integration.rs`).
-- [ ] **(deferred to [[0328]], gated on [[0286]])** End-to-end verify against the live `now64()` window —
-      currently impossible: CH ingest is ~10 days behind chain head (see
-      Issues), so the wall-clock 7-day window is empty and the whole stats
-      trio returns 0. Re-runnable once ingest catches up (gated on
-      [[0286]] galexie disk-full). NOTE: the original "verified before the
+- [x] **(verified in [[0328]] 2026-07-03)** End-to-end verify against the live `now64()` window.
+      [[0286]] resolved, CH `ledgers` lag = 0h, so the window is live again. The
+      exact `contract_stats_sql` (all three stats) run via `chq` against prod CH
+      for the native XLM SAC `CAS3J7GY…OWMA` returned a coherent non-zero trio:
+      `recent_invocations=144,112`, `recent_unique_callers=26`,
+      `recent_events=69,411,088` (events ≫ invocations — SAC fires many events
+      per call). `chq` reproduces the API output exactly (no compute beyond this
+      SQL; the API's 45s TTL cache only serves a copy of it). See [[0328]] for
+      the full write-up. NOTE: the original "verified before the
       `API_DATASOURCE_CONTRACTS=ch` prod flip" wording is stale — the flip
       already shipped (`infra/.../compute-stack.ts`, `CONTRACTS: 'ch'`,
       `DATABASE_URL` disabled → PG path is dead code).
