@@ -43,8 +43,12 @@ Home — first impression:
   with no autoFocus (never had one). Live: `scrollY=0`, `activeElement=BODY`.
   Home lands at scroll-top, headline visible. Dropped by decision
   (2026-07-03).
-- [ ] **F17 — home stat counters garble mid-animation** (digits overlap during
-      the rolling tween).
+- [~] **F17 — SKIPPED (not reproducible; by decision 2026-07-03).** Counters
+  use `@number-flow/react` — a purpose-built odometer with digit masking +
+  explicit `tabular-nums`. ~2900 measured animation frames across the 4 home
+  KPIs showed zero digit garble / zero multi-glyph columns (could not force
+  a value roll in-window, so not 100% refuted, but no code-level overlap
+  mechanism exists). Same misdiagnosis pattern as F3/F5.
 - [~] **F14 — SKIPPED (by decision, 2026-07-03).** Would wire
   `formatCompactAmount` into home KPIs for compact display. Dropped — user
   settled on keeping full US-grouped numbers (compact rejected during F4;
@@ -60,10 +64,13 @@ Core lists / detail:
 - [~] **F5 — SKIPPED (misdiagnosed).** The Time column is NOT clipped — DOM
   shows the full `… UTC` timestamp intact. The table (1100px) is just wider
   than its container on narrow windows → a horizontal scrollbar (`overflow-x:
-    auto`); content is fully reachable and there is no scroll on wider screens.
+auto`); content is fully reachable and there is no scroll on wider screens.
   Cosmetic, not data-loss. Dropped by decision (2026-07-03).
-- [ ] **F11 — accounts list "Last Seen"/"First Seen" show raw ledger numbers,
-      identical every row** → reads as broken. Relabel + pair with human time.
+- [~] **F11 — SKIPPED (by decision 2026-07-03).** The raw ledger numbers are
+  correct (identical only because the top rows are the newest accounts,
+  sorted by Last Seen). API exposes no per-account timestamp, so "human
+  time" isn't doable FE-only. A "(ledger)" header relabel was tried and
+  reverted — dropped.
 - [x] **F8 — DONE.** `collection_name` is null for every NFT (0/14696 in CH),
       so the column + its "Filter by collection" input were dead. Both gated
       behind `COLLECTION_COLUMN_ENABLED = false`. Thumbnails left as-is (already
@@ -88,8 +95,15 @@ Core lists / detail:
 
 ## Optional (nice demo feature, not blocking)
 
-- [ ] **F19 — add a visible theme toggle** (the context has `toggleMode` but no
-      button; also explains Chrome-light/Firefox-dark from `prefers-color-scheme`).
+- [x] **F19 — DONE.** Added a sun/moon `ThemeToggle` (libs/ui) rendered inline
+      at the far-right of `SecondaryNav` (persistent on every route incl. home;
+      inlined rather than a prop — the nav has a single consumer) — the
+      block-explorer convention (Etherscan / Solscan /
+      Blockscout / stellar.expert all top-right). Wired to the existing
+      `useColorMode().toggleMode`; first-visit default unchanged (system
+      `prefers-color-scheme` → dark fallback, already in `readInitialMode`).
+      Placement chosen via `/ux-expert`. Verified: light↔dark flips, icon +
+      persistence work.
 
 ## Explicitly out of scope for the video
 
@@ -101,8 +115,8 @@ count (F1), native-XLM transactions (F2), API amount nits (0350).
 ## Acceptance Criteria
 
 - [ ] All "Must-do" items land; nothing on the recorded pages reads as broken
-      (done: F4; skipped: F3, F5; remaining: F17, F14, F11)
-- [ ] Quick wins landed where cheap (done: F10, F18; remaining: F6, F7)
+      (done: F4, F8; skipped: F3, F5, F11, F14, F17)
+- [ ] Quick wins landed where cheap (done: F10, F18, F7; remaining: F6)
 - [x] **Docs updated** — F18 touched the backend read path, so its
       `docs/architecture/**` query mirrors were updated (ADR 0032). The FE-only
       items need no doc change.
