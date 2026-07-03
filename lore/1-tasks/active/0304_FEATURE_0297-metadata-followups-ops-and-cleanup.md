@@ -69,11 +69,13 @@ This task bundles the remaining non-implementation work.
 
 ### Backfill & data
 
-- [ ] Backfill `soroban_contract_metadata` for existing contracts (table starts
-      empty). Decide: re-parse historical ledgers vs RPC `getLedgerEntries` dump —
-      archived/evicted instances need re-parse (RPC ~7-day retention).
+- [x] Backfill `soroban_contract_metadata` — DONE in prod (re-parse the archive,
+      not an RPC dump; RPC ~7-day retention can't reach archived instances). Prod
+      holds 3728 rows / 3724 contracts (chq, 2026-07-02). Bin:
+      `crates/backfill-runner/src/bin/metadata-backfill.rs`.
 - [ ] Direct created-vs-updated confirmation on a representative deploy via the
       galexie archive (RPC retention can't reach old deploys; see 0297 Option B).
+      Nice-to-have validation, non-blocking (see Future Work).
 
 ### Validation & perf
 
@@ -132,15 +134,25 @@ drop lives here — NOT in 0310 (that task's dead-column story is 0293's
       `assets` table with 0310's `total_supply`/`holder_count` drop, so run both
       `assets` ALTERs in the same 0310 deploy-drain window (one cycle, not two).
       Ownership stays 0304; 0310 is only the shared prod-run slot.
-- [ ] Optional upstream: drop the now-always-`None` `ExtractedContractDeployment.name` + asset-stage `name` plumbing (parser).
+- [ ] Upstream parser/PG-staging `name` plumbing — **deferred to full PG
+      retirement, NOT optional-quick.** Correction (2026-07-02): the earlier
+      "always `None` / fully un-threaded" claim was wrong. `ExtractedContractDeployment.name`
+      is still populated (`state.rs:125-141` second pass + `extract_contract_data_name_writes`)
+      and consumed by the **PG** staging path (`indexer/process.rs:421,457`
+      `contract_name_writes` → `indexer/.../staging.rs:607,1024` `ContractRow`/`AssetRow`
+      with str-keys). It compiles fine after the CH-side drop because PG staging
+      uses different structs. Ripping it out = gutting the compiled PG write path,
+      so it belongs in the PG-retirement task (see Future Work), not here.
 
 ### Cleanup (code)
 
-- [x] Legacy `contract_name_writes` / `Symbol("name")` path fully un-threaded —
-      done in 0297 PR (`extract_contract_data_name_writes`, deploy second pass,
-      `ParseOutput.contract_name_writes`, PG `apply_contract_name_writes` + the
-      `assets.name` mirror, all plumbing + tests). `ExtractedContractDeployment.name`
-      kept (now always `None`) until the column drop above.
+- [~] Legacy `contract_name_writes` / `Symbol("name")` path — **only the CH side
+  is un-threaded.** Correction (2026-07-02): 0297 removed the CH-side name
+  consumption, but the extraction (`extract_contract_data_name_writes`, the
+  deploy second pass) and `ParseOutput.contract_name_writes` are STILL live,
+  feeding the compiled **PG** staging path (`indexer/.../staging.rs`).
+  `ExtractedContractDeployment.name` is populated, not `None`. Full removal is
+  part of PG retirement (Future Work), not done here.
 
 ### Docs (ADR 0032)
 
@@ -229,15 +241,26 @@ cross-check remains as nice-to-have validation.
 
 - **Full PG retirement** — delete PG `queries.rs` ×9 + the `Pg` datasource arm +
   the PG `endpoint-queries/` doc set + fix ~15 code-comments. Removes the rollback
-  fallback; prod is already all-CH. Own task (not yet spawned).
+  fallback; prod is already all-CH. Own task (not yet spawned). **Also folds in the
+  `name`-extraction removal:** `ExtractedContractDeployment.name`, the `state.rs`
+  deploy second pass, `extract_contract_data_name_writes`, `ParseOutput.contract_name_writes`,
+  and the PG staging `ContractRow`/`AssetRow` `name` fields — all dead once PG is
+  gone, but load-bearing for the compiled PG path until then.
+
+- **Galexie created-vs-updated validation** (nice-to-have) — direct
+  created-vs-updated confirmation of a metadata write on a representative deploy
+  via the galexie archive; cross-check decimals/symbol/name against an
+  independent source. Manual/ops (needs archive access), not blocking.
 
 ## Acceptance Criteria
 
 - [x] Backfilled + read flag flipped in prod; live tests green. (Perf: confirmed
       by the live prod CH read path, no read-rows regression reported.)
 - [x] Frontend renders amounts via `decimals` (single `scaleByDecimals` scaler).
-- [x] Legacy name path removed as far as this task goes — last reader dropped
-      (`sc.name` name-search). **Vestigial column DROP deferred to 0310** (both
-      columns confirmed 100% NULL + reader-less).
+- [x] Legacy name path removed (CH side) — last reader dropped (`sc.name`
+      name-search) + `name` removed from the CH structs/schema/tests. Both columns
+      confirmed 100% NULL + reader-less. **Only the destructive prod `ALTER DROP
+    COLUMN` remains** (gated on indexer deploy-drain, runs in 0310's assets
+      window; 0304 owns it). PG-side `name` plumbing stays until PG retirement.
 - [x] Docs synced per ADR 0032 (backend-overview + CH assets/contracts SQL; PG
       set banner-superseded).
