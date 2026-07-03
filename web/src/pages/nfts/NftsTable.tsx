@@ -16,6 +16,15 @@ interface NftsTableProps {
   skeletonRows?: number;
 }
 
+/**
+ * Hides the Collection column until the backend populates
+ * `collection_name` (currently null for every NFT, so the column is `—`
+ * on every row and reads as broken). Build-time `const false` — same
+ * pattern as `TVL_FILTER_ENABLED` / `CHARTS_ENABLED` (tasks 0351/0341).
+ * Flip to `true` once collections land. Task 0351 (F8).
+ */
+const COLLECTION_COLUMN_ENABLED = false;
+
 const columns: ExplorerTableColumn<NftItem>[] = [
   {
     id: 'nft',
@@ -23,23 +32,27 @@ const columns: ExplorerTableColumn<NftItem>[] = [
     width: 240,
     cell: (row) => <NftNameCell row={row} />,
   },
-  {
-    id: 'collection',
-    header: 'Collection',
-    width: 180,
-    cell: (row) =>
-      row.collection_name ? (
-        <Typography
-          component="span"
-          variant="bodySmMedium"
-          sx={(theme) => ({ color: theme.palette.text.primary })}
-        >
-          {row.collection_name}
-        </Typography>
-      ) : (
-        <Dash />
-      ),
-  },
+  ...(COLLECTION_COLUMN_ENABLED
+    ? [
+        {
+          id: 'collection',
+          header: 'Collection',
+          width: 180,
+          cell: (row: NftItem) =>
+            row.collection_name ? (
+              <Typography
+                component="span"
+                variant="bodySmMedium"
+                sx={(theme) => ({ color: theme.palette.text.primary })}
+              >
+                {row.collection_name}
+              </Typography>
+            ) : (
+              <Dash />
+            ),
+        },
+      ]
+    : []),
   {
     id: 'contract',
     header: 'Contract ID',
