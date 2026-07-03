@@ -81,10 +81,16 @@ auto`); content is fully reachable and there is no scroll on wider screens.
 
 - [x] **F10 — DONE.** "Any TVL" preset gated behind `TVL_FILTER_ENABLED = false`
       (0341 pattern); asset-pair search stays. Commit `78ef6a64`.
-- [ ] **F6 — tables leave an empty void with few rows** before the footer bar —
-      fit height to actual row count for small sets.
-- [ ] **F7 — NFT trait values oversized** (`heading5SemiBold` 24px) on NFT
-      detail — drop to a body variant.
+- [x] **F6 — DONE.** Each embedded table wrapped its body in a fixed
+      `<Box sx={{ minHeight: 280|200 }}>` — an arbitrary floor (NOT anti-jump:
+      the loading skeleton is 20 rows, far taller), leaving a void below
+      few-row results before the pagination bar. Removed the wrapper in all 8
+      tables (pool participants/transactions, account/asset/contract-inv/
+      contract-events/ledger/nft transactions) so the body fits its rows;
+      empty/error keep their own padding. Verified: 1-participant pool hugs the
+      footer, full pages unchanged.
+- [x] **F7 — DONE.** NFT trait value dropped from `heading5SemiBold` (24px) to
+      `bodyMdBold` (18px); label stays `bodySmMedium`. Commit `7a574323`.
 - [x] **F18 — DONE (fixed at source, not FE).** Backend returned the native
       name singular; fixed the shared ClickHouse asset SELECT literal
       `'Stellar Lumen'` → `'Stellar Lumens'` (covers list + detail), plus doc
@@ -114,9 +120,9 @@ count (F1), native-XLM transactions (F2), API amount nits (0350).
 
 ## Acceptance Criteria
 
-- [ ] All "Must-do" items land; nothing on the recorded pages reads as broken
-      (done: F4, F8; skipped: F3, F5, F11, F14, F17)
-- [ ] Quick wins landed where cheap (done: F10, F18, F7; remaining: F6)
+- [x] All "Must-do" items resolved; nothing on the recorded pages reads as
+      broken (done: F4, F8; skipped: F3, F5, F11, F14, F17)
+- [x] Quick wins + optional landed (done: F10, F18, F7, F6, F19)
 - [x] **Docs updated** — F18 touched the backend read path, so its
       `docs/architecture/**` query mirrors were updated (ADR 0032). The FE-only
       items need no doc change.
