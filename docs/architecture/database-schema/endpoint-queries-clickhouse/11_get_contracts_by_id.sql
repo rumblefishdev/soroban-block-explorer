@@ -60,8 +60,9 @@ SELECT
     sc.contract_type                   AS contract_type,
     sc.is_sac,
     -- NO `sc.name`: contract detail surfaces no name (task 0297 #3). The dead
-    -- `soroban_contracts.name` is read only by the CH name-search substring
-    -- fallback in the contracts LIST, never composed here.
+    -- `soroban_contracts.name` column has no reader at all since task 0304
+    -- dropped the contracts-LIST name-search fallback (it was empty in prod);
+    -- the column is pending `DROP COLUMN` (task 0310).
     toInt8(if(JSONHas(wim.metadata, 'upgradeable'),
               JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable
 FROM soroban_contracts sc FINAL
