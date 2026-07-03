@@ -103,9 +103,10 @@ struct ContractDeployerRow {
 ///
 /// - **`filter[q]`** has no CH equivalent for PG's `search_vector` FTS
 ///   (`websearch_to_tsquery`). Fallback = case-insensitive substring on
-///   `contract_id` + `name` (`positionCaseInsensitive`). A full scan of the
+///   `contract_id` only (`positionCaseInsensitive`). A full scan of the
 ///   (small) contracts table, NOT tokenized search — close enough for the
-///   explorer's id/name lookup, documented divergence.
+///   explorer's id lookup, documented divergence. (The legacy `sc.name` arm
+///   was dropped in task 0304 — empty since 0297, no name to search.)
 /// - **`contract_type` / cursor** are interpolated (typed `i16` / `i64`, no
 ///   injection surface); the free-text `q` is `.bind()`-ed.
 ///
@@ -131,8 +132,11 @@ pub async fn fetch_contract_list(
         .contract_type
         .map_or_else(String::new, |t| format!(" AND sc.contract_type = {t}"));
     let q_clause = if params.q.is_some() {
-        " AND (positionCaseInsensitive(sc.contract_id, ?) > 0 \
-              OR positionCaseInsensitive(ifNull(sc.name, ''), ?) > 0)"
+        // Substring on `contract_id` only. The legacy `sc.name` arm was dropped
+        // (task 0304): `soroban_contracts.name` has had no writer since 0297 and
+        // is empty in prod, so the OR never matched — and the contract API does
+        // not surface a name to search against (0297 #3).
+        " AND positionCaseInsensitive(sc.contract_id, ?) > 0"
     } else {
         ""
     };
@@ -156,7 +160,7 @@ pub async fn fetch_contract_list(
 
     let mut list_query = client.query(&list_sql);
     if let Some(q) = &params.q {
-        list_query = list_query.bind(q).bind(q);
+        list_query = list_query.bind(q);
     }
     // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
     let list_rows = list_query
