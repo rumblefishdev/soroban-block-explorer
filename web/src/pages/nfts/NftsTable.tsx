@@ -21,9 +21,11 @@ interface NftsTableProps {
  * `collection_name` (currently null for every NFT, so the column is `—`
  * on every row and reads as broken). Build-time `const false` — same
  * pattern as `TVL_FILTER_ENABLED` / `CHARTS_ENABLED` (tasks 0351/0341).
- * Flip to `true` once collections land. Task 0351 (F8).
+ * Flip to `true` once collections land. Task 0351 (F8). Also gates the
+ * "Filter by collection" input in `NftFilters` — the filter targets the
+ * same always-null field, so it must hide/show together with the column.
  */
-const COLLECTION_COLUMN_ENABLED = false;
+export const COLLECTION_COLUMN_ENABLED = false;
 
 const columns: ExplorerTableColumn<NftItem>[] = [
   {
