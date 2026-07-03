@@ -95,9 +95,10 @@ auto`); content is fully reachable and there is no scroll on wider screens.
 
 ## Optional (nice demo feature, not blocking)
 
-- [x] **F19 — DONE.** Added a sun/moon `ThemeToggle` (libs/ui) pinned to the
-      far-right of `SecondaryNav` (persistent on every route incl. home) via a
-      new `endSlot` prop — the block-explorer convention (Etherscan / Solscan /
+- [x] **F19 — DONE.** Added a sun/moon `ThemeToggle` (libs/ui) rendered inline
+      at the far-right of `SecondaryNav` (persistent on every route incl. home;
+      inlined rather than a prop — the nav has a single consumer) — the
+      block-explorer convention (Etherscan / Solscan /
       Blockscout / stellar.expert all top-right). Wired to the existing
       `useColorMode().toggleMode`; first-visit default unchanged (system
       `prefers-color-scheme` → dark fallback, already in `readInitialMode`).
