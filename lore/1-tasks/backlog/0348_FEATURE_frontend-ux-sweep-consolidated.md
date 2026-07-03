@@ -4,7 +4,7 @@ title: 'Frontend UX sweep — consolidated fixes (19 findings across all pages)'
 type: FEATURE # bundle of bug-fixes + UX polish from a full-page audit
 status: backlog
 related_adr: []
-related_tasks: ['0341']
+related_tasks: ['0341', '0351']
 tags: ['frontend', 'ux', 'phase-polish', 'effort-large', 'priority-medium']
 links: []
 history:
@@ -16,6 +16,14 @@ history:
       against prod-read API, light + dark). 19 findings consolidated into one
       task. Analysis-only — no code changed yet. Root causes + file refs
       captured per finding.
+  - date: 2026-07-03
+    status: backlog
+    who: karolkow
+    note: >
+      Video-prep subset (the eye-catching, FE-only findings) split into 0351
+      for the milestone-2 frontend video: F3, F4, F5, F6, F7, F8, F10, F11,
+      F14, F17, F18, F19. 0348 stays the full record; 0351 is the curated
+      punch-list. Fix each finding once — mark it done in both when landed.
 ---
 
 # Frontend UX sweep — consolidated fixes (19 findings)
@@ -32,6 +40,12 @@ its root cause and the exact file(s) to touch.
 ## Status: Backlog
 
 **Current state:** Audit complete, root-caused, not started. No files changed.
+
+> **Video-prep subset → [[0351]].** The eye-catching, FE-only findings needed
+> before the milestone-2 video are tracked in 0351: **F3, F4, F5, F6, F7, F8,
+> F10, F11, F14, F17, F18, F19**. This task remains the full 19-finding record
+> (incl. backend/subtle items F1, F2, F9, F12, F13, F15, F16). Fix a finding
+> once and check it off in both places.
 
 ## Locked decisions (from audit review)
 
