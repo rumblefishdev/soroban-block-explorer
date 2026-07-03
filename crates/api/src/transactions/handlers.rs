@@ -352,7 +352,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .map(|r| EventAppearanceItem {
                 contract_id: r.contract_id,
                 ledger_sequence: r.ledger_sequence,
-                amount: r.amount,
+                fold_count: r.amount,
                 created_at: r.created_at,
             })
             .collect();
@@ -366,7 +366,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
                 contract_id: r.contract_id,
                 caller_account: r.caller_account,
                 ledger_sequence: r.ledger_sequence,
-                amount: r.amount,
+                fold_count: r.amount,
                 created_at: r.created_at,
             })
             .collect();

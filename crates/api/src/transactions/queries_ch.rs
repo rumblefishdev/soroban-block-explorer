@@ -18,7 +18,7 @@
 //!   (canonical SQL 03 statement C).
 //! - **`soroban_events` is the full-payload table**, with no per-appearance
 //!   fold-count column. The archive-unavailable fallback derives the
-//!   `EventAppearanceItem.amount` as the per-contract event `count()` — a
+//!   `EventAppearanceItem.fold_count` as the per-contract event `count()` — a
 //!   CH analogue of the PG `soroban_events_appearances.amount` fold count,
 //!   not a token amount (same non-amount semantic as the PG column).
 //!
@@ -806,10 +806,10 @@ pub async fn fetch_event_appearances(
     ledger_sequence: i64,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
     // CH `soroban_events` is the full-payload table (no fold-count column).
-    // The PG `EventAppearanceItem.amount` is a per-(contract, ledger)
+    // The PG `EventAppearanceItem.fold_count` is a per-(contract, ledger)
     // appearance fold count; the CH analogue is the per-contract event
     // `count()` in this tx. Both are non-token "how many" counters, so the
-    // wire shape and semantic match (`amount` is never a stroop value).
+    // wire shape and semantic match (`fold_count` is never a stroop value).
     let rows = client
         .query(
             "SELECT \

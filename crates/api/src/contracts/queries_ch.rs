@@ -800,7 +800,7 @@ fn map_event_row(r: EventChRow) -> ChEvent {
             successful: r.successful,
             // CH is per-event (unfolded); the PG fold-count is vestigial and not
             // surfaced by the FE — each CH row is one event.
-            amount: 1,
+            fold_count: 1,
             created_at: millis_to_utc(r.created_at),
             event_type,
             topics,
@@ -1002,7 +1002,7 @@ mod tests {
         ));
         assert_eq!(ev.event_index, 2); // cursor tie-break preserved off the wire
         assert_eq!(ev.item.event_type, "contract");
-        assert_eq!(ev.item.amount, 1); // CH per-event (unfolded)
+        assert_eq!(ev.item.fold_count, 1); // CH per-event (unfolded)
         assert_eq!(ev.item.topics.len(), 2); // JSON array → its elements
         assert_eq!(ev.item.data["value"], "1000");
         assert_eq!(ev.item.transaction_hash, "deadbeef");

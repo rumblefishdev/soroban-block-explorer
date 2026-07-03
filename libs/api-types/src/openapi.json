@@ -2066,7 +2066,7 @@
           "fee_charged": {
             "type": "integer",
             "format": "int64",
-            "description": "Stroops."
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -2265,7 +2265,8 @@
           },
           "fee_charged": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -2611,7 +2612,7 @@
               "fee_charged": {
                 "type": "integer",
                 "format": "int64",
-                "description": "Fee charged in stroops."
+                "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
               },
               "has_soroban": {
                 "type": "boolean"
@@ -2719,18 +2720,24 @@
       },
       "EventAppearanceItem": {
         "type": "object",
-        "required": ["contract_id", "ledger_sequence", "amount", "created_at"],
+        "required": [
+          "contract_id",
+          "ledger_sequence",
+          "fold_count",
+          "created_at"
+        ],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int64"
-          },
           "contract_id": {
             "type": "string"
           },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "fold_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Appearance fold/expansion count (not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -2740,23 +2747,19 @@
       },
       "EventItem": {
         "type": "object",
-        "description": "One row per event — an appearance with `amount > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+        "description": "One row per event — an appearance with `fold_count > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
         "required": [
           "transaction_hash",
           "ledger_sequence",
           "transaction_id",
           "successful",
-          "amount",
+          "fold_count",
           "created_at",
           "event_type",
           "topics",
           "data"
         ],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int64"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -2764,6 +2767,11 @@
           "data": {},
           "event_type": {
             "type": "string"
+          },
+          "fold_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Appearance fold/expansion count (not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -2815,12 +2823,13 @@
       },
       "InvocationAppearanceItem": {
         "type": "object",
-        "required": ["contract_id", "ledger_sequence", "amount", "created_at"],
+        "required": [
+          "contract_id",
+          "ledger_sequence",
+          "fold_count",
+          "created_at"
+        ],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int32"
-          },
           "caller_account": {
             "type": ["string", "null"],
             "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
@@ -2831,6 +2840,11 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "fold_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Appearance fold/expansion count (not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -2843,22 +2857,22 @@
         "required": [
           "transaction_hash",
           "ledger_sequence",
-          "amount",
+          "fold_count",
           "created_at",
           "successful"
         ],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Folded invocation-tree node count for this appearance."
-          },
           "caller_account": {
             "type": ["string", "null"]
           },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "fold_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Folded invocation-tree node count for this appearance (a fold/expansion\ncount, not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -3333,7 +3347,7 @@
                 "fee_charged": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Stroops."
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean"
@@ -3474,7 +3488,8 @@
                 },
                 "fee_charged": {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean"
@@ -3570,23 +3585,19 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row per event — an appearance with `amount > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+              "description": "One row per event — an appearance with `fold_count > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
                 "transaction_id",
                 "successful",
-                "amount",
+                "fold_count",
                 "created_at",
                 "event_type",
                 "topics",
                 "data"
               ],
               "properties": {
-                "amount": {
-                  "type": "integer",
-                  "format": "int64"
-                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
@@ -3594,6 +3605,11 @@
                 "data": {},
                 "event_type": {
                   "type": "string"
+                },
+                "fold_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Appearance fold/expansion count (not a monetary amount)."
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -3633,22 +3649,22 @@
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
-                "amount",
+                "fold_count",
                 "created_at",
                 "successful"
               ],
               "properties": {
-                "amount": {
-                  "type": "integer",
-                  "format": "int32",
-                  "description": "Folded invocation-tree node count for this appearance."
-                },
                 "caller_account": {
                   "type": ["string", "null"]
                 },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "fold_count": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Folded invocation-tree node count for this appearance (a fold/expansion\ncount, not a monetary amount)."
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -3982,7 +3998,8 @@
                 },
                 "fee_charged": {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean"
@@ -4061,7 +4078,7 @@
                 "fee_charged": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Fee charged in stroops."
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean",
@@ -4258,7 +4275,8 @@
           },
           "fee_charged": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -4422,7 +4440,7 @@
           "fee_charged": {
             "type": "integer",
             "format": "int64",
-            "description": "Fee charged in stroops."
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -4518,7 +4536,7 @@
           "fee_charged": {
             "type": "integer",
             "format": "int64",
-            "description": "Fee charged in stroops."
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean",

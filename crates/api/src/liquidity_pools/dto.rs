@@ -171,6 +171,8 @@ pub struct PoolTransactionItem {
     pub hash: String,
     pub ledger_sequence: i64,
     pub source_account: String,
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     pub successful: bool,
     pub operation_count: i16,

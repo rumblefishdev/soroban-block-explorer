@@ -126,13 +126,14 @@ pub struct InvocationItem {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
     pub caller_account: Option<String>,
-    /// Folded invocation-tree node count for this appearance.
-    pub amount: i32,
+    /// Folded invocation-tree node count for this appearance (a fold/expansion
+    /// count, not a monetary amount).
+    pub fold_count: i32,
     pub created_at: DateTime<Utc>,
     pub successful: bool,
 }
 
-/// One row per event — an appearance with `amount > 1` expands to that
+/// One row per event — an appearance with `fold_count > 1` expands to that
 /// many rows (per-tx fields repeated, per-event fields unique).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EventItem {
@@ -140,7 +141,8 @@ pub struct EventItem {
     pub ledger_sequence: i64,
     pub transaction_id: i64,
     pub successful: bool,
-    pub amount: i64,
+    /// Appearance fold/expansion count (not a monetary amount).
+    pub fold_count: i64,
     pub created_at: DateTime<Utc>,
     pub event_type: String,
     pub topics: Vec<serde_json::Value>,
