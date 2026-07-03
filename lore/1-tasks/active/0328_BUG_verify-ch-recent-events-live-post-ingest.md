@@ -2,7 +2,7 @@
 id: '0328'
 title: 'BUG: verify CH contract `recent_events` live once ingest recovers (0300 AC#4)'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0047']
 related_tasks: ['0300', '0286']
 tags:
@@ -27,6 +27,12 @@ history:
       window was impossible: CH ingest was ~10 days behind chain head (galexie
       0286), so the wall-clock 7-day window was empty and the whole stats trio
       read 0. This task tracks the gated re-verification.
+  - date: '2026-07-03'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active — ingest recovered (0286 fixed), CH ledgers lag is 0h,
+      so the now64() 7-day window is live again. Starting re-verification.
 ---
 
 # BUG: verify CH `recent_events` live once ingest recovers
