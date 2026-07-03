@@ -129,6 +129,7 @@ export {
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
   routeForHit,
+  DEFAULT_TRUNCATION,
   getDefaultTruncation,
   truncateMiddle,
   type EntityType,

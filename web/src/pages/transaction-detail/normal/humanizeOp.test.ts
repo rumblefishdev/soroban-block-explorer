@@ -35,7 +35,7 @@ describe('humanizeOp', () => {
       asset: 'native',
       destination: 'GA5X',
     });
-    expect(humanizeOp(op, h)).toBe('Sent 100.5 XLM to GA5XIG…GKTM');
+    expect(humanizeOp(op, h)).toBe('Sent 100.5 XLM to GA5X…GKTM');
   });
 
   it('uses the credit asset code as the unit', () => {
@@ -49,7 +49,7 @@ describe('humanizeOp', () => {
       amount: 250_000_000,
       asset: 'USDC:GISSUER',
     });
-    expect(humanizeOp(op, h)).toBe('Sent 25 USDC to GA5XIG…GKTM');
+    expect(humanizeOp(op, h)).toBe('Sent 25 USDC to GA5X…GKTM');
   });
 
   it('reads destAmount/destAsset for a strict-receive path payment', () => {
@@ -59,7 +59,7 @@ describe('humanizeOp', () => {
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
     const h = heavy({ destAmount: 50_000_000, destAsset: 'native' });
-    expect(humanizeOp(op, h)).toBe('Sent 5 XLM to GA5XIG…GKTM');
+    expect(humanizeOp(op, h)).toBe('Sent 5 XLM to GA5X…GKTM');
   });
 
   it('reads sendAmount/sendAsset for a strict-send path payment', () => {
@@ -69,7 +69,7 @@ describe('humanizeOp', () => {
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
     const h = heavy({ sendAmount: 75_000_000, sendAsset: 'BTC:GISSUER' });
-    expect(humanizeOp(op, h)).toBe('Sent 7.5 BTC to GA5XIG…GKTM');
+    expect(humanizeOp(op, h)).toBe('Sent 7.5 BTC to GA5X…GKTM');
   });
 
   it('renders a zero amount as "0 XLM"', () => {
@@ -79,7 +79,7 @@ describe('humanizeOp', () => {
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
     expect(humanizeOp(op, heavy({ amount: 0, asset: 'native' }))).toBe(
-      'Sent 0 XLM to GA5XIG…GKTM'
+      'Sent 0 XLM to GA5X…GKTM'
     );
   });
 
@@ -92,7 +92,7 @@ describe('humanizeOp', () => {
     });
     // heavy present (e.g. malformed/missing amount) → no amount, asset-only.
     expect(humanizeOp(op, heavy({ asset: 'USDC:GISSUER' }))).toBe(
-      'Sent USDC to GA5XIG…GKTM'
+      'Sent USDC to GA5X…GKTM'
     );
   });
 
@@ -103,7 +103,7 @@ describe('humanizeOp', () => {
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
       asset_code: 'EURC',
     });
-    expect(humanizeOp(op, null)).toBe('Sent EURC to GA5XIG…GKTM');
+    expect(humanizeOp(op, null)).toBe('Sent EURC to GA5X…GKTM');
   });
 
   it('shows the starting balance for create-account', () => {
@@ -113,7 +113,7 @@ describe('humanizeOp', () => {
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
     const h = heavy({ startingBalance: 100_000_000 });
-    expect(humanizeOp(op, h)).toBe('Created account GA5XIG…GKTM with 10 XLM');
+    expect(humanizeOp(op, h)).toBe('Created account GA5X…GKTM with 10 XLM');
   });
 
   it('falls back to the plain create-account label when heavy lacks startingBalance', () => {
@@ -122,6 +122,6 @@ describe('humanizeOp', () => {
       destination_account:
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
-    expect(humanizeOp(op, heavy({}))).toBe('Created account GA5XIG…GKTM');
+    expect(humanizeOp(op, heavy({}))).toBe('Created account GA5X…GKTM');
   });
 });

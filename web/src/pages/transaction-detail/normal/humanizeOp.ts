@@ -1,5 +1,6 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
 import {
+  DEFAULT_TRUNCATION,
   formatTokenAmount,
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -7,7 +8,7 @@ import {
 import { formatOperationType } from '../../transactions/operationTypes.js';
 
 function shortId(value: string): string {
-  return truncateMiddle(value, { prefix: 6, suffix: 4 });
+  return truncateMiddle(value, DEFAULT_TRUNCATION);
 }
 
 /** Heavy `details` as a plain object, or null when absent / not an object. */
