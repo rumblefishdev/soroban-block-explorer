@@ -260,7 +260,7 @@ cross-check remains as nice-to-have validation.
 - [x] Legacy name path removed (CH side) — last reader dropped (`sc.name`
       name-search) + `name` removed from the CH structs/schema/tests. Both columns
       confirmed 100% NULL + reader-less. **Only the destructive prod `ALTER DROP
-    COLUMN` remains** (gated on indexer deploy-drain, runs in 0310's assets
+COLUMN` remains** (gated on indexer deploy-drain, runs in 0310's assets
       window; 0304 owns it). PG-side `name` plumbing stays until PG retirement.
 - [x] Docs synced per ADR 0032 (backend-overview + CH assets/contracts SQL; PG
       set banner-superseded).
