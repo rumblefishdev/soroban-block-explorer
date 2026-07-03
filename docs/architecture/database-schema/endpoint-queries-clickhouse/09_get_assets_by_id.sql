@@ -65,7 +65,7 @@
 --     the `assets` row.** `assets.name` has had no writer since task 0297.
 --     Name precedence: `asset_enrichment.name` (classic/SAC, task 0231) →
 --     `soroban_contract_metadata.name` (on-chain SEP-41 `METADATA`, task 0297)
---     → `'Stellar Lumen'` for native. `symbol`/`decimals` come from
+--     → `'Stellar Lumens'` for native. `symbol`/`decimals` come from
 --     `soroban_contract_metadata` (decimals defaults to 7 for classic/SAC).
 --     The detail now uses the SAME accounts-join-free SELECT as the list `08`
 --     (task 0334 collapsed them); the issuer is resolved by a key-seek (step 2).
@@ -78,7 +78,7 @@ SELECT
     nullIf(a.asset_code, '')            AS asset_code,
     nullIf(sc.contract_id, '')          AS contract_id,
     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''),
-             if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name,
+             if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name,
     nullIf(m.symbol, '')                AS symbol,
     coalesce(m.decimals, 7)             AS decimals,
     toString(agg.total_supply)          AS total_supply,

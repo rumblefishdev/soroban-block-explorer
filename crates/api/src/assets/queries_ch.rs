@@ -83,7 +83,7 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 //   soroban (3)       → `soroban_contract_metadata.name` (on-chain instance
 //                       `METADATA` struct; the legacy `soroban_contracts.name`
 //                       column is dead — no writer since task 0297)
-//   native (0)        → the `"Stellar Lumen"` literal
+//   native (0)        → the `"Stellar Lumens"` literal
 // `asset_enrichment` is `ReplacingMergeTree(version)`; the `argMax(_, version)`
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
@@ -120,7 +120,7 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      nullIf(a.asset_code, '')     AS asset_code, \
      nullIf(sc.contract_id, '')   AS contract_id, \
      coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), \
-              if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
+              if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
      toString(bagg.total_supply)  AS total_supply, \

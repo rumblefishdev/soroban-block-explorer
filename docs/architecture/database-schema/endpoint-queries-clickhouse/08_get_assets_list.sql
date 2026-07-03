@@ -55,7 +55,7 @@
 --     (empty going forward) and no reader; pending `DROP COLUMN` (task 0310). Name
 --     precedence: `asset_enrichment.name` (classic/SAC enrichment, task 0231)
 --     → `soroban_contract_metadata.name` (on-chain SEP-41 `METADATA`, task
---     0297) → `'Stellar Lumen'` literal for native. `symbol` / `decimals`
+--     0297) → `'Stellar Lumens'` literal for native. `symbol` / `decimals`
 --     come from `soroban_contract_metadata` (decimals defaults to 7 for
 --     classic/SAC). PG still reads `a.name` until 0243 (see the PG snapshot).
 
@@ -64,7 +64,7 @@ SELECT
     nullIf(a.asset_code, '')                  AS asset_code,
     nullIf(sc.contract_id, '')                AS contract_id,
     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''),
-             if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name,
+             if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name,
     nullIf(m.symbol, '')                      AS symbol,         -- on-chain token symbol (0297); NULL for classic/native
     coalesce(m.decimals, 7)                   AS decimals,       -- on-chain decimals (0297); 7 = classic/SAC default
     toString(agg.total_supply)                AS total_supply,   -- asset_aggregates (task 0293)

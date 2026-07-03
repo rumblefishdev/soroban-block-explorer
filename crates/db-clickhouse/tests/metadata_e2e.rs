@@ -183,7 +183,7 @@ async fn token_metadata_three_fields_end_to_end() {
     let composed: ComposedRow = cl
         .query(
             "SELECT \
-                coalesce(nullIf(m.name, ''), if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
+                coalesce(nullIf(m.name, ''), if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name, \
                 nullIf(m.symbol, '')    AS symbol, \
                 coalesce(m.decimals, 7) AS decimals \
              FROM assets a FINAL \
