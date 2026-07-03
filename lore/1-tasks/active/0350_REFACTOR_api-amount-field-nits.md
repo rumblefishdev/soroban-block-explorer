@@ -2,7 +2,7 @@
 id: '0350'
 title: 'API contract nits: amount-field naming + fee decimals doc + LP share_percentage purity'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [api, api-types, clarity, priority-low, effort-small, optional]
@@ -14,6 +14,10 @@ history:
     note: >
       Three optional API-contract nits found during the amount-scaling review.
       Not bugs — clarity/purity/doc only. Refs verified against source.
+  - date: 2026-07-03
+    status: active
+    who: karolkow
+    note: Promoted to active to begin work.
 ---
 
 # API contract nits (optional — not bugs)
