@@ -2,7 +2,7 @@
 id: '0351'
 title: 'M2 video prep — frontend must-do (eye-catching UX fixes only)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0348']
 tags:
@@ -22,6 +22,19 @@ history:
     status: active
     who: karolkow
     note: Promoted to active — starting M2 video frontend fixes.
+  - date: 2026-07-03
+    status: completed
+    who: karolkow
+    note: >
+      All 12 findings resolved. Landed 7 (F4, F6, F7, F8, F10, F18, F19);
+      skipped 5 (F3, F5, F11, F14, F17) — F3/F5/F17 were misdiagnosed in the
+      0348 audit (verified not reproducible in code / live), F11 needs a
+      per-account timestamp the API doesn't expose, F14 dropped (user kept
+      full US-grouped numbers). 8 FE commits. F18 is the only backend change
+      (CH query literal) — needs a Lambda deploy before recording. FE checks
+      green (111 web tests, api 217 + db-clickhouse 65 lib tests, typecheck +
+      lint). One follow-up spawned (unify the 8 detail tables onto
+      DataListCard).
 ---
 
 # M2 video prep — frontend must-do
@@ -110,6 +123,17 @@ auto`); content is fully reachable and there is no scroll on wider screens.
       `prefers-color-scheme` → dark fallback, already in `readInitialMode`).
       Placement chosen via `/ux-expert`. Verified: light↔dark flips, icon +
       persistence work.
+
+## Future Work
+
+- **Unify the 8 detail-page tables onto `DataListCard`.** F6 removed a
+  copy-pasted `minHeight` floor from 8 hand-rolled table sections (pool
+  participants/transactions, account/asset/contract-inv/contract-events/
+  ledger/nft transactions). They still duplicate the body+skeleton+pagination
+  layout that the 7 list pages already get from the shared `DataListCard`.
+  Migrating them onto `DataListCard` would delete the duplication at the root
+  so the floor (and other drift) can't reappear. Spawn as a REFACTOR backlog
+  task. Deferred — behaviour is already consistent, this is a code-dedup win.
 
 ## Explicitly out of scope for the video
 
