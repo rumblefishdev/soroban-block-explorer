@@ -4,12 +4,12 @@ import type { NftTransferItem } from '@rumblefish/api-types';
 import {
   Dash,
   EmptyState,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
   PaginationControls,
   QueryErrorState,
   TableSectionHeader,
-  TableSkeleton,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -32,11 +32,13 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
   {
     id: 'event',
     header: 'Event',
+    width: 120,
     cell: (row) => <NftEventBadge name={row.event_type_name} />,
   },
   {
     id: 'from',
     header: 'From',
+    width: 160,
     // `from_account` is null on the mint row.
     cell: (row) =>
       row.from_account ? (
@@ -48,6 +50,7 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
   {
     id: 'to',
     header: 'To',
+    width: 160,
     // `to_account` is null on a burn.
     cell: (row) =>
       row.to_account ? (
@@ -59,6 +62,7 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
   {
     id: 'transaction',
     header: 'Transaction',
+    width: 160,
     cell: (row) => (
       <IdentifierDisplay value={row.transaction_hash} type="transaction" />
     ),
@@ -66,11 +70,10 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
   {
     id: 'time',
     header: 'Time',
+    width: 210,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
-
-const COLUMN_COUNT = columns.length;
 
 /**
  * Transfer-history section of the NFT detail page — a cursor-paginated table
@@ -82,11 +85,8 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
     resetKey: `${contractId}/${tokenId}`,
   });
 
-  const { data, isLoading, isError, error, refetch } = useNftTransfers(
-    contractId,
-    tokenId,
-    cursor
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useNftTransfers(contractId, tokenId, cursor);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -96,11 +96,16 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
+  if (isLoading || isPlaceholderData) {
     body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={5} columns={COLUMN_COUNT} />
-      </Box>
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+        loading
+        skeletonRows={20}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
     );
   } else if (isError) {
     body = (
@@ -121,6 +126,7 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
         columns={columns}
         rows={rows}
         rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
       />
     );
   }

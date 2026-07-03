@@ -1,6 +1,7 @@
 import AccountCircleIcon from '@mui/icons-material/AccountCircleOutlined';
 import AddBoxIcon from '@mui/icons-material/AddBoxOutlined';
 import AddCircleIcon from '@mui/icons-material/AddCircleOutline';
+import CodeIcon from '@mui/icons-material/CodeOutlined';
 import ImageIcon from '@mui/icons-material/ImageOutlined';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import WaterDropIcon from '@mui/icons-material/WaterDropOutlined';
@@ -13,7 +14,8 @@ export type TableEmptyKind =
   | 'accounts'
   | 'tokens'
   | 'nft'
-  | 'pools';
+  | 'pools'
+  | 'contracts';
 
 interface Preset {
   icon: ReactNode;
@@ -51,6 +53,11 @@ const PRESETS: Record<TableEmptyKind, Preset> = {
     icon: <WaterDropIcon fontSize="small" />,
     title: 'No liquidity pools yet',
     description: 'Pools will appear here once liquidity is deployed on chain',
+  },
+  contracts: {
+    icon: <CodeIcon fontSize="small" />,
+    title: 'No contracts found',
+    description: 'Soroban contracts will appear here once deployed on chain',
   },
 };
 

@@ -72,7 +72,8 @@ async fn main() -> Result<(), Error> {
     let cw_client = CloudWatchClient::new(&aws_config);
     let sqs_client = SqsClient::new(&aws_config);
 
-    let enrichment_publisher = handler::enrichment_publish::Publisher::from_env(sqs_client)?;
+    let enrichment_publisher =
+        handler::enrichment_publish::Publisher::from_env(sqs_client, ch_client.clone())?;
 
     // The doorbell handler derives S3 keys from ledger numbers and reads them
     // from this bucket (it does not parse the S3 event). CDK always injects
@@ -88,6 +89,8 @@ async fn main() -> Result<(), Error> {
         cw_client,
         ch_client,
         enrichment_publisher,
+        // Task 0283 live G9 — fresh per cold start; warms across invocations.
+        classification_cache: domain::ClassificationCache::new(),
     };
 
     info!("indexer ready — starting Lambda runtime");

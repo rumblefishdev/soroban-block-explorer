@@ -19,7 +19,7 @@ history:
     note: 'Task activated'
   - date: '2026-05-14'
     status: completed
-    who: claude
+    who: karolkow
     note: >
       Implemented 6 components in libs/ui (TopNav, SecondaryNav, NavButton,
       NetworkSwitcher, SearchInput, Footer) + web AppShell wiring.

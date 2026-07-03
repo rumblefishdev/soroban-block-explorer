@@ -4,10 +4,10 @@ import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
-import { AssetAvatar } from '../liquidity-pools/AssetAvatar.js';
-import { FeePill } from '../liquidity-pools/FeePill.js';
+import { FeePill } from '../pool-shared/FeePill.js';
+import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 
-import { assetLegLabel } from './helpers.js';
+import { assetLegLabel } from '../pool-shared/helpers.js';
 
 interface PoolDetailHeaderProps {
   poolId: string;
@@ -28,12 +28,7 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
         ]}
       />
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
-        {pool && (
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <AssetAvatar leg={pool.asset_a} size={44} />
-            <AssetAvatar leg={pool.asset_b} overlap size={44} />
-          </Box>
-        )}
+        {pool && <PoolAssetPair a={pool.asset_a} b={pool.asset_b} size={44} />}
         <Stack spacing={0.5}>
           <Stack direction="row" spacing={2}>
             <Typography variant="heading5SemiBold" component="h1">

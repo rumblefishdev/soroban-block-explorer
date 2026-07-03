@@ -1,8 +1,7 @@
 import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  formatAmount,
-  formatTps,
+  AnimatedNumber,
   QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -21,8 +20,11 @@ import { LiveIndicator } from './LiveIndicator.js';
 export function ChainOverview() {
   const { data, isLoading, isError, error, refetch } = useNetworkStats();
 
+  // Error state only when there is nothing to show — a transient failed
+  // poll keeps the last good stats on screen instead of collapsing the
+  // panel (the LiveIndicator flips to OFFLINE to signal the condition).
   let content: ReactNode;
-  if (isError) {
+  if (isError && !data) {
     content = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={4} />
     );
@@ -35,7 +37,11 @@ export function ChainOverview() {
         valueVariant="heading4SemiBold"
         labelVariant="bodyMedium"
         label={<LiveIndicator />}
-        value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
+        value={
+          data ? (
+            <AnimatedNumber value={data.latest_ledger_sequence} />
+          ) : undefined
+        }
         caption="Current ledger"
         loading={isLoading}
       />,
@@ -46,7 +52,14 @@ export function ChainOverview() {
         valueVariant="heading4SemiBold"
         labelVariant="bodyMedium"
         label="TPS"
-        value={data ? formatTps(data.tps_60s) : undefined}
+        value={
+          data ? (
+            <AnimatedNumber
+              value={data.tps_60s}
+              format={{ minimumFractionDigits: 1, maximumFractionDigits: 1 }}
+            />
+          ) : undefined
+        }
         caption="Last 60s"
         valueColor={(theme) => theme.palette.text.success}
         loading={isLoading}
@@ -58,7 +71,9 @@ export function ChainOverview() {
         valueVariant="heading4SemiBold"
         labelVariant="bodyMedium"
         label="Accounts"
-        value={data ? formatAmount(data.total_accounts) : undefined}
+        value={
+          data ? <AnimatedNumber value={data.total_accounts} /> : undefined
+        }
         caption="Total"
         loading={isLoading}
       />,
@@ -69,7 +84,9 @@ export function ChainOverview() {
         valueVariant="heading4SemiBold"
         labelVariant="bodyMedium"
         label="Contracts"
-        value={data ? formatAmount(data.total_contracts) : undefined}
+        value={
+          data ? <AnimatedNumber value={data.total_contracts} /> : undefined
+        }
         caption="Soroban"
         loading={isLoading}
       />,
@@ -108,7 +125,7 @@ export function ChainOverview() {
         sx={(theme) => ({
           width: '100%',
           maxWidth: 1064,
-          borderRadius: '16px',
+          borderRadius: `${theme.shape.radius.lg}px`,
           border: `1px solid ${theme.palette.stroke.default}`,
           backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),
           backdropFilter: 'blur(6px)',

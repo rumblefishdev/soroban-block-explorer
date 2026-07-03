@@ -15,6 +15,8 @@
 //! every error variant collapses to `None` — the API never 5xx's because
 //! of an enrichment failure (matches the SEP-1 + stellar archive pattern).
 
+use std::error::Error as StdError;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -36,6 +38,15 @@ pub enum NftTokenUriError {
         #[source]
         source: reqwest::Error,
     },
+
+    /// Non-success HTTP status surfaced without an underlying
+    /// `reqwest::Error` — chiefly a **3xx redirect**. We run
+    /// `Policy::limited(0)` as an SSRF guard, so a redirecting gateway is
+    /// unusable; `reqwest`'s `error_for_status()` does NOT treat 3xx as an
+    /// error (only 4xx/5xx), so the old `.expect_err()` on it panicked.
+    /// Carries the numeric code for failover + transient classification.
+    #[error("metadata fetch ({host}): HTTP {status}")]
+    HttpStatus { host: String, status: u16 },
 
     /// Body exceeded the per-fetch cap before fully buffering.
     #[error("metadata body exceeded {limit} bytes")]
@@ -100,58 +111,199 @@ pub enum NftTokenUriError {
 pub fn is_transient(err: &NftTokenUriError) -> bool {
     match err {
         NftTokenUriError::Http { source, .. } => {
-            source.is_timeout()
-                || source.is_connect()
-                || source
-                    .status()
-                    .map(|s| s.is_server_error())
-                    .unwrap_or(false)
+            // A DNS-resolution failure (NXDOMAIN / host gone) is PERMANENT — no
+            // same-host retry resolves it; sentinel instead of retry → DLQ
+            // (task 0335). `is_endpoint_fault` deliberately still treats it as
+            // a failover trigger (a different pool endpoint is a different host).
+            !is_dns_failure(source)
+                && (source.is_timeout()
+                    || source.is_connect()
+                    || source
+                        .status()
+                        .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                        .unwrap_or(false))
         }
-        // Soroban RPC errors collapse a wide surface (network, 5xx,
-        // contract revert). Discriminate by error message content:
-        // some known patterns are fundamentally permanent (contract
-        // function signature mismatches, missing symbols) — these
-        // would burn SQS retry budget forever if classified as
-        // transient. Audit 2026-05-13 (Bug #6) identified the
-        // patterns below.
-        NftTokenUriError::SorobanRpc(msg) => !is_permanent_soroban_rpc_pattern(msg),
+        // 3xx is permanent for an SQS retry (a persistent redirect is a
+        // gateway-config fault a same-endpoint retry can't fix); 429 / 5xx
+        // surfaced this way are retryable.
+        NftTokenUriError::HttpStatus { status, .. } => {
+            *status == 429 || (500..600).contains(status)
+        }
+        // Soroban RPC errors are **permanent by default** — see
+        // `is_transient_soroban_rpc_pattern`. A genuine network failure
+        // (connect / timeout / 5xx) surfaces as the `Http` variant above,
+        // NOT here: a `SorobanRpc(String)` only exists once the RPC already
+        // answered HTTP 200 with a JSON body carrying the error, so it is a
+        // contract- or request-level fault that retry cannot fix.
+        NftTokenUriError::SorobanRpc(msg) => is_transient_soroban_rpc_pattern(msg),
         _ => false,
     }
 }
 
-/// Heuristic — Soroban RPC error messages that are fundamentally
-/// permanent (function signature won't change, missing function won't
-/// appear, archived contract instance won't return). Adding patterns
-/// is safe and additive.
-fn is_permanent_soroban_rpc_pattern(msg: &str) -> bool {
-    // `Func(MismatchingParameterLen)` — function exists but arity mismatch.
-    // Real Soroban NFTs split between SEP-50 (1-arg `token_uri(token_id)`)
-    // and SEP-39 (0-arg `token_uri()`). Either signature is fixed once
-    // the contract is deployed.
-    msg.contains("MismatchingParameterLen")
-        // `"symbol not found in slice of strs"` — contract simply does
-        // not export the function we tried to call. Common for the
-        // Bug #3 false-positive NFTs (SAC contracts wrongly flagged).
-        || msg.contains("symbol not found in slice of strs")
-        // Generic "Error(WasmVm, UnexpectedSize)" — emitted alongside
-        // MismatchingParameterLen and similar permanent VM contract
-        // shape mismatches.
-        || msg.contains("Error(WasmVm, UnexpectedSize)")
-        // `Error(Storage, MissingValue)` —
-        // "trying to get non-existing value for contract instance".
-        // The contract instance entry has been pruned from live state
-        // and won't return without re-deployment. Treated as permanent:
-        // any future activity on that contract would push the instance
-        // back to live state, at which point a fresh enrichment trigger
-        // will run anyway. Retrying meanwhile is pure SQS retry budget
-        // waste. Audit 2026-05-13 measured 23/1000 transient-classified
-        // errors of this shape in the false-positive NFT population.
-        || msg.contains("Error(Storage, MissingValue)")
+/// "Another endpoint might succeed" — drives the fetcher's RPC- and
+/// IPFS-gateway-pool failover (task 0311). Broader than [`is_transient`]: it
+/// also advances past a **3xx** (a redirecting gateway is unusable under our
+/// `Policy::limited(0)` guard → try the next one) and a **429** (rate-limited
+/// endpoint → another provider may have budget). Excludes deterministic
+/// content/contract faults (malformed JSON, unsupported content-type, arity
+/// mismatch, missing `token_uri`) — they repeat identically on every endpoint,
+/// so failover is pointless.
+pub fn is_endpoint_fault(err: &NftTokenUriError) -> bool {
+    match err {
+        NftTokenUriError::Http { source, .. } => {
+            source.is_timeout()
+                || source.is_connect()
+                // A redirect under our `Policy::limited(0)` SSRF guard surfaces
+                // as a `reqwest` error (not a 3xx response): the gateway is
+                // unusable, so advance to the next one.
+                || source.is_redirect()
+                || source
+                    .status()
+                    .map(|s| {
+                        s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    })
+                    .unwrap_or(false)
+        }
+        NftTokenUriError::HttpStatus { status, .. } => {
+            (300..400).contains(status) || *status == 429 || (500..600).contains(status)
+        }
+        NftTokenUriError::SorobanRpc(msg) => is_transient_soroban_rpc_pattern(msg),
+        _ => false,
+    }
+}
+
+/// `SorobanRpc` errors that are genuinely retryable (server-side, not
+/// contract/request-level). **Default is permanent** — only these escape to
+/// transient.
+///
+/// Inverts the pre-2026-06 deny-list (which defaulted `SorobanRpc` to
+/// *transient* and enumerated permanent patterns). That leaked any
+/// un-enumerated permanent shape to an infinite SQS retry → DLQ: e.g.
+/// `Error(WasmVm, MissingValue)` "trying to invoke non-existent contract
+/// function" (a contract that simply lacks `token_uri`) was classified
+/// transient because it was not on the list. Since a stringified
+/// `SorobanRpc` always means "the RPC responded" (network faults are the
+/// `Http` variant), permanent-by-default is the correct shape: the prior
+/// audit's permanent patterns (`MismatchingParameterLen`, `symbol not found
+/// in slice of strs`, `Error(WasmVm, UnexpectedSize)`, `Error(Storage,
+/// MissingValue)`, `Error(WasmVm, MissingValue)`) are now all permanent
+/// without enumeration. A misfire (a true transient phrased outside the
+/// allow-list → false sentinel) is recoverable with `--retry-sentinels`;
+/// the inverse (false transient → DLQ loop) is not.
+///
+/// The allow-list still errs narrow on purpose, but covers the common
+/// server/gateway 5xx phrasings a provider emits during an outage — left out,
+/// a provider's bad hour silently converts a chunk of the population to
+/// permanent sentinels (recoverable only by an operator running
+/// `--retry-sentinels`). Matching is case-insensitive.
+fn is_transient_soroban_rpc_pattern(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    // JSON-RPC server-side error codes — retryable.
+    m.contains("-32603")   // "Internal error"
+        || m.contains("-32000") // generic server error (execution/timeout)
+        // Rate-limiting / load-shedding phrasings.
+        || m.contains("rate limit")
+        || m.contains("try again")
+        || m.contains("overloaded")
+        // Gateway / upstream 5xx phrasings (LB/proxy in front of the RPC).
+        || m.contains("unavailable") // "service unavailable" / 503
+        || m.contains("bad gateway") // 502
+        || m.contains("gateway timeout") // 504
+        || m.contains("timeout")
+        || m.contains("deadline") // "context deadline exceeded"
+}
+
+/// True when a `reqwest` error's source chain indicates DNS resolution failed
+/// (NXDOMAIN / host does not resolve). Such a failure is **permanent** — the
+/// domain is gone, no retry resolves it — so both [`is_transient`] and the
+/// SEP-1 `sep1_assets::is_transient` classify it permanent and the enrich fn
+/// writes the `''` sentinel instead of 3×-retrying to the DLQ (task 0335).
+///
+/// Deliberately NOT consulted by [`is_endpoint_fault`]: a dead host in the
+/// RPC/IPFS pool should still fail over to a different provider (a different
+/// host may resolve).
+pub(crate) fn is_dns_failure(err: &reqwest::Error) -> bool {
+    let mut src: Option<&(dyn StdError + 'static)> = Some(err);
+    while let Some(e) = src {
+        if is_dns_marker(&e.to_string()) {
+            return true;
+        }
+        src = e.source();
+    }
+    false
+}
+
+/// Resolver-error text markers for a DNS NXDOMAIN / no-such-host failure.
+/// Split from [`is_dns_failure`] so it is unit-testable without constructing a
+/// `reqwest::Error` (which has no public constructor). Matching is
+/// case-insensitive.
+///
+/// ponytail: string-match on resolver text — Linux `getaddrinfo` wording
+/// covers prod (Lambda AL2 + Hetzner box); upgrade to an explicit
+/// `tokio::net::lookup_host` pre-check if a resolver/platform changes phrasing.
+fn is_dns_marker(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("failed to lookup address")        // glibc getaddrinfo (Linux)
+        || m.contains("name or service not known") // EAI_NONAME (Linux)
+        || m.contains("no such host")               // common cross-platform
+        || m.contains("nodename nor servname")      // macOS EAI_NONAME (dev)
+        || m.contains("dns error") // hickory/trust-dns wrapper
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_marker_flags_nxdomain_phrasings() {
+        for s in [
+            "error sending request for url (https://dead.example/): error trying to connect: \
+             dns error: failed to lookup address information: Name or service not known",
+            "failed to lookup address information",
+            "No such host is known. (os error 11001)",
+            "nodename nor servname provided, or not known",
+        ] {
+            assert!(is_dns_marker(s), "should flag DNS failure: {s}");
+        }
+    }
+
+    /// Empirical guard: the whole fix hinges on `is_dns_marker` matching the
+    /// text reqwest actually emits for an unresolvable host AND on that text
+    /// being reachable via the error's `source()` chain. `.invalid` (RFC 6761)
+    /// never resolves → guaranteed NXDOMAIN, no real network egress. `#[ignore]`
+    /// (needs a working resolver). Run:
+    /// `cargo test -p enrichment-shared is_dns_failure_matches_real -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a resolver; verifies is_dns_failure vs reqwest's real NXDOMAIN error"]
+    async fn is_dns_failure_matches_real_reqwest_nxdomain() {
+        let err = reqwest::Client::new()
+            .get("https://nonexistent-host-0335.invalid/.well-known/stellar.toml")
+            .send()
+            .await
+            .expect_err("an unresolvable host must error");
+        eprintln!("top-level: {err}");
+        let mut s: Option<&(dyn StdError + 'static)> = Some(&err);
+        while let Some(e) = s {
+            eprintln!("  source: {e}");
+            s = e.source();
+        }
+        assert!(
+            is_dns_failure(&err),
+            "is_dns_failure must fire for a real NXDOMAIN reqwest error"
+        );
+    }
+
+    #[test]
+    fn dns_marker_ignores_transient_phrasings() {
+        for s in [
+            "connection refused (os error 111)",
+            "operation timed out",
+            "error trying to connect: tls handshake eof",
+            "503 Service Unavailable",
+        ] {
+            assert!(!is_dns_marker(s), "should NOT flag (transient): {s}");
+        }
+    }
 
     #[test]
     fn body_too_large_is_permanent() {
@@ -173,8 +325,51 @@ mod tests {
     }
 
     #[test]
-    fn soroban_rpc_is_transient() {
-        assert!(is_transient(&NftTokenUriError::SorobanRpc("5xx".into())));
+    fn soroban_rpc_internal_error_is_transient() {
+        // JSON-RPC -32603 = server-side internal error → retryable.
+        assert!(is_transient(&NftTokenUriError::SorobanRpc(
+            "{\"code\":-32603,\"message\":\"Internal error\"}".into()
+        )));
+        assert!(is_transient(&NftTokenUriError::SorobanRpc(
+            "rate limit exceeded, try again".into()
+        )));
+    }
+
+    #[test]
+    fn soroban_rpc_gateway_5xx_is_transient() {
+        // Provider/LB outage phrasings (mixed case) — server-side, retryable.
+        for msg in [
+            "503 Service Unavailable",
+            "502 Bad Gateway",
+            "504 Gateway Timeout",
+            "upstream request timeout",
+            "context deadline exceeded",
+            "{\"code\":-32000,\"message\":\"execution timeout\"}",
+        ] {
+            assert!(
+                is_transient(&NftTokenUriError::SorobanRpc(msg.into())),
+                "{msg:?} should be transient"
+            );
+        }
+    }
+
+    #[test]
+    fn soroban_rpc_wasmvm_missing_value_is_permanent() {
+        // The reported bug: contract lacks the `token_uri` entrypoint. A retry
+        // can never make the function appear → permanent (was leaking transient
+        // → DLQ loop under the old deny-list).
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(WasmVm, MissingValue) … trying to invoke non-existent contract function, token_uri".into()
+        )));
+    }
+
+    #[test]
+    fn soroban_rpc_unknown_shape_defaults_permanent() {
+        // Any un-enumerated SorobanRpc error is permanent by default (the RPC
+        // answered → contract/request fault), not transient.
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(Contract, #5)".into()
+        )));
     }
 
     #[test]
@@ -197,5 +392,29 @@ mod tests {
         assert!(!is_transient(&NftTokenUriError::SorobanRpc(
             "HostError: Error(Storage, MissingValue) … trying to get non-existing value for contract instance".into()
         )));
+    }
+
+    #[test]
+    fn http_status_3xx_is_failover_worthy_but_not_transient() {
+        // A redirecting gateway: advance to the next (failover), but a
+        // same-endpoint SQS retry won't help → not transient (task 0311).
+        let e = NftTokenUriError::HttpStatus {
+            host: "gw".into(),
+            status: 301,
+        };
+        assert!(is_endpoint_fault(&e));
+        assert!(!is_transient(&e));
+    }
+
+    #[test]
+    fn http_status_429_and_5xx_are_transient_and_failover() {
+        for code in [429u16, 500, 503] {
+            let e = NftTokenUriError::HttpStatus {
+                host: "gw".into(),
+                status: code,
+            };
+            assert!(is_transient(&e), "{code} should be transient");
+            assert!(is_endpoint_fault(&e), "{code} should be failover-worthy");
+        }
     }
 }

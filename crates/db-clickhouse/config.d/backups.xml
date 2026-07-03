@@ -1,32 +1,22 @@
 <!--
-  ClickHouse backup destination disk + allow-policy.
-  Mounted only by the production compose overlay.
+  Local backup disk for ad-hoc operational snapshots via
+  `BACKUP DATABASE default TO Disk('backups', '<name>')`.
 
-  ## Why this file is required
+  This is the MANUAL, pre-op checkpoint path (e.g. before a destructive
+  redrain / backfill / engine swap) — distinct from the maintained weekly
+  off-box backup (Borg → Hetzner Storage Box, see
+  infra-hetzner/ansible/roles/backup). It writes a full local copy, so it
+  needs free disk >= dataset size; only use it when the host has the room.
 
-  `BACKUP DATABASE … TO Disk('backups', …)` (issued by the daily
-  Borg pipeline in `infra-hetzner/ansible/roles/backup/templates/
-  ch-backup.sh.j2`) refers to a `backups` disk by name. Without a
-  matching `<storage_configuration>/<disks>/<backups>` declaration
-  the BACKUP statement fails with "Disk 'backups' does not exist"
-  and the cron script aborts before producing anything to push to
-  BX21 — silent zero-backup state until someone reads the log.
+  Container path `/backups/` is bind-mounted to host `/srv/backups`
+  (see docker-compose.prod.yml). The path is intentionally NOT under
+  `/var/lib/clickhouse` — a backup disk nested in the main data path
+  fails CH startup.
 
-  ## Why `<allowed_disk>` is required
-
-  CH 22.8+ refuses BACKUP/RESTORE to disks not on the
-  `<backup>/<allowed_disk>` allowlist, as a defence against a
-  rogue query writing parts to an unintended location. We
-  whitelist only the `backups` disk and only the `/backups/`
-  prefix; nothing else can be targeted.
-
-  ## Container path
-
-  `/backups/` inside the container maps to the host bind mount
-  `/srv/backups` declared in `docker-compose.prod.yml`. The
-  Ansible `app` role creates the host directory with ownership
-  matching the in-container CH UID (101:101) so the engine can
-  write without an in-container `chown`.
+  Mounted only in docker-compose.prod.yml (prod has the /srv/backups host
+  mount); dev does not load this file. Previously configured by hand on the
+  box, which a container recreate silently dropped — pinning it here makes
+  the disk survive deploys.
 -->
 <clickhouse>
     <storage_configuration>
@@ -37,9 +27,7 @@
             </backups>
         </disks>
     </storage_configuration>
-
     <backups>
         <allowed_disk>backups</allowed_disk>
-        <allowed_path>/backups/</allowed_path>
     </backups>
 </clickhouse>

@@ -57,13 +57,14 @@ users.d/dict.xml             ← `dict_reader` user (loopback-only)
 
 On the deploy operator's laptop:
 
-| Tool           | Why                                 | Floor  |
-| -------------- | ----------------------------------- | ------ |
-| `ansible-core` | playbook runner                     | 2.16+  |
-| `openssl`      | CA bootstrap + client cert issuance | 1.1.1+ |
-| `git`, `ssh`   | repo + box reachability             | recent |
-| Python 3       | json bundle assembly for AWS SM     | 3.10+  |
-| `aws` CLI      | upload AWS service certs to SM      | v2     |
+| Tool           | Why                                                         | Floor  |
+| -------------- | ----------------------------------------------------------- | ------ |
+| `ansible-core` | playbook runner                                             | 2.16+  |
+| `openssl`      | CA bootstrap + client cert issuance                         | 1.1.1+ |
+| `git`, `ssh`   | repo + box reachability                                     | recent |
+| Python 3       | json bundle assembly for AWS SM                             | 3.10+  |
+| `aws` CLI      | upload AWS service certs to SM                              | v2     |
+| `hcloud` (pip) | `hetzner.hcloud` Storage Box modules (`pip install hcloud`) | recent |
 
 In the team password manager (entries named exactly as below):
 
@@ -81,12 +82,13 @@ The `ansible-env` entry contains a shell block of the form:
 # --- Required ---
 export HCLOUD_ROBOT_USER="..."          # Hetzner Robot webservice user (#ws+...)
 export HCLOUD_ROBOT_PASSWORD="..."      # Robot webservice password
+export HCLOUD_TOKEN="..."               # Hetzner Cloud API token (Console → Security → API tokens, read+write) — manages the Borg Storage Box subaccount
+export STORAGEBOX_ID="..."              # Numeric Cloud ID of the BX21 Storage Box (Console → Storage Boxes)
+export STORAGEBOX_SUBACCOUNT_PASSWORD="..."  # Random 32-byte base64 — password set on the Borg subaccount (used for the SFTP key-install login, not by the cron)
 export CLICKHOUSE_PASSWORD="..."        # CH `default` user password
 export BORG_PASSPHRASE="..."            # Borg repokey-blake2 passphrase
 export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.rumblefish.dev — matches `chDomainName` in the CDK env config)
 export ACME_EMAIL="..."                 # Let's Encrypt account email
-export STORAGEBOX_SSH_USER="..."        # BX21 user, e.g. u123456
-export STORAGEBOX_SSH_HOST="..."        # BX21 host, e.g. u123456.your-storagebox.de
 export CLICKHOUSE_CN_USER_MAP="..."     # Comma-separated `<cn>:<ch_user>` pairs — Caddy uses both as the mTLS allowlist AND as the identity it forwards to CH (e.g. `<firstname>-laptop:dev_shared,galexie-production:galexie,...`). See docs/architecture/security/clickhouse-rbac.md.
 
 # OPERATOR_SSH_PUBKEYS — multi-line. One OpenSSH public key per
@@ -99,13 +101,25 @@ PUBKEYS
 )"
 
 # --- Optional overrides (sensible defaults applied if unset) ---
+# STORAGEBOX_SSH_USER / STORAGEBOX_SSH_HOST are DISCOVERED from the
+# Cloud API by the `storagebox` play and need not be set. Pin them
+# only to override, or to enable a `--tags backup`-only re-run that
+# skips discovery (use the u…-subN user / host the role printed).
+# export STORAGEBOX_SSH_USER="u123456-sub1"
+# export STORAGEBOX_SSH_HOST="u123456-sub1.your-storagebox.de"
+# export STORAGEBOX_SUBACCOUNT_NAME="borg-backup-ch-prod-01"
+# export STORAGEBOX_SUBACCOUNT_HOME="borg-ch-prod-01-repo"
+# export STORAGEBOX_RUN_BACKUP_VALIDATION="true"  # set false to skip the first-run full backup
 # export STORAGEBOX_SSH_PORT="23"
 # export BORG_REPO_PATH="./backups/clickhouse"
-# export BORG_KEEP_DAILY="7"
+# Backup cadence + retention (task 0236): WEEKLY backups, keep 4.
+# Defaults below; override only for a different cadence/retention.
+# export BORG_KEEP_DAILY="0"
 # export BORG_KEEP_WEEKLY="4"
-# export BORG_KEEP_MONTHLY="6"
+# export BORG_KEEP_MONTHLY="0"
 # export BORG_CRON_HOUR="3"
 # export BORG_CRON_MINUTE="30"
+# export BORG_CRON_WEEKDAY="0"   # 0 = Sunday; set "*" to back up daily
 # export HOST_TIMEZONE="Etc/UTC"
 # export HETZNER_SERVER_NAME="ch-prod-01"
 ```
@@ -116,9 +130,17 @@ they prefer) with `chmod 600` and sources it before deploys.
 In the Hetzner Robot UI:
 
 - The dedicated server `ch-prod-01` already ordered and online.
-- A `BX21` Storage Box ordered in the same data centre.
 - The operator's personal SSH public key registered in the Robot
   UI for the rescue-system fallback.
+
+In the Hetzner Cloud Console (Storage Boxes moved here from Robot
+in 2025):
+
+- A `BX21` Storage Box ordered in the same data centre. Note its
+  numeric ID → `STORAGEBOX_ID`.
+- A read+write API token (Security → API tokens) → `HCLOUD_TOKEN`.
+- The Borg backup **subaccount is created by the playbook** (the
+  `storagebox` play) — no manual subaccount or SSH-key step.
 
 ## First-time setup (per environment)
 
@@ -183,8 +205,12 @@ the template in the "Prerequisites" section above):
   `chDomainName` in the CDK env config — provisioned by
   `HetznerDnsStack`)
 - `ACME_EMAIL` → real operator email (LE expiry warnings)
-- `STORAGEBOX_SSH_USER`, `STORAGEBOX_SSH_HOST` → values from the
-  BX21 order page
+- `STORAGEBOX_ID` → numeric Cloud ID of the BX21 Storage Box
+  (Console → Storage Boxes). `HCLOUD_TOKEN` →
+  read+write Cloud API token. `STORAGEBOX_SUBACCOUNT_PASSWORD` →
+  random 32-byte base64. The `storagebox` play creates/reconciles
+  the Borg subaccount and discovers its `STORAGEBOX_SSH_USER` /
+  `STORAGEBOX_SSH_HOST` automatically — you do **not** set those.
 - `OPERATOR_SSH_PUBKEYS` → multi-line block of OpenSSH public
   keys; one per operator authorised to SSH the box
 
@@ -226,7 +252,27 @@ ansible-playbook ... --tags security
 
 # Apply only Hetzner Robot side-channel changes (firewall, rDNS).
 ansible-playbook ... --tags hetzner
+
+# Reconcile the Borg Storage Box subaccount + authorised_keys via
+# the Cloud API, then run a one-off validation backup. Skip the
+# validation backup with -e storagebox_run_backup_validation=false.
+ansible-playbook ... --tags storagebox
 ```
+
+> **Docker log rotation — one-time container recreate.** The CH log cap
+> (`logging: json-file max-size=100m max-file=5` in `docker-compose.prod.yml`)
+> only applies to containers **created after** it lands. A `--tags app` run
+> recreates the `clickhouse` service when its compose definition changed, so
+> the cap takes effect then. If you deployed the backup change via a narrower
+> tag set, force it once explicitly (the running container keeps its old,
+> unbounded log driver because `daemon.json` has `live-restore: true`):
+>
+> ```bash
+> docker compose -f /srv/app/docker-compose.yml \
+>                -f /srv/app/docker-compose.prod.yml up -d --force-recreate clickhouse
+> # verify the cap is live:
+> docker inspect -f '{{.HostConfig.LogConfig}}' clickhouse   # → max-size:100m max-file:5
+> ```
 
 ## Post-deploy verification
 
@@ -329,95 +375,145 @@ CRL/OCSP infrastructure required.
 > Borg SSH public key from the Storage Box BEFORE provisioning
 > the new box. Otherwise the attacker — who still has the dead
 > box's `/root/.ssh/borg_ed25519` — can `borg delete` every
-> archive while you set up the replacement. In the Hetzner
-> Robot UI: Storage Boxes → ch-prod-01-bx21 → SSH Keys →
-> remove the old box's entry. Only then proceed with step 1.
+> archive while you set up the replacement. The dead key lives in
+> the subaccount's `authorized_keys`, which is reachable over SSH
+> only from inside Hetzner (`reachable_externally: false`) — you
+> cannot reach it from your laptop. Cut access via the **Cloud
+> API**, which needs no connection to the Storage Box: disable SSH
+> on the Borg subaccount, or delete it. In the Hetzner Console:
+> Storage Boxes → the box → Sub-accounts → turn SSH off (or delete
+> the subaccount). Equivalently, with `HCLOUD_TOKEN`/`STORAGEBOX_ID`
+> set, run `hetzner.hcloud.storage_box_subaccount` with
+> `access_settings.ssh_enabled=false` (or `state: absent`). This
+> instantly revokes the attacker's key-based access. Only then
+> proceed with step 1; the full playbook run in step 4 recreates /
+> re-enables the subaccount with only the new box's key authorised.
 
 1. Order a new dedicated server in Hetzner Robot UI.
 2. Apply `installimage.conf` from this directory via the Hetzner
    installimage tool. Reboots into fresh Ubuntu 24.04 on RAID 1.
 3. Update `inventory.ini` with the new IP.
-4. Run the full playbook: `ansible-playbook -i inventory.ini site.yml`.
-   This brings the stack up empty AND generates a new Borg SSH
-   keypair on the box. The playbook prints the new public key
-   in the `backup` role's "Display Storage Box authorised_keys
-   onboarding instructions" task — copy that output.
-
-5. **Authorise the new Borg SSH public key on the Storage Box.**
-   Without this step, `borg list` and `borg extract` in the next
-   steps will fail with "permission denied". The playbook's
-   `Display Storage Box authorised_keys onboarding instructions`
-   debug task printed the public key during step 4, but only on
-   that run — to re-display it from a fresh shell:
+4. Run the full playbook, skipping the first-run validation backup
+   (you are about to restore, not back up):
 
    ```bash
-   ssh deploy@<new-box-ip> sudo cat /root/.ssh/borg_ed25519.pub
+   ansible-playbook -i inventory.ini site.yml \
+       -e storagebox_run_backup_validation=false
    ```
 
-   In the Hetzner Robot UI: Storage Boxes → ch-prod-01-bx21 →
-   SSH Keys → add this public key. (You can also remove the old
-   key from the previous box at the same time.)
+   This brings the stack up empty, generates a new Borg SSH keypair
+   on the box, and — via the `storagebox` play — reconciles the
+   Storage Box subaccount and **authorises the new box's pubkey on
+   it automatically** (overwriting `authorized_keys`, which also
+   revokes the dead box's key). No manual Robot UI / Console step.
 
-6. Restore from the most recent Borg snapshot.
+5. Restore from the most recent Borg snapshot (FREEZE-based — task 0236).
+
+   The archive contains: immutable MergeTree **parts**, the **live schema**
+   (`_schema.sql` — `SHOW CREATE` of every table+dictionary), and a
+   **uuid↔name map** (`_table_uuids.tsv`). You re-create the EXACT schema
+   from `_schema.sql` (NOT `init.sql` — which can drift from prod via online
+   ALTERs), then re-attach the parts. There is no SQL `RESTORE`.
+
+   > Drill-tested locally end-to-end (mixed partitioned/plain/RMT schema,
+   > full FREEZE→borg→extract→ATTACH roundtrip, fingerprints matched). A real
+   > BX21 restore is still the operator's first LIVE exercise — rehearse it
+   > once on a throwaway box.
 
    ```bash
    ssh deploy@<new-box-ip>
+   SB="ssh://<sb-user>@<sb-host>:23/./backups/clickhouse"   # from `borg list`
+   export BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase"
+   export BORG_RSH="ssh -i /root/.ssh/borg_ed25519"          # cron key; root has no default identity
 
-   # Borg archives preserve absolute paths from the source box —
-   # extracting writes files under <target>/srv/backups/ch-<stamp>/.
-   # Pick the most recent archive name from `borg list` first.
-   # BORG_RSH must point at the dedicated cron key — otherwise
-   # ssh tries the host's default identity (none for root on a
-   # fresh box) and the connection fails with permission denied.
-   sudo BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase" \
-        BORG_RSH="ssh -i /root/.ssh/borg_ed25519" \
-        borg list \
-            "ssh://<sb-user>@<sb-host>:23/./backups/clickhouse"
+   # a) pick the archive (prefer the most recent that did NOT end with
+   #    warnings in `borg list`, if a clean later one exists)
+   sudo -E borg list "$SB"
 
-   # Stage the archive under /tmp/borg-restore (not directly into
-   # /srv/clickhouse-data: that's the live CH data dir; the BACKUP
-   # snapshot is a separate artefact restored via the SQL RESTORE
-   # statement below, not a raw data-volume swap).
+   # b) extract. The archive stores paths RELATIVE to the freeze root
+   #    (`store/<uuid>/…`, `_schema.sql`, `_table_uuids.tsv`), so they land
+   #    directly under the --target dir.
    sudo mkdir -p /tmp/borg-restore
-   sudo BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase" \
-        BORG_RSH="ssh -i /root/.ssh/borg_ed25519" \
-        borg extract --target /tmp/borg-restore \
-            "ssh://<sb-user>@<sb-host>:23/./backups/clickhouse::ch-<latest>"
+   sudo -E borg extract --target /tmp/borg-restore "$SB::ch-<stamp>"
+   SHADOW=/tmp/borg-restore
 
-   # Move the staged snapshot into /srv/backups (the host path the
-   # CH 'backups' disk points at — see config.d/backups.xml).
-   # Ownership must match the in-container CH UID 101:101.
-   sudo mv /tmp/borg-restore/srv/backups/ch-<latest> /srv/backups/
-   sudo chown -R 101:101 /srv/backups/ch-<latest>
+   CB="sudo docker compose -f /srv/app/docker-compose.yml -f /srv/app/docker-compose.prod.yml exec -T clickhouse"
+   chq() { $CB clickhouse-client --config-file=/etc/clickhouse-backup/client.xml "$@" </dev/null; }
 
-   # Tell CH to consume the snapshot via the SQL RESTORE statement.
-   # The credentials file is the same one the backup script uses;
-   # never need to type the password manually.
-   sudo docker compose -f /srv/app/docker-compose.yml \
-                       -f /srv/app/docker-compose.prod.yml \
-                       exec -T clickhouse \
-       clickhouse-client \
-           --config-file=/etc/clickhouse-backup/client.xml \
-           --query="RESTORE DATABASE default FROM Disk('backups', 'ch-<latest>/')"
+   # c) recreate the EXACT snapshot schema (replaces the init.sql schema the
+   #    stack just created — so the recreated tables match the frozen parts
+   #    even if prod had online ALTERs not in init.sql).
+   for t in $(chq --query="SELECT name FROM system.tables WHERE database='default' AND engine!='Dictionary'"); do
+     chq --query="DROP TABLE IF EXISTS default.\`$t\` SYNC"
+   done
+   for d in $(chq --query="SELECT name FROM system.dictionaries WHERE database='default'"); do
+     chq --query="DROP DICTIONARY IF EXISTS default.\`$d\`"
+   done
+   # apply captured DDL (file on stdin — NOT chq, which redirects </dev/null)
+   $CB clickhouse-client --config-file=/etc/clickhouse-backup/client.xml --multiquery < "$SHADOW/_schema.sql"
+
+   # d) ATTACH each table's frozen parts.
+   #    GOTCHAS: HOST path via the bind mount (data_paths[1] shows the
+   #    container path); chown 101:101 after cp (else ATTACH EPERM);
+   #    partitioned parts are `<pid>_*` not `all_*` → copy `*_*` and ATTACH
+   #    PART per part; `chq </dev/null` avoids the docker-exec stdin-steal.
+   #    A "NO PARTS" / "ATTACH FAILED" / "PARTIAL" line is a RED FLAG (table
+   #    restores EMPTY or with missing rows) — investigate; do not ignore.
+   miss=""
+   while IFS=$'\t' read -r olduuid table; do
+     [ -z "$table" ] && continue
+     newuuid=$(chq --query="SELECT toString(uuid) FROM system.tables WHERE database='default' AND name='$table'" | tr -d '\r\n')
+     [ -z "$newuuid" ] && { echo "!! MISSING TABLE $table (schema apply failed?)"; miss="$miss $table"; continue; }
+     src="$SHADOW/store/${olduuid:0:3}/$olduuid"
+     dst="/srv/clickhouse-data/store/${newuuid:0:3}/$newuuid/detached"
+     sudo mkdir -p "$dst"
+     if ! sudo cp -r "$src"/*_* "$dst"/ 2>/dev/null; then
+       echo "!! NO PARTS for $table — investigate (empty table or path error)"; miss="$miss $table"; continue
+     fi
+     sudo chown -R 101:101 "$dst"
+     # ATTACH every copied part; count successes vs parts present so a single
+     # failed ATTACH (corrupt/version-skew part) can't masquerade as success.
+     want=$(ls "$dst" | wc -l); got=0
+     for part in $(ls "$dst"); do
+       if chq --query="ALTER TABLE default.\`$table\` ATTACH PART '$part'"; then got=$((got+1))
+       else echo "!! ATTACH FAILED: $table part $part"; fi
+     done
+     if [ "$got" -ne "$want" ]; then echo "!! PARTIAL: $table attached $got/$want parts"; miss="$miss $table"
+     else echo "attached: $table ($got parts)"; fi
+   done < "$SHADOW/_table_uuids.tsv"
+   [ -n "$miss" ] && echo "!!!! NOT FULLY RESTORED:$miss — DO NOT declare success"
+
+   # e) reload dictionaries (cache dicts loaded empty on the fresh stack;
+   #    they only see the freshly-ATTACHed source rows after a reload).
+   chq --query="SYSTEM RELOAD DICTIONARIES"
+
+   # f) completeness + sanity. Every table from _table_uuids.tsv must appear
+   #    with rows; RMT counts settle after a background merge (force if needed:
+   #    OPTIMIZE TABLE default.<t> FINAL).
+   chq --query="SELECT name, total_rows FROM system.tables WHERE database='default' ORDER BY name FORMAT TSV"
+
+   # g) resume point. The marker (ledgers) was frozen FIRST → its max is the
+   #    last FULLY-committed ledger; restart the indexer from max+1.
+   chq --query="SELECT max(sequence)+1 AS resume_from FROM default.ledgers"
    ```
 
-7. Validate the restore: row counts on a few large tables, schema
+6. Validate the restore: row counts on a few large tables, schema
    discovery via `SELECT name FROM system.tables WHERE database = 'default'`.
-8. Re-issue any mTLS service certs whose private keys were lost with
+7. Re-issue any mTLS service certs whose private keys were lost with
    the box (developer laptop certs are unaffected — those keys live
    on the laptops).
-9. Re-point the prod DNS A-record at the new IP. Caddy obtains a new
+8. Re-point the prod DNS A-record at the new IP. Caddy obtains a new
    LE cert on first request; mind the LE rate limit (5 certs/week
    per domain) if you have already issued recently.
-10. Smoke-test from a dev cert end-to-end before announcing
-    restoration.
+9. Smoke-test from a dev cert end-to-end before announcing
+   restoration.
 
 ### Storage Box (BX21) is lost
 
 Backups are off-site replicated only against operator-managed
 backups (Borg → BX21 is the primary; no secondary). If BX21 is
 lost, re-order, init a new Borg repo, accept the historical-
-backup gap until the next daily run lands.
+backup gap until the next weekly run lands.
 
 ### CA private key compromise
 

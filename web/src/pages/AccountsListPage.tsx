@@ -1,15 +1,13 @@
 import { Stack } from '@mui/material';
+import type { ListAccountsData } from '@rumblefish/api-types';
 import {
+  type SortDirection,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
-import {
-  useAccountsList,
-  type AccountsListFilters,
-  type AccountsSort,
-} from '../api/hooks/useAccountsList.js';
+import { useAccountsList } from '../api/index.js';
 
 import { AccountsFilters } from './accounts/AccountsFilters.js';
 import {
@@ -19,49 +17,29 @@ import {
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
+type Filters = NonNullable<ListAccountsData['query']>;
+
 const PAGE_SIZE = 20;
-const DEFAULT_SORT: AccountsSort = 'xlm_desc';
-const SORT_VALUES = new Set<AccountsSort>([
-  'xlm_desc',
-  'last_seen_desc',
-  'first_seen_desc',
-]);
-
-function parseSort(raw: string | undefined): AccountsSort {
-  return raw && SORT_VALUES.has(raw as AccountsSort)
-    ? (raw as AccountsSort)
-    : DEFAULT_SORT;
-}
-
-const CAPTION_BY_SORT: Record<AccountsSort, string> = {
-  xlm_desc: 'Top XLM holders',
-  last_seen_desc: 'Recently active',
-  first_seen_desc: 'New accounts',
-};
 
 export default function AccountsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['q', 'sort', 'domain'],
-  });
-  const q = state.filters.q ?? '';
-  const sort = parseSort(state.filters.sort);
+  const { state, cursor, goNext, goPrev, setFilter, setSort, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['domain'],
+    });
   const withDomain = state.filters.domain === '1';
-  const hasFilters = q !== '' || withDomain;
+  // Sort lives in the URL `dir` param (read via `state.sortDir`); the only
+  // sortable column is `last_seen_ledger`. Default DESC = recently active.
+  const sortDir = state.sortDir;
+  const hasFilters = withDomain;
 
-  const filters = useMemo<AccountsListFilters>(
-    () => ({
-      limit: PAGE_SIZE,
-      sort,
-      ...(q ? { q } : {}),
-      ...(withDomain ? { with_domain: true } : {}),
-    }),
-    [q, sort, withDomain]
-  );
+  const queryFilters = useMemo<Filters>(() => {
+    const filters: Filters = { limit: PAGE_SIZE, order: sortDir };
+    if (withDomain) filters['filter[with_domain]'] = true;
+    return filters;
+  }, [withDomain, sortDir]);
 
-  const { data, isLoading, isError, error, refetch } = useAccountsList(
-    cursor,
-    filters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useAccountsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -70,25 +48,16 @@ export default function AccountsListPage() {
     goPrev
   );
 
-  const handleSearchChange = useCallback(
-    (value: string) => setFilter('q', value || null),
-    [setFilter]
-  );
-  const handleSortChange = useCallback(
-    (value: AccountsSort) =>
-      setFilter('sort', value === DEFAULT_SORT ? null : value),
-    [setFilter]
-  );
-  const handleDomainChange = useCallback(
+  const handleWithDomainChange = useCallback(
     (value: boolean) => setFilter('domain', value ? '1' : null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('q', null);
-    setFilter('domain', null);
-  }, [setFilter]);
-
-  const startRank = Number(cursor) || 0;
+  const handleSortChange = useCallback(
+    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
+    // resets the cursor.
+    (id: string, next: SortDirection) => setSort(id, next),
+    [setSort]
+  );
 
   return (
     <Stack spacing={3}>
@@ -99,28 +68,31 @@ export default function AccountsListPage() {
       <DataListCard
         filters={
           <AccountsFilters
-            search={q}
-            sort={sort}
             withDomain={withDomain}
-            onSearchChange={handleSearchChange}
-            onSortChange={handleSortChange}
-            onWithDomainChange={handleDomainChange}
+            onWithDomainChange={handleWithDomainChange}
           />
         }
         columnCount={ACCOUNT_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => (
-          <AccountsTable rows={visibleRows} startRank={startRank} />
+          <AccountsTable
+            rows={visibleRows}
+            sortDir={sortDir}
+            onSortChange={handleSortChange}
+          />
+        )}
+        renderSkeleton={() => (
+          <AccountsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="accounts"
         emptyNoun="accounts"
-        onClearFilters={handleClearFilters}
-        paginationCaption={CAPTION_BY_SORT[sort]}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}

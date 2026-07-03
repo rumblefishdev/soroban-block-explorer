@@ -16,7 +16,7 @@ related_tasks:
     '0197',
     '0199',
   ]
-related_adrs: ['0007', '0022', '0023', '0029', '0032', '0033', '0034']
+related_adrs: ['0007', '0022', '0023', '0029', '0032', '0033', '0034', '0048']
 tags: [governance, enrichment, schema, indexer, lambda, milestone-2]
 links:
   - docs/audits/2026-04-10-pipeline-data-audit.md
@@ -29,6 +29,17 @@ history:
     status: accepted
     who: karolkow
     note: 'Amended Notes section to record the type-1 "drain path" — task 0196 introduces `crates/backfill-enrichment-runner`, a one-shot CLI that calls the same `enrich_and_persist::*` functions as the live worker to fill rows that pre-date the SQS queue. No decision change — the rule already permitted multiple execution paths for type-1, this just names the second path.'
+  - date: '2026-06-09'
+    status: accepted
+    who: stkrolikiewicz
+    note: >
+      Proposed amendment: ADR 0048 adds a fourth path (compute-at-read via a
+      local per-asset price join) for the FAST-CHANGE off-chain category on the
+      ClickHouse primary store. Rationale #2 here assumes off-chain = rare-change,
+      which does not hold for per-second USD prices; on CH there is also no row
+      UPDATE (ReplacingMergeTree), so a write-back column is a racy
+      read-modify-write. 0043 is unchanged for rare-change off-chain data; see
+      ADR 0048 (status proposed, pending review).
 ---
 
 # ADR 0043: How new fields reach the API — indexer column / enrichment Lambda column / runtime fetch (no column)

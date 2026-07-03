@@ -1,8 +1,9 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
+  Chip,
   DetailErrorState,
   getDefaultTruncation,
+  IdentifierWithCopy,
   isAccountId,
   NotFoundState,
   SectionErrorBoundary,
@@ -14,6 +15,7 @@ import { useParams } from 'react-router-dom';
 import { useAccountDetail } from '../api/index.js';
 
 import { AccountBalances } from './accounts/AccountBalances.js';
+import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
 import { AccountTransactions } from './accounts/AccountTransactions.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
@@ -33,12 +35,13 @@ export default function AccountDetailPage() {
     return <NotFoundState entity="account" identifier={accountId} />;
   }
 
+  if (account.isLoading) {
+    return <AccountDetailSkeleton />;
+  }
+
   let summary: ReactNode = null;
   let balances: ReactNode = null;
-  if (account.isLoading) {
-    summary = <CardSkeleton />;
-    balances = <CardSkeleton />;
-  } else if (account.isError) {
+  if (account.isError) {
     summary = (
       <DetailErrorState
         error={account.error}
@@ -63,18 +66,19 @@ export default function AccountDetailPage() {
             },
           ]}
         />
-        <Typography variant="heading5SemiBold" component="h1">
-          Account
-        </Typography>
-        <Typography
-          variant="bodyMedium"
-          sx={(theme) => ({
-            color: theme.palette.text.secondary,
-            wordBreak: 'break-all',
-          })}
-        >
-          {accountId}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="heading5SemiBold" component="h1">
+            Account
+          </Typography>
+          {/* Account removed from the ledger via account_merge (task 0324). */}
+          {account.data?.deleted === true && (
+            <Chip size="sm" color="error" dot label="Deleted" />
+          )}
+        </Box>
+        {/* Truncated under-title identity (full id stays in the summary
+            card below); the special identifier component carries the copy
+            affordance. */}
+        <IdentifierWithCopy value={accountId} type="account" linked={false} />
       </Box>
 
       <SectionErrorBoundary sectionName="account-summary">

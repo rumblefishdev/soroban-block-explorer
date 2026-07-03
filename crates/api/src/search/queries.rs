@@ -123,7 +123,7 @@ pub async fn fetch_search(
                 'transaction'::text                AS entity_type,
                 encode(thi.hash, 'hex')            AS identifier,
                 ''::text                           AS label,
-                NULL::bigint                       AS surrogate_id,
+                NULL::varchar                      AS route_token,
                 t.successful                       AS successful,
                 thi.created_at                     AS last_activity_at,
                 NULL::varchar                      AS contract_id,
@@ -142,7 +142,7 @@ pub async fn fetch_search(
                 'contract'::text          AS entity_type,
                 sc.contract_id            AS identifier,
                 COALESCE(sc.name, '')              AS label,
-                sc.id                     AS surrogate_id,
+                NULL::varchar             AS route_token,
                 NULL::bool                AS successful,
                 NULL::timestamptz         AS last_activity_at,
                 NULL::varchar             AS contract_id,
@@ -160,12 +160,29 @@ pub async fn fetch_search(
                 'asset'::text                       AS entity_type,
                 COALESCE(a.asset_code, 'XLM')       AS identifier,
                 token_asset_type_name(a.asset_type) AS label,
-                a.id::bigint                        AS surrogate_id,
+                -- Canonical routing token = `canonical_id` in assets/handlers.rs:
+                -- contract StrKey if present, else CODE-ISSUER, else `native` —
+                -- the `native` arm GATED on `asset_type = 0`. A malformed row
+                -- (code present but issuer unresolved) therefore yields NULL (an
+                -- honest no-route) instead of mis-routing to the native XLM page.
+                -- Mirrors the type-gated last arm of `canonical_id` (which
+                -- returns "" in that case). The displayed `identifier` stays the
+                -- asset code; this is what the FE puts in `/assets/:id`.
+                COALESCE(
+                    sc.contract_id,
+                    CASE
+                        WHEN a.asset_code IS NOT NULL AND iss.account_id IS NOT NULL
+                        THEN a.asset_code || '-' || iss.account_id
+                    END,
+                    CASE WHEN a.asset_type = 0 THEN 'native' END
+                )                                   AS route_token,
                 NULL::bool                          AS successful,
                 NULL::timestamptz                   AS last_activity_at,
                 NULL::varchar                       AS contract_id,
                 NULL::varchar                       AS token_id
             FROM assets a
+            LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
+            LEFT JOIN accounts          iss ON iss.id = a.issuer_id
             WHERE $7 = TRUE
               AND (
                       (a.asset_code IS NOT NULL AND a.asset_code ILIKE '%' || $1 || '%')
@@ -178,7 +195,7 @@ pub async fn fetch_search(
                 'account'::text         AS entity_type,
                 a.account_id            AS identifier,
                 COALESCE(a.home_domain, '') AS label,
-                a.id                    AS surrogate_id,
+                NULL::varchar           AS route_token,
                 NULL::bool              AS successful,
                 NULL::timestamptz       AS last_activity_at,
                 NULL::varchar           AS contract_id,
@@ -199,7 +216,7 @@ pub async fn fetch_search(
                 'nft'::text                          AS entity_type,
                 n.name                               AS identifier,
                 COALESCE(n.collection_name, '')      AS label,
-                n.id::bigint                         AS surrogate_id,
+                NULL::varchar                        AS route_token,
                 NULL::bool                           AS successful,
                 NULL::timestamptz                    AS last_activity_at,
                 sc.contract_id                       AS contract_id,
@@ -224,7 +241,7 @@ pub async fn fetch_search(
                     || ' / '
                     || COALESCE(lp.asset_b_code, 'XLM')
                 )::text                     AS label,
-                NULL::bigint                AS surrogate_id,
+                NULL::varchar               AS route_token,
                 NULL::bool                  AS successful,
                 NULL::timestamptz           AS last_activity_at,
                 NULL::varchar               AS contract_id,
@@ -235,17 +252,17 @@ pub async fn fetch_search(
               AND lp.pool_id = $2
             LIMIT $4
         )
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at, contract_id, token_id FROM tx_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM tx_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at, contract_id, token_id FROM contract_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM contract_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at, contract_id, token_id FROM asset_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM asset_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at, contract_id, token_id FROM account_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM account_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at, contract_id, token_id FROM nft_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM nft_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at, contract_id, token_id FROM pool_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM pool_hits
     "#;
 
     let rows = sqlx::query(sql)
@@ -279,7 +296,7 @@ pub async fn fetch_search(
             };
             let identifier: String = row.get("identifier");
             let label: String = row.get("label");
-            let surrogate_id: Option<i64> = row.get("surrogate_id");
+            let route_token: Option<String> = row.get("route_token");
             let successful: Option<bool> = row.get("successful");
             let last_activity_at: Option<DateTime<Utc>> = row.get("last_activity_at");
             let contract_id: Option<String> = row.get("contract_id");
@@ -298,7 +315,7 @@ pub async fn fetch_search(
                     entity_type: parsed,
                     identifier,
                     label,
-                    surrogate_id,
+                    route_token,
                     successful,
                     last_activity_at,
                     contract_id,

@@ -47,6 +47,7 @@ export interface SearchResultsState {
   isFetching: boolean;
   isError: boolean;
   error: unknown;
+  refetch: () => void;
   counts: Record<EntityType, number>;
   totalCount: number;
   activeTab: EntityType;
@@ -126,6 +127,9 @@ export function useSearchResults({
     isFetching: enabled && query.isFetching,
     isError: query.isError,
     error: query.error,
+    refetch: () => {
+      void query.refetch();
+    },
     counts,
     totalCount,
     activeTab,

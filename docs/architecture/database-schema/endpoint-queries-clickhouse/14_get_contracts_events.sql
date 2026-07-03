@@ -1,3 +1,16 @@
+-- ============================================================================
+-- ✅ CH STATUS (task 0243) — MIGRATED. `list_events` dispatches PG/CH via
+--    `DataSource::for_module(Module::Contracts)`; CH path =
+--    `contracts/queries_ch::fetch_events`. CH `soroban_events` stores the ScVal
+--    payload pre-decoded to JSON at ingest (column names `topics_xdr`/`data_xdr`
+--    are a misnomer; diagnostic-source events are also dropped at ingest), so
+--    the read path just JSON-deserializes inline — no Archive overlay, no
+--    read-time XDR decode. Keyset is 3-component
+--    `(ledger_sequence, transaction_id, event_index)`. Divergence from PG: CH
+--    pages per EVENT (one row → one item, `data.len() <= limit`) vs PG's folded
+--    appearance (expands to many). `EventItem.amount` (vestigial fold-count, not
+--    FE-surfaced) is `1` on CH.
+-- ============================================================================
 -- Endpoint:     GET /contracts/:contract_id/events
 -- Purpose:      Paginated list of recent events emitted by a contract.
 --               Default ordering: most recent first.

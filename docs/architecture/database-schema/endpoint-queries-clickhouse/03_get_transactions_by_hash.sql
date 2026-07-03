@@ -111,7 +111,7 @@ SELECT
     sc.contract_id                          AS contract_id,
     oa.asset_code,
     iss.account_id                          AS asset_issuer,
-    lower(hex(oa.pool_id))                  AS pool_id_hex,
+    arrayMap(x -> lower(hex(x)), oa.pool_ids) AS pool_ids_hex,
     oa.application_order,
     oa.ledger_sequence,
     l.closed_at                             AS created_at

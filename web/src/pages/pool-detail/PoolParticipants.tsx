@@ -4,15 +4,14 @@ import type { ParticipantItem } from '@rumblefish/api-types';
 import {
   EmptyState,
   ExplorerTable,
-  formatAmount,
-  formatPercent,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
-  TableSkeleton,
   useCursorPagination,
   usePageHandlers,
+  formatAmount,
+  formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -25,12 +24,14 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
   {
     id: 'account',
     header: 'Account',
+    width: 160,
     cell: (row) => <IdentifierWithCopy value={row.account} type="account" />,
   },
   {
     id: 'shares',
     header: 'Shares',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography
         component="span"
@@ -45,6 +46,7 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     id: 'share_percentage',
     header: 'Share %',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography
         component="span"
@@ -61,6 +63,7 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     id: 'first_deposit_ledger',
     header: 'Since ledger',
     align: 'right',
+    width: 120,
     cell: (row) => (
       <IdentifierDisplay
         value={String(row.first_deposit_ledger)}
@@ -88,10 +91,8 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
     resetKey: poolId,
   });
 
-  const { data, isLoading, isError, error, refetch } = usePoolParticipants(
-    poolId,
-    cursor
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    usePoolParticipants(poolId, cursor);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -101,11 +102,15 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
+  if (isLoading || isPlaceholderData) {
     body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={6} columns={columns.length} />
-      </Box>
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row) => row.account}
+        loading
+        skeletonRows={20}
+      />
     );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;

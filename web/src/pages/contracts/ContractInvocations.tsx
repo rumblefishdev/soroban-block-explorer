@@ -2,6 +2,7 @@ import { Box } from '@mui/material';
 import type { PaginatedInvocationItem } from '@rumblefish/api-types';
 import {
   Dash,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
@@ -9,7 +10,6 @@ import {
   QueryErrorState,
   StatusChip,
   TableEmptyState,
-  TableSkeleton,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -29,6 +29,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
   {
     id: 'transaction',
     header: 'Transaction',
+    width: 160,
     cell: (row) => (
       <IdentifierWithCopy value={row.transaction_hash} type="transaction" />
     ),
@@ -36,6 +37,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
   {
     id: 'caller',
     header: 'Caller',
+    width: 160,
     cell: (row) =>
       row.caller_account ? (
         <IdentifierDisplay value={row.caller_account} type="account" />
@@ -46,11 +48,13 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
   {
     id: 'status',
     header: 'Status',
+    width: 120,
     cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'ledger',
     header: 'Ledger',
+    width: 120,
     cell: (row) => (
       <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
     ),
@@ -58,6 +62,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
   {
     id: 'time',
     header: 'Time',
+    width: 210,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
@@ -76,10 +81,8 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
     resetKey: contractId,
   });
 
-  const { data, isLoading, isError, error, refetch } = useContractInvocations(
-    contractId,
-    cursor
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useContractInvocations(contractId, cursor);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -89,11 +92,18 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
+  if (isLoading || isPlaceholderData) {
     body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={8} columns={columns.length} />
-      </Box>
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row, index) =>
+          `${row.transaction_hash}-${row.ledger_sequence}-${index}`
+        }
+        loading
+        skeletonRows={20}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
     );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
@@ -113,6 +123,7 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
         rowKey={(row, index) =>
           `${row.transaction_hash}-${row.ledger_sequence}-${index}`
         }
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
       />
     );
   }

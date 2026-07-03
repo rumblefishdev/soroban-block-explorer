@@ -74,8 +74,9 @@
 //! before the next attempt.
 
 use clickhouse::Client as ClickhouseClient;
-use tracing::{debug, info, warn};
+use tracing::info;
 
+use crate::ch_staging::{create_staging_like, drop_if_exists, finalize, staging_row_count};
 use crate::error::BackfillError;
 use crate::sink::Sink;
 
@@ -212,11 +213,11 @@ async fn rebuild_lp_positions(
            FROM lp_positions AS lp FINAL
            LEFT JOIN (
              SELECT
-                 pool_id AS pool_id,
+                 arrayJoin(pool_ids) AS pool_id,
                  source_id AS account_id,
                  min(ledger_sequence) AS min_ledger
                FROM operations_appearances
-              WHERE type = 22 AND isNotNull(source_id) AND isNotNull(pool_id)
+              WHERE type = 22 AND isNotNull(source_id) AND notEmpty(pool_ids)
               GROUP BY pool_id, source_id
            ) AS m ON m.pool_id = lp.pool_id AND m.account_id = lp.account_id"
     );
@@ -352,70 +353,6 @@ async fn rebuild_soroban_contracts(
 
     finalize(client, "soroban_contracts", staging, dry_run).await?;
     Ok(rows)
-}
-
-/// Shared swap-or-drop helper. Real run swaps live ↔ staging via
-/// `EXCHANGE TABLES`, then drops the now-stale data sitting in the
-/// staging name. Dry run just drops the staging table after row count
-/// has been recorded — leaves the live table untouched.
-async fn finalize(
-    client: &ClickhouseClient,
-    live: &str,
-    staging: &str,
-    dry_run: bool,
-) -> Result<(), BackfillError> {
-    if dry_run {
-        debug!(live, staging, "repair_tier1: dry-run, dropping staging");
-        drop_if_exists(client, staging).await?;
-        return Ok(());
-    }
-    client
-        .query(&format!("EXCHANGE TABLES {live} AND {staging}"))
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-    info!(live, staging, "repair_tier1: tables exchanged");
-    // After EXCHANGE the old-live data sits inside `staging`; drop it.
-    drop_if_exists(client, staging).await?;
-    Ok(())
-}
-
-/// `CREATE TABLE <new> AS <existing>` — clones the schema + engine but
-/// not the data. The engine clone is essential: the staging table must
-/// share the same `ReplacingMergeTree(version_column)` semantics as the
-/// live table so EXCHANGE is a true atomic swap and not a schema
-/// rewrite.
-async fn create_staging_like(
-    client: &ClickhouseClient,
-    source: &str,
-    staging: &str,
-) -> Result<(), BackfillError> {
-    let sql = format!("CREATE TABLE {staging} AS {source}");
-    client
-        .query(&sql)
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-    debug!(source, staging, "repair_tier1: staging table created");
-    Ok(())
-}
-
-async fn drop_if_exists(client: &ClickhouseClient, table: &str) -> Result<(), BackfillError> {
-    let sql = format!("DROP TABLE IF EXISTS {table}");
-    if let Err(err) = client.query(&sql).execute().await {
-        warn!(table, %err, "repair_tier1: DROP TABLE IF EXISTS failed");
-        return Err(BackfillError::Ch(err));
-    }
-    Ok(())
-}
-
-async fn staging_row_count(client: &ClickhouseClient, table: &str) -> Result<u64, BackfillError> {
-    let n: u64 = client
-        .query(&format!("SELECT count() FROM {table}"))
-        .fetch_one::<u64>()
-        .await
-        .map_err(BackfillError::Ch)?;
-    Ok(n)
 }
 
 #[cfg(test)]

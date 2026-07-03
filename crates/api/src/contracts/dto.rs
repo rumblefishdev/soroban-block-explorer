@@ -3,12 +3,56 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
+
+/// Query params for `GET /v1/contracts` (list). Mirrors the assets-list
+/// filter shape: `filter[type]` (contract class) + `filter[q]` (search by
+/// contract id or name, full-text via `search_vector`).
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ContractsListParams {
+    /// Contract class: `token | other | nft | fungible`.
+    #[serde(rename = "filter[type]")]
+    pub filter_type: Option<String>,
+    /// Free-text search over contract id + name (`search_vector`).
+    #[serde(rename = "filter[q]")]
+    pub filter_q: Option<String>,
+}
+
+/// One row of `GET /v1/contracts`. Identity + classification + deploy
+/// provenance + a 7-day activity signal. All fields come straight from
+/// `soroban_contracts` (+ a deployer join and a windowed invocation count);
+/// nullable fields are `None` until the contract's deploy is observed.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractListItem {
+    pub contract_id: String,
+    /// Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+    /// until deployment is observed.
+    pub contract_type: Option<i16>,
+    /// `token | other | nft | fungible`. `null` only on schema drift / no type.
+    pub contract_type_name: Option<String>,
+    /// Stellar Asset Contract flag (stored, not derived from `contract_type`).
+    pub is_sac: bool,
+    /// Deployer account G-strkey; `null` until the deploy op is observed.
+    pub deployer: Option<String>,
+    /// Ledger the deploy was observed at; `null` until then.
+    pub deployed_at_ledger: Option<i64>,
+    /// Invocation count over the last 7 days (windowed; matches the detail
+    /// `ContractStats.recent_invocations` semantics).
+    pub recent_invocations: i64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ContractStats {
     pub recent_invocations: i64,
     pub recent_unique_callers: i64,
+    /// Event count in the same window as `recent_invocations` (NOT the full
+    /// `/events` history — that endpoint pages all events with no time bound).
+    /// PG sums `soroban_events_appearances.amount` (one appearance row folds
+    /// multiple events, `amount > 1`); CH has no appearance-fold table, so it
+    /// `count()`s the unfolded `soroban_events` (one row per event). Both tables
+    /// are written from the same parser event stream (diagnostics dropped at
+    /// parse, System + Contract kept), so the two figures match by construction.
+    pub recent_events: i64,
     /// Echoed window label (e.g. `"7 days"`) so the UI can label "last N days".
     pub stats_window: String,
 }
@@ -22,13 +66,50 @@ pub struct ContractDetailResponse {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
-    // `metadata` field removed per ADR 0042 / task 0156. The
-    // underlying `soroban_contracts.metadata JSONB` was replaced by
-    // typed `name VARCHAR(256)`; the field was always `{}` in
-    // practice and carried no information for the detail view.
-    // Frontend already handled the empty-object case as "no
-    // metadata"; absent field has the same effect.
+    /// Task 0327: contract mutability, 3-state.
+    /// - `Some(true)` → **Upgradeable**: the current WASM imports
+    ///   `update_current_contract_wasm` (a self-upgrade path).
+    /// - `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC
+    ///   has no WASM and is always `Some(false)`).
+    /// - `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /
+    ///   pre-0327 row) — the frontend renders no chip.
+    ///
+    /// Derived from the WASM at parse time
+    /// (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
+    /// (none exists). ClickHouse-sourced; always `None` on the retired PG path.
+    pub upgradeable: Option<bool>,
     pub stats: ContractStats,
+}
+
+/// One parameter on a Soroban contract function signature.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractFunctionParam {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// A single public function signature extracted from a Soroban contract's
+/// WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+/// the indexer-side source of the persisted shape.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractFunctionSig {
+    pub name: String,
+    /// Documentation string; may be empty.
+    pub doc: String,
+    pub inputs: Vec<ContractFunctionParam>,
+    /// Output type names; empty array == void return.
+    pub outputs: Vec<String>,
+}
+
+/// Soroban contract interface metadata persisted in
+/// `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+/// indexer's `xdr_parser::types::ContractInterface` exactly — the API
+/// hands the same JSON object to clients that the indexer wrote.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractInterfaceMetadata {
+    pub functions: Vec<ContractFunctionSig>,
+    /// Raw WASM byte length (informational).
+    pub wasm_byte_len: i64,
 }
 
 /// `interface_metadata` is `null` for SAC / pre-upload / stub rows;
@@ -37,7 +118,7 @@ pub struct ContractDetailResponse {
 pub struct InterfaceResponse {
     pub contract_id: String,
     pub wasm_hash: Option<String>,
-    pub interface_metadata: Option<serde_json::Value>,
+    pub interface_metadata: Option<ContractInterfaceMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -64,4 +145,29 @@ pub struct EventItem {
     pub event_type: String,
     pub topics: Vec<serde_json::Value>,
     pub data: serde_json::Value,
+}
+
+/// Opaque pagination cursor for `GET /contracts/:id/events`, datasource-tagged
+/// (ADR 0008) so a cursor minted for one backend is rejected after a flag flip;
+/// a legacy/untagged cursor (no `src`) fails to decode → clean 400.
+///
+/// - `Pg` — `(created_at, transaction_id)` keyset over the folded appearance
+///   index `soroban_events_appearances` (payload overlaid from the Archive at
+///   read time).
+/// - `Ch` — `(ledger_sequence, transaction_id, event_index)` keyset over the
+///   full-content `soroban_events` table (per-event rows; `event_index` is the
+///   multi-event-tx tie-break, non-optional so a CH keyset never binds a NULL
+///   tuple element).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "src", rename_all = "snake_case")]
+pub enum EventCursor {
+    Pg {
+        ts: DateTime<Utc>,
+        id: i64,
+    },
+    Ch {
+        ledger_sequence: i64,
+        transaction_id: i64,
+        event_index: i16,
+    },
 }

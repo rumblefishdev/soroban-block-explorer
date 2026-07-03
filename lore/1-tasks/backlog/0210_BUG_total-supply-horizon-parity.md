@@ -4,7 +4,7 @@ title: 'BUG: assets.total_supply Horizon parity — extend MVP sum to 4 sources'
 type: BUG
 status: backlog
 related_adr: ['0043']
-related_tasks: ['0194', '0197']
+related_tasks: ['0194', '0197', '0331', '0339', '0323']
 tags:
   [priority-high, effort-medium, layer-indexer, layer-xdr-parsing, correctness]
 milestone: 2
@@ -21,6 +21,47 @@ history:
       MVP misses 3 of them, causing known drift up to ~20-50% on DeFi
       assets (USDC w/ Soroswap + SAC). This task closes the gap and
       validates parity against an external source.
+  - date: '2026-06-30'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Re-confirmed in a SAC/asset modeling session: the SAC contract-holder gap
+      (`holder_count` + `total_supply` miss contract-side `ContractData` balances) is real
+      and has a Horizon parity target (`num_accounts` + `num_contracts` / `contracts_amount`).
+      Phase 3 (SAC contract holdings) owns the supply half; the `holder_count` half stays
+      deferred here (out of scope) but now has a confirmed Horizon target if un-deferred —
+      note the "semantics differ from trustline count" caveat applies to the ACCOUNT side;
+      the CONTRACT side has a clean `num_contracts` target. 0323 Phase 2 executed →
+      `soroban_contracts` is now deployed-only, so deployed-SAC identification for Phase 3 is
+      cleaner (`is_sac=true, deployed>0`). Entity-model context: 0339 (SAC = facet of
+      classic_credit, not a separate asset_type).
+  - date: '2026-07-02'
+    status: backlog
+    who: karolkow
+    note: >
+      2 of the 4 sources SUBSUMED by task 0331 (unified `balances`): #1 trustlines
+      (classic→balances migration) and #4 SAC/contract holdings (contract-held type-0/1
+      re-key, ADR 0051 — incl. Soroban-DEX pool reserves, which are contract-held). The
+      old `recompute_asset_aggregates` mechanism is dead (PG retired); supply is now
+      `sum(balances)`. Remaining = the 2 NON-contract sources: #2 claimable balances
+      (only ops parsed, no state table) + #3 native protocol LP reserves
+      (`LiquidityPoolEntry`, not a contract). Rewritten scope: write synthetic `balances`
+      rows for those two. Still backlog. See the dated status section in the body.
+  - date: '2026-07-02'
+    status: backlog
+    who: claude
+    note: >
+      Faza-3 item folded here from the 0331 OPS close-out (2026-07-02): a per-protocol decoder
+      for CUSTOM-STORAGE Soroban LP pools. ~264 type-3 LP-share tokens (Comet `CPAL` x136,
+      `Pool Share Token`/Soroswap x128) render `—` for supply because their LP-share balances
+      live in custom u32-keyed instance storage, NOT the standard SEP-41 `Balance(Address)`
+      ContractData key the 0331 seed reads. Needs one decoder per protocol (Comet / Soroswap /
+      Phoenix layouts). SCOPE FLAG: this is a SOROBAN (type-3) LP-SHARE SUPPLY gap, distinct
+      from 0210's classic Horizon-parity core (#2 claimable + #3 native-LP) — parked here per
+      operator; a standalone task or 0199 (LP analytics) may be a cleaner home if it muddies
+      0210. The pool's HELD reserves are already captured by 0331 (contract-held); only the
+      LP-SHARE token supply is missing. External check (StellarExpert live, 2026-07-02)
+      confirmed the type-3 coverage is otherwise complete — no indexing gap, just this decoder.
 ---
 
 # BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources
@@ -43,21 +84,54 @@ This is the only ADR 0043 list-endpoint column whose **correctness** is suspect.
 0197 audit verifies only non-NULL, not value parity — so this gap will not be
 caught by the audit and must be its own task.
 
+## 2026-07-02 (karolkow) — 2 of 4 sources SUBSUMED by task 0331; mechanism changed
+
+Task **0331** (unified `balances` model, Option C) closed **2 of the 4 Horizon
+sources** — including the one this task flagged as "heaviest design work":
+
+- **#1 Trustlines — DONE.** The classic `account_balances_current` → `balances`
+  migration + live single-write lands every trustline holding in `balances`.
+- **#4 SAC / contract holdings — DONE.** 0331's contract-held type-0/1 re-key
+  (ADR 0051) indexes every contract that holds a classic/native asset via its SAC
+  as a `balances` row keyed on the wrapped asset. **This includes Soroban-DEX pool
+  reserves** (Soroswap/Phoenix etc. — they hold their reserves AS a contract), which
+  was the bulk of the SAC-holdings concern.
+
+**Mechanism is different now.** This task's plan targets `recompute_asset_aggregates`
+in `crates/indexer/src/handler/persist/write.rs` — that whole PG path is **dead**
+(PG retired). On the new model, supply = `sum(balances)` via `balance_aggregates`, so
+each source just needs its holdings written as `balances` rows (additive, no recompute).
+
+**Remaining = the 2 NON-contract sources only:**
+
+- **#2 Claimable balances** — we parse the _operations_ (create/claim/clawback) but
+  keep **no state table** of per-asset claimable amounts (no `claimable_balances`
+  table on prod). Needs a new ingestion path.
+- **#3 NATIVE protocol LP reserves** — a classic Stellar AMM (`LiquidityPoolEntry`)
+  is NOT a contract; its reserves live in the protocol pool entry, not a trustline or
+  a `Balance(contract)` entry, so 0331 does not capture them. (`liquidity_pools` holds
+  74,728 pool _definitions_ but no reserve columns; reserves are in `pool_snapshots`.)
+
+**Rewritten scope:** write synthetic `balances` rows for claimable amounts (holder =
+claimable-balance id) + native-LP reserves (holder = pool id), keyed by `assets.id`.
+Then `sum(balances)` reaches full Horizon parity. Much smaller than the original 4-source
+recompute. Until then, classic-asset `total_supply` undercounts by (claimable + native-LP
+reserves) — the residual ~20-50% drift on heavily-pooled assets.
+
 ## Context
 
 ### The four sources Horizon aggregates
 
 1. **Trustlines** — `account_balances_current.balance` per `(code, issuer_id)`.
-   Already summed by 0194 MVP. ✅
+   ✅ **DONE via 0331** (migrated into unified `balances`).
 2. **Claimable balances** — `claimable_balances.amount` per `(code, issuer_id)`.
-   Pre-claim hot wallet liquidity. ❌ NOT in MVP.
-3. **Liquidity pool reserves** — `liquidity_pools.reserve_a` / `reserve_b` per
-   asset participant. Significant for AMM-listed pairs. ❌ NOT in MVP.
-   **0194 implementation Round 4 prototyped this**; schema already in place
-   per 0194 §1b.
+   Pre-claim hot wallet liquidity. ❌ NOT done (only ops parsed; no state table).
+3. **Liquidity pool reserves** — NATIVE protocol AMM (`LiquidityPoolEntry`) reserves
+   per asset participant. ❌ NOT done (not a contract; reserves in `pool_snapshots`).
+   _(Soroban-DEX pool reserves are a CONTRACT holding → already captured by 0331 #4.)_
 4. **SAC contract holdings** — Stellar Asset Contract instance balance held
-   inside Soroban contracts (SAC entries in `contract_data`). Per-asset SAC
-   contract tracking required. ❌ NOT in MVP; needs new tracking.
+   inside Soroban contracts (SAC entries in `contract_data`).
+   ✅ **DONE via 0331** (contract-held type-0/1 re-key, ADR 0051).
 
 ### Why this matters
 
@@ -150,10 +224,11 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
 
 ## Acceptance Criteria
 
-- [ ] `recompute_asset_aggregates` sums trustlines + LP reserves + claimable
-      balances + SAC contract holdings.
-- [ ] SAC contract holdings path designed via spike + ADR amendment to 0043
-      (or new ADR) documenting the choice between 3a / 3b.
+- [~] Supply sums all 4 sources. **Trustlines + SAC/contract holdings DONE via 0331**
+  (`sum(balances)` over the unified model — the dead `recompute_asset_aggregates`
+  is superseded); **claimable + native-LP reserves remain**.
+- [x] SAC contract holdings path — DONE via **0331 + ADR 0051** (contract-held type-0/1
+      re-key; state-based, no separate aggregation table needed).
 - [ ] Per-ledger overhead measured. Target: < +10% over post-0194 baseline.
       0194 measured +4% baseline; new ceiling +14%.
 - [ ] External-source parity snapshot committed to `docs/audits/`. Sample
@@ -176,6 +251,31 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
   scope; would need product decision + ADR.
 
 ## Notes
+
+- **Phase 3 mechanism = the 0331 ContractData-balance ingestion (UPDATED
+  2026-06-29).** ⚠️ The earlier "event-fold over `soroban_events`" idea is
+  REFUTED — measured on prod (`stellar` RPC): the fold under-counts 3/3 tokens
+  with a getter (vault / rebasing / non-SEP-41-event tokens change balances with
+  no foldable event; 54% of type-3 events are non-SEP-41). 0331 pivoted to reading
+  **ledger STATE**: `ContractData` `Balance(Address)` entries → `soroban_token_balances`
+  (the parser already decodes these — `xdr-parser::extract_soroban_token_balances`).
+  Phase 3 (SAC contract holdings) is the **same mechanism on type-2 SAC contracts**:
+  same `Vec[Symbol("Balance"), Address]` key, same table/framework — the only delta
+  is the value shape (SAC stores a `BalanceValue` **struct**: amount + authorized +
+  clawback flags, vs the bespoke-token bare `i128`), so Phase 3 adds a struct decoder
+
+  - resolves SAC `contract_id → (code, issuer)`. The "non-standard storage-key
+    layouts" line that scoped out 0138 is **disproven** (the standard `Balance(Address)`
+    key was confirmed readable on a real vault token). **0331 lands the ingestion
+    framework first; Phase 3 is a small extension on top, not a separate path.**
+    0331 still owns type-3 (bespoke Soroban) supply+holders, out of this task's scope.
+
+  * **Double-count trap:** the same classic asset is held two ways — as G-address
+    trustline holdings (source #1) AND as Soroban `Balance` entries held by
+    C-contracts via the SAC (source #4). Total supply is the ADDITIVE union:
+    `trustline holdings + C-contract Balance holdings`. A trustline holder and a
+    contract holder are distinct entries, so each is counted once — it's a sum of
+    the two sources, NOT a subtraction of one from the other. Matches Horizon parity.
 
 - **0194 deliberately deferred this.** From 0194 closing history (2026-05-XX):
   "Full Horizon-parity total_supply (LP reserves + claimable_balances + SAC

@@ -107,6 +107,93 @@ describe('useTableUrlState', () => {
     expect(probe.search).not.toContain('cursor=');
   });
 
+  it('clearFilters drops ALL filter keys + cursor in one update', () => {
+    // Regression: doing this via two sequential setFilter(key, null) calls
+    // fails — react-router hands each synchronous functional update the
+    // same pre-render params, so the second clobbers the first and only
+    // one key clears. clearFilters must drop every key at once.
+    const probe = { search: '' };
+    function Probe() {
+      const { search } = useLocation();
+      probe.search = search;
+      return null;
+    }
+    const { result } = renderHook(
+      () => useTableUrlState({ filterKeys: ['q', 'type'] }),
+      {
+        wrapper: ({ children }) => (
+          <MemoryRouter initialEntries={['/?q=ABC&type=token&cursor=c0']}>
+            {children}
+            <Probe />
+          </MemoryRouter>
+        ),
+      }
+    );
+
+    act(() => result.current.clearFilters());
+    expect(probe.search).not.toContain('q=');
+    expect(probe.search).not.toContain('type=');
+    expect(probe.search).not.toContain('cursor=');
+  });
+
+  it('clearFilters leaves sort/dir alone (they are not filter keys)', () => {
+    // Sort lives in the dedicated `sort`/`dir` params, never in filterKeys,
+    // so "Clear filters" narrows nothing about the ordering.
+    const probe = { search: '' };
+    function Probe() {
+      const { search } = useLocation();
+      probe.search = search;
+      return null;
+    }
+    const { result } = renderHook(
+      () => useTableUrlState({ filterKeys: ['q', 'domain'] }),
+      {
+        wrapper: ({ children }) => (
+          <MemoryRouter
+            initialEntries={['/?q=ABC&domain=1&sort=xlm_desc&dir=asc']}
+          >
+            {children}
+            <Probe />
+          </MemoryRouter>
+        ),
+      }
+    );
+
+    act(() => result.current.clearFilters());
+    expect(probe.search).not.toContain('q=');
+    expect(probe.search).not.toContain('domain=');
+    expect(probe.search).toContain('sort=xlm_desc');
+    expect(probe.search).toContain('dir=asc');
+  });
+
+  it('setFilters sets/deletes several keys + drops the cursor in one update', () => {
+    // Atomic sibling of clearFilters: a single user action that changes more
+    // than one filter must be ONE update — two sequential setFilter calls
+    // clobber each other (same react-router functional-update trap).
+    const probe = { search: '' };
+    function Probe() {
+      const { search } = useLocation();
+      probe.search = search;
+      return null;
+    }
+    const { result } = renderHook(
+      () => useTableUrlState({ filterKeys: ['type', 'sac'] }),
+      {
+        wrapper: ({ children }) => (
+          <MemoryRouter initialEntries={['/?sac=true&cursor=c0']}>
+            {children}
+            <Probe />
+          </MemoryRouter>
+        ),
+      }
+    );
+
+    act(() => result.current.setFilters({ type: 'soroban', sac: null }));
+    expect(probe.search).toContain('type=soroban');
+    expect(probe.search).not.toContain('sac=');
+    expect(probe.search).not.toContain('cursor=');
+  });
+
   it('cursorParam option lets multiple tables coexist', () => {
     const probe = { search: '' };
     function Probe() {

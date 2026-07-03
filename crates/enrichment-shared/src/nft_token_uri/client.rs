@@ -7,6 +7,7 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use base64::Engine;
@@ -22,7 +23,7 @@ use stellar_xdr::curr::{
 };
 use tracing::{debug, instrument};
 
-use super::errors::NftTokenUriError;
+use super::errors::{NftTokenUriError, is_endpoint_fault};
 
 /// Body cap for NFT metadata JSON (typical files <10 KB).
 pub(super) const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -31,9 +32,19 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CACHE_CAPACITY: u64 = 1024;
 const USER_AGENT: &str = concat!("soroban-block-explorer/", env!("CARGO_PKG_VERSION"));
-/// SDF public mainnet RPC. Switch via `with_rpc_url` if rate-limited.
+/// SDF public mainnet RPC — the single default when no `SOROBAN_RPC_URLS` /
+/// `SOROBAN_RPC_URL` env is set. The fetcher rotates + fails over across the
+/// whole pool when given more (task 0311).
 pub(super) const DEFAULT_SOROBAN_RPC_URL: &str = "https://mainnet.sorobanrpc.com";
-pub(super) const IPFS_GATEWAY_BASE: &str = "https://cloudflare-ipfs.com/ipfs/";
+/// Default IPFS gateways, tried in order with failover. Both serve path-style
+/// `/ipfs/<CID>` with HTTP 200 (no redirect — required by our
+/// `Policy::limited(0)` SSRF guard) and are reachable from the prod box
+/// (task 0311 sieve, 2026-06-22). The prior single default
+/// `cloudflare-ipfs.com` was sunset by Cloudflare → dead.
+pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
+    "https://ipfs.io/ipfs/",
+    "https://gateway.pinata.cloud/ipfs/",
+];
 
 /// `token_uri` is the OpenZeppelin / ERC-721 metadata-extension
 /// function name. Stellar Soroban NFT contracts copy the convention.
@@ -51,18 +62,68 @@ const TOKEN_URI_FN: &str = "token_uri";
 #[derive(Clone)]
 pub struct NftTokenUriFetcher {
     client: reqwest::Client,
-    rpc_url: Arc<String>,
+    /// RPC endpoint pool — round-robin + failover (task 0311). A single
+    /// element = the historical single-RPC behaviour.
+    rpc_urls: Arc<Vec<String>>,
+    /// IPFS gateway pool — round-robin + failover for `ipfs://` token_uris.
+    ipfs_gateways: Arc<Vec<String>>,
+    /// Round-robin start cursor — spreads each request's first pick across the
+    /// pools so no single endpoint is hammered first (proactive 429 avoidance).
+    cursor: Arc<AtomicUsize>,
     cache: FutureCache<String, Arc<Option<Value>>>,
 }
 
+/// Parse a comma-separated env var into a trimmed, non-empty list. `None` if
+/// unset or all-empty.
+fn env_list(key: &str) -> Option<Vec<String>> {
+    let raw = std::env::var(key).ok()?;
+    let list: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (!list.is_empty()).then_some(list)
+}
+
 impl NftTokenUriFetcher {
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (comma-sep) →
+    /// single `SOROBAN_RPC_URL` → SDF default; IPFS gateway pool from
+    /// `IPFS_GATEWAY_BASES` (comma-sep) → [`DEFAULT_IPFS_GATEWAYS`]. With no env
+    /// set, behaviour is identical to the historical single-SDF-RPC fetcher.
     pub fn new() -> Result<Self, reqwest::Error> {
-        Self::with_rpc_url(DEFAULT_SOROBAN_RPC_URL.to_owned())
+        let rpc_urls = env_list("SOROBAN_RPC_URLS")
+            .or_else(|| std::env::var("SOROBAN_RPC_URL").ok().map(|u| vec![u]))
+            .unwrap_or_else(|| vec![DEFAULT_SOROBAN_RPC_URL.to_owned()]);
+        let ipfs_gateways = env_list("IPFS_GATEWAY_BASES").unwrap_or_else(|| {
+            DEFAULT_IPFS_GATEWAYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        });
+        Self::build(rpc_urls, ipfs_gateways)
     }
 
-    /// Test / advanced hook: build a fetcher pointing at a custom RPC
-    /// endpoint. Production callers use [`Self::new`].
+    /// Test / advanced hook: a single RPC endpoint + the default IPFS gateways.
     pub fn with_rpc_url(rpc_url: String) -> Result<Self, reqwest::Error> {
+        Self::build(
+            vec![rpc_url],
+            DEFAULT_IPFS_GATEWAYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+    }
+
+    /// Test / advanced hook: explicit RPC pool + IPFS gateway pool.
+    pub fn with_pools(
+        rpc_urls: Vec<String>,
+        ipfs_gateways: Vec<String>,
+    ) -> Result<Self, reqwest::Error> {
+        Self::build(rpc_urls, ipfs_gateways)
+    }
+
+    fn build(rpc_urls: Vec<String>, ipfs_gateways: Vec<String>) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -76,7 +137,9 @@ impl NftTokenUriFetcher {
             .build();
         Ok(Self {
             client,
-            rpc_url: Arc::new(rpc_url),
+            rpc_urls: Arc::new(rpc_urls),
+            ipfs_gateways: Arc::new(ipfs_gateways),
+            cursor: Arc::new(AtomicUsize::new(0)),
             cache,
         })
     }
@@ -105,14 +168,25 @@ impl NftTokenUriFetcher {
     ) -> Result<Option<Value>, Arc<NftTokenUriError>> {
         let key = format!("{contract_id}:{token_id}");
         let client = self.client.clone();
-        let rpc_url = Arc::clone(&self.rpc_url);
+        let rpc_urls = Arc::clone(&self.rpc_urls);
+        let ipfs_gateways = Arc::clone(&self.ipfs_gateways);
+        // One round-robin tick per request → spreads each request's first pick.
+        let start = self.cursor.fetch_add(1, Ordering::Relaxed);
         let contract_id = contract_id.to_owned();
         let token_id = token_id.to_owned();
 
         let cached = self
             .cache
             .try_get_with(key, async move {
-                let json = fetch_uncached(&client, &rpc_url, &contract_id, &token_id).await?;
+                let json = fetch_uncached(
+                    &client,
+                    &rpc_urls,
+                    &ipfs_gateways,
+                    start,
+                    &contract_id,
+                    &token_id,
+                )
+                .await?;
                 Ok::<_, NftTokenUriError>(Arc::new(Some(json)))
             })
             .await?;
@@ -124,7 +198,9 @@ impl NftTokenUriFetcher {
 /// Pulled out of the cache closure so tests can drive it directly.
 async fn fetch_uncached(
     client: &reqwest::Client,
-    rpc_url: &str,
+    rpc_urls: &[String],
+    ipfs_gateways: &[String],
+    start: usize,
     contract_id: &str,
     token_id: &str,
 ) -> Result<Value, NftTokenUriError> {
@@ -136,17 +212,93 @@ async fn fetch_uncached(
         })?;
 
     let result_xdr_b64 =
-        simulate_token_uri_with_fallback(client, rpc_url, contract_id, token_u32).await?;
+        simulate_with_failover(client, rpc_urls, start, contract_id, token_u32).await?;
     let uri = decode_token_uri_result(&result_xdr_b64)?;
 
     validate_uri(&uri)?;
-    let url = resolve_ipfs_to_https(&uri);
-    let host = host_of(&url).unwrap_or_else(|| url.clone());
+    debug!(uri = %uri, "nft token_uri resolved; fetching metadata");
+    fetch_metadata_with_failover(client, &uri, ipfs_gateways, start).await
+}
 
-    debug!(uri = %uri, url = %url, "nft token_uri resolved; fetching metadata");
+/// Try each RPC in the pool (round-robin from `start`) until one answers.
+/// Advances on endpoint faults (429 / 5xx / timeout / connect / a rate-limit
+/// JSON-RPC error); returns immediately on a deterministic contract/parse error
+/// (identical on every endpoint) or success.
+async fn simulate_with_failover(
+    client: &reqwest::Client,
+    rpc_urls: &[String],
+    start: usize,
+    contract_id: &str,
+    token_id_u32: u32,
+) -> Result<String, NftTokenUriError> {
+    let n = rpc_urls.len();
+    let mut last: Option<NftTokenUriError> = None;
+    for k in 0..n {
+        let url = &rpc_urls[(start + k) % n];
+        match simulate_token_uri_with_fallback(client, url, contract_id, token_id_u32).await {
+            Ok(xdr) => return Ok(xdr),
+            Err(e) if is_endpoint_fault(&e) => {
+                debug!(rpc = %url, error = %e, "rpc endpoint fault — failing over");
+                last = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.expect("rpc pool is non-empty, so the loop body ran"))
+}
 
+/// Resolve the `token_uri` value to metadata JSON, rotating IPFS gateways with
+/// failover. An `ipfs://` URI has one candidate per gateway (content-addressed
+/// → identical bytes); an `https://` URI has a single candidate. Advances only
+/// on endpoint faults; a deterministic content error (unsupported type,
+/// malformed JSON) repeats on every gateway, so it returns immediately.
+async fn fetch_metadata_with_failover(
+    client: &reqwest::Client,
+    uri: &str,
+    ipfs_gateways: &[String],
+    start: usize,
+) -> Result<Value, NftTokenUriError> {
+    let candidates = ipfs_candidate_urls(uri, ipfs_gateways, start);
+    let mut last: Option<NftTokenUriError> = None;
+    for url in &candidates {
+        match fetch_one_metadata(client, url).await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_endpoint_fault(&e) => {
+                debug!(gateway = %url, error = %e, "ipfs gateway fault — failing over");
+                last = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| NftTokenUriError::MalformedUri {
+        uri: uri.to_owned(),
+    }))
+}
+
+/// Ordered candidate URLs for a validated `token_uri` value. `ipfs://<rest>` →
+/// one URL per gateway (round-robin from `start`); `https://…` → the single
+/// direct URL (a specific host — no rotation).
+fn ipfs_candidate_urls(uri: &str, gateways: &[String], start: usize) -> Vec<String> {
+    match uri.strip_prefix("ipfs://") {
+        Some(rest) if !gateways.is_empty() => {
+            let n = gateways.len();
+            (0..n)
+                .map(|k| format!("{}{rest}", gateways[(start + k) % n]))
+                .collect()
+        }
+        _ => vec![uri.to_owned()],
+    }
+}
+
+/// Single metadata GET: status check (3xx → `HttpStatus`, never panics),
+/// content-type branch (JSON vs direct-image), capped body.
+async fn fetch_one_metadata(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Value, NftTokenUriError> {
+    let host = host_of(url).unwrap_or_else(|| url.to_owned());
     let resp = client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|source| NftTokenUriError::Http {
@@ -155,10 +307,7 @@ async fn fetch_uncached(
         })?;
     let status = resp.status();
     if !status.is_success() {
-        let err = resp
-            .error_for_status()
-            .expect_err("non-success status guaranteed to map to Err");
-        return Err(NftTokenUriError::Http { host, source: err });
+        return Err(non_success_error(resp, status, host));
     }
     let content_type = resp
         .headers()
@@ -181,6 +330,27 @@ async fn fetch_uncached(
         Ok(json!({ "image": url }))
     } else {
         Err(NftTokenUriError::UnsupportedContentType(content_type))
+    }
+}
+
+/// Map a non-2xx response to an error WITHOUT panicking on 3xx. `reqwest`'s
+/// `error_for_status()` only errors on 4xx/5xx, so a 3xx (redirect — we run
+/// `Policy::limited(0)`) would make a bare `.expect_err()` panic. 3xx →
+/// `HttpStatus` (failover-worthy: the gateway redirects, try the next); 4xx/5xx
+/// → `Http` (preserves the reqwest-error-carrying variant + its transient
+/// classification).
+fn non_success_error(
+    resp: reqwest::Response,
+    status: reqwest::StatusCode,
+    host: String,
+) -> NftTokenUriError {
+    match resp.error_for_status() {
+        // 3xx (and any other non-2xx reqwest declines to flag) → status-only.
+        Ok(_redirect) => NftTokenUriError::HttpStatus {
+            host,
+            status: status.as_u16(),
+        },
+        Err(source) => NftTokenUriError::Http { host, source },
     }
 }
 
@@ -334,10 +504,7 @@ async fn simulate_transaction(
         })?;
     let status = resp.status();
     if !status.is_success() {
-        let err = resp
-            .error_for_status()
-            .expect_err("non-success status guaranteed to map to Err");
-        return Err(NftTokenUriError::Http { host, source: err });
+        return Err(non_success_error(resp, status, host));
     }
     let body: Value = resp
         .json()
@@ -383,10 +550,13 @@ fn decode_token_uri_result(xdr_b64: &str) -> Result<String, NftTokenUriError> {
         .map_err(|e| NftTokenUriError::MalformedRpcResponse(format!("token_uri not UTF-8: {e}")))
 }
 
-/// `ipfs://...` → `https://<gateway>/ipfs/...`; HTTPS passes through.
+/// `ipfs://...` → `https://<primary-gateway>/ipfs/...`; HTTPS passes through.
+/// Single-gateway resolution (the primary of [`DEFAULT_IPFS_GATEWAYS`]) for the
+/// `image`-field path in `enrich_and_persist::nft_token_uri`; the `token_uri`
+/// metadata fetch itself rotates the full pool via `fetch_metadata_with_failover`.
 pub(crate) fn resolve_ipfs_to_https(uri: &str) -> String {
     uri.strip_prefix("ipfs://")
-        .map(|rest| format!("{IPFS_GATEWAY_BASE}{rest}"))
+        .map(|rest| format!("{}{rest}", DEFAULT_IPFS_GATEWAYS[0]))
         .unwrap_or_else(|| uri.to_owned())
 }
 
@@ -616,7 +786,7 @@ mod tests {
     fn resolve_ipfs_swaps_scheme() {
         assert_eq!(
             resolve_ipfs_to_https("ipfs://QmFoo/1.json"),
-            "https://cloudflare-ipfs.com/ipfs/QmFoo/1.json"
+            "https://ipfs.io/ipfs/QmFoo/1.json"
         );
         assert_eq!(
             resolve_ipfs_to_https("https://example.com/1.json"),
@@ -839,9 +1009,16 @@ mod tests {
         // Pure structural check — `fetch_uncached` short-circuits before
         // any network call when token_id isn't a u32.
         let client = reqwest::Client::new();
-        let err = super::fetch_uncached(&client, "http://unused", "C...", "not-a-number")
-            .await
-            .expect_err("non-u32 token_id must hard-fail");
+        let err = super::fetch_uncached(
+            &client,
+            &["http://unused".to_owned()],
+            &["https://gw/ipfs/".to_owned()],
+            0,
+            "C...",
+            "not-a-number",
+        )
+        .await
+        .expect_err("non-u32 token_id must hard-fail");
         assert!(matches!(
             err,
             NftTokenUriError::MalformedInput { field, .. } if field.contains("token_id")
@@ -851,13 +1028,161 @@ mod tests {
     #[tokio::test]
     async fn fetch_uncached_rejects_bad_contract_strkey() {
         let client = reqwest::Client::new();
-        let err = super::fetch_uncached(&client, "http://unused", "not-a-strkey", "42")
-            .await
-            .expect_err("malformed contract strkey must hard-fail");
+        let err = super::fetch_uncached(
+            &client,
+            &["http://unused".to_owned()],
+            &["https://gw/ipfs/".to_owned()],
+            0,
+            "not-a-strkey",
+            "42",
+        )
+        .await
+        .expect_err("malformed contract strkey must hard-fail");
         assert!(matches!(
             err,
             NftTokenUriError::MalformedInput { field, .. } if field.contains("contract_id")
         ));
+    }
+
+    // ---- task 0311: multi-provider RPC rotation + failover ----
+
+    #[tokio::test]
+    async fn simulate_failover_advances_past_429() {
+        // First RPC 429s; the pool must fail over to the healthy second.
+        let limited = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&limited)
+            .await;
+        let healthy = MockServer::start().await;
+        let xdr = scval_string_b64("ipfs://QmGood/1.json");
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "latestLedger": 1, "results": [{ "auth": [], "xdr": xdr }] },
+            })))
+            .mount(&healthy)
+            .await;
+
+        let client = reqwest::Client::new();
+        let contract = stellar_strkey::Contract([0xCD; 32]).to_string();
+        // start=0 → tries `limited` (429) first, fails over to `healthy`.
+        let got = super::simulate_with_failover(
+            &client,
+            &[limited.uri(), healthy.uri()],
+            0,
+            &contract,
+            1,
+        )
+        .await
+        .expect("must fail over from 429 to the healthy RPC");
+        assert_eq!(
+            decode_token_uri_result(&got).unwrap(),
+            "ipfs://QmGood/1.json"
+        );
+    }
+
+    #[tokio::test]
+    async fn simulate_failover_all_429_surfaces_transient() {
+        // Whole pool 429s → the exhausted error must classify transient (so the
+        // worker requests an SQS retry rather than burning a permanent sentinel).
+        let a = MockServer::start().await;
+        let b = MockServer::start().await;
+        for m in [&a, &b] {
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(429))
+                .mount(m)
+                .await;
+        }
+        let client = reqwest::Client::new();
+        let contract = stellar_strkey::Contract([0x01; 32]).to_string();
+        let err = super::simulate_with_failover(&client, &[a.uri(), b.uri()], 0, &contract, 1)
+            .await
+            .expect_err("a fully-429 pool must surface an error");
+        assert!(
+            super::super::errors::is_transient(&err),
+            "exhausted-429 pool should be transient, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn simulate_failover_stops_on_deterministic_error() {
+        // A contract-side revert is identical on every endpoint → must NOT fail
+        // over (would waste the whole pool on a permanent fault).
+        let first = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "latestLedger": 1, "error": "HostError: Error(Contract, #5)" },
+            })))
+            .mount(&first)
+            .await;
+        let never = MockServer::start().await;
+        let xdr = scval_string_b64("ipfs://QmNever/1.json");
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "latestLedger": 1, "results": [{ "auth": [], "xdr": xdr }] },
+            })))
+            .mount(&never)
+            .await;
+
+        let client = reqwest::Client::new();
+        let contract = stellar_strkey::Contract([0x02; 32]).to_string();
+        let err =
+            super::simulate_with_failover(&client, &[first.uri(), never.uri()], 0, &contract, 1)
+                .await
+                .expect_err("deterministic contract error must not fail over");
+        assert!(matches!(err, NftTokenUriError::SorobanRpc(_)));
+    }
+
+    #[tokio::test]
+    async fn metadata_3xx_surfaces_not_panics() {
+        // A 3xx from a gateway must surface as a failover-worthy error WITHOUT
+        // panicking (the old `error_for_status().expect_err()` panicked on 3xx).
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(301))
+            .mount(&mock)
+            .await;
+        let client = reqwest::Client::builder()
+            .redirect(Policy::limited(0))
+            .build()
+            .unwrap();
+        let err = super::fetch_one_metadata(&client, &format!("{}/x", mock.uri()))
+            .await
+            .expect_err("3xx must surface as error, not panic");
+        // Reaching here = no panic. The key property: a 3xx gateway is
+        // failover-worthy so the pool advances to the next one.
+        assert!(super::super::errors::is_endpoint_fault(&err), "got {err:?}");
+    }
+
+    #[test]
+    fn ipfs_candidates_rotate_and_passthrough() {
+        let gws = vec![
+            "https://gw-a/ipfs/".to_owned(),
+            "https://gw-b/ipfs/".to_owned(),
+        ];
+        // ipfs:// → one URL per gateway, order rotated by `start`.
+        assert_eq!(
+            super::ipfs_candidate_urls("ipfs://QmX/1.json", &gws, 0),
+            vec![
+                "https://gw-a/ipfs/QmX/1.json",
+                "https://gw-b/ipfs/QmX/1.json"
+            ]
+        );
+        assert_eq!(
+            super::ipfs_candidate_urls("ipfs://QmX/1.json", &gws, 1),
+            vec![
+                "https://gw-b/ipfs/QmX/1.json",
+                "https://gw-a/ipfs/QmX/1.json"
+            ]
+        );
+        // https:// → single passthrough, no rotation.
+        assert_eq!(
+            super::ipfs_candidate_urls("https://host.example/1.json", &gws, 0),
+            vec!["https://host.example/1.json"]
+        );
     }
 
     // Live mainnet smoke. Default-ignored — hits SDF public RPC. Run:

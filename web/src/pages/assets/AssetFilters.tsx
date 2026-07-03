@@ -1,6 +1,5 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, Divider, InputAdornment, Stack, TextField } from '@mui/material';
-import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
+import { Box, Divider, Stack } from '@mui/material';
+import { Chip, DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ASSET_TYPE_FILTERS } from './assetType.js';
 
@@ -9,22 +8,28 @@ interface AssetFiltersProps {
   search: string;
   /** Active asset-type filter, or `''` for "All types". */
   type: string;
+  /** Whether the "Has SAC" property filter is active (`filter[sac]=true`). */
+  sac: boolean;
   onSearchChange: (value: string) => void;
   onTypeChange: (value: string) => void;
+  onSacChange: (value: boolean) => void;
 }
 
 /**
- * Filter bar for the assets list — an asset-code search input plus a row of
- * type chips (All types / Classic / SAC / Soroban), matching the Figma design.
+ * Filter bar for the assets list — an asset-code search input, a row of type
+ * chips (All types / Classic / Soroban), and a separate "Has SAC" property
+ * toggle. Type and the SAC facet are orthogonal axes (ADR 0051): an asset has
+ * a type AND may additionally carry a deployed SAC, so SAC is a property toggle,
+ * not a type chip.
  */
 export function AssetFilters({
   search,
   type,
+  sac,
   onSearchChange,
   onTypeChange,
+  onSacChange,
 }: AssetFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
-
   return (
     <Box
       sx={(theme) => ({
@@ -37,26 +42,12 @@ export function AssetFilters({
         bgcolor: theme.palette.surface.grayMainAlt,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={search}
         placeholder="Search by asset code..."
-        aria-label="Search by asset code"
-        sx={{ width: { xs: '100%', sm: 320 } }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Search by asset code"
+        width={320}
+        onCommit={onSearchChange}
       />
       <Divider
         orientation="vertical"
@@ -79,6 +70,19 @@ export function AssetFilters({
           );
         })}
       </Stack>
+      <Divider
+        orientation="vertical"
+        flexItem
+        sx={{ display: { xs: 'none', sm: 'block' }, my: 0.5 }}
+      />
+      <Chip
+        label="Has SAC"
+        size="lg"
+        color={sac ? 'accent' : 'neutral'}
+        clickable
+        onClick={() => onSacChange(!sac)}
+        aria-pressed={sac}
+      />
     </Box>
   );
 }

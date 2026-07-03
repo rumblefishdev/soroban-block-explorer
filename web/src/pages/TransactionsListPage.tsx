@@ -24,9 +24,10 @@ type Filters = NonNullable<ListTransactionsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function TransactionsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['q', 'op'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['q', 'op'],
+    });
   const q = state.filters.q ?? '';
   // Normalise the URL `op` param against the backend enum — see
   // `normalizeOperationType` for the why. Bad / lowercase values
@@ -47,10 +48,8 @@ export default function TransactionsListPage() {
     return filters;
   }, [q, op]);
 
-  const { data, isLoading, isError, error, refetch } = useTransactionsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useTransactionsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -67,10 +66,6 @@ export default function TransactionsListPage() {
     (value: string) => setFilter('op', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('q', null);
-    setFilter('op', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -89,15 +84,19 @@ export default function TransactionsListPage() {
         }
         columnCount={TRANSACTION_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <TransactionsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <TransactionsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="transactions"
         emptyNoun="transactions"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         paginationCaption="All results"
         canPrev={canPrev}
         canNext={canNext}

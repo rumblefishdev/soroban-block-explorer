@@ -1,8 +1,8 @@
 import { Box, Card, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   Chip,
   DetailErrorState,
+  IdentifierWithCopy,
   isContractId,
   NotFoundState,
   SectionErrorBoundary,
@@ -20,6 +20,7 @@ import { routes } from '../router/routes.js';
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
+import { ContractDetailSkeleton } from './contracts/ContractDetailSkeleton.js';
 import { ContractSummary } from './contracts/ContractSummary.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
@@ -40,10 +41,12 @@ export default function ContractDetailPage() {
     return <NotFoundState entity="contract" identifier={contractId} />;
   }
 
-  let summary: ReactNode = null;
   if (contract.isLoading) {
-    summary = <CardSkeleton />;
-  } else if (contract.isError) {
+    return <ContractDetailSkeleton />;
+  }
+
+  let summary: ReactNode = null;
+  if (contract.isError) {
     summary = (
       <DetailErrorState
         error={contract.error}
@@ -66,10 +69,7 @@ export default function ContractDetailPage() {
     {
       key: 'events',
       label: 'Events',
-      // Placeholder count — `recent_unique_callers` is a callers metric,
-      // not an events total. Stays until the API exposes a real events
-      // count (tracked in the FE→API gaps doc).
-      count: contract.data?.stats.recent_unique_callers,
+      count: contract.data?.stats.recent_events,
     },
   ];
 
@@ -94,16 +94,26 @@ export default function ContractDetailPage() {
           {contract.data?.is_sac === true && (
             <Chip size="md" color="accent" label="Stellar Asset Contract" />
           )}
+          {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
+              Label states exactly what the WASM import scan proves ("self-
+              upgrade path present/absent"), not the broader "immutable" — a
+              static scan can't see proxy/delegate or renounced-admin patterns. */}
+          {contract.data?.upgradeable != null && (
+            <Chip
+              size="md"
+              color={contract.data.upgradeable ? 'emerald' : 'neutral'}
+              label={
+                contract.data.upgradeable
+                  ? 'Self-upgradeable'
+                  : 'No self-upgrade'
+              }
+            />
+          )}
         </Stack>
-        <Typography
-          variant="bodyMedium"
-          sx={(theme) => ({
-            color: theme.palette.text.secondary,
-            wordBreak: 'break-all',
-          })}
-        >
-          {contractId}
-        </Typography>
+        {/* Truncated under-title identity (full id stays in the summary
+            card below); the special identifier component carries the copy
+            affordance. */}
+        <IdentifierWithCopy value={contractId} type="contract" linked={false} />
       </Box>
 
       <SectionErrorBoundary sectionName="contract-summary">

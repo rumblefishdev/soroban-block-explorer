@@ -33,7 +33,13 @@
     "infra:deploy:staging": "make -C infra deploy-staging",
     "infra:deploy:production": "make -C infra deploy-production",
     "infra:synth:staging": "make -C infra synth-staging",
-    "infra:synth:production": "make -C infra synth-production"
+    "infra:synth:production": "make -C infra synth-production",
+    "web:serve": "npx nx serve @rumblefish/soroban-block-explorer-web",
+    "web:build": "npx nx build @rumblefish/soroban-block-explorer-web",
+    "web:preview": "npx nx preview @rumblefish/soroban-block-explorer-web",
+    "web:test": "npx nx test @rumblefish/soroban-block-explorer-web",
+    "web:lint": "npx nx lint @rumblefish/soroban-block-explorer-web",
+    "web:typecheck": "npx nx typecheck @rumblefish/soroban-block-explorer-web"
   },
   "devDependencies": {
     "@eslint/js": "^9.8.0",

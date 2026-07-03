@@ -72,7 +72,8 @@
 --   - state tables             → ReplacingMergeTree(version_column) where
 --                                a natural NOT NULL ledger column exists
 --                                (otherwise plain ReplacingMergeTree)
---   - immutable lookup tables  → MergeTree
+--   - immutable lookup tables  → ReplacingMergeTree (collapse re-run /
+--                                parallel-merge duplicates; lore-0293)
 --
 -- Partitioning: every fact table uses `intDiv(ledger_sequence, 500000)`
 -- (~29 days at 5 s/ledger). State and immutable tables not partitioned.
@@ -81,9 +82,19 @@
 -- `CREATE DICTIONARY IF NOT EXISTS`); applying twice is a no-op.
 
 ----------------------------------------------------------------------
--- Immutable lookups (MergeTree)
+-- Immutable lookups (ReplacingMergeTree — collapse re-run / parallel-merge
+-- duplicates; were plain MergeTree until lore-0293)
 ----------------------------------------------------------------------
 
+-- ReplacingMergeTree (was plain MergeTree): the commit marker. A normal
+-- single-machine crash-resume never re-writes a marked ledger (resume keys on
+-- the ABSENT marker), but parallel-backfill merges / range overlap / manual
+-- re-index DO produce duplicate `sequence` rows that plain MergeTree never
+-- collapses — they double `ledgers` JOINs and needed a manual
+-- `OPTIMIZE … DEDUPLICATE BY sequence` (task 0228). RMT collapses them
+-- automatically on merge. Content is immutable per `sequence`, so no version
+-- column; cost is merge-time only and ~0 on a unique monotonic key; reads stay
+-- FINAL-free. (lore-0293)
 CREATE TABLE IF NOT EXISTS ledgers (
     sequence          Int64,
     hash              FixedString(32),
@@ -92,15 +103,22 @@ CREATE TABLE IF NOT EXISTS ledgers (
     transaction_count Int32,
     base_fee          Int64
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(sequence, 500000)
 ORDER BY (sequence);
 
+-- ReplacingMergeTree (was plain MergeTree): written in the entity phase
+-- (before the `ledgers` commit marker), so a crash-resume / backfill re-run
+-- re-emits the same `(wasm_hash, metadata)` row. Plain MergeTree never dedups
+-- → permanent byte-identical duplicates that double `contracts/interface`
+-- JOINs and needed a manual `OPTIMIZE … DEDUPLICATE BY wasm_hash` (task 0228).
+-- Content is immutable per `wasm_hash`, so no version column — any duplicate is
+-- byte-identical and RMT collapses it on merge; reads stay FINAL-free. (lore-0293)
 CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
     wasm_hash FixedString(32),
     metadata  String CODEC(ZSTD(3))
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);
 
 ----------------------------------------------------------------------
@@ -122,7 +140,19 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- domains across tens of millions of accounts; the vast majority
     -- are NULL). LowCardinality dictionary-encodes the few unique
     -- values per block — strong compression on top of default LZ4.
-    home_domain       LowCardinality(Nullable(String))
+    home_domain       LowCardinality(Nullable(String)),
+    -- The table is ORDER BY account_id (StrKey -> id resolves on the PK), but
+    -- tx-list endpoints need the REVERSE: id (surrogate) -> account_id, to
+    -- project `source_account`. `id` is not the sort key, so that lookup
+    -- full-scans accounts (~23M rows, task 0290 — the ~35M/poll the polled
+    -- /transactions list read came from this join, NOT the partition scan).
+    -- A bloom_filter on `id` lets `WHERE id IN (page source_ids)` prune to a
+    -- handful of granules. FP 0.001 (tighter than the 0.025 default) because
+    -- the lookup tests N keys at once and per-key false positives compound
+    -- (1-(1-p)^N): at default 0.025 / 11 keys ~6M rows survived; at 0.001 ~1M.
+    -- Index is ~tens of MB. Applied to the live prod table via
+    -- ALTER ... ADD INDEX + MATERIALIZE INDEX (online, 2026-06-16).
+    INDEX idx_acc_id id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree(last_seen_ledger)
 ORDER BY (account_id);
@@ -139,10 +169,43 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
     deployer_id              Nullable(Int64),
     deployed_at_ledger       Nullable(Int64),
     contract_type            Nullable(Int16),
-    is_sac                   Bool,
-    name                     Nullable(String)
+    is_sac                   Bool
+    -- `name` DROPPED (task 0304): dead since 0297 (no writer, reader-less,
+    -- 0/148663 populated in prod). Prod `ALTER … DROP COLUMN name` pending.
 )
 ENGINE = ReplacingMergeTree(wasm_uploaded_at_ledger)
+ORDER BY (contract_id);
+
+-- On-chain Soroban token metadata (name/symbol/decimals) read from the
+-- contract's instance-storage `Symbol("METADATA")` struct. Per-contract,
+-- INDEXER-derived (NOT the off-chain enrichment family). A SEPARATE table, not
+-- columns on `soroban_contracts`, because: (1) RMT whole-row replace +
+-- soroban_contracts' many writers (deploy / contract_type_rebuild EXCHANGE /
+-- stub INSERTs / db-merge) would clobber in-row metadata to NULL (the G5 bug
+-- class); (2) deploy identity (wasm_hash/deployer, from the deploy tx, NOT in
+-- the instance entry) and metadata live on DIFFERENT update clocks, which one
+-- RMT version column cannot track. Written by the parser on contract-instance
+-- `created` / `updated` / `restored` changes; SACs skipped (name=CODE:ISSUER /
+-- symbol=code / decimals=7 already derivable from SAC identity). `version` =
+-- observed ledger (deterministic/replay-safe; latest wins). `decimals` is
+-- rendered as 7 at read for classic/SAC.
+-- INVARIANT: every row is a WHOLE-struct snapshot at one ledger (name+symbol+
+-- decimals all set from the same METADATA at that version) — never a partial
+-- single-column write. Read with `FINAL` (latest whole row per contract_id) —
+-- the direct, frankenstein-proof RMT collapse for a whole-row read; the table is
+-- bounded (Soroban-native tokens only) so the read-time merge is cheap. Read
+-- (assets list): `assets … LEFT JOIN (SELECT contract_id, name, symbol, decimals
+-- FROM soroban_contract_metadata FINAL) m ON m.contract_id = sc.contract_id`,
+-- `COALESCE(ae.name, m.name, sc.name, …)`. The contract detail endpoint does NOT
+-- read this table. Full reasoning: task 0297.
+CREATE TABLE IF NOT EXISTS soroban_contract_metadata (
+    contract_id  String,
+    name         Nullable(String),
+    symbol       Nullable(String),
+    decimals     Nullable(UInt32),
+    version      Int64
+)
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (contract_id);
 
 ----------------------------------------------------------------------
@@ -153,18 +216,132 @@ ORDER BY (contract_id);
 -- Classic credit: code+issuer set, contract_id=0. SAC: contract_id
 -- set, code/issuer optional. Soroban-native: contract_id set,
 -- code/issuer=empty/0.
+--
+-- DEAD columns (`ALTER … DROP COLUMN` batched in the cleanup task 0310):
+--  * `total_supply` / `holder_count` (lore-0293) — nothing reads them (the API
+--    serves the aggregate from `balance_aggregates`); the indexer writes NULL.
+--    A global rollup written into this per-ledger-rewritten row clobbered them
+--    (no-version RMT, last-write-wins → ~25% of classic served NULL in prod).
+--  * `name` / `icon_url` — the indexer writes them NULL (parser never sets an
+--    asset name; verified 0/367321 rows populated in prod). Every read resolves
+--    the display name/icon from `asset_enrichment` (curated) coalesced over
+--    `soroban_contract_metadata` (on-chain) — never from `assets` — so these two
+--    are vestigial too.
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
-    name            Nullable(String),
-    total_supply    Nullable(Decimal128(7)),
-    holder_count    Nullable(Int32),
-    icon_url        Nullable(String)
+    -- `name` DROPPED (task 0304): dead since 0297 (reader-less, 0/336053 prod).
+    -- Prod `ALTER … DROP COLUMN name` batches with 0310's assets deploy-drain.
+    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → balance_aggregates
+    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → balance_aggregates
+    icon_url        Nullable(String),         -- DEAD → asset_enrichment.icon_url
+    -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
+    -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
+    -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`
+    -- references it. NOT in ORDER BY (natural key unchanged; additive, non-breaking).
+    -- PROD: existing table needs `ALTER TABLE assets ADD COLUMN id Int64` + a
+    -- one-time backfill of `id` for existing rows (maintenance window) — CREATE IF
+    -- NOT EXISTS won't add it. Default 0 until a row is rewritten/backfilled.
+    id              Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- SAC facet side table (ADR 0051 / task 0339). One logical row per SAC-having
+-- classic_credit / native asset, keyed byte-for-byte like `assets` and joined at
+-- read (`… GROUP BY key` with `max()`). Written by the INDEXER (not the enricher)
+-- ONLY when a SAC is sighted — a deploy (`sac_deployed=1`) or an un-deployed
+-- override event (`sac_deployed=0`) — NEVER on a plain trustline re-emit, so the
+-- per-ledger whole-row `assets` rewrite can never zero it.
+--   * `sac_contract_id` — cityhash64 surrogate of the SAC's `C…` StrKey (the same
+--     hash used for `soroban_contracts.id`). The `C…` StrKey itself is NOT stored
+--     — it re-derives on read from `code:issuer` (`derive_sac_strkey`).
+--   * `sac_deployed` — deployed on-chain? MONOTONIC (false→true, never back), so
+--     `SimpleAggregateFunction(max)` makes a deploy sighting stick over any later
+--     un-deployed-override event; `max()` on the constant surrogate is a no-op.
+-- AggregatingMergeTree (not RMT): `max` merges column-wise per key, so an override
+-- event AFTER a deploy cannot downgrade `sac_deployed` (a versioned RMT keeps the
+-- last-inserted whole row and WOULD downgrade). No `soroban_contracts` join needed
+-- for deployed-ness — the flag is stored.
+-- No skip-index on `sac_contract_id`: every read aggregates the whole (small)
+-- table — `SELECT key, max(sac_contract_id) … GROUP BY key` for the join, then the
+-- `/assets/{C…}` deep-link filters `sac.sac_contract_id = ?` on that join result —
+-- so a per-column index would prune nothing. `asset_sac` is one row per
+-- SAC-having asset (~31k at mainnet scale), so the full-table aggregate is cheap;
+-- add a `sac_contract_id` skip-index + a direct point-lookup only if it ever grows.
+CREATE TABLE IF NOT EXISTS asset_sac (
+    asset_type      Int16,
+    asset_code      LowCardinality(String),
+    issuer_id       Int64,
+    contract_id     Int64,
+    sac_contract_id SimpleAggregateFunction(max, Int64),
+    sac_deployed    SimpleAggregateFunction(max, UInt8)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- Off-chain SEP-1 enrichment for `assets` (task 0231). Written by the
+-- enrichment-worker Lambda (NOT the indexer), keyed byte-for-byte like
+-- `assets`, joined at read (`… FINAL`/`argMax`). Lives in a separate table
+-- because the live indexer re-writes whole `assets` rows (enrichment columns
+-- NULL) and would clobber it; `ReplacingMergeTree(version)` is order-safe under
+-- retries and lets the enricher CLEAR a value (re-insert NULL with a higher
+-- `version`). `version` = enricher processing timestamp (ms; non-nullable as
+-- RMT requires). NOTE: `assets.{icon_url,name}` stay — `icon_url` there is
+-- vestigial (always NULL; dropping it on the live table is a heavy ALTER, low
+-- value — deferred to a cleanup task), and `name` is still indexer-owned for
+-- soroban-native assets (read path does `COALESCE(asset_enrichment.name,
+-- assets.name)`). Full reasoning + measured evidence: lore task 0231,
+-- `notes/R-clickhouse-enrichment-write-strategy.md`.
+CREATE TABLE IF NOT EXISTS asset_enrichment (
+    asset_type   Int16,
+    asset_code   LowCardinality(String),
+    issuer_id    Int64,
+    contract_id  Int64,
+    icon_url     Nullable(String),
+    name         Nullable(String),
+    version      DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- NOTE: the legacy `asset_aggregates` table + `asset_aggregates_mv` (classic
+-- supply/holders over `account_balances_current`, keyed code+issuer) were DROPPED
+-- (task 0331) — superseded by `balance_aggregates` (below) over the unified
+-- `balances` table, keyed by `assets.id`. It was a refreshable MV (derived), so
+-- the drop loses no source data; classic supply now flows through `balances`
+-- (single-write + the one-time classic→`balances` migration).
+--
+-- Pre-computed per-asset aggregates over the unified `balances` table (task 0331,
+-- Option C) — supply + active-holder count keyed by the `assets.id` surrogate.
+-- `total_supply` is RAW `Int128` (the read scales by the asset's `decimals`); a
+-- Soroban token's supply needs raw Int128 (token-specific decimals; PIKA=43224
+-- overflows any Decimal), so this table is raw for ALL asset types once classic
+-- migrates in (step 6). Refreshable-MV (full recompute, atomic EXCHANGE → no FINAL
+-- on read). Columns `Nullable` so a read LEFT-JOIN miss is NULL (→ "—"), not 0.
+-- (classic enters `balances` via single-write + the one-time classic→`balances`
+-- migration; type-3 + SAC/native contract-held via the live parser + seed.)
+CREATE TABLE IF NOT EXISTS balance_aggregates (
+    asset_id     Int64,
+    total_supply Nullable(Int128),
+    holder_count Nullable(Int32)
+)
+ENGINE = MergeTree
+ORDER BY (asset_id);
+
+-- NOTE: `balance_aggregates_mv` (the refreshable MV that fills this table) is
+-- defined AFTER `balances` below — a `CREATE MATERIALIZED VIEW … FROM balances`
+-- needs its source table to already exist on a fresh `init.sql` run.
+
+-- (tombstone) `soroban_token_supply` was DROPPED — task 0331 Option-A decision.
+-- A per-token authoritative `TotalSupply` key read (76.6% of type-3 tokens expose
+-- one; 27% do not) added a second supply source + a seed-only staleness bug for
+-- no measurable gain: a mint always credits a holder balance (often a contract
+-- treasury, summed under Path A G+C holders), so `balance_aggregates.total_supply`
+-- (Σ amount, MV-refreshed) equals the real supply. ONE universal method; the
+-- narrow residue (TTL-archived tail + true rebasing) is the accepted non-100% cost.
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,
@@ -176,6 +353,47 @@ CREATE TABLE IF NOT EXISTS account_balances_current (
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (account_id, asset_type, asset_code, issuer_id);
+
+-- ── Option C unified balance model (task 0331) ──────────────────────────────
+-- The two tables below are the unified replacement for `account_balances_current`
+-- (classic) + the interim `soroban_token_balances` (type-3). The persist path now
+-- writes `balances` ONLY (single-write, task 0331 Option A); `account_balances_current`
+-- is retained (no longer written) pending the one-time classic→`balances` data
+-- migration + drop (OPS steps 6b/6d). See the task README.
+
+-- Unified per-holder balances — the single balance model for ALL asset types.
+-- `amount` is RAW `Int128` (scale by the asset's `decimals` at read — universal
+-- fixed-point, handles classic 7-dec AND arbitrary Soroban decimals). `holder_id`
+-- = `cityhash64(holder StrKey)` (the same surrogate space as `accounts.id` /
+-- `soroban_contracts.id`; resolve back to a StrKey via `accounts` (G) or
+-- `soroban_contracts` (C) — there is no dedicated address dimension). `asset_id`
+-- → the `assets.id` surrogate (`ids::asset_id`). RMT version = `last_updated_ledger`;
+-- a removed/zeroed balance writes 0 so a fully-spent holder collapses.
+CREATE TABLE IF NOT EXISTS balances (
+    holder_id           Int64,
+    asset_id            Int64,
+    amount              Int128,
+    last_updated_ledger Int64
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+-- holder_id FIRST: the account-detail read is a per-holder PK-prefix seek (the
+-- hot, latency-critical path — mirrors `account_balances_current`'s account_id-first
+-- key, avoids the 0198 Seq Scan). `balance_aggregates_mv` GROUP BY asset_id is a
+-- periodic full-recompute scan either way, so it doesn't need asset_id-first.
+ORDER BY (holder_id, asset_id);
+
+-- Refreshable MV that recomputes `balance_aggregates` from `balances` (defined
+-- above — the source table MUST exist before this CREATE). Full recompute + atomic
+-- EXCHANGE, so reads need no FINAL.
+CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
+REFRESH EVERY 2 MINUTE
+TO balance_aggregates AS
+SELECT
+    asset_id,
+    sum(amount)                  AS total_supply,
+    toInt32(countIf(amount > 0)) AS holder_count
+FROM balances FINAL
+GROUP BY asset_id;
 
 CREATE TABLE IF NOT EXISTS nfts (
     contract_id           Int64,
@@ -214,6 +432,27 @@ CREATE TABLE IF NOT EXISTS nfts_pending (
     current_owner_ledger  Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
+
+-- Off-chain `token_uri` enrichment for `nfts` (task 0231). Written by the
+-- enrichment-worker Lambda (NOT the indexer), keyed like `nfts`, joined at
+-- read. Separate table for the same reason as `asset_enrichment`: the live
+-- indexer re-writes whole `nfts` rows on every ownership change (metadata
+-- NULL) and the ownership clock (`current_owner_ledger`) is its RMT version —
+-- so enrichment in `nfts` would be clobbered AND has no safe version to claim.
+-- Here `version` is the enricher's own clock (ms), independent of ownership.
+-- `nfts.{name,media_url,collection_name}` stay vestigial (NULL; DROP deferred
+-- to a cleanup task). See lore task 0231,
+-- `notes/R-clickhouse-enrichment-write-strategy.md`.
+CREATE TABLE IF NOT EXISTS nft_enrichment (
+    contract_id      Int64,
+    token_id         String,
+    name             Nullable(String),
+    media_url        Nullable(String),
+    collection_name  Nullable(String),
+    version          DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (contract_id, token_id);
 
 -- liquidity_pools (task 0208 Path 2 folded inline): RMT(last_updated_ledger),
@@ -293,9 +532,56 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     contract_id       Nullable(Int64),
     asset_code        LowCardinality(String),
     asset_issuer_id   Nullable(Int64),
-    pool_id           Nullable(FixedString(32)),
+    -- Crossed liquidity pools (task 0261/0268): single-element for LP
+    -- deposit/withdraw, full crossed-pool list (result claim atoms) for
+    -- path payments / offers, [] for no pool involvement (Array cannot be
+    -- Nullable; has([], x) = 0 so empty arrays miss pool filters). Sorted +
+    -- deduped by the stage fold. Filter with
+    -- has(pool_ids, toFixedString(unhex(...), 32)).
+    pool_ids          Array(FixedString(32)),
     amount            Int64,   -- fold count, see header comment
-    ledger_sequence   Int64
+    ledger_sequence   Int64,
+    -- Skip index for the `has(pool_ids, …)` pool filter (E20 /
+    -- liquidity-pools/:id/transactions; task 0281 C). The read driver
+    -- (fetch_pool_transactions) seeks via read-in-order `ORDER BY ledger DESC
+    -- LIMIT`, so a POPULAR pool early-terminates near the tip; this bloom bounds
+    -- the OTHER regime — a sparse pool whose last activity is far below the tip,
+    -- where the driver must scan back to reach it. `bloom_filter(0.001)` (not the
+    -- 0.025 default) keeps that scan's false-positive floor at ~0.1 % of the table
+    -- (~6 M rows) instead of ~2.5 % (~155 M, box-measured 2026-06-17); same
+    -- tight-FP rationale as the 0290 `idx_acc_id`.
+    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter(0.001) GRANULARITY 1,
+    -- Skip index for the contract-filtered transaction-list path (E03
+    -- Statement B; task 0333). `contract_id` is NOT the ORDER BY prefix
+    -- (unlike the `soroban_events` / `soroban_invocations_appearances` arms of
+    -- the same UNION, which seek on `contract_id`), so this arm full-scanned.
+    -- The read driver seeks via read-in-order `ORDER BY ledger DESC LIMIT`: a
+    -- VERY active contract early-terminates near the tip (cheap), but a SPARSE
+    -- contract — few/old appearances — forces a scan of the entire table to
+    -- fill the page (box-measured: 42-appearance contract read 13.18 M / the
+    -- whole table; this is the ~6.2 B-rows/query full scan that blew the prod
+    -- `api_throttle.read_rows` quota on 2026-06-29, CH Code 201). This bloom
+    -- bounds that sparse regime to the granules that actually hold the contract.
+    -- `bloom_filter(0.001)` (not the 0.025 default) keeps the false-positive
+    -- floor tight, same rationale as `idx_oa_pool_ids` / the 0290 `idx_acc_id`.
+    -- contract_id is Nullable; `= <id>` never matches NULL rows, and granules
+    -- holding only NULLs carry no value → skipped.
+    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1,
+    -- Skip index for the CLASSIC / classic-wrap-SAC arm of the asset-transactions
+    -- driver (E10 GET /assets/:id/transactions; task 0334). That driver filters
+    -- `(asset_code = ? AND asset_issuer_id = ?) OR (contract_id = ?)`. For a
+    -- classic-wrap SAC both arms are present, and the `asset_*` arm had NO index —
+    -- so the `OR` defeated `idx_oa_contract_id` entirely (a granule can only be
+    -- skipped if BOTH disjuncts can be ruled out), forcing a FULL scan
+    -- (prod-measured: ~6.2 B rows / ~115 GiB / ~7.5 s per request for `zkSync`,
+    -- still blowing `api_throttle.read_rows` after the 0333 contract-only fix).
+    -- A bloom on `asset_issuer_id` (high-cardinality Int64 surrogate; `asset_code`
+    -- is then checked only within candidate granules) makes the classic arm
+    -- prunable; CH unions it with `idx_oa_contract_id` for the OR (EXPLAIN:
+    -- "<Combined skip indexes>"). Box-measured: 13.18 M (whole table) → 114 K.
+    -- Same `bloom_filter(0.001)` rationale as `idx_oa_contract_id`; asset_issuer_id
+    -- is Nullable (NULL = non-asset op) → NULL-only granules carry no value, skipped.
+    INDEX idx_oa_asset_issuer_id asset_issuer_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -383,7 +669,12 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     total_shares    Decimal128(7),
     tvl             Nullable(Decimal128(7)),
     volume          Nullable(Decimal128(7)),
-    fee_revenue     Nullable(Decimal128(7))
+    fee_revenue     Nullable(Decimal128(7)),
+    -- Gross trade volume in asset-A units per (pool, ledger), computed from
+    -- path-payment claim atoms (task 0261 extractor; written by the 0266
+    -- backfill / 0247 wiring). USD volume/fee stay NULL until the Prices
+    -- API lands (ADR 0048 read-time join).
+    gross_volume_a  Nullable(Decimal128(7))
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

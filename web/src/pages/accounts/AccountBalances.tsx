@@ -6,26 +6,28 @@ import {
   EmptyState,
   formatAmount,
   IdentifierDisplay,
-  monoFontFamily,
+  scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { AssetIcon, type AssetIconKind } from '../assets/AssetIcon.js';
+import { AssetIcon } from '../assets/AssetIcon.js';
 
 interface BalanceShape {
-  kind: AssetIconKind;
+  /** Native XLM — its subline is prose ("Native asset"); non-native sublines
+   *  are issuer addresses, rendered mono. */
+  isNative: boolean;
   name: string;
   code: string;
   subline: string;
-  chipLabel: 'Classic' | 'SAC' | null;
+  chipLabel: 'Classic' | 'SAC' | 'Token' | null;
   href: string | undefined;
 }
 
 function shape(balance: AccountBalance): BalanceShape {
   if (balance.asset_type_name === 'native') {
     return {
-      kind: 'native',
+      isNative: true,
       name: 'Stellar Lumens',
       code: 'XLM',
       subline: 'Native asset',
@@ -33,6 +35,22 @@ function shape(balance: AccountBalance): BalanceShape {
       href: undefined,
     };
   }
+  // Soroban token (type-3): no classic code/issuer — its identity is the token
+  // contract + on-chain symbol. Link to the asset detail page by contract id.
+  if (balance.type === 3) {
+    const symbol = balance.symbol ?? '—';
+    return {
+      isNative: false,
+      // Full on-chain name as the title (like /assets), symbol as the ticker
+      // under the amount. Fall back to symbol when the token has no name.
+      name: balance.name ?? symbol,
+      code: symbol,
+      subline: balance.contract_id ?? '',
+      chipLabel: 'Token',
+      href: balance.contract_id ? routes.asset(balance.contract_id) : undefined,
+    };
+  }
+
   const code = balance.asset_code ?? '—';
   const issuer = balance.asset_issuer ?? '';
 
@@ -42,7 +60,7 @@ function shape(balance: AccountBalance): BalanceShape {
       ? routes.asset(`${balance.asset_code}-${balance.asset_issuer}`)
       : undefined;
   return {
-    kind: isSac ? 'sac' : 'classic',
+    isNative: false,
     name: code,
     code,
     subline: issuer,
@@ -100,7 +118,7 @@ function BalanceRow({
         alignItems="center"
         sx={{ minWidth: 0, flex: 1 }}
       >
-        <AssetIcon code={s.code} kind={s.kind} size={32} />
+        <AssetIcon code={s.code} size={32} />
         <Box
           sx={{
             display: 'flex',
@@ -117,23 +135,44 @@ function BalanceRow({
               alignItems="center"
               sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
             >
-              <Typography
-                component="span"
-                sx={(theme) => ({
-                  fontFamily: s.kind === 'native' ? undefined : monoFontFamily,
-                  fontSize: 12,
-                  color: theme.palette.text.tertiary,
-                  wordBreak: 'break-all',
-                })}
-              >
-                {s.subline}
-              </Typography>
+              {s.isNative ? (
+                <Typography
+                  component="span"
+                  sx={(theme) => ({
+                    fontSize: 12,
+                    color: theme.palette.text.tertiary,
+                  })}
+                >
+                  {s.subline}
+                </Typography>
+              ) : (
+                // Issuer address: truncated via the identifier component
+                // (the full id is one tap away on the asset/issuer page);
+                // `tone='inherit'` adopts the tertiary subline colour.
+                <Box
+                  component="span"
+                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                >
+                  <IdentifierDisplay
+                    value={s.subline}
+                    type={s.subline.startsWith('C') ? 'contract' : 'account'}
+                    tone="inherit"
+                    fontSize={12}
+                  />
+                </Box>
+              )}
             </Stack>
           </Stack>
           {s.chipLabel && (
             <Chip
               size="sm"
-              color={s.chipLabel === 'SAC' ? 'brown' : 'default'}
+              color={
+                s.chipLabel === 'SAC'
+                  ? 'brown'
+                  : s.chipLabel === 'Token'
+                  ? 'neutral'
+                  : 'default'
+              }
               label={s.chipLabel}
             />
           )}
@@ -144,7 +183,7 @@ function BalanceRow({
           variant="bodyMedium"
           sx={(theme) => ({ color: theme.palette.text.primary })}
         >
-          {formatAmount(balance.balance, 2)}
+          {formatAmount(scaleByDecimals(balance.balance, balance.decimals), 2)}
         </Typography>
         <Typography
           variant="bodyXsRegular"

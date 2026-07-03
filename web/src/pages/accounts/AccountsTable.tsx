@@ -1,112 +1,120 @@
-import { Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
+import type { AccountListItem } from '@rumblefish/api-types';
 import {
-  Dash,
+  Chip,
   ExplorerTable,
-  formatAmount,
-  formatPercent,
+  IdentifierDisplay,
   IdentifierWithCopy,
+  Dash,
+  formatAmount,
+  scaleByDecimals,
   type ExplorerTableColumn,
+  type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import type { AccountListItem } from '../../api/hooks/useAccountsList.js';
+const columns: ExplorerTableColumn<AccountListItem>[] = [
+  {
+    id: 'account',
+    header: 'Account',
+    // Wider than a plain identifier: this cell also carries the home-domain
+    // chip (e.g. "lobstr.co") next to the address + copy button.
+    width: 240,
+    cell: (row) => (
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ minWidth: 0 }}
+      >
+        <IdentifierWithCopy value={row.account_id} type="account" />
+        {row.home_domain && (
+          // Issuer home domain → external link to the org site. The bare
+          // domain has no scheme on-chain, so default to https.
+          <Box
+            component="a"
+            href={
+              /^https?:\/\//.test(row.home_domain)
+                ? row.home_domain
+                : `https://${row.home_domain}`
+            }
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              display: 'inline-flex',
+              textDecoration: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            <Chip size="sm" color="neutral" label={row.home_domain} />
+          </Box>
+        )}
+      </Stack>
+    ),
+  },
+  {
+    id: 'xlm',
+    header: 'XLM Balance',
+    align: 'right',
+    width: 165,
+    cell: (row) =>
+      row.xlm_balance != null ? (
+        <Typography component="span" variant="bodySmMedium">
+          {/* xlm_balance is RAW stroops (Int128); native is 7 decimals. */}
+          {formatAmount(scaleByDecimals(row.xlm_balance, 7))}
+        </Typography>
+      ) : (
+        <Dash />
+      ),
+  },
+  {
+    id: 'last_seen',
+    header: 'Last Seen',
+    align: 'right',
+    sortable: true,
+    width: 180,
+    cell: (row) => (
+      <IdentifierDisplay value={String(row.last_seen_ledger)} type="ledger" />
+    ),
+  },
+  {
+    id: 'first_seen',
+    header: 'First Seen',
+    align: 'right',
+    width: 180,
+    cell: (row) => (
+      <IdentifierDisplay value={String(row.first_seen_ledger)} type="ledger" />
+    ),
+  },
+];
 
 interface AccountsTableProps {
   rows: readonly AccountListItem[];
-  startRank?: number;
+  sortDir?: SortDirection;
+  /** `(columnId, direction)` — forwarded straight from the sorted column. */
+  onSortChange?: (id: string, dir: SortDirection) => void;
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
-export function AccountsTable({ rows, startRank = 0 }: AccountsTableProps) {
-  const columns: ExplorerTableColumn<AccountListItem>[] = [
-    {
-      id: 'rank',
-      header: '#',
-      align: 'right',
-      width: 56,
-      cell: (_row, idx) => (
-        <Typography
-          component="span"
-          variant="bodyMonoSmMedium"
-          sx={(theme) => ({ color: theme.palette.text.tertiary })}
-        >
-          {startRank + idx + 1}
-        </Typography>
-      ),
-    },
-    {
-      id: 'account',
-      header: 'Account',
-      cell: (row) => (
-        <IdentifierWithCopy value={row.account_id} type="account" />
-      ),
-    },
-    {
-      id: 'xlm',
-      header: 'XLM Balance',
-      align: 'right',
-      cell: (row) => (
-        <Typography component="span" variant="bodySmMedium">
-          {formatAmount(row.xlm_balance)}
-        </Typography>
-      ),
-    },
-    {
-      id: 'supply',
-      header: '% Supply',
-      align: 'right',
-      cell: (row) => (
-        <Typography
-          component="span"
-          variant="bodyMonoSmMedium"
-          sx={(theme) => ({ color: theme.palette.text.secondary })}
-        >
-          {formatPercent(row.xlm_supply_percent)}
-        </Typography>
-      ),
-    },
-    {
-      id: 'last_seen',
-      header: 'Last Seen',
-      align: 'right',
-      cell: (row) => (
-        <Typography component="span" variant="bodyMonoSmMedium">
-          {formatAmount(row.last_seen_ledger)}
-        </Typography>
-      ),
-    },
-    {
-      id: 'first_seen',
-      header: 'First Seen',
-      align: 'right',
-      cell: (row) => (
-        <Typography
-          component="span"
-          variant="bodyMonoSmMedium"
-          sx={(theme) => ({ color: theme.palette.text.secondary })}
-        >
-          {formatAmount(row.first_seen_ledger)}
-        </Typography>
-      ),
-    },
-    {
-      id: 'domain',
-      header: 'Domain',
-      cell: (row) =>
-        row.home_domain ? (
-          <Typography component="span" variant="bodySmMedium">
-            {row.home_domain}
-          </Typography>
-        ) : (
-          <Dash />
-        ),
-    },
-  ];
+export function AccountsTable({
+  rows,
+  sortDir,
+  onSortChange,
+  loading,
+  skeletonRows,
+}: AccountsTableProps) {
   return (
     <ExplorerTable
       columns={columns}
       rows={rows}
       rowKey={(row) => row.account_id}
+      sortBy="last_seen"
+      sortDir={sortDir}
+      onSortChange={onSortChange}
+      loading={loading}
+      skeletonRows={skeletonRows}
     />
   );
 }
 
-export const ACCOUNT_COLUMN_COUNT = 7;
+export const ACCOUNT_COLUMN_COUNT = 4;

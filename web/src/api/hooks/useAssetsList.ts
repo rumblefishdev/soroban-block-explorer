@@ -4,26 +4,23 @@ import { useQuery } from '@tanstack/react-query';
 import { listPolicy } from '../polling.js';
 
 type Filters = NonNullable<ListAssetsData['query']>;
-type Order = 'asc' | 'desc';
 
 /**
  * `GET /assets` — cursor-paginated asset list with optional type / code
- * filters. URL-as-state pagination via `useCursorPagination`. `order`
- * flips the `total_supply` sort direction — forwarded via cast since
- * the codegen does not (yet) describe it.
+ * filters. URL-as-state pagination via `useCursorPagination`. The backend
+ * orders by `id` only (no client-selectable sort), so no `order` param is
+ * sent.
  */
 export const useAssetsList = (
   cursor: string | null = null,
-  filters?: Filters,
-  order: Order = 'desc'
+  filters?: Filters
 ) => {
-  const query: Record<string, unknown> = {
+  const query: Filters = {
     ...(filters ?? {}),
-    order,
     ...(cursor ? { cursor } : {}),
   };
   return useQuery({
-    ...listAssetsOptions({ query: query as Filters }),
+    ...listAssetsOptions({ query }),
     ...listPolicy,
   });
 };

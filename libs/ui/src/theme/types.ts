@@ -3,7 +3,14 @@ import type { CSSProperties } from 'react';
 import type { scales } from './colors.js';
 import type { radius } from './radius.js';
 
-interface TypeSurface {
+// Exported (not just module-local) so `theme/index.ts` can re-export it. That
+// re-export is load-bearing: it forces the emitted `dist/index.d.ts` to
+// reference this file, which carries the `declare module '@mui/material/styles'`
+// augmentations below. A bare side-effect `import './types.js'` is elided from
+// the emitted .d.ts, so consumers resolving the package via its built types
+// (web, project references) never loaded the augmentation → `bodyXsRegular` /
+// `text.tertiary` unknown across the whole app.
+export interface TypeSurface {
   background: string;
   backgroundAlt: string;
   information: string;
@@ -148,6 +155,15 @@ declare module '@mui/material/styles' {
 
   interface ShapeOptions {
     radius?: typeof radius;
+  }
+
+  interface ZIndex {
+    pageGlow: number;
+    gridBackdrop: number;
+    contentMain: number;
+    secondaryNav: number;
+    footer: number;
+    topNav: number;
   }
 }
 

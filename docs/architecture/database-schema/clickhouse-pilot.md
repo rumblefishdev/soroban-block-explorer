@@ -79,26 +79,26 @@ primary keys on the other 12 tables where StrKey-hash composites are
 already cheap. PG snapshot the pilot was sized against:
 [`sources/db-schema-snapshot.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md).
 
-| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                                         |
-| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
-| `accounts`                                            | `accounts`                            | state                   | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                     |
-| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                   |
-| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                    |
-| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                                  |
-| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                      |
-| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                                            |
-| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`                                 |
-| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                                              |
-| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                  |
-| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_id, application_order)`; FK Int64                         |
-| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`             |
-| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                      |
-| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_id)`                                         |
-| `transactions`                                        | `transactions`                        | append-only fact        | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash` |
-| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`                              |
-| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_id)`; FK Int64                                |
-| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                             |
-| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                             |
+| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                                               |
+| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------- |
+| `accounts`                                            | `accounts`                            | state                   | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                           |
+| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                         |
+| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                          |
+| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                                        |
+| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                            |
+| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                                                  |
+| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`                                       |
+| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                                                    |
+| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                        |
+| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_id, application_order)`; FK Int64; `pool_ids` Array (0261/0268) |
+| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`                   |
+| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                            |
+| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_id)`                                               |
+| `transactions`                                        | `transactions`                        | append-only fact        | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash`       |
+| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`                                    |
+| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_id)`; FK Int64                                      |
+| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                                   |
+| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                                   |
 
 CH net schema: **17 tables + 1 `Dictionary`** (PG had 18; `_sqlx_migrations` dropped).
 
@@ -281,6 +281,40 @@ PG keeps all of these.
   or a re-insert that relies on `wasm_uploaded_at_ledger` version
   semantics to absorb the corrected row).
 
+### 4f. Unified balance model (task 0331)
+
+Soroban-token (`asset_type = 3`) `total_supply` / `holder_count` rendered `—` (no
+trustlines). The fix is a CH-only **unified per-holder balance model** that also
+re-keys classic balances off PG's `Decimal128(7)` `account_balances_current` onto a
+raw representation. Two objects, none in PG:
+
+- **`balances`** (`holder_id`, `asset_id`, `amount Int128`, `last_updated_ledger`)
+  `ReplacingMergeTree(last_updated_ledger)` — unified per-holder balance, raw
+  `Int128` (scale by the asset's `decimals` at read; type-3 decimals vary — PIKA
+  43224 overflows any `Decimal`). Read from `ContractData Balance(Address)` ledger
+  STATE, never an event-fold (folds drift on vault / rebasing / non-SEP-41-event
+  tokens — see README DECISION 2026-06-29). `removed` / spent → `amount = 0`.
+  `holder_id = cityhash64(holder StrKey)` — a `G…` account or `C…` contract (~34% of
+  type-3 holders are contracts), in the one surrogate space shared with `accounts.id`
+  / `soroban_contracts.id`. Resolution back to a StrKey (for portfolio / top-holders)
+  is via `accounts` (G) / `soroban_contracts` (C); there is no dedicated address
+  dimension.
+- **`balance_aggregates`** (`asset_id`, `total_supply Nullable(Int128)`,
+  `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
+  (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over
+  `balances FINAL`, keyed by the `assets.id` surrogate. One 1:1 read join for ALL
+  asset types. **`total_supply` = `sum(amount)` is the SOLE supply source** — task
+  0331 Option A: a mint always credits a holder balance (often a contract treasury,
+  summed because holders include `C…`), so the sum equals real supply. No per-token
+  `TotalSupply` key read (it was optional — only ~73% of wasm expose it — and
+  seed-only/stale); the narrow residue (TTL-archived tail + true rebasing) is the
+  accepted non-100% cost. See README DECISION 2026-06-30.
+
+The historical set is seeded once by `backfill-runner balance-seed` (RPC snapshot:
+holders enumerated from `soroban_events`, `Balance(Address)` entries read via
+`getLedgerEntries`); live ingest maintains `balances` forward and supersedes the seed
+on catch-up. See the [indexing-pipeline overview §6.2](../indexing-pipeline/indexing-pipeline-overview.md).
+
 ## 5. Engine, partitioning, and ordering
 
 Resolved in
@@ -315,6 +349,17 @@ Highlights:
 
 - 32-byte `BYTEA` columns (hashes, `pool_id`, `wasm_hash`) become
   `FixedString(32)` in CH
+- `operations_appearances.pool_id` (PG scalar `BYTEA`, nullable) becomes
+  `pool_ids Array(FixedString(32))` (task 0261/0268): path payments
+  contribute every pool crossed by their result claim atoms, LP
+  deposit/withdraw a single element, `[]` = no pool involvement. Filter
+  with `has(pool_ids, unhex(...))`; PG keeps the legacy scalar (path
+  payments stay NULL there) pending retirement
+- `liquidity_pool_snapshots` carries the CH-only `gross_volume_a
+Nullable(Decimal128(7))` — per-(pool, ledger) trade volume in asset-A
+  units from path-payment claim atoms (derived at ingest by the live
+  indexer and, for history, by the 0266 backfill; USD `volume`/`fee_revenue`
+  stay NULL until the Prices API, ADR 0048)
 - `NUMERIC(28,7)` → `Decimal128(7)`
 - The only `TIMESTAMPTZ` column that survives is
   `ledgers.closed_at`, which becomes `DateTime64(3, 'UTC')`
@@ -704,6 +749,52 @@ correlated column …`. The live read path instead fetches the page of tx
 > reuse it for any new transaction-list module rather than the inline
 > correlated projection the reference SQL still shows (those files carry a
 > correction banner).
+
+> **CH read-cost correction — `contract_ids` is ops-only (task 0243).** The
+> reference SQL builds `contract_ids` from a 3-source UNION
+> (`operations_appearances` + `soroban_invocations_appearances` +
+> `soroban_events`) for full PG parity. Both `soroban_*` tables are
+> `ORDER BY (contract_id, …)`, so the per-page
+> `(ledger_sequence, transaction_id) IN (…)` key filter is a **partition scan**
+> on them, not a key seek. In production a single `/transactions` page read
+> ~1e8 rows and a handful of requests exhausted the `api_reader` `read_rows`
+> hourly quota (`Code: 201 QUOTA_EXCEEDED`), 500-ing every CH endpoint. The
+> live helper therefore sources `contract_ids` from `operations_appearances` > **only** (primary-key seek, ~hundreds of rows/page). **Parity cost:** a
+> contract touched solely via a nested sub-invocation or an emitted event
+> (never a root-op `contract_id`) is not listed; for the vast majority of
+> Soroban transactions the invoked contract IS the root-op `contract_id`, so
+> list-row `contract_ids` match PG in practice. A cheap full-parity path
+> (skip-index on `transaction_id`, or a precomputed per-tx `contract_ids`
+> column written at ingest) is a deferred follow-up.
+
+> **CH read-cost correction — list reads must stay on the primary key (task
+> 0243).** `... FINAL ... ORDER BY ... LIMIT` over a partition reads the
+> **whole partition** — FINAL merges it before the limit applies (~1.2e8
+> transactions on the mainnet head). Under frontend polling this exhausted the
+> `api_reader` `read_rows` hourly quota (CH `Code: 201`). The live read paths
+> were corrected to read in primary-key order:
+>
+> - **transactions list** (no filter, polled) drops FINAL and orders/keys on
+>   `(ledger_sequence, application_order)` — the table's physical sort key — so
+>   CH stops at the limit (~2e5 rows/page, validated). The cursor tie-break is
+>   `application_order` (also the correct in-ledger order; the `id` hash
+>   surrogate did not preserve it). The filtered statements still key on `id`.
+> - **filtered transactions list** (contract / op_type) must not join the
+>   driver to an unpruned `transactions FINAL` — that merges the whole 3.6B-row
+>   table per request (measured ~1e9+ rows; blew the quota). `transactions` is
+>   pruned to the driver's partition and streamed, the driver is the hash side
+>   (~2e8 rows/page, validated). Making the driver itself a seek (it scans the
+>   partition by `type` / `contract_id`, neither a PK prefix) needs a
+>   skip-index — deferred follow-up.
+> - **ledgers list** + **network stats** are ORDER BY `sequence`, not
+>   `closed_at`; both now drive off `sequence` (monotonic with `closed_at`) to
+>   stay on the primary key instead of scanning the ~12M-row table per request.
+>
+> FINAL is retained only for single-key / per-page key-seek reads (transaction
+> detail, embedded ledger transactions, the aggregate helper), where it is
+> cheap. This is the general rule for any new CH read path: a polled or
+> list-shaped query must read in primary-key order; reserve FINAL for reads
+> already bounded to a key seek.
 
 ---
 

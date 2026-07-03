@@ -7,6 +7,8 @@ import KeyboardReturnIcon from '@mui/icons-material/KeyboardReturn';
 
 import { monoFontFamily } from '../theme/typography.js';
 
+import { searchShortcutLabel } from './platform.js';
+
 export type SearchInputSize = 'md' | 'lg';
 
 export interface SearchInputProps {
@@ -14,6 +16,9 @@ export interface SearchInputProps {
   onChange: (value: string) => void;
   onSubmit?: () => void;
   onClear?: () => void;
+  /** Fired when the text input gains focus. Lets the caller re-open the
+   *  results dropdown when the field is re-focused with a query already in it. */
+  onFocus?: () => void;
   placeholder?: string;
   size?: SearchInputSize;
 }
@@ -23,6 +28,7 @@ export function SearchInput({
   onChange,
   onSubmit,
   onClear,
+  onFocus,
   placeholder = 'Search by TX hash, accounts, contract, token',
   size = 'md',
 }: SearchInputProps) {
@@ -47,6 +53,7 @@ export function SearchInput({
 
   return (
     <Box
+      data-search-input
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       sx={(theme) => ({
@@ -101,9 +108,13 @@ export function SearchInput({
             />
             <Box
               component="input"
+              data-global-search="true"
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              onFocus={() => setFocused(true)}
+              onFocus={() => {
+                setFocused(true);
+                onFocus?.();
+              }}
               onBlur={() => setFocused(false)}
               onKeyDown={handleKeyDown}
               autoFocus
@@ -192,9 +203,13 @@ export function SearchInput({
             />
             <Box
               component="input"
+              data-global-search="true"
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              onFocus={() => setFocused(true)}
+              onFocus={() => {
+                setFocused(true);
+                onFocus?.();
+              }}
               onBlur={() => setFocused(false)}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
@@ -236,7 +251,7 @@ export function SearchInput({
               noWrap
               sx={{ fontFamily: monoFontFamily }}
             >
-              CTRL + F
+              {searchShortcutLabel}
             </Typography>
           </Box>
         </>

@@ -5,7 +5,7 @@ import {
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo } from 'react';
+import { useMemo } from 'react';
 
 import { useNftsList } from '../api/index.js';
 
@@ -19,9 +19,10 @@ type Filters = NonNullable<ListNftsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function NftsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['collection', 'contract'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['collection', 'contract'],
+    });
   const collection = state.filters.collection ?? '';
   const contract = state.filters.contract ?? '';
   const hasFilters = collection !== '' || contract !== '';
@@ -37,10 +38,8 @@ export default function NftsListPage() {
     return filters;
   }, [collection, contract]);
 
-  const { data, isLoading, isError, error, refetch } = useNftsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useNftsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -48,11 +47,6 @@ export default function NftsListPage() {
     goNext,
     goPrev
   );
-
-  const handleClearFilters = useCallback(() => {
-    setFilter('collection', null);
-    setFilter('contract', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -71,15 +65,19 @@ export default function NftsListPage() {
         }
         columnCount={NFT_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <NftsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <NftsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="nft"
         emptyNoun="NFTs"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}

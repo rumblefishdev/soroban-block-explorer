@@ -23,6 +23,15 @@
 --     surfaces it as `metadata` on `NftDetailResponse`. The contract-
 --     defined JSONB shape is therefore intentionally not standardised
 --     in this file.
+--
+-- ClickHouse read path (task 0243 — MIGRATED; see crates/api/src/nfts/queries_ch.rs):
+--   • The wire `id` surrogate is dropped (external identity is the composite
+--     (contract_id, token_id) per task 0264 Phase 8a; CH has no surrogate).
+--   • `name`/`media_url`/`collection_name` come from `nft_enrichment`
+--     (`argMax(_, version)`), NOT the vestigial-NULL `nfts` columns.
+--   • `nfts n FINAL` (collapse re-ingest); plain no-FINAL LEFT JOINs to
+--     `accounts` (owner) / `soroban_contracts` — one id is a cheap bloom probe,
+--     so the restricted CTE the list uses is unnecessary for a single row.
 
 SELECT
     n.id,

@@ -25,6 +25,46 @@ export function formatAmount(
   }`;
 }
 
+/**
+ * Scales a RAW integer amount (string or number) by `decimals` into a decimal
+ * string with trailing zeros trimmed — e.g. `("500000000000000", 7)` →
+ * `"50000000"`, `("123", 7)` → `"0.0000123"`. BigInt keeps `Int128` token
+ * supplies / balances exact (raw amounts exceed `Number` precision). The API
+ * returns raw integers for all asset types (task 0331 Option C); callers pipe
+ * the result through `formatAmount` for display. `decimals <= 0` returns the
+ * integer unchanged. Returns `null` for null / negative / non-integer input so
+ * `formatAmount(null)` renders an em-dash.
+ */
+export function scaleByDecimals(
+  value: string | number | null | undefined,
+  decimals: number
+): string | null {
+  if (value == null) return null;
+  // Reject invalid decimals up front: null / undefined / NaN / fractional would
+  // throw in `BigInt(decimals)`, and `null <= 0` is `true` (would silently return
+  // the raw integer unscaled).
+  if (!Number.isInteger(decimals) || decimals < 0) return null;
+  let safe: bigint;
+  if (typeof value === 'number') {
+    // Reject non-integer (and non-finite) numbers rather than truncating — matches
+    // the string path's `/^\d+$/` and the JSDoc "null for non-integer" contract.
+    if (!Number.isInteger(value) || value < 0) return null;
+    safe = BigInt(value);
+  } else {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    safe = BigInt(trimmed);
+  }
+  if (decimals === 0) return safe.toString();
+  const scale = 10n ** BigInt(decimals);
+  const whole = safe / scale;
+  const frac = (safe % scale)
+    .toString()
+    .padStart(decimals, '0')
+    .replace(/0+$/, '');
+  return frac.length > 0 ? `${whole}.${frac}` : `${whole}`;
+}
+
 /** Module-level — Intl.NumberFormat construction is expensive enough
  *  to be worth caching across renders. */
 const COMPACT_FORMATTER = new Intl.NumberFormat('en-US', {

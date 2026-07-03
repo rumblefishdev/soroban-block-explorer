@@ -2,10 +2,104 @@
 //! `transaction_participants` includes source, so no UNION with `source_id`.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql};
+
+// ---------------------------------------------------------------------------
+// GET /v1/accounts (list)
+// ---------------------------------------------------------------------------
+
+/// Keyset cursor for the accounts list. Sort is `last_seen_ledger` with the
+/// surrogate `id` as the unique tiebreak (`last_seen_ledger` is not unique).
+/// Mirrors lp's `SharesCursor` (value + id) but uses `keyset_sql` so the
+/// base `?order=` can flip, like the ledgers list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountsListCursor {
+    pub last_seen_ledger: i64,
+    pub id: i64,
+}
+
+#[derive(Debug)]
+pub struct AccountListRow {
+    /// Surrogate id — cursor tiebreak only, never on the wire.
+    pub id: i64,
+    pub account_id: String,
+    pub xlm_balance: Option<String>,
+    pub last_seen_ledger: i64,
+    pub first_seen_ledger: i64,
+    pub home_domain: Option<String>,
+}
+
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<AccountsListCursor>,
+    pub with_domain: bool,
+}
+
+/// `xlm_balance` is the native row from `account_balances_current` (served by
+/// the partial unique index `uidx_abc_native (account_id) WHERE asset_type=0`);
+/// `None` when the account has no native balance row.
+const ACCOUNT_LIST_SELECT: &str = "SELECT a.id, \
+     a.account_id, \
+     a.last_seen_ledger, \
+     a.first_seen_ledger, \
+     a.home_domain, \
+     abc.balance::text AS xlm_balance \
+     FROM accounts a \
+     LEFT JOIN account_balances_current abc \
+       ON abc.account_id = a.id AND abc.asset_type = 0";
+
+fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bool) {
+    qb.push(if *has_where { " AND" } else { " WHERE" });
+    *has_where = true;
+}
+
+fn map_list_row(r: &PgRow) -> AccountListRow {
+    AccountListRow {
+        id: r.get("id"),
+        account_id: r.get("account_id"),
+        xlm_balance: r.get("xlm_balance"),
+        last_seen_ledger: r.get("last_seen_ledger"),
+        first_seen_ledger: r.get("first_seen_ledger"),
+        home_domain: r.get("home_domain"),
+    }
+}
+
+pub async fn fetch_list(
+    pool: &PgPool,
+    params: &ResolvedListParams,
+    sort: SortOrder,
+    direction: Direction,
+) -> Result<Vec<AccountListRow>, sqlx::Error> {
+    let (op, order) = keyset_sql(sort, direction);
+
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(ACCOUNT_LIST_SELECT);
+    let mut has_where = false;
+
+    if params.with_domain {
+        push_glue(&mut qb, &mut has_where);
+        qb.push(" a.home_domain IS NOT NULL");
+    }
+    if let Some(cursor) = &params.cursor {
+        push_glue(&mut qb, &mut has_where);
+        qb.push(format!(" (a.last_seen_ledger, a.id) {op} ("));
+        qb.push_bind(cursor.last_seen_ledger);
+        qb.push(", ");
+        qb.push_bind(cursor.id);
+        qb.push(")");
+    }
+
+    qb.push(format!(
+        " ORDER BY a.last_seen_ledger {order}, a.id {order} LIMIT "
+    ));
+    qb.push_bind(params.limit);
+
+    let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
+    Ok(raw.iter().map(map_list_row).collect())
+}
 
 #[derive(Debug)]
 pub struct AccountHeaderRow {
@@ -24,7 +118,11 @@ pub struct AccountBalanceRow {
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
+    pub contract_id: Option<String>,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
     pub balance: String,
+    pub decimals: u32,
     pub last_updated_ledger: i64,
 }
 
@@ -77,44 +175,8 @@ pub async fn fetch_account(
     }))
 }
 
-// ---------------------------------------------------------------------------
-// Detail balances query — canonical 06 Statement B
-// ---------------------------------------------------------------------------
-
-/// `account_id` is the surrogate from [`fetch_account`].
-pub async fn fetch_balances(
-    pool: &PgPool,
-    account_id: i64,
-) -> Result<Vec<AccountBalanceRow>, sqlx::Error> {
-    let raw: Vec<PgRow> = sqlx::query(
-        "SELECT \
-            asset_type_name(abc.asset_type) AS asset_type_name, \
-            abc.asset_type                  AS asset_type, \
-            abc.asset_code, \
-            iss.account_id                  AS asset_issuer, \
-            abc.balance::text               AS balance, \
-            abc.last_updated_ledger \
-         FROM account_balances_current abc \
-         LEFT JOIN accounts iss ON iss.id = abc.issuer_id \
-         WHERE abc.account_id = $1 \
-         ORDER BY abc.asset_type, abc.asset_code, iss.account_id",
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(raw
-        .iter()
-        .map(|r| AccountBalanceRow {
-            asset_type_name: r.get("asset_type_name"),
-            asset_type: r.get("asset_type"),
-            asset_code: r.get("asset_code"),
-            asset_issuer: r.get("asset_issuer"),
-            balance: r.get("balance"),
-            last_updated_ledger: r.get("last_updated_ledger"),
-        })
-        .collect())
-}
+// Detail balances are ClickHouse-only (unified `balances` model, task 0331); the
+// legacy PG `fetch_balances` over `account_balances_current` was cut (PG retired).
 
 // ---------------------------------------------------------------------------
 // Transactions query — canonical 07
@@ -128,11 +190,12 @@ pub async fn fetch_transactions(
     account_id: i64,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, sqlx::Error> {
     let cursor_ts = cursor.map(|c| c.ts);
     let cursor_id = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql(sort, direction);
 
     let sql = format!(
         "SELECT \

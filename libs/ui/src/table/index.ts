@@ -1,4 +1,8 @@
-export { ExplorerTable } from './ExplorerTable.js';
+export {
+  ExplorerTable,
+  EXPLORER_TABLE_ROW_HEIGHT,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
+} from './ExplorerTable.js';
 export type {
   ExplorerTableColumn,
   ExplorerTableProps,

@@ -19,7 +19,6 @@
 
 use core::str::FromStr;
 
-use domain::TokenAssetType;
 use sha2::{Digest, Sha256};
 use stellar_xdr::curr::{
     AccountId, AlphaNum4, AlphaNum12, Asset, AssetCode4, AssetCode12, ContractId,
@@ -27,11 +26,10 @@ use stellar_xdr::curr::{
     HashIdPreimageContractId, HostFunction, Limits, OperationBody, ScAddress,
     SorobanAuthorizedFunction, SorobanAuthorizedInvocation, WriteXdr,
 };
-use tracing::{instrument, warn};
 
 use crate::envelope::InnerTxRef;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::types::{ExtractedAsset, SacAssetIdentity};
+use crate::types::SacAssetIdentity;
 
 pub const MAINNET_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
 pub const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
@@ -81,13 +79,29 @@ pub fn derive_sac_contract_id(
     Ok(ScAddress::Contract(ContractId(Hash(digest))).to_string())
 }
 
-/// Forward-derived SAC `(contract_id, identity)` pair (task 0218).
+/// Re-derive a classic / native asset's SAC `C…` StrKey from its identity
+/// (ADR 0051). The StrKey is **not stored** — the API derives it on read for
+/// display, since it is a pure function of `code:issuer`. Empty `asset_code`
+/// AND `issuer` ⇒ the native (XLM) SAC. Returns `None` for a malformed issuer
+/// StrKey or an over-long code (caller renders no contract link).
+pub fn derive_sac_strkey(asset_code: &str, issuer: &str, network_id: &[u8; 32]) -> Option<String> {
+    let asset = if asset_code.is_empty() && issuer.is_empty() {
+        Asset::Native
+    } else {
+        let issuer_acct = AccountId::from_str(issuer).ok()?;
+        build_credit_asset(asset_code, issuer_acct).ok()?
+    };
+    let preimage = ContractIdPreimage::Asset(asset);
+    derive_sac_contract_id(&preimage, network_id).ok()
+}
+
+/// Crypto-proven un-deployed-SAC `(contract_id, identity)` pair (task 0323).
 ///
-/// Produced by [`derive_sac_overrides_from_assets`] for every observed
-/// classic-credit / native asset; consumed by the indexer persist path
-/// to flip `is_sac=true` + `sac_asset` on pre-existing SAC contracts
-/// whose `create_contract` op happened before the indexed window and
-/// therefore left the row as a skeleton.
+/// Produced by `detect_undeployed_sac_overrides` for every event-emitting
+/// un-deployed SAC in a ledger (the `sac_override_from_event_topics` gate).
+/// On the CH path each (a) suppresses the Pass-2 FK stub (no contract row) and
+/// (b) seeds a SAC `assets` row from its identity. (The legacy PG persist path
+/// still consumes them to flip `is_sac=true` on pre-window SAC skeletons.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SacOverride {
     /// Derived SAC `C…` StrKey for the asset.
@@ -97,113 +111,100 @@ pub struct SacOverride {
     pub identity: SacAssetIdentity,
 }
 
-/// Derive the SAC `contract_id` for every observed classic / native asset.
+/// Crypto-match-gated SAC override for a single event's `(emitter, topics)`.
 ///
-/// Native and classic-credit assets each have a single deterministic SAC
-/// contract_id (per network). The derivation is the same as
-/// [`derive_sac_contract_id`] applied to `ContractIdPreimage::Asset(...)`;
-/// this helper just walks the asset list and emits one [`SacOverride`]
-/// per derivable entry.
+/// Returns `Some` only when `emitter` IS the SAC contract for the asset carried
+/// in the event's LAST topic (`emitter == derive_sac(asset)`) and the event's
+/// first topic is a SAC-control signature. Shared gate (task 0294) for the live
+/// NFT-detection path ([`crate::detect_nft_events`], which skips a crypto-proven
+/// SAC event before it can be minted as a false NFT candidate) and the batch
+/// orphan-relabel pass — both apply the identical gate so a bespoke WASM emitter
+/// of a SAC-shaped event is never mislabeled `is_sac`.
 ///
-/// `TokenAssetType::Sac` and `TokenAssetType::Soroban` assets are skipped:
-///
-/// - `Sac` already carries the observed `contract_id` from the
-///   in-window `create_contract` op (and its `soroban_contracts` row is
-///   already `is_sac=true`).
-/// - `Soroban` is a bespoke contract token with no SAC mapping.
-///
-/// Derivation errors (malformed issuer StrKey, XDR serialize failure)
-/// are `warn!`-logged and skipped — they must not fail the persist tx.
-#[instrument(skip(assets), fields(asset_count = assets.len()))]
-pub fn derive_sac_overrides_from_assets(
-    assets: &[ExtractedAsset],
-    network_passphrase: &str,
-) -> Vec<SacOverride> {
-    let net_id = network_id(network_passphrase);
-    let mut out: Vec<SacOverride> = Vec::new();
-
-    for asset in assets {
-        match asset.asset_type {
-            TokenAssetType::Native => {
-                let preimage = ContractIdPreimage::Asset(Asset::Native);
-                match derive_sac_contract_id(&preimage, &net_id) {
-                    Ok(contract_id) => out.push(SacOverride {
-                        contract_id,
-                        identity: SacAssetIdentity::Native,
-                    }),
-                    Err(e) => warn!(
-                        target: "xdr_parser::sac",
-                        error = %e.message,
-                        "SAC derive failed for native asset",
-                    ),
-                }
-            }
-            TokenAssetType::ClassicCredit => {
-                let Some(code) = asset.asset_code.as_ref() else {
-                    warn!(
-                        target: "xdr_parser::sac",
-                        "classic_credit asset missing asset_code; skipping SAC derive",
-                    );
-                    continue;
-                };
-                let Some(issuer) = asset.issuer_address.as_ref() else {
-                    warn!(
-                        target: "xdr_parser::sac",
-                        code = %code,
-                        "classic_credit asset missing issuer; skipping SAC derive",
-                    );
-                    continue;
-                };
-                let issuer_acct = match AccountId::from_str(issuer) {
-                    Ok(acct) => acct,
-                    Err(_) => {
-                        warn!(
-                            target: "xdr_parser::sac",
-                            code = %code,
-                            issuer = %issuer,
-                            "invalid issuer StrKey; skipping SAC derive",
-                        );
-                        continue;
-                    }
-                };
-                let xdr_asset = match build_credit_asset(code, issuer_acct) {
-                    Ok(a) => a,
-                    Err(()) => {
-                        warn!(
-                            target: "xdr_parser::sac",
-                            code = %code,
-                            "asset_code too long for AlphaNum12; skipping SAC derive",
-                        );
-                        continue;
-                    }
-                };
-                let preimage = ContractIdPreimage::Asset(xdr_asset);
-                match derive_sac_contract_id(&preimage, &net_id) {
-                    Ok(contract_id) => out.push(SacOverride {
-                        contract_id,
-                        identity: SacAssetIdentity::Credit {
-                            code: code.clone(),
-                            issuer: issuer.clone(),
-                        },
-                    }),
-                    Err(e) => warn!(
-                        target: "xdr_parser::sac",
-                        code = %code,
-                        issuer = %issuer,
-                        error = %e.message,
-                        "SAC derive failed for classic_credit asset",
-                    ),
-                }
-            }
-            // SAC contracts already carry their observed contract_id from the
-            // in-window create_contract op; no forward derivation needed.
-            TokenAssetType::Sac => {}
-            // Soroban-native tokens are bespoke contracts with no SAC mapping.
-            TokenAssetType::Soroban => {}
-        }
+/// `net_id` is `network_id(passphrase)` — hoist it out of any loop.
+pub fn sac_override_from_event_topics(
+    emitter: &str,
+    topics: &serde_json::Value,
+    net_id: &[u8; 32],
+) -> Option<SacOverride> {
+    let topics = topics.as_array()?;
+    // Signature topic + the trailing asset topic at minimum.
+    if topics.len() < 2 {
+        return None;
     }
+    let signature = topic_symbol_value(&topics[0]);
+    if !SAC_CONTROL_EVENT_SIGNATURES
+        .iter()
+        .any(|s| signature.eq_ignore_ascii_case(s))
+    {
+        return None;
+    }
+    // The SEP-11 asset string rides in the LAST topic across every SAC event
+    // shape — CAP-67 §"Unified Asset Events" defines transfer/mint/burn/clawback/
+    // set_authorized all as `[sym, …, sep0011_asset]` (asset last; the i128 is in
+    // `data`, never a topic). This is the load-bearing invariant: the gate keys
+    // off the last topic being the asset string, so a (hypothetical) SAC event
+    // that ever omitted the asset topic would NOT be gated and could re-open the
+    // false-NFT path. Spec-verified + mainnet-confirmed (every sampled SAC event
+    // carries it); a non-SAC contract's last topic is an address/scalar, so it
+    // returns None below and is unaffected.
+    let asset_str = topics.last().and_then(topic_string_value)?;
+    let asset = parse_sac_asset_string(&asset_str)?;
+    let preimage = ContractIdPreimage::Asset(asset.clone());
+    let derived = derive_sac_contract_id(&preimage, net_id).ok()?;
+    // Crypto-match gate (task 0294 C1): a contract is the asset's SAC only if
+    // its own id IS the derived SAC id.
+    if derived != emitter {
+        return None;
+    }
+    Some(SacOverride {
+        contract_id: derived,
+        identity: asset_to_identity(&asset),
+    })
+}
 
-    out
+/// Classic-asset SAC control-event signatures. `transfer`/`mint`/`burn` are
+/// shared with bespoke tokens, but `clawback`/`set_authorized` are SAC-only
+/// (a custom Soroban NFT never emits them). The crypto-match gate in
+/// [`sac_override_from_event_topics`] is what makes the shared signatures
+/// safe to act on.
+const SAC_CONTROL_EVENT_SIGNATURES: &[&str] =
+    &["transfer", "mint", "burn", "clawback", "set_authorized"];
+
+/// Extract an `ScVal::Symbol` string from a tagged JSON topic (`type: "sym"`).
+/// Shared with NFT detection (`crate::nft`) — one canonical copy.
+pub(crate) fn topic_symbol_value(topic: &serde_json::Value) -> String {
+    if topic.get("type").and_then(|v| v.as_str()) == Some("sym")
+        && let Some(s) = topic.get("value").and_then(|v| v.as_str())
+    {
+        return s.to_string();
+    }
+    String::new()
+}
+
+/// Extract an `ScVal::String` value from a tagged JSON topic (`type: "string"`).
+fn topic_string_value(topic: &serde_json::Value) -> Option<String> {
+    if topic.get("type").and_then(|v| v.as_str()) == Some("string")
+        && let Some(s) = topic.get("value").and_then(|v| v.as_str())
+        && !s.is_empty()
+    {
+        return Some(s.to_string());
+    }
+    None
+}
+
+/// Parse a SEP-11 asset string (`"native"` or `"CODE:ISSUER"`) into an XDR
+/// `Asset`. Returns `None` for malformed strings or invalid issuer StrKeys.
+fn parse_sac_asset_string(s: &str) -> Option<Asset> {
+    if s == "native" {
+        return Some(Asset::Native);
+    }
+    let (code, issuer) = s.split_once(':')?;
+    if code.is_empty() {
+        return None;
+    }
+    let issuer_acct = AccountId::from_str(issuer).ok()?;
+    build_credit_asset(code, issuer_acct).ok()
 }
 
 /// Build the XDR `Asset` for a classic credit asset given `(code, issuer)`.
@@ -395,169 +396,6 @@ mod tests {
         );
     }
 
-    // ----------------------------------------------------------------------
-    // Task 0218 — `derive_sac_overrides_from_assets`
-    // ----------------------------------------------------------------------
-
-    fn native_asset_input() -> ExtractedAsset {
-        ExtractedAsset {
-            asset_type: TokenAssetType::Native,
-            asset_code: None,
-            issuer_address: None,
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        }
-    }
-
-    fn classic_credit_asset_input(code: &str, issuer: &str) -> ExtractedAsset {
-        ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
-            asset_code: Some(code.to_string()),
-            issuer_address: Some(issuer.to_string()),
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        }
-    }
-
-    #[test]
-    fn overrides_native_xlm_maps_to_mainnet_sac() {
-        let overrides =
-            derive_sac_overrides_from_assets(&[native_asset_input()], MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 1);
-        assert_eq!(
-            overrides[0].contract_id,
-            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
-        );
-        assert_eq!(overrides[0].identity, SacAssetIdentity::Native);
-    }
-
-    #[test]
-    fn overrides_usdc_classic_credit_maps_to_mainnet_sac() {
-        let usdc = classic_credit_asset_input(
-            "USDC",
-            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        );
-        let overrides = derive_sac_overrides_from_assets(&[usdc], MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 1);
-        assert_eq!(
-            overrides[0].contract_id,
-            "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75"
-        );
-        assert_eq!(
-            overrides[0].identity,
-            SacAssetIdentity::Credit {
-                code: "USDC".into(),
-                issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn overrides_alphanum12_code_uses_credit_alphanum12_path() {
-        // Codes 5–12 bytes select `CreditAlphanum12`. Compare against a
-        // direct `derive_sac_contract_id` call with the same XDR shape to
-        // pin down the wrapper's behaviour.
-        let issuer_strkey = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-        let asset = classic_credit_asset_input("LONGCODE", issuer_strkey);
-        let overrides = derive_sac_overrides_from_assets(&[asset], MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 1);
-
-        let issuer = AccountId::from_str(issuer_strkey).unwrap();
-        let mut padded = [0u8; 12];
-        padded[..8].copy_from_slice(b"LONGCODE");
-        let direct = derive_sac_contract_id(
-            &ContractIdPreimage::Asset(Asset::CreditAlphanum12(AlphaNum12 {
-                asset_code: AssetCode12(padded),
-                issuer,
-            })),
-            &network_id(MAINNET_PASSPHRASE),
-        )
-        .unwrap();
-        assert_eq!(overrides[0].contract_id, direct);
-    }
-
-    #[test]
-    fn overrides_sac_and_soroban_assets_are_skipped() {
-        // SAC already carries its observed contract_id; Soroban-native
-        // has no SAC mapping. Both contribute zero overrides.
-        let sac = ExtractedAsset {
-            asset_type: TokenAssetType::Sac,
-            asset_code: Some("USDC".into()),
-            issuer_address: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
-            contract_id: Some("CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75".into()),
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let soroban = ExtractedAsset {
-            asset_type: TokenAssetType::Soroban,
-            asset_code: None,
-            issuer_address: None,
-            contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let overrides = derive_sac_overrides_from_assets(&[sac, soroban], MAINNET_PASSPHRASE);
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn overrides_classic_credit_with_invalid_issuer_strkey_is_skipped() {
-        // Malformed issuer must not panic the derive; warn-log + skip.
-        let asset = classic_credit_asset_input("USDC", "not-a-valid-strkey");
-        let overrides = derive_sac_overrides_from_assets(&[asset], MAINNET_PASSPHRASE);
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn overrides_classic_credit_missing_code_or_issuer_is_skipped() {
-        let no_code = ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
-            asset_code: None,
-            issuer_address: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let no_issuer = ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
-            asset_code: Some("USDC".into()),
-            issuer_address: None,
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let overrides = derive_sac_overrides_from_assets(&[no_code, no_issuer], MAINNET_PASSPHRASE);
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn overrides_emits_one_per_observed_asset_in_input_order() {
-        // Deterministic order — important for the persist UPDATE binding
-        // (UNNEST aligns positionally).
-        let assets = vec![
-            native_asset_input(),
-            classic_credit_asset_input(
-                "USDC",
-                "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-            ),
-        ];
-        let overrides = derive_sac_overrides_from_assets(&assets, MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 2);
-        assert_eq!(overrides[0].identity, SacAssetIdentity::Native);
-        assert!(matches!(
-            overrides[1].identity,
-            SacAssetIdentity::Credit { .. }
-        ));
-    }
-
     // -- Factory SAC: CreateContractHostFn carried inside auth entries --
 
     use stellar_xdr::curr::{
@@ -668,5 +506,28 @@ mod tests {
             pairs[0].0, "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
             "USDC mainnet SAC contract_id derived from nested auth invocation"
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // Task 0294 — `sac_override_from_event_topics` (the shared SAC gate)
+    // ----------------------------------------------------------------------
+
+    const USDC_SAC: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+    const NATIVE_SAC: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+
+    #[test]
+    fn helper_override_from_topics_positive_and_gate() {
+        let net = network_id(MAINNET_PASSPHRASE);
+        let topics = serde_json::json!([
+            {"type": "sym", "value": "transfer"},
+            {"type": "address", "value": "GFROM"},
+            {"type": "address", "value": "GTO"},
+            {"type": "string", "value": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"},
+        ]);
+        // positive: emitter IS the USDC SAC
+        let ov = sac_override_from_event_topics(USDC_SAC, &topics, &net);
+        assert_eq!(ov.expect("override").contract_id, USDC_SAC);
+        // gate: wrong emitter (native SAC id) → rejected
+        assert!(sac_override_from_event_topics(NATIVE_SAC, &topics, &net).is_none());
     }
 }

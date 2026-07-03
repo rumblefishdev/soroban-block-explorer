@@ -5,20 +5,48 @@ export type ClientOptions = {
 };
 
 /**
- * Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.
+ * Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have
+ * both; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`
+ * instead (the account portfolio includes Soroban balances, task 0331 Option C).
  */
 export type AccountBalance = {
   asset_code?: string | null;
   asset_issuer?: string | null;
   /**
-   * `native` | `credit_alphanum4` | `credit_alphanum12`.
+   * Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`
+   * | `credit_alphanum12` for classic. Soroban (type-3) rows are also returned
+   * — identify them via `contract_id`, not this label.
    */
   asset_type_name?: string | null;
   /**
-   * `NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros).
+   * RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
+   * Option C: one convention for all asset types; classic `decimals` = 7). The
+   * account portfolio now includes Soroban (type-3) token balances too.
    */
   balance: string;
+  /**
+   * C-strkey of the Soroban token's contract (type-3 only) — the identity +
+   * link target (`/assets/${contract_id}`). `null` for native / classic.
+   */
+  contract_id?: string | null;
+  /**
+   * Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
+   */
+  decimals: number;
   last_updated_ledger: number;
+  /**
+   * Asset display `name`, from two disjoint sources by asset type: classic /
+   * native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
+   * assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+   * Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
+   * `null` when neither source has a name.
+   */
+  name?: string | null;
+  /**
+   * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+   * ticker. `null` for native / classic (they carry `asset_code`).
+   */
+  symbol?: string | null;
   /**
    * Raw SMALLINT — stable across label renames.
    */
@@ -28,10 +56,35 @@ export type AccountBalance = {
 export type AccountDetailResponse = {
   account_id: string;
   balances: Array<AccountBalance>;
+  /**
+   * `true` when the account was removed from the ledger via `account_merge`
+   * and never re-funded (its last lifecycle event is the merge). Derived,
+   * not stored. CH-only — the PG fallback always reports `false`.
+   */
+  deleted: boolean;
   first_seen_ledger: number;
   home_domain?: string | null;
   last_seen_ledger: number;
   sequence_number: number;
+};
+
+/**
+ * One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
+ * first/last-seen activity window + `home_domain`. Ordered by
+ * `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native
+ * balance from the unified `balances` table; `null` if no native row exists.
+ */
+export type AccountListItem = {
+  account_id: string;
+  first_seen_ledger: number;
+  home_domain?: string | null;
+  last_seen_ledger: number;
+  /**
+   * Native (XLM) balance as a RAW `Int128` stroop string (human value =
+   * ÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as
+   * the account-detail balances.
+   */
+  xlm_balance?: string | null;
 };
 
 /**
@@ -72,22 +125,67 @@ export type AccountTransactionItem = {
 export type AssetDetailResponse = {
   asset_code?: string | null;
   /**
-   * Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).
+   * Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
    */
   asset_type: number;
   /**
-   * `native | classic_credit | sac | soroban`. `null` only on schema drift.
+   * `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
+   * only on schema drift.
    */
   asset_type_name?: string | null;
+  /**
+   * Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where
+   * the contract IS the asset. `null` for native / classic_credit (a wrapping
+   * SAC's address rides in `sac_contract_id`).
+   */
   contract_id?: string | null;
   /**
-   * May be `null` / stale until task 0135 ships.
+   * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+   * (Stellar classic precision). Load-bearing for amount rendering.
+   */
+  decimals: number;
+  /**
+   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+   * (all asset types — trustline holders + contract holders). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
-  id: number;
+  /**
+   * Canonical identifier — the single token usable as `/assets/{id}`:
+   * the reserved `native` token for native XLM, the contract StrKey
+   * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+   * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+   * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+   * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+   * with no surrogate.
+   */
+  id: string;
   issuer?: string | null;
   name?: string | null;
+  /**
+   * SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey
+   * for a native / classic_credit asset that has one, re-derived on read from
+   * `code:issuer` (never stored). `null` when the asset has no observed SAC.
+   */
+  sac_contract_id?: string | null;
+  /**
+   * Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`
+   * when the asset has no SAC; `false` = reserved-but-un-deployed address
+   * (render the contract link non-clickable).
+   */
+  sac_deployed?: boolean | null;
+  /**
+   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * (use `asset_code`) and native.
+   */
+  symbol?: string | null;
+  /**
+   * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+   * display (task 0331 Option C: one convention for ALL asset types; classic
+   * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+   * unified `balances` table.
+   */
   total_supply?: string | null;
 } & {
   /**
@@ -106,22 +204,67 @@ export type AssetDetailResponse = {
 export type AssetItem = {
   asset_code?: string | null;
   /**
-   * Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).
+   * Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
    */
   asset_type: number;
   /**
-   * `native | classic_credit | sac | soroban`. `null` only on schema drift.
+   * `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
+   * only on schema drift.
    */
   asset_type_name?: string | null;
+  /**
+   * Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where
+   * the contract IS the asset. `null` for native / classic_credit (a wrapping
+   * SAC's address rides in `sac_contract_id`).
+   */
   contract_id?: string | null;
   /**
-   * May be `null` / stale until task 0135 ships.
+   * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+   * (Stellar classic precision). Load-bearing for amount rendering.
+   */
+  decimals: number;
+  /**
+   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+   * (all asset types — trustline holders + contract holders). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
-  id: number;
+  /**
+   * Canonical identifier — the single token usable as `/assets/{id}`:
+   * the reserved `native` token for native XLM, the contract StrKey
+   * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+   * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+   * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+   * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+   * with no surrogate.
+   */
+  id: string;
   issuer?: string | null;
   name?: string | null;
+  /**
+   * SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey
+   * for a native / classic_credit asset that has one, re-derived on read from
+   * `code:issuer` (never stored). `null` when the asset has no observed SAC.
+   */
+  sac_contract_id?: string | null;
+  /**
+   * Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`
+   * when the asset has no SAC; `false` = reserved-but-un-deployed address
+   * (render the contract link non-clickable).
+   */
+  sac_deployed?: boolean | null;
+  /**
+   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * (use `asset_code`) and native.
+   */
+  symbol?: string | null;
+  /**
+   * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+   * display (task 0331 Option C: one convention for ALL asset types; classic
+   * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+   * unified `balances` table.
+   */
   total_supply?: string | null;
 };
 
@@ -181,11 +324,111 @@ export type ContractDetailResponse = {
   deployer?: string | null;
   is_sac: boolean;
   stats: ContractStats;
+  /**
+   * Task 0327: contract mutability, 3-state.
+   * - `Some(true)` → **Upgradeable**: the current WASM imports
+   * `update_current_contract_wasm` (a self-upgrade path).
+   * - `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC
+   * has no WASM and is always `Some(false)`).
+   * - `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /
+   * pre-0327 row) — the frontend renders no chip.
+   *
+   * Derived from the WASM at parse time
+   * (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
+   * (none exists). ClickHouse-sourced; always `None` on the retired PG path.
+   */
+  upgradeable?: boolean | null;
   wasm_hash?: string | null;
   wasm_uploaded_at_ledger?: number | null;
 };
 
+/**
+ * One parameter on a Soroban contract function signature.
+ */
+export type ContractFunctionParam = {
+  name: string;
+  type_name: string;
+};
+
+/**
+ * A single public function signature extracted from a Soroban contract's
+ * WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+ * the indexer-side source of the persisted shape.
+ */
+export type ContractFunctionSig = {
+  /**
+   * Documentation string; may be empty.
+   */
+  doc: string;
+  inputs: Array<ContractFunctionParam>;
+  name: string;
+  /**
+   * Output type names; empty array == void return.
+   */
+  outputs: Array<string>;
+};
+
+/**
+ * Soroban contract interface metadata persisted in
+ * `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+ * indexer's `xdr_parser::types::ContractInterface` exactly — the API
+ * hands the same JSON object to clients that the indexer wrote.
+ */
+export type ContractInterfaceMetadata = {
+  functions: Array<ContractFunctionSig>;
+  /**
+   * Raw WASM byte length (informational).
+   */
+  wasm_byte_len: number;
+};
+
+/**
+ * One row of `GET /v1/contracts`. Identity + classification + deploy
+ * provenance + a 7-day activity signal. All fields come straight from
+ * `soroban_contracts` (+ a deployer join and a windowed invocation count);
+ * nullable fields are `None` until the contract's deploy is observed.
+ */
+export type ContractListItem = {
+  contract_id: string;
+  /**
+   * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+   * until deployment is observed.
+   */
+  contract_type?: number | null;
+  /**
+   * `token | other | nft | fungible`. `null` only on schema drift / no type.
+   */
+  contract_type_name?: string | null;
+  /**
+   * Ledger the deploy was observed at; `null` until then.
+   */
+  deployed_at_ledger?: number | null;
+  /**
+   * Deployer account G-strkey; `null` until the deploy op is observed.
+   */
+  deployer?: string | null;
+  /**
+   * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+   */
+  is_sac: boolean;
+  /**
+   * Invocation count over the last 7 days (windowed; matches the detail
+   * `ContractStats.recent_invocations` semantics).
+   */
+  recent_invocations: number;
+};
+
 export type ContractStats = {
+  /**
+   * Event count in the same window as `recent_invocations` (NOT the full
+   * `/events` history — that endpoint pages all events with no time bound).
+   * PG sums `soroban_events_appearances.amount` (one appearance row folds
+   * multiple events, `amount > 1`); CH has no appearance-fold table, so it
+   * `count()`s the unfolded `soroban_events` (one row per event). Both tables
+   * are written from the same parser event stream (diagnostics dropped at
+   * parse, System + Contract kept), so the two figures match by construction.
+   */
+  recent_events: number;
   recent_invocations: number;
   recent_unique_callers: number;
   /**
@@ -380,7 +623,7 @@ export type HeavyFieldsStatus = 'ok' | 'unavailable';
  */
 export type InterfaceResponse = {
   contract_id: string;
-  interface_metadata?: unknown;
+  interface_metadata?: null | ContractInterfaceMetadata;
   wasm_hash?: string | null;
 };
 
@@ -535,7 +778,6 @@ export type NftDetailResponse = {
    * Contract C-StrKey resolved via `soroban_contracts` join.
    */
   contract_id: string;
-  id: number;
   /**
    * Most recent ledger where ownership state changed
    * (`nfts.current_owner_ledger`).
@@ -564,6 +806,12 @@ export type NftDetailResponse = {
  * One NFT row. Same shape on `GET /v1/nfts` list rows and as the
  * flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
  * to canonical SQL `15_get_nfts_list.sql` for the column projection.
+ *
+ * The numeric surrogate `id` was dropped (task 0243 NFT slice): the
+ * external NFT identity is the composite `(contract_id, token_id)` per
+ * task 0264 Phase 8a, and ClickHouse — the production datastore — has no
+ * surrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This
+ * mirrors the assets `:id`-surrogate drop (PR #175).
  */
 export type NftItem = {
   collection_name?: string | null;
@@ -571,7 +819,6 @@ export type NftItem = {
    * Contract C-StrKey resolved via `soroban_contracts` join.
    */
   contract_id: string;
-  id: number;
   /**
    * Most recent ledger where ownership state changed
    * (`nfts.current_owner_ledger`).
@@ -649,11 +896,23 @@ export type OperationItem = {
   destination_account?: string | null;
   ledger_sequence: number;
   /**
-   * Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded
-   * from the DB hex form at the response boundary so cross-entity
-   * link targets match the `/v1/liquidity-pools/:id` route shape.
+   * Liquidity pools crossed by this operation, as SEP-23 strkeys
+   * (`L...`, 56 chars). Encoded from the DB hex form at the response
+   * boundary so cross-entity link targets match the
+   * `/v1/liquidity-pools/:id` route shape. Single-element for LP
+   * deposit/withdraw; the full crossed-pool list for path payments and
+   * offers that filled against a pool (task 0261/0268 — replaces the
+   * former nullable scalar `pool_id`).
+   *
+   * **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
+   * pool" **only** for ClickHouse-served responses. The Postgres backend
+   * (default until each module flips to CH, per task 0243) never received
+   * the claim-atom extraction, so it returns `[]` for *every* path-payment
+   * and offer op regardless of whether a pool was crossed — only LP
+   * deposit/withdraw carry a pool there. Treat `[]` as authoritative for
+   * pool absence only once the module reads from CH.
    */
-  pool_id?: string | null;
+  pool_ids: Array<string>;
   source_account?: string | null;
   /**
    * Raw `OperationType` SMALLINT (ADR 0031).
@@ -665,6 +924,40 @@ export type OperationItem = {
    */
   type_name: string;
 };
+
+/**
+ * Stellar operation type. Discriminants match the XDR numbering; the
+ * serde representation is the canonical SCREAMING_SNAKE_CASE label used
+ * by the Horizon API and historically persisted as VARCHAR.
+ */
+export type OperationType =
+  | 'CREATE_ACCOUNT'
+  | 'PAYMENT'
+  | 'PATH_PAYMENT_STRICT_RECEIVE'
+  | 'MANAGE_SELL_OFFER'
+  | 'CREATE_PASSIVE_SELL_OFFER'
+  | 'SET_OPTIONS'
+  | 'CHANGE_TRUST'
+  | 'ALLOW_TRUST'
+  | 'ACCOUNT_MERGE'
+  | 'INFLATION'
+  | 'MANAGE_DATA'
+  | 'BUMP_SEQUENCE'
+  | 'MANAGE_BUY_OFFER'
+  | 'PATH_PAYMENT_STRICT_SEND'
+  | 'CREATE_CLAIMABLE_BALANCE'
+  | 'CLAIM_CLAIMABLE_BALANCE'
+  | 'BEGIN_SPONSORING_FUTURE_RESERVES'
+  | 'END_SPONSORING_FUTURE_RESERVES'
+  | 'REVOKE_SPONSORSHIP'
+  | 'CLAWBACK'
+  | 'CLAWBACK_CLAIMABLE_BALANCE'
+  | 'SET_TRUST_LINE_FLAGS'
+  | 'LIQUIDITY_POOL_DEPOSIT'
+  | 'LIQUIDITY_POOL_WITHDRAW'
+  | 'INVOKE_HOST_FUNCTION'
+  | 'EXTEND_FOOTPRINT_TTL'
+  | 'RESTORE_FOOTPRINT';
 
 /**
  * Pagination metadata attached to list responses.
@@ -720,6 +1013,31 @@ export type PageInfo = {
  * when M2 endpoint modules are wired in. Unused in M1 — kept as
  * infrastructure that M2 endpoints will consume.
  */
+export type PaginatedAccountListItem = {
+  data: Array<{
+    account_id: string;
+    first_seen_ledger: number;
+    home_domain?: string | null;
+    last_seen_ledger: number;
+    /**
+     * Native (XLM) balance as a RAW `Int128` stroop string (human value =
+     * ÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as
+     * the account-detail balances.
+     */
+    xlm_balance?: string | null;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
 export type PaginatedAccountTransactionItem = {
   data: Array<{
     /**
@@ -758,22 +1076,67 @@ export type PaginatedAssetItem = {
   data: Array<{
     asset_code?: string | null;
     /**
-     * Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).
+     * Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
      */
     asset_type: number;
     /**
-     * `native | classic_credit | sac | soroban`. `null` only on schema drift.
+     * `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
+     * only on schema drift.
      */
     asset_type_name?: string | null;
+    /**
+     * Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where
+     * the contract IS the asset. `null` for native / classic_credit (a wrapping
+     * SAC's address rides in `sac_contract_id`).
+     */
     contract_id?: string | null;
     /**
-     * May be `null` / stale until task 0135 ships.
+     * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+     * (Stellar classic precision). Load-bearing for amount rendering.
+     */
+    decimals: number;
+    /**
+     * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+     * (all asset types — trustline holders + contract holders). `null` = no data.
      */
     holder_count?: number | null;
     icon_url?: string | null;
-    id: number;
+    /**
+     * Canonical identifier — the single token usable as `/assets/{id}`:
+     * the reserved `native` token for native XLM, the contract StrKey
+     * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+     * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+     * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+     * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+     * with no surrogate.
+     */
+    id: string;
     issuer?: string | null;
     name?: string | null;
+    /**
+     * SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey
+     * for a native / classic_credit asset that has one, re-derived on read from
+     * `code:issuer` (never stored). `null` when the asset has no observed SAC.
+     */
+    sac_contract_id?: string | null;
+    /**
+     * Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051). `null`
+     * when the asset has no SAC; `false` = reserved-but-un-deployed address
+     * (render the contract link non-clickable).
+     */
+    sac_deployed?: boolean | null;
+    /**
+     * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+     * (use `asset_code`) and native.
+     */
+    symbol?: string | null;
+    /**
+     * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+     * display (task 0331 Option C: one convention for ALL asset types; classic
+     * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+     * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+     * unified `balances` table.
+     */
     total_supply?: string | null;
   }>;
   page: PageInfo;
@@ -802,6 +1165,48 @@ export type PaginatedAssetTransactionItem = {
     operation_types: Array<string>;
     source_account: string;
     successful: boolean;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
+export type PaginatedContractListItem = {
+  data: Array<{
+    contract_id: string;
+    /**
+     * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+     * until deployment is observed.
+     */
+    contract_type?: number | null;
+    /**
+     * `token | other | nft | fungible`. `null` only on schema drift / no type.
+     */
+    contract_type_name?: string | null;
+    /**
+     * Ledger the deploy was observed at; `null` until then.
+     */
+    deployed_at_ledger?: number | null;
+    /**
+     * Deployer account G-strkey; `null` until the deploy op is observed.
+     */
+    deployer?: string | null;
+    /**
+     * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+     */
+    is_sac: boolean;
+    /**
+     * Invocation count over the last 7 days (windowed; matches the detail
+     * `ContractStats.recent_invocations` semantics).
+     */
+    recent_invocations: number;
   }>;
   page: PageInfo;
 };
@@ -894,7 +1299,6 @@ export type PaginatedNftItem = {
      * Contract C-StrKey resolved via `soroban_contracts` join.
      */
     contract_id: string;
-    id: number;
     /**
      * Most recent ledger where ownership state changed
      * (`nfts.current_owner_ledger`).
@@ -1085,7 +1489,14 @@ export type PaginatedTransactionListItem = {
      */
     application_order: number;
     /**
-     * All C-StrKeys touched anywhere in the transaction.
+     * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+     * On the ClickHouse path this is sourced from `operations_appearances`
+     * only (primary-key seek): a contract reached solely via a nested
+     * sub-invocation or an emitted event — never a root-op `contract_id` — is
+     * NOT listed. For the overwhelming majority of Soroban transactions the
+     * invoked contract IS the root-op `contract_id`, so this matches the PG
+     * path in practice; the full 3-source set was dropped because its scan
+     * blew the read_rows quota (task 0243; see `common::ch`).
      */
     contract_ids: Array<string>;
     created_at: string;
@@ -1169,10 +1580,10 @@ export type ParticipantItem = {
  * * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
  * address in classic Stellar protocol; SAC mirror is network-dependent).
  * * `contract_id` — C-strkey of the SAC mirror for a classic credit
- * leg (populated when an `assets` row with `asset_type = 2`
- * exists for `(asset_code, issuer)` and carries a
- * `soroban_contracts.contract_id`). `None` for legs without an
- * SAC mirror. Pool legs only carry XDR `AssetType` (native /
+ * leg (populated when the leg's `(asset_code, issuer)` classic_credit /
+ * native `assets` row carries a deployed SAC facet — `sac_contract_id`
+ * resolving a `soroban_contracts.contract_id`, ADR 0051). `None` for legs
+ * without a deployed SAC mirror. Pool legs only carry XDR `AssetType` (native /
  * credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
  * so SAC / Soroban legs are not directly representable here;
  * `contract_id` surfaces the SAC mirror look-up so the FE can
@@ -1184,19 +1595,28 @@ export type ParticipantItem = {
 export type PoolAssetLeg = {
   asset_code?: string | null;
   /**
-   * Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).
+   * Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
    */
   asset_type: number;
   /**
-   * `native | classic_credit | sac | soroban`. `null` only on schema drift.
+   * `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
+   * only on schema drift.
    */
   asset_type_name?: string | null;
   /**
-   * C-strkey of the SAC mirror, when a matching `assets` row
-   * (`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for
-   * native legs and for classic credit legs without an SAC mirror.
+   * C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`
+   * classic_credit / native asset (ADR 0051 — resolved via the row's
+   * `sac_contract_id` facet). `None` for native legs and for classic credit
+   * legs without a deployed SAC.
    */
   contract_id?: string | null;
+  /**
+   * Asset icon URL, mirrored from the leg's `assets.icon_url` row so
+   * pool avatars render the same icon as the assets list. `None` for
+   * native legs and assets without an enriched icon — the FE falls back
+   * to the asset-code initial.
+   */
+  icon_url?: string | null;
   issuer?: string | null;
 };
 
@@ -1282,11 +1702,17 @@ export type SearchGroups = {
  *
  * `identifier` is the canonical human-shown id (hex hash for
  * transactions, strkey `L…` for pools, StrKey for accounts /
- * contracts, asset code for assets, name for NFTs). For `asset` it is
- * NOT unique — the frontend routes via `surrogate_id`. For `nft` it is
- * also not unique and `surrogate_id` alone is insufficient because NFT
- * identity is the composite `(contract_id, token_id)` per task 0264 /
- * ADR 0030 — the two fields below carry the composite for routing.
+ * contracts, asset code for assets, name for NFTs). It is the routing
+ * key too for every type whose display id IS routable (transaction,
+ * account, contract, pool). The two exceptions carry a separate routing
+ * payload because their display id is NOT routable:
+ *
+ * - `asset`: `identifier` is the asset code (not unique / not routable);
+ * `route_token` carries the canonical `/assets/:id` token (contract
+ * StrKey | `CODE-ISSUER` | `native`), mirroring `canonical_id` in
+ * `assets/handlers.rs`.
+ * - `nft`: identity is the composite `(contract_id, token_id)` per task
+ * 0264 / ADR 0030 — the two fields below carry it for routing.
  *
  * `successful` and `last_activity_at` are populated only for
  * `entity_type = transaction` today — joined from the partitioned
@@ -1306,8 +1732,12 @@ export type SearchHit = {
   identifier: string;
   label: string;
   last_activity_at?: string | null;
+  /**
+   * Canonical `/assets/:id` routing token for `asset` hits; `None` for
+   * every other type (they route on `identifier`). See the struct doc.
+   */
+  route_token?: string | null;
   successful?: boolean | null;
-  surrogate_id?: number | null;
   /**
    * NFT composite routing key. Populated only when
    * `entity_type = nft`; `None` for every other bucket.
@@ -1408,7 +1838,14 @@ export type TransactionListItem = {
    */
   application_order: number;
   /**
-   * All C-StrKeys touched anywhere in the transaction.
+   * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+   * On the ClickHouse path this is sourced from `operations_appearances`
+   * only (primary-key seek): a contract reached solely via a nested
+   * sub-invocation or an emitted event — never a root-op `contract_id` — is
+   * NOT listed. For the overwhelming majority of Soroban transactions the
+   * invoked contract IS the root-op `contract_id`, so this matches the PG
+   * path in practice; the full 3-source set was dropped because its scan
+   * blew the read_rows quota (task 0243; see `common::ch`).
    */
   contract_ids: Array<string>;
   created_at: string;
@@ -1504,6 +1941,51 @@ export type HealthResponses = {
   200: unknown;
 };
 
+export type ListAccountsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Base sort order on `last_seen_ledger`: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
+    'filter[with_domain]'?: boolean | null;
+  };
+  url: '/v1/accounts';
+};
+
+export type ListAccountsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListAccountsError = ListAccountsErrors[keyof ListAccountsErrors];
+
+export type ListAccountsResponses = {
+  /**
+   * Paginated account list
+   */
+  200: PaginatedAccountListItem;
+};
+
+export type ListAccountsResponse =
+  ListAccountsResponses[keyof ListAccountsResponses];
+
 export type GetAccountData = {
   body?: never;
   path: {
@@ -1559,6 +2041,11 @@ export type ListAccountTransactionsData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Sort order on transaction time: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
   };
   url: '/v1/accounts/{account_id}/transactions';
 };
@@ -1603,12 +2090,24 @@ export type ListAssetsData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * `native | classic_credit | soroban` (ADR 0051 — `sac` is no longer a
+     * type; use `filter[sac]` for the SAC view).
+     */
     'filter[type]'?: string | null;
     /**
      * Substring match against `asset_code`; SQL wraps in `%...%`.
      * Caller MUST NOT pass `%` / `_` literals.
      */
     'filter[code]'?: string | null;
+    /**
+     * SAC property filter (ADR 0051): `true` restricts the list to assets whose
+     * Stellar Asset Contract is deployed on-chain (`sac_deployed`) — the old
+     * `filter[type]=sac` view, now a facet predicate over classic_credit /
+     * native rows. Reserved (un-deployed) SAC addresses are excluded. Any other
+     * value is ignored.
+     */
+    'filter[sac]'?: string | null;
   };
   url: '/v1/assets';
 };
@@ -1639,7 +2138,7 @@ export type GetAssetData = {
   body?: never;
   path: {
     /**
-     * Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite.
+     * Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.
      */
     id: string;
   };
@@ -1677,7 +2176,7 @@ export type ListAssetTransactionsData = {
   body?: never;
   path: {
     /**
-     * Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite.
+     * Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.
      */
     id: string;
   };
@@ -1721,6 +2220,53 @@ export type ListAssetTransactionsResponses = {
 
 export type ListAssetTransactionsResponse =
   ListAssetTransactionsResponses[keyof ListAssetTransactionsResponses];
+
+export type ListContractsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Contract class: `token | other | nft | fungible`.
+     */
+    'filter[type]'?: string | null;
+    /**
+     * Free-text search over contract id + name (`search_vector`).
+     */
+    'filter[q]'?: string | null;
+  };
+  url: '/v1/contracts';
+};
+
+export type ListContractsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListContractsError = ListContractsErrors[keyof ListContractsErrors];
+
+export type ListContractsResponses = {
+  /**
+   * Paginated contract list
+   */
+  200: PaginatedContractListItem;
+};
+
+export type ListContractsResponse =
+  ListContractsResponses[keyof ListContractsResponses];
 
 export type GetContractData = {
   body?: never;
@@ -1771,10 +2317,10 @@ export type ListEventsData = {
   };
   query?: {
     /**
-     * Items per page (1–100, default 20). Page granularity is per
-     * `(contract, transaction, ledger)` appearance — a single appearance
-     * can expand to multiple per-node items in the response, so the
-     * returned `data.len()` may exceed `limit`.
+     * Items per page (1–100, default 20). On the PG datasource the page is per
+     * `(contract, transaction, ledger)` appearance — one appearance can expand to
+     * multiple events, so `data.len()` may exceed `limit`. On the CH datasource the
+     * page is per event (one row → one item), so `data.len() <= limit`.
      */
     limit?: number;
     /**
@@ -1912,6 +2458,10 @@ export type ListLedgersData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Base sort order: `asc` = oldest→newest, `desc` (default) = newest→oldest. Sticky — re-send it on every page alongside `cursor`. Reset to the first page (drop `cursor`) when changing it.
+     */
+    order?: string;
   };
   url: '/v1/ledgers';
 };

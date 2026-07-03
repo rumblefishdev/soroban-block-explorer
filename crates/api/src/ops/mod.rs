@@ -8,6 +8,10 @@ use serde_json::{Value, json};
     get,
     path = "/health",
     tag = "ops",
+    // Liveness is exempt from the auth gate (see auth::is_exempt); override the
+    // global security requirement with an empty one so the spec stays accurate
+    // and Swagger "Try it out" on /health doesn't demand a token (task 0287).
+    security(()),
     responses(
         (status = 200, description = "Service is healthy", body = serde_json::Value),
     ),

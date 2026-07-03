@@ -14,12 +14,28 @@ interface DataListCardProps<T> {
   filters?: ReactNode;
   columnCount: number;
   isLoading: boolean;
+  /**
+   * `true` while a page change or filter change is fetching new data (React
+   * Query `isPlaceholderData`). `keepPreviousData` keeps the old rows + cursors
+   * around, but we replace the body with the skeleton so the user sees the
+   * table is reloading. Not the same as `isLoading` (first load, no data yet).
+   */
+  isReloading?: boolean;
   isError: boolean;
   error?: unknown;
   onRetry?: () => void;
   rows: readonly T[];
 
   renderTable: (rows: readonly T[]) => ReactNode;
+
+  /**
+   * Render the loading skeleton using the REAL table in its `loading` mode
+   * (`<XxxTable loading />`) — same headers, same column layout, same row
+   * height — so the skeleton is the same height as the populated table at every
+   * viewport (responsive, no jump). Falls back to the generic `TableSkeleton`
+   * when not provided.
+   */
+  renderSkeleton?: () => ReactNode;
 
   hasActiveFilters?: boolean;
   emptyKind: TableEmptyKind;
@@ -37,11 +53,13 @@ export function DataListCard<T>({
   filters,
   columnCount,
   isLoading,
+  isReloading = false,
   isError,
   error,
   onRetry,
   rows,
   renderTable,
+  renderSkeleton,
   hasActiveFilters = false,
   emptyKind,
   emptyNoun,
@@ -51,14 +69,25 @@ export function DataListCard<T>({
   canNext,
   onPrev,
   onNext,
-  skeletonRows = 10,
+  // Default to a full list page (all list pages use `PAGE_SIZE = 20`) so the
+  // skeleton matches the populated table's height — no jump on the data ↔
+  // skeleton swap during pagination / filter changes. A page with a different
+  // size passes `skeletonRows` explicitly.
+  skeletonRows = 20,
 }: DataListCardProps<T>) {
   let body: ReactNode;
-  if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={skeletonRows} columns={columnCount} />
-      </Box>
+  if (isLoading || isReloading) {
+    // Skeleton on first load (`isLoading`) AND while a page/filter change is
+    // fetching (`isReloading` = `isPlaceholderData`), so the user sees the
+    // table is reloading rather than the old rows sitting silently.
+    // Prefer `renderSkeleton` (the real table in `loading` mode) — it matches
+    // the populated table's height at every viewport. The generic
+    // `TableSkeleton` fallback is height-matched on wide screens but can drift
+    // when headers wrap on narrow ones.
+    body = renderSkeleton ? (
+      renderSkeleton()
+    ) : (
+      <TableSkeleton rows={skeletonRows} columns={columnCount} />
     );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={onRetry} py={8} />;

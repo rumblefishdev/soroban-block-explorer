@@ -8,8 +8,11 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as synthetics from 'aws-cdk-lib/aws-synthetics';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import type { Construct } from 'constructs';
 
+import { originLockCanaryCode } from '../canaries/origin-lock.js';
 import type { EnvironmentConfig } from '../types.js';
 
 export interface CloudWatchStackProps extends cdk.StackProps {
@@ -22,6 +25,12 @@ export interface CloudWatchStackProps extends cdk.StackProps {
   /** Type-1 enrichment worker Lambda (task 0191) — error-rate alarm. */
   readonly enrichmentWorkerFunction: lambda.IFunction;
   readonly restApi: apigateway.RestApi;
+  /**
+   * CloudFront `*.cloudfront.net` domain of the SPA distribution, used as a
+   * target by the origin-lockdown canary (task 0277). Optional — when
+   * absent the canary only checks the execute-api URL.
+   */
+  readonly spaDistributionDomainName?: string;
 }
 
 /**
@@ -57,6 +66,7 @@ export class CloudWatchStack extends cdk.Stack {
       enrichmentDlq,
       enrichmentWorkerFunction,
       restApi,
+      spaDistributionDomainName,
     } = props;
 
     // ---------------------
@@ -70,13 +80,29 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // AWS Chatbot — Slack channel
-    // Prerequisite: authorize the Slack workspace in the AWS Console under
-    // AWS Chatbot (one-time manual step) before running cdk deploy.
+    // Workspace + channel IDs are deployment-specific identifiers we keep OUT
+    // of the (public) repo, so they come from SSM Parameter Store (plain
+    // String — not credentials) at deploy time, not from env config. Set once
+    // out-of-band before deploy:
+    //   aws ssm put-parameter --type String \
+    //     --name /soroban-explorer/${envName}/slack-workspace-id --value T...
+    //   aws ssm put-parameter --type String \
+    //     --name /soroban-explorer/${envName}/slack-channel-id   --value C...
+    // Prerequisites (one-time, manual): authorize the Slack workspace in the
+    // AWS Console under AWS Chatbot, and `/invite @aws` in the target channel.
     // ---------------------
+    const slackWorkspaceId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/soroban-explorer/${config.envName}/slack-workspace-id`
+    );
+    const slackChannelId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/soroban-explorer/${config.envName}/slack-channel-id`
+    );
     new chatbot.SlackChannelConfiguration(this, 'SlackChannel', {
       slackChannelConfigurationName: `${config.envName}-soroban-explorer-alarms`,
-      slackWorkspaceId: config.slackWorkspaceId,
-      slackChannelId: config.slackChannelId,
+      slackWorkspaceId,
+      slackChannelId,
       notificationTopics: [alarmTopic],
       role: new iam.Role(this, 'ChatbotRole', {
         assumedBy: new iam.ServicePrincipal('chatbot.amazonaws.com'),
@@ -121,6 +147,59 @@ export class CloudWatchStack extends cdk.Stack {
         threshold: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    // ---------------------
+    // Alarm 1b: Galexie ephemeral storage utilization (%)
+    // captive-core's BucketList (current ledger state) + catchup temp live on
+    // the task's ephemeral disk. Baseline ~30%; >60% sustained = plan a disk
+    // bump BEFORE a merge/catchup spike hits the "No space left on device"
+    // ceiling (the 2026-07-01/02 deadlock: full disk → catchup never completes
+    // → temp never cleaned → task wedged while `pgrep stellar-core` still
+    // reports healthy). Metric-math on % is robust to disk-size changes.
+    // Sustained 3×5 min avoids paging on a transient merge spike.
+    // Cluster/service names are deterministic (see IngestionStack).
+    // ---------------------
+    const galexieCluster = `${config.envName}-ingestion`;
+    const galexieService = `${config.envName}-galexie-live`;
+    const ephemeralUsed = new cloudwatch.Metric({
+      namespace: 'ECS/ContainerInsights',
+      metricName: 'EphemeralStorageUtilized',
+      dimensionsMap: {
+        ClusterName: galexieCluster,
+        ServiceName: galexieService,
+      },
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.MAXIMUM,
+    });
+    const ephemeralReserved = new cloudwatch.Metric({
+      namespace: 'ECS/ContainerInsights',
+      metricName: 'EphemeralStorageReserved',
+      dimensionsMap: {
+        ClusterName: galexieCluster,
+        ServiceName: galexieService,
+      },
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.MAXIMUM,
+    });
+    withActions(
+      new cloudwatch.Alarm(this, 'GalexieEphemeralStorageAlarm', {
+        alarmName: `${config.envName}-galexie-ephemeral-storage`,
+        alarmDescription:
+          'Galexie captive-core ephemeral disk >60% — approaching the deadlock ceiling; plan a disk bump.',
+        metric: new cloudwatch.MathExpression({
+          expression: '(used / reserved) * 100',
+          usingMetrics: { used: ephemeralUsed, reserved: ephemeralReserved },
+          period: cdk.Duration.minutes(5),
+          label: 'Ephemeral Used (%)',
+        }),
+        threshold: config.galexieEphemeralUtilizationThreshold,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -357,6 +436,70 @@ export class CloudWatchStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
+
+    // ---------------------
+    // Origin-lockdown canary (task 0277 / ADR 0048, Step 7)
+    // ---------------------
+    // Periodically asserts the direct-origin bypass vectors stay BLOCKED
+    // (403): the raw execute-api URL and the *.cloudfront.net domain. Alarms
+    // via the same SNS→Slack topic if either starts answering 2xx — i.e. the
+    // Cloudflare-only origin lockdown regressed. Enable only post-cutover
+    // (validateConfig warns if the locks are off). ~15-min cadence keeps the
+    // canary run cost negligible (~$3-4/mo).
+    if (config.enableOriginLockCanary) {
+      const canary = new synthetics.Canary(this, 'OriginLockCanary', {
+        // AWS Synthetics canary names are capped at 21 chars (and lowercase);
+        // `${envName}-origin-lock` = 22 for "production" would pass synth but
+        // fail CreateCanary at deploy. Fixed short name (production is the only
+        // env; see infrastructure-overview §7.1).
+        canaryName: 'soroban-origin-lock',
+        runtime: synthetics.Runtime.SYNTHETICS_NODEJS_PUPPETEER_13_0,
+        test: synthetics.Test.custom({
+          code: synthetics.Code.fromInline(originLockCanaryCode()),
+          handler: 'index.handler',
+        }),
+        schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
+        environmentVariables: {
+          // Only probe a vector whose lock is actually live. With its lock
+          // off an origin legitimately returns 2xx, so probing it would make
+          // the canary alarm forever during a staged (one-leg-at-a-time)
+          // rollout. The raw execute-api URL returns 403 under EITHER API lock:
+          // the app-layer edge-secret check (missing X-Edge-Secret) OR mTLS
+          // (disableExecuteApiEndpoint) — so probe it whenever either is live.
+          // Gating only on enableApiMtls would leave the edge-secret-only prod
+          // config (the current one) with no API target → every run fails.
+          ...((config.enableApiMtls || config.enableEdgeSecretLock) && {
+            EXECUTE_API_URL: restApi.url,
+          }),
+          ...(config.enableOriginSecretLock &&
+            spaDistributionDomainName && {
+              CLOUDFRONT_URL: `https://${spaDistributionDomainName}/`,
+            }),
+        },
+      });
+
+      withActions(
+        new cloudwatch.Alarm(this, 'OriginLockCanaryAlarm', {
+          alarmName: `${config.envName}-origin-lock-bypass`,
+          alarmDescription:
+            'Origin-lockdown canary failed — a direct origin (execute-api / *.cloudfront.net) is answering instead of returning 403. Possible Cloudflare-bypass regression.',
+          metric: canary.metricSuccessPercent({
+            period: cdk.Duration.minutes(15),
+          }),
+          threshold: 100,
+          comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+          // Require 2 consecutive 15-min windows (~30 min) below 100% before
+          // paging — absorbs the cold-start gap before the first run and a
+          // single slow/missed run, while still catching a sustained
+          // regression or a stalled canary.
+          evaluationPeriods: 2,
+          datapointsToAlarm: 2,
+          // Security invariant: no fresh confirmation = treat as a breach,
+          // so a stalled canary also pages rather than failing silent.
+          treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+        })
+      );
+    }
 
     // ---------------------
     // Dashboard

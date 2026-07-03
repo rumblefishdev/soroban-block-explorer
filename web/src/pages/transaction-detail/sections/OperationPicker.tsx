@@ -86,7 +86,7 @@ export function OperationPicker({
         sx={{ flexWrap: 'wrap', rowGap: 0.75 }}
       >
         <Typography variant="heading6SemiBold" component="h3">
-          Choose payment
+          Choose operation
         </Typography>
         <Stack
           direction="row"

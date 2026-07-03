@@ -84,6 +84,7 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
               <IdentifierWithCopy
                 value={tx.hash}
                 type="transaction"
+                linked={false}
                 truncate={false}
               />
             ),

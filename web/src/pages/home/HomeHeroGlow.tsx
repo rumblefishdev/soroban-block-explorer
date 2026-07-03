@@ -11,14 +11,14 @@ export function HomeHeroGlow() {
   return (
     <Box
       aria-hidden
-      sx={{
+      sx={(theme) => ({
         position: 'absolute',
         inset: '0 0 auto 0',
         height: 780,
-        zIndex: 0,
+        zIndex: theme.zIndex.pageGlow,
         pointerEvents: 'none',
         overflow: 'hidden',
-      }}
+      })}
     >
       <Box
         sx={(theme) => ({

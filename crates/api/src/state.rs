@@ -1,9 +1,12 @@
 //! Shared application state injected into every axum handler via `State<AppState>`.
 
+use std::sync::{Arc, RwLock};
+
 use sqlx::PgPool;
 
 use crate::contracts::cache::{ContractMetadataCache, new_contract_cache};
 use crate::network::cache::{NetworkStatsCache, new_network_cache};
+use crate::network::dto::NetworkStats;
 use crate::runtime_enrichment::RuntimeEnrichment;
 
 /// Application-wide state. All inner types are cheaply cloneable
@@ -20,12 +23,26 @@ pub struct AppState {
     pub runtime_enrichment: RuntimeEnrichment,
     /// Per-Lambda warm cache for contract detail responses (45 s TTL).
     pub contract_cache: ContractMetadataCache,
-    /// Per-Lambda warm cache for the `/v1/network/stats` singleton (30 s TTL).
+    /// Per-Lambda warm cache for `/v1/network/stats`, version-keyed on the
+    /// chain head (`latest_ledger_sequence`) — see `network/cache.rs`.
     pub network_cache: NetworkStatsCache,
+    /// Last successfully-computed network-stats snapshot, updated on every
+    /// cache miss. Serves as the availability fallback when the per-request
+    /// head read fails (so a transient DB/CH blip does not 500 a request the
+    /// warm cache could still answer). Written only on a miss; read only on a
+    /// head-read error — both rare, so a std `RwLock` is ample.
+    pub network_last_good: Arc<RwLock<Option<Arc<NetworkStats>>>>,
     /// `SHA256(STELLAR_NETWORK_PASSPHRASE)`. Required to align tx_set
     /// envelopes (hash-sorted) with `tx_processing` (apply order) when
     /// re-extracting heavy fields from archive XDR.
     pub network_id: [u8; 32],
+    /// Test-only counter incremented each time a list handler actually issues
+    /// its heavy list query (`fetch_list_for_source`). It exists so the
+    /// conditional-GET tests can assert the load-bearing invariant that a `304`
+    /// short-circuit returns **without** running the heavy query (task 0292).
+    /// Compiled out of release builds.
+    #[cfg(test)]
+    pub list_query_count: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AppState {
@@ -41,7 +58,10 @@ impl AppState {
             runtime_enrichment,
             contract_cache: new_contract_cache(),
             network_cache: new_network_cache(),
+            network_last_good: Arc::new(RwLock::new(None)),
             network_id,
+            #[cfg(test)]
+            list_query_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -53,12 +73,29 @@ impl AppState {
     /// process state — e.g. env mutated post-init, or a `Module` variant
     /// missing from `Module::ALL` — and is a misconfigured deploy that
     /// must fail loudly on first request.
-    pub fn ch(&self) -> &clickhouse::Client {
-        self.ch.as_ref().expect(
-            "CH client not built at cold start, but handler dispatched to CH read path — \
-             AppConfig::ch_enabled was false while DataSource::for_module returned Ch \
-             (check Module::ALL completeness and the API_DATASOURCE_* env at init time)",
-        )
+    ///
+    /// Returns an owned client (clone — cheap, the `hyper` pool is
+    /// `Arc`-shared) rather than a borrow, so the load-test correlation can
+    /// stamp it per request: when the [`crate::common::request_id`] capture
+    /// scope holds an `X-Request-Id` (only possible under `load_testing` — the
+    /// layer is wired only then), every query from the returned client carries
+    /// `log_comment=<id>`, letting `system.query_log` be JOINed back to the
+    /// exact HTTP request (task 0338, "B2"). No scope (normal production) → the
+    /// clone is returned unmodified.
+    pub fn ch(&self) -> clickhouse::Client {
+        let client = self
+            .ch
+            .as_ref()
+            .expect(
+                "CH client not built at cold start, but handler dispatched to CH read path — \
+                 AppConfig::ch_enabled was false while DataSource::for_module returned Ch \
+                 (check Module::ALL completeness and the API_DATASOURCE_* env at init time)",
+            )
+            .clone();
+        match crate::common::request_id::current() {
+            Some(id) => client.with_setting("log_comment", id),
+            None => client,
+        }
     }
 
     /// Test constructor — defaults the CH client to `None`, the caches

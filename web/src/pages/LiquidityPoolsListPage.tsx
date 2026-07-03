@@ -24,9 +24,10 @@ const PAGE_SIZE = 20;
  * `GET /liquidity-pools` endpoint as extended by task 0246.
  */
 export default function LiquidityPoolsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['asset', 'min_tvl'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['asset', 'min_tvl'],
+    });
   const asset = state.filters.asset ?? '';
   const minTvl = state.filters.min_tvl ?? '';
   const hasFilters = asset !== '' || minTvl !== '';
@@ -38,10 +39,8 @@ export default function LiquidityPoolsListPage() {
     return filters;
   }, [asset, minTvl]);
 
-  const { data, isLoading, isError, error, refetch } = usePoolsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    usePoolsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -58,10 +57,6 @@ export default function LiquidityPoolsListPage() {
     (value: string) => setFilter('min_tvl', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('asset', null);
-    setFilter('min_tvl', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -80,15 +75,19 @@ export default function LiquidityPoolsListPage() {
         }
         columnCount={POOL_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <PoolsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <PoolsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="pools"
         emptyNoun="pools"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}

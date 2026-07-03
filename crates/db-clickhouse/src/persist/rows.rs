@@ -38,7 +38,7 @@
 //! - `DateTime64(3, 'UTC')` → `i64` ms since Unix epoch
 
 use clickhouse::Row;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// `ledgers` — immutable lookup, MergeTree, partitioned.
 #[derive(Debug, Clone, Row, Serialize)]
@@ -73,35 +73,96 @@ pub struct AccountRow {
 
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
+/// `total_supply`, `holder_count`, `icon_url` are DEAD columns — the
+/// indexer writes them `None` and NO read touches them: supply/holders come from
+/// `balance_aggregates` (lore-0293), display name/icon from `asset_enrichment`
+/// coalesced over `soroban_contract_metadata`. `total_supply`/`holder_count`
+/// `ALTER … DROP COLUMN` batched in task 0310. The dead `name` column was
+/// removed from this struct + `init.sql` in task 0304 (empty in prod, reader-less);
+/// the prod `DROP COLUMN name` runs in 0310's `assets` deploy-drain window.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,
     pub asset_code: String,
     pub issuer_id: i64,
     pub contract_id: i64,
-    pub name: Option<String>,
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
+    /// lore-0331 surrogate (`ids::asset_id`) — single-column asset key for
+    /// `balances.asset_id`. Column order MUST match `assets` schema (id last).
+    pub id: i64,
 }
 
-/// `account_balances_current` — state, RMT(last_updated_ledger).
-/// Trustline removals emitted as `balance = 0` rows; reads filter
-/// `WHERE balance > 0`.
+impl AssetRow {
+    /// Build a staging `AssetRow` from its identity, computing the `id`
+    /// surrogate ONCE from the identity so no build site can forget it or diverge.
+    /// The aggregate columns are dead at write time (lore-0293 → `balance_aggregates`)
+    /// so they are always `None` here.
+    pub fn staged(asset_type: i16, asset_code: String, issuer_id: i64, contract_id: i64) -> Self {
+        Self {
+            id: super::ids::asset_id(asset_type, &asset_code, issuer_id, contract_id),
+            asset_type,
+            asset_code,
+            issuer_id,
+            contract_id,
+            total_supply: None,
+            holder_count: None,
+            icon_url: None,
+        }
+    }
+}
+
+/// `asset_sac` — indexer-owned SAC facet side table (ADR 0051 / task 0339),
+/// `AggregatingMergeTree` with `SimpleAggregateFunction(max)` columns. Keyed
+/// byte-for-byte like `assets`; written ONLY on a SAC sighting (deploy or
+/// un-deployed override), so the per-ledger whole-row `assets` rewrite cannot
+/// zero it. `max()` merges column-wise: `sac_deployed` (monotonic) sticks true
+/// once deployed; `sac_contract_id` is a constant per key. Insert side just
+/// serialises the raw values (the engine aggregates on merge).
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct AccountBalanceRow {
-    pub account_id: i64,
+pub struct AssetSacRow {
     pub asset_type: i16,
     pub asset_code: String,
     pub issuer_id: i64,
-    pub balance: i128,
-    pub last_updated_ledger: i64,
+    pub contract_id: i64,
+    /// cityhash64 surrogate of the SAC's `C…` StrKey.
+    pub sac_contract_id: i64,
+    /// Deployed on-chain? Serialised as `UInt8` (0/1) to match the CH column.
+    pub sac_deployed: u8,
 }
+
+/// `asset_enrichment` — off-chain SEP-1 enrichment side table (task 0231),
+/// RMT(version). Written by the enrichment worker, NOT the indexer; keyed
+/// byte-for-byte like `assets` and joined at read. `version` =
+/// `DateTime64(3, 'UTC')` (ms since epoch); a higher version wins, so the
+/// worker can refresh or CLEAR (re-insert NULL with a newer `version`).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AssetEnrichmentRow {
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub contract_id: i64,
+    pub icon_url: Option<String>,
+    pub name: Option<String>,
+    pub version: i64,
+}
+
+// `account_balances_current` — table retained (pending classic→`balances`
+// migration + rollback) but NO LONGER WRITTEN (lore-0331 Option A single-write):
+// its `AccountBalanceRow` write struct was removed. Classic + native balances now
+// stage straight into the unified `balances` table (`BalanceRow`); reads already
+// resolve there.
 
 /// `soroban_contracts` — state hub, RMT(wasm_uploaded_at_ledger).
 /// Surrogate `id`; `wasm_uploaded_at_ledger = 0` is the stub sentinel
 /// (Pass 2 stub-rowing for referenced-but-not-deployed contracts).
-#[derive(Debug, Clone, Row, Serialize)]
+///
+/// Also read back (not just written): the task-0320 live WASM-upgrade prefetch
+/// (`persist::fetch_prior_contract_rows`) reads the prior row in full so
+/// `build_wasm_upgrade_rows` can carry the identity columns forward — hence
+/// `Deserialize`.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
 pub struct SorobanContractRow {
     pub id: i64,
     pub contract_id: String,
@@ -111,7 +172,38 @@ pub struct SorobanContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+}
+
+/// `soroban_contract_metadata` — on-chain Soroban token metadata
+/// (name/symbol/decimals) from the instance-storage `Symbol("METADATA")`
+/// struct. RMT(version); `version` = observed ledger (latest wins). Per
+/// `contract_id`; SACs are excluded by the producer
+/// (`xdr_parser::extract_contract_metadata_writes`). Separate table — never
+/// columns on `soroban_contracts` — to dodge the RMT whole-row clobber across
+/// that table's many writers (deploy / rebuild EXCHANGE / stubs / db-merge).
+/// See task 0297.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanContractMetadataRow {
+    pub contract_id: String,
     pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<u32>,
+    pub version: i64,
+}
+
+/// `balances` — unified per-holder balance (task 0331, Option C). RMT(version);
+/// `last_updated_ledger` = observed ledger; removed/zeroed → `amount = 0`.
+/// `holder_id` = `cityhash64(holder StrKey)` (one surrogate space with
+/// `accounts.id` / `soroban_contracts.id`; resolve back to a StrKey via `accounts`
+/// (G) / `soroban_contracts` (C)); `asset_id` = `ids::asset_id` (→ `assets.id`);
+/// `amount` raw `Int128` (scale by the asset's decimals at read). Replaces
+/// `soroban_token_balances` + (after step 6) classic `account_balances_current`.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct BalanceRow {
+    pub holder_id: i64,
+    pub asset_id: i64,
+    pub amount: i128,
+    pub last_updated_ledger: i64,
 }
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
@@ -146,6 +238,21 @@ pub struct NftPendingRow {
     pub minted_at_ledger: Option<i64>,
     pub current_owner_id: Option<i64>,
     pub current_owner_ledger: i64,
+}
+
+/// `nft_enrichment` — off-chain `token_uri` enrichment side table (task 0231),
+/// RMT(version). Same rationale as [`AssetEnrichmentRow`]: written by the
+/// enrichment worker (not the indexer), keyed like `nfts`, joined at read;
+/// `version` is the worker's own clock (`DateTime64(3, 'UTC')`, ms),
+/// independent of the `nfts` ownership clock.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct NftEnrichmentRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub collection_name: Option<String>,
+    pub version: i64,
 }
 
 /// `liquidity_pools` — state, RMT(last_updated_ledger). PK = pool_id.
@@ -212,7 +319,10 @@ pub struct OperationAppearanceRow {
     pub contract_id: Option<i64>,
     pub asset_code: String,
     pub asset_issuer_id: Option<i64>,
-    pub pool_id: Option<[u8; 32]>,
+    /// Crossed liquidity pools, sorted + deduped (canonical order — see the
+    /// stage fold). Empty = no pool involvement; `[]` replaces the legacy
+    /// scalar NULL (task 0261/0268).
+    pub pool_ids: Vec<[u8; 32]>,
     pub amount: i64,
     pub ledger_sequence: i64,
 }
@@ -291,4 +401,8 @@ pub struct LiquidityPoolSnapshotRow {
     pub tvl: Option<i128>,
     pub volume: Option<i128>,
     pub fee_revenue: Option<i128>,
+    /// Gross trade volume in asset-A units per (pool, ledger), from
+    /// path-payment/offer claim atoms. NULL until the 0266 backfill / 0247
+    /// wiring writes it (live ingest leaves it NULL today). Task 0261/0268.
+    pub gross_volume_a: Option<i128>,
 }

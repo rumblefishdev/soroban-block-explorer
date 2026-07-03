@@ -28,6 +28,15 @@ export interface WafWebAclProps {
   readonly rateLimit: number;
 
   /**
+   * Whether to include the per-IP rate-based rule. Defaults to `true`.
+   * Set `false` to keep the managed rule groups but drop the rate limit —
+   * used during a load-test window (task 0338) so a test measures backend
+   * capacity instead of tripping the per-IP rate rule. When `false`,
+   * `rateLimit` is ignored.
+   */
+  readonly includeRateLimit?: boolean;
+
+  /**
    * CloudWatch Logs retention for WAF logs. Defaults to 1 month if omitted.
    */
   readonly logRetention?: logs.RetentionDays;
@@ -52,6 +61,10 @@ export class WafWebAcl extends Construct {
     super(scope, id);
 
     const { account, region } = cdk.Stack.of(this);
+
+    // Managed rule groups always apply; the per-IP rate rule is opt-out so a
+    // load-test window can drop it without touching the managed protections.
+    const includeRateLimit = props.includeRateLimit ?? true;
 
     // CloudWatch Logs delivery for WAF requires the log group name to
     // start with `aws-waf-logs-`.
@@ -119,22 +132,26 @@ export class WafWebAcl extends Construct {
             sampledRequestsEnabled: true,
           },
         },
-        {
-          name: 'RateLimit',
-          priority: 4,
-          action: { block: {} },
-          statement: {
-            rateBasedStatement: {
-              limit: props.rateLimit,
-              aggregateKeyType: 'IP',
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'RateLimit',
-            sampledRequestsEnabled: true,
-          },
-        },
+        ...(includeRateLimit
+          ? [
+              {
+                name: 'RateLimit',
+                priority: 4,
+                action: { block: {} },
+                statement: {
+                  rateBasedStatement: {
+                    limit: props.rateLimit,
+                    aggregateKeyType: 'IP',
+                  },
+                },
+                visibilityConfig: {
+                  cloudWatchMetricsEnabled: true,
+                  metricName: 'RateLimit',
+                  sampledRequestsEnabled: true,
+                },
+              },
+            ]
+          : []),
       ],
     });
 

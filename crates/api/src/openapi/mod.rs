@@ -9,14 +9,19 @@
 
 pub mod schemas;
 
-use utoipa::OpenApi;
+use domain::OperationType;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::accounts::dto::{AccountBalance, AccountDetailResponse, AccountTransactionItem};
+use crate::accounts::dto::{
+    AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
+};
 use crate::assets::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem};
 use crate::contracts::dto::{
-    ContractDetailResponse, ContractStats, EventItem, InterfaceResponse, InvocationItem,
+    ContractDetailResponse, ContractFunctionParam, ContractFunctionSig, ContractInterfaceMetadata,
+    ContractListItem, ContractStats, EventItem, InterfaceResponse, InvocationItem,
 };
 use crate::liquidity_pools::dto::{
     ChartDataPoint, ChartResponse, PoolAssetLeg, PoolItem, PoolTransactionItem,
@@ -32,6 +37,36 @@ use crate::transactions::dto::{
 };
 use schemas::{ErrorEnvelope, PageInfo, Paginated};
 
+/// Injects the two security schemes the auth gate accepts (task 0277) into the
+/// OpenAPI components so Swagger UI renders an "Authorize" dialog and "Try it
+/// out" can reach the gated `/v1` surface:
+///   - `api_key`    — paid tier, `x-api-key` request header
+///   - `bearer_jwt` — free tier, `Authorization: Bearer <session JWT>`
+///
+/// `ApiDoc`'s `security(...)` attribute references these schemes by name; the
+/// schemes themselves can only be constructed in a `Modify` impl (the derive
+/// attribute can't build an `ApiKey`/`Http` scheme value).
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "api_key",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("x-api-key"))),
+        );
+        components.add_security_scheme(
+            "bearer_jwt",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("JWT")
+                    .build(),
+            ),
+        );
+    }
+}
+
 /// Root OpenAPI document. Holds API metadata and declares shared
 /// schema components that are referenced across multiple endpoints.
 ///
@@ -40,6 +75,7 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
 /// endpoint modules add routes without touching this file.
 #[derive(OpenApi)]
 #[openapi(
+    modifiers(&SecurityAddon),
     info(
         title = "Soroban Block Explorer API",
         version = env!("CARGO_PKG_VERSION"),
@@ -64,9 +100,14 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         XdrEventDto,
         XdrOperationDto,
         HeavyFieldsStatus,
+        Paginated<ContractListItem>,
+        ContractListItem,
         ContractDetailResponse,
         ContractStats,
         InterfaceResponse,
+        ContractInterfaceMetadata,
+        ContractFunctionSig,
+        ContractFunctionParam,
         Paginated<InvocationItem>,
         InvocationItem,
         Paginated<EventItem>,
@@ -76,6 +117,8 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         AssetDetailResponse,
         Paginated<AssetTransactionItem>,
         AssetTransactionItem,
+        Paginated<AccountListItem>,
+        AccountListItem,
         AccountDetailResponse,
         AccountBalance,
         Paginated<AccountTransactionItem>,
@@ -95,7 +138,23 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         SearchGroups,
         SearchHit,
         EntityType,
+        // Canonical Stellar operation-type enum. Not referenced by a DTO
+        // field (response op-type fields stay wire-`string`), but registered
+        // here so the generated TS client emits a named `OperationType` union
+        // — the single source of truth the frontend keys its op-type label
+        // map against, replacing a hand-maintained 27-entry mirror that
+        // silently drifted from this enum (audit F-Z-2 / lore-0280).
+        OperationType,
     )),
+    // Auth advertised in the spec so Swagger UI's "Authorize" works and "Try it
+    // out" can hit the gated /v1 surface (task 0287). Two separate requirement
+    // objects = OR: a request passes the gate with EITHER the paid `x-api-key`
+    // OR a free-tier `Bearer` session JWT. Schemes are injected by SecurityAddon.
+    // Exempt endpoints (e.g. /health) override this with `security(())`.
+    security(
+        ("api_key" = []),
+        ("bearer_jwt" = []),
+    ),
 )]
 pub struct ApiDoc;
 

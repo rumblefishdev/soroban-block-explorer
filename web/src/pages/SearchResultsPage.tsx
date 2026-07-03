@@ -1,4 +1,4 @@
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Paper, Stack, Typography } from '@mui/material';
 import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -33,7 +33,7 @@ export default function SearchResultsPage() {
   // Singleton auto-navigation (task 0271): when broad search returns
   // exactly one hit across all entity buckets, treat it as a redirect
   // and navigate straight to the detail page. `routeForHit` already
-  // handles every entity type (asset uses surrogate_id, NFT uses
+  // handles every entity type (asset uses route_token, NFT uses
   // composite contract_id+token_id, others use identifier).
   useEffect(() => {
     if (state.isFetching || state.totalCount !== 1) return;
@@ -81,7 +81,20 @@ export default function SearchResultsPage() {
         />
       </Box>
 
-      <SearchResultsView state={state} />
+      {/* Rounded outlined card with a surface background (results + tab headers
+          read as one block) — using the explorer's standard table/card border
+          (`stroke.default`, 1px), not the nav-bar dropdown's accent border. */}
+      <Paper
+        variant="outlined"
+        elevation={0}
+        sx={(theme) => ({
+          borderColor: theme.palette.stroke.default,
+          backgroundColor: theme.palette.surface.grayMain,
+          overflow: 'hidden',
+        })}
+      >
+        <SearchResultsView state={state} />
+      </Paper>
     </Stack>
   );
 }

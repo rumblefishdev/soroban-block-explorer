@@ -11,10 +11,25 @@
 
 collections:
   # Hetzner Robot REST API — manages firewall rules, reverse DNS,
-  # server display name, rescue SSH keys, and Storage Box SSH
-  # authorisations on the dedicated server.
+  # server display name, and rescue SSH keys on the dedicated
+  # server. NOTE: the Robot Web Service Storage Box endpoints were
+  # removed by Hetzner on 2025-07-30 (Storage Boxes moved to the
+  # Cloud API) — Storage Box subaccount management lives in the
+  # `hetzner.hcloud` collection below, not here.
   - name: community.hrobot
     version: '>=1.9.0,<2.0.0'
+
+  # Hetzner Cloud API — used ONLY by the `hetzner_storagebox` role
+  # to reconcile the Borg backup Storage Box subaccount
+  # (`storage_box_subaccount` + `storage_box_subaccount_info`).
+  # Separate collection from `community.hrobot` on purpose: it
+  # carries its own `HCLOUD_TOKEN` auth and keeps the Cloud-API
+  # surface isolated from the Robot-API `hetzner` role. Requires
+  # the `hcloud` Python SDK on the controller (see README
+  # prerequisites). The Storage Box subaccount modules ship in the
+  # 6.x line.
+  - name: hetzner.hcloud
+    version: '>=6.9.0,<7.0.0'
 
   # Docker daemon + compose plugin orchestration. Also pulls in
   # the docker_login / docker_compose_v2 modules used in the app

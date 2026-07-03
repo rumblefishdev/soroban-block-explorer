@@ -20,6 +20,7 @@ pub mod operation;
 pub mod sac;
 pub mod scval;
 pub mod state;
+pub mod token_metadata;
 pub mod transaction;
 pub mod types;
 
@@ -35,26 +36,30 @@ pub use event_filters::{Transfer, is_transfer_event, parse_transfer, transfer_pa
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
-pub use nft::detect_nft_events;
+pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;
-pub use operation::extract_operations;
+pub use operation::{extract_operations, tx_op_results};
 pub use sac::{
-    MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id,
-    derive_sac_overrides_from_assets, extract_sac_identities, network_id, passphrase_for,
+    MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id, derive_sac_strkey,
+    extract_sac_identities, network_id, passphrase_for, sac_override_from_event_topics,
 };
 pub use scval::scval_to_typed_json;
 pub use state::{
-    detect_assets, detect_classic_credit_assets, detect_nfts, extract_account_states,
-    extract_contract_data_name_writes, extract_contract_deployments, extract_liquidity_pools,
-    extract_lp_positions, extract_nft_ownership_events, native_asset_singleton,
+    SacBalanceValue, decode_sac_balance_value, detect_assets, detect_classic_credit_assets,
+    detect_nfts, extract_account_states, extract_contract_data_name_writes,
+    extract_contract_deployments, extract_contract_metadata_writes, extract_liquidity_pools,
+    extract_lp_positions, extract_nft_ownership_events, extract_soroban_token_balances,
+    native_asset_singleton,
 };
-pub use transaction::extract_transactions;
+pub use token_metadata::TokenMetadata;
+pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
-    ExtractedLedger, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedOperation, ExtractedTransaction, NftEvent, SacAssetIdentity,
+    ExtractedContractDeployment, ExtractedContractInterface, ExtractedContractMetadata,
+    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLedgerEntryChange,
+    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
+    ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, NftEvent,
+    SacAssetIdentity,
 };
 
 use stellar_xdr::curr::{LedgerCloseMetaBatch, ReadXdr};

@@ -7,7 +7,13 @@
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.2 + §7
 -- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
 -- Data sources: DB-only.
--- Inputs:       (none)
+-- Inputs:       {head} — the chain head (max ledger sequence) the API
+--               version-keys its cache on (crate::common::head), inlined as a
+--               trusted i64. The latest row is PINNED to it (WHERE sequence =
+--               {head}) and the TPS window prunes on sequence > {head} - 200,
+--               so latest_ledger_sequence always equals the cache key and the
+--               previous inner (SELECT max(sequence) ...) subquery is dropped.
+--               {head} = 0 (empty cluster) matches no row -> zero response.
 -- Indexes:      ledgers PK on (sequence); system.tables.total_rows for the
 --               accounts / soroban_contracts estimates.
 -- CH Engine:    ledgers — MergeTree (no FINAL needed).
@@ -32,9 +38,10 @@
 --     min/max closed_at in the window. `nullIf(.., 0)` guards a 0 window
 --     (single-ledger or empty range). Same numerical semantics as PG E01.
 --   • `generated_at` is `now()` at SELECT time. The API caches the
---     assembled response in-process (~30 s TTL); cache hits return the
---     original `generated_at` so the frontend can split indexer-health
---     lag from data staleness.
+--     assembled response in-process, version-keyed on {head} (one compute per
+--     chain head; a 60 s backstop TTL bounds memory / a stalled head); cache
+--     hits return the original `generated_at` so the frontend can split
+--     indexer-health lag from data staleness.
 
 SELECT
     latest.sequence                                                              AS latest_ledger_sequence,
@@ -49,13 +56,13 @@ SELECT
             )
         )
         FROM ledgers
-        WHERE closed_at >= now64() - INTERVAL 60 SECOND
+        WHERE sequence > {head} - 200                  -- prune to recent ~200 ledgers
+          AND closed_at >= now64() - INTERVAL 60 SECOND
     )                                                                            AS tps_60s,
     (SELECT total_rows FROM system.tables WHERE database = currentDatabase() AND name = 'accounts')          AS total_accounts,
     (SELECT total_rows FROM system.tables WHERE database = currentDatabase() AND name = 'soroban_contracts') AS total_contracts
 FROM (
     SELECT sequence, closed_at
     FROM ledgers
-    ORDER BY closed_at DESC
-    LIMIT 1
+    WHERE sequence = {head}   -- pinned to the cache-key head (PK point read)
 ) AS latest;

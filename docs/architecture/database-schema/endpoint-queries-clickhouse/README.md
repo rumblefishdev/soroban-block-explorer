@@ -1,5 +1,13 @@
 # ClickHouse endpoint SQL query reference set
 
+> ⚠️ **Task 0331 (unified balances) supersedes the supply/holders/account-balance
+> queries here.** `06_get_accounts_by_id`, `08_get_assets_list`, `09_get_assets_by_id`
+> now read from the unified `balances` table + `balance_aggregates` MV (keyed by the
+> re-added `assets.id` surrogate); `asset_aggregates`, `account_balances_current`, and
+> `soroban_token_*` are retired/renamed. The authoritative queries live in
+> `crates/api/src/{assets,accounts}/queries_ch.rs`. The banners in those three files
+> point to them; the SQL bodies here are pre-0331 and pending a full refresh.
+
 Hand-tuned read queries — **one script per public REST endpoint** defined in
 [`backend-overview.md §6.2`](../../backend/backend-overview.md#62-endpoint-inventory),
 parallel to the [Postgres reference set](../endpoint-queries/README.md) (task
@@ -48,26 +56,27 @@ Every file must:
 
 ## FINAL discipline
 
-| Table                                | Engine                                         | `FINAL` required?                                                                                                               |
-| ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `ledgers`                            | `MergeTree`                                    | no                                                                                                                              |
-| `liquidity_pools`                    | `MergeTree`                                    | no                                                                                                                              |
-| `wasm_interface_metadata`            | `MergeTree`                                    | no                                                                                                                              |
-| `transaction_hash_dict` (Dictionary) | `Dictionary`                                   | no (`dictGet` returns latest by Dict lifecycle)                                                                                 |
-| `accounts`                           | `ReplacingMergeTree(last_seen_ledger)`         | **yes**                                                                                                                         |
-| `assets`                             | `ReplacingMergeTree` (no version)              | **yes** — last-write-wins by ORDER BY                                                                                           |
-| `account_balances_current`           | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                         |
-| `soroban_contracts`                  | `ReplacingMergeTree(wasm_uploaded_at_ledger)`  | **yes**                                                                                                                         |
-| `nfts`                               | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                         |
-| `lp_positions`                       | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                         |
-| `transactions`                       | `ReplacingMergeTree` (no version, partitioned) | **yes**                                                                                                                         |
-| `transaction_hash_index`             | `ReplacingMergeTree` (no version, partitioned) | **yes** — but use `dictGet` on hash lookups                                                                                     |
-| `operations_appearances`             | same                                           | **yes**                                                                                                                         |
-| `transaction_participants`           | same                                           | **yes**                                                                                                                         |
-| `soroban_events`                     | same                                           | **yes** (ORDER BY is unique by `(contract_id, ledger_sequence, transaction_id, event_index)`; FINAL ensures replay idempotency) |
-| `soroban_invocations_appearances`    | same                                           | **yes**                                                                                                                         |
-| `nft_ownership`                      | same                                           | **yes**                                                                                                                         |
-| `liquidity_pool_snapshots`           | same                                           | **yes**                                                                                                                         |
+| Table                                | Engine                                         | `FINAL` required?                                                                                                                                                               |
+| ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ledgers`                            | `ReplacingMergeTree` (no version)              | no — unique/immutable per `sequence`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                               |
+| `liquidity_pools`                    | `ReplacingMergeTree(last_updated_ledger)`      | **yes** (doc was stale: schema is RMT since task 0208)                                                                                                                          |
+| `wasm_interface_metadata`            | `ReplacingMergeTree` (no version)              | no — immutable per `wasm_hash`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                                     |
+| `transaction_hash_dict` (Dictionary) | `Dictionary`                                   | no (`dictGet` returns latest by Dict lifecycle)                                                                                                                                 |
+| `accounts`                           | `ReplacingMergeTree(last_seen_ledger)`         | **yes**                                                                                                                                                                         |
+| `assets`                             | `ReplacingMergeTree` (no version)              | **yes** — `total_supply`/`holder_count` columns kept but DEAD, served from `asset_aggregates` (lore-0293)                                                                       |
+| `asset_aggregates`                   | `MergeTree` (refreshable MV from balances)     | no — pre-computed per-asset `total_supply`/`holder_count`, read via a 1:1 LEFT JOIN; `Nullable` cols (NULL on miss). Refreshed on a cadence (eventually consistent) (lore-0293) |
+| `account_balances_current`           | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
+| `soroban_contracts`                  | `ReplacingMergeTree(wasm_uploaded_at_ledger)`  | **yes**                                                                                                                                                                         |
+| `nfts`                               | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                                                                         |
+| `lp_positions`                       | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
+| `transactions`                       | `ReplacingMergeTree` (no version, partitioned) | **yes**                                                                                                                                                                         |
+| `transaction_hash_index`             | `ReplacingMergeTree` (no version, partitioned) | **yes** — but use `dictGet` on hash lookups                                                                                                                                     |
+| `operations_appearances`             | same                                           | **yes**                                                                                                                                                                         |
+| `transaction_participants`           | same                                           | **yes**                                                                                                                                                                         |
+| `soroban_events`                     | same                                           | **yes** (ORDER BY is unique by `(contract_id, ledger_sequence, transaction_id, event_index)`; FINAL ensures replay idempotency)                                                 |
+| `soroban_invocations_appearances`    | same                                           | **yes**                                                                                                                                                                         |
+| `nft_ownership`                      | same                                           | **yes**                                                                                                                                                                         |
+| `liquidity_pool_snapshots`           | same                                           | **yes**                                                                                                                                                                         |
 
 **Rationale:** `ReplacingMergeTree` deduplicates by ORDER BY key on background
 merges. Between ingestion and merge, the same logical row can appear N times.

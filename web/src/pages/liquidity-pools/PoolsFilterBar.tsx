@@ -1,13 +1,5 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import {
-  Box,
-  InputAdornment,
-  MenuItem,
-  Select,
-  TextField,
-  type SelectChangeEvent,
-} from '@mui/material';
-import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
+import { Box, MenuItem, Select, type SelectChangeEvent } from '@mui/material';
+import { DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
  * TVL preset options (Figma node 267:60674).
@@ -15,6 +7,15 @@ import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
  * Empty value (`""`) maps to "Any TVL" — no `filter[min_tvl]` sent.
  * Other values are the raw decimal thresholds the API expects.
  */
+/**
+ * Hides the TVL preset filter until the backend exposes a TVL column /
+ * value to filter against (no TVL is shown anywhere in the UI, so the
+ * filter reads as broken). Build-time `const false` — same pattern as
+ * `CHARTS_ENABLED` in pool-detail (task 0341). Flip to `true` once TVL
+ * lands. Task 0351 (F10).
+ */
+const TVL_FILTER_ENABLED = false;
+
 export const TVL_PRESETS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: 'Any TVL' },
   { value: '10000', label: 'Min $10,000' },
@@ -43,8 +44,6 @@ export function PoolsFilterBar({
   onAssetChange,
   onMinTvlChange,
 }: PoolsFilterBarProps) {
-  const [draft, setDraft] = useDebouncedDraft(asset, onAssetChange);
-
   const handleTvlChange = (event: SelectChangeEvent<string>) => {
     onMinTvlChange(event.target.value);
   };
@@ -61,47 +60,35 @@ export function PoolsFilterBar({
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={asset}
         placeholder="Filter by asset pair..."
-        aria-label="Filter by asset pair"
-        sx={{ width: 400, maxWidth: '100%' }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Filter by asset pair"
+        width={400}
+        onCommit={onAssetChange}
       />
-      <Select
-        value={minTvl}
-        onChange={handleTvlChange}
-        aria-label="Minimum TVL"
-        size="small"
-        // `displayEmpty` keeps the "Any TVL" label visible when no
-        // preset is active — otherwise MUI renders an empty box and
-        // the dropdown's purpose is invisible.
-        displayEmpty
-        renderValue={(value) =>
-          TVL_PRESETS.find((opt) => opt.value === value)?.label ?? 'Any TVL'
-        }
-        sx={{ width: 280, maxWidth: '100%' }}
-      >
-        {TVL_PRESETS.map((option) => (
-          <MenuItem key={option.value || 'any'} value={option.value}>
-            {option.label}
-          </MenuItem>
-        ))}
-      </Select>
+      {TVL_FILTER_ENABLED && (
+        <Select
+          value={minTvl}
+          onChange={handleTvlChange}
+          aria-label="Minimum TVL"
+          size="small"
+          // `displayEmpty` keeps the "Any TVL" label visible when no
+          // preset is active — otherwise MUI renders an empty box and
+          // the dropdown's purpose is invisible.
+          displayEmpty
+          renderValue={(value) =>
+            TVL_PRESETS.find((opt) => opt.value === value)?.label ?? 'Any TVL'
+          }
+          sx={{ width: 280, maxWidth: '100%' }}
+        >
+          {TVL_PRESETS.map((option) => (
+            <MenuItem key={option.value || 'any'} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </Select>
+      )}
     </Box>
   );
 }

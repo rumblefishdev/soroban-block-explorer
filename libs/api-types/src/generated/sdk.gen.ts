@@ -42,6 +42,9 @@ import type {
   GetTransactionResponses,
   HealthData,
   HealthResponses,
+  ListAccountsData,
+  ListAccountsErrors,
+  ListAccountsResponses,
   ListAccountTransactionsData,
   ListAccountTransactionsErrors,
   ListAccountTransactionsResponses,
@@ -51,6 +54,9 @@ import type {
   ListAssetTransactionsData,
   ListAssetTransactionsErrors,
   ListAssetTransactionsResponses,
+  ListContractsData,
+  ListContractsErrors,
+  ListContractsResponses,
   ListEventsData,
   ListEventsErrors,
   ListEventsResponses,
@@ -110,6 +116,30 @@ export const health = <ThrowOnError extends boolean = false>(
   });
 
 /**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccounts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListAccountsData, ThrowOnError>
+) =>
+  (options?.client ?? client).get<
+    ListAccountsResponses,
+    ListAccountsErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts',
+    ...options,
+  });
+
+/**
  * Account detail — header from `accounts` + balances from
  * `account_balances_current` (canonical 06 statements A + B).
  */
@@ -120,7 +150,14 @@ export const getAccount = <ThrowOnError extends boolean = false>(
     GetAccountResponses,
     GetAccountErrors,
     ThrowOnError
-  >({ url: '/v1/accounts/{account_id}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts/{account_id}',
+    ...options,
+  });
 
 /**
  * Paginated transactions involving the account (source or participant).
@@ -134,7 +171,14 @@ export const listAccountTransactions = <ThrowOnError extends boolean = false>(
     ListAccountTransactionsResponses,
     ListAccountTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/accounts/{account_id}/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts/{account_id}/transactions',
+    ...options,
+  });
 
 export const listAssets = <ThrowOnError extends boolean = false>(
   options?: Options<ListAssetsData, ThrowOnError>
@@ -143,7 +187,14 @@ export const listAssets = <ThrowOnError extends boolean = false>(
     ListAssetsResponses,
     ListAssetsErrors,
     ThrowOnError
-  >({ url: '/v1/assets', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/assets',
+    ...options,
+  });
 
 export const getAsset = <ThrowOnError extends boolean = false>(
   options: Options<GetAssetData, ThrowOnError>
@@ -152,7 +203,14 @@ export const getAsset = <ThrowOnError extends boolean = false>(
     GetAssetResponses,
     GetAssetErrors,
     ThrowOnError
-  >({ url: '/v1/assets/{id}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/assets/{id}',
+    ...options,
+  });
 
 export const listAssetTransactions = <ThrowOnError extends boolean = false>(
   options: Options<ListAssetTransactionsData, ThrowOnError>
@@ -161,7 +219,35 @@ export const listAssetTransactions = <ThrowOnError extends boolean = false>(
     ListAssetTransactionsResponses,
     ListAssetTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/assets/{id}/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/assets/{id}/transactions',
+    ...options,
+  });
+
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContracts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListContractsData, ThrowOnError>
+) =>
+  (options?.client ?? client).get<
+    ListContractsResponses,
+    ListContractsErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts',
+    ...options,
+  });
 
 export const getContract = <ThrowOnError extends boolean = false>(
   options: Options<GetContractData, ThrowOnError>
@@ -170,7 +256,14 @@ export const getContract = <ThrowOnError extends boolean = false>(
     GetContractResponses,
     GetContractErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}',
+    ...options,
+  });
 
 export const listEvents = <ThrowOnError extends boolean = false>(
   options: Options<ListEventsData, ThrowOnError>
@@ -179,7 +272,14 @@ export const listEvents = <ThrowOnError extends boolean = false>(
     ListEventsResponses,
     ListEventsErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}/events', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/events',
+    ...options,
+  });
 
 export const getInterface = <ThrowOnError extends boolean = false>(
   options: Options<GetInterfaceData, ThrowOnError>
@@ -188,7 +288,14 @@ export const getInterface = <ThrowOnError extends boolean = false>(
     GetInterfaceResponses,
     GetInterfaceErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}/interface', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/interface',
+    ...options,
+  });
 
 export const listInvocations = <ThrowOnError extends boolean = false>(
   options: Options<ListInvocationsData, ThrowOnError>
@@ -197,11 +304,19 @@ export const listInvocations = <ThrowOnError extends boolean = false>(
     ListInvocationsResponses,
     ListInvocationsErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}/invocations', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/invocations',
+    ...options,
+  });
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor
- * pagination.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgers = <ThrowOnError extends boolean = false>(
   options?: Options<ListLedgersData, ThrowOnError>
@@ -210,7 +325,14 @@ export const listLedgers = <ThrowOnError extends boolean = false>(
     ListLedgersResponses,
     ListLedgersErrors,
     ThrowOnError
-  >({ url: '/v1/ledgers', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/ledgers',
+    ...options,
+  });
 
 /**
  * Get ledger detail by sequence — header + prev/next navigation +
@@ -237,7 +359,14 @@ export const getLedger = <ThrowOnError extends boolean = false>(
     GetLedgerResponses,
     GetLedgerErrors,
     ThrowOnError
-  >({ url: '/v1/ledgers/{sequence}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/ledgers/{sequence}',
+    ...options,
+  });
 
 export const listPools = <ThrowOnError extends boolean = false>(
   options?: Options<ListPoolsData, ThrowOnError>
@@ -246,13 +375,27 @@ export const listPools = <ThrowOnError extends boolean = false>(
     ListPoolsResponses,
     ListPoolsErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools',
+    ...options,
+  });
 
 export const getPool = <ThrowOnError extends boolean = false>(
   options: Options<GetPoolData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetPoolResponses, GetPoolErrors, ThrowOnError>(
-    { url: '/v1/liquidity-pools/{pool_id}', ...options }
+    {
+      security: [
+        { name: 'x-api-key', type: 'apiKey' },
+        { scheme: 'bearer', type: 'http' },
+      ],
+      url: '/v1/liquidity-pools/{pool_id}',
+      ...options,
+    }
   );
 
 export const getPoolChart = <ThrowOnError extends boolean = false>(
@@ -262,7 +405,14 @@ export const getPoolChart = <ThrowOnError extends boolean = false>(
     GetPoolChartResponses,
     GetPoolChartErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools/{pool_id}/chart', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/chart',
+    ...options,
+  });
 
 export const listParticipants = <ThrowOnError extends boolean = false>(
   options: Options<ListParticipantsData, ThrowOnError>
@@ -271,7 +421,14 @@ export const listParticipants = <ThrowOnError extends boolean = false>(
     ListParticipantsResponses,
     ListParticipantsErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools/{pool_id}/participants', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/participants',
+    ...options,
+  });
 
 export const listPoolTransactions = <ThrowOnError extends boolean = false>(
   options: Options<ListPoolTransactionsData, ThrowOnError>
@@ -280,7 +437,14 @@ export const listPoolTransactions = <ThrowOnError extends boolean = false>(
     ListPoolTransactionsResponses,
     ListPoolTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools/{pool_id}/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/transactions',
+    ...options,
+  });
 
 /**
  * Get top-level chain overview stats.
@@ -288,14 +452,22 @@ export const listPoolTransactions = <ThrowOnError extends boolean = false>(
  * Reads the canonical single-statement network-stats query (latest
  * ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
  * estimates for accounts / contracts) and caches the assembled
- * response for 30s in process memory. See the task 0045 spec and
+ * response **keyed on the chain head** (`latest_ledger_sequence`) in
+ * process memory — see `network/cache.rs`. See the task 0045 spec and
  * `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
  * for the full data-source mapping.
+ *
+ * Per request we first read the head cheaply (`crate::common::head` —
+ * `SELECT max(sequence)`, a primary-key probe) and look up the cache
+ * under it: an unchanged head is a HIT (the new ledger has not landed),
+ * an advanced head is a MISS that recomputes once. So a new ledger is
+ * visible on the **first** request after it is written — there is no
+ * up-to-TTL window serving the previous head (task 0291).
  *
  * Concurrent cold-cache requests deduplicate via
  * `moka::future::Cache::try_get_with` — the first task runs the
  * async DB query and the rest wait on its result instead of fanning
- * out N Postgres round-trips.
+ * out N round-trips.
  */
 export const getNetworkStats = <ThrowOnError extends boolean = false>(
   options?: Options<GetNetworkStatsData, ThrowOnError>
@@ -304,7 +476,14 @@ export const getNetworkStats = <ThrowOnError extends boolean = false>(
     GetNetworkStatsResponses,
     GetNetworkStatsErrors,
     ThrowOnError
-  >({ url: '/v1/network/stats', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/network/stats',
+    ...options,
+  });
 
 export const listNfts = <ThrowOnError extends boolean = false>(
   options?: Options<ListNftsData, ThrowOnError>
@@ -313,12 +492,23 @@ export const listNfts = <ThrowOnError extends boolean = false>(
     ListNftsResponses,
     ListNftsErrors,
     ThrowOnError
-  >({ url: '/v1/nfts', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/nfts',
+    ...options,
+  });
 
 export const getNft = <ThrowOnError extends boolean = false>(
   options: Options<GetNftData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetNftResponses, GetNftErrors, ThrowOnError>({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
     url: '/v1/nfts/{contract_id}/{token_id}',
     ...options,
   });
@@ -330,7 +520,14 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
     ListNftTransfersResponses,
     ListNftTransfersErrors,
     ThrowOnError
-  >({ url: '/v1/nfts/{contract_id}/{token_id}/transfers', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/nfts/{contract_id}/{token_id}/transfers',
+    ...options,
+  });
 
 /**
  * Unified search across all entity types.
@@ -345,8 +542,8 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
  * * One SQL path: broad search across the six entity-typed CTEs.
  * * Response is `{ "groups": {…} }` with up to `limit` rows per
  * entity bucket. Rows carry the same columns regardless of
- * bucket: `entity_type`, `identifier`, `label`, `surrogate_id`
- * (BIGINT FK or `null`), plus optional enrichment
+ * bucket: `entity_type`, `identifier`, `label`, `route_token`
+ * (asset routing token or `null`), plus optional enrichment
  * (`successful`, `last_activity_at`) and composite routing
  * (`contract_id`, `token_id`) fields.
  * * FE decides "singleton → direct navigation" by inspecting the
@@ -363,7 +560,14 @@ export const getSearch = <ThrowOnError extends boolean = false>(
     GetSearchResponses,
     GetSearchErrors,
     ThrowOnError
-  >({ url: '/v1/search', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/search',
+    ...options,
+  });
 
 /**
  * List transactions with optional filters and cursor-based pagination.
@@ -375,7 +579,14 @@ export const listTransactions = <ThrowOnError extends boolean = false>(
     ListTransactionsResponses,
     ListTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/transactions',
+    ...options,
+  });
 
 /**
  * Get a single transaction by hash.
@@ -397,4 +608,11 @@ export const getTransaction = <ThrowOnError extends boolean = false>(
     GetTransactionResponses,
     GetTransactionErrors,
     ThrowOnError
-  >({ url: '/v1/transactions/{hash}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/transactions/{hash}',
+    ...options,
+  });

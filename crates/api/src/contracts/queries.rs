@@ -2,10 +2,18 @@
 //! Mirrors canonical SQL `endpoint-queries/{11..14}_*.sql` (task 0167).
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, TsIdCursor, keyset_sql_desc};
+
+use super::dto::ContractStats;
+
+/// Recent-activity window shared by the detail stats (`fetch_contract_stats`)
+/// and the list's `recent_invocations` column, so both compute the count
+/// over the SAME period. Single source — they cannot drift.
+pub(crate) const STATS_WINDOW: &str = "7 days";
 
 #[derive(Debug)]
 pub struct ContractRow {
@@ -18,6 +26,124 @@ pub struct ContractRow {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// Task 0327 — contract mutability, 3-state (`None` = Unknown). Populated
+    /// only on the ClickHouse path; the retired PG path always sets `None`.
+    pub upgradeable: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/contracts (list)
+// ---------------------------------------------------------------------------
+
+/// Pagination payload for `GET /v1/contracts`. `soroban_contracts` is
+/// unpartitioned with no `created_at`, so — like assets — the natural,
+/// index-free order is `id DESC` (BIGSERIAL = ingestion order ≈ recency),
+/// served by the existing primary key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractIdCursor {
+    pub id: i64,
+}
+
+#[derive(Debug)]
+pub struct ContractListRow {
+    pub id: i64,
+    pub contract_id: String,
+    pub contract_type: Option<i16>,
+    pub contract_type_name: Option<String>,
+    pub is_sac: bool,
+    pub deployer: Option<String>,
+    pub deployed_at_ledger: Option<i64>,
+    pub recent_invocations: i64,
+}
+
+pub struct ResolvedContractsListParams {
+    pub limit: i64,
+    pub cursor: Option<ContractIdCursor>,
+    pub contract_type: Option<i16>,
+    /// Free-text search; matched against `search_vector` (name + contract_id).
+    pub q: Option<String>,
+}
+
+/// List SELECT. `recent_invocations` counts the SAME table + predicate as
+/// the detail's `fetch_contract_stats`, over the SAME `STATS_WINDOW` (interpolated
+/// from the const — not user input — so the window cannot drift between
+/// list and detail). All other projected columns use the SAME expressions
+/// as `fetch_contract` (`contract_type_name(...)`, the `accounts` deployer
+/// join), so a list item is a strict subset of the detail row. `sc.name` is
+/// NOT projected — it feeds `search_vector` only, never a response field.
+fn contract_list_select() -> String {
+    format!(
+        "SELECT sc.id, \
+         sc.contract_id, \
+         sc.contract_type, \
+         contract_type_name(sc.contract_type) AS contract_type_name, \
+         sc.is_sac, \
+         deployer.account_id AS deployer, \
+         sc.deployed_at_ledger, \
+         ( SELECT COUNT(*) \
+             FROM soroban_invocations_appearances ia \
+            WHERE ia.contract_id = sc.id \
+              AND ia.created_at >= NOW() - INTERVAL '{STATS_WINDOW}' \
+         )::bigint AS recent_invocations \
+         FROM soroban_contracts sc \
+         LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id"
+    )
+}
+
+fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bool) {
+    qb.push(if *has_where { " AND" } else { " WHERE" });
+    *has_where = true;
+}
+
+fn map_contract_list_row(r: &PgRow) -> ContractListRow {
+    ContractListRow {
+        id: r.get("id"),
+        contract_id: r.get("contract_id"),
+        contract_type: r.get("contract_type"),
+        contract_type_name: r.get("contract_type_name"),
+        is_sac: r.get("is_sac"),
+        deployer: r.get("deployer"),
+        deployed_at_ledger: r.get("deployed_at_ledger"),
+        recent_invocations: r.get("recent_invocations"),
+    }
+}
+
+pub async fn fetch_contract_list(
+    pool: &PgPool,
+    params: &ResolvedContractsListParams,
+    direction: Direction,
+) -> Result<Vec<ContractListRow>, sqlx::Error> {
+    let (op, order) = keyset_sql_desc(direction);
+
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(contract_list_select());
+    let mut has_where = false;
+
+    if let Some(t) = params.contract_type {
+        push_glue(&mut qb, &mut has_where);
+        qb.push(" sc.contract_type = ");
+        qb.push_bind(t);
+    }
+    if let Some(q) = &params.q {
+        // FTS over `search_vector` (name + contract_id), served by
+        // `idx_contracts_search` (GIN). `websearch_to_tsquery` tolerates
+        // arbitrary user input without syntax errors.
+        push_glue(&mut qb, &mut has_where);
+        qb.push(" sc.search_vector @@ websearch_to_tsquery('simple', ");
+        qb.push_bind(q.clone());
+        qb.push(")");
+    }
+    if let Some(cursor) = &params.cursor {
+        push_glue(&mut qb, &mut has_where);
+        qb.push(format!(" sc.id {op} "));
+        qb.push_bind(cursor.id);
+    }
+
+    // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
+    qb.push(format!(" ORDER BY sc.id {order} LIMIT "));
+    qb.push_bind(params.limit);
+
+    let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
+    Ok(raw.iter().map(map_contract_list_row).collect())
 }
 
 pub async fn fetch_contract(
@@ -27,9 +153,9 @@ pub async fn fetch_contract(
     // Per ADR 0042 / task 0156: `soroban_contracts.metadata JSONB` was
     // replaced by typed `name VARCHAR(256)`. The detail response no
     // longer projects a `metadata` field (was always `{}` in practice
-    // and added no value). The `name` column is consumed only by the
-    // search query (`COALESCE(sc.name, '')`); detail page does not
-    // surface it as a separate field.
+    // and added no value). `sc.name` is also NOT projected — it exists only
+    // to feed the search query's `search_vector` (`COALESCE(sc.name, '')`),
+    // and no endpoint surfaces it as a response field.
     let row: Option<PgRow> = sqlx::query(
         "SELECT sc.id, sc.contract_id, encode(sc.wasm_hash, 'hex') AS wasm_hash, \
          sc.wasm_uploaded_at_ledger, \
@@ -54,22 +180,34 @@ pub async fn fetch_contract(
         contract_type_name: r.get("contract_type_name"),
         contract_type: r.get("contract_type"),
         is_sac: r.get("is_sac"),
+        // Task 0327 — mutability lives in the CH wasm_interface_metadata JSON;
+        // the retired PG path has no equivalent → Unknown.
+        upgradeable: None,
     }))
 }
 
 /// Bounded-window stats per canonical 11 Statement B. `window` is bound
-/// twice — `$2::interval` for the predicate, `$2::text` for the echoed
-/// label. Drops the unbounded `SUM(amount)` over events table that the
-/// task 0167 audit flagged as a HIGH-severity full-history scan.
+/// twice — `$2::interval` for the predicates, `$2::text` for the echoed
+/// label. `recent_events` is computed via a correlated subquery against
+/// `soroban_events_appearances` over the SAME window, summing `amount`
+/// (one appearance row can represent multiple actual events). Both
+/// predicates have the shape `(contract_id, created_at >= …)` so they
+/// ride the standard appearance `(contract_id, created_at)` index.
 pub async fn fetch_contract_stats(
     pool: &PgPool,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, String), sqlx::Error> {
+) -> Result<ContractStats, sqlx::Error> {
     let row: PgRow = sqlx::query(
-        "SELECT COUNT(*)::BIGINT                          AS recent_invocations, \
-                COUNT(DISTINCT caller_id)::BIGINT         AS recent_unique_callers, \
-                $2::text                                  AS stats_window \
+        "SELECT COUNT(*)::BIGINT                              AS recent_invocations, \
+                COUNT(DISTINCT caller_id)::BIGINT             AS recent_unique_callers, \
+                ( \
+                    SELECT COALESCE(SUM(amount), 0)::BIGINT \
+                    FROM soroban_events_appearances \
+                    WHERE contract_id = $1 \
+                      AND created_at >= NOW() - $2::interval \
+                )                                             AS recent_events, \
+                $2::text                                      AS stats_window \
          FROM soroban_invocations_appearances \
          WHERE contract_id = $1 \
            AND created_at >= NOW() - $2::interval",
@@ -79,11 +217,12 @@ pub async fn fetch_contract_stats(
     .fetch_one(pool)
     .await?;
 
-    Ok((
-        row.get("recent_invocations"),
-        row.get("recent_unique_callers"),
-        row.get("stats_window"),
-    ))
+    Ok(ContractStats {
+        recent_invocations: row.get("recent_invocations"),
+        recent_unique_callers: row.get("recent_unique_callers"),
+        recent_events: row.get("recent_events"),
+        stats_window: row.get("stats_window"),
+    })
 }
 
 #[derive(Debug)]
@@ -144,7 +283,7 @@ pub async fn fetch_invocation_appearances(
     cursor: Option<&TsIdCursor>,
     direction: Direction,
 ) -> Result<Vec<InvocationAppearanceRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT sia.transaction_id, \
                 encode(t.hash, 'hex')   AS tx_hash, \
@@ -169,7 +308,9 @@ pub async fn fetch_invocation_appearances(
     qb.push(format!(
         " ORDER BY sia.created_at {order}, sia.transaction_id {order} LIMIT "
     ));
-    qb.push_bind(limit + 1);
+    // `limit` is the handler's `fetch_limit()` (already the peek `+1`) — bind
+    // raw, same convention as the CH paths + this branch's other lists.
+    qb.push_bind(limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw
@@ -205,7 +346,7 @@ pub async fn fetch_event_appearances(
     cursor: Option<&TsIdCursor>,
     direction: Direction,
 ) -> Result<Vec<EventAppearanceRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT sea.transaction_id, \
                 encode(t.hash, 'hex')   AS tx_hash, \
@@ -228,7 +369,9 @@ pub async fn fetch_event_appearances(
     qb.push(format!(
         " ORDER BY sea.created_at {order}, sea.transaction_id {order} LIMIT "
     ));
-    qb.push_bind(limit + 1);
+    // `limit` is the handler's `fetch_limit()` (already the peek `+1`) — bind
+    // raw, same convention as the CH paths + this branch's other lists.
+    qb.push_bind(limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw

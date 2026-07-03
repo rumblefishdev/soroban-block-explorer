@@ -74,7 +74,14 @@ pub struct TransactionListItem {
     /// All distinct operation type names in the transaction
     /// (e.g. `["INVOKE_HOST_FUNCTION", "PAYMENT"]`).
     pub operation_types: Vec<String>,
-    /// All C-StrKeys touched anywhere in the transaction.
+    /// C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+    /// On the ClickHouse path this is sourced from `operations_appearances`
+    /// only (primary-key seek): a contract reached solely via a nested
+    /// sub-invocation or an emitted event — never a root-op `contract_id` — is
+    /// NOT listed. For the overwhelming majority of Soroban transactions the
+    /// invoked contract IS the root-op `contract_id`, so this matches the PG
+    /// path in practice; the full 3-source set was dropped because its scan
+    /// blew the read_rows quota (task 0243; see `common::ch`).
     pub contract_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -162,10 +169,22 @@ pub struct OperationItem {
     /// Asset code (≤12 chars) for classic asset operations.
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
-    /// Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded
-    /// from the DB hex form at the response boundary so cross-entity
-    /// link targets match the `/v1/liquidity-pools/:id` route shape.
-    pub pool_id: Option<String>,
+    /// Liquidity pools crossed by this operation, as SEP-23 strkeys
+    /// (`L...`, 56 chars). Encoded from the DB hex form at the response
+    /// boundary so cross-entity link targets match the
+    /// `/v1/liquidity-pools/:id` route shape. Single-element for LP
+    /// deposit/withdraw; the full crossed-pool list for path payments and
+    /// offers that filled against a pool (task 0261/0268 — replaces the
+    /// former nullable scalar `pool_id`).
+    ///
+    /// **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
+    /// pool" **only** for ClickHouse-served responses. The Postgres backend
+    /// (default until each module flips to CH, per task 0243) never received
+    /// the claim-atom extraction, so it returns `[]` for *every* path-payment
+    /// and offer op regardless of whether a pool was crossed — only LP
+    /// deposit/withdraw carry a pool there. Treat `[]` as authoritative for
+    /// pool absence only once the module reads from CH.
+    pub pool_ids: Vec<String>,
     /// 1-based per-tx apply position carrying on-chain operation order
     /// (task 0192). For folded appearance rows (multiple identical-identity
     /// envelope ops collapsed into one row, see task 0163) this is the

@@ -1,0 +1,384 @@
+# 0331 OPS Run Log — live execution record
+
+> Chronological record of the **actual** prod execution of [`ops-runbook.md`](./ops-runbook.md).
+> The runbook is the PLAN; this is the LOG (commands run, numbers observed, gate verdicts,
+> anomalies, decisions). Append-only, one block per step. Filled live during the OPS window.
+
+## Meta
+
+- **Started:** 2026-07-02
+- **Operator (all WRITE/DDL/deploy):** Karol Kowalczyk (`karolkow`) — holds the mTLS **write/admin** cert.
+- **Guide + READ-only validation:** Claude (this session) — holds the mTLS **read-only** cert (`chq`, user `dev_read`).
+- **Rule:** every WRITE to prod is run by the operator; Claude only issues `chq` READ queries,
+  analyzes pasted output, and gates each step. A failed gate STOPS the run.
+
+## Connection method (mTLS, per Filip's guide 2026-07-02)
+
+- Host: `https://ch.sorobanscan.rumblefish.dev` — identity from the client cert, **no** `--user`/`--password`, **no** `--cacert` (public Let's Encrypt cert, system trust).
+- **Read-only** (`chq`, this session): `curl --cert ~/.certs/<cn>.crt --key ~/.certs/<cn>.key <host> --data-binary "<SQL>"` → user `dev_read`. Writes → `Cannot execute query in readonly mode` (by design).
+- **Write/admin** (operator): cert → user **`dev_shared`**, verified 2026-07-02 via `SHOW GRANTS`:
+  `SELECT, INSERT, ALTER, CREATE, DROP, UNDROP, TRUNCATE, OPTIMIZE, SYSTEM, … ON *.*`. Covers every
+  runbook WRITE (Step 1 ALTER, Step 4 CREATE, Step 5 INSERT, Step 10 DROP, SYSTEM REFRESH/WAIT VIEW).
+  Same `chw` helper + host as read, no `--cacert`. Used for every Step marked `[DB]`/WRITE.
+- Per-query limits (read cert): **30 s** wall, **4 GB** memory. Heavy analytics must be range/partition-scoped.
+- `chq` read quota (org): 2B rows / 100 GB per server-hour — heavy reads flagged in the runbook.
+
+## Preconditions — VERIFIED ✅ (2026-07-02, `chq`)
+
+Query:
+
+```sql
+SELECT
+  (SELECT count() FROM assets FINAL WHERE asset_type = 2)                       AS type2_rows,
+  (SELECT countIf(sac_deployed = 1) FROM asset_sac)                            AS sac_deployed,
+  (SELECT count() FROM system.columns
+     WHERE database = currentDatabase() AND table = 'assets' AND name = 'id')  AS assets_id_exists;
+```
+
+| field              | observed | required               | verdict |
+| ------------------ | -------- | ---------------------- | ------- |
+| `type2_rows`       | **0**    | 0 (0339 folded type-2) | ✅      |
+| `sac_deployed`     | **3780** | > 0 (~3780)            | ✅      |
+| `assets_id_exists` | **0**    | 0 (Step 1 adds it)     | ✅      |
+
+0339 phase-2 confirmed live in prod; `assets.id` absent (pending Step 1). Cleared to start.
+
+### Post-merge re-check (2026-07-02) — `feat/0331` merged to `develop`
+
+Operator merged the branch to `develop`. Re-verified prod is UNAFFECTED (no auto-deploy fired):
+`assets.id` col = **0** (absent), `balances`/`balance_aggregates`/`balance_aggregates_mv` = **0**
+(not created), `account_balances_current` = **1** (present). Prod still pristine pre-Step-1. Deploy
+is manual (Step 4/9) → merge changes nothing for the SQL steps; it only makes `develop` the build source.
+
+**Where to run:** `chq`/`chw` are curl-over-HTTPS to the single global prod CH — folder/branch/worktree
+independent; run from `~` (env vars live there). Only `cargo build`/deploy (Steps 3/4/9) are run from a
+repo checkout.
+
+---
+
+## Runbook pre-flight review vs real prod DB (2026-07-02)
+
+Full pass over all 11 steps against the actual prod CH schema (`chq` reads + init.sql DDL).
+
+**Bugs found + FIXED in runbook:**
+
+1. **Step 2 liveness** — `max(last_updated_ledger) FROM assets FINAL` → `assets` has NO ledger column
+   (`DESCRIBE`: asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count,
+   icon_url, id). Fixed → `max(sequence) FROM ledgers`.
+2. **Step 4 gate** — `countIf(id=0) FROM assets FINAL WHERE last_updated_ledger > …` → same missing
+   column. Fixed → `countIf(id=0) FROM assets FINAL` (must stay 0).
+3. **Summary table** Step 2 row — updated to `max(sequence)`.
+4. **Step 3 USDC spot-check** — `USDC` is NOT unique (many issuers on prod); improved to pin the issuer.
+
+**Verified CORRECT against real data (core migration logic):**
+
+- **Step 5 join is 1:1 — NO fan-out.** `SELECT code, issuer, count() … FROM assets type-1 GROUP BY
+code, issuer HAVING count>1` returned **empty** → each (code, issuer) maps to exactly one type-1 row.
+  The `(code, issuer, type)` join can't multiply an abc row. ✅ (`USDC` repeats only across distinct issuers.)
+- **Native representation matches** — assets native = (type 0, code `''`, issuer 0, contract 0, id 0);
+  abc native = type 0, code `''`, issuer 0, **21,024,448 rows**. Join `''=''  ∧ 0=0 ∧ if(0)=0` matches. ✅
+- **Decimals math** — `abc.balance` is `Decimal(38,7)`; `toInt128(balance * 1e7)` → raw stroops. ✅
+- **balances family DDL** (init.sql) matches Step 5 INSERT + read: `balances(holder_id, asset_id, amount
+Int128, last_updated_ledger)` RMT(last_updated_ledger); `balance_aggregates(asset_id, total_supply
+Nullable(Int128), holder_count Nullable(Int32))`; MV `sum(amount)` + `countIf(amount>0)` GROUP BY
+  asset_id FROM balances FINAL, REFRESH EVERY 2 MINUTE, TO … atomic (reads need no FINAL). ✅
+- **Step 7 sources** — `soroban_contracts.is_sac Bool` ✅; `asset_sac(asset_type, asset_code, issuer_id,
+contract_id, sac_contract_id SAF(max,Int64), sac_deployed SAF(max,UInt8))` = the re-key map. ✅
+
+**Flags added to runbook (not blocking):**
+
+- **Step 5 SCALE** — `account_balances_current` = **~59.8M raw rows** (~21M native + ~39M classic).
+  The migration INSERT is the heaviest DB op; measure the FINAL/`balance!=0` count first, chunk by
+  `holder_id` if it nears the 30 s / 4 GB `chw` single-query cap.
+- **Step 8 MV cadence** — `REFRESH EVERY 2 MINUTE` over ~60M `balances FINAL` ≈ ~1.8B rows/h from the MV
+  alone → near the 2B rows/h quota. Measure at Step 8; relax to `EVERY 5 MINUTE` if heavy.
+
+**Verdict:** runbook is **sound + appropriate for our DB** after the 4 fixes; core migration logic
+confirmed against real data. Cleared to continue.
+
+### Missing-objects check + pre-create decision (2026-07-02)
+
+Compared init.sql's 27 CREATE objects vs prod `system.tables`. **Only 3 missing on prod** (all 0331):
+`balances`, `balance_aggregates`, `balance_aggregates_mv`. Everything else already live (0293 engine
+swaps `ledgers`/`wasm_interface_metadata` → RMT; 0297 `soroban_contract_metadata`; 0339 `asset_sac`;
+accounts bloom index; `assets.id` from Step 1). Prod-only leftovers `asset_aggregates` /
+`asset_aggregates_mv` (old read-path, still served by the CURRENT API → drop only AFTER Step 9) +
+`assets_pre0339` (0339 backup) — NOT dropped here.
+
+**DECISION (⚠️ SUPERSEDED at Step 4a — see below): ~~do NOT manually pre-create the 3 tables; the new
+indexer runs `apply_init_sql` at cold-start so Step 4 deploy creates them.~~** This was WRONG — grep at
+Step 4a proved the indexer does NOT call `apply_init_sql` (only `db-clickhouse-init` + tests do) and
+there's no CDK schema hook, so the deploy never creates the tables. They were created explicitly via
+`chw` at **Step 4a** (which is REQUIRED, not optional — the indexer's `BalanceRow` INSERT fails without
+them).
+
+**Safety fact (recorded to kill a recurring worry):** `apply_init_sql` / init.sql is **create-only**
+— ZERO `DROP`/`TRUNCATE` (grep-verified), just `CREATE … IF NOT EXISTS` in a loop. Removing a table
+from the _file_ never drops it from the _DB_; there is no reconcile/sync-to-file. `account_balances_current`
+(the Step-5 copy source) is (a) still in the file [line 344, kept on purpose] and (b) unremovable by
+schema apply regardless. In this project every DROP is a separate explicit manual step (Step 10).
+
+---
+
+## Step 1 — [DB] add `assets.id` column — ✅ DONE (2026-07-02)
+
+**Prod-safety analysis (Claude, pre-run):** safe. `ADD COLUMN ... DEFAULT` is metadata-only in CH
+(no part rewrite, near-instant, non-blocking); `IF NOT EXISTS` = idempotent. All writers to `assets`
+(indexer `writer.rs:239` via the `clickhouse` crate + the `write.rs` INSERTs) use an **explicit named
+column list** → the new column is transparently `DEFAULT 0`, no column-count/decode break. CH reads
+(`queries_ch.rs`) select explicit columns. Old indexer may keep running (writes `id=0`, fixed by Step 3).
+
+**WRITE command (operator):**
+
+```sql
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS id Int64 DEFAULT 0;
+```
+
+**VALIDATE (gate — MUST be 1):**
+
+```sql
+SELECT count() FROM system.columns
+WHERE database = currentDatabase() AND table = 'assets' AND name = 'id';
+```
+
+- **Ran:** `chw "ALTER TABLE assets ADD COLUMN IF NOT EXISTS id Int64 DEFAULT 0"` → empty output (OK).
+- **Gate result (`chq`):** `system.columns` → `id | Int64 | DEFAULT | 0` → column exists = **1**. ✅
+- **Baseline (`chq`, for Step 3):** `assets FINAL` = **329,277** rows, `id=0` = **329,277**, `id!=0` = **0**.
+  Step 3 must drive `id=0` → **0** (all 329,277 keyed by the Rust `ids::asset_id`).
+- **Gate verdict:** ✅ PASS. Proceed to Step 2.
+
+---
+
+## Step 2 — STOP indexer — PENDING (operator AWS action; not `chw`)
+
+**Runbook bug found + fixed (2026-07-02):** the runbook's Step 2 & Step 4 VALIDATE queries read
+`max(last_updated_ledger) FROM assets FINAL` / `WHERE last_updated_ledger > …` — but `assets` has
+**NO ledger column** (`DESCRIBE assets` = asset_type, asset_code, issuer_id, contract_id, name,
+total_supply, holder_count, icon_url, id). Fixed in runbook: Step 2 liveness → `max(sequence) FROM
+ledgers` (per-ledger heartbeat); Step 4 → `countIf(id=0) FROM assets FINAL` must stay 0 (no ledger
+filter possible). `account_balances_current` + `balances` DO have `last_updated_ledger` → Steps 5/10
+unaffected (verified via `system.columns`).
+
+**Liveness baseline (`chq`, 2026-07-02 10:20 UTC):** `ledgers` max sequence = **63,293,670**;
+`soroban_events` max = **63,293,670** (agree). Indexer live, near tip.
+
+**Mechanism (IaC, chosen 2026-07-02):** stop = set `indexerLambdaConcurrency` in
+`infra/envs/production.json` → 0, deploy the compute stack. CDK applies concurrency 0 → indexer
+Lambda throttled to 0 = stopped (S3 trigger wired only when > 0). Cleaner than a manual
+`aws lambda put-function-concurrency` (which the next CDK deploy would reset to the config value).
+Reversible, no data loss (S3 backlog drains on restart).
+
+- **Committed value on develop was `1`** (real steady-state; indexer requires exactly 1 for gapless
+  ordering) → **RESTORE value for Step 6 = `1`.**
+- Operator's local edit `1→0` committed + pushed direct to develop: **`cbe92d57`**
+  (`chore(lore-0331): pause indexer …`), husky lint/typecheck green.
+- ⚠️ **Push ≠ stop.** The prod Lambda still has deployed concurrency 1 until a deploy runs.
+  **Stop happens on `make -C infra deploy-production-compute`** — which ALSO ships the new indexer
+  code (develop has feat/0331 merged), i.e. it does Step 2 (stop) + Step 4 (new indexer code) in one,
+  scoped to the compute stack only (API/FE untouched → deployed in Step 9). `deploy-production` (--all)
+  also works (operator accepts API/FE breaking meanwhile) but is unnecessary now.
+- Restart later = `indexerLambdaConcurrency` back to 1 + `deploy-production-compute` (or manual set).
+
+**Pre-Step-2 readiness gate (minimize downtime — do NOT stop until both ready):**
+
+- Step 3 artifact: `backfill-runner` built + dry-run CLEAN against prod (see Step 3 below). ✅
+- Step 4 artifact: new indexer deployable — CI green on `develop`, `make deploy-production` ready. ⬜ (last gate before stop)
+
+- **Status:** Step 3 dry-run ✅. Awaiting Step 4 deploy-readiness confirm → then stop → freeze-validate.
+
+## Step 3 — [run] backfill `assets.id` — DRY-RUN ✅ / REAL pending (2026-07-02)
+
+**Invocation** (from `feat-0331` worktree; mTLS via operator `WRITE_*` = admin cert → `dev_shared`):
+
+```bash
+cargo run --release -p backfill-runner --bin backfill-runner -- \
+  --target clickhouse --clickhouse-url https://ch.sorobanscan.rumblefish.dev \
+  --ch-cert "$WRITE_CERT" --ch-key "$WRITE_KEY" --ch-ca "$WRITE_CA" \
+  assets-id-backfill --dry-run
+```
+
+**DRY-RUN:** `total_rows=329278  id_zero_before=329278  id_zero_after=0` ✅
+
+- `id_zero_after=0` → Rust `ids::asset_id` keys ALL rows; none escape the map (core check).
+- +1 vs Step-1 baseline (329277→329278) = live indexer added 1 asset — expected.
+- Builds staging + reports + drops; live `assets` untouched (dry-run). **Step 3 de-risked.**
+- REAL run (drop `--dry-run`; does `EXCHANGE`) pending — requires indexer STOPPED (Step 2 first).
+
+**Independent simulation (Claude, `chq` — proves the dry-run, doesn't just trust it):** `ids::asset_id` =
+`0→hash64("native")`, `1→hash64("code:issuer_id")`, `2/3→contract_id`. The only way to yield `id=0` is a
+type-2/3 (or unknown type) with `contract_id=0`. Measured on prod `assets FINAL`:
+
+| check                                  | value   | meaning                                                |
+| -------------------------------------- | ------- | ------------------------------------------------------ |
+| total                                  | 329,278 | matches dry-run                                        |
+| native (type 0)                        | 1       | → one `hash64("native")`                               |
+| classic (type 1)                       | 325,145 | → `hash64("code:issuer")`, unique (no dup code+issuer) |
+| soroban (type 3)                       | 4,132   | → `contract_id`                                        |
+| **type-2/3 with contract_id=0**        | **0**   | ⭐ the only `id=0` risk — none                         |
+| unknown types (∉0,1,3)                 | 0       | no `_ => contract_id` surprises                        |
+| malformed classic (issuer=0 / code='') | 0       | none                                                   |
+
+1 + 325,145 + 4,132 = 329,278 = total ✓ (zero type-2, consistent with 0339). **Every row → deterministic
+nonzero id; collision ~2⁻⁶⁴ (negligible).** Downstream-consistent: Step 5 migration takes `assets.id =
+hash64("code:issuer")`, the live indexer computes the same via `ids::asset_id` → migrated + live balances
+share the `asset_id` by construction. Unit + real-CH e2e tests cover native/classic/soroban + idempotency.
+**Verdict: Step 3 real run is safe + correct; it adds only the atomic EXCHANGE (needs indexer stopped).**
+
+## Step 2 — STOP indexer — ✅ DONE (2026-07-02)
+
+IaC stop: `indexerLambdaConcurrency 1→0` committed `cbe92d57` + pushed develop, then
+`make -C infra deploy-production-compute`. Deploy diff: ProcessorFunction `ReservedConcurrentExecutions
+1→0` + **SQS EventSourceMapping DESTROYED** (concurrency 0 → CDK removes the trigger — stronger than a
+throttle) + new code S3Key (new indexer binary). `get-function-concurrency` → **0**. Deploy
+`Explorer-production-Compute` ✅ 33 s. **Freeze validated:** `max(sequence)` = 63,294,116 == 63,294,116
+across 35 s → indexer stopped. NOTE: compute-stack also holds ApiFunction → the API is now on new code
+(reads `balances`, empty until Step 5/7) — operator accepts API breakage; part of Step 9 already done.
+
+## Step 3 — REAL run — ✅ DONE (2026-07-02)
+
+`assets_id_backfill completed (dry_run=false): total_rows=329278 id_zero_before=329278 id_zero_after=0`.
+**Validated (`chq`):** `id=0` → 0; `uniqExact(id)` = 329,278 = total → **zero collisions** (materialized
+ids let me confirm empirically what was ~2⁻⁶⁴ theory); soroban `id==contract_id` 4132/4132; native id =
+`-6959166271784855184`. Every asset uniquely keyed.
+
+## Step 4a — create balance tables — ✅ DONE (2026-07-02)
+
+Root cause found: the indexer does NOT run `apply_init_sql` (only `db-clickhouse-init` + tests do), and
+no CDK schema hook → the tables had to be created explicitly BEFORE starting the indexer (else its
+`BalanceRow` INSERT fails). Created via `chw` (verbatim init.sql): `balance_aggregates` (MergeTree),
+`balances` (RMT(last_updated_ledger)), `balance_aggregates_mv` (refreshable MV). Validated: 3 objects,
+correct engines + schemas, `balances` empty, MV `status=Scheduled`, no exception.
+
+## Step 5 — migrate `account_balances_current` → `balances` — ✅ DONE (2026-07-02, indexer stopped)
+
+**Ordering:** ran with the indexer STILL stopped (deviation from runbook start-then-migrate) → no
+concurrent writes → clean deterministic validation; RMT keeps correctness either order.
+
+**Executed (`chw`, no timeout):**
+
+```sql
+INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger)
+SELECT abc.account_id, a.id, toInt128(abc.balance * 10000000), abc.last_updated_ledger
+FROM account_balances_current abc FINAL
+INNER JOIN assets a FINAL ON a.asset_code = abc.asset_code AND a.issuer_id = abc.issuer_id
+  AND a.asset_type = if(abc.asset_type = 0, 0, 1);
+```
+
+**DECISION — migrate zeros (operator):** NO `WHERE balance != 0`. Preserves trustline-existence info.
+Cost: ~2× MV scan (may relax MV to 5 min, Step 8). Correct — reads filter `amount != 0`.
+
+**Validated (`chq`):** `balances` = **48,504,880** rows (59.87M raw − 11.4M RMT dedup); **orphans
+(asset_id=0) = 0**; nonzero 20.08M / zero 28.43M. **Circle USDC parity EXACT** — `sum/1e7` =
+219,734,650.6938 == old `asset_aggregates` 219,734,650.6938326. Native XLM sum 104.78B (see below).
+(Runbook validate-(b) "live wins tie" deferred to post-4b catch-up.)
+
+### Investigation findings (all → real chain data, no bugs)
+
+- **Two `asset_type` enums (load-bearing):** `account_balances_current.asset_type` = HORIZON
+  (0=native, 1=alphanum4 [code ≤4], 2=alphanum12 [code 5-12]); `assets.asset_type` = PROJECT
+  (0=native, 1=classic_credit, 2=SAC [retired 0339], 3=soroban). The "2" collision is coincidental —
+  Horizon-2 = alphanum12, NOT SAC. Verified prod: type1 codes len 1-4, type2 len 5-12; **0 cross-type
+  (code,issuer) dups** (code length is deterministic → no double-count). Old `asset_aggregates_mv`
+  uses `WHERE asset_type IN (1,2) GROUP BY code,issuer` — CORRECT (both alphanum = classic), no naive
+  `abc.asset_type = assets.asset_type` join anywhere. **No bug from the two enums.** `balances` drops
+  the Horizon enum entirely (keys by `asset_id`; Horizon 1&2 → one project-classic `asset_id`).
+- **i64-ceiling "artifacts":** ~5,823 classic balances at exactly `922337203685.4775807` (=2⁶³−1
+  stroops) on FAKE tokens (fake USDC/XRP/GOLD/metals). Real Circle USDC (561k holders) has ZERO
+  ceiling → spam lands on its own spam `asset_id`, real assets untouched. Old `asset_aggregates` shows
+  the same absurd spam supplies → **not a regression.** Real on-chain balances of spam tokens.
+- **Native XLM = 104.78B (NOT an artifact — I falsely alarmed first):** top account
+  `GALAXYVOIDAOPZTDLHILAJQKCVVFMD4IKLXLSZV5YHO7VY74IWZILUTO` (home*domain "…stare into the abyss…")
+  holds **55.44B XLM** — **Horizon-confirmed EXACT** (`55442115247.4347086`). It's the XLM **burn/void
+  address** (2019 "burn" sent ~55B here, not protocol-destroyed). On-chain native total = ~105B;
+  CMC/StellarExpert cite ~50B \_circulating* by excluding it. Our sum is CHAIN-FAITHFUL. My "55B > 50B =
+  impossible" was wrong — I conflated circulating (~50B) with on-chain total (~105B).
+- **→ Spawned [0342] (backlog):** supply DISPLAY convention (exclude burn-void for native; flag/hide
+  spam-ceiling tokens). Read/display only — `balances` stays chain-faithful. Not a blocker.
+
+## Step 4b — indexer restart — (2026-07-02), then re-stopped
+
+- **Resumed indexer = the NEW single-write code:** writes `balances` (not `account_balances_current`);
+  `account_balances_current` stayed FROZEN (59,869,428 rows, max_ledger 63,294,116, 0 rows after cutover).
+  `assets.id` stayed clean (`countIf(id=0)=0`).
+- **350,215 real balance rows** written live in the window (last_updated_ledger 63,294,117–685; 348,803
+  nonzero; 0 negatives; 0 orphans). Cross-checked a live-indexed holder (G-account `GC5LF63G…`) vs
+  Horizon: ours 24,249,174.27 USDC @ ledger 63,294,633 vs Horizon 24,411,441.26 @ tip — matches (the
+  ~0.67% gap = an active account trading between our ledger and tip). **Scaling correct.**
+- **Circle USDC supply moved 219.7M → 245.9M** — REAL + GOOD: the live indexer captures contract-held
+  SAC USDC (72.5M contract-held in the window) that the trustline-only migration missed → supply trends
+  toward Circle's true ~250M. No double-count (G-trustline vs C-contract = distinct holder_id). This is
+  exactly 0331's purpose (surface what Horizon/trustline-sum can't see).
+
+## Step 7 — balance-seed — DRY-RUN ✅ / REAL running (2026-07-02)
+
+**Transport blocker found + fixed:** the seed's SAC candidate scan is HEAVY (~9.5B rows / ~6 min / ~2 TiB)
+and streams no response header until done → Caddy's `response_header_timeout 30s` (Caddyfile) → **504**.
+Operator raised it **30s → 10 min** on the box + reloaded Caddy → seed runs. (Tried a URL-param
+`send_progress_in_http_headers=1` first — DEAD: clickhouse 0.15.0 `query.rs:211` `pairs.clear()` wipes
+base-URL params; only `.with_option()` works, which is a code change. So Caddy bump was the fix.) Also
+fixed the CLI: `--soroban-rpc-url` is a GLOBAL arg (before the subcommand), not a `balance-seed` arg.
+RPC used: `https://mainnet.sorobanrpc.com` (project's 0311 pool primary).
+
+**DRY-RUN funnel (healthy):** `tokens=5285 holders_enumerated=122704 keys_requested=122704
+entries_returned=115438 balances_decoded=115425`. → 0 malformed holders; 94.1% keys have a live entry
+(5.9% = spent-to-zero/removed, correctly excluded); 99.99% of returned decode (13 edge shapes). Seed
+inserts ~115k rows (type-3 G∪C + contract-held SAC), one write at the end (`insert_rows`).
+
+**Catch-up-before-seed — NOT required here** (corrected): the runbook rule was for a ~12-day-behind
+indexer (freshness decay). Near tip, seed (historical holders via `soroban_events`) + live indexer
+(recent holders) cover everything, RMT-convergent, either order. Seed run with indexer stopped for clean
+isolation. **REAL seed launched 2026-07-02, indexer stopped.**
+
+**REAL seed ✅ DONE + VALIDATED (2026-07-02):** `balances_decoded=115425` (funnel identical to dry-run).
+
+- **All rows landed:** `balances` 48,855,095 → **48,970,520** (+115,425 exact).
+- **🎯 AMM pool `CATUJXDU` contract-held reserves captured** (the flagship 0331 win — Soroban-LP
+  reserves invisible to Horizon/trustline-sum/StellarExpert): native **1,158,166.09 XLM** + **203,656.95
+  EURC** — matches the 2026-07-01 on-chain (`get_reserves`) 1,166,805.7 XLM / 202,080.76 EURC within ~1%
+  (pool traded 1.5 days). Re-keyed onto native+EURC `asset_id` via `asset_sac` (ADR 0051).
+- **type-3 supply coverage: 11 → 1,167 tokens** now have a positive balance (~80% of the ~1448 meaningful
+  set; the rest are currently zero/empty).
+- **Every asset_type held by BOTH C-contracts AND G-accounts** (unified holder model, the core 0331
+  goal): native 873 C / 12.58M G; classic 36,932 C / 7.85M G; soroban 844 C / 32k G.
+
+## Step 8 — validation — ✅ PASSED (2026-07-02)
+
+- **AMM pool `CATUJXDU` reserves** 1.158M XLM + 203.7k EURC = on-chain `get_reserves` ~1% (flagship).
+- **type-3 supply coverage 11 → 1,167** tokens.
+- **Every asset_type held by BOTH C + G** (native 873C/12.58M G · classic 36,932C/7.85M G · soroban 844C/32k G).
+- **USDC full supply 259.2M** (trustline ~220M + ~40M contract-held) — captures what Horizon/trustline-sum miss.
+- **Vault MERU 13.59M** (≈ README `TotalSupply` +7% growth) + rebasing **EUTBL 386.6M / eurSAFO 436.9M** (were `—`).
+- **Account portfolio vs Horizon** (GC5LF63G VELO/XLM/USDC) matches; delta = live lag (indexer stopped).
+- **Integrity** 0 neg / 0 orphan; **MV cost** 50M rows / 1.3 s per 2-min refresh (keep 2-min).
+
+### Coverage deep-dive (operator was skeptical — externally verified, NOT hand-waved)
+
+`balance_aggregates` coverage: native 100% · classic 69.6% · type-3 28.2% with positive supply. Verified:
+
+- **type-3 empty is REAL, not a gap.** 4,132 total; **1,506 ever emitted events**, **2,626 (63.6%) never**
+  (event-verified, matches README's 2,623). Of the 339 event-but-no-supply: ~264 are custom-storage LP-share
+  tokens (Comet `CPAL` 136 + `Pool Share` 128) → honest `—` (Faza-3 deferred), rest meme/spent-to-zero.
+- **type-3 is SAC-free** (0 is_sac, 4,132 all real WASM) — count not inflated by SAC-wrapped.
+- **EXTERNAL (StellarExpert live API, background research agent):** recent ~480 Soroban contracts = only 15%
+  ever-active (85% dead template/factory deploys, 1 wasm = 80%); classic oldest-3000 = 68.2% funded ≈ our
+  69.6%; 459,506 total mainnet assets. **Verdict: our 28%/70%/63% are mainnet-consistent, NO indexing gap.**
+
+## Step 10 — drop `account_balances_current` — ✅ DONE (2026-07-02)
+
+Pre-drop safety (`chq`): API reads `balance_aggregates` (41 reads/30 min), **0 abc reads, 0 old
+`asset_aggregates` reads**; only the old `asset_aggregates_mv` still read abc. Dropped in order (operator, `chw`):
+`asset_aggregates_mv` (reader) → `asset_aggregates` (old target) → `account_balances_current` (abc). Validated:
+3 objects gone; `balances`/`balance_aggregates`/MV intact; USDC supply still reads 259.2M. Data safe (migration
+was complete: 0 orphans, all 226,355 identities matched).
+
+## Steps 6, 9, 11 + close-out
+
+| #   | Step                                        | Status                                           |
+| --- | ------------------------------------------- | ------------------------------------------------ |
+| 6   | catch-up to tip (indexer restart)           | ⬜ config 0→1 set; operator deploys when ready   |
+| 9   | API (Step 2) + FE                           | ✅ both deployed                                 |
+| 11  | feed 0199                                   | ✅ cross-linked (Soroban reserve data satisfied) |
+| —   | close 0331 + follow-ups (0342, 0210 Faza-3) | ✅ task done + archived                          |
+
+**OPS RUN COMPLETE.** Only Step 6 (operator-controlled indexer restart → freshness) remains; the model is
+live + validated. `assets.id` incident (uncontrolled restart from a premature config push) recorded; no data harm.

@@ -6,12 +6,14 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
-import { reserveDotColor } from '../liquidity-pools/assetColor.js';
 
-import { assetLegLabel, legHref } from './helpers.js';
+import {
+  assetLegLabel,
+  legHref,
+  reserveDotColor,
+} from '../pool-shared/helpers.js';
 
 interface AssetReserveCellProps {
   amount: string | null | undefined;
@@ -54,6 +56,11 @@ function AssetReserveCell({
         }}
       />
       <Typography component="span" variant="bodyXsMedium">
+        {/* LP amounts (reserves, shares) arrive pre-scaled: CH stores them as
+            Decimal128(7) so `toString` already renders "750.699916", not a raw
+            integer. Do NOT wrap in scaleByDecimals — unlike account balances /
+            asset supply (raw Int128 + `decimals`, scaled on the FE), LP assets
+            are always classic 7dp and scaled DB-side. */}
         {amount != null ? formatAmount(amount) : '—'}
       </Typography>
       {amount != null ? codeNode : null}
@@ -87,7 +94,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
               <IdentifierWithCopy
                 value={pool.pool_id}
                 type="pool"
-                href={routes.pool(pool.pool_id)}
+                linked={false}
                 truncate={false}
               />
             ),

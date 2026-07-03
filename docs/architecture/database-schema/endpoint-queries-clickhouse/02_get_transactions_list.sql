@@ -11,6 +11,50 @@
 --     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates` for any new
 --     transaction-list module instead of the inline projection here.
 -- ============================================================================
+-- ⚠️  CH READ-COST CORRECTION (task 0243) — `contract_ids` is OPS-ONLY in the
+--     live read path. The `arrayConcat`/UNION over operations_appearances +
+--     soroban_invocations_appearances + soroban_events shown in statements
+--     B/C below is NOT what runs. Both soroban_* tables are ORDER BY
+--     (contract_id, …), so the per-page `(ledger_sequence, transaction_id) IN
+--     (…)` key filter is a PARTITION SCAN on them, not a key seek. In
+--     production a single /transactions page read ~1e8 rows and a handful of
+--     requests exhausted the api_reader read_rows hourly quota
+--     (CH Code: 201 QUOTA_EXCEEDED), 500-ing every CH endpoint.
+--     The live helper sources `contract_ids` from operations_appearances ONLY
+--     (primary-key seek). PARITY COST: a contract touched solely via a nested
+--     sub-invocation or an emitted event (never a root-op contract_id) is not
+--     listed; for the vast majority of Soroban tx the invoked contract IS the
+--     root-op contract_id, so list-row contract_ids match PG in practice.
+--     A cheap full-parity path (skip-index on transaction_id, or a precomputed
+--     per-tx contract_ids column) is a deferred follow-up.
+-- ============================================================================
+-- ⚠️  CH FINAL READ-COST CORRECTION (task 0243) — `... FINAL ... ORDER BY ...
+--     LIMIT` over a partition reads the WHOLE partition: FINAL must merge it
+--     before the limit applies (~1.2e8 transactions on the mainnet head).
+--     Live read path:
+--     • Statement A (no filter, polled) DROPS FINAL and orders/keys on the
+--       physical sort key `(ledger_sequence, application_order)` so CH reads in
+--       primary-key order and stops at the limit (~2e5 rows/page, validated).
+--       Cursor tie-break is `application_order` (also the correct in-ledger
+--       order — the `id` hash tie-break shown below does NOT preserve it).
+--     • Statements B/C (filtered) must NOT join the driver to
+--       `transactions t FINAL` unpruned — that merges the whole 3.6B-row table
+--       per request (measured; blew the read_rows quota, Code: 201). Prune
+--       `transactions` to the driver's partition and stream it (driver = hash
+--       side). The `contract_id` driver now SEEKS via the
+--       `idx_oa_contract_id` bloom_filter skip-index on `operations_appearances`
+--       (task 0333) — a SPARSE contract previously full-scanned the table
+--       (box-measured 13.18 M read_rows / 1609 granules → 245 K / 32 granules
+--       with the index; this full scan recurred and blew the quota again on
+--       2026-06-29, CH Code: 201). The `type` driver (Statement C) still scans
+--       the pruned partition (low-cardinality; bloom less effective) — its own
+--       skip-index/analysis remains a deferred follow-up.
+--     • ledgers (04) + network (01) are ORDER BY `sequence`, NOT `closed_at`;
+--       drive their reads off `sequence` (monotonic with closed_at) to stay on
+--       the primary key.
+--     FINAL is kept only for single-key / per-page key-seek reads (detail,
+--       embedded ledger tx, the aggregate helper) where it is cheap.
+-- ============================================================================
 -- Endpoint:     GET /transactions
 -- Purpose:      Paginated list of transactions. Optional filters:
 --               source_account, contract_id, operation_type.

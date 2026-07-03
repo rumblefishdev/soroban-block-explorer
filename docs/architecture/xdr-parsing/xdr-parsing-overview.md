@@ -176,9 +176,39 @@ From `OperationMeta` per transaction, the ingest path extracts:
 - `source_id`, `destination_id` surrogate FKs (ADR 0026)
 - `contract_id` surrogate FK
   ([ADR 0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md))
-- `asset_code`, `asset_issuer_id`, `pool_id` (BYTEA 32)
+- `asset_code`, `asset_issuer_id`, `pool_id` (BYTEA 32; CH: `pool_ids`
+  Array — see below)
 - `ledger_sequence`, `created_at`
 - `amount` aggregate count of physical operations collapsed into this identity
+
+**Liquidity-pool attribution (task 0261).** LP deposit/withdraw ops carry
+their pool id in the operation body. Path payments
+(`path_payment_strict_send` / `path_payment_strict_receive`) and offer ops
+(`manage_sell_offer` / `manage_buy_offer` / `create_passive_sell_offer`) do
+**not** — the pools they cross are only visible in the `OperationResult`
+success branch as `ClaimAtom::LiquidityPool` entries (path payments expose
+`offers`, offers expose `ManageOfferSuccessResult.offers_claimed`; a single
+op can fill against both the order book and an AMM, CAP-38). The parser
+unwraps the per-op results (`tx_op_results`, including the fee-bump inner
+nesting) and, for each such successful op, appends to the op details:
+
+- `poolIds` — deduped list of crossed pools (hex), and
+- `claimedAtoms` — every LP fill with `poolId`, `assetSold`/`amountSold`,
+  `assetBought`/`amountBought`, so per-(pool, ledger) `gross_volume_a`
+  can be computed downstream without a second parse pass (tasks
+  0247/0266/0199).
+
+`tx_op_results` returns op results only for **successful** transactions: a
+failed transaction rolls every op back, yet an op that executed before the
+failing one still shows op-level `Success` with claim atoms — gating on tx
+success keeps those phantom crossings out of `pool_ids` and
+`gross_volume_a`. Failed (or order-book-only) ops therefore contribute no
+pool attribution. The CH writer folds `poolIds` into
+`operations_appearances.pool_ids Array(FixedString(32))` (sorted + deduped;
+one row per op identity — task 0268); the PG store keeps the legacy scalar
+`pool_id`, where these ops remain NULL pending PG retirement.
+`/liquidity-pools/:id/transactions` on CH therefore surfaces path payments
+and offers that crossed the pool, matching Horizon.
 
 Not stored at ingest (re-derived from XDR at read time per ADR 0029):
 `transfer_amount` (dropped), `application_order` (dropped), per-op JSONB
@@ -240,6 +270,29 @@ entities:
   override map consumed by `extract_contract_deployments`. Task 0255
   Phase 1; pre-fix the parser stored the inner-tx source unconditionally
   and misattributed deploys with per-op overrides
+- contract WASM upgrade → re-emitted `soroban_contracts` row (task 0320).
+  `extract_contract_deployments` records `wasm_hash` only on the `created`
+  instance, so a later executable swap on an `updated` ContractInstance was
+  dropped and the row kept its stale deploy-time hash + verdict forever.
+  `state::extract_contract_wasm_upgrades` scans `updated` instances for the new
+  `wasm_hash` (SACs carry no hash → skipped). The CH writer does a
+  read-modify-write: it pre-fetches the prior row's identity
+  (`persist::fetch_prior_contract_rows`) and re-emits a full row with the new
+  `wasm_hash`, `wasm_uploaded_at_ledger` bumped to the upgrade ledger (wins the
+  RMT `ORDER BY (contract_id)` collapse), the verdict re-derived from the new
+  hash, and deployer / deploy-ledger / name carried forward unchanged — so the
+  whole-row RMT replace never clobbers deploy identity (the naive filter-flip
+  rejected in 0283). The classification cache is evicted for upgraded
+  `contract_id`s so the new verdict takes effect.
+- contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
+  task 0297). `name` / `symbol` / `decimals` are read from the contract instance
+  entry's `Symbol("METADATA")` struct (`{decimal, name, symbol}`) via
+  `token_metadata::extract_token_metadata`, collected by
+  `state::extract_contract_metadata_writes` on `created` + `updated` instance
+  changes (SACs skipped — derivable from the SAC identity). This corrects the
+  legacy assumption that token names are a standalone `Symbol("name")` entry —
+  they are not (that path matched 0 contracts); the name lives nested in METADATA
+  in instance storage, which `scval_to_typed_json` used to drop.
 - WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
   wasm_hash BYTEA)
 - account state → `accounts` row + `account_balances_current` entries per
@@ -253,10 +306,36 @@ entities:
   (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a
   per-ledger singleton emit (`xdr_parser::native_asset_singleton`) — the
   persist `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.
-  These two paths complement `detect_assets`, which only emits SAC + Soroban
-  variants from observed contract deployments. Without the dedicated
-  classic-credit producer, `account_balances_current` would carry the
-  balances but the entity row never existed (Karol's pre-audit Bug #1).
+  These paths complement `detect_assets`, which emits Soroban-native rows plus
+  **folds a SAC deploy onto the underlying classic/native row** (see below).
+  Without the dedicated classic-credit producer, `account_balances_current`
+  would carry the balances but the entity row never existed (Karol's pre-audit
+  Bug #1).
+- **SAC is a facet of the classic/native asset, not a separate row** (ADR 0051 /
+  task 0339). A SAC deploy (`detect_assets` SAC branch) and an un-deployed SAC
+  seen via a CAP-67 event (`detect_undeployed_sac_overrides`, task 0323) both
+  record the SAC handle (`sac_contract_id` = surrogate of the derived `C…`, +
+  `sac_deployed`) keyed on the `classic_credit` / `native` identity in the
+  `asset_sac` side table — NOT a distinct `asset_type = 2` row, and NOT columns on
+  `assets` (which is re-written whole every ledger and would clobber them). The
+  staging `push_sac` accumulator `max`-merges the facet per key (a deploy sighting
+  beats a later un-deployed override), mirrored cross-ledger by the `asset_sac`
+  AggregatingMergeTree. Override collection is crypto-gated
+  (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`, so a bespoke
+  contract is never mislabeled) and suppresses the Pass-2 FK stub (**no
+  `soroban_contracts` row**), so `soroban_contracts` holds **deployed instances
+  only**. The `C…` StrKey itself is not stored — the read path re-derives it from
+  `code:issuer` (`derive_sac_strkey`). The legacy PG path still flips `is_sac=true`
+  on pre-window SAC skeletons (`apply_sac_overrides_for_skeleton_contracts`, task 0218) — being deprecated with PG.
+- **SAC event gate at NFT detection** (task 0294) → a CAP-67 classic-asset SAC
+  emits `transfer`/`mint`/`burn` under its deterministic `contract_id` carrying
+  the SEP-11 asset `CODE:ISSUER` in the LAST topic and an i128 **amount** in data.
+  `detect_nft_events` runs the shared `sac_override_from_event_topics` gate first
+  (`emitter == derive_sac(asset)`); a crypto-proven SAC event is **skipped before
+  it can be minted as an NFT candidate**, so a payment/transfer-only un-deployed
+  SAC's amount is never mis-read as an NFT token_id. Stateless and per-event (no
+  prior-row / no quarantine needed for this class). The gate returns `None` for
+  bespoke emitters, so genuine NFTs are unaffected (false-negative-only).
 
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.
@@ -404,6 +483,19 @@ Public function signatures are extracted from contract WASM at deployment time
 and stored in `wasm_interface_metadata.metadata` (keyed by `wasm_hash BYTEA(32)`),
 deduplicated across every contract instance that shares the same WASM.
 
+The same pass also derives the **mutability** bit (task 0327): the parser scans
+the WASM's import section for the `update_current_contract_wasm` host fn (Soroban
+env import module `"l"`, field `"6"`) and stores `metadata.upgradeable: bool`. A
+contract can only replace its own code by calling that host fn, so importing it is
+the authoritative "self-upgradeable" signal; its absence means the contract is
+effectively immutable/frozen (there is no on-ledger immutability flag — CAP-0046).
+Because the bit is keyed by `wasm_hash`, it re-resolves correctly after an upgrade
+swaps a contract's `wasm_hash` (task 0320). The import-section walker is a small
+hand-rolled LEB128 scan in `crates/xdr-parser/src/contract.rs`
+(`wasm_imports_upgrade_fn`), reusing the same `read_leb128` reader as the custom-
+section parser; it is validated against real mainnet WASM in
+`crates/xdr-parser/tests/upgradeable_real_wasm.rs`.
+
 `soroban_contracts.name VARCHAR(256)` (per
 [ADR 0042](../../../lore/2-adrs/0042_soroban-contracts-typed-name-column.md))
 carries the human-readable contract name extracted from the standard
@@ -422,6 +514,42 @@ narrowing rather than as further JSONB fields.
 This extraction is part of the broader XDR/protocol decode pipeline because it
 turns deployment-related protocol artifacts into stable explorer-facing contract
 metadata.
+
+### 5.5 NFT Event Shapes (`detect_nft_events`)
+
+NFT mint/transfer/burn events are matched by their first topic Symbol
+(`transfer`/`mint`/`burn`, case-insensitive) and parsed by `detect_nft_events`
+(`crates/xdr-parser/src/nft.rs`). The `token_id` (vs a fungible `amount`) rides in
+one of three on-chain `data` encodings — all observed on mainnet — and each is handled:
+
+- **Shape A — scalar:** addresses in topics, bare scalar `token_id` in `data`
+  (`u32`/`u64`/`i128`); the SEP-41/SEP-50 `single-value` form.
+- **Shape B — packed vec:** topics carry only the event Symbol, `data = Vec[addr…,
+token_id]` (older ERC-721-port / pre-`#[contractevent]` contracts).
+- **Shape C — map:** addresses in topics, `data = map{ "token_id": uN }` — the
+  soroban-sdk `#[contractevent]` map-by-field default, i.e. the OpenZeppelin
+  reference-impl / SEP-50 shape (the dominant modern NFT encoding).
+
+`consecutive_mint` (OpenZeppelin Consecutive / EIP-2309) is a batch event: topics
+`[consecutive_mint, to]`, `data` a `[from_token_id, to_token_id]` range (map or vec),
+expanded into one mint per id and bounded by `MAX_CONSECUTIVE_RANGE` (over-cap or
+inverted ranges are dropped + tripwired).
+
+**Fungible disambiguation.** The same symbols + a `map` data shape are also used by
+SEP-41/SAC fungible events (`map{ amount, to_muxed_id }`, the CAP-67 muxed form). A map
+is treated as NFT **iff it carries a `token_id` key**; a map with `amount`/`to_muxed_id`
+and no `token_id` is fungible and skipped.
+
+**Silent-drop tripwire.** A recognised NFT symbol whose argument shape does not parse is
+dropped with a `tracing::warn!` tripwire (not silently), so unhandled future shapes
+surface instead of vanishing. The parser is deliberately permissive here; the
+authoritative NFT-vs-fungible-vs-other decision is the downstream WASM-spec classifier
+(`soroban_contracts.contract_type`): only `Nft`-classified contracts' rows reach the hot
+`nfts`/`nft_ownership` tables, `Fungible`/`Token` are dropped, and `Other`/`NULL` wait in
+the `nfts_pending` quarantine until a later WASM observation reclassifies them. A
+parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefore
+contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
+prod/RPC evidence behind these shapes.)
 
 ## 6. Storage Contract
 

@@ -1,6 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   DetailErrorState,
   getDefaultTruncation,
   NotFoundState,
@@ -18,6 +17,7 @@ import { ModeToggle } from './sections/ModeToggle.js';
 import { OperationsSection } from './sections/OperationsSection.js';
 import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
+import { TransactionDetailSkeleton } from './TransactionDetailSkeleton.js';
 import { useDetailMode } from './useDetailMode.js';
 import { useTxHashParam } from './useTxHashParam.js';
 
@@ -32,29 +32,7 @@ export default function TransactionDetailPage() {
   }
 
   if (query.isLoading) {
-    return (
-      <Stack spacing={3}>
-        <Box>
-          <PageBreadcrumb
-            items={[
-              { label: 'Transactions', to: '/transactions' },
-              {
-                label: truncateMiddle(
-                  hash,
-                  getDefaultTruncation('transaction')
-                ),
-              },
-            ]}
-          />
-          <Typography variant="heading5SemiBold" component="h1">
-            Transaction Detail
-          </Typography>
-        </Box>
-        <CardSkeleton />
-        <CardSkeleton />
-        <CardSkeleton />
-      </Stack>
-    );
+    return <TransactionDetailSkeleton />;
   }
 
   if (query.isError) {

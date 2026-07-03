@@ -1,114 +1,152 @@
-//! `assets.{icon_url, name}` enrichment from issuer SEP-1 stellar.toml.
+//! `asset_enrichment` side-table fill from issuer SEP-1 stellar.toml.
 //!
-//! Single fetch yields both `image` and `name` from the matching
-//! `CURRENCIES[]` row; the worker writes them in one UPDATE so SQS
-//! traffic stays at one message per asset.
+//! A single fetch yields both `image` and `name` from the matching
+//! `CURRENCIES[]` row; both land in one `asset_enrichment` row (ADR 0050).
+//! The indexer-owned `assets` table is **never** written here, so the
+//! indexer's continuous whole-row re-inserts cannot clobber the
+//! enrichment.
 //!
-//! `assets.name` is filled only for ClassicCredit (asset_type=1) and
-//! SAC (asset_type=2). Soroban-native (3) is owned by the indexer
-//! (task 0156). Permanent fails write the `''` sentinel so the
-//! producer dedup
-//! `WHERE icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)`
-//! short-circuits. Transient fails return [`EnrichError::Transient`]
-//! and SQS retries.
+//! `name` is filled only for ClassicCredit (asset_type=1) and SAC
+//! (asset_type=2). Native (0) / soroban (3) are not SEP-1 enrichable —
+//! their names come from elsewhere (Option C: soroban from
+//! `soroban_contracts.name`, native from an API constant; task 0231).
+//! Permanent fails write the `''` sentinel; a row **existing** for the key
+//! marks it "tried" so the candidate query (`NOT IN asset_enrichment`)
+//! skips it. Transient fails return [`EnrichError::Transient`] and SQS
+//! retries.
 //!
-//! UPDATE uses `COALESCE(NULLIF($n, ''), col, $n)` per column so the
-//! write ordering is `real > sentinel > NULL`:
-//!
-//! - real beats existing sentinel `''` — a later run that finally
-//!   resolves a column upgrades the row instead of being blocked by
-//!   the previous permanent-fail sentinel.
-//! - real beats existing real — a later TOML edit refreshes the value.
-//! - sentinel does NOT clobber existing real — protects classic-form
-//!   assets re-emitted because the OTHER column was NULL (e.g.
-//!   `icon_url` already real, `name` missing → producer re-emits;
-//!   worker permanent-fails on `image` lookup but real `icon_url`
-//!   stays put).
-//! - sentinel beats NULL — first non-success run records the
-//!   producer-dedup breaker.
-//!
-//! For Soroban-native (asset_type=3) the binding for `name` is `NULL`,
-//! so `COALESCE` is a no-op and indexer-set names (task 0156) are
-//! untouched.
+//! The side table is `ReplacingMergeTree(version)`: every write is an
+//! INSERT with `version = now_ms`, latest-wins. The read path neutralises
+//! the `''` sentinel with `NULLIF` (task 0243). A later run upgrades a
+//! sentinel to a real value — or clears a removed one — simply by
+//! inserting a newer-version row.
 
-use sqlx::{PgPool, Row};
+use super::persist::insert_asset;
+use clickhouse::{Client, Row};
+use serde::Deserialize;
 use tracing::{debug, instrument, warn};
 
-use super::EnrichError;
+use super::{AssetKey, EnrichError, EnrichOutcome};
+use crate::nft_token_uri::errors::is_dns_failure;
 use crate::sep1::dto::Sep1Currency;
 use crate::sep1::errors::Sep1Error;
 use crate::sep1::{Sep1Fetcher, Sep1TomlParsed};
 
-/// `assets.icon_url VARCHAR(1024)` — over-long URLs hit sentinel + warn.
-const MAX_ICON_URL_BYTES: usize = 1024;
-/// `assets.name VARCHAR(256)`.
-const MAX_NAME_BYTES: usize = 256;
+/// Generous safety bound on the SEP-1 `image` URL. CH `asset_enrichment.icon_url`
+/// is `Nullable(String)` (unbounded), so this only sentinels pathological
+/// multi-KB blobs — a long-but-valid URL is stored, not dropped.
+const MAX_ICON_URL_BYTES: usize = 8192;
+/// Generous safety bound on the SEP-1 `name` (CH `asset_enrichment.name` is
+/// unbounded `Nullable(String)`).
+const MAX_NAME_BYTES: usize = 4096;
 
-#[instrument(skip(pool, fetcher), fields(asset_id))]
-pub async fn enrich_asset_from_sep1(
-    pool: &PgPool,
-    asset_id: i32,
-    fetcher: &Sep1Fetcher,
-) -> Result<(), EnrichError> {
-    let row = sqlx::query(
-        r#"
-        SELECT
-            a.asset_type,
-            a.asset_code,
-            iss.account_id  AS issuer_strkey,
-            iss.home_domain
-        FROM assets a
-        LEFT JOIN accounts iss ON iss.id = a.issuer_id
-        WHERE a.id = $1
-        "#,
+/// Issuer inputs for SEP-1 resolution, looked up by `issuer_id` on CH.
+/// `nullIf(_, '')` collapses an empty/missing value to `None`.
+#[derive(Row, Deserialize)]
+struct IssuerLookup {
+    issuer_strkey: Option<String>,
+    home_domain: Option<String>,
+}
+
+// The `#[instrument]` span carries the FULL composite key — every event in this
+// fn (incl. the resolver warnings) inherits it, so individual events don't repeat
+// the key.
+#[instrument(
+    skip(client, fetcher),
+    fields(
+        asset_type = key.asset_type,
+        asset_code = %key.asset_code,
+        issuer_id = key.issuer_id,
+        contract_id = key.contract_id,
     )
-    .bind(asset_id)
-    .fetch_optional(pool)
-    .await?;
+)]
+pub async fn enrich_asset_from_sep1(
+    client: &Client,
+    key: AssetKey,
+    fetcher: &Sep1Fetcher,
+) -> Result<EnrichOutcome, EnrichError> {
+    // Issuer home_domain + StrKey drive the SEP-1 fetch + currency match.
+    let issuer = client
+        .query(
+            "SELECT nullIf(account_id, '')  AS issuer_strkey, \
+                    nullIf(home_domain, '') AS home_domain \
+             FROM accounts FINAL WHERE id = ? LIMIT 1",
+        )
+        .bind(key.issuer_id)
+        .fetch_optional::<IssuerLookup>()
+        .await?;
 
-    let Some(row) = row else {
-        warn!("asset_id {asset_id} not found; acking SQS message");
-        return Ok(());
+    let Some(issuer) = issuer else {
+        warn!(key = %key, reason = "issuer_account_missing", "writing sentinel");
+        let (icon, name) = permanent_fail_outcome(key.asset_type);
+        return insert_asset(client, &key, icon, name).await;
     };
 
-    let asset_type: i16 = row.try_get("asset_type")?;
-    let asset_code: Option<String> = row.try_get("asset_code")?;
-    let issuer_strkey: Option<String> = row.try_get("issuer_strkey")?;
-    let home_domain: Option<String> = row.try_get("home_domain")?;
-
-    let Some(home_domain) = home_domain
+    let Some(home_domain) = issuer
+        .home_domain
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
-        write_outcome(pool, asset_id, "", sentinel_name(asset_type)).await?;
-        return Ok(());
+        // Was a silent sentinel write — now logged so a blank asset is
+        // debuggable by key (in the `#[instrument]` span) + reason.
+        debug!(key = %key, reason = "issuer_home_domain_missing", "writing sentinel");
+        let (icon, name) = permanent_fail_outcome(key.asset_type);
+        return insert_asset(client, &key, icon, name).await;
     };
 
     match fetcher.fetch(home_domain).await {
         Ok(parsed) => {
-            let entry = find_currency(&parsed, asset_code.as_deref(), issuer_strkey.as_deref());
-            let icon = resolve_icon(entry);
-            let name = resolve_name(asset_type, entry);
-            write_outcome(pool, asset_id, &icon, name).await?;
-            debug!(asset_id, asset_type, "icon+name UPDATE applied");
-            Ok(())
+            let (icon, name) = resolve_currency_outcome(
+                key.asset_type,
+                Some(key.asset_code.as_str()),
+                issuer.issuer_strkey.as_deref(),
+                &parsed,
+            );
+            let outcome = insert_asset(client, &key, icon, name).await?;
+            debug!("asset_enrichment row written");
+            Ok(outcome)
         }
         Err(arc_err) => {
             if is_transient(&arc_err) {
+                // Logged at the call site (was only sampled in the report) so
+                // the retried key + cause are visible, not just counted.
+                warn!(key = %key, reason = "transient", error = %arc_err, "retry candidate (no row written)");
                 Err(EnrichError::Transient(arc_err.to_string()))
             } else {
-                warn!("permanent SEP-1 fetch failure: {arc_err}; sentinels written");
-                write_outcome(pool, asset_id, "", sentinel_name(asset_type)).await?;
-                Ok(())
+                warn!(key = %key, reason = "sep1_fetch_permanent", error = %arc_err, "sentinel written");
+                let (icon, name) = permanent_fail_outcome(key.asset_type);
+                insert_asset(client, &key, icon, name).await
             }
         }
     }
 }
 
-/// `Some("")` sentinel breaks the producer dedup loop on
-/// `asset_type IN (1, 2) AND name IS NULL`; `None` is a no-op via
-/// `COALESCE`, preserving indexer-set Soroban-native names.
+/// Resolve the `(icon_url, name)` write outcome from a fetched SEP-1 TOML —
+/// the security-sensitive icon/name validation (https-only, length caps,
+/// sentinel rules) in one place. `""` = the "tried, nothing" sentinel;
+/// `name = None` for native/soroban (not SEP-1 enrichable). See module doc.
+fn resolve_currency_outcome(
+    asset_type: i16,
+    asset_code: Option<&str>,
+    issuer_strkey: Option<&str>,
+    parsed: &Sep1TomlParsed,
+) -> (String, Option<String>) {
+    let entry = find_currency(parsed, asset_code, issuer_strkey);
+    (resolve_icon(entry), resolve_name(asset_type, entry))
+}
+
+/// The outcome to write when the issuer has no usable home_domain or the SEP-1
+/// fetch permanently failed: the `""` icon sentinel + the per-type name
+/// sentinel. Mirrors `nft_token_uri::permanent_fail_outcome`.
+fn permanent_fail_outcome(asset_type: i16) -> (String, Option<String>) {
+    (String::new(), sentinel_name(asset_type))
+}
+
+/// `Some("")` is the "tried, nothing" sentinel for classic/SAC — the row's
+/// existence makes the candidate query (`NOT IN asset_enrichment`) skip the key
+/// next pass. `None` for native/soroban (0/3): not SEP-1 enrichable; their names
+/// come from elsewhere (Option C — `soroban_contracts.name` / an API constant).
 fn sentinel_name(asset_type: i16) -> Option<String> {
     matches!(asset_type, 1 | 2).then(String::new)
 }
@@ -121,7 +159,7 @@ fn resolve_icon(entry: Option<&Sep1Currency>) -> String {
     else {
         return String::new();
     };
-    if !is_safe_icon_url(url) {
+    if !super::is_safe_https_url(url) {
         warn!(
             url_prefix = url.chars().take(20).collect::<String>(),
             "icon URL not https://; sentinel written (potential XSS)",
@@ -161,33 +199,6 @@ fn resolve_name(asset_type: i16, entry: Option<&Sep1Currency>) -> Option<String>
     Some(name.to_owned())
 }
 
-/// Write priority `real > sentinel > NULL` per column — see module doc.
-async fn write_outcome(
-    pool: &PgPool,
-    asset_id: i32,
-    icon_url: &str,
-    name: Option<String>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE assets \
-         SET icon_url = COALESCE(NULLIF($1, ''), icon_url, $1), \
-             name     = COALESCE(NULLIF($2, ''), name,     $2) \
-         WHERE id = $3",
-    )
-    .bind(icon_url)
-    .bind(name)
-    .bind(asset_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Frontend renders `icon_url` as `<img src>`. Only `https://` passes —
-/// `http://` is mixed-content; `javascript:` / `data:` are XSS vectors.
-fn is_safe_icon_url(url: &str) -> bool {
-    url.trim().to_ascii_lowercase().starts_with("https://")
-}
-
 fn find_currency<'a>(
     parsed: &'a Sep1TomlParsed,
     code: Option<&str>,
@@ -200,20 +211,30 @@ fn find_currency<'a>(
         .find(|c| c.code.as_deref() == Some(code) && c.issuer.as_deref() == Some(issuer))
 }
 
-/// Network-layer (no HTTP status) and 5xx retry. 4xx and parse-level
-/// failures are permanent — caller writes the empty sentinel.
-fn is_transient(err: &Sep1Error) -> bool {
+/// Network-layer (no HTTP status) and 5xx retry — EXCEPT a DNS-resolution
+/// failure (NXDOMAIN / dead issuer domain), which is permanent (task 0335).
+/// 4xx and parse-level failures are permanent too — caller writes the empty
+/// sentinel. `pub` so the ClickHouse paths classify fetch errors with the same
+/// rule as the PG worker.
+pub fn is_transient(err: &Sep1Error) -> bool {
     match err {
         Sep1Error::Timeout { .. } => true,
         Sep1Error::Http { source, .. } => match source.status() {
             Some(s) if s.is_server_error() => true,
             Some(_) => false,
-            None => true,
+            // No HTTP status = network-layer failure. A DNS-resolution failure
+            // (NXDOMAIN / dead issuer domain) is PERMANENT → sentinel, not
+            // 3×-retry → DLQ (task 0335). Connect-refused / TLS / connect-timeout
+            // may recover → transient.
+            None => !is_dns_failure(source),
         },
         Sep1Error::MissingHomeDomain
         | Sep1Error::MalformedHomeDomain { .. }
         | Sep1Error::BodyTooLarge { .. }
         | Sep1Error::NonUtf8Body
+        // A refused redirect (off registrable-domain / unsafe target / over
+        // budget, task 0200) is permanent — re-fetching yields the same 3xx.
+        | Sep1Error::RedirectBlocked { .. }
         | Sep1Error::MalformedToml { .. } => false,
     }
 }
@@ -341,5 +362,128 @@ mod tests {
         assert_eq!(sentinel_name(1).as_deref(), Some(""));
         assert_eq!(sentinel_name(2).as_deref(), Some(""));
         assert!(sentinel_name(3).is_none());
+    }
+
+    /// Smoke (task 0231 step 5): hit a REAL issuer `stellar.toml` over the
+    /// network and run the actual fetch + resolve path — catches real-world
+    /// TOML quirks the mocked unit tests can't. `#[ignore]` (manual / network,
+    /// not CI). Run:
+    /// `cargo test -p enrichment-shared smoke_real_sep1 -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: fetches a live issuer stellar.toml"]
+    async fn smoke_real_sep1_resolves_icon_and_name() {
+        // USDC (Circle) — a stable, well-formed SEP-1 issuer.
+        let home_domain = "centre.io";
+        let code = "USDC";
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let fetcher = Sep1Fetcher::new().expect("build fetcher");
+        let parsed = fetcher.fetch(home_domain).await.expect("fetch USDC toml");
+        let (icon, name) = resolve_currency_outcome(1, Some(code), Some(issuer), &parsed);
+        eprintln!("USDC → icon={icon:?} name={name:?}");
+        assert!(!icon.is_empty(), "expected a real icon URL (got sentinel)");
+        assert!(
+            name.as_deref().is_some_and(|n| !n.is_empty()),
+            "expected a real name (got sentinel/None)"
+        );
+    }
+
+    /// CH-backed end-to-end smoke (task 0231 step 5): the full sep1 write path
+    /// against a live local ClickHouse — issuer `accounts` lookup → live TOML
+    /// fetch → resolve → INSERT → read back. Covers the **real** path (USDC) and
+    /// the **sentinel** path (issuer absent from `accounts`). `#[ignore]` (needs
+    /// CH + network). Run:
+    /// `CLICKHOUSE_URL=http://localhost:8125 CLICKHOUSE_USER=default \
+    ///  CLICKHOUSE_PASSWORD=clickhouse cargo test -p enrichment-shared \
+    ///  smoke_ch_sep1 -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + network (centre.io TOML)"]
+    async fn smoke_ch_sep1_real_and_sentinel() {
+        #[derive(Row, Deserialize)]
+        struct Readback {
+            icon_url: Option<String>,
+            name: Option<String>,
+        }
+        async fn read(client: &Client, k: &AssetKey) -> (Option<String>, Option<String>) {
+            let r = client
+                .query(
+                    "SELECT icon_url, name FROM asset_enrichment FINAL \
+                     WHERE asset_type = ? AND asset_code = ? AND issuer_id = ? AND contract_id = ?",
+                )
+                .bind(k.asset_type)
+                .bind(&k.asset_code)
+                .bind(k.issuer_id)
+                .bind(k.contract_id)
+                .fetch_one::<Readback>()
+                .await
+                .expect("read asset_enrichment");
+            (r.icon_url, r.name)
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let fetcher = Sep1Fetcher::new().expect("build fetcher");
+
+        // --- REAL: seed the USDC issuer account (home_domain → centre.io) ---
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let issuer_id = db_clickhouse::persist::ids::account_id(issuer);
+        client
+            .query(
+                "INSERT INTO accounts \
+                 (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number, home_domain) \
+                 VALUES (?, ?, 0, 0, 0, 'centre.io')",
+            )
+            .bind(issuer_id)
+            .bind(issuer)
+            .execute()
+            .await
+            .expect("seed issuer account");
+
+        let usdc = AssetKey {
+            asset_type: 1,
+            asset_code: "USDC".into(),
+            issuer_id,
+            contract_id: 0,
+        };
+        enrich_asset_from_sep1(&client, usdc.clone(), &fetcher)
+            .await
+            .expect("enrich USDC");
+        let (icon, name) = read(&client, &usdc).await;
+        eprintln!("REAL USDC -> icon={icon:?} name={name:?}");
+        assert!(
+            icon.as_deref().is_some_and(|s| !s.is_empty()),
+            "real path: non-empty icon"
+        );
+        assert!(
+            name.as_deref().is_some_and(|s| !s.is_empty()),
+            "real path: non-empty name"
+        );
+
+        // --- SENTINEL: a classic asset whose issuer is absent from `accounts` ---
+        let ghost = AssetKey {
+            asset_type: 1,
+            asset_code: "GHOST".into(),
+            issuer_id: 909_001,
+            contract_id: 0,
+        };
+        enrich_asset_from_sep1(&client, ghost.clone(), &fetcher)
+            .await
+            .expect("enrich ghost");
+        let (g_icon, g_name) = read(&client, &ghost).await;
+        assert_eq!(g_icon.as_deref(), Some(""), "sentinel: icon = ''");
+        assert_eq!(g_name.as_deref(), Some(""), "sentinel: name = ''");
+
+        // --- cleanup (dev CH is otherwise empty) ---
+        client
+            .query("ALTER TABLE accounts DELETE WHERE id = ?")
+            .bind(issuer_id)
+            .execute()
+            .await
+            .expect("cleanup accounts");
+        client
+            .query(
+                "ALTER TABLE asset_enrichment DELETE WHERE asset_code = 'USDC' OR asset_code = 'GHOST'",
+            )
+            .execute()
+            .await
+            .expect("cleanup asset_enrichment");
     }
 }

@@ -71,7 +71,7 @@ async fn smoke_inserts_and_reads_each_table() {
     client
         .query(
             "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
-             VALUES (1, 'USDC', ?, 0, 'USD Coin', toDecimal128('1000000.0', 7), 5, NULL)",
+             VALUES (1, 'USDC', ?, 0, 'USD Coin', NULL, NULL, NULL)",
         )
         .bind(SMOKE_LEDGER)
         .execute()
@@ -104,6 +104,31 @@ async fn smoke_inserts_and_reads_each_table() {
         1,
     )
     .await;
+
+    // ----- balances (unified per-holder model, task 0331 Option C) -----
+    client
+        .query(
+            "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) \
+             VALUES (?, ?, 123456789, ?)",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .execute()
+        .await
+        .expect("insert balances");
+    assert_count(
+        &client,
+        "balances",
+        &format!("holder_id = {SMOKE_LEDGER}"),
+        1,
+    )
+    .await;
+
+    // (`balance_aggregates` is filled by `balance_aggregates_mv`, a REFRESH EVERY
+    // 2 MINUTE view — not synchronously assertable in a smoke test. The legacy
+    // `asset_aggregates` refresh smoke was dropped with that table in the task 0331
+    // simplification; classic supply now flows via `balance_aggregates` over `balances`.)
 
     // ----- soroban_contracts (state) -----
     client
@@ -182,8 +207,8 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- operations_appearances (append-only fact) — no surrogate `id` -----
     client
         .query(
-            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_id, amount, ledger_sequence) \
-             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, NULL, 100, ?)",
+            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids, amount, ledger_sequence) \
+             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, [], 100, ?)",
         )
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -383,18 +408,102 @@ async fn smoke_inserts_and_reads_each_table() {
     cleanup(&client).await;
 }
 
-/// Assert there is exactly `expected` rows in `table` matching `where_clause`.
+/// Count rows in `table` matching `where_clause`.
 ///
 /// No `FINAL`: plain `MergeTree` tables reject it, and the smoke test only
 /// inserts one row per (table, sentinel) combination so background
 /// `ReplacingMergeTree` dedup never hides anything.
-async fn assert_count(client: &clickhouse::Client, table: &str, where_clause: &str, expected: u64) {
+async fn count_rows(client: &clickhouse::Client, table: &str, where_clause: &str) -> u64 {
     let q = format!("SELECT count() FROM {table} WHERE {where_clause}");
-    let actual: u64 = client
+    client
         .query(&q)
         .fetch_one()
         .await
-        .unwrap_or_else(|e| panic!("count from {table}: {e}"));
+        .unwrap_or_else(|e| panic!("count from {table}: {e}"))
+}
+
+/// Assert there are exactly `expected` rows in `table` matching `where_clause`.
+/// The `balance_aggregates_mv` refreshable MV is the source of every user-facing
+/// `total_supply` / `holder_count`, and the main smoke test can't assert it (2-minute
+/// cadence). This proves it sums correctly: it runs in a THROWAWAY database (the MV
+/// does a FULL recompute of `balances` into `balance_aggregates`, replacing the whole
+/// target — must never touch shared data), forces an immediate refresh, and checks the
+/// result. Gated on `CLICKHOUSE_URL`.
+#[tokio::test]
+async fn balance_aggregates_mv_sums_supply_and_holders() {
+    let Some(url) = ch_url() else {
+        eprintln!("CLICKHOUSE_URL not set — skipping balance_aggregates MV test");
+        return;
+    };
+    let db = "ch_test_0331_balance_agg_mv";
+    let base = client(&Config {
+        url: url.clone(),
+        ..Config::from_env()
+    });
+    base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+        .execute()
+        .await
+        .expect("drop pre-existing throwaway db");
+    base.query(&format!("CREATE DATABASE {db}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let cl = client(&Config {
+        url,
+        database: db.to_string(),
+        ..Config::from_env()
+    });
+    apply_init_sql(&cl).await.expect("apply init schema");
+
+    // One asset, three holders: 100 + 50 positive, 1 zeroed → supply 150, holders 2.
+    let asset: i64 = 424_242;
+    cl.query(
+        "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
+         (1, ?, 100, 10), (2, ?, 50, 10), (3, ?, 0, 10)",
+    )
+    .bind(asset)
+    .bind(asset)
+    .bind(asset)
+    .execute()
+    .await
+    .expect("insert balances");
+
+    // Force the refreshable MV to recompute NOW (vs REFRESH EVERY 2 MINUTE) and wait.
+    cl.query("SYSTEM REFRESH VIEW balance_aggregates_mv")
+        .execute()
+        .await
+        .expect("refresh mv");
+    cl.query("SYSTEM WAIT VIEW balance_aggregates_mv")
+        .execute()
+        .await
+        .expect("wait mv");
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Agg {
+        total_supply: Option<i128>,
+        holder_count: Option<i32>,
+    }
+    let agg = cl
+        .query("SELECT total_supply, holder_count FROM balance_aggregates WHERE asset_id = ?")
+        .bind(asset)
+        .fetch_one::<Agg>()
+        .await
+        .expect("aggregate row");
+    assert_eq!(
+        agg.total_supply,
+        Some(150),
+        "sum(amount) over the 3 balance rows"
+    );
+    assert_eq!(agg.holder_count, Some(2), "countIf(amount > 0)");
+
+    base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+        .execute()
+        .await
+        .expect("cleanup throwaway db");
+}
+
+async fn assert_count(client: &clickhouse::Client, table: &str, where_clause: &str, expected: u64) {
+    let actual = count_rows(client, table, where_clause).await;
     assert_eq!(
         actual, expected,
         "table {table} expected {expected} row(s) for `{where_clause}`, got {actual}"

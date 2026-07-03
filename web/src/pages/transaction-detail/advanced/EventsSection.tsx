@@ -8,7 +8,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { Chip, truncateMiddle } from '@rumblefish/soroban-block-explorer-ui';
+import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -78,16 +78,10 @@ export function EventsSection({
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
                     {event.contract_id != null ? (
-                      <Typography
-                        component="span"
-                        variant="bodyMonoSmMedium"
-                        sx={(theme) => ({ color: theme.palette.text.primary })}
-                      >
-                        {truncateMiddle(event.contract_id, {
-                          prefix: 5,
-                          suffix: 4,
-                        })}
-                      </Typography>
+                      <IdentifierDisplay
+                        value={event.contract_id}
+                        type="contract"
+                      />
                     ) : (
                       <Typography
                         component="span"
@@ -98,10 +92,10 @@ export function EventsSection({
                     )}
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
-                    <HighlightedJson value={event.topics} compact />
+                    <HighlightedJson value={event.topics} />
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
-                    <HighlightedJson value={event.data} compact />
+                    <HighlightedJson value={event.data} />
                   </TableCell>
                 </TableRow>
               ))}

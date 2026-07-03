@@ -28,13 +28,21 @@ export function TableSectionHeader({
     >
       <Stack spacing={1} alignItems="flex-start">
         <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="heading5SemiBold" color="text.primary">
+          <Typography
+            variant="heading5SemiBold"
+            color="text.primary"
+            component="h2"
+          >
             {title}
           </Typography>
           {badge}
         </Stack>
         {description ? (
-          <Typography variant="bodyMedium" color="text.secondary">
+          <Typography
+            component="div"
+            variant="bodyMedium"
+            color="text.secondary"
+          >
             {description}
           </Typography>
         ) : null}

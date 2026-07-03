@@ -2,6 +2,7 @@
 
 mod accounts;
 mod assets;
+mod auth;
 mod cache;
 mod common;
 mod config;
@@ -24,7 +25,10 @@ mod transactions;
 // further wiring.
 mod runtime_enrichment;
 
-use axum::{Json, Router, routing::get};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use utoipa::openapi::OpenApi as OpenApiSpec;
 
 use crate::config::AppConfig;
@@ -60,7 +64,92 @@ fn app(config: &AppConfig, state: AppState) -> Router {
         }),
     );
 
-    mount_swagger_ui(router, spec_arc.as_ref())
+    let router = mount_swagger_ui(router, spec_arc.as_ref());
+
+    // Load-test correlation (task 0338): capture `X-Request-Id` into a
+    // task-local so CH queries stamp `system.query_log.log_comment` with it
+    // (B2). Added ONLY when armed (`load_testing`) — double-gated with the
+    // header-presence check inside the middleware, so normal production never
+    // sets a `log_comment`. Innermost of the security layers (it only needs to
+    // wrap the handlers, where CH queries run).
+    let router = if config.load_testing {
+        router.layer(axum::middleware::from_fn(common::request_id::capture))
+    } else {
+        router
+    };
+
+    // ── Access layer (task 0277 paid-API; docs/paid-api/plan-platne-api.md):
+    // free tier via Turnstile → session JWT, paid tier via X-API-Key. Built only
+    // when ARMED (jwt_secret set) so it deploys "dark"; sits INSIDE the edge-secret
+    // lock (which runs first), so only Cloudflare traffic reaches the auth gate.
+    let auth_config = config
+        .jwt_secret
+        .as_ref()
+        .map(|jwt_secret| auth::AuthConfig {
+            jwt_secret: std::sync::Arc::new(jwt_secret.clone()),
+            turnstile_secret: config
+                .turnstile_secret
+                .as_ref()
+                .map(|s| std::sync::Arc::new(s.clone())),
+            api_keys: std::sync::Arc::new(config.api_keys.clone()),
+        });
+
+    // `/auth/session` — verify a Turnstile token, mint a free-tier session JWT.
+    // Exempt from the gate (it is called precisely to OBTAIN a session).
+    let router = match auth_config.clone() {
+        Some(a) => router.route(
+            "/auth/session",
+            post(move |body: Json<auth::SessionRequest>| {
+                let a = a.clone();
+                async move { auth::session(a, body).await }
+            }),
+        ),
+        None => router,
+    };
+
+    // Auth gate (inner of the edge lock): require a valid paid key OR free session.
+    let router = match auth_config {
+        Some(a) => router.layer(axum::middleware::from_fn_with_state(a, auth::require_auth)),
+        None => router,
+    };
+
+    // Origin lock (task 0277 Step 2, ADR 0048): reject any request that did NOT
+    // arrive through the Cloudflare edge — i.e. that carries no matching
+    // `X-Edge-Secret` (injected by Cloudflare toward the origin). Wraps the auth
+    // gate (runs before it). No-op when `EDGE_SECRET` is unset. See
+    // `common::edge_lock`.
+    let router = match &config.edge_secret {
+        Some(secret) => router.layer(axum::middleware::from_fn_with_state(
+            std::sync::Arc::new(secret.clone()),
+            common::edge_lock::require_edge_secret,
+        )),
+        None => router,
+    };
+
+    // CORS (OUTERMOST): the cross-origin SPA reads the actual GET/POST responses
+    // from this Lambda. API Gateway's `defaultCorsPreflightOptions` answers only
+    // the OPTIONS preflight (MOCK integration); the real responses are produced
+    // here and must carry `Access-Control-Allow-Origin` themselves or the browser
+    // blocks the read. Outermost so even 401/403 responses get the header.
+    // `None` (CORS_ALLOW_ORIGIN unset) = no CORS layer (same-origin/non-browser).
+    match config
+        .cors_allow_origin
+        .as_deref()
+        .and_then(|o| axum::http::HeaderValue::from_str(o).ok())
+    {
+        Some(origin) => router.layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::ACCEPT,
+                    axum::http::HeaderName::from_static("x-api-key"),
+                ]),
+        ),
+        None => router,
+    }
 }
 
 #[cfg(feature = "swagger-ui")]
@@ -149,6 +238,12 @@ mod tests {
         AppConfig {
             base_url: "http://localhost:9000".to_string(),
             ch_enabled: false,
+            edge_secret: None,
+            jwt_secret: None,
+            turnstile_secret: None,
+            api_keys: Vec::new(),
+            cors_allow_origin: None,
+            load_testing: false,
         }
     }
 

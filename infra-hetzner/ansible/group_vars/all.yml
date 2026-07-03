@@ -27,6 +27,35 @@ hcloud_robot_password: "{{ lookup('env', 'HCLOUD_ROBOT_PASSWORD') }}"
 clickhouse_password: "{{ lookup('env', 'CLICKHOUSE_PASSWORD') }}"
 borg_passphrase: "{{ lookup('env', 'BORG_PASSPHRASE') }}"
 
+# Hetzner Cloud API token — distinct from the Robot webservice
+# user/password above. Required by the `hetzner_storagebox` role
+# to reconcile the Borg Storage Box subaccount via the Cloud API
+# (the legacy Robot Storage Box endpoints were removed 2025-07-30).
+# Create a read+write token in Hetzner Console → Security → API
+# tokens. Scoped to the project that owns the Storage Box.
+hcloud_token: "{{ lookup('env', 'HCLOUD_TOKEN') }}"
+
+# Numeric Cloud ID of the BX21 Storage Box (Hetzner Console →
+# Storage Boxes → the box → its ID, NOT the `uNNNNNN` username).
+# Used as the `storage_box` selector for the subaccount modules.
+storagebox_id: "{{ lookup('env', 'STORAGEBOX_ID') }}"
+
+# Password set on the Borg subaccount. The Cloud API requires a
+# password at subaccount-create time; we also use it for the
+# transient SFTP login that installs the cron's authorised_keys
+# (no API surface manages SSH keys). Random 32-byte base64, stored
+# in the password manager alongside the other secrets. Borg itself
+# authenticates with the ed25519 key once authorised — this
+# password is never used by the daily cron.
+#
+# ROTATION CAVEAT: changing this value is NOT auto-applied to an
+# existing subaccount — the Cloud API does not expose the current
+# password to diff against, and the role only resets it on the
+# bootstrap path (when key auth is denied). To apply a rotation,
+# reset it once via the Hetzner Console, or run
+# `hetzner.hcloud.storage_box_subaccount` with `state: reset_password`.
+storagebox_subaccount_password: "{{ lookup('env', 'STORAGEBOX_SUBACCOUNT_PASSWORD') }}"
+
 # Public DNS name Caddy serves on. The Hetzner Robot reverse-DNS
 # entry should match. Let's Encrypt validates http-01 against this
 # hostname. Per-environment in the CDK config (see EnvironmentConfig
@@ -80,26 +109,102 @@ clickhouse_cn_user_pairs: "{{ lookup('env', 'CLICKHOUSE_CN_USER_MAP').split(',')
 # only needs the names, not the mapping.
 allowed_client_cns: "{{ clickhouse_cn_user_pairs | map('regex_replace', '^([^:]+):.*$', '\\1') | list }}"
 
-# Storage Box SSH credentials (BX21).
-storagebox_ssh_user: "{{ lookup('env', 'STORAGEBOX_SSH_USER') }}"
-storagebox_ssh_host: "{{ lookup('env', 'STORAGEBOX_SSH_HOST') }}"
+# Storage Box subaccount SSH credentials (BX21).
+#
+# These used to be REQUIRED env vars. They are now DISCOVERED by
+# the `hetzner_storagebox` role from the Cloud API response
+# (`username` → user, `server` → host) and `set_fact` onto this
+# host before the `backup` role runs — on a fresh box the operator
+# cannot know the Hetzner-assigned `uNNNNNN-subN` username up
+# front. The env lookups below are an optional pin/override: if
+# set, the role asserts the discovered values match (drift guard);
+# if unset (the default), discovery fills them. For a targeted
+# `--tags backup` re-run that skips the `storagebox` tag, set these
+# in env to the values the role printed on the last full run.
+storagebox_ssh_user: "{{ lookup('env', 'STORAGEBOX_SSH_USER') | default('', true) }}"
+storagebox_ssh_host: "{{ lookup('env', 'STORAGEBOX_SSH_HOST') | default('', true) }}"
 
 # ---------------------------------------------------------------------
 # Operational defaults — env-overridable
 # ---------------------------------------------------------------------
 
 storagebox_ssh_port: "{{ lookup('env', 'STORAGEBOX_SSH_PORT') | default('23', true) | int }}"
+
+# ---------------------------------------------------------------------
+# Storage Box subaccount declarative state (hetzner_storagebox role)
+# ---------------------------------------------------------------------
+
+# Subaccount identity. `name` is the idempotent match key for the
+# Cloud API module; `home_directory` is the chroot the subaccount
+# is confined to (no leading slash — relative to the box root).
+# The Borg repo path (`borg_repo_path`, default ./backups/clickhouse)
+# is resolved relative to this home over SSH.
+storagebox_subaccount_name: "{{ lookup('env', 'STORAGEBOX_SUBACCOUNT_NAME') | default('borg-backup-ch-prod-01', true) }}"
+storagebox_subaccount_home: "{{ lookup('env', 'STORAGEBOX_SUBACCOUNT_HOME') | default('borg-ch-prod-01-repo', true) }}"
+
+# Access methods on the subaccount. Borg needs SSH only; everything
+# else stays off (least privilege). `reachable_externally: false`
+# keeps the subaccount reachable only from inside Hetzner — the box
+# (also in Hetzner) reaches it fine, and the authorised_keys install
+# runs FROM the box, so no external exposure is required.
+storagebox_subaccount_access:
+  ssh_enabled: true
+  samba_enabled: false
+  webdav_enabled: false
+  readonly: false
+  reachable_externally: false
+
+# ADDITIONAL SSH public keys to authorise on the subaccount, on top
+# of the box's own Borg cron pubkey (which is ALWAYS authorised while
+# the subaccount has SSH enabled — it is the backup identity, slurped
+# from the box at run time). The role renders `authorized_keys` as an
+# overwrite of {box pubkey} + this list, so removing or rotating an
+# entry HERE is reconciled away on the next run (delta, not append).
+# This list does NOT control the box key. To REVOKE the cron's access
+# entirely, set `storagebox_subaccount_access.ssh_enabled: false` (the
+# reconcile play disables SSH on the subaccount) or delete the
+# subaccount via the Cloud API — see the DR runbook in README.
+storagebox_authorized_keys: []
+
+# First-run validation: after the key is wired, run `ch-backup`
+# once and assert the repo lists a `ch-*` archive. Set false to
+# skip the (potentially long) full-backup roundtrip on re-runs.
+storagebox_run_backup_validation: "{{ lookup('env', 'STORAGEBOX_RUN_BACKUP_VALIDATION') | default('true', true) | bool }}"
 borg_repo_path: "{{ lookup('env', 'BORG_REPO_PATH') | default('./backups/clickhouse', true) }}"
+
+# Backup marker table — frozen FIRST by ch-backup so its high-water mark
+# is conservative (task 0236 redesign). The indexer writes `ledgers`
+# LAST as a commit marker (a `ledgers` row implies all its children are
+# already in the DB), so freezing it first guarantees every ledger in
+# the backup has its children — no orphans, no indexer pause. Env-
+# overridable only if the marker table is ever renamed.
+borg_marker_table: "{{ lookup('env', 'BORG_MARKER_TABLE') | default('ledgers', true) }}"
 
 # Borg retention policy — overridable for envs with different
 # capacity / retention requirements.
-borg_keep_daily: "{{ lookup('env', 'BORG_KEEP_DAILY') | default('7', true) | int }}"
+#
+# Policy (task 0236): WEEKLY backups, keep the last 4 (~4-week window).
+# The ClickHouse corpus is large (~700 GB+ per full snapshot, growing)
+# and re-derivable from the stellar-ledger-data S3 XDR archives, so a
+# tight 4-archive window is the right space/RPO trade-off. With a weekly
+# cron, `keep-weekly=4` retains 4 archives; `keep-daily`/`keep-monthly`
+# are 0 (a daily/monthly bucket makes no sense at a weekly cadence).
+# `keep-weekly` protects the single first archive on a fresh repo
+# (last-of-week), so the first run is never pruned away.
+borg_keep_daily: "{{ lookup('env', 'BORG_KEEP_DAILY') | default('0', true) | int }}"
 borg_keep_weekly: "{{ lookup('env', 'BORG_KEEP_WEEKLY') | default('4', true) | int }}"
-borg_keep_monthly: "{{ lookup('env', 'BORG_KEEP_MONTHLY') | default('6', true) | int }}"
+borg_keep_monthly: "{{ lookup('env', 'BORG_KEEP_MONTHLY') | default('0', true) | int }}"
 
-# Daily backup cron — UTC. Box is forced to UTC by the base role.
+# Weekly backup cron — UTC. Box is forced to UTC by the base role.
+# `borg_cron_weekday` pins the day (0 = Sunday, cron/`date +%w`
+# convention). Sunday is the default so the `borg compact` step in
+# ch-backup.sh — which also keys on Sunday historically, now runs every
+# run — stays aligned. A true "every 7 days" has no clean cron
+# expression, so a pinned weekday is the mechanism. Set BORG_CRON_WEEKDAY
+# to `*` to restore daily backups.
 borg_cron_hour: "{{ lookup('env', 'BORG_CRON_HOUR') | default('3', true) | int }}"
 borg_cron_minute: "{{ lookup('env', 'BORG_CRON_MINUTE') | default('30', true) | int }}"
+borg_cron_weekday: "{{ lookup('env', 'BORG_CRON_WEEKDAY') | default('0', true) }}"
 
 # Local timezone for the host.
 host_timezone: "{{ lookup('env', 'HOST_TIMEZONE') | default('Etc/UTC', true) }}"
@@ -154,7 +259,6 @@ app_repo_dest: /srv/app
 # mounts. Ownership matches the in-container CH UID (101).
 ch_data_dir: /srv/clickhouse-data
 ch_logs_dir: /srv/clickhouse-logs
-backups_dir: /srv/backups
 
 # ClickHouse runs as UID/GID 101 inside the official 26.x image.
 clickhouse_uid: 101

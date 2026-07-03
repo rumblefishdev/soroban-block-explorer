@@ -37,6 +37,14 @@ pub enum Sep1Error {
     #[error("timeout fetching stellar.toml from {host}")]
     Timeout { host: String },
 
+    /// A 3xx redirect was returned but the fetcher refused to follow it —
+    /// it left the issuer's registrable domain (eTLD+1), pointed at an
+    /// unsafe target (IP literal / non-`https`), or exceeded the redirect
+    /// budget (task 0200). PERMANENT: a re-fetch yields the same redirect,
+    /// so `is_transient` maps this to a sentinel, not a retry.
+    #[error("stellar.toml fetch for {host} hit an un-followable redirect to {location:?}")]
+    RedirectBlocked { host: String, location: String },
+
     /// The remote sent more bytes than the SEP-1 100 KB cap; we reject
     /// without buffering the rest.
     #[error("stellar.toml body exceeded {limit} bytes")]

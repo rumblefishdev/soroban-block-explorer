@@ -200,6 +200,18 @@ impl PartitionWriterHandle<'_> {
                 // reclassification UPDATE path that needs it.
                 let _ = classification_cache;
                 let parsed = indexer::handler::process::parse_ledger(meta);
+                // ADR 0051 — re-key contract-held type-0/1 balances onto their
+                // wrapped classic/native asset_id, same as the live indexer and
+                // RPC `balance-seed`. The fetch guards on empty balances, so
+                // ledgers with no SAC/token balances skip the query.
+                // ponytail: per-ledger query on the small `asset_sac` table; the
+                // `Run` path is the rarely-used heavy fallback, so no cross-ledger
+                // cache. Add one if a full reprocess ever makes this hot.
+                let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(
+                    pw.client(),
+                    &parsed.soroban_token_balances,
+                )
+                .await?;
                 // Task 0220 — switch to the `_with_sac_overrides` entry
                 // point so the CH writer flips `is_sac=true,
                 // contract_type=Token` on pre-existing SAC skeleton
@@ -209,22 +221,43 @@ impl PartitionWriterHandle<'_> {
                 // the production wire-up the PR #186 description called
                 // out as a follow-up.
                 let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
-                    &parsed.ledger,
-                    &parsed.transactions,
-                    &parsed.operations,
-                    &parsed.events,
-                    &parsed.invocations,
-                    &parsed.contract_interfaces,
-                    &parsed.contract_deployments,
-                    &parsed.account_states,
-                    &parsed.liquidity_pools,
-                    &parsed.pool_snapshots,
-                    &parsed.assets,
-                    &parsed.nfts,
-                    &parsed.nft_events,
-                    &parsed.lp_positions,
-                    &parsed.contract_name_writes,
-                    &parsed.sac_overrides,
+                    &db_clickhouse::persist::stage::StageInputs {
+                        ledger: &parsed.ledger,
+                        transactions: &parsed.transactions,
+                        operations: &parsed.operations,
+                        events: &parsed.events,
+                        invocations: &parsed.invocations,
+                        contract_interfaces: &parsed.contract_interfaces,
+                        contract_deployments: &parsed.contract_deployments,
+                        account_states: &parsed.account_states,
+                        liquidity_pools: &parsed.liquidity_pools,
+                        pool_snapshots: &parsed.pool_snapshots,
+                        assets: &parsed.assets,
+                        nfts: &parsed.nfts,
+                        nft_events: &parsed.nft_events,
+                        lp_positions: &parsed.lp_positions,
+                        contract_metadata_writes: &parsed.contract_metadata_writes,
+                        // Task 0331 — backfill reprocesses ledger ContractData
+                        // changes through the shared `process.rs`, so this is
+                        // populated for free: the historical-balance seed pass is
+                        // the existing backfill, not a new crate. (TTL-archived
+                        // entries never re-emitted in-window stay absent — the
+                        // open caveat.)
+                        soroban_token_balances: &parsed.soroban_token_balances,
+                        sac_classic: &sac_classic,
+                        sac_overrides: &parsed.sac_overrides,
+                        // Task 0283 live G1/G9 are for the live indexer path only.
+                        // Backfill stays as-is (empty maps = pre-0283 behaviour):
+                        // historical cross-ledger verdicts are reconstructed by
+                        // the batch `ch-maint contract-type-rebuild` + one-shot
+                        // `nft-reclassify`, not inline.
+                        prior_wasm_verdicts: &std::collections::HashMap::new(),
+                        prior_contract_verdicts: &std::collections::HashMap::new(),
+                        // Task 0320 live WASM-upgrade rewrite is live-indexer-only;
+                        // the backfill recovers stale hashes via the dedicated
+                        // `wasm-upgrade-backfill` pass, so pass an empty map here.
+                        prior_contract_rows: &std::collections::HashMap::new(),
+                    },
                 )?;
                 pw.write_ledger(staged).await?;
                 Ok(())

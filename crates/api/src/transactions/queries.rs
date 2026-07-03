@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::TxListCursor;
 
@@ -66,7 +66,10 @@ pub struct OpRow {
     pub contract_id: Option<String>,
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
-    pub pool_id: Option<String>,
+    /// Crossed liquidity pools, hex-encoded. PG stores the legacy scalar
+    /// (0 or 1 element after mapping); CH stores the full crossed-pool
+    /// list from path-payment claim atoms (task 0261/0268).
+    pub pool_ids: Vec<String>,
     /// 1-based per-tx apply position (task 0192). `None` for pre-task-0192
     /// rows where the column was not yet populated by the indexer; the
     /// caller falls back to `appearance_id` ordering for those.
@@ -188,7 +191,7 @@ pub async fn fetch_list(
     direction: Direction,
 ) -> Result<Vec<TxListRow>, sqlx::Error> {
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new("");
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // PG keys on `(created_at, id)`. Extract the `Pg` cursor variant; a
     // non-`Pg` cursor never reaches here (`list_transactions` rejects a
@@ -424,7 +427,7 @@ pub async fn fetch_operations(
             sc.contract_id, \
             oa.asset_code, \
             iss.account_id                  AS asset_issuer, \
-            encode(oa.pool_id, 'hex')       AS pool_id, \
+            array_remove(ARRAY[encode(oa.pool_id, 'hex')], NULL) AS pool_ids, \
             oa.application_order, \
             oa.ledger_sequence, \
             oa.created_at \
@@ -452,7 +455,7 @@ pub async fn fetch_operations(
             contract_id: r.get("contract_id"),
             asset_code: r.get("asset_code"),
             asset_issuer: r.get("asset_issuer"),
-            pool_id: r.get("pool_id"),
+            pool_ids: r.get("pool_ids"),
             application_order: r.get("application_order"),
             ledger_sequence: r.get("ledger_sequence"),
             created_at: r.get("created_at"),

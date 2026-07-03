@@ -43,11 +43,17 @@ pub struct SearchGroups {
 ///
 /// `identifier` is the canonical human-shown id (hex hash for
 /// transactions, strkey `L…` for pools, StrKey for accounts /
-/// contracts, asset code for assets, name for NFTs). For `asset` it is
-/// NOT unique — the frontend routes via `surrogate_id`. For `nft` it is
-/// also not unique and `surrogate_id` alone is insufficient because NFT
-/// identity is the composite `(contract_id, token_id)` per task 0264 /
-/// ADR 0030 — the two fields below carry the composite for routing.
+/// contracts, asset code for assets, name for NFTs). It is the routing
+/// key too for every type whose display id IS routable (transaction,
+/// account, contract, pool). The two exceptions carry a separate routing
+/// payload because their display id is NOT routable:
+///
+/// - `asset`: `identifier` is the asset code (not unique / not routable);
+///   `route_token` carries the canonical `/assets/:id` token (contract
+///   StrKey | `CODE-ISSUER` | `native`), mirroring `canonical_id` in
+///   `assets/handlers.rs`.
+/// - `nft`: identity is the composite `(contract_id, token_id)` per task
+///   0264 / ADR 0030 — the two fields below carry it for routing.
 ///
 /// `successful` and `last_activity_at` are populated only for
 /// `entity_type = transaction` today — joined from the partitioned
@@ -61,7 +67,10 @@ pub struct SearchHit {
     pub entity_type: EntityType,
     pub identifier: String,
     pub label: String,
-    pub surrogate_id: Option<i64>,
+    /// Canonical `/assets/:id` routing token for `asset` hits; `None` for
+    /// every other type (they route on `identifier`). See the struct doc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub successful: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,7 +147,7 @@ mod tests {
             entity_type: EntityType::Nft,
             identifier: "Cool Cat #7".to_string(),
             label: "CoolCats".to_string(),
-            surrogate_id: Some(42),
+            route_token: None,
             successful: None,
             last_activity_at: None,
             contract_id: Some(
@@ -160,7 +169,7 @@ mod tests {
             entity_type: EntityType::Transaction,
             identifier: "deadbeef".to_string(),
             label: "ledger 1".to_string(),
-            surrogate_id: None,
+            route_token: None,
             successful: Some(true),
             last_activity_at: None,
             contract_id: None,
@@ -169,5 +178,31 @@ mod tests {
         let json = serde_json::to_value(&hit).unwrap();
         assert!(json.get("contract_id").is_none());
         assert!(json.get("token_id").is_none());
+        // route_token omitted when None (non-asset hits route on identifier).
+        assert!(json.get("route_token").is_none());
+    }
+
+    /// Asset hit carries the canonical routing token (display id stays the
+    /// asset code in `identifier`). The FE routes `/assets/<route_token>`.
+    #[test]
+    fn asset_hit_serializes_route_token() {
+        let hit = SearchHit {
+            entity_type: EntityType::Asset,
+            identifier: "USDC".to_string(),
+            label: "classic_credit".to_string(),
+            route_token: Some(
+                "USDC-GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT".to_string(),
+            ),
+            successful: None,
+            last_activity_at: None,
+            contract_id: None,
+            token_id: None,
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(json["identifier"], "USDC");
+        assert_eq!(
+            json["route_token"],
+            "USDC-GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT"
+        );
     }
 }

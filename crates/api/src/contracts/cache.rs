@@ -48,9 +48,11 @@ mod tests {
             contract_type_name: None,
             contract_type: None,
             is_sac: false,
+            upgradeable: None,
             stats: super::super::dto::ContractStats {
                 recent_invocations: 0,
                 recent_unique_callers: 0,
+                recent_events: 0,
                 stats_window: "7 days".to_string(),
             },
         }

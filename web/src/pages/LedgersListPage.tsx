@@ -4,7 +4,7 @@ import {
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 
 import { useLedgersList } from '../api/index.js';
 
@@ -13,19 +13,19 @@ import { PageHeader } from './detail/PageHeader.js';
 import { LEDGER_COLUMN_COUNT, LedgersTable } from './ledgers/LedgersTable.js';
 
 export default function LedgersListPage() {
-  const { cursor, goNext, goPrev, reset } = useCursorPagination();
-  const [sortDir, setSortDir] = useState<SortDirection>('desc');
-  const { data, isLoading, isError, error, refetch } = useLedgersList(
-    cursor,
-    sortDir
-  );
+  const { state, cursor, goNext, goPrev, setSort } = useCursorPagination();
+  // Sort lives in the URL `sort` (column) + `dir` (direction) params via
+  // `setSort`, so it survives reload / deep links and stays paired with
+  // the cursor.
+  const sortDir = state.sortDir;
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useLedgersList(cursor, sortDir);
 
   const handleSortChange = useCallback(
-    (next: SortDirection) => {
-      setSortDir(next);
-      reset();
-    },
-    [reset]
+    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
+    // resets the cursor.
+    (id: string, next: SortDirection) => setSort(id, next),
+    [setSort]
   );
 
   const rows = data?.data ?? [];
@@ -44,6 +44,7 @@ export default function LedgersListPage() {
       <DataListCard
         columnCount={LEDGER_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
@@ -54,6 +55,9 @@ export default function LedgersListPage() {
             sortDir={sortDir}
             onSortChange={handleSortChange}
           />
+        )}
+        renderSkeleton={() => (
+          <LedgersTable rows={[]} loading skeletonRows={20} />
         )}
         emptyKind="ledgers"
         emptyNoun="ledgers"

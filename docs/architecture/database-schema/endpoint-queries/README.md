@@ -1,5 +1,12 @@
 # Endpoint SQL query reference set
 
+> **⚠️ SUPERSEDED — Postgres is retired.** Prod serves every module from
+> ClickHouse (all 9 API datasource flags are `ch`; task 0243). This set remains
+> only as the reference for the still-compiled PG fallback path
+> (`crates/api/src/*/queries.rs`). For the live read plan see the parallel
+> [`endpoint-queries-clickhouse/`](../endpoint-queries-clickhouse/) set. Full PG
+> code + doc removal is a separate retirement task (task 0304 scope).
+
 Hand-tuned read queries — **one script per public REST endpoint** defined in
 [`backend-overview.md §6.2`](../../backend/backend-overview.md#62-endpoint-inventory).
 Schema reference: [ADR 0037](../../../../lore/2-adrs/0037_current-schema-snapshot.md).

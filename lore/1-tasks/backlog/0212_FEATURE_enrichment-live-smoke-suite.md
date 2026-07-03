@@ -47,7 +47,12 @@ end-to-end against real-world data:
 2. **NFT metadata smoke** — Fetch a known live NFT collection's
    `token_uri()` metadata, run the full
    `enrich_and_persist::nft_token_uri` flow, assert non-NULL `name`,
-   `media_url`, `collection_name` on the resulting `nfts` row.
+   `media_url` on the resulting `nfts` row. **`collection_name` does NOT
+   come from `token_uri()` JSON** (corrected by task 0340 — no real
+   Stellar NFT emits a JSON `"collection"` field, 0/68 on prod); it is
+   sourced from the contract-level SEP-50 `name()` RPC, so a
+   `collection_name` assertion belongs against a collection known to
+   export `name()`, not a "JSON-metadata collection".
 
 Both run only when CI is explicitly invoked with `cargo test -- --ignored`.
 Goal: catch regressions where the live worker silently breaks against real
@@ -116,7 +121,11 @@ the regression risk doesn't snap back.
     public collection with stable JSON-metadata behind IPFS; final choice
     during implementation).
   - Calls the full `enrich_and_persist::nft_token_uri::enrich_nft_token_uri`.
-  - Asserts non-NULL `nfts.name`, `nfts.media_url`, `nfts.collection_name`.
+  - Asserts non-NULL `nfts.name`, `nfts.media_url`. For
+    `nfts.collection_name`, pick a collection that exports SEP-50
+    `name()` (task 0340 — the source is the contract `name()` RPC, not
+    `token_uri()` JSON); a JSON-only collection legitimately leaves it
+    the `''` sentinel and should not be asserted non-NULL.
   - Asserts `media_url` starts with `https://` (verifies the ipfs→https
     gateway resolver shipped post-0196 merge is wired correctly).
 - Manual workflow-dispatch entry in `.github/workflows/` (e.g.

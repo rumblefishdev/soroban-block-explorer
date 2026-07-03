@@ -16,7 +16,7 @@ tags:
     refactor,
     clickhouse,
   ]
-milestone: 2
+milestone: 3
 links:
   - crates/api/Cargo.toml
   - crates/api/src/
@@ -30,6 +30,17 @@ history:
       CH default + 7 days stable with no errors. Activating earlier is risky
       — `sqlx` + `queries.rs` are still needed as the per-module rollback
       path.
+  - date: '2026-06-09'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Moved to milestone 3. Team decision: only the PG cleanup is deferred to M3;
+      the base per-module CH-read (0243) stays in M2 (launch-critical — prod has
+      no PG). Consistency note re the 0243 scope correction: in production the
+      `sqlx`/`queries.rs` path is NOT a rollback path — RDS PostgreSQL is
+      decommissioned (task 0239), prod is CH-only — so it survives purely for
+      local-dev parity, not prod resilience. The "wait for 7 days stable because
+      sqlx is the rollback path" gate therefore only matters for local-dev.
 ---
 
 # API cleanup — remove sqlx + PG path

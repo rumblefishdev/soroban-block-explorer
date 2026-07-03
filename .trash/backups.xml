@@ -1,0 +1,45 @@
+<!--
+  ClickHouse backup destination disk + allow-policy.
+  Mounted only by the production compose overlay.
+
+  ## Why this file is required
+
+  `BACKUP DATABASE … TO Disk('backups', …)` (issued by the daily
+  Borg pipeline in `infra-hetzner/ansible/roles/backup/templates/
+  ch-backup.sh.j2`) refers to a `backups` disk by name. Without a
+  matching `<storage_configuration>/<disks>/<backups>` declaration
+  the BACKUP statement fails with "Disk 'backups' does not exist"
+  and the cron script aborts before producing anything to push to
+  BX21 — silent zero-backup state until someone reads the log.
+
+  ## Why `<allowed_disk>` is required
+
+  CH 22.8+ refuses BACKUP/RESTORE to disks not on the
+  `<backup>/<allowed_disk>` allowlist, as a defence against a
+  rogue query writing parts to an unintended location. We
+  whitelist only the `backups` disk and only the `/backups/`
+  prefix; nothing else can be targeted.
+
+  ## Container path
+
+  `/backups/` inside the container maps to the host bind mount
+  `/srv/backups` declared in `docker-compose.prod.yml`. The
+  Ansible `app` role creates the host directory with ownership
+  matching the in-container CH UID (101:101) so the engine can
+  write without an in-container `chown`.
+-->
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <backups>
+                <type>local</type>
+                <path>/backups/</path>
+            </backups>
+        </disks>
+    </storage_configuration>
+
+    <backups>
+        <allowed_disk>backups</allowed_disk>
+        <allowed_path>/backups/</allowed_path>
+    </backups>
+</clickhouse>

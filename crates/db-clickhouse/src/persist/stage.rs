@@ -32,17 +32,19 @@
 //!
 //! ## Trustline removal handling
 //!
-//! Parser-emitted `removed_trustlines` are translated to
-//! `AccountBalanceRow` with `balance = 0` and current ledger as
+//! Parser-emitted `removed_trustlines` are translated to a unified
+//! `BalanceRow` with `amount = 0` and current ledger as
 //! `last_updated_ledger`. `ReplacingMergeTree(last_updated_ledger)`
 //! keeps the zero-balance row (newest version wins). Read-time
-//! convention: `WHERE balance > 0` to recover "active trustlines"
+//! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
 use std::collections::{HashMap, HashSet};
 
-use domain::{AssetType, ContractType, OperationType};
+use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
+use xdr_parser::ExtractedContractMetadata;
+use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
@@ -51,9 +53,46 @@ use xdr_parser::types::{
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
 
+use xdr_parser::event::extract_executable_update_new_wasm_hash;
+
 use super::ids;
 use super::rows::*;
 use crate::SchemaError;
+
+/// Sum `gross_volume_a` (asset-A-side trade volume, stroops) per pool from the
+/// `claimedAtoms` the parser attaches to path-payment / offer ops (the 0261
+/// claim-atom extractor emits `amountA` per atom). Keyed by raw 32-byte pool id
+/// to match [`LiquidityPoolSnapshotRow`]. Trades only — LP deposits/withdrawals
+/// carry no claimed atoms. Shared by live ingest (via [`prepare`]) and the 0266
+/// backfill worker, so the value is identical on either path.
+pub fn gross_volume_a_by_pool(
+    operations: &[(String, Vec<ExtractedOperation>)],
+) -> HashMap<[u8; 32], i128> {
+    let mut gross: HashMap<[u8; 32], i128> = HashMap::new();
+    for (_tx, ops) in operations {
+        for op in ops {
+            let Some(atoms) = op.details.get("claimedAtoms").and_then(Value::as_array) else {
+                continue;
+            };
+            for atom in atoms {
+                let (Some(pool_hex), Some(amount_a)) = (
+                    atom.get("poolId").and_then(Value::as_str),
+                    atom.get("amountA").and_then(Value::as_i64),
+                ) else {
+                    continue;
+                };
+                let Ok(bytes) = hex::decode(pool_hex) else {
+                    continue;
+                };
+                let Ok(pool_id) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+                    continue;
+                };
+                *gross.entry(pool_id).or_insert(0) += i128::from(amount_a);
+            }
+        }
+    }
+    gross
+}
 
 #[derive(Debug, Default)]
 pub struct StagedLedger {
@@ -63,6 +102,10 @@ pub struct StagedLedger {
     pub account_rows: Vec<AccountRow>,
     pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
     pub contract_rows: Vec<SorobanContractRow>,
+    /// On-chain Soroban token metadata side table (task 0297). Populated inside
+    /// [`prepare_with_sac_overrides`] via [`build_metadata_rows`] from the
+    /// `StageInputs.contract_metadata_writes` slice.
+    pub metadata_rows: Vec<SorobanContractMetadataRow>,
     pub transaction_rows: Vec<TransactionRow>,
     pub hash_index_rows: Vec<TransactionHashIndexRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
@@ -73,6 +116,8 @@ pub struct StagedLedger {
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
+    /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
+    pub asset_sac_rows: Vec<AssetSacRow>,
     pub nft_rows: Vec<NftRow>,
     pub nft_ownership_rows: Vec<NftOwnershipRow>,
     /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
@@ -84,7 +129,67 @@ pub struct StagedLedger {
     /// drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
-    pub balance_rows: Vec<AccountBalanceRow>,
+    /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
+    /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
+    /// from `StageInputs.soroban_token_balances`; classic + native per-account
+    /// balances are appended straight from `account_states` (single-write — the
+    /// legacy `account_balances_current` staging was removed).
+    pub unified_balance_rows: Vec<BalanceRow>,
+}
+
+/// Named, borrowed inputs to [`prepare_with_sac_overrides`].
+///
+/// Replaces the former ~18 positional arguments: many are `&[T]` slices and a
+/// few share types, so a positional call could silently transpose two. Named
+/// fields make the call site readable and a wrong order a compile error. `Copy`
+/// (every field is a shared reference) so the stage body can destructure it
+/// back into locals with zero ceremony.
+#[derive(Clone, Copy)]
+pub struct StageInputs<'a> {
+    pub ledger: &'a ExtractedLedger,
+    pub transactions: &'a [ExtractedTransaction],
+    pub operations: &'a [(String, Vec<ExtractedOperation>)],
+    pub events: &'a [(String, Vec<ExtractedEvent>)],
+    pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
+    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub contract_deployments: &'a [ExtractedContractDeployment],
+    pub account_states: &'a [ExtractedAccountState],
+    pub liquidity_pools: &'a [ExtractedLiquidityPool],
+    pub pool_snapshots: &'a [ExtractedLiquidityPoolSnapshot],
+    pub assets: &'a [ExtractedAsset],
+    pub nfts: &'a [ExtractedNft],
+    pub nft_events: &'a [ExtractedNftEvent],
+    pub lp_positions: &'a [ExtractedLpPosition],
+    /// On-chain Soroban token metadata writes (task 0297). Threaded through to
+    /// `metadata_rows` via [`build_metadata_rows`] inside
+    /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
+    pub contract_metadata_writes: &'a [ExtractedContractMetadata],
+    /// Per-holder Soroban token (type-3) balances from `ContractData`
+    /// `Balance(Address)` entries (task 0331). Threaded to the unified
+    /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
+    /// legacy callers.
+    pub soroban_token_balances: &'a [ExtractedSorobanBalance],
+    /// Task 0331 + ADR 0051 — SAC contract surrogate → wrapped classic/native
+    /// `asset_id` (from `asset_sac`, via [`crate::persist::fetch_sac_classic_map`]).
+    /// [`build_balance_rows`] keys a contract-held SAC balance onto the classic
+    /// asset it wraps instead of the SAC surrogate (which has no `assets` row of its
+    /// own). Empty map for legacy callers (SAC balances keep their surrogate key).
+    pub sac_classic: &'a HashMap<i64, i64>,
+    /// Crypto-proven un-deployed-SAC overrides for this ledger's events
+    /// (task 0323, `xdr_parser::detect_undeployed_sac_overrides`). Each
+    /// suppresses the Pass-2 FK stub (no contract row) + seeds a SAC `assets`
+    /// row. Empty for legacy callers.
+    pub sac_overrides: &'a [SacOverride],
+    /// Task 0283 live G1 — cross-ledger WASM verdicts by `wasm_hash`. Empty map
+    /// for legacy callers (behaves exactly as pre-0283).
+    pub prior_wasm_verdicts: &'a HashMap<[u8; 32], ContractType>,
+    /// Task 0283 live G9 — cross-ledger contract verdicts by `contract_id`.
+    pub prior_contract_verdicts: &'a HashMap<String, ContractType>,
+    /// Task 0320 live WASM-upgrade — prior `soroban_contracts` rows (read back
+    /// in full) for the contracts that emit an `executable_update` this ledger,
+    /// so [`build_wasm_upgrade_rows`] can carry identity forward when it rewrites
+    /// `wasm_hash`. Empty map for legacy callers (no upgrade rows emitted).
+    pub prior_contract_rows: &'a HashMap<String, SorobanContractRow>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -103,9 +208,10 @@ pub fn prepare(
     nfts: &[ExtractedNft],
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
-    contract_name_writes: &[(String, String)],
 ) -> Result<StagedLedger, SchemaError> {
-    prepare_with_sac_overrides(
+    // Convenience wrapper: no SAC overrides, no cross-ledger verdicts (the
+    // legacy / test path). Behaves exactly as the pre-StageInputs `prepare`.
+    prepare_with_sac_overrides(&StageInputs {
         ledger,
         transactions,
         operations,
@@ -120,43 +226,200 @@ pub fn prepare(
         nfts,
         nft_events,
         lp_positions,
-        contract_name_writes,
-        &[],
-    )
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &HashMap::new(),
+        prior_contract_verdicts: &HashMap::new(),
+        prior_contract_rows: &HashMap::new(),
+    })
 }
 
-/// Same as [`prepare`] but also re-emits SAC-override `ContractRow`s
-/// for every `(contract_id, identity)` pair in `sac_overrides` (task
-/// 0220 Part 2). Each override row carries `is_sac=true,
-/// contract_type=Token, wasm_uploaded_at_ledger=0` so RMT collapses by
-/// `ORDER BY (contract_id)` keeping the SAC-flagged version over the
-/// `is_sac=false` Pass-2 stub that would otherwise be emitted for the
-/// same contract.
+/// Build corrected `soroban_contracts` rows for contracts that emitted an
+/// `executable_update` SYSTEM event this ledger (task 0320, live path).
+///
+/// Per `executable_update` event with a parseable new WASM hash AND a known
+/// prior row, emit a full row that **overrides** `wasm_hash` +
+/// `wasm_uploaded_at_ledger` (= the upgrade ledger, the RMT version that wins
+/// the merge) and **carries forward** the identity columns. `contract_type` is
+/// carried forward unchanged — the class never net-changes on upgrade for
+/// current data; the rare flip is task 0325.
+///
+/// Events without a parseable hash, without a contract address, or **without a
+/// prior row are skipped** — emitting a partial row would clobber the identity
+/// columns to NULL under RMT. Multiple upgrades of one contract in the same
+/// ledger collapse to the last (on-chain application order).
+pub fn build_wasm_upgrade_rows(
+    events: &[(String, Vec<ExtractedEvent>)],
+    prior: &HashMap<String, SorobanContractRow>,
+    ledger_sequence: i64,
+) -> Vec<SorobanContractRow> {
+    // Keyed by contract_id so multiple upgrades of one contract in the same
+    // ledger collapse to the last seen (= on-chain application order).
+    let mut by_contract: HashMap<String, SorobanContractRow> = HashMap::new();
+    for (_tx_hash, evs) in events {
+        for ev in evs {
+            // Only consensus events drive state. The diagnostic container holds
+            // byte-identical copies of consensus events AND events from FAILED
+            // transactions (an upgrade that never applied) — acting on those would
+            // write a `wasm_hash` the chain never adopted. Mirror the `soroban_events`
+            // staging guard (this is the same population the backfill reads, post-drop).
+            if is_diagnostic(ev.source) {
+                continue;
+            }
+            // Only the host emits `executable_update`, and always as a SYSTEM
+            // event. A contract can emit a Contract-typed event with the same
+            // topic shape; requiring System blocks that spoof of its own
+            // `wasm_hash` (and never drops a real upgrade — all are System).
+            if ev.event_type != ContractEventType::System {
+                continue;
+            }
+            let Some(addr) = ev.contract_id.as_deref() else {
+                continue;
+            };
+            // `extract_…` returns `Some` only for a well-formed executable_update.
+            let Some(new_hash) = extract_executable_update_new_wasm_hash(&ev.topics) else {
+                continue;
+            };
+            // Skip-on-miss: without the prior row we cannot carry identity
+            // columns forward, and a partial row would NULL them under RMT.
+            let Some(prior_row) = prior.get(addr) else {
+                continue;
+            };
+            // Carry the prior row forward verbatim, overriding only what the
+            // upgrade actually changes: the new WASM hash and the RMT version
+            // (= upgrade ledger, so it wins the merge). `id` / `contract_id` /
+            // deployer / name / contract_type / is_sac all ride along from the
+            // read-back row — matching the backfill SQL, which also passes
+            // `is_sac` through (no upgrader is a mislabeled SAC on current data).
+            let mut row = prior_row.clone();
+            row.wasm_hash = Some(new_hash);
+            row.wasm_uploaded_at_ledger = ledger_sequence;
+            by_contract.insert(addr.to_string(), row);
+        }
+    }
+    by_contract.into_values().collect()
+}
+
+/// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
+/// rows (task 0297). Called inside [`prepare_with_sac_overrides`] from the
+/// `StageInputs.contract_metadata_writes` slice. SAC filtering already happened
+/// in the producer (`xdr_parser::extract_contract_metadata_writes`); `version` =
+/// observed ledger.
+pub fn build_metadata_rows(
+    writes: &[ExtractedContractMetadata],
+) -> Vec<SorobanContractMetadataRow> {
+    writes
+        .iter()
+        .map(|w| SorobanContractMetadataRow {
+            contract_id: w.contract_id.clone(),
+            name: w.metadata.name.clone(),
+            symbol: w.metadata.symbol.clone(),
+            decimals: w.metadata.decimals,
+            version: i64::from(w.ledger),
+        })
+        .collect()
+}
+
+/// Map parser-extracted Soroban token balances to unified `balances` rows
+/// (task 0331, Option C). `holder_id` = `ids::address_id(holder)`; `amount` raw.
+///
+/// `asset_id` is resolved from the STORING contract's surrogate: a SAC is NOT a
+/// distinct asset (ADR 0051 retired `asset_type=2`) and has no `assets` row of its
+/// own, so a contract-held SAC balance must key by the classic/native asset it
+/// wraps or it would orphan. `sac_classic` maps a SAC contract surrogate → its
+/// classic/native `asset_id` (from the `asset_sac` facet, via
+/// [`crate::persist::fetch_sac_classic_map`]); a storing contract ABSENT from the
+/// map is a type-3 token and keeps its own surrogate (`ids::asset_id(3, …)`). The
+/// resolution happens HERE, at build time — the live indexer (`prepare_with_sac_overrides`)
+/// and the RPC seed both call this one shared fn with the same map, so neither
+/// post-mutates the staged rows.
+pub fn build_balance_rows(
+    balances: &[ExtractedSorobanBalance],
+    sac_classic: &HashMap<i64, i64>,
+) -> Vec<BalanceRow> {
+    // Dedup by (holder_id, asset_id) keeping the LAST occurrence, position-stable:
+    // two txs in one ledger can touch the same holder+asset, producing rows that
+    // share the RMT version (`last_updated_ledger`) — a tie the merge would resolve
+    // nondeterministically. Ledger/tx order puts the final state last, so last-wins
+    // is correct; the first-seen position is preserved for deterministic output.
+    let mut rows: Vec<BalanceRow> = Vec::with_capacity(balances.len());
+    let mut idx: HashMap<(i64, i64), usize> = HashMap::with_capacity(balances.len());
+    for b in balances {
+        let contract = ids::contract_id(&b.contract_id);
+        let holder_id = ids::address_id(&b.holder);
+        let asset_id = sac_classic
+            .get(&contract)
+            .copied()
+            .unwrap_or_else(|| ids::asset_id(3, "", 0, contract));
+        let row = BalanceRow {
+            holder_id,
+            asset_id,
+            amount: b.balance,
+            last_updated_ledger: i64::from(b.ledger),
+        };
+        match idx.get(&(holder_id, asset_id)) {
+            Some(&i) => rows[i] = row,
+            None => {
+                idx.insert((holder_id, asset_id), rows.len());
+                rows.push(row);
+            }
+        }
+    }
+    rows
+}
+
+/// Same as [`prepare`] but also consumes `sac_overrides` — the crypto-proven
+/// un-deployed-SAC emitters for this ledger (task 0323). An un-deployed SAC is
+/// modelled as an ASSET, not a contract: each override (a) suppresses the
+/// Pass-2 FK stub so NO `soroban_contracts` row is written for it, and (b)
+/// seeds a SAC `assets` row from its `identity`. (Replaces the task-0220
+/// `is_sac=true` skeleton re-insert, which wrote a contract row instead.)
 ///
 /// Production callers that have a `ParseOutput.sac_overrides` slice
 /// (PG-side bridge for task 0218 + the CH backfill path) call this
 /// directly; legacy callers via [`prepare`] get a no-op override list
 /// and behave exactly as before — the override mechanism stays opt-in
 /// at the call site, so the addition is fully backward-compatible.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_with_sac_overrides(
-    ledger: &ExtractedLedger,
-    transactions: &[ExtractedTransaction],
-    operations: &[(String, Vec<ExtractedOperation>)],
-    events: &[(String, Vec<ExtractedEvent>)],
-    invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
-    contract_deployments: &[ExtractedContractDeployment],
-    account_states: &[ExtractedAccountState],
-    liquidity_pools: &[ExtractedLiquidityPool],
-    pool_snapshots: &[ExtractedLiquidityPoolSnapshot],
-    assets: &[ExtractedAsset],
-    nfts: &[ExtractedNft],
-    nft_events: &[ExtractedNftEvent],
-    lp_positions: &[ExtractedLpPosition],
-    contract_name_writes: &[(String, String)],
-    sac_overrides: &[SacOverride],
-) -> Result<StagedLedger, SchemaError> {
+///
+/// `prior_wasm_verdicts` (task 0283 live G1 fix) carries cross-ledger
+/// WASM verdicts the pure stage cannot see: on Soroban `uploadContractWasm`
+/// and `createContract` are separate transactions in (almost always)
+/// different ledgers, so a deploy's WASM is invisible to the same-ledger
+/// `wasm_classification` map below and the contract would persist the parser
+/// default `Other`. The writer pre-fetches the verdict for such hashes from
+/// the already-persisted `wasm_interface_metadata` (see
+/// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
+/// override consults it as a fallback after the same-ledger map. Legacy
+/// callers via [`prepare`] pass an empty map and behave exactly as before.
+pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedger, SchemaError> {
+    // Destructure back into locals (StageInputs is `Copy`) so the body below is
+    // unchanged from the positional-argument era — every name matches.
+    let StageInputs {
+        ledger,
+        transactions,
+        operations,
+        events,
+        invocations,
+        contract_interfaces,
+        contract_deployments,
+        account_states,
+        liquidity_pools,
+        pool_snapshots,
+        assets,
+        nfts,
+        nft_events,
+        lp_positions,
+        contract_metadata_writes,
+        soroban_token_balances,
+        sac_classic,
+        sac_overrides,
+        prior_wasm_verdicts,
+        prior_contract_verdicts,
+        prior_contract_rows,
+    } = *input;
+
     let ledger_sequence_i64 = i64::from(ledger.sequence);
     let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
     let ledger_closed_at_ms = ledger.closed_at.saturating_mul(1_000);
@@ -351,9 +614,14 @@ pub fn prepare_with_sac_overrides(
         let classification = xdr_parser::classify_contract_from_wasm_spec(&iface.functions);
         wasm_classification.insert(hash, classification.into());
 
+        // Task 0327: persist the mutability bit so the API can surface the
+        // Upgradeable/Immutable badge. Read back via
+        // `JSONExtractBool(metadata,'upgradeable')`; rows written before this
+        // (no key) read as Unknown → chip renders nothing.
         let metadata = serde_json::json!({
             "functions": iface.functions,
             "wasm_byte_len": iface.wasm_byte_len,
+            "upgradeable": iface.upgradeable,
         });
         out.wasm_rows.push(WasmInterfaceMetadataRow {
             wasm_hash: hash,
@@ -374,15 +642,26 @@ pub fn prepare_with_sac_overrides(
         };
         let deployed = i64::from(dep.deployed_at_ledger);
         // Task 0118 Phase 2 (PG-side mirror) — if this deployment's
-        // wasm was classified in the same ledger and carries a
-        // definitive `Nft` / `Fungible` verdict, override the parser
-        // default (`Other` for non-SAC) before the row reaches CH.
-        // SAC deploys stay `Token` (is_sac short-circuits WASM
+        // wasm carries a definitive `Nft` / `Fungible` verdict, override
+        // the parser default (`Other` for non-SAC) before the row reaches
+        // CH. SAC deploys stay `Token` (is_sac short-circuits WASM
         // classification — SACs have no WASM).
+        //
+        // Verdict source, in precedence order:
+        //   1. `wasm_classification` — WASM uploaded in THIS ledger.
+        //   2. `prior_wasm_verdicts` — WASM uploaded in an EARLIER ledger,
+        //      pre-fetched by the writer from `wasm_interface_metadata`
+        //      (task 0283 live G1). This is the common Soroban case
+        //      (upload + deploy are separate txs / ledgers); without it
+        //      the contract would persist `Other` and its NFT events would
+        //      route to quarantine until the batch backstop drains them.
         let mut contract_type = dep.contract_type;
         if !dep.is_sac
             && let Some(hash) = wasm_hash
-            && let Some(&classified) = wasm_classification.get(&hash)
+            && let Some(classified) = wasm_classification
+                .get(&hash)
+                .or_else(|| prior_wasm_verdicts.get(&hash))
+                .copied()
             && matches!(classified, ContractType::Nft | ContractType::Fungible)
         {
             contract_type = classified;
@@ -396,66 +675,58 @@ pub fn prepare_with_sac_overrides(
             deployed_at_ledger: Some(deployed),
             contract_type: Some(contract_type as i16),
             is_sac: dep.is_sac,
-            name: dep.name.clone(),
         });
     }
 
-    for (cid, name) in contract_name_writes {
-        out.contract_rows.push(SorobanContractRow {
-            id: ids::contract_id(cid),
-            contract_id: cid.clone(),
-            wasm_hash: None,
-            wasm_uploaded_at_ledger: ledger_sequence_i64,
-            deployer_id: None,
-            deployed_at_ledger: None,
-            contract_type: None,
-            is_sac: false,
-            name: Some(name.clone()),
-        });
-    }
-
-    // Task 0220 — SAC override re-insert. For every observed classic
-    // asset (Native / ClassicCredit), the parser already derived the
-    // SAC contract_id (see `xdr_parser::derive_sac_overrides_from_assets`).
-    // Re-insert a corrected `SorobanContractRow` with
-    // `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0` so
-    // RMT collapses by `ORDER BY (contract_id)` keeping the override
-    // version when the original deploy lived outside our backfill
-    // window and persisted as `is_sac=false`. Skips contracts already
-    // emitted from `contract_deployments` (no point in writing twice
-    // in the same partition).
+    // (task 0297) On-chain token name/symbol/decimals → the dedicated
+    // `soroban_contract_metadata` side table. A pure 1:1 map of the producer's
+    // output (extraction + SAC-skip already done), built here like the other
+    // `out.*` rows rather than post-`prepare`. This coexists with the legacy
+    // `Symbol("name")` path (parser `extract_contract_data_name_writes`, deploy
+    // second pass, `soroban_contracts.name`); full removal of that path is
+    // deferred to task 0304.
+    out.metadata_rows = build_metadata_rows(contract_metadata_writes);
+    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
+    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet — it's written to
+    // `asset_sac` during this same staging. Seed those current-ledger carriers so a
+    // same-ledger contract-held balance re-keys onto the wrapped classic/native id
+    // instead of orphaning on its surrogate. Guarded: the common ledger (no new SAC,
+    // or no balances) skips the clone; the DB map wins on conflict (`or_insert`).
+    let effective_sac_classic;
+    let sac_map: &HashMap<i64, i64> = if !soroban_token_balances.is_empty()
+        && assets.iter().any(|t| t.sac_contract_id.is_some())
     {
-        let mut override_seen: HashSet<&str> = HashSet::new();
-        for cid in &contract_seen {
-            override_seen.insert(cid.as_str());
-        }
-        for ov in sac_overrides {
-            if !override_seen.insert(ov.contract_id.as_str()) {
-                continue;
+        let mut m = sac_classic.clone();
+        for t in assets {
+            if let Some(sac) = t.sac_contract_id.as_deref() {
+                let issuer_id = t
+                    .issuer_address
+                    .as_deref()
+                    .map(ids::account_id)
+                    .unwrap_or(0);
+                let classic = ids::asset_id(
+                    t.asset_type as i16,
+                    t.asset_code.as_deref().unwrap_or(""),
+                    issuer_id,
+                    0,
+                );
+                m.entry(ids::contract_id(sac)).or_insert(classic);
             }
-            out.contract_rows.push(SorobanContractRow {
-                id: ids::contract_id(&ov.contract_id),
-                contract_id: ov.contract_id.clone(),
-                wasm_hash: None,
-                // RMT version = 0 sentinel: every real deploy (which
-                // carries `wasm_uploaded_at_ledger = deployed_at_ledger
-                // >= window_start`) wins over this override, so a
-                // future in-window deploy of the same contract won't
-                // be downgraded back to a stub. But the override
-                // _does_ win over the existing `is_sac=false` skeleton
-                // RMT-merged from referenced-only Pass-2 emits which
-                // also carry `wasm_uploaded_at_ledger = 0` — the new
-                // row dedupes by `(contract_id)` ORDER BY and the
-                // freshly-written `is_sac=true` is the one kept.
-                wasm_uploaded_at_ledger: 0,
-                deployer_id: None,
-                deployed_at_ledger: None,
-                contract_type: Some(ContractType::Token as i16),
-                is_sac: true,
-                name: None,
-            });
         }
-    }
+        effective_sac_classic = m;
+        &effective_sac_classic
+    } else {
+        sac_classic
+    };
+    out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
+
+    // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
+    // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
+    // here are removed. `sac_overrides` (now the crypto-proven event emitters
+    // from `detect_undeployed_sac_overrides`) instead (a) suppress the Pass-2 FK
+    // stub below so no contract row is written, and (b) seed a SAC `assets` row
+    // in the asset-emission pass. A real deploy still writes its contract row
+    // from `contract_deployments` (site above).
 
     // ---- transactions + transaction_hash_index ----
     let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
@@ -549,6 +820,10 @@ pub fn prepare_with_sac_overrides(
     }
 
     // ---- liquidity_pool_snapshots ----
+    // Per-(pool, ledger) asset-A trade volume from claim atoms (0261 extractor).
+    // Live ingest now derives it directly (previously backfill-only); the 0266
+    // worker reuses this same value via `prepare`, so live + backfill agree.
+    let gross_volume_by_pool = gross_volume_a_by_pool(operations);
     for snap in pool_snapshots {
         let pool_id = decode_hash(&snap.pool_id, "snapshot.pool_id")?;
         let reserve_a = snap
@@ -584,6 +859,10 @@ pub fn prepare_with_sac_overrides(
                 .as_deref()
                 .map(decimal7_string_to_i128)
                 .transpose()?,
+            // Asset-A-side trade volume for this (pool, ledger) from claim atoms
+            // (0261). `None` when the pool had no trade this ledger. USD volume/
+            // fee_revenue remain read-time (ADR 0048); those columns stay NULL.
+            gross_volume_a: gross_volume_by_pool.get(&pool_id).copied(),
         });
     }
 
@@ -634,7 +913,9 @@ pub fn prepare_with_sac_overrides(
         contract_strkey: Option<String>,
         asset_code: String,
         asset_issuer_account: Option<String>,
-        pool_id: Option<[u8; 32]>,
+        /// Sorted + deduped — canonical order makes the fold identity (and
+        /// the emitted row) deterministic across re-parses (task 0261/0266).
+        pool_ids: Vec<[u8; 32]>,
     }
     struct OpAgg {
         count: i64,
@@ -647,10 +928,12 @@ pub fn prepare_with_sac_overrides(
         }
         for op in ops {
             let typed = OpTyped::from_details(op.op_type, &op.details);
-            let pool_id = match &typed.pool_id_hex {
-                Some(h) => Some(decode_hash(h, "op.pool_id")?),
-                None => None,
-            };
+            let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
+            for h in &typed.pool_ids_hex {
+                pool_ids.push(decode_hash(h, "op.pool_ids")?);
+            }
+            pool_ids.sort_unstable();
+            pool_ids.dedup();
             let key = OpKey {
                 tx_hash_hex: tx_hash.clone(),
                 op_type: op.op_type as i16,
@@ -659,7 +942,7 @@ pub fn prepare_with_sac_overrides(
                 contract_strkey: typed.contract_id,
                 asset_code: typed.asset_code.unwrap_or_default(),
                 asset_issuer_account: typed.asset_issuer,
-                pool_id,
+                pool_ids,
             };
             op_agg
                 .entry(key)
@@ -688,7 +971,7 @@ pub fn prepare_with_sac_overrides(
             contract_id: k.contract_strkey.as_deref().map(ids::contract_id),
             asset_code: k.asset_code,
             asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
-            pool_id: k.pool_id,
+            pool_ids: k.pool_ids,
             amount: agg.count,
             ledger_sequence: ledger_sequence_i64,
         });
@@ -798,10 +1081,23 @@ pub fn prepare_with_sac_overrides(
         });
     }
 
-    // ---- assets (dedup by 4-tuple identity) ----
+    // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
+    //
+    // ADR 0051: the classic_credit / native `assets` row is the asset's identity;
+    // the SAC handle is a FACET written to the `asset_sac` side table — NOT a
+    // column on `assets`, which is a no-version RMT re-written whole every ledger
+    // a trustline for the asset changes (`detect_classic_credit_assets`) and would
+    // clobber a mutable non-key column to its default on the next re-emit (the
+    // ~25% NULL prod bug). `push_asset` dedups identity by the 4-tuple; `push_sac`
+    // collects one facet per key, `max`-merging `sac_deployed` (a deploy sticks
+    // over a later un-deployed override) — mirrored by the `asset_sac`
+    // AggregatingMergeTree so the fold is correct cross-ledger too, not just
+    // within one staged batch.
     let mut asset_seen: HashSet<(i16, String, i64, i64)> = HashSet::new();
     let push_asset =
         |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, row: AssetRow| {
+            // Dedup by the identity 4-tuple. `row.id` is already the `ids::asset_id`
+            // surrogate (computed in `AssetRow::staged`), so build sites can't diverge.
             let key = (
                 row.asset_type,
                 row.asset_code.clone(),
@@ -812,6 +1108,21 @@ pub fn prepare_with_sac_overrides(
                 out.asset_rows.push(row);
             }
         };
+    // Facet accumulator: (asset_type, code, issuer_id, contract_id=0) → (surrogate, deployed).
+    let mut sac_facets: HashMap<(i16, String, i64), (i64, u8)> = HashMap::new();
+    let mut push_sac = |asset_type: i16,
+                        asset_code: String,
+                        issuer_id: i64,
+                        sac_contract_id: i64,
+                        deployed: u8| {
+        let e = sac_facets
+            .entry((asset_type, asset_code, issuer_id))
+            .or_insert((0, 0));
+        if sac_contract_id != 0 {
+            e.0 = sac_contract_id;
+        }
+        e.1 = e.1.max(deployed);
+    };
     for t in assets {
         let issuer_id = t
             .issuer_address
@@ -819,44 +1130,95 @@ pub fn prepare_with_sac_overrides(
             .map(ids::account_id)
             .unwrap_or(0);
         let contract_id_int = t.contract_id.as_deref().map(ids::contract_id).unwrap_or(0);
-        let row = AssetRow {
-            asset_type: t.asset_type as i16,
-            asset_code: t.asset_code.clone().unwrap_or_default(),
+        let row = AssetRow::staged(
+            t.asset_type as i16,
+            t.asset_code.clone().unwrap_or_default(),
             issuer_id,
-            contract_id: contract_id_int,
-            name: t.name.clone(),
-            total_supply: t
-                .total_supply
-                .as_deref()
-                .map(decimal7_string_to_i128)
-                .transpose()?,
-            holder_count: t.holder_count,
-            icon_url: None,
-        };
+            contract_id_int,
+        );
+        // SAC facet carried by `detect_assets`' SAC branch (the classic/native
+        // carrier for a deploy). Emitted to `asset_sac`, never onto `assets`.
+        if let Some(sac) = t.sac_contract_id.as_deref() {
+            push_sac(
+                t.asset_type as i16,
+                row.asset_code.clone(),
+                issuer_id,
+                ids::contract_id(sac),
+                t.sac_deployed as u8,
+            );
+        }
         push_asset(&mut out, &mut asset_seen, row);
     }
 
+    // SAC deploys (ADR 0051): ensure the underlying classic_credit / native
+    // identity row exists and record the SAC facet (`sac_deployed = 1`). Never a
+    // separate `type=2` row. `detect_assets` already emits the same carrier from
+    // these deployments; the dedup collapses the two, and this also covers callers
+    // that pass deployments without running `detect_assets`.
     for dep in contract_deployments {
         let Some(sac) = &dep.sac_asset else {
             continue;
         };
-        let (asset_code, issuer_id) = match sac {
-            SacAssetIdentity::Native => (String::new(), 0),
-            SacAssetIdentity::Credit { code, issuer } => (code.clone(), ids::account_id(issuer)),
+        let (asset_type, asset_code, issuer_id) = match sac {
+            SacAssetIdentity::Native => (domain::TokenAssetType::Native, String::new(), 0),
+            SacAssetIdentity::Credit { code, issuer } => (
+                domain::TokenAssetType::ClassicCredit,
+                code.clone(),
+                ids::account_id(issuer),
+            ),
         };
+        push_sac(
+            asset_type as i16,
+            asset_code.clone(),
+            issuer_id,
+            ids::contract_id(&dep.contract_id),
+            1,
+        );
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: domain::TokenAssetType::Sac as i16,
+            AssetRow::staged(
+                asset_type as i16,
                 asset_code,
                 issuer_id,
-                contract_id: ids::contract_id(&dep.contract_id),
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            },
+                0, // key reserved for soroban identity
+            ),
+        );
+    }
+
+    // Un-deployed-SAC facet (task 0323 AC#3 → ADR 0051). The crypto-proven event
+    // emitters in `sac_overrides` (see `detect_undeployed_sac_overrides`) get NO
+    // contract row (suppressed in Pass-2 below); fold the SAC handle onto the
+    // underlying classic_credit / native row with `sac_deployed = false` so its
+    // activity has a home while it stays a reserved-but-un-deployed address.
+    // `ov.identity` carries the classic asset. A deployed SAC (e.g. USDC) that
+    // also emits is harmless — `push_asset`'s merge keeps `sac_deployed = true`
+    // from the real deploy row (OR-merge never downgrades it).
+    for ov in sac_overrides {
+        let (asset_type, asset_code, issuer_id) = match &ov.identity {
+            SacAssetIdentity::Native => (domain::TokenAssetType::Native, String::new(), 0),
+            SacAssetIdentity::Credit { code, issuer } => (
+                domain::TokenAssetType::ClassicCredit,
+                code.clone(),
+                ids::account_id(issuer),
+            ),
+        };
+        push_sac(
+            asset_type as i16,
+            asset_code.clone(),
+            issuer_id,
+            ids::contract_id(&ov.contract_id),
+            0,
+        );
+        push_asset(
+            &mut out,
+            &mut asset_seen,
+            AssetRow::staged(
+                asset_type as i16,
+                asset_code,
+                issuer_id,
+                0, // key reserved for soroban identity
+            ),
         );
     }
 
@@ -864,17 +1226,53 @@ pub fn prepare_with_sac_overrides(
     push_asset(
         &mut out,
         &mut asset_seen,
-        AssetRow {
-            asset_type: domain::TokenAssetType::Native as i16,
-            asset_code: String::new(),
-            issuer_id: 0,
-            contract_id: 0,
-            name: Some("Stellar Lumen".to_string()),
-            total_supply: None,
-            holder_count: None,
-            icon_url: None,
-        },
+        AssetRow::staged(domain::TokenAssetType::Native as i16, String::new(), 0, 0),
     );
+
+    // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
+    //
+    // Mirror of PG `insert_assets_from_reclassified_contracts`: a contract
+    // whose verdict resolved to `Fungible` (same-ledger classification or the
+    // writer's prior-ledger prefetch via the deploy override above) gets a
+    // bespoke-Soroban (`asset_type = 3`) asset row carrying only the
+    // `contract_id` — code/issuer are empty, aggregates are filled later by the
+    // `asset-aggregates` batch. `push_asset` dedups against any row the parser
+    // already emitted same-batch; SAC short-circuits `Fungible`, so these never
+    // collide with a SAC-carrying classic/native row. Read from the staged
+    // `contract_rows` so the corrected verdict (incl. the prior-ledger override)
+    // is honoured.
+    let fungible_contract_ids: Vec<i64> = out
+        .contract_rows
+        .iter()
+        .filter(|r| !r.is_sac && r.contract_type == Some(ContractType::Fungible as i16))
+        .map(|r| r.id)
+        .collect();
+    for contract_id in fungible_contract_ids {
+        push_asset(
+            &mut out,
+            &mut asset_seen,
+            AssetRow::staged(
+                domain::TokenAssetType::Soroban as i16,
+                String::new(),
+                0,
+                contract_id,
+            ),
+        );
+    }
+
+    // Materialise the accumulated SAC facets into `asset_sac` rows (contract_id
+    // is 0 — the classic/native carrier's key). AggregatingMergeTree `max`-merges
+    // these with any prior-ledger rows, so `sac_deployed` is monotonic.
+    for ((asset_type, asset_code, issuer_id), (sac_contract_id, sac_deployed)) in sac_facets {
+        out.asset_sac_rows.push(AssetSacRow {
+            asset_type,
+            asset_code,
+            issuer_id,
+            contract_id: 0,
+            sac_contract_id,
+            sac_deployed,
+        });
+    }
 
     // ---- NFT routing verdict map (task 0217 / 0220) -------------------
     //
@@ -886,11 +1284,13 @@ pub fn prepare_with_sac_overrides(
     //        - WASM-classified deploy (the override applied above).
     //   2. SAC overrides (also Token) — these were skipped from Pass-2
     //      stubs, so they're in `out.contract_rows` already.
-    // Contracts with NO entry → treat as `Other`/uncached → route to
-    // pending. CH has no DB access in the stage, so prior-ledger
-    // classifications are not visible here; this is the same semantic
-    // PG would produce for a worker with an empty `ClassificationCache`
-    // — pending now, drained / promoted later via the runbook.
+    // Contracts with NO entry in EITHER source → treat as `Other`/uncached →
+    // route to pending. The stage itself has no DB access; cross-ledger
+    // verdicts arrive via `prior_contract_verdicts` (task 0283 live G9), the
+    // writer's lookup of `soroban_contracts` for contracts emitting NFT
+    // rows/events here but deployed earlier. This restores the PG
+    // `ClassificationCache` semantic the CH cutover dropped — without it a
+    // later transfer from an already-classified NFT would quarantine.
     let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
     for row in &out.contract_rows {
         if let Some(ty_i16) = row.contract_type
@@ -901,18 +1301,23 @@ pub fn prepare_with_sac_overrides(
     }
 
     // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
+    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
+    // (G9, cross-ledger) is the fallback for contracts not deployed here.
     enum NftRoute {
         Hot,
         Pending,
         Drop,
     }
     let route_for = |strkey: &str| -> NftRoute {
-        match verdict_by_contract.get(strkey).copied() {
+        let verdict = verdict_by_contract
+            .get(strkey)
+            .copied()
+            .or_else(|| prior_contract_verdicts.get(strkey).copied());
+        match verdict {
             Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
             Some(ContractType::Nft) => NftRoute::Hot,
-            // `Other` (cached or just-fetched) and uncached (no entry)
-            // both go to quarantine — same semantic as PG-side
-            // `resolve_nft_filter`.
+            // `Other` and uncached (no entry in either source) both go to
+            // quarantine — same semantic as PG-side `resolve_nft_filter`.
             _ => NftRoute::Pending,
         }
     };
@@ -1050,8 +1455,13 @@ pub fn prepare_with_sac_overrides(
         }
     }
 
-    // ---- account_balances_current ----
-    let mut balance_dedup: HashMap<(i64, i16, String, i64), AccountBalanceRow> = HashMap::new();
+    // ---- unified `balances` — classic + native per-account balances (lore-0331
+    // Option A single-write). `account_balances_current` is no longer written (only
+    // its table remains, for the pending classic→`balances` migration + rollback).
+    // Dedup straight on (holder_id, asset_id): the project `asset_id` already folds
+    // the Horizon alphanum4/12 split into one `classic-credit` key. amount is the
+    // same scaled-i128 (decimals=7 at read); accounts resolve via `accounts`.
+    let mut balance_dedup: HashMap<(i64, i64), BalanceRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1064,95 +1474,37 @@ pub fn prepare_with_sac_overrides(
                 continue;
             };
             let balance_str = b.get("balance").and_then(Value::as_str).unwrap_or("0");
-            let balance = decimal7_string_to_i128(balance_str)?;
-            let (asset_code, issuer_id) = if asset_type == AssetType::Native {
-                (String::new(), 0)
+            let amount = decimal7_string_to_i128(balance_str)?;
+            let asset_id = if asset_type == AssetType::Native {
+                ids::asset_id(0, "", 0, 0)
             } else {
-                let code = b
-                    .get("asset_code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let issuer = b
-                    .get("issuer")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
+                let code = b.get("asset_code").and_then(Value::as_str).unwrap_or("");
+                let issuer = b.get("issuer").and_then(Value::as_str).unwrap_or("");
                 if code.is_empty() || issuer.is_empty() {
                     continue;
                 }
-                (code, ids::account_id(&issuer))
+                ids::asset_id(1, code, ids::account_id(issuer), 0)
             };
-            let key = (
+            upsert_balance(
+                &mut balance_dedup,
                 account_id_int,
-                asset_type as i16,
-                asset_code.clone(),
-                issuer_id,
+                asset_id,
+                amount,
+                watermark,
             );
-            let row = AccountBalanceRow {
-                account_id: account_id_int,
-                asset_type: asset_type as i16,
-                asset_code,
-                issuer_id,
-                balance,
-                last_updated_ledger: watermark,
-            };
-            match balance_dedup.entry(key) {
-                Entry::Occupied(mut occ) => {
-                    let existing = occ.get_mut();
-                    if row.last_updated_ledger >= existing.last_updated_ledger {
-                        *existing = row;
-                    }
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(row);
-                }
-            }
         }
 
         for rm in &st.removed_trustlines {
-            let code = rm
-                .get("asset_code")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let issuer = rm
-                .get("issuer")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let code = rm.get("asset_code").and_then(Value::as_str).unwrap_or("");
+            let issuer = rm.get("issuer").and_then(Value::as_str).unwrap_or("");
             if code.is_empty() || issuer.is_empty() {
                 continue;
             }
-            let asset_type = if code.len() <= 4 {
-                AssetType::CreditAlphanum4
-            } else {
-                AssetType::CreditAlphanum12
-            };
-            let issuer_id = ids::account_id(&issuer);
-            let key = (account_id_int, asset_type as i16, code.clone(), issuer_id);
-            let row = AccountBalanceRow {
-                account_id: account_id_int,
-                asset_type: asset_type as i16,
-                asset_code: code,
-                issuer_id,
-                balance: 0,
-                last_updated_ledger: watermark,
-            };
-            match balance_dedup.entry(key) {
-                Entry::Occupied(mut occ) => {
-                    let existing = occ.get_mut();
-                    if row.last_updated_ledger >= existing.last_updated_ledger {
-                        *existing = row;
-                    }
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(row);
-                }
-            }
+            let asset_id = ids::asset_id(1, code, ids::account_id(issuer), 0);
+            upsert_balance(&mut balance_dedup, account_id_int, asset_id, 0, watermark);
         }
     }
-    out.balance_rows.extend(balance_dedup.into_values());
+    out.unified_balance_rows.extend(balance_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {
@@ -1160,16 +1512,13 @@ pub fn prepare_with_sac_overrides(
         for cid in &contract_seen {
             emitted.insert(cid.as_str());
         }
-        for (cid, _) in contract_name_writes {
-            emitted.insert(cid.as_str());
-        }
-        // Task 0220 — exclude SAC-override contracts. The override row
-        // (emitted earlier with `is_sac=true`) and a Pass-2 stub
-        // (`is_sac=false`) would both carry `wasm_uploaded_at_ledger=0`;
-        // CH RMT tie-breaks nondeterministically on equal version, so
-        // emitting both could clobber the override on merge. Suppress
-        // the stub here — the override carries enough fields
-        // (`contract_id`, `id`) to satisfy the FK-by-id read path.
+        // Task 0323 — suppress the Pass-2 FK stub for SAC-override contracts.
+        // `sac_overrides` are crypto-proven un-deployed SACs (modelled as
+        // ASSETS, not contracts) plus deployed SACs that emit this ledger
+        // (already carrying a real deploy row). Neither should get an
+        // `is_sac=false` stub: un-deployed SACs get an `assets` row instead,
+        // and for a deployed SAC a stub at `wasm_uploaded_at_ledger=0` could
+        // clobber its real deploy row on the equal-version RMT merge.
         for ov in sac_overrides {
             emitted.insert(ov.contract_id.as_str());
         }
@@ -1229,10 +1578,23 @@ pub fn prepare_with_sac_overrides(
                 deployed_at_ledger: None,
                 contract_type: None,
                 is_sac: false,
-                name: None,
             });
         }
     }
+
+    // ---- Task 0320 live path: WASM-upgrade row rewrites ----
+    // Appended last (after deploy / SAC-override / skeleton rows) so a contract
+    // upgraded this ledger gets a full row overriding `wasm_hash` +
+    // `wasm_uploaded_at_ledger` (RMT version = upgrade ledger, wins the merge)
+    // while carrying its identity forward. `prior_contract_rows` is empty for
+    // every caller except the live indexer, so this is a no-op elsewhere. A
+    // contract that both deploys and upgrades in one ledger is impossible (the
+    // WASM upload must precede the upgrade in an earlier tx).
+    out.contract_rows.extend(build_wasm_upgrade_rows(
+        events,
+        prior_contract_rows,
+        ledger_sequence_i64,
+    ));
 
     Ok(out)
 }
@@ -1254,6 +1616,34 @@ fn decode_hash(hex_str: &str, field: &'static str) -> Result<[u8; 32], SchemaErr
 
 fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
+}
+
+/// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
+/// the newest `last_updated_ledger` (RMT version semantics resolved at stage time).
+fn upsert_balance(
+    map: &mut HashMap<(i64, i64), BalanceRow>,
+    holder_id: i64,
+    asset_id: i64,
+    amount: i128,
+    last_updated_ledger: i64,
+) {
+    use std::collections::hash_map::Entry;
+    let row = BalanceRow {
+        holder_id,
+        asset_id,
+        amount,
+        last_updated_ledger,
+    };
+    match map.entry((holder_id, asset_id)) {
+        Entry::Occupied(mut occ) => {
+            if row.last_updated_ledger >= occ.get().last_updated_ledger {
+                *occ.get_mut() = row;
+            }
+        }
+        Entry::Vacant(vac) => {
+            vac.insert(row);
+        }
+    }
 }
 
 fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {
@@ -1335,7 +1725,10 @@ struct OpTyped {
     contract_id: Option<String>,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
-    pool_id_hex: Option<String>,
+    /// Liquidity pools touched by the op. Single-element for LP
+    /// deposit/withdraw; the full crossed-pool list (from result claim
+    /// atoms) for path payments; empty otherwise. Task 0261 / 0268.
+    pool_ids_hex: Vec<String>,
 }
 
 impl OpTyped {
@@ -1345,7 +1738,7 @@ impl OpTyped {
             contract_id: None,
             asset_code: None,
             asset_issuer: None,
-            pool_id_hex: None,
+            pool_ids_hex: Vec::new(),
         };
         match op_type {
             OperationType::CreateAccount => {
@@ -1379,7 +1772,7 @@ impl OpTyped {
                 }
             }
             OperationType::LiquidityPoolDeposit | OperationType::LiquidityPoolWithdraw => {
-                out.pool_id_hex = str_field(details, "liquidityPoolId");
+                out.pool_ids_hex = str_field(details, "liquidityPoolId").into_iter().collect();
             }
             OperationType::InvokeHostFunction => {
                 out.contract_id = str_field(details, "contractId");
@@ -1411,6 +1804,20 @@ impl OpTyped {
                 out.destination = str_field(details, "sponsoredId");
             }
             _ => {}
+        }
+        // `poolIds` (path payments + offers crossing an LP — task 0261) is
+        // present on any op whose result carried claim atoms, regardless of op
+        // type. LP deposit/withdraw already set `pool_ids_hex` from
+        // `liquidityPoolId` above, so the guard skips them.
+        if out.pool_ids_hex.is_empty()
+            && let Some(ids) = details.get("poolIds").and_then(Value::as_array)
+        {
+            out.pool_ids_hex = ids
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
         }
         out
     }
@@ -1582,4 +1989,63 @@ fn merge_account_state_overrides(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod balance_tests {
+    use super::*;
+    use xdr_parser::ExtractedSorobanBalance;
+
+    #[test]
+    fn build_balance_rows_maps_holder_and_asset_surrogates() {
+        let extracted = vec![ExtractedSorobanBalance {
+            contract_id: "CTOKEN1".into(),
+            holder: "GHOLDER1".into(),
+            balance: 800_009_446_178_i128,
+            ledger: 100,
+        }];
+        // No SAC map → type-3 keying: asset_id == the token's contract surrogate.
+        let rows = build_balance_rows(&extracted, &HashMap::new());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].holder_id, ids::address_id("GHOLDER1"));
+        assert_eq!(rows[0].asset_id, ids::contract_id("CTOKEN1"));
+        assert_eq!(rows[0].amount, 800_009_446_178_i128);
+        assert_eq!(rows[0].last_updated_ledger, 100);
+    }
+
+    #[test]
+    fn build_balance_rows_rekeys_sac_via_map_but_not_type3() {
+        // A SAC contract-held balance + a type-3 token balance. The map re-keys
+        // only the SAC (its surrogate → classic id); the type-3 token is absent
+        // and keeps its own surrogate.
+        let classic_usdc = ids::asset_id(1, "USDC", 42, 0);
+        let sac_classic = HashMap::from([(ids::contract_id("CSAC"), classic_usdc)]);
+        let rows = build_balance_rows(
+            &[
+                ExtractedSorobanBalance {
+                    contract_id: "CSAC".into(),
+                    holder: "CPOOL".into(),
+                    balance: 100,
+                    ledger: 10,
+                },
+                ExtractedSorobanBalance {
+                    contract_id: "CTOKEN3".into(),
+                    holder: "GHOLDER".into(),
+                    balance: 200,
+                    ledger: 10,
+                },
+            ],
+            &sac_classic,
+        );
+
+        assert_eq!(
+            rows[0].asset_id, classic_usdc,
+            "SAC contract-held → classic id"
+        );
+        assert_eq!(
+            rows[1].asset_id,
+            ids::contract_id("CTOKEN3"),
+            "type-3 unchanged"
+        );
+    }
 }
