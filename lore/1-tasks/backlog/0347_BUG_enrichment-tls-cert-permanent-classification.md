@@ -1,5 +1,5 @@
 ---
-id: '0345'
+id: '0347'
 title: 'BUG: classify TLS certificate-verification failures as permanent (sentinel) in enrichment, not transient'
 type: BUG
 status: backlog
@@ -17,6 +17,14 @@ tags:
   ]
 links: []
 history:
+  - date: '2026-07-03'
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0345 → 0347: id 0345 collided with pre-existing
+      0345_PERF_entity-filtered-endpoints-skip-index-or-mv.md (spawned
+      earlier in the 0338 perf-task batch). 0346 also taken, so next free
+      id was 0347.
   - date: '2026-07-03'
     status: backlog
     who: karolkow
