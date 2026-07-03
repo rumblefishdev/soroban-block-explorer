@@ -113,8 +113,10 @@ served from CH.
       exact `contract_stats_sql` (all three stats) run via `chq` against prod CH
       for the native XLM SAC `CAS3J7GY…OWMA` returned a coherent non-zero trio:
       `recent_invocations=144,112`, `recent_unique_callers=26`,
-      `recent_events=69,411,088` (events ≫ invocations — SAC fires many events
-      per call). `chq` reproduces the API output exactly (no compute beyond this
+      `recent_events=69,411,088`. (events ≫ invocations because they count
+      different populations — all SAC events incl. classic-emitted transfers vs
+      Soroban-only invocations — not "events per call"; verified dup-free on a
+      sampled slice.) `chq` reproduces the API output exactly (no compute beyond this
       SQL; the API's 45s TTL cache only serves a copy of it). See [[0328]] for
       the full write-up. NOTE: the original "verified before the
       `API_DATASOURCE_CONTRACTS=ch` prod flip" wording is stale — the flip

@@ -107,7 +107,35 @@ and cleaner check.
 | `recent_unique_callers` | 26             |
 | `recent_events`         | **69,411,088** |
 
-`recent_events ≫ recent_invocations` (69.4M vs 144K) is coherent — a SAC emits
-many events per invocation — and matches 0300's data-anchored parity shape
-(1.27M events vs 12.9K invocations on its sample). Confirms the 0300 fix now
-returns a real windowed count against the live window, not `0`.
+Confirms the 0300 fix now returns a real windowed count against the live
+window, not `0`.
+
+**Why `recent_events` (69.4M) ≫ `recent_invocations` (144K).** These count
+**different populations**, not "events per call". `recent_events` is every
+event `soroban_events` holds for the SAC — dominated by transfer events emitted
+by _classic_ XLM operations (payments / DEX / path-payments), all
+`event_type=1`. `recent_invocations` counts only _Soroban_ cross-contract
+invocations of the SAC. ~99.95% of the events have no matching Soroban
+invocation, so the 481:1 gap is two different denominators. (My first pass
+mislabelled this as "a SAC emits many events per invocation" — wrong.)
+
+**Validation of the 69.4M figure (not inflated):**
+
+- `soroban_events` is a `ReplacingMergeTree` and the shipped query counts
+  **without `FINAL`**, so duplicate rows from re-ingestion were a risk. Checked
+  a ~1h slice (720 ledgers) for the SAC: `count() == uniqExact(transaction_id,
+event_index)`, **0 dupes**, 0 keys with >1 row. Not inflated.
+- Daily trend is smooth (~6.5M → 10.9M/day, last day partial/in-progress), no
+  re-ingest spike. Rate ≈ 574 events/ledger (7d avg) ≈ 115/s — consistent for
+  the settlement asset.
+
+**Out-of-scope caveats surfaced (not `recent_events`, so 0328 stays done):**
+
+- `recent_unique_callers = 26` is technically-correct-but-misleading: 144,082 of
+  144,157 invocation rows have `caller_id = NULL`; `uniqExact` skips NULLs → 26.
+  Near-meaningless for the native SAC. This is a `recent_unique_callers` (0300
+  stat) quality gap — candidate follow-up.
+- Native SAC is a slightly pathological verification pick (classic-emitted
+  events + null callers); a plain Soroban contract would give a cleaner
+  events≈k·invocations shape. AC only requires `recent_events` non-zero +
+  plausible, which holds.
