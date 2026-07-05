@@ -26,7 +26,7 @@ use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc};
+use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -722,12 +722,12 @@ struct PoolListChRow {
     pool_id_hex: String,
     asset_a_type: i16,
     asset_a_code: Option<String>,
-    asset_a_issuer: Option<String>,
+    asset_a_issuer_id: i64,
     asset_a_contract_id: Option<String>,
     asset_a_icon_url: Option<String>,
     asset_b_type: i16,
     asset_b_code: Option<String>,
-    asset_b_issuer: Option<String>,
+    asset_b_issuer_id: i64,
     asset_b_contract_id: Option<String>,
     asset_b_icon_url: Option<String>,
     fee_bps: i32,
@@ -872,12 +872,6 @@ pub async fn fetch_pool_list(
              ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
-         iss AS ( \
-             SELECT id, any(account_id) AS account_id FROM accounts \
-             WHERE id IN (SELECT asset_a_issuer_id FROM page WHERE asset_a_issuer_id != 0 \
-                          UNION ALL SELECT asset_b_issuer_id FROM page WHERE asset_b_issuer_id != 0) \
-             GROUP BY id \
-         ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
                     max(sc.contract_id) AS contract_id, \
@@ -900,12 +894,12 @@ pub async fn fetch_pool_list(
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
              lp.asset_a_type                                 AS asset_a_type, \
              nullIf(lp.asset_a_code, '')                     AS asset_a_code, \
-             nullIf(iss_a.account_id, '')                    AS asset_a_issuer, \
+             lp.asset_a_issuer_id                            AS asset_a_issuer_id, \
              nullIf(sac_a.contract_id, '')                   AS asset_a_contract_id, \
              sac_a.icon_url                                  AS asset_a_icon_url, \
              lp.asset_b_type                                 AS asset_b_type, \
              nullIf(lp.asset_b_code, '')                     AS asset_b_code, \
-             nullIf(iss_b.account_id, '')                    AS asset_b_issuer, \
+             lp.asset_b_issuer_id                            AS asset_b_issuer_id, \
              nullIf(sac_b.contract_id, '')                   AS asset_b_contract_id, \
              sac_b.icon_url                                  AS asset_b_icon_url, \
              lp.fee_bps                                      AS fee_bps, \
@@ -940,8 +934,6 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
-         LEFT JOIN iss iss_a ON iss_a.id = lp.asset_a_issuer_id \
-         LEFT JOIN iss iss_b ON iss_b.id = lp.asset_b_issuer_id \
          LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
                             AND sac_a.issuer_id = lp.asset_a_issuer_id \
                             AND lp.asset_a_code != '' \
@@ -964,6 +956,19 @@ pub async fn fetch_pool_list(
     }
     let rows = query.fetch_all::<PoolListChRow>().await?;
 
+    // Resolve issuer StrKeys by surrogate id (bloom seek). The old in-query `iss`
+    // CTE used `WHERE id IN (SELECT … FROM page)` — the subquery form does not
+    // trigger the `idx_acc_id` bloom, so it scanned `accounts.id` (task 0345).
+    let issuer_ids = rows
+        .iter()
+        .flat_map(|r| [r.asset_a_issuer_id, r.asset_b_issuer_id])
+        // Exclude the native sentinel `0` — the old `iss` CTE filtered
+        // `WHERE … != 0`. A no-op on real data (`accounts.id = cityhash64(strkey)`
+        // is never 0), but keeps the resolution unconditionally identical.
+        .filter(|&id| id != 0)
+        .collect();
+    let accounts = resolve_accounts(client, issuer_ids).await?;
+
     Ok(rows
         .into_iter()
         .map(|r| PoolRow {
@@ -971,13 +976,19 @@ pub async fn fetch_pool_list(
             asset_a_type: r.asset_a_type,
             asset_a_type_name: asset_type_name(r.asset_a_type),
             asset_a_code: r.asset_a_code,
-            asset_a_issuer: r.asset_a_issuer,
+            asset_a_issuer: accounts
+                .get(&r.asset_a_issuer_id)
+                .cloned()
+                .filter(|s| !s.is_empty()),
             asset_a_contract_id: r.asset_a_contract_id,
             asset_a_icon_url: r.asset_a_icon_url,
             asset_b_type: r.asset_b_type,
             asset_b_type_name: asset_type_name(r.asset_b_type),
             asset_b_code: r.asset_b_code,
-            asset_b_issuer: r.asset_b_issuer,
+            asset_b_issuer: accounts
+                .get(&r.asset_b_issuer_id)
+                .cloned()
+                .filter(|s| !s.is_empty()),
             asset_b_contract_id: r.asset_b_contract_id,
             asset_b_icon_url: r.asset_b_icon_url,
             fee_bps: r.fee_bps,

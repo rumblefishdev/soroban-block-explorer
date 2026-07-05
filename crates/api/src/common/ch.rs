@@ -211,6 +211,69 @@ pub fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
     values
 }
 
+// ---------------------------------------------------------------------------
+// Surrogate `id` -> StrKey resolution (tasks 0344 / 0345)
+//
+// Replaces the whole-dimension `JOIN accounts/soroban_contracts (…) ON x.id =
+// <surrogate>` anti-pattern: that join reads the ENTIRE dimension table to build
+// its hash side (surrogate `id` is not the sort key), even to resolve a handful
+// of ids — the ~25M-row cost seen across the detail/entity endpoints. Instead we
+// fetch the surrogate ids off the driver rows and look StrKeys up by `id`:
+// `accounts`/`soroban_contracts` have a bloom skip index on `id`, so
+// `WHERE id IN (…)` is a granule seek. `LIMIT 1 BY id` picks any
+// ReplacingMergeTree version — exact because the StrKey (`account_id` /
+// `contract_id`) is immutable across versions (proven byte-identical in 0344).
+//
+// The returned map is RAW (may contain empty StrKeys). Callers apply their own
+// `nullIf('')` — `map.get(&id).filter(|s| !s.is_empty())` matches the old
+// `LEFT JOIN … nullIf(x, '')`; a plain `map.get(&id)` matches an `INNER JOIN`.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Row, Deserialize)]
+struct IdStrKeyRow {
+    id: i64,
+    strkey: String,
+}
+
+async fn resolve_id_strkey(
+    client: &clickhouse::Client,
+    table: &str,
+    strkey_col: &str,
+    mut ids: Vec<i64>,
+) -> Result<HashMap<i64, String>, clickhouse::error::Error> {
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    Ok(client
+        .query(&format!(
+            "SELECT id, {strkey_col} AS strkey FROM {table} WHERE id IN ({in_list}) LIMIT 1 BY id"
+        ))
+        .fetch_all::<IdStrKeyRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.strkey))
+        .collect())
+}
+
+/// `accounts.id` -> `account_id` (StrKey). See the module note above.
+pub async fn resolve_accounts(
+    client: &clickhouse::Client,
+    ids: Vec<i64>,
+) -> Result<HashMap<i64, String>, clickhouse::error::Error> {
+    resolve_id_strkey(client, "accounts", "account_id", ids).await
+}
+
+/// `soroban_contracts.id` -> `contract_id` (StrKey). See the module note above.
+pub async fn resolve_contracts(
+    client: &clickhouse::Client,
+    ids: Vec<i64>,
+) -> Result<HashMap<i64, String>, clickhouse::error::Error> {
+    resolve_id_strkey(client, "soroban_contracts", "contract_id", ids).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
