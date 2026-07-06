@@ -164,20 +164,28 @@ PG-SQL fixtures) moved to `.trash/` → **follow-up task 0360** (on develop):
 
 ### ⏳ Remaining — exhaustive
 
-**DECIDED (2026-07-06): delete both** (Karol signed off).
+**DECIDED (2026-07-06): delete both.** **REVISED (2026-07-07): keep + port
+`audit-harness`** (Karol signed off both).
 
-- **`audit-harness` → C: delete from 0244 + spawn a CH-native rebuild task.**
-  Genuine correctness safety net (Horizon/archive diff + all-row SQL invariants)
-  with no CH mirror, but already non-functional against ClickHouse (sqlx-bound),
-  so keeping it is PG-shaped debt inside a remove-PG refactor. A from-scratch CH
-  tool beats mechanically porting PG SQL; the spawned task means the net is
-  deferred, not lost. → follow-up task **0361** (on develop).
+- **`audit-harness` → KEEP + PORT, deferred to task 0361.** First deleted
+  (commit `71506367`), then reverted (`4bd834b8`) once the code was re-read:
+  it is a genuine correctness safety net (Horizon/archive diff + all-row SQL
+  invariants) and the 3 diff binaries (~2760 lines) are **store-agnostic** —
+  only ~32 lines touch `sqlx`. So the CH work is a **port** (swap the DB-read
+  layer to `clickhouse::Client`, re-express the 18 SQL invariants for CH), not a
+  rewrite — porting preserves tested Horizon/archive/CAP-0038 logic. The port is
+  real feature work with live-diff validation, so it stays **out of 0244** and is
+  tracked under task **0361** (re-scoped rebuild→port). **Consequence:**
+  `audit-harness` remains PG-bound (`sqlx`) in-tree, so item 7's _"drop the
+  `sqlx` workspace dep"_ is **carved out** — sqlx survives solely for
+  audit-harness until 0361 lands (see AC #13).
 - **`backfill-bench` → B: delete.** Benchmarks the now-dead PG write path,
   redundant with `backfill-runner` (the real CH sink), and the keystone pinning
   `pg-persist`. If local throughput benchmarking is wanted later, add a `--bench`
-  mode to `backfill-runner` (CH).
+  mode to `backfill-runner` (CH). (Done — commit `7cbf6dc4`.)
 
-Both deletes unblock items 3–8.
+The `backfill-bench` delete unblocks items 3–8; the workspace-`sqlx` drop (item 7)
+is gated on the 0361 audit-harness port.
 
 1. `crates/audit-harness/` — **decision: port to CH or delete.** No CH mirror
    exists (the `compare-with-stellar-api` skill is also PG-bound); it is
@@ -219,9 +227,9 @@ operation_type, token_asset_type, enums/mod).
     placeholder + `API_DATASOURCE_*` env block + `infra/README.md` PG refs.
     ⚠️ prod config — needs explicit go. Overlaps the RDS teardown (task 0239).
 11. **libs/api-types** — PG strings live in api DTO **doc comments**
-    (`LedgerListItem` "sqlx::FromRow", `NetworkStats` "pg_class.reltuples", the
+    (`LedgerListItem` "sqlx::FromRow", `NetworkStats` "pg*class.reltuples", the
     `pool_ids` PG↔CH caveat, network-stats query desc). **Open call:** scrub PG
-    from the _public_ API docs, or keep as history? Then **regenerate**
+    from the \_public* API docs, or keep as history? Then **regenerate**
     (`nx run @rumblefish/api-types:generate`) so `openapi.json` +
     `generated/types.gen.ts` refresh.
 12. **docs/architecture — remaining after the session-2 sweep:**
