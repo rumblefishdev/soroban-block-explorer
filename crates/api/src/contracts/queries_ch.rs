@@ -37,11 +37,11 @@ use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{ContractStats, EventCursor, EventItem};
-use super::queries::{
+use super::dto::{
     ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
     ResolvedContractsListParams, STATS_WINDOW,
 };
+use super::dto::{ContractStats, EventCursor, EventItem};
 
 /// `contract_type` SMALLINT → label, matching the PG `contract_type_name`
 /// function (migration `20260422000100_contract_type_add_nft_fungible`).

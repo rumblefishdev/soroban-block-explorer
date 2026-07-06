@@ -8,7 +8,6 @@
 pub mod cache;
 pub mod dto;
 mod handlers;
-mod queries;
 mod queries_ch;
 
 use utoipa_axum::router::OpenApiRouter;

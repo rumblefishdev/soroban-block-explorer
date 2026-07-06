@@ -46,8 +46,6 @@ pub struct ListParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    // TODO(0244): remove once contracts collapses off the PG cursor.
-    Pg { ts: DateTime<Utc>, id: i64 },
     Ch { ledger_sequence: i64, tiebreak: i64 },
 }
 
