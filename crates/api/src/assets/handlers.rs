@@ -19,17 +19,18 @@ use crate::state::AppState;
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
-    AssetDetailResponse, AssetIdentity, AssetItem, AssetKeyCursor, AssetRow, AssetTransactionItem,
-    AssetTxRow, ListParams, ResolvedListParams, asset_predicate_present,
+    AssetDetailResponse, AssetItem, AssetKeyCursor, AssetTransactionItem, ListParams,
 };
-use super::queries_ch;
+use super::queries::{
+    self, AssetIdentity, AssetRow, AssetTxRow, ResolvedListParams, asset_predicate_present,
+};
 
 async fn fetch_list_for_source(
     state: &AppState,
     params: &ResolvedListParams,
     direction: Direction,
 ) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
-    queries_ch::fetch_list(&state.ch(), params, direction).await
+    queries::fetch_list(&state.ch(), params, direction).await
 }
 
 /// `:id` detail-row dispatch — resolves the `AssetRow` from CH.
@@ -38,10 +39,10 @@ async fn fetch_asset_row_for_source(
     parsed: AssetIdRef<'_>,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
     match parsed {
-        AssetIdRef::Native => queries_ch::fetch_native(&state.ch()).await,
-        AssetIdRef::Contract(c) => queries_ch::fetch_by_contract_id(&state.ch(), c).await,
+        AssetIdRef::Native => queries::fetch_native(&state.ch()).await,
+        AssetIdRef::Contract(c) => queries::fetch_by_contract_id(&state.ch(), c).await,
         AssetIdRef::CodeIssuer(code, issuer) => {
-            queries_ch::fetch_by_code_issuer(&state.ch(), code, issuer).await
+            queries::fetch_by_code_issuer(&state.ch(), code, issuer).await
         }
     }
 }
@@ -340,7 +341,7 @@ async fn fetch_asset_tx_for_source(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
-    queries_ch::fetch_transactions(
+    queries::fetch_transactions(
         &state.ch(),
         row.asset_code.as_deref(),
         row.issuer_id,

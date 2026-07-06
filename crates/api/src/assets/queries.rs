@@ -50,11 +50,106 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
+use chrono::{DateTime, Utc};
+
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{AssetRow, AssetTxRow, ResolvedListParams};
+use super::dto::AssetKeyCursor;
+
+// ---------------------------------------------------------------------------
+// Internal query-result rows + helpers (not serialized; the handler maps these
+// into the public response DTOs).
+// ---------------------------------------------------------------------------
+
+/// Detail/list row for an asset. Handler maps this to the wire `AssetItem`.
+#[derive(Debug, Clone)]
+pub struct AssetRow {
+    pub asset_type: i16,
+    /// Pre-decoded via `token_asset_type_name()` SQL helper. `None` only
+    /// when the discriminant is outside the schema CHECK range — defensive
+    /// against future schema drift.
+    pub asset_type_name: Option<String>,
+    pub asset_code: Option<String>,
+    /// Already resolved through `accounts.account_id` join.
+    pub issuer: Option<String>,
+    /// Already resolved through `soroban_contracts.contract_id` join.
+    pub contract_id: Option<String>,
+    pub name: Option<String>,
+    /// On-chain SEP-41 token symbol from `soroban_contract_metadata` (task 0297);
+    /// `None` for classic/native.
+    pub symbol: Option<String>,
+    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+    /// (Stellar classic precision).
+    pub decimals: u32,
+    pub total_supply: Option<String>,
+    pub holder_count: Option<i32>,
+    pub icon_url: Option<String>,
+    /// `soroban_contracts.deployed_at_ledger` — populated for SAC and
+    /// Soroban-native rows; `None` for native and classic_credit.
+    pub deployed_at_ledger: Option<i64>,
+    /// `accounts.home_domain` for the issuer, used as the SEP-1 lookup
+    /// key in `get_asset` runtime enrichment (task 0188). `None` for
+    /// native, no-issuer, and issuer accounts that did not set
+    /// `home_domain` on-chain.
+    pub issuer_home_domain: Option<String>,
+    /// Surrogate key columns — cursor keyset only, never on the wire. These
+    /// are the 4-tuple CH orders `assets` by `(asset_type, asset_code,
+    /// issuer_id, contract_id)`; `0` / `''` stand in for "absent" (native has
+    /// no issuer_id, classic-credit has no contract_id), matching CH defaults.
+    pub issuer_id: i64,
+    pub contract_surrogate_id: i64,
+    /// SAC facet (ADR 0051): the surrogate of the wrapping SAC's `C…` StrKey,
+    /// or `0` when the asset has no observed SAC. Never on the wire — the
+    /// handler re-derives the display StrKey from `code:issuer` when non-zero.
+    pub sac_contract_surrogate: i64,
+    /// Whether the `sac_contract_surrogate` SAC is deployed on-chain (ADR 0051).
+    pub sac_deployed: bool,
+}
+
+#[derive(Debug)]
+pub struct AssetTxRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub source_account: String,
+    pub successful: bool,
+    pub fee_charged: i64,
+    pub created_at: DateTime<Utc>,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub operation_types: Vec<String>,
+}
+
+/// Resolved, validated `GET /v1/assets` list params handed to `fetch_list`.
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<AssetKeyCursor>,
+    pub asset_type: Option<i16>,
+    /// Raw substring (no `%` / `_` from the caller). The SQL builder
+    /// wraps it in `%...%` for the trigram match.
+    pub asset_code: Option<String>,
+    /// SAC property filter (ADR 0051): restrict to assets with a SAC
+    /// (`sac_contract_id != 0`) — the old `filter[type]=sac` view.
+    pub sac_only: bool,
+}
+
+/// Resolved asset identity used to gate the `/transactions` sub-resource query.
+pub struct AssetIdentity<'a> {
+    pub asset_code: Option<&'a str>,
+    pub issuer: Option<&'a str>,
+    pub contract_id: Option<&'a str>,
+}
+
+/// True when the asset has a DB-side identity ops can key on. Native XLM and
+/// friends have none → the handler short-circuits with an empty page rather
+/// than emit a degenerate `WHERE ()`.
+pub fn asset_predicate_present(identity: &AssetIdentity<'_>) -> bool {
+    let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
+    let has_contract = identity.contract_id.is_some();
+    has_classic || has_contract
+}
 
 /// `asset_type` SMALLINT → canonical label, matching the PG
 /// `token_asset_type_name` function. `None` for an out-of-range code (the PG
