@@ -16,8 +16,7 @@ use serde::Deserialize;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
 
-use super::dto::LedgerListItem;
-use super::queries::{LedgerDetailRow, LedgerTxRow};
+use super::dto::{LedgerDetailRow, LedgerListItem, LedgerTxRow};
 
 #[derive(Debug, Row, Deserialize)]
 struct LedgerListRow {

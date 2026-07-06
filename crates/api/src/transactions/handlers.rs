@@ -126,7 +126,7 @@ pub async fn list_transactions(
     // (historical) pages are excluded — head-independent. The head probe is
     // therefore paid only on the polled live request.
     let live_head = if pagination.cursor.is_none() {
-        head::current_head_opt(&state, source).await
+        head::current_head_opt(&state).await
     } else {
         None
     };

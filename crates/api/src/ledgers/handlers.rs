@@ -15,7 +15,6 @@ use serde::Deserialize;
 use crate::common::cache_control;
 use crate::common::conditional;
 use crate::common::cursor::{Direction, SortOrder, TsIdCursor, parse_sort_order};
-use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::head;
@@ -25,9 +24,8 @@ use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 use crate::transactions::dto::TransactionListItem;
 
-use super::dto::{LedgerDetailResponse, LedgerListItem};
-use super::queries::LedgerTxRow;
-use super::{queries, queries_ch};
+use super::dto::{LedgerDetailResponse, LedgerDetailRow, LedgerListItem, LedgerTxRow};
+use super::queries_ch;
 
 /// Base sort order for `GET /v1/ledgers` — a sticky query param the
 /// client re-sends on every page. `order=asc|desc` sets the base sort for all
@@ -73,7 +71,6 @@ pub async fn list_ledgers(
     Query(order_query): Query<LedgersListQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let source = DataSource::for_module(Module::Ledgers);
     // `?order=` sets the persistent base sort, which `fetch_list` receives.
     // The cursor only controls navigation direction rather than overriding order.
     // The client resets to page 1 when toggling order, and re-sends the order param
@@ -91,7 +88,7 @@ pub async fn list_ledgers(
     // every poll. The head probe (and the whole conditional path) is therefore
     // paid only on the polled live request; other pages behave exactly as before.
     let live_head = if pagination.cursor.is_none() && sort == SortOrder::Desc {
-        head::current_head_opt(&state, source).await
+        head::current_head_opt(&state).await
     } else {
         None
     };
@@ -106,7 +103,6 @@ pub async fn list_ledgers(
     // order; `direction` (from the cursor) walks forward/back within it.
     let mut rows: Vec<LedgerListItem> = match fetch_list_for_source(
         &state,
-        source,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         sort,
@@ -116,7 +112,7 @@ pub async fn list_ledgers(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in list_ledgers: {e}");
+            tracing::error!("DB error in list_ledgers: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -195,7 +191,6 @@ pub async fn get_ledger(
     Path(sequence_raw): Path<String>,
     pagination: Pagination<TsIdCursor>,
 ) -> Response {
-    let source = DataSource::for_module(Module::Ledgers);
     // Path param shape-validate via the canonical helper from task 0044
     // (PR #132). Rejects non-numeric / negative / zero / >u32::MAX inputs
     // with `code = "invalid_sequence"` and `details.{param,received}`.
@@ -205,11 +200,11 @@ pub async fn get_ledger(
     };
 
     // Phase 1 — DB header.
-    let header_row = match fetch_by_sequence_for_source(&state, source, sequence).await {
+    let header_row = match fetch_by_sequence_for_source(&state, sequence).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("ledger with sequence {sequence} not found")),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in get_ledger header: {e}");
+            tracing::error!("DB error in get_ledger header: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -218,7 +213,6 @@ pub async fn get_ledger(
     // `?limit=` / `?cursor=` query params validated above.
     let mut tx_rows: Vec<LedgerTxRow> = match fetch_transactions_for_source(
         &state,
-        source,
         header_row.sequence,
         header_row.closed_at,
         pagination.cursor.as_ref(),
@@ -229,7 +223,7 @@ pub async fn get_ledger(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in get_ledger transactions: {e}");
+            tracing::error!("DB error in get_ledger transactions: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -272,7 +266,6 @@ pub async fn get_ledger(
 
 async fn fetch_list_for_source(
     state: &AppState,
-    source: DataSource,
     limit: i64,
     cursor: Option<&TsIdCursor>,
     sort: SortOrder,
@@ -284,68 +277,42 @@ async fn fetch_list_for_source(
     state
         .list_query_count
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    match source {
-        DataSource::Pg => queries::fetch_list(&state.db, limit, cursor, sort, direction)
-            .await
-            .map_err(LedgerFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(&state.ch(), limit, cursor, sort, direction)
-            .await
-            .map_err(LedgerFetchError::Ch),
-    }
+    queries_ch::fetch_list(&state.ch(), limit, cursor, sort, direction)
+        .await
+        .map_err(LedgerFetchError::Ch)
 }
 
 async fn fetch_by_sequence_for_source(
     state: &AppState,
-    source: DataSource,
     sequence: i64,
-) -> Result<Option<queries::LedgerDetailRow>, LedgerFetchError> {
-    match source {
-        DataSource::Pg => queries::fetch_by_sequence(&state.db, sequence)
-            .await
-            .map_err(LedgerFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_by_sequence(&state.ch(), sequence)
-            .await
-            .map_err(LedgerFetchError::Ch),
-    }
+) -> Result<Option<LedgerDetailRow>, LedgerFetchError> {
+    queries_ch::fetch_by_sequence(&state.ch(), sequence)
+        .await
+        .map_err(LedgerFetchError::Ch)
 }
 
 async fn fetch_transactions_for_source(
     state: &AppState,
-    source: DataSource,
     ledger_sequence: i64,
     closed_at: chrono::DateTime<chrono::Utc>,
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: crate::common::cursor::Direction,
 ) -> Result<Vec<LedgerTxRow>, LedgerFetchError> {
-    match source {
-        DataSource::Pg => queries::fetch_transactions(
-            &state.db,
-            ledger_sequence,
-            closed_at,
-            cursor,
-            limit,
-            direction,
-        )
-        .await
-        .map_err(LedgerFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_transactions(
-            &state.ch(),
-            ledger_sequence,
-            closed_at,
-            cursor,
-            limit,
-            direction,
-        )
-        .await
-        .map_err(LedgerFetchError::Ch),
-    }
+    queries_ch::fetch_transactions(
+        &state.ch(),
+        ledger_sequence,
+        closed_at,
+        cursor,
+        limit,
+        direction,
+    )
+    .await
+    .map_err(LedgerFetchError::Ch)
 }
 
 #[derive(Debug, thiserror::Error)]
 enum LedgerFetchError {
-    #[error("pg: {0}")]
-    Pg(sqlx::Error),
     #[error("ch: {0}")]
     Ch(clickhouse::error::Error),
 }
