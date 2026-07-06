@@ -9,14 +9,13 @@ use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
 use crate::common::conditional;
-use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::head;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
 use super::dto::NetworkStats;
-use super::{queries, queries_ch};
+use super::queries_ch;
 
 /// Unified per-call fetch error so the moka cache initializer can dispatch
 /// between the PG and CH backends without leaking driver types up the
@@ -63,26 +62,18 @@ enum FetchStatsError {
     ),
 )]
 pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let source = DataSource::for_module(Module::Network);
-
     // Cheap head read gates the cache: the head is the cache key, so a new
     // ledger changes it and the next request misses + recomputes. The probe is
-    // a single-row read over the ledgers ordering key (PG `max(sequence)` over
-    // the PK; CH `ORDER BY sequence DESC LIMIT 1` — see `crate::common::head`),
-    // orders of magnitude cheaper than the stats statement it guards (task
-    // 0291).
-    let head = match source {
-        DataSource::Pg => head::latest_sequence_pg(&state.db)
-            .await
-            .map_err(FetchStatsError::from),
-        DataSource::Ch => head::latest_sequence_ch(&state.ch())
-            .await
-            .map_err(FetchStatsError::from),
-    };
+    // a single-row read over the ledgers ordering key (CH `ORDER BY sequence
+    // DESC LIMIT 1` — see `crate::common::head`), orders of magnitude cheaper
+    // than the stats statement it guards (task 0291).
+    let head = head::latest_sequence_ch(&state.ch())
+        .await
+        .map_err(FetchStatsError::from);
     let head = match head {
         Ok(head) => head,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error reading head in get_network_stats: {e}");
+            tracing::error!("DB error reading head in get_network_stats: {e}");
             // Availability: the head read is a new hard dependency in front of
             // the cache (it did not exist under the old TTL design, where a
             // warm HIT served with no DB round-trip). A transient head-read
@@ -121,15 +112,10 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     let result: Result<Arc<NetworkStats>, Arc<FetchStatsError>> = state
         .network_cache
         .try_get_with(head, async {
-            let stats = match source {
-                DataSource::Pg => queries::fetch_stats(&state.db, head)
-                    .await
-                    .map_err(FetchStatsError::from),
-                DataSource::Ch => queries_ch::fetch_stats(&state.ch(), head)
-                    .await
-                    .map_err(FetchStatsError::from),
-            }
-            .map(Arc::new)?;
+            let stats = queries_ch::fetch_stats(&state.ch(), head)
+                .await
+                .map_err(FetchStatsError::from)
+                .map(Arc::new)?;
             // Runs only on a miss (inside the initializer): record the freshest
             // successfully-computed snapshot for the head-read failure fallback
             // above. The std `RwLock` write is never held across an `.await`.
@@ -141,7 +127,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     match result {
         Ok(stats) => ok_response(stats),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in get_network_stats: {e}");
+            tracing::error!("DB error in get_network_stats: {e}");
             errors::internal_error(errors::DB_ERROR, "Unable to retrieve network statistics.")
         }
     }
