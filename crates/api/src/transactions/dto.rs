@@ -221,25 +221,6 @@ pub struct TxListRow {
     pub created_at: DateTime<Utc>,
 }
 
-impl From<TxListRow> for TransactionListItem {
-    fn from(row: TxListRow) -> Self {
-        Self {
-            hash: row.hash,
-            ledger_sequence: row.ledger_sequence,
-            application_order: row.application_order,
-            source_account: row.source_account,
-            fee_charged: row.fee_charged,
-            inner_tx_hash: row.inner_tx_hash,
-            successful: row.successful,
-            operation_count: row.operation_count,
-            has_soroban: row.has_soroban,
-            operation_types: row.operation_types,
-            contract_ids: row.contract_ids,
-            created_at: row.created_at,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct TxDetailRow {
     pub id: i64,

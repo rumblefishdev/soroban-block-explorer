@@ -22,9 +22,9 @@ use crate::common::pagination::{finalize_ts_id_page, into_envelope};
 use crate::common::path;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
-use crate::transactions::dto::{TransactionListItem, TxListRow};
+use crate::transactions::dto::TransactionListItem;
 
-use super::dto::{LedgerDetailResponse, LedgerDetailRow, LedgerListItem};
+use super::dto::{LedgerDetailResponse, LedgerDetailRow, LedgerListItem, LedgerTxRow};
 use super::queries_ch;
 
 /// Base sort order for `GET /v1/ledgers` — a sticky query param the
@@ -211,7 +211,7 @@ pub async fn get_ledger(
 
     // Phase 2 — DB embedded transactions, keyset-paginated by
     // `?limit=` / `?cursor=` query params validated above.
-    let mut tx_rows: Vec<TxListRow> = match fetch_transactions_for_source(
+    let mut tx_rows: Vec<LedgerTxRow> = match fetch_transactions_for_source(
         &state,
         header_row.sequence,
         header_row.closed_at,
@@ -294,7 +294,7 @@ async fn fetch_transactions_for_source(
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: crate::common::cursor::Direction,
-) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
+) -> Result<Vec<LedgerTxRow>, clickhouse::error::Error> {
     queries_ch::fetch_transactions(
         &state.ch(),
         ledger_sequence,
