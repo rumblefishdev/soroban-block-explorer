@@ -7,8 +7,7 @@
 //! [`super`] via `db_clickhouse::persist::persist_ledger_clickhouse`
 //! — the same one-shot wrapper the runner's `Sink::persist_ledger`
 //! fallback uses (open `PartitionWriter` → write_ledger → commit per
-//! ledger). For the legacy PG flow (gated behind `pg-persist`),
-//! [`process_ledger`] runs the 15-step `persist::persist_ledger`.
+//! ledger).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -22,18 +21,6 @@ use xdr_parser::types::{
     ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
     ExtractedOperation, ExtractedTransaction,
 };
-
-#[cfg(feature = "pg-persist")]
-use aws_sdk_cloudwatch::Client as CloudWatchClient;
-#[cfg(feature = "pg-persist")]
-use sqlx::PgPool;
-
-#[cfg(feature = "pg-persist")]
-use super::HandlerError;
-#[cfg(feature = "pg-persist")]
-use super::persist;
-#[cfg(feature = "pg-persist")]
-use super::persist::ClassificationCache;
 
 /// Parsed-but-not-yet-persisted output of a single `LedgerCloseMeta`.
 ///
@@ -57,8 +44,10 @@ pub struct ParseOutput {
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
     /// Legacy `Symbol("name")` writes for the PG `soroban_contracts.name`
-    /// retroactive UPDATE path (ADR 0042 / task 0156). Full removal deferred
-    /// to task 0304; coexists with the metadata side table below.
+    /// retroactive UPDATE path (ADR 0042 / task 0156). Its only reader was the
+    /// PG `process_ledger` path (removed with `pg-persist`, task 0244); still
+    /// populated by the parser. Full removal deferred to task 0304.
+    #[allow(dead_code)]
     pub contract_name_writes: Vec<(String, String)>,
     /// On-chain Soroban token metadata (name/symbol/decimals) from
     /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
@@ -165,85 +154,6 @@ fn network_id() -> &'static [u8; 32] {
             )
         });
         xdr_parser::network_id(&passphrase)
-    })
-}
-
-/// Per-ledger output kept for the legacy PG `process_ledger` path
-/// (pg-persist feature only). Lambda handler reads parser slices
-/// directly off `ParseOutput` and doesn't need this wrapper. Fields
-/// are write-only inside the PG flow today; kept for symmetry with the
-/// pre-cutover indexer Lambda enrichment publish that consumed them.
-#[cfg(feature = "pg-persist")]
-#[allow(dead_code)]
-pub struct ProcessLedgerOutput {
-    pub extracted_assets: Vec<ExtractedAsset>,
-    pub ledger_sequence: u32,
-    pub had_nft_mints: bool,
-}
-
-/// Legacy PG path — parse one ledger and persist via the 15-step PG
-/// transaction. Only compiled when `pg-persist` feature is enabled
-/// (dev / bench tools targeting PG for comparison runs). Lambda
-/// binary's per-target dead-code analysis flags it because main.rs no
-/// longer references the PG path — that warning is noise; the lib
-/// consumer (backfill-runner / backfill-bench) is the real caller.
-#[cfg(feature = "pg-persist")]
-#[allow(dead_code)]
-pub async fn process_ledger(
-    meta: &LedgerCloseMeta,
-    pool: &PgPool,
-    cw_client: Option<&CloudWatchClient>,
-    classification_cache: &ClassificationCache,
-) -> Result<ProcessLedgerOutput, HandlerError> {
-    let parsed = parse_ledger(meta);
-    let ledger_sequence = parsed.ledger.sequence;
-    let parse_ms = parsed.parse_ms;
-    let tx_parse_errors_len = parsed.tx_parse_errors.len();
-    let tx_count = parsed.transactions.len();
-
-    let persist_timer = Instant::now();
-    persist::persist_ledger(
-        pool,
-        &parsed.ledger,
-        &parsed.transactions,
-        &parsed.operations,
-        &parsed.events,
-        &parsed.invocations,
-        &parsed.operation_trees,
-        &parsed.contract_interfaces,
-        &parsed.contract_deployments,
-        &parsed.account_states,
-        &parsed.liquidity_pools,
-        &parsed.pool_snapshots,
-        &parsed.assets,
-        &parsed.nfts,
-        &parsed.nft_events,
-        &parsed.lp_positions,
-        &parsed.contract_name_writes,
-        &parsed.sac_overrides,
-        classification_cache,
-    )
-    .await?;
-    let persist_ms = persist_timer.elapsed().as_millis();
-
-    info!(
-        ledger_sequence,
-        tx_count,
-        parse_errors = tx_parse_errors_len,
-        parse_ms,
-        persist_ms,
-        "ledger saved to database"
-    );
-
-    if let Some(cw) = cw_client {
-        legacy_publish_ledger_sequence_metric(cw, ledger_sequence).await;
-    }
-
-    let had_nft_mints = parsed.nfts.iter().any(|n| n.minted_at_ledger.is_some());
-    Ok(ProcessLedgerOutput {
-        extracted_assets: parsed.assets,
-        ledger_sequence,
-        had_nft_mints,
     })
 }
 
@@ -461,33 +371,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         parse_ms,
         tx_parse_errors,
         sac_overrides,
-    }
-}
-
-#[cfg(feature = "pg-persist")]
-#[allow(dead_code)]
-async fn legacy_publish_ledger_sequence_metric(cw_client: &CloudWatchClient, ledger_sequence: u32) {
-    use aws_sdk_cloudwatch::types::{Dimension, MetricDatum, StandardUnit};
-    let env_name = std::env::var("ENV_NAME").unwrap_or_else(|_| "unknown".to_string());
-    let datum = MetricDatum::builder()
-        .metric_name("LastProcessedLedgerSequence")
-        .dimensions(
-            Dimension::builder()
-                .name("Environment")
-                .value(&env_name)
-                .build(),
-        )
-        .value(f64::from(ledger_sequence))
-        .unit(StandardUnit::None)
-        .build();
-    let result = cw_client
-        .put_metric_data()
-        .namespace("SorobanBlockExplorer/Indexer")
-        .metric_data(datum)
-        .send()
-        .await;
-    if let Err(e) = result {
-        warn!(ledger_sequence, error = %e, "failed to publish LastProcessedLedgerSequence metric");
     }
 }
 

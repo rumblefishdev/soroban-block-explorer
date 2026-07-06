@@ -12,25 +12,6 @@ path = "src/lib.rs"
 name = "indexer"
 path = "src/main.rs"
 
-# Legacy PG integration suite — only buildable with `pg-persist`. Skipped
-# transparently from `cargo test -p indexer` under the default
-# (CH-only) features, run via `cargo test -p indexer --features
-# pg-persist` against a live PG (DATABASE_URL env required).
-[[test]]
-name = "persist_integration"
-path = "tests/persist_integration.rs"
-required-features = ["pg-persist"]
-
-[features]
-default = []
-# Legacy PG write-path — kept compilable for the backfill-runner /
-# backfill-bench dev tools which still drive the 15-step PG persist
-# flow for diff / parity benches. The production Lambda binary is built
-# without this feature (task 0241 hard swap: indexer writes to CH only).
-# Once the PG dev tools migrate or retire, this feature and the entire
-# `handler::persist` PG tree become removable.
-pg-persist = ["dep:db", "dep:sqlx", "domain/sqlx"]
-
 [dependencies]
 xdr-parser = { path = "../xdr-parser" }
 domain = { path = "../domain" }
@@ -52,7 +33,3 @@ thiserror = { workspace = true }
 stellar-xdr = { workspace = true }
 hex = { workspace = true }
 percent-encoding = "2"
-
-# Optional PG path — only compiled when `pg-persist` feature is enabled.
-db = { path = "../db", features = ["aws-secrets"], optional = true }
-sqlx = { workspace = true, optional = true }

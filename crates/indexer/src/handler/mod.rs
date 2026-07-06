@@ -16,13 +16,10 @@
 //! invocations would race the same cursor — which is load-bearing for
 //! correctness, not a preference (see `compute-stack.ts`).
 //!
-//! Task 0241: the legacy 15-step PG flow (`handler::persist`) is now
-//! feature-gated behind `pg-persist`. The production Lambda binary
-//! drives CH only and contains no PG / sqlx code.
+//! Task 0244: the legacy 15-step PG flow (`handler::persist`) was removed.
+//! The indexer drives ClickHouse only and contains no PG / sqlx code.
 
 pub mod enrichment_publish;
-#[cfg(feature = "pg-persist")]
-pub mod persist;
 pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
@@ -87,14 +84,6 @@ pub enum HandlerError {
     Parse(#[from] xdr_parser::ParseError),
     #[error("ClickHouse write failed: {0}")]
     ClickHouse(#[from] db_clickhouse::SchemaError),
-    /// Legacy PG persist path — only constructible when the `pg-persist`
-    /// feature is enabled (backfill-runner / backfill-bench dev tools).
-    #[cfg(feature = "pg-persist")]
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
-    #[cfg(feature = "pg-persist")]
-    #[error("persist staging error: {0}")]
-    Staging(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -465,10 +454,6 @@ fn safe_error_message(err: &HandlerError) -> String {
         HandlerError::ClickHouse(db_clickhouse::SchemaError::Staging(_)) => {
             "ClickHouse staging error".to_string()
         }
-        #[cfg(feature = "pg-persist")]
-        HandlerError::Database(_) => "database error".to_string(),
-        #[cfg(feature = "pg-persist")]
-        HandlerError::Staging(_) => "persist staging error".to_string(),
     }
 }
 
