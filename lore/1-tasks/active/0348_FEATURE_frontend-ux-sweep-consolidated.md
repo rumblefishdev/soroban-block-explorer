@@ -246,8 +246,18 @@ routes.asset('native')`). Commit `15cd2a27`.
 **Remaining in 0348 (FE):**
 
 - **F16** commit + optional `/ux-expert` pass on the landed fixes.
-- **F9** — LP Fee column de-emphasize/drop (all pools = 30 bps, constant column).
-- **F12** — ledger-sequence fields paired with human time app-wide (systemic).
+- ~~**F9** — LP Fee column de-emphasize/drop~~ → **DONE** (2026-07-06).
+  Verified: `fee_bps` parsed from on-chain XDR (`LiquidityPoolEntry.params.fee`,
+  `xdr-parser/src/state.rs:855`); prod is 100% `30` across all 51,969 pools —
+  protocol-fixed (`LIQUIDITY_POOL_FEE_V18`), not a bug, structurally constant
+  for classic pools (Soroban AMMs are a separate contract data-path, not this
+  table). Dropped the list column + the loud header `FeePill`; kept the quiet
+  Summary "Fee: 0.30%" cell (canonical per-pool fact). `FeePill.tsx` → `.trash`
+  (dead). Upgrade path: if a Soroban-AMM pool source is ever unified into this
+  list, re-introduce Fee as a data-driven column (render iff `COUNT(DISTINCT
+fee) > 1`). Typecheck + 111 web tests green.
+- ~~**F12** — ledger-sequence fields paired with human time app-wide~~ →
+  **SKIPPED** (2026-07-06, permanent drop — not deferred).
 - **F1** — invocations KPI 0-vs-table: split path — the honest **relabel** is FE
   (could stay here); the **7-day-window vs all-time data fix** is backend and is
   captured in 0357 (K4-1). Decide which half lands where.
@@ -262,10 +272,10 @@ routes.asset('native')`). Commit `15cd2a27`.
 - [ ] 6 — Tables fit their row count for small result sets (no empty void)
 - [ ] 7 — NFT trait values use a body-size variant
 - [ ] 8 — NFT list Collection column resolved; image fallback added
-- [ ] 9 — LP Fee column de-emphasized/dropped
+- [x] 9 — LP Fee column dropped (list) + detail deduped — **DONE** (feat/0348, uncommitted)
 - [ ] 10 — LP TVL filter hidden behind a 0341-style flag
 - [ ] 11 — Accounts list seen-columns relabeled and/or given human time
-- [ ] 12 — Ledger-sequence fields paired with human time app-wide
+- [~] 12 — Ledger-sequence + human time — **SKIPPED** (2026-07-06, permanent drop)
 - [x] 13 — Single truncation standard (first 4 + last 4) applied and enforced;
       one-offs removed; untruncated identifiers found and fixed — **DONE** (feat/0348 `f205fe99`)
 - [ ] 14 — `formatCompactAmount` wired into all large-number display sites — → **0351** (video subset)
