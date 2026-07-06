@@ -706,7 +706,6 @@ struct OpRawRow {
 struct EventAppearanceRawRow {
     id: i64,
     ledger_sequence: i64,
-    amount: i64,
     created_at: i64,
 }
 
@@ -715,7 +714,6 @@ struct InvocationAppearanceRawRow {
     contract_surrogate: i64,
     caller_id: Option<i64>,
     ledger_sequence: i64,
-    amount: i32,
     created_at: i64,
 }
 
@@ -876,11 +874,9 @@ pub async fn fetch_event_appearances(
     transaction_id: i64,
     ledger_sequence: i64,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    // CH `soroban_events` is the full-payload table (no fold-count column).
-    // The PG `EventAppearanceItem.amount` is a per-(contract, ledger)
-    // appearance fold count; the CH analogue is the per-contract event
-    // `count()` in this tx. Both are non-token "how many" counters, so the
-    // wire shape and semantic match (`amount` is never a stroop value).
+    // CH `soroban_events` is the full-payload table (one row per event). We
+    // group per (contract, ledger) to produce one appearance row per contract
+    // in this tx — the same wire shape as the PG appearance index.
     let raw = client
         .query(
             "SELECT \
@@ -905,7 +901,6 @@ pub async fn fetch_event_appearances(
         .map(|r| EventAppearanceRow {
             contract_id: contracts.get(&r.id).cloned().unwrap_or_default(),
             ledger_sequence: r.ledger_sequence,
-            amount: r.amount,
             created_at: millis_to_utc(r.created_at),
         })
         .collect();
@@ -955,7 +950,6 @@ pub async fn fetch_invocation_appearances(
                 .and_then(|id| accounts.get(&id).cloned())
                 .filter(|s| !s.is_empty()),
             ledger_sequence: r.ledger_sequence,
-            amount: r.amount,
             created_at: millis_to_utc(r.created_at),
         })
         .collect();
