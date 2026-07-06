@@ -59,18 +59,16 @@ export default function ContractDetailPage() {
     summary = <ContractSummary contract={contract.data} />;
   }
 
+  // No count badges on the Invocations / Events tabs (task 0348 F1):
+  // `recent_invocations` / `recent_events` are a 7-day activity window, but a
+  // tab badge reads as "items in this tab" — and the tabs' tables are
+  // all-time. On the 84.6% of contracts dormant >7d the badge showed "0"
+  // over a full table. The honest 7-day figure stays on the KPI cards, which
+  // are explicitly labelled "(last 7 days)".
   const tabs: TabDefinition[] = [
     { key: 'interface', label: 'Interface' },
-    {
-      key: 'invocations',
-      label: 'Invocations',
-      count: contract.data?.stats.recent_invocations,
-    },
-    {
-      key: 'events',
-      label: 'Events',
-      count: contract.data?.stats.recent_events,
-    },
+    { key: 'invocations', label: 'Invocations' },
+    { key: 'events', label: 'Events' },
   ];
 
   return (

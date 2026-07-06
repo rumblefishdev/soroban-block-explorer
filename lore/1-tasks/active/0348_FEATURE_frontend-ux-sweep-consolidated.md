@@ -258,13 +258,23 @@ routes.asset('native')`). Commit `15cd2a27`.
 fee) > 1`). Typecheck + 111 web tests green.
 - ~~**F12** — ledger-sequence fields paired with human time app-wide~~ →
   **SKIPPED** (2026-07-06, permanent drop — not deferred).
-- **F1** — invocations KPI 0-vs-table: split path — the honest **relabel** is FE
-  (could stay here); the **7-day-window vs all-time data fix** is backend and is
-  captured in 0357 (K4-1). Decide which half lands where.
+- ~~**F1** — invocations KPI 0-vs-table~~ → FE relabel half **DONE**
+  (2026-07-06). Root cause: `recent_invocations`/`recent_events` are a 7-day
+  activity window (bounded mainly to cap the 9.5B-row events count); the table
+  pages all-time and never counts. The tab badge reused the 7d number as if it
+  were an item-count → "0" over a full table on the 84.6% of contracts dormant
+  > 7d. Fix (Option A): dropped `count` from the Invocations + Events tab badges;
+  > KPI cards keep the honest "(last 7 days)" label. All-time-total badge (Option
+  > B) deferred to [[0357]] K4-1 — invocations all-time is cheap, events all-time
+  > isn't → product call.
 
 ## Acceptance Criteria
 
-- [ ] 1 — Contract invocations KPI/badge and table agree (or KPI honestly labeled)
+- [x] 1 — Invocations/Events tab badges no longer show a 7d count over an
+      all-time table (FE relabel half) — **DONE** (feat/0348, uncommitted). The
+      all-time-count _data_ half (make the badge show a real total) stays in
+      [[0357]] K4-1: invocations all-time is a cheap seek, but events all-time
+      is a 9.5B-row cost problem → product decision, not FE polish.
 - [~] 2 — Native XLM tx — DEFERRED to 0357 (root-caused: data-model, backend epic)
 - [ ] 3 — Home loads at scroll-top, hero visible
 - [ ] 4 — Asset detail supply no longer overlaps Holders
