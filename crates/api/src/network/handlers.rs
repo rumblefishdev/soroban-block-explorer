@@ -24,7 +24,7 @@ use super::queries;
 /// estimates for accounts / contracts) and caches the assembled
 /// response **keyed on the chain head** (`latest_ledger_sequence`) in
 /// process memory — see `network/cache.rs`. See the task 0045 spec and
-/// `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
+/// `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`
 /// for the full data-source mapping.
 ///
 /// Per request we first read the head cheaply (`crate::common::head` —

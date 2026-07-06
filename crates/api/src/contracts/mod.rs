@@ -1,6 +1,6 @@
 //! Contracts API module: detail, interface, invocations, events.
 //!
-//! Wire shapes mirror canonical SQL `endpoint-queries/{11..14}_*.sql`
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{11..14}_*.sql`
 //! (task 0167). Pagination, error envelopes, cursor codec, and StrKey
 //! validation come from `crate::common::*` (task 0043). Contract metadata
 //! is small and gets a 45 s per-Lambda cache (`cache::ContractMetadataCache`).

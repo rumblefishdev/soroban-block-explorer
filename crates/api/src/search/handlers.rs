@@ -66,7 +66,7 @@ pub struct SearchParams {
 ///   resolves ⇒ navigate; else show the dropdown / list.
 ///
 /// Authoritative SQL:
-/// `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
+/// `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.
 #[utoipa::path(
     get,
     path = "/search",

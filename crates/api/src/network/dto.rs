@@ -1,7 +1,7 @@
 //! Response DTO for `GET /v1/network/stats`.
 //!
 //! Wire shape per task 0045 + canonical SQL in task 0167
-//! (`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`).
+//! (`docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`).
 //! The frontend consumes this endpoint on every Home dashboard load —
 //! see `docs/architecture/frontend/frontend-overview.md` §6.2.
 

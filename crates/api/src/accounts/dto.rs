@@ -1,4 +1,4 @@
-//! Wire shapes mirror canonical SQL `endpoint-queries/{06,07}_*.sql`.
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{06,07}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

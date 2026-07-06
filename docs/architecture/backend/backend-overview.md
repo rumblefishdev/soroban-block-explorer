@@ -533,7 +533,7 @@ Behaviour:
   optional); frontend treats absent and empty array identically.
 
 Authoritative SQL:
-[`22_get_search.sql`](../database-schema/endpoint-queries/22_get_search.sql) — UNION ALL
+[`22_get_search.sql`](../database-schema/endpoint-queries-clickhouse/22_get_search.sql) — UNION ALL
 of six narrow CTEs, each `LIMIT $per_group_limit`-bounded, with `:include_*` BOOLEAN
 flags resolved from the optional `?type=` filter (the planner removes branches whose
 flag is FALSE).

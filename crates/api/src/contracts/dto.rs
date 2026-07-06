@@ -1,5 +1,5 @@
 //! Request and response DTOs for the contracts endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries/{11..14}_*.sql`.
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{11..14}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -6,8 +6,8 @@
 //! summary + balances + transactions per ADR 0025 / task 0048.
 //!
 //! Canonical SQL refs:
-//!   - `docs/architecture/database-schema/endpoint-queries/06_get_accounts_by_id.sql`
-//!   - `docs/architecture/database-schema/endpoint-queries/07_get_accounts_transactions.sql`
+//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/06_get_accounts_by_id.sql`
+//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/07_get_accounts_transactions.sql`
 
 pub mod dto;
 mod handlers;

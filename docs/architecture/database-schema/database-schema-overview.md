@@ -1347,27 +1347,24 @@ The schema should continue to prioritize those explorer patterns over generic an
 #### Canonical query references
 
 Each `/v1/*` list / detail endpoint has a canonical SQL projection committed
-in this repo. Two parallel reference sets exist:
+in this repo:
 
-- [`endpoint-queries/`](./endpoint-queries/) — **PostgreSQL** canonical
-  source of truth for the live API handlers in
-  [`crates/api/`](../../../crates/api). Every endpoint enumerated in
+- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
+  canonical source of truth for the live API handlers in
+  [`crates/api/`](../../../crates/api)
+  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
+  tasks 0204 / 0206 / 0207). Every endpoint enumerated in
   [`backend-overview.md §6.2 Endpoint Inventory`](../backend/backend-overview.md#62-endpoint-inventory)
   maps 1:1 to a `NN_*.sql` file here.
   Field-allocation per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule-list-vs-detail.md);
   list-endpoint completeness verified by audit task 0197
   (see [`docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md`](../../audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)).
-- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
-  parallel reference set for the CH-side pilot
-  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
-  tasks 0204 / 0206 / 0207). Maintained alongside the PG set but the API
-  read-path does **not** call into it yet — CH is a parallel store, no live
-  `/v1/*` handler routes through it. A CH-side equivalence audit is deferred
-  until at least one handler is wired through ClickHouse.
 
-When editing a `/v1/*` endpoint behaviour, update the PG canonical SQL in the
-same PR. Update the CH parallel file only when explicitly working on the CH
-pilot (0207 scope).
+The retired PostgreSQL reference set (`endpoint-queries/`) was removed with the
+PG backend (task 0244).
+
+When editing a `/v1/*` endpoint behaviour, update the CH canonical SQL in the
+same PR.
 
 ### 7.3 Raw vs Derived Storage
 

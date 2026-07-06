@@ -2,7 +2,7 @@
 //!
 //! Spec sources:
 //!   * lore task 0053
-//!   * `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`
+//!   * `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`
 //!     (authoritative SQL — six narrow CTEs unioned, `:include_*` flags
 //!     per entity bucket, `:per_group_limit` cap)
 //!   * `docs/architecture/backend/backend-overview.md §6.3 Search`

@@ -728,9 +728,9 @@ The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 ### Read queries (reference set)
 
 [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/README.md) is
-the canonical reference set of CH-side read queries for the 23 public REST
-endpoints, parallel to the PG [`endpoint-queries/`](./endpoint-queries/README.md)
-set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
+the canonical reference set of read queries for the 23 public REST
+endpoints (the retired PostgreSQL reference set was removed with the PG backend,
+task 0244). Each query targets the ADR 0044 schema (`init.sql`), uses
 `FINAL` on `ReplacingMergeTree` reads, partition-prunes via
 `intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
 `ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
