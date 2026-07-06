@@ -552,34 +552,53 @@ pub async fn fetch_transactions(
         _ => String::new(),
     };
 
-    // Step 1: driver seek. `operations_appearances` is ORDER BY
-    // `(ledger_sequence, transaction_id, application_order)`; the identity
-    // predicate is NOT the leading key, so CH walks descending ledgers until
-    // the page fills (read-cost caveat in the module header). No FINAL — the
-    // `LIMIT 1 BY` collapses re-ingest duplicates and the multi-op-per-tx
-    // fan-out, so the page still yields `limit` distinct transactions.
-    let driver_sql = format!(
-        "SELECT oa.ledger_sequence AS ledger_sequence, oa.transaction_id AS transaction_id \
-         FROM operations_appearances oa \
-         WHERE ({predicate}) AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-         ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
-         LIMIT 1 BY oa.ledger_sequence, oa.transaction_id \
-         LIMIT ?"
-    );
-    let mut driver = client.query(&driver_sql);
-    if has_classic {
-        driver = driver.bind(asset_code.expect("guarded by has_classic"));
-    }
-    // `limit` is the handler's `fetch_limit()` (already the peek +1).
-    let key_rows = driver.bind(limit).fetch_all::<AssetTxKeyChRow>().await?;
+    // Step 1: driver seek over `operations_appearances` (ORDER BY
+    // `(ledger_sequence, transaction_id, application_order)`). The identity
+    // predicate is NOT the leading key, so we lean on `optimize_read_in_order`:
+    // read from the tip in `(ledger, tx)` order and EARLY-TERMINATE once the page
+    // fills. A `LIMIT 1 BY` here DEFEATS read-in-order → full-history scan (the
+    // 0281-C finding on the LP path, box-measured), so instead we over-fetch RAW
+    // op-rows and collapse a tx's adjacent op-rows in Rust. Over-fetch (`limit*4`)
+    // absorbs the multi-op-per-tx fan-out; a capped under-delivery re-fetches ONCE
+    // at the hard bound `limit*128` (a Stellar tx has <=100 ops, so that always
+    // covers `limit` distinct txs). `keys` stays keyset-ordered and `limit`-bounded
+    // — the same page the old `LIMIT 1 BY … LIMIT` returned.
+    let mut overfetch = limit.saturating_mul(4);
+    let keys: Vec<(i64, i64)> = loop {
+        let driver_sql = format!(
+            "SELECT oa.ledger_sequence AS ledger_sequence, oa.transaction_id AS transaction_id \
+             FROM operations_appearances oa \
+             WHERE ({predicate}) AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+             ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
+             LIMIT {overfetch}"
+        );
+        let mut driver = client.query(&driver_sql);
+        if has_classic {
+            driver = driver.bind(asset_code.expect("guarded by has_classic"));
+        }
+        let raw = driver.fetch_all::<AssetTxKeyChRow>().await?;
+        let capped = raw.len() as i64 >= overfetch;
 
-    if key_rows.is_empty() {
+        // A tx's op-rows are adjacent in read-in-order, so collapsing consecutive
+        // equal `(ledger, tx)` is exactly the `LIMIT 1 BY` we replaced.
+        let mut distinct: Vec<(i64, i64)> = Vec::with_capacity(raw.len());
+        for r in &raw {
+            let k = (r.ledger_sequence, r.transaction_id);
+            if distinct.last().is_none_or(|last| *last != k) {
+                distinct.push(k);
+            }
+        }
+
+        if (distinct.len() as i64) >= limit || !capped || overfetch >= limit.saturating_mul(128) {
+            distinct.truncate(limit.max(0) as usize);
+            break distinct;
+        }
+        overfetch = limit.saturating_mul(128);
+    };
+
+    if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let keys: Vec<(i64, i64)> = key_rows
-        .iter()
-        .map(|r| (r.ledger_sequence, r.transaction_id))
-        .collect();
 
     // Step 2: transaction headers for the page keys + the operation_types
     // aggregate, concurrently. Keys are i64 — inlined.
