@@ -327,6 +327,96 @@ fix options) — a strong cross-check:
   fan-out per (op × asset)) = the same options in this task's design. His framing:
   "billions of rows = not an accident, it's a property of the project."
 
+## Red-team calibration (2026-07-06) — corrections to the audit above
+
+A 4-agent adversarial red-team (each told to REFUTE, re-derive numbers on prod,
+flag intended-by-design) stress-tested every finding. The core holds but several
+figures/severities were **overstated**; recorded here honestly. These corrections
+**supersede** the numbers/severities in the tables above.
+
+**Overstatements corrected:**
+
+- **Headline "~3.1 B / 48% lost" → ~2.4 B / 37.5% carry NO asset.** Path-payments
+  were counted whole (1.734 B), but **42% (731 M) keep `destAsset`** — a valid
+  per-asset entry, not a loss. Honest floor = offers 1.37 B (21.4%) + empty
+  path-pay 1.003 B + claimable 26.9 M = **2.40 B (37.5%)** with zero asset. Of
+  that, **offers (21.4%) are the unambiguous defect**; path-payment source-leg
+  loss (15.7%) is a design-tradeoff, not a clean loss. `pool_ids` does NOT
+  recover it (offers 0%, path-pay 4.5%/14.7%).
+- **K2-1 (native tx empty): HIGH → LOW / by-design.** Documented out-of-scope,
+  PG parity (`10_get_assets_transactions.sql:61-62`). Data exists; read-side
+  choice, not a defect. (Still worth doing as part of the re-model, but not a
+  "bug".)
+- **K3-1 (SAC not unioned): HIGH → MEDIUM.** SAC activity IS reachable via the
+  contract-transactions endpoint (unions `soroban_invocations_appearances` by
+  contract_id); it's a cross-reference gap on the _asset_ page, not invisibility.
+- **K2-2 (LP native leg): 16,552 / 701 → 11,641 pools (22.4%) / 480 impostors.**
+  Our count was raw ReplacingMergeTree rows; FINAL (user-visible) is ~1.4× lower.
+  Mechanism airtight; HIGH stands; % actually slightly higher than claimed.
+- **K1-3 (events undecoded): reword.** Core holds (`parse_transfer` is dead code;
+  no queryable from/to/amount column; API `amount` hardcoded 1). But "9.5 B
+  opaque/undecoded" overstates: `signature` IS a queryable column, and
+  `topics_xdr`/`data_xdr` are ScVal-decoded JSON (not opaque XDR) — from/to/amount
+  are recoverable from the payload, just not promoted to named columns.
+- **K3-4 (events not unioned): downgrade + correction.** G-sided transfers DO
+  appear on account pages via the `transaction_participants` back-fill; the gap is
+  non-G sides + mint/burn/clawback, not "all transfers absent". The earlier claim
+  that this was a "deliberate documented quota decision" is **unsubstantiated —
+  no such ADR/doc exists** (retracted).
+- **K2-3 (non-G participants): C/B/L only; muxed-M is NOT dropped** (canonicalised
+  to base G upstream, ADR 0026). Dropping C/B/L is intended for the accounts-shape
+  index; the real gap is contract/CB/LP transfer participation invisibility.
+
+**Reclassified as NOT bugs (remove from the defect count):**
+
+- **DEX per-asset trades** — an unbuilt feature (scope/roadmap), not a defect.
+- **K3-5 (Soroban-AMM pools not unioned)** — INTENDED-BY-DESIGN, product-gated
+  deferral (ADR 0014 §, ADR 0017 deferred-topics).
+- **K4-5 (nullable-aggregate 500 trap)** — theoretical; the guards (`ifNull`,
+  `toString`→Option, non-Nullable `count()`) are already present in all live CH
+  `fetch_one` sites. Keep only as a review-time watch note.
+- **K4-3/K4-4 (amount=1 / fold-count)** — documented naming choice, not a
+  divergence bug (a "confusing field name" note at most).
+
+**More corrections (quick-verdict cluster):**
+
+- **K2-8 (contract-holder orphan): MED → LOW.** The primary SAC-`ContractData`
+  `BalanceValue` path for contract-held classic/native IS shipped and
+  prod-validated (`state.rs:302-369,428`; wired `process.rs:420` → `balances`);
+  task 0331 (done) closed it. The earlier "types 0/1/2 skipped" framing came from
+  0331's **pre-implementation** notes. Residual tail only: frozen-balance flags
+  not propagated + non-standard custom-storage tokens skipped (not mis-summed).
+- **K1-4 (op fold < operation_count): CONFIRMED but INTENDED-BY-DESIGN** —
+  documented (`dto.rs:188-194`); heavy `operation_tree` carries the full unfolded
+  list. Cosmetic on the light array.
+- **K1-5 (crossed-offer counterparty dropped): CONFIRMED, COMMON** — order-book
+  crossing is the normal taker path (`operation.rs:118-121` drops
+  `ClaimAtom::OrderBook` seller_id). Solid MED.
+- **K1-6 (NFT single-owner) / K3-7 (NFT collection): LOW confirmed** — correct for
+  the indexed single-owner standards (no ERC-1155 path); collection-name sourcing
+  fixed by task 0340.
+
+**Overall-thesis verdict: SHIP WITH CHANGES.** "Single participant slot is _a_
+real design limitation with real consequences (offers = 1.37 B rows, zero asset
+attribution)" is **solid and HIGH**. But "single-slot is _the_ single root cause"
+overclaims — native (out-of-scope) and SAC-union are **separate, independently
+documented choices**, not downstream effects of the asset slot. The "codebase
+already models participants/pools multi-valued elsewhere" contrast IS accurate
+(not cherry-picked): `op_participant_str_keys` extracts all 3 asset fields into
+`transaction_participants`; `pool_ids` is a real `Array`.
+
+**Still quota-blocked (re-derive after 13:00 UTC):** fee-bump 45% (verify it's
+not head-partition-only), NFT contract-owner 22%/51%, pending NFTs 71K,
+contract_ids 100%-of-Soroban-txs. Mechanisms confirmed in code; exact prod
+percentages pending the CH read-quota reset.
+
+**Net after calibration:** the genuine, confirmed HIGH core is **offers carry
+zero asset attribution (1.37 B / 21.4%)** plus the read-side native/SAC
+completeness gaps (now LOW/MED) and the L2 fungible-transfer decode gap. Fewer
+clean HIGHs than first stated; the re-model is still justified by the offers
+defect + native-first-class goal, but sized honestly at **~37.5% no-asset**, not
+48%.
+
 ## Notes / open questions
 
 - **Offers as "asset transactions"?** Product call — include (stellar.expert
