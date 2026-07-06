@@ -131,9 +131,53 @@ PG-SQL fixtures) moved to `.trash/` → **follow-up task 0360** (on develop):
 
 `cargo check --workspace` + `cargo check -p api --tests` clean throughout.
 
+### ✅ Done — session 2 (2026-07-06): docs + comment sweep (+5 commits)
+
+- **api + db-clickhouse stale PG comments** (`b45f7661`): rewrote comments that
+  described current ClickHouse code against the retired PG backend — 5
+  `queries.rs` headers that claimed to "mirror the PG path (`queries.rs`)" (that
+  sibling file is gone; `network` self-referenced), the contracts-cache TTL note,
+  the `common/pagination` `sqlx::QueryBuilder` note, and 2 db-clickhouse `lib.rs`
+  docs. Load-bearing history (stale-cursor rejection, parity-divergence
+  rationale, `persist/*` "mirrors PG" notes) deliberately left as history.
+- **docs/architecture PG reference-SQL removal + repoint** (`46cc726e`): deleted
+  the PostgreSQL `endpoint-queries/` set (25 `.sql` + README + `run_endpoint.sh`)
+  and `compare_pg_ch.sh` → `.trash/`; the CH `endpoint-queries-clickhouse/` set
+  is now the sole read-plan reference. Repointed the 17 canonical-SQL doc-comment
+  refs across 13 api modules to the CH set; fixed the dangling PG-dir links in
+  backend/clickhouse-pilot/CH-README and rewrote `database-schema-overview` §7.2
+  (dropped the now-false "CH not wired yet / parallel store" claim).
+- **docs/architecture store name** (`35251027`): xdr-parsing (6 store refs, ADR
+  0029 "raw XDR not stored" semantics preserved) + frontend overview → ClickHouse.
+- **`database-schema-overview.md` retargeted** (`16df884b`): flipped framing from
+  "the PostgreSQL schema" to the store-agnostic logical model + a **Store: CH**
+  banner; physical authority = `crates/db-clickhouse/schema/init.sql` +
+  `clickhouse-pilot.md`; inverted the false §8.0 "read-empty parallel store /
+  Postgres unchanged" appendix; §8.2 → `init.sql`. DDL blocks kept as
+  banner-labelled historical PG notation (no duplication of clickhouse-pilot.md).
+- **`technical-design-general-overview.md` store-identity sweep** (`a7f5e9f9`):
+  intro store source + a top **Store-status** banner, §2.1 backend (drop sqlx,
+  store → CH), Search → CH buckets, §6 Database Schema framing + a
+  historical-notation note. **RDS-infra sections deliberately HELD** as the frozen
+  pre-cutover baseline (task 0239 teardown, consent-gated); reconciled the stale
+  2026-05-20 amendment note; fixed a mislabeled `0239` link (`backlog`→`archive`).
+
 ### ⏳ Remaining — exhaustive
 
-**Gated on two team decisions (audit-harness, backfill-bench):**
+**DECIDED (2026-07-06): delete both** (Karol signed off).
+
+- **`audit-harness` → C: delete from 0244 + spawn a CH-native rebuild task.**
+  Genuine correctness safety net (Horizon/archive diff + all-row SQL invariants)
+  with no CH mirror, but already non-functional against ClickHouse (sqlx-bound),
+  so keeping it is PG-shaped debt inside a remove-PG refactor. A from-scratch CH
+  tool beats mechanically porting PG SQL; the spawned task means the net is
+  deferred, not lost. → follow-up task **0361** (on develop).
+- **`backfill-bench` → B: delete.** Benchmarks the now-dead PG write path,
+  redundant with `backfill-runner` (the real CH sink), and the keystone pinning
+  `pg-persist`. If local throughput benchmarking is wanted later, add a `--bench`
+  mode to `backfill-runner` (CH).
+
+Both deletes unblock items 3–8.
 
 1. `crates/audit-harness/` — **decision: port to CH or delete.** No CH mirror
    exists (the `compare-with-stellar-api` skill is also PG-bound); it is
@@ -166,23 +210,42 @@ db-partition-mgmt, backfill-bench, audit-harness. 8. `crates/domain` — drop th
 (asset_type, contract_event_type, contract_type, nft_event_type,
 operation_type, token_asset_type, enums/mod).
 
-**Independent (no decision needed):** 9. `docker-compose.yml` — remove the base `postgres` service + `pgdata` volume
-(once nothing local still talks to it — i.e. after 4/5/bench). 10. **infra** — `infra/src/lib/stacks/compute-stack.ts`: the `DATABASE_URL`
-placeholder + the `API_DATASOURCE_*` env block + `infra/README.md` PG refs.
-⚠️ prod config — needs an explicit go. 11. **api comments** — stale PG prose (no live code): `common/pagination.rs`,
-`contracts/cache.rs`, `ledgers/queries.rs`, `liquidity_pools/handlers.rs`,
-`transactions/dto.rs`+`queries.rs`, network handler doc. 12. **db-clickhouse comments** — stale PG-context prose: `src/lib.rs`,
-`src/persist/stage.rs`, README. 13. **libs/api-types** — the PG strings live in DTO **doc comments**
-(`LedgerListItem` "sqlx::FromRow", `NetworkStats` "pg_class.reltuples",
-the `pool_ids` PG↔CH caveat, the network-stats query description). Fix the
-Rust rustdoc, then **regenerate** (`nx run @rumblefish/api-types:generate`)
-so `openapi.json` + `generated/types.gen.ts` refresh. 14. **docs/architecture/** ** (ADR 0032) — remove PG/RDS: `infrastructure/
-    infrastructure-overview.md` (RDS + decommission), `backend/backend-overview.md`
-(PG database), `database-schema/**`, plus mentions in xdr-parsing / frontend
-overviews.
+**Independent (no decision needed):**
 
-**Final AC verification:** 15. `rg -i 'sqlx|PgPool|postgres' crates/ infra/ libs/` = 0 outside
-comments/lore/docs-archive (currently NOT zero). 16. `cargo check --workspace` clean; api-types `check-generated` green.
+9. `docker-compose.yml` — remove the base `postgres` service + `pgdata` volume
+   (local-dev only, no code dep; safe for CH-only dev). `docker-compose.prod.yml`
+   also has `postgres` + gated `postgres-merge`/`snapshot-source` — OPS, careful.
+10. **infra** — `infra/src/lib/stacks/compute-stack.ts`: `DATABASE_URL`
+    placeholder + `API_DATASOURCE_*` env block + `infra/README.md` PG refs.
+    ⚠️ prod config — needs explicit go. Overlaps the RDS teardown (task 0239).
+11. **libs/api-types** — PG strings live in api DTO **doc comments**
+    (`LedgerListItem` "sqlx::FromRow", `NetworkStats` "pg_class.reltuples", the
+    `pool_ids` PG↔CH caveat, network-stats query desc). **Open call:** scrub PG
+    from the _public_ API docs, or keep as history? Then **regenerate**
+    (`nx run @rumblefish/api-types:generate`) so `openapi.json` +
+    `generated/types.gen.ts` refresh.
+12. **docs/architecture — remaining after the session-2 sweep:**
+    - `backend/backend-overview.md` — **NOT done** (only its link was repointed).
+      Full non-infra doc: store identity, `sqlx` tech-stack lines, §Search FTS,
+      and the **actively-false** "Per-module datasource (task 0243) — dispatch PG
+      (`sqlx`) or CH" (that dispatch was removed). Same treatment as
+      technical-design (non-infra sweep; hold any RDS-topology diagram).
+    - `infrastructure/infrastructure-overview.md` — **HELD** (RDS topology +
+      decommission; task 0239, consent-gated).
+    - `indexing-pipeline/indexing-pipeline-overview.md` — pg-persist / backfill
+      sink prose, **coupled to items 4/5**.
+    - `security/clickhouse-rbac.md` — 1 stray mention to check.
+    - ✅ done: `endpoint-queries/` removed, xdr-parsing, frontend,
+      `database-schema-overview`, `technical-design` (non-infra).
+
+**Done since the checkpoint:** api + db-clickhouse stale PG comments (was #11/#12
+here) — landed in `b45f7661`.
+
+**Final AC verification:**
+
+13. `rg -i 'sqlx|PgPool|postgres' crates/ infra/ libs/` = 0 outside
+    comments/lore/docs-archive (currently NOT zero).
+14. `cargo check --workspace` clean; api-types `check-generated` green.
 
 ## Summary
 
