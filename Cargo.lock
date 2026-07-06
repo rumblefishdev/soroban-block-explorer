@@ -1495,20 +1495,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "db-migrate"
-version = "0.1.0"
-dependencies = [
- "db",
- "lambda_runtime",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "db-partition-mgmt"
 version = "0.1.0"
 dependencies = [

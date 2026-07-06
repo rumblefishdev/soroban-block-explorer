@@ -5,7 +5,6 @@ members = [
     "crates/indexer",
     "crates/xdr-parser",
     "crates/db",
-    "crates/db-migrate",
     "crates/db-partition-mgmt",
     "crates/domain",
     "crates/backfill-bench",
