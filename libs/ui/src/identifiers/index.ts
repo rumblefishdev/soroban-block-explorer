@@ -8,7 +8,11 @@ export {
   type IdentifierWithCopyProps,
 } from './IdentifierWithCopy.js';
 export { routeForHit } from './routes.js';
-export { getDefaultTruncation, truncateMiddle } from './truncate.js';
+export {
+  DEFAULT_TRUNCATION,
+  getDefaultTruncation,
+  truncateMiddle,
+} from './truncate.js';
 export type { EntityType, TruncationConfig } from './types.js';
 export {
   isAccountId,
