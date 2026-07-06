@@ -2,7 +2,7 @@
 id: '0355'
 title: 'PERF: nftdetail — resolver swap (deferred from 0354, needs NFT test data)'
 type: PERF
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0354', '0345', '0357']
 tags:
@@ -22,6 +22,16 @@ history:
       the 2026-07-06 prod load test: nftdetail p95 ~7-9 s, ch read_rows ~24.7M/req
       (whole-dimension JOIN). The "needs NFT test data" blocker is stale — prod
       has ~12.8k NFTs, so verify via a prod before/after diff (AC already permits).
+  - date: 2026-07-06
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Implemented + merged (PR #314, develop af774044). Swapped the two
+      whole-dimension JOINs for an input echo (contract) + resolve_accounts
+      (owner). Verified byte-identical on prod (6/6 sampled NFTs); read_rows
+      24.18M -> ~103k (~235x). cargo check + clippy -D warnings + high code-review
+      all clean. Live on the next compute deploy (rides with the loadTesting
+      rollback). 1 file, +49/-36.
 ---
 
 # PERF: nftdetail — resolver swap
@@ -63,8 +73,38 @@ exactly the shipped `common/ch.rs` resolver.)
 
 ## Acceptance Criteria
 
-- [ ] `nftdetail` resolves owner + contract via id-IN; no whole-`accounts`/`soroban_contracts` read
-- [ ] Output byte-identical — verified on a DB range that CONTAINS NFTs (backfill a
-      Soroban-NFT ledger range locally) OR a careful prod before/after diff
-- [ ] `n.current_owner_id` nullability typed correctly (no RowBinary schema mismatch — cf. the 0344 `source_id` bug)
-- [ ] Query-only, no schema change
+- [x] `nftdetail` resolves owner + contract via id-IN; no whole-`accounts`/`soroban_contracts` read
+- [x] Output byte-identical — verified via prod before/after diff (6/6 sampled NFTs, `verify_0355_nftdetail.sh`)
+- [x] `n.current_owner_id` nullability typed correctly (`Option<i64>`; no RowBinary mismatch — confirmed in review)
+- [x] Query-only, no schema change
+
+## Implementation Notes
+
+`fetch_by_composite` (`crates/api/src/nfts/queries_ch.rs`), 1 file, +49/-36:
+
+- Dropped `LEFT JOIN soroban_contracts sc` and `LEFT JOIN accounts own` (the ~25M
+  / ~23M whole-dimension hash reads). `NftChRow` now leads with the raw
+  `current_owner_id: Option<i64>` surrogate; the enrichment `ne` collapse and the
+  `nfts n FINAL` PK seek are unchanged.
+- Contract StrKey: **echoed from the request input** (see Emerged #2), not resolved.
+- Owner StrKey: resolved in Rust via the shared `resolve_accounts` (a `WHERE id IN`
+  bloom seek on the single owner id), with `.filter(|s| !s.is_empty())` reproducing
+  the old `nullIf(own.account_id, '')` (miss -> None, empty -> None, present -> Some).
+- `fetch_list` / `fetch_transfers` already used bloom-pruned CTEs — left untouched.
+
+Result: read_rows 24.18M -> ~103k (seek 62k + resolver 41k), ~235x; p95 ~5 s -> ms.
+
+## Design Decisions
+
+### From Plan
+
+1. **Owner via `resolve_accounts`** — the id-IN bloom resolver the task specced,
+   matching 0344/0345/0354 and the six other endpoint modules.
+
+### Emerged
+
+2. **Echo the contract StrKey from the input instead of `resolve_contracts`** — the
+   plan called for resolving both surrogates, but the contract StrKey is the request
+   _input_ and the `nfts` seek filters by it (`WHERE n.contract_id IN (cid)`), so the
+   old `sc.contract_id` output is provably equal to the input. Echoing it drops one
+   resolver round-trip — output-identical, verified. `resolve_contracts` is unused here.
