@@ -2,7 +2,7 @@
 id: '0348'
 title: 'Frontend UX sweep — consolidated fixes (19 findings across all pages)'
 type: FEATURE # bundle of bug-fixes + UX polish from a full-page audit
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0341', '0351']
 tags: ['frontend', 'ux', 'phase-polish', 'effort-large', 'priority-medium']
@@ -29,6 +29,16 @@ history:
     who: karolkow
     note: >
       Promoted to active to begin the consolidated fix pass.
+  - date: 2026-07-06
+    status: completed
+    who: karolkow
+    note: >
+      Non-video subset shipped in PR #316: F1 (contract tab badge), F9 (LP fee
+      column + detail dedup), F13 (4/4 truncation), F15 (native XLM link), F16
+      (search chip). F12 skipped (permanent). F2 deferred to the data-model
+      epic 0359. The remaining video-subset criteria (F3–F8, F10, F11, F14,
+      F17–F19) are owned by 0351 — not 0348's work. `/ux-expert` regression
+      pass on the five landed fixes came back clean.
 ---
 
 # Frontend UX sweep — consolidated fixes (19 findings)
@@ -42,9 +52,11 @@ formatting standards. This task bundles them so they can be fixed as one
 coherent polish pass rather than 19 micro-tasks. Each finding below carries
 its root cause and the exact file(s) to touch.
 
-## Status: Backlog
+## Status: Completed
 
-**Current state:** Audit complete, root-caused, not started. No files changed.
+**Current state:** Non-video subset shipped in PR #316 (F1, F9, F13, F15, F16);
+F12 skipped; F2 → 0359. Video subset (F3–F8, F10, F11, F14, F17–F19) owned by
+[[0351]]. See the Progress section for per-finding detail.
 
 > **Video-prep subset → [[0351]].** The eye-catching, FE-only findings needed
 > before the milestone-2 video are tracked in 0351: **F3, F4, F5, F6, F7, F8,
