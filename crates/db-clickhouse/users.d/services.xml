@@ -34,8 +34,8 @@
   exposing the box's password-protected `default`.
 -->
 <clickhouse>
-    <users>
-        <!-- Shared admin user for developer mTLS certs. Cert is the
+  <users>
+    <!-- Shared admin user for developer mTLS certs. Cert is the
              credential (verified by Caddy + mapped to dev_shared);
              ClickHouse trusts the forwarded `X-ClickHouse-User`
              header on a `<no_password/>` user restricted to the
@@ -43,55 +43,55 @@
              lives in Caddy access logs (X-Client-Subject), not in
              the CH user — joining the two log streams gives the
              "who ran which query" answer. -->
-        <dev_shared>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>admin</profile>
-            <quota>unlimited</quota>
-            <access_management>0</access_management>
-        </dev_shared>
+    <dev_shared>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>admin</profile>
+      <quota>unlimited</quota>
+      <access_management>0</access_management>
+    </dev_shared>
 
-        <galexie>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>write_no_ddl</profile>
-            <quota>high_write</quota>
-            <access_management>0</access_management>
-        </galexie>
+    <galexie>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>write_no_ddl</profile>
+      <quota>high_write</quota>
+      <access_management>0</access_management>
+    </galexie>
 
-        <api_reader>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>read_only</profile>
-            <quota>unlimited</quota>
-            <access_management>0</access_management>
-        </api_reader>
+    <api_reader>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>read_only</profile>
+      <quota>unlimited</quota>
+      <access_management>0</access_management>
+    </api_reader>
 
-        <ingestion_writer>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>write_no_ddl</profile>
-            <quota>high_write</quota>
-            <access_management>0</access_management>
-        </ingestion_writer>
+    <ingestion_writer>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>write_no_ddl</profile>
+      <quota>high_write</quota>
+      <access_management>0</access_management>
+    </ingestion_writer>
 
-        <!-- Read-only human access for a teammate's mTLS cert.
+    <!-- Read-only human access for a teammate's mTLS cert.
              A SEPARATE user from `api_reader` ON PURPOSE: a developer's
              ad-hoc query must NOT share the production API's `api_throttle`
              quota — a heavy human query on `api_reader` would burn the API's
@@ -101,56 +101,58 @@
              grant a teammate read-only (not admin), map their cert CN to
              THIS user in CLICKHOUSE_CN_USER_MAP (`<cn>:dev_read`) instead of
              `dev_shared`. -->
-        <dev_read>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>read_only</profile>
-            <quota>dev_read</quota>
-            <access_management>0</access_management>
-        </dev_read>
+    <dev_read>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>read_only</profile>
+      <quota>dev_read</quota>
+      <access_management>0</access_management>
+    </dev_read>
 
-        <!-- prices tenant (prices-api task 0063, BE task 0314). Additive;
+    <!-- prices tenant (prices-api task 0063, BE task 0314). Additive;
              cert-as-credential. Scoped to prices.* via <grants> (first users
              here to use it) so a leaked prices cert cannot touch default.* or
              run DDL. The prices DB + schema are owned by prices-api over
              loopback admin, not by these users. -->
-        <prices_writer>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>write_no_ddl</profile>
-            <quota>prices_write</quota>
-            <access_management>0</access_management>
-            <grants>
-                <query>GRANT SELECT, INSERT, OPTIMIZE ON prices.*</query>
-            </grants>
-        </prices_writer>
+    <prices_writer>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>prices_write_ddl</profile>
+      <quota>prices_write</quota>
+      <access_management>0</access_management>
+      <grants>
+        <query>GRANT SELECT, INSERT, OPTIMIZE ON prices.*</query>
+        <query>GRANT ALTER DELETE ON prices.*</query>
+        <query>GRANT SELECT ON system.parts</query>
+      </grants>
+    </prices_writer>
 
-        <prices_reader>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>read_only</profile>
-            <quota>prices_read</quota>
-            <access_management>0</access_management>
-            <grants>
-                <query>GRANT SELECT ON prices.*</query>
-            </grants>
-        </prices_reader>
+    <prices_reader>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>read_only</profile>
+      <quota>prices_read</quota>
+      <access_management>0</access_management>
+      <grants>
+        <query>GRANT SELECT ON prices.*</query>
+      </grants>
+    </prices_reader>
 
-        <!-- migration_admin + partition_admin users removed in task 0241
+    <!-- migration_admin + partition_admin users removed in task 0241
              (PG-era migration + partition Lambdas dropped; CH applies its
              schema box-side via the db-clickhouse-init sidecar and
              auto-creates partitions on insert). -->
-    </users>
+  </users>
 </clickhouse>
