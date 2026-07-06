@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
@@ -29,9 +30,70 @@ use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{
-    AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
-};
+use super::dto::AccountsListCursor;
+
+// ---------------------------------------------------------------------------
+// Internal query-result rows + resolved params (not serialized; the handler
+// maps these into the public response DTOs).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct AccountListRow {
+    /// Surrogate id — cursor tiebreak only, never on the wire.
+    pub id: i64,
+    pub account_id: String,
+    pub xlm_balance: Option<String>,
+    pub last_seen_ledger: i64,
+    pub first_seen_ledger: i64,
+    pub home_domain: Option<String>,
+}
+
+/// Resolved, validated `GET /v1/accounts` list params handed to `fetch_list`.
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<AccountsListCursor>,
+    pub with_domain: bool,
+}
+
+#[derive(Debug)]
+pub struct AccountHeaderRow {
+    /// Surrogate id, threaded into balances query — never on wire.
+    pub id: i64,
+    pub account_id: String,
+    pub first_seen_ledger: i64,
+    pub last_seen_ledger: i64,
+    pub sequence_number: i64,
+    pub home_domain: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AccountBalanceRow {
+    pub asset_type_name: Option<String>,
+    pub asset_type: i16,
+    pub asset_code: Option<String>,
+    pub asset_issuer: Option<String>,
+    pub contract_id: Option<String>,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub balance: String,
+    pub decimals: u32,
+    pub last_updated_ledger: i64,
+}
+
+#[derive(Debug)]
+pub struct AccountTxRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub source_account: String,
+    pub fee_charged: i64,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub operation_types: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
 
 /// `asset_type` SMALLINT → canonical label, matching the PG `asset_type_name`
 /// function (`domain::AssetType`, 4 XDR variants). `None` for an out-of-range

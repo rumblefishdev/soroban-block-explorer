@@ -1,5 +1,5 @@
 //! Axum handlers for the accounts endpoints. DB reads are served from
-//! ClickHouse (`queries_ch`); PG was retired (task 0244).
+//! ClickHouse (`queries`); PG was retired (task 0244).
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -16,11 +16,12 @@ use crate::state::AppState;
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
-    AccountBalance, AccountBalanceRow, AccountDetailResponse, AccountHeaderRow, AccountListItem,
-    AccountListRow, AccountTransactionItem, AccountTxListParams, AccountTxRow, AccountsListCursor,
-    AccountsListParams, ResolvedListParams,
+    AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
+    AccountTxListParams, AccountsListCursor, AccountsListParams,
 };
-use super::queries_ch;
+use super::queries::{
+    self, AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
+};
 
 // ---------------------------------------------------------------------------
 // GET /v1/accounts (list)
@@ -309,23 +310,23 @@ async fn fetch_list_for_source(
     sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountListRow>, clickhouse::error::Error> {
-    queries_ch::fetch_list(&state.ch(), params, sort, direction).await
+    queries::fetch_list(&state.ch(), params, sort, direction).await
 }
 
 async fn fetch_account_for_source(
     state: &AppState,
     account_strkey: &str,
 ) -> Result<Option<AccountHeaderRow>, clickhouse::error::Error> {
-    queries_ch::fetch_account(&state.ch(), account_strkey).await
+    queries::fetch_account(&state.ch(), account_strkey).await
 }
 
-/// Derived `deleted` status (task 0324). See `queries_ch::fetch_deleted_status`.
+/// Derived `deleted` status (task 0324). See `queries::fetch_deleted_status`.
 async fn fetch_deleted_for_source(
     state: &AppState,
     account_surrogate_id: i64,
     last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    queries_ch::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
+    queries::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
 }
 
 async fn fetch_account_balances(
@@ -333,7 +334,7 @@ async fn fetch_account_balances(
     account_id: i64,
 ) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
     // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331).
-    queries_ch::fetch_balances(&state.ch(), account_id).await
+    queries::fetch_balances(&state.ch(), account_id).await
 }
 
 async fn fetch_account_tx_for_source(
@@ -344,7 +345,7 @@ async fn fetch_account_tx_for_source(
     sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, clickhouse::error::Error> {
-    queries_ch::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
+    queries::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
 }
 
 /// Build the opaque account-transactions cursor for a boundary row. CH keys on
