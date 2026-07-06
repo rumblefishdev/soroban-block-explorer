@@ -2066,7 +2066,7 @@
           "fee_charged": {
             "type": "integer",
             "format": "int64",
-            "description": "Stroops."
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -2265,7 +2265,8 @@
           },
           "fee_charged": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -2611,7 +2612,7 @@
               "fee_charged": {
                 "type": "integer",
                 "format": "int64",
-                "description": "Fee charged in stroops."
+                "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
               },
               "has_soroban": {
                 "type": "boolean"
@@ -2719,12 +2720,8 @@
       },
       "EventAppearanceItem": {
         "type": "object",
-        "required": ["contract_id", "ledger_sequence", "amount", "created_at"],
+        "required": ["contract_id", "ledger_sequence", "created_at"],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int64"
-          },
           "contract_id": {
             "type": "string"
           },
@@ -2740,23 +2737,18 @@
       },
       "EventItem": {
         "type": "object",
-        "description": "One row per event — an appearance with `amount > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+        "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
         "required": [
           "transaction_hash",
           "ledger_sequence",
           "transaction_id",
           "successful",
-          "amount",
           "created_at",
           "event_type",
           "topics",
           "data"
         ],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int64"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -2815,12 +2807,8 @@
       },
       "InvocationAppearanceItem": {
         "type": "object",
-        "required": ["contract_id", "ledger_sequence", "amount", "created_at"],
+        "required": ["contract_id", "ledger_sequence", "created_at"],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int32"
-          },
           "caller_account": {
             "type": ["string", "null"],
             "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
@@ -2843,16 +2831,10 @@
         "required": [
           "transaction_hash",
           "ledger_sequence",
-          "amount",
           "created_at",
           "successful"
         ],
         "properties": {
-          "amount": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Folded invocation-tree node count for this appearance."
-          },
           "caller_account": {
             "type": ["string", "null"]
           },
@@ -3333,7 +3315,7 @@
                 "fee_charged": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Stroops."
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean"
@@ -3474,7 +3456,8 @@
                 },
                 "fee_charged": {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean"
@@ -3570,23 +3553,18 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row per event — an appearance with `amount > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+              "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
                 "transaction_id",
                 "successful",
-                "amount",
                 "created_at",
                 "event_type",
                 "topics",
                 "data"
               ],
               "properties": {
-                "amount": {
-                  "type": "integer",
-                  "format": "int64"
-                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
@@ -3633,16 +3611,10 @@
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
-                "amount",
                 "created_at",
                 "successful"
               ],
               "properties": {
-                "amount": {
-                  "type": "integer",
-                  "format": "int32",
-                  "description": "Folded invocation-tree node count for this appearance."
-                },
                 "caller_account": {
                   "type": ["string", "null"]
                 },
@@ -3982,7 +3954,8 @@
                 },
                 "fee_charged": {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean"
@@ -4061,7 +4034,7 @@
                 "fee_charged": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Fee charged in stroops."
+                  "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
                 },
                 "has_soroban": {
                   "type": "boolean",
@@ -4258,7 +4231,8 @@
           },
           "fee_charged": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -4422,7 +4396,7 @@
           "fee_charged": {
             "type": "integer",
             "format": "int64",
-            "description": "Fee charged in stroops."
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean"
@@ -4518,7 +4492,7 @@
           "fee_charged": {
             "type": "integer",
             "format": "int64",
-            "description": "Fee charged in stroops."
+            "description": "Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so\nthere is no `decimals` field — the frontend scales by 1e7."
           },
           "has_soroban": {
             "type": "boolean",

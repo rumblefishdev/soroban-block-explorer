@@ -82,7 +82,6 @@ pub struct OpRow {
 pub struct EventAppearanceRow {
     pub contract_id: String,
     pub ledger_sequence: i64,
-    pub amount: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -91,7 +90,6 @@ pub struct InvocationAppearanceRow {
     pub contract_id: String,
     pub caller_account: Option<String>,
     pub ledger_sequence: i64,
-    pub amount: i32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -492,7 +490,6 @@ pub async fn fetch_event_appearances(
         "SELECT \
             sc.contract_id, \
             sea.ledger_sequence, \
-            sea.amount, \
             sea.created_at \
          FROM soroban_events_appearances sea \
          JOIN soroban_contracts sc ON sc.id = sea.contract_id \
@@ -509,7 +506,6 @@ pub async fn fetch_event_appearances(
         .map(|r| EventAppearanceRow {
             contract_id: r.get("contract_id"),
             ledger_sequence: r.get("ledger_sequence"),
-            amount: r.get("amount"),
             created_at: r.get("created_at"),
         })
         .collect())
@@ -525,7 +521,6 @@ pub async fn fetch_invocation_appearances(
             sc.contract_id, \
             caller.account_id    AS caller_account, \
             sia.ledger_sequence, \
-            sia.amount, \
             sia.created_at \
          FROM soroban_invocations_appearances sia \
          JOIN soroban_contracts sc      ON sc.id     = sia.contract_id \
@@ -544,7 +539,6 @@ pub async fn fetch_invocation_appearances(
             contract_id: r.get("contract_id"),
             caller_account: r.get("caller_account"),
             ledger_sequence: r.get("ledger_sequence"),
-            amount: r.get("amount"),
             created_at: r.get("created_at"),
         })
         .collect())

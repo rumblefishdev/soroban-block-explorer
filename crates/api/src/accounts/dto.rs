@@ -104,7 +104,8 @@ pub struct AccountTransactionItem {
     /// 1-based position in ledger.
     pub application_order: i16,
     pub source_account: String,
-    /// Stroops.
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     pub successful: bool,
     pub operation_count: i16,

@@ -16,11 +16,10 @@
 //! - **`operations_appearances` has no `id` surrogate** (PR #175). The
 //!   per-op `appearance_id` is the natural-key `application_order`
 //!   (canonical SQL 03 statement C).
-//! - **`soroban_events` is the full-payload table**, with no per-appearance
-//!   fold-count column. The archive-unavailable fallback derives the
-//!   `EventAppearanceItem.amount` as the per-contract event `count()` — a
-//!   CH analogue of the PG `soroban_events_appearances.amount` fold count,
-//!   not a token amount (same non-amount semantic as the PG column).
+//! - **`soroban_events` is the full-payload table** (one row per event). The
+//!   archive-unavailable fallback groups per (contract, ledger) to emit one
+//!   appearance row per contract — the same wire shape as the PG appearance
+//!   index (which additionally carries a fold-count column, not surfaced).
 //!
 //! ### List pagination + the partition-prune / read-in-order guard
 //!
@@ -707,7 +706,6 @@ struct OpRawRow {
 struct EventAppearanceRawRow {
     id: i64,
     ledger_sequence: i64,
-    amount: i64,
     created_at: i64,
 }
 
@@ -716,7 +714,6 @@ struct InvocationAppearanceRawRow {
     contract_surrogate: i64,
     caller_id: Option<i64>,
     ledger_sequence: i64,
-    amount: i32,
     created_at: i64,
 }
 
@@ -877,17 +874,14 @@ pub async fn fetch_event_appearances(
     transaction_id: i64,
     ledger_sequence: i64,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    // CH `soroban_events` is the full-payload table (no fold-count column).
-    // The PG `EventAppearanceItem.amount` is a per-(contract, ledger)
-    // appearance fold count; the CH analogue is the per-contract event
-    // `count()` in this tx. Both are non-token "how many" counters, so the
-    // wire shape and semantic match (`amount` is never a stroop value).
+    // CH `soroban_events` is the full-payload table (one row per event). We
+    // group per (contract, ledger) to produce one appearance row per contract
+    // in this tx — the same wire shape as the PG appearance index.
     let raw = client
         .query(
             "SELECT \
                 se.contract_id AS id, \
                 se.ledger_sequence, \
-                toInt64(count()) AS amount, \
                 any(l.closed_at) AS created_at \
              FROM soroban_events se FINAL \
              JOIN ledgers l ON l.sequence = se.ledger_sequence \
@@ -907,7 +901,6 @@ pub async fn fetch_event_appearances(
         .map(|r| EventAppearanceRow {
             contract_id: contracts.get(&r.id).cloned().unwrap_or_default(),
             ledger_sequence: r.ledger_sequence,
-            amount: r.amount,
             created_at: millis_to_utc(r.created_at),
         })
         .collect();
@@ -929,7 +922,6 @@ pub async fn fetch_invocation_appearances(
                 sia.contract_id AS contract_surrogate, \
                 sia.caller_id, \
                 sia.ledger_sequence, \
-                sia.amount, \
                 l.closed_at AS created_at \
              FROM soroban_invocations_appearances sia FINAL \
              INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
@@ -958,7 +950,6 @@ pub async fn fetch_invocation_appearances(
                 .and_then(|id| accounts.get(&id).cloned())
                 .filter(|s| !s.is_empty()),
             ledger_sequence: r.ledger_sequence,
-            amount: r.amount,
             created_at: millis_to_utc(r.created_at),
         })
         .collect();
