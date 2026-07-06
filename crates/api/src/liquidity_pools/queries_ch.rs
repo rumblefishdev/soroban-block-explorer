@@ -31,7 +31,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{ChartDataPoint, SharesCursor};
-use super::queries::{ParticipantRow, PoolRow, PoolTxRow, ResolvedPoolListParams};
+use super::dto::{ParticipantRow, PoolRow, PoolTxRow, ResolvedPoolListParams};
 
 /// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
 /// ~5 s mainnet cadence). The PG path uses `snapshots.created_at >= NOW() - 7d`;
