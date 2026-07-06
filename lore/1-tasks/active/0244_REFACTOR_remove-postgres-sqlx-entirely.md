@@ -56,9 +56,133 @@ history:
     who: karolkow
     note: >
       Promoted to active. Starting the full PG removal (buckets A+B+C).
+  - date: '2026-07-06'
+    status: active
+    who: karolkow
+    note: >
+      Big session (26 commits). DONE: standalone dead-crate deletes
+      (db-migrate, db-merge+scripts, db/migrations+migrate.rs, docker
+      PG-merge services); FULL API collapse — all 9 endpoint modules on CH,
+      DataSource enum + datasource.rs deleted, state.db/PgPool removed,
+      config ch_enabled gone, api dropped the db + sqlx deps; 3 conditional-GET
+      tests ported to CH; the 5448-line tests_integration.rs dropped to a
+      follow-up (task 0360 on develop). Plus post-collapse cleanup: killed 7
+      single-variant error enums, kept ledger/transaction domains isolated,
+      and Option C — renamed every queries_ch.rs->queries.rs and moved the
+      internal query row/param types out of dto.rs back into the query layer.
+      See "Progress" section for the exhaustive remaining list. Gated on two
+      pending team decisions: audit-harness (port-to-CH vs delete) and
+      backfill-bench (drop vs port).
 ---
 
 # Remove Postgres/sqlx entirely — ClickHouse is the only DB
+
+## Progress (2026-07-06)
+
+### ✅ Done (26 commits on `refactor/0244_remove-postgres-sqlx-entirely`)
+
+**Standalone dead-crate deletes** (CH mirror verified per artifact):
+
+- `crates/db-migrate/` (RDS migration Lambda) → `.trash/`
+- `crates/db-merge/` + 3 merge scripts (FDW snapshot merge; CH does it via
+  `backfill-runner/ch_staging` EXCHANGE TABLES) → `.trash/`
+- `crates/db/migrations/` (35 SQL DDL) + `crates/db/src/migrate.rs` +
+  `pub mod migrate` (the `sqlx::migrate!()` embed had zero callers) → `.trash/`
+- `docker-compose.yml`: removed `postgres-merge` / `postgres-snapshot-source`
+  (db-merge profile) + their volumes + `x-postgres-base` anchor
+
+**API dual-backend collapse (bucket B) — all 9 modules CH-only:**
+accounts, assets, contracts, ledgers, liquidity_pools, network, nfts, search,
+transactions. Each: PG `queries.rs` deleted, `queries_ch` = sole path,
+`match DataSource` dispatch removed, PG-only helpers gone (contracts
+`expand_events`/`ParsedLedger`/`fetch_unique_ledgers`/archive overlay),
+`*Cursor::Pg` variants removed, `EventAppearanceRow`/`HashIndexRow`
+(PG-fold-only) dropped.
+
+**API teardown:**
+
+- `common/datasource.rs` (`DataSource`/`Module` enum + `API_DATASOURCE_*`
+  plumbing) deleted
+- `AppState.db: PgPool` removed; `ch` is now non-optional
+  `clickhouse::Client`; `main.rs` builds the mTLS CH client unconditionally,
+  no PG pool / `db::secrets`
+- `config.ch_enabled` removed
+- `crates/api/Cargo.toml` dropped the `db` and `sqlx` deps + `domain/sqlx`
+  feature; last sqlx uses (network `FetchStatsError::Pg`, ledgers
+  `LedgerListItem: sqlx::FromRow`) removed
+- `common/head::latest_sequence_pg` deleted; `current_head_opt` CH-only
+
+**Tests:** ledgers/network/transactions conditional-GET tests ported from
+`DATABASE_URL`/`PgPool` to `CH_URL`/`clickhouse::Client` (shared
+`common::ch::test_client_from_env`). `tests_integration.rs` (5448 lines of
+PG-SQL fixtures) moved to `.trash/` → **follow-up task 0360** (on develop):
+"rebuild API integration tests on ClickHouse fixtures".
+
+**Post-collapse cleanup refactors:**
+
+- removed 7 single-variant `*FetchError` enums (return `clickhouse::error::Error`)
+- reverted a bad `LedgerTxRow`↔`TxListRow` unification to keep the ledger and
+  transaction domains isolated (wire `TransactionListItem` stays shared — API
+  contract)
+- **Option C**: renamed all 9 `queries_ch.rs` → `queries.rs` and moved the
+  internal query-result rows / resolved-params / helpers out of `dto.rs` into
+  `queries.rs`. `dto.rs` now holds only wire (Serialize/ToSchema) + cursor
+  types (cursors are serialized into the opaque ADR-0008 wire cursor).
+
+`cargo check --workspace` + `cargo check -p api --tests` clean throughout.
+
+### ⏳ Remaining — exhaustive
+
+**Gated on two team decisions (audit-harness, backfill-bench):**
+
+1. `crates/audit-harness/` — **decision: port to CH or delete.** No CH mirror
+   exists (the `compare-with-stellar-api` skill is also PG-bound); it is
+   project functionality (continuous Horizon/archive correctness audit) whose
+   only PG-bound part is the `sqlx` read side. Includes crate + workspace
+   member + README + `reports/` + `sql/` + `run-invariants.sh`.
+2. `crates/backfill-bench/` — **decision: drop or port.** No CH bench exists;
+   dev perf tool for the (gone) PG write path. Includes crate + member +
+   README + `how-to-run-soroban-backfill.md` + `scripts/bench-schema-layers.sh`.
+3. `crates/db-partition-mgmt/` — delete (CH partitions declaratively via
+   `PARTITION BY` in `init.sql`). Coupled to backfill-bench (bench depends on
+   it), so it moves with the bench decision. Crate + member.
+4. `crates/indexer` — remove the `pg-persist` feature: `Cargo.toml`
+   (`pg-persist = [dep:db, dep:sqlx, domain/sqlx]`) + 13 `#[cfg(feature =
+"pg-persist")]` files + the whole `handler/persist/` tree
+   (mod/staging/write) + cfg blocks in `process.rs` / `handler/mod.rs` +
+   `tests/persist_integration.rs`. (Used by backfill-bench + backfill-runner,
+   so blocked on both.)
+5. `crates/backfill-runner` — **crate stays (real CH sink)**; prune the PG
+   sink: `Target::Postgres` + `--target postgres` default, the `db` + `sqlx`
+   deps, `src/sink.rs` PG code, PG refs across ~11 files (assets_id_backfill,
+   balance_seed, bootstrap, contract_type_rebuild, error, main, nft_reclassify,
+   repair_tier1, resume, upgradeable_backfill, wasm_upgrade_backfill).
+6. `crates/db/` — the PG crate (pool.rs, secrets.rs, lib.rs, Cargo.toml,
+   MIGRATIONS.md). Dies only after 4 + 5 + backfill-bench stop importing it.
+
+**Cross-cutting sqlx (after 4/5/6 land):** 7. workspace `Cargo.toml:41` — drop the `sqlx` dep; members — drop db,
+db-partition-mgmt, backfill-bench, audit-harness. 8. `crates/domain` — drop the `sqlx` feature (`Cargo.toml:11,21`) + the
+`#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]` derives on ~7 enums
+(asset_type, contract_event_type, contract_type, nft_event_type,
+operation_type, token_asset_type, enums/mod).
+
+**Independent (no decision needed):** 9. `docker-compose.yml` — remove the base `postgres` service + `pgdata` volume
+(once nothing local still talks to it — i.e. after 4/5/bench). 10. **infra** — `infra/src/lib/stacks/compute-stack.ts`: the `DATABASE_URL`
+placeholder + the `API_DATASOURCE_*` env block + `infra/README.md` PG refs.
+⚠️ prod config — needs an explicit go. 11. **api comments** — stale PG prose (no live code): `common/pagination.rs`,
+`contracts/cache.rs`, `ledgers/queries.rs`, `liquidity_pools/handlers.rs`,
+`transactions/dto.rs`+`queries.rs`, network handler doc. 12. **db-clickhouse comments** — stale PG-context prose: `src/lib.rs`,
+`src/persist/stage.rs`, README. 13. **libs/api-types** — the PG strings live in DTO **doc comments**
+(`LedgerListItem` "sqlx::FromRow", `NetworkStats` "pg_class.reltuples",
+the `pool_ids` PG↔CH caveat, the network-stats query description). Fix the
+Rust rustdoc, then **regenerate** (`nx run @rumblefish/api-types:generate`)
+so `openapi.json` + `generated/types.gen.ts` refresh. 14. **docs/architecture/** ** (ADR 0032) — remove PG/RDS: `infrastructure/
+    infrastructure-overview.md` (RDS + decommission), `backend/backend-overview.md`
+(PG database), `database-schema/**`, plus mentions in xdr-parsing / frontend
+overviews.
+
+**Final AC verification:** 15. `rg -i 'sqlx|PgPool|postgres' crates/ infra/ libs/` = 0 outside
+comments/lore/docs-archive (currently NOT zero). 16. `cargo check --workspace` clean; api-types `check-generated` green.
 
 ## Summary
 
