@@ -26,22 +26,27 @@ The database schema is the persistent storage model of the block explorer. Its r
 store all indexed chain data needed by the ingestion pipeline, backend API, and explorer UI
 without depending on any external explorer database.
 
-This document covers the target design of the PostgreSQL schema only. It does not redefine
-frontend behavior, backend transport concerns, or infrastructure provisioning except where
-those influence schema decisions.
+This document covers the **logical** design of the schema — entities, keys,
+relationships, field allocation, and partitioning strategy — which is store-agnostic.
+It does not redefine frontend behavior, backend transport concerns, or infrastructure
+provisioning except where those influence schema decisions.
 
-This document describes the **current production schema** as of the migrations in
-`crates/db/migrations/` (post-ADR 0036 rename `tokens → assets`); every DDL block
-in §4 matches the live migration state. The narrative
+**Store: ClickHouse.** Postgres was retired (task 0244); ClickHouse is the sole
+production store. The authoritative **physical** schema (engines, column types,
+partition keys) is `crates/db-clickhouse/schema/init.sql`, documented in
+[`clickhouse-pilot.md`](./clickhouse-pilot.md) with the full PG→CH type-translation
+table and divergence rationale. The `CREATE TABLE` blocks in §4 below are retained in
+their historical PostgreSQL notation to describe table **shape** readably — for the
+live ClickHouse form (`ReplacingMergeTree`, `Int64` surrogates, `Decimal128(7)`,
+`intDiv(ledger_sequence, 500000)` partitioning) defer to the authority. The narrative
 [`technical-design-general-overview.md`](../technical-design-general-overview.md)
-takes precedence for cross-component behavior, but where its §6 data model and this
-file disagree on schema specifics, this file is authoritative — it is kept in sync
-with the migrations per
-[ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md).
+takes precedence for cross-component behavior; per
+[ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md) this
+file and `init.sql` are updated together on any schema change.
 
 ## 2. Ownership and Design Goals
 
-The block explorer owns its full PostgreSQL schema. All chain data is stored here; there is
+The block explorer owns its full schema. All chain data is stored in ClickHouse; there is
 no dependency on an external database.
 
 The schema should satisfy four goals at the same time:
@@ -93,7 +98,7 @@ The schema is not intended to be:
 
 The current schema is centered around a small set of core explorer entities plus a
 handful of registry and history tables. Table names below are the physical names used
-by the current migrations (`crates/db/migrations/0001_*` through `0007_*`).
+by the ClickHouse schema (`crates/db-clickhouse/schema/init.sql`).
 
 Backbone timeline:
 
@@ -1393,29 +1398,26 @@ The DB therefore holds only:
 This split — typed summaries in the DB, heavy payloads fetched on-demand from the
 public archive — is the core architectural choice, not accidental duplication.
 
-### 8.0 ClickHouse pilot (parallel store, read-empty)
+### 8.0 ClickHouse (sole production store)
 
-A parallel ClickHouse store was added next to the production Postgres
-schema per
+ClickHouse is the sole production store (task 0244 — Postgres retired). It began
+as a parallel pilot per
 [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
 (implementation in
-[task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)).
-It mirrors the table-by-table logical shape described above, with five
-deliberate divergences (full-content `soroban_events` replacing
-`soroban_events_appearances`, `created_at` dropped from every CH table
-except `ledgers`, `nfts.metadata` dropped CH-side, `_sqlx_migrations`
-replaced by an idempotent `init.sql`, `transaction_hash_index` exposed as
-a `Dictionary` for hot point lookups). **Postgres is unchanged by all
-five.**
+[task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)),
+then took over ingestion and all API reads in the hard cutover
+[task 0241](../../../lore/1-tasks/archive/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
+It carries the table-by-table logical shape described above, with five
+deliberate divergences from the former PG schema (full-content `soroban_events`
+replacing `soroban_events_appearances`, `created_at` dropped from every table
+except `ledgers`, `nfts.metadata` dropped, `_sqlx_migrations` replaced by an
+idempotent `init.sql`, `transaction_hash_index` also exposed as a `Dictionary`
+for hot point lookups).
 
-The ClickHouse copy lives in `crates/db-clickhouse/` and runs as the
-`clickhouse` service in `docker-compose.yml`. It is read-empty in scope —
-no indexer dual-write, no API reads. The full pilot schema reference,
+The store lives in `crates/db-clickhouse/` (schema `init.sql`) and runs as the
+`clickhouse` service in `docker-compose.yml`. The full physical schema reference,
 including the type-translation table and divergence rationale, lives in
 [`clickhouse-pilot.md`](./clickhouse-pilot.md).
-
-This subsection only flags that the pilot exists; the rest of this
-document continues to describe the Postgres source-of-truth schema.
 
 ## 8. Evolution Rules and Delivery Notes
 
@@ -1430,12 +1432,11 @@ Any future schema change should preserve the same general discipline:
 
 ### 8.2 Current Workspace State
 
-The repository now provides concrete DDL for every table in §4 under
-`crates/db/migrations/0001_*` through `0007_*` plus subsequent dated migrations for
-replay-safe uniqueness (`20260421*`), enum label helpers (`20260422000000_*`), and
-in-place enum-variant additions (`20260422000100_*`). Runtime persistence lives in
-the indexer (`crates/indexer/src/handler/persist/`) and follows the 14-step
-`persist_ledger` pipeline per
+The repository provides concrete DDL for every table in §4 in the ClickHouse schema
+`crates/db-clickhouse/schema/init.sql` — a single idempotent `CREATE … IF NOT EXISTS`
+script applied by `db-clickhouse-init` (there is no ordered migration sequence).
+Runtime persistence lives in the indexer, which stages and writes via the
+`crates/db-clickhouse/src/persist/` pipeline; the post-surrogate schema rationale is
 [ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md).
 
 This document is the detailed schema reference; the narrative
