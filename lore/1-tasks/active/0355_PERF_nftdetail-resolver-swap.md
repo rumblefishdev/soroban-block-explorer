@@ -2,9 +2,9 @@
 id: '0355'
 title: 'PERF: nftdetail — resolver swap (deferred from 0354, needs NFT test data)'
 type: PERF
-status: backlog
+status: active
 related_adr: []
-related_tasks: ['0354', '0345']
+related_tasks: ['0354', '0345', '0357']
 tags:
   [priority-medium, effort-small, layer-clickhouse, milestone-3, phase-launch]
 milestone: 3
@@ -14,6 +14,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Deferred from 0354 — same id-IN resolver swap, but the local 25k-ledger DB has 0 NFTs so it cannot be locally diffed there.'
+  - date: 2026-07-06
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated as the first fix in the 0357 launch perf cluster. Re-confirmed on
+      the 2026-07-06 prod load test: nftdetail p95 ~7-9 s, ch read_rows ~24.7M/req
+      (whole-dimension JOIN). The "needs NFT test data" blocker is stale — prod
+      has ~12.8k NFTs, so verify via a prod before/after diff (AC already permits).
 ---
 
 # PERF: nftdetail — resolver swap
