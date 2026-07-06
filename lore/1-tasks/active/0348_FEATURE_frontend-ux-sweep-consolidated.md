@@ -87,12 +87,12 @@ Refs: `docs/architecture/database-schema/endpoint-queries-clickhouse/11_get_cont
 have transactions — suspect the native-asset transactions query/data path
 returns empty. Investigate the `/assets/native` transactions endpoint before
 assuming display bug. Ref: `web/src/pages/AssetDetailPage.tsx`.
-**→ DEFERRED to [[0357]] (2026-07-06).** Root-caused: not a display bug — the
+**→ DEFERRED to [[0359]] (2026-07-06).** Root-caused: not a display bug — the
 asset-tx query has no native branch (native = empty-string identity). The
 investigation escalated into a system-wide data-model audit; the fundamental
 fix (per-(op,asset) participation index, native first-class) is a backend epic
-tracked in task 0357, not FE polish. The stopgap "variant C" built here was
-reverted. This finding is closed in 0348 as deferred, owned by 0357.
+tracked in task 0359, not FE polish. The stopgap "variant C" built here was
+reverted. This finding is closed in 0348 as deferred, owned by 0359.
 
 **3. [Bug] Home auto-scrolls ~218px on load**, hiding the hero headline; user
 lands mid-page on the search bar. Almost certainly `autoFocus` on the search
@@ -238,10 +238,10 @@ routes.asset('native')`). Commit `15cd2a27`.
 
 **Deferred:**
 
-- **F2** (native XLM tx empty) → [[0357]]. Root-caused as a data-model / backend
+- **F2** (native XLM tx empty) → [[0359]]. Root-caused as a data-model / backend
   problem (single-asset-slot index + native-as-absence), not FE polish. The
   stopgap "variant C" built during the investigation was reverted. F2 escalated
-  into a full system-wide audit now living in 0357.
+  into a full system-wide audit now living in 0359.
 
 **Remaining in 0348 (FE):**
 
@@ -250,12 +250,12 @@ routes.asset('native')`). Commit `15cd2a27`.
 - **F12** — ledger-sequence fields paired with human time app-wide (systemic).
 - **F1** — invocations KPI 0-vs-table: split path — the honest **relabel** is FE
   (could stay here); the **7-day-window vs all-time data fix** is backend and is
-  captured in 0357 (K4-1). Decide which half lands where.
+  captured in 0359 (K4-1). Decide which half lands where.
 
 ## Acceptance Criteria
 
 - [ ] 1 — Contract invocations KPI/badge and table agree (or KPI honestly labeled)
-- [~] 2 — Native XLM tx — DEFERRED to 0357 (root-caused: data-model, backend epic)
+- [~] 2 — Native XLM tx — DEFERRED to 0359 (root-caused: data-model, backend epic)
 - [ ] 3 — Home loads at scroll-top, hero visible
 - [ ] 4 — Asset detail supply no longer overlaps Holders
 - [ ] 5 — Time column no longer clips in the wide transaction tables

@@ -1,5 +1,5 @@
 ---
-id: '0357'
+id: '0359'
 title: 'Asset-participation index re-model — native XLM first-class + complete per-asset activity (offers, all path-payment legs)'
 type: FEATURE # fundamental data-model fix: schema + ingestion + XDR re-parse backfill + query rewrites
 status: backlog
@@ -29,6 +29,14 @@ history:
       hotfixes — accepting a full XDR-re-parse backfill if required. The stopgap
       "variant C" (native payments-only branch) built during the investigation
       was DELIBERATELY REVERTED so the fix is done once, correctly, here.
+  - date: 2026-07-06
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0357 → 0359. Three sessions independently grabbed id 0357 on
+      2026-07-06; the develop rebase surfaced the collision. PERF
+      launch-readpath task keeps 0357 (already public on origin/develop, ref'd
+      by 0355); this FEATURE moves to 0359. Inbound refs in 0348 updated.
 ---
 
 # Asset-participation index re-model
@@ -210,7 +218,7 @@ absence/two-hop sweep, aggregate/detail) against prod CH found this is **not an
 assets-only problem** — the same four bug classes recur across the whole
 explorer, and there is a **second under-modelled layer** (`soroban_events`,
 9.5 B rows — larger than `operations_appearances`) whose fungible-token flow is
-almost entirely undecoded. **All clusters below are in-scope for THIS task (0357)
+almost entirely undecoded. **All clusters below are in-scope for THIS task (0359)
 — karolkow decided 2026-07-06 to keep everything in one task, not fan out into
 sibling tasks.** They are organised as workstreams (see "Workstreams" below).
 
@@ -349,7 +357,7 @@ figures/severities were **overstated**; recorded here honestly. These correction
   "bug".)
 - **K3-1 (SAC not unioned): HIGH → MEDIUM.** SAC activity IS reachable via the
   contract-transactions endpoint (unions `soroban_invocations_appearances` by
-  contract_id); it's a cross-reference gap on the _asset_ page, not invisibility.
+  contract*id); it's a cross-reference gap on the \_asset* page, not invisibility.
 - **K2-2 (LP native leg): 16,552 / 701 → 11,641 pools (22.4%) / 480 impostors.**
   Our count was raw ReplacingMergeTree rows; FINAL (user-visible) is ~1.4× lower.
   Mechanism airtight; HIGH stands; % actually slightly higher than claimed.
