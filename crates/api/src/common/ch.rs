@@ -274,6 +274,27 @@ pub async fn resolve_contracts(
     resolve_id_strkey(client, "soroban_contracts", "contract_id", ids).await
 }
 
+/// Build a ClickHouse client from `CH_URL` (+ optional `CH_USER` /
+/// `CH_PASSWORD` / `CH_DATABASE`) for the DB-backed handler tests. Returns
+/// `None` when `CH_URL` is unset so the tests skip cleanly and CI (no CH
+/// access) stays green — shared by every `#[cfg(test)]` module that needs a
+/// live client.
+#[cfg(test)]
+pub(crate) fn test_client_from_env() -> Option<clickhouse::Client> {
+    let url = std::env::var("CH_URL").ok()?;
+    let mut c = clickhouse::Client::default().with_url(url);
+    if let Ok(u) = std::env::var("CH_USER") {
+        c = c.with_user(u);
+    }
+    if let Ok(p) = std::env::var("CH_PASSWORD") {
+        c = c.with_password(p);
+    }
+    if let Ok(d) = std::env::var("CH_DATABASE") {
+        c = c.with_database(d);
+    }
+    Some(c)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

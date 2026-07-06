@@ -2,8 +2,6 @@
 
 use std::sync::{Arc, RwLock};
 
-use sqlx::PgPool;
-
 use crate::contracts::cache::{ContractMetadataCache, new_contract_cache};
 use crate::network::cache::{NetworkStatsCache, new_network_cache};
 use crate::network::dto::NetworkStats;
@@ -14,8 +12,7 @@ use crate::runtime_enrichment::RuntimeEnrichment;
 /// clones are refcount bumps; `reqwest::Client` is also `Arc`-backed).
 #[derive(Clone)]
 pub struct AppState {
-    pub db: PgPool,
-    pub(crate) ch: Option<clickhouse::Client>,
+    pub(crate) ch: clickhouse::Client,
     /// Bundle of runtime-enrichment fetchers (S3 stellar archive + SEP-1
     /// stellar.toml). One struct so the field count on `AppState` doesn't
     /// grow per new transport, and so the grouping mirrors the
@@ -47,13 +44,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(
-        db: PgPool,
-        ch: Option<clickhouse::Client>,
+        ch: clickhouse::Client,
         runtime_enrichment: RuntimeEnrichment,
         network_id: [u8; 32],
     ) -> Self {
         Self {
-            db,
             ch,
             runtime_enrichment,
             contract_cache: new_contract_cache(),
@@ -65,14 +60,7 @@ impl AppState {
         }
     }
 
-    /// CH client for a handler module routed to the ClickHouse read path.
-    /// Panics when the cold-start `AppConfig::ch_enabled` gate decided
-    /// not to build the client (no module reported CH at init time) yet
-    /// a handler later reads `DataSource::for_module(..) == Ch` and
-    /// reaches this accessor. The combination indicates an inconsistent
-    /// process state — e.g. env mutated post-init, or a `Module` variant
-    /// missing from `Module::ALL` — and is a misconfigured deploy that
-    /// must fail loudly on first request.
+    /// CH client for the handler read path.
     ///
     /// Returns an owned client (clone — cheap, the `hyper` pool is
     /// `Arc`-shared) rather than a borrow, so the load-test correlation can
@@ -83,29 +71,22 @@ impl AppState {
     /// exact HTTP request (task 0338, "B2"). No scope (normal production) → the
     /// clone is returned unmodified.
     pub fn ch(&self) -> clickhouse::Client {
-        let client = self
-            .ch
-            .as_ref()
-            .expect(
-                "CH client not built at cold start, but handler dispatched to CH read path — \
-                 AppConfig::ch_enabled was false while DataSource::for_module returned Ch \
-                 (check Module::ALL completeness and the API_DATASOURCE_* env at init time)",
-            )
-            .clone();
+        let client = self.ch.clone();
         match crate::common::request_id::current() {
             Some(id) => client.with_setting("log_comment", id),
             None => client,
         }
     }
 
-    /// Test constructor — defaults the CH client to `None`, the caches
-    /// to fresh empties, and the network id to mainnet. Keeps every
+    /// Test constructor — caller supplies the CH client (an unconnected
+    /// `clickhouse::Client::default()` for validation-only tests, or a real
+    /// `CLICKHOUSE_URL` client for the DB-backed conditional-GET tests). Caches
+    /// default to fresh empties, network id to mainnet. Keeps every
     /// `#[cfg(test)]` site free of edits when new fields land.
     #[cfg(test)]
-    pub fn for_tests(db: PgPool, runtime_enrichment: RuntimeEnrichment) -> Self {
+    pub fn for_tests(ch: clickhouse::Client, runtime_enrichment: RuntimeEnrichment) -> Self {
         Self::new(
-            db,
-            None,
+            ch,
             runtime_enrichment,
             xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
         )

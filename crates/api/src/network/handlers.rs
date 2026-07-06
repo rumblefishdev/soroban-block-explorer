@@ -17,15 +17,11 @@ use crate::state::AppState;
 use super::dto::NetworkStats;
 use super::queries_ch;
 
-/// Unified per-call fetch error so the moka cache initializer can dispatch
-/// between the PG and CH backends without leaking driver types up the
-/// call stack. Only the `Display` impl is observed (forwarded to the
-/// canonical `db_error` envelope + tracing); the variant is for
-/// diagnostics on the log side.
+/// Per-call fetch error so the moka cache initializer does not leak the
+/// `clickhouse` driver type up the call stack. Only the `Display` impl is
+/// observed (forwarded to the canonical `db_error` envelope + tracing).
 #[derive(Debug, thiserror::Error)]
 enum FetchStatsError {
-    #[error("pg: {0}")]
-    Pg(#[from] sqlx::Error),
     #[error("ch: {0}")]
     Ch(#[from] clickhouse::error::Error),
 }
@@ -154,31 +150,27 @@ fn ok_response(stats: Arc<NetworkStats>) -> Response {
 mod tests {
     //! End-to-end shape check for `/v1/network/stats`.
     //!
-    //! Mirrors the `DATABASE_URL`-gated pattern used by
-    //! `crates/indexer/tests/persist_integration.rs` — runs only when
-    //! the env var is set and reachable, skips cleanly otherwise so
-    //! `cargo test` is green on a workstation without the compose
-    //! stack up.
+    //! `CH_URL`-gated — runs only when the env var is set and reachable,
+    //! skips cleanly otherwise so `cargo test` is green on a workstation
+    //! without a ClickHouse up.
     //!
-    //!   docker compose up -d
-    //!   npm run db:migrate
-    //!   DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer \
+    //!   CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
     //!       cargo test -p api --bin api network -- --test-threads=1
     use axum::Router;
     use axum::body::{self, Body};
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
-    use sqlx::PgPool;
     use tower::ServiceExt;
     use utoipa_axum::router::OpenApiRouter;
 
+    use crate::common::ch::test_client_from_env;
     use crate::network;
     use crate::runtime_enrichment::RuntimeEnrichment;
     use crate::runtime_enrichment::sep1::Sep1Fetcher;
     use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
     use crate::state::AppState;
 
-    fn app(db: PgPool) -> Router {
+    fn app(ch: clickhouse::Client) -> Router {
         let runtime_enrichment = RuntimeEnrichment {
             stellar_archive: StellarArchiveFetcher::new(
                 crate::runtime_enrichment::stellar_archive::test_client(),
@@ -187,7 +179,7 @@ mod tests {
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        let state = AppState::for_tests(db, runtime_enrichment);
+        let state = AppState::for_tests(ch, runtime_enrichment);
 
         let (router, _spec) = OpenApiRouter::new()
             .nest("/v1", network::router())
@@ -201,19 +193,12 @@ mod tests {
     /// parallel tests cannot trample each other's cache state.
     #[tokio::test]
     async fn stats_endpoint_returns_documented_shape_against_real_db() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
-            eprintln!("DATABASE_URL unset — skipping network stats integration test");
+        let Some(ch) = test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping network stats integration test");
             return;
         };
-        let pool = match PgPool::connect(&database_url).await {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("DATABASE_URL unreachable ({err}) — skipping network stats test");
-                return;
-            }
-        };
 
-        let resp = app(pool)
+        let resp = app(ch)
             .oneshot(
                 Request::builder()
                     .uri("/v1/network/stats")

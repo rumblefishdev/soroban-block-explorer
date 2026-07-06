@@ -530,24 +530,23 @@ async fn fetch_invocations_for_source(
 
 #[cfg(test)]
 mod conditional_tests {
-    //! `DATABASE_URL`-gated conditional-GET tests for `GET /v1/transactions`.
-    //! Skips cleanly when the env var is unset/unreachable (mirrors the
-    //! network-stats integration test). Runs against the PG datasource (the
-    //! `for_tests` default), so it needs only a migrated DB — empty is fine.
+    //! `CH_URL`-gated conditional-GET tests for `GET /v1/transactions`.
+    //! Skips cleanly when the env var is unset/unreachable. Runs against a real
+    //! ClickHouse — a migrated (possibly empty) `transactions` table is enough.
     use std::sync::atomic::Ordering;
 
     use axum::body::{self, Body};
     use axum::http::{Request, StatusCode, header};
-    use sqlx::PgPool;
     use tower::ServiceExt;
     use utoipa_axum::router::OpenApiRouter;
 
+    use crate::common::ch::test_client_from_env;
     use crate::runtime_enrichment::RuntimeEnrichment;
     use crate::runtime_enrichment::sep1::Sep1Fetcher;
     use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
     use crate::state::AppState;
 
-    fn test_state(db: PgPool) -> AppState {
+    fn test_state(ch: clickhouse::Client) -> AppState {
         let runtime_enrichment = RuntimeEnrichment {
             stellar_archive: StellarArchiveFetcher::new(
                 crate::runtime_enrichment::stellar_archive::test_client(),
@@ -556,7 +555,7 @@ mod conditional_tests {
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        AppState::for_tests(db, runtime_enrichment)
+        AppState::for_tests(ch, runtime_enrichment)
     }
 
     fn app(state: AppState) -> axum::Router {
@@ -573,18 +572,11 @@ mod conditional_tests {
     /// `list_query_count` audit counter, which only the heavy path increments.
     #[tokio::test]
     async fn live_list_304_short_circuits_before_heavy_query() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
-            eprintln!("DATABASE_URL unset — skipping tx conditional-GET test");
+        let Some(ch) = test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping tx conditional-GET test");
             return;
         };
-        let pool = match PgPool::connect(&database_url).await {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("DATABASE_URL unreachable ({err}) — skipping tx conditional-GET test");
-                return;
-            }
-        };
-        let state = test_state(pool);
+        let state = test_state(ch);
 
         // 1) Live first page → 200 + ETag; the heavy query runs exactly once.
         let resp = app(state.clone())

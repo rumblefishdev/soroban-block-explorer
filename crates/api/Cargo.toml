@@ -18,12 +18,10 @@ default = []
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
 [dependencies]
-domain = { path = "../domain", features = ["sqlx", "utoipa"] }
-db = { path = "../db", features = ["aws-secrets"] }
+domain = { path = "../domain", features = ["utoipa"] }
 db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
 clickhouse = { workspace = true }
 enrichment-shared = { path = "../enrichment-shared" }
-sqlx = { workspace = true }
 xdr-parser = { path = "../xdr-parser" }
 axum = { workspace = true }
 base64 = { workspace = true }

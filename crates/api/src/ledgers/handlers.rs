@@ -319,23 +319,23 @@ enum LedgerFetchError {
 
 #[cfg(test)]
 mod conditional_tests {
-    //! `DATABASE_URL`-gated conditional-GET tests for `GET /v1/ledgers`.
-    //! Skips cleanly when the env var is unset/unreachable. Runs against the PG
-    //! datasource (the `for_tests` default) — a migrated DB is enough.
+    //! `CH_URL`-gated conditional-GET tests for `GET /v1/ledgers`.
+    //! Skips cleanly when the env var is unset/unreachable. Runs against a real
+    //! ClickHouse — a migrated (possibly empty) `ledgers` table is enough.
     use std::sync::atomic::Ordering;
 
     use axum::body::{self, Body};
     use axum::http::{Request, StatusCode, header};
-    use sqlx::PgPool;
     use tower::ServiceExt;
     use utoipa_axum::router::OpenApiRouter;
 
+    use crate::common::ch::test_client_from_env;
     use crate::runtime_enrichment::RuntimeEnrichment;
     use crate::runtime_enrichment::sep1::Sep1Fetcher;
     use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
     use crate::state::AppState;
 
-    fn test_state(db: PgPool) -> AppState {
+    fn test_state(ch: clickhouse::Client) -> AppState {
         let runtime_enrichment = RuntimeEnrichment {
             stellar_archive: StellarArchiveFetcher::new(
                 crate::runtime_enrichment::stellar_archive::test_client(),
@@ -344,7 +344,7 @@ mod conditional_tests {
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        AppState::for_tests(db, runtime_enrichment)
+        AppState::for_tests(ch, runtime_enrichment)
     }
 
     fn app(state: AppState) -> axum::Router {
@@ -360,20 +360,11 @@ mod conditional_tests {
     /// shared `list_query_count` audit counter.
     #[tokio::test]
     async fn live_list_304_short_circuits_before_heavy_query() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
-            eprintln!("DATABASE_URL unset — skipping ledgers conditional-GET test");
+        let Some(ch) = test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping ledgers conditional-GET test");
             return;
         };
-        let pool = match PgPool::connect(&database_url).await {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!(
-                    "DATABASE_URL unreachable ({err}) — skipping ledgers conditional-GET test"
-                );
-                return;
-            }
-        };
-        let state = test_state(pool);
+        let state = test_state(ch);
 
         let resp = app(state.clone())
             .oneshot(
@@ -418,15 +409,11 @@ mod conditional_tests {
     /// layer: no ETag emitted, so it never short-circuits.
     #[tokio::test]
     async fn asc_oldest_page_emits_no_etag() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
-            eprintln!("DATABASE_URL unset — skipping ledgers asc test");
+        let Some(ch) = test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping ledgers asc test");
             return;
         };
-        let Ok(pool) = PgPool::connect(&database_url).await else {
-            eprintln!("DATABASE_URL unreachable — skipping ledgers asc test");
-            return;
-        };
-        let state = test_state(pool);
+        let state = test_state(ch);
 
         let resp = app(state)
             .oneshot(
