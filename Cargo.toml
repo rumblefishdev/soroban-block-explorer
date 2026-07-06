@@ -10,7 +10,6 @@ members = [
     "crates/backfill-bench",
     "crates/backfill-runner",
     "crates/audit-harness",
-    "crates/db-merge",
     "crates/enrichment-shared",
     "crates/enrichment-worker",
     "crates/backfill-enrichment-runner",
