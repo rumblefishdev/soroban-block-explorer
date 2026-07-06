@@ -63,7 +63,7 @@ use crate::common::ch::{
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::TxListCursor;
-use super::queries::{
+use super::dto::{
     EventAppearanceRow, InvocationAppearanceRow, OpRow, ResolvedListParams, TxDetailRow, TxListRow,
 };
 

@@ -710,7 +710,7 @@ mod normalize_asset_code_tests {
 #[cfg(test)]
 mod map_pool_item_tests {
     use super::*;
-    use crate::liquidity_pools::queries::PoolRow;
+    use crate::liquidity_pools::dto::PoolRow;
 
     fn base_row() -> PoolRow {
         PoolRow {

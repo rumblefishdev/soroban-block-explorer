@@ -1094,7 +1094,7 @@ mod tests {
 mod decode_smoke {
     use super::*;
     use crate::common::cursor::Direction;
-    use crate::liquidity_pools::queries::ResolvedPoolListParams;
+    use crate::liquidity_pools::dto::ResolvedPoolListParams;
 
     fn client() -> Option<clickhouse::Client> {
         let url = std::env::var("CH_URL").ok()?;

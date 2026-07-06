@@ -46,6 +46,7 @@ pub struct ListParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
+    // TODO(0244): remove once contracts collapses off the PG cursor.
     Pg { ts: DateTime<Utc>, id: i64 },
     Ch { ledger_sequence: i64, tiebreak: i64 },
 }
@@ -197,21 +198,100 @@ pub struct OperationItem {
     pub created_at: DateTime<Utc>,
 }
 
+// ---------------------------------------------------------------------------
+// Internal query-result rows + resolved params (not serialized; produced by
+// queries_ch and mapped to the wire types above by the handler). Relocated
+// from the deleted PG queries.rs (task 0244).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct TxListRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    /// `None` for Variant A `parse_error` transactions whose envelope was
+    /// unavailable (lore-0209).
+    pub source_account: Option<String>,
+    pub fee_charged: i64,
+    pub inner_tx_hash: Option<String>,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub operation_types: Vec<String>,
+    pub contract_ids: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct TxDetailRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    /// `None` for Variant A `parse_error` transactions whose envelope was
+    /// unavailable (lore-0209).
+    pub source_account: Option<String>,
+    pub fee_charged: i64,
+    pub inner_tx_hash: Option<String>,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub created_at: DateTime<Utc>,
+    pub parse_error: bool,
+}
+
+#[derive(Debug)]
+pub struct OpRow {
+    pub appearance_id: i64,
+    pub type_name: String,
+    pub op_type: i16,
+    pub source_account: Option<String>,
+    pub destination_account: Option<String>,
+    pub contract_id: Option<String>,
+    pub asset_code: Option<String>,
+    pub asset_issuer: Option<String>,
+    /// Crossed liquidity pools, hex-encoded (full crossed-pool list from
+    /// path-payment claim atoms, task 0261/0268).
+    pub pool_ids: Vec<String>,
+    /// 1-based per-tx apply position (task 0192). `None` for pre-task-0192
+    /// rows; the caller falls back to `appearance_id` ordering.
+    pub application_order: Option<i16>,
+    pub ledger_sequence: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct EventAppearanceRow {
+    pub contract_id: String,
+    pub ledger_sequence: i64,
+    pub amount: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct InvocationAppearanceRow {
+    pub contract_id: String,
+    pub caller_account: Option<String>,
+    pub ledger_sequence: i64,
+    pub amount: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Resolved, validated `GET /v1/transactions` list params.
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<TxListCursor>,
+    pub source_account: Option<String>,
+    pub contract_id: Option<String>,
+    pub op_type: Option<i16>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::cursor::{self, CursorError, Direction};
     use chrono::TimeZone;
-
-    #[test]
-    fn pg_cursor_round_trips() {
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let c = TxListCursor::Pg { ts, id: 42 };
-        let encoded = cursor::encode(&c, Direction::Next);
-        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-        assert_eq!(dir, Direction::Next);
-        assert!(matches!(decoded, TxListCursor::Pg { id: 42, .. }));
-    }
 
     #[test]
     fn ch_cursor_round_trips() {
@@ -237,13 +317,9 @@ mod tests {
 
     #[test]
     fn variant_carries_the_src_tag_on_the_wire() {
-        // The `src` discriminant is what lets `list_transactions` detect a
-        // cross-datasource cursor and reject it (ADR 0008 fail-clean).
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        assert_eq!(
-            serde_json::to_value(TxListCursor::Pg { ts, id: 1 }).unwrap()["src"],
-            "pg"
-        );
+        // The `src` discriminant is what lets `list_transactions` reject a
+        // stale PG cursor (ADR 0008 fail-clean): a decoded cursor without the
+        // current `ch` tag is refused.
         assert_eq!(
             serde_json::to_value(TxListCursor::Ch {
                 ledger_sequence: 1,
