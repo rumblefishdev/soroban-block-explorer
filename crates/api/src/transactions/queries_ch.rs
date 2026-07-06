@@ -57,7 +57,9 @@
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{self, millis_to_utc, operation_type_label};
+use crate::common::ch::{
+    self, millis_to_utc, operation_type_label, resolve_accounts, resolve_contracts,
+};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::TxListCursor;
@@ -143,6 +145,13 @@ struct LedgerClosedAtRow {
     closed_at: i64,
 }
 
+/// Driver key row for the filtered-list two-step seek (task 0354).
+#[derive(Debug, Row, Deserialize)]
+struct TxKeyRow {
+    ledger_sequence: i64,
+    transaction_id: i64,
+}
+
 /// Resolve `source_account` + `created_at` for a page of raw rows via key
 /// seeks instead of full-table hash joins (task 0290). `accounts WHERE id IN
 /// (...)` rides the `idx_acc_id` bloom skip-index (accounts is ORDER BY
@@ -225,41 +234,6 @@ async fn resolve_source_and_closed_at(
 }
 
 #[derive(Debug, Row, Deserialize)]
-struct TxDetailChRow {
-    id: i64,
-    hash: String,
-    ledger_sequence: i64,
-    application_order: i16,
-    source_account: Option<String>,
-    fee_charged: i64,
-    inner_tx_hash: Option<String>,
-    successful: bool,
-    operation_count: i16,
-    has_soroban: bool,
-    created_at: i64,
-    parse_error: bool,
-}
-
-impl From<TxDetailChRow> for TxDetailRow {
-    fn from(row: TxDetailChRow) -> Self {
-        Self {
-            id: row.id,
-            hash: row.hash,
-            ledger_sequence: row.ledger_sequence,
-            application_order: row.application_order,
-            source_account: row.source_account.filter(|s| !s.is_empty()),
-            fee_charged: row.fee_charged,
-            inner_tx_hash: row.inner_tx_hash.filter(|s| !s.is_empty()),
-            successful: row.successful,
-            operation_count: row.operation_count,
-            has_soroban: row.has_soroban,
-            created_at: millis_to_utc(row.created_at),
-            parse_error: row.parse_error,
-        }
-    }
-}
-
-#[derive(Debug, Row, Deserialize)]
 struct OpChRow {
     op_type: i16,
     source_account: Option<String>,
@@ -299,46 +273,6 @@ impl From<OpChRow> for OpRow {
 }
 
 #[derive(Debug, Row, Deserialize)]
-struct EventAppearanceChRow {
-    contract_id: String,
-    ledger_sequence: i64,
-    amount: i64,
-    created_at: i64,
-}
-
-impl From<EventAppearanceChRow> for EventAppearanceRow {
-    fn from(row: EventAppearanceChRow) -> Self {
-        Self {
-            contract_id: row.contract_id,
-            ledger_sequence: row.ledger_sequence,
-            amount: row.amount,
-            created_at: millis_to_utc(row.created_at),
-        }
-    }
-}
-
-#[derive(Debug, Row, Deserialize)]
-struct InvocationAppearanceChRow {
-    contract_id: String,
-    caller_account: Option<String>,
-    ledger_sequence: i64,
-    amount: i32,
-    created_at: i64,
-}
-
-impl From<InvocationAppearanceChRow> for InvocationAppearanceRow {
-    fn from(row: InvocationAppearanceChRow) -> Self {
-        Self {
-            contract_id: row.contract_id,
-            caller_account: row.caller_account.filter(|s| !s.is_empty()),
-            ledger_sequence: row.ledger_sequence,
-            amount: row.amount,
-            created_at: millis_to_utc(row.created_at),
-        }
-    }
-}
-
-#[derive(Debug, Row, Deserialize)]
 struct SurrogateIdRow {
     id: i64,
 }
@@ -346,11 +280,6 @@ struct SurrogateIdRow {
 #[derive(Debug, Row, Deserialize)]
 struct LedgerSeqRow {
     ledger_sequence: i64,
-}
-
-#[derive(Debug, Row, Deserialize)]
-struct AccountIdRow {
-    account_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -492,39 +421,75 @@ pub async fn fetch_list(
                        AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
                 )
             };
-            let sql = format!(
-                "SELECT {SLIM_PROJECTION} \
-                 FROM ( \
-                    SELECT * FROM transactions \
-                    WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
-                 ) t \
-                 INNER JOIN ( \
-                    SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
-                        {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
-                    ) u \
-                    WHERE ledger_sequence <= {head_max} \
-                    ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT {lim_over} \
-                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
-                 LEFT JOIN accounts src ON src.id = t.source_id \
-                 INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE ({src} IS NULL OR t.source_id = {src}) \
-                   AND ({ot} IS NULL OR ( \
-                        SELECT count() FROM operations_appearances oa2 \
-                        WHERE oa2.transaction_id = t.id \
-                          AND oa2.ledger_sequence = t.ledger_sequence \
-                          AND oa2.type = {ot} \
-                          AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
-                   ) > 0) \
-                 ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT 1 BY t.id \
-                 LIMIT {lim_peek}",
+            // Step 1: the 3-arm contract driver → ≤lim_over (ledger, tx) keys.
+            let driver_sql = format!(
+                "SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
+                    {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
+                 ) u \
+                 WHERE ledger_sequence <= {head_max} \
+                 ORDER BY ledger_sequence {order}, transaction_id {order} \
+                 LIMIT {lim_over}",
                 arm_ops = arm("operations_appearances"),
                 arm_inv = arm("soroban_invocations_appearances"),
                 arm_evt = arm("soroban_events"),
             );
-            client.query(&sql).fetch_all::<TxPageChRow>().await?
+            let keys = client.query(&driver_sql).fetch_all::<TxKeyRow>().await?;
+            if keys.is_empty() {
+                Vec::new()
+            } else {
+                // Step 2: SEEK `transactions` by the driver keys instead of
+                // streaming the whole partition as the join's left side (task
+                // 0354: CH can't push `t.id = m.transaction_id` into the scan —
+                // `id` is not a PK prefix — so the old `FROM (SELECT * FROM
+                // transactions WHERE <partition>) t` read the entire ~1e8-row
+                // head partition). Same raw projection as Statement A; source +
+                // closed_at resolve by key-seek in `resolve_source_and_closed_at`
+                // (dropping the whole-`accounts` `LEFT JOIN src`). The seek on
+                // `(ledger_sequence, id) IN (keys)` returns exactly the rows the
+                // INNER JOIN on the same keys did.
+                let in_tuples = keys
+                    .iter()
+                    .map(|k| format!("({},{})", k.ledger_sequence, k.transaction_id))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let partitions = keys
+                    .iter()
+                    .map(|k| k.ledger_sequence / 500_000)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "SELECT \
+                        lower(hex(t.hash)) AS hash, \
+                        t.ledger_sequence AS ledger_sequence, \
+                        t.application_order AS application_order, \
+                        t.source_id AS source_id, \
+                        t.fee_charged AS fee_charged, \
+                        lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+                        t.successful AS successful, \
+                        t.operation_count AS operation_count, \
+                        t.has_soroban AS has_soroban, \
+                        t.id AS id \
+                     FROM transactions t \
+                     WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+                       AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
+                       AND ({src} IS NULL OR t.source_id = {src}) \
+                       AND ({ot} IS NULL OR ( \
+                            SELECT count() FROM operations_appearances oa2 \
+                            WHERE oa2.transaction_id = t.id \
+                              AND oa2.ledger_sequence = t.ledger_sequence \
+                              AND oa2.type = {ot} \
+                              AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
+                       ) > 0) \
+                     ORDER BY t.ledger_sequence {order}, t.id {order} \
+                     LIMIT 1 BY t.id \
+                     LIMIT {lim_peek}",
+                );
+                let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
+                resolve_source_and_closed_at(client, raw).await?
+            }
         }
 
         // --- Statement C: op_type filter only ------------------------------
@@ -708,19 +673,66 @@ pub async fn lookup_hash_ledger(
     Ok(row.map(|r| r.ledger_sequence))
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct TxDetailRawRow {
+    id: i64,
+    hash: String,
+    ledger_sequence: i64,
+    application_order: i16,
+    source_id: i64,
+    fee_charged: i64,
+    inner_tx_hash: Option<String>,
+    successful: bool,
+    operation_count: i16,
+    has_soroban: bool,
+    created_at: i64,
+    parse_error: bool,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct OpRawRow {
+    op_type: i16,
+    source_id: Option<i64>,
+    destination_id: Option<i64>,
+    contract_id: Option<i64>,
+    asset_issuer_id: Option<i64>,
+    asset_code: Option<String>,
+    pool_ids: Vec<String>,
+    application_order: i16,
+    ledger_sequence: i64,
+    created_at: i64,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct EventAppearanceRawRow {
+    id: i64,
+    ledger_sequence: i64,
+    amount: i64,
+    created_at: i64,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct InvocationAppearanceRawRow {
+    contract_surrogate: i64,
+    caller_id: Option<i64>,
+    ledger_sequence: i64,
+    amount: i32,
+    created_at: i64,
+}
+
 pub async fn fetch_detail(
     client: &clickhouse::Client,
     hash_hex: &str,
     ledger_sequence: i64,
 ) -> Result<Option<TxDetailRow>, clickhouse::error::Error> {
-    let row = client
+    let raw = client
         .query(
             "SELECT \
                 t.id AS id, \
                 lower(hex(t.hash)) AS hash, \
                 t.ledger_sequence, \
                 t.application_order, \
-                nullIf(src.account_id, '') AS source_account, \
+                t.source_id, \
                 t.fee_charged, \
                 lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
                 t.successful, \
@@ -729,15 +741,34 @@ pub async fn fetch_detail(
                 l.closed_at AS created_at, \
                 t.parse_error \
              FROM transactions t FINAL \
-             LEFT JOIN accounts src ON src.id = t.source_id \
              INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
              WHERE t.ledger_sequence = ? AND t.hash = unhex(?)",
         )
         .bind(ledger_sequence)
         .bind(hash_hex)
-        .fetch_optional::<TxDetailChRow>()
+        .fetch_optional::<TxDetailRawRow>()
         .await?;
-    Ok(row.map(Into::into))
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let accounts = resolve_accounts(client, vec![raw.source_id]).await?;
+    Ok(Some(TxDetailRow {
+        id: raw.id,
+        hash: raw.hash,
+        ledger_sequence: raw.ledger_sequence,
+        application_order: raw.application_order,
+        source_account: accounts
+            .get(&raw.source_id)
+            .cloned()
+            .filter(|s| !s.is_empty()),
+        fee_charged: raw.fee_charged,
+        inner_tx_hash: raw.inner_tx_hash.filter(|s| !s.is_empty()),
+        successful: raw.successful,
+        operation_count: raw.operation_count,
+        has_soroban: raw.has_soroban,
+        created_at: millis_to_utc(raw.created_at),
+        parse_error: raw.parse_error,
+    }))
 }
 
 pub async fn fetch_operations(
@@ -745,25 +776,21 @@ pub async fn fetch_operations(
     transaction_id: i64,
     ledger_sequence: i64,
 ) -> Result<Vec<OpRow>, clickhouse::error::Error> {
-    let rows = client
+    let raw = client
         .query(
             "SELECT \
                 oa.type AS op_type, \
-                nullIf(src.account_id, '') AS source_account, \
-                nullIf(dst.account_id, '') AS destination_account, \
-                nullIf(sc.contract_id, '') AS contract_id, \
+                oa.source_id, \
+                oa.destination_id, \
+                oa.contract_id, \
+                oa.asset_issuer_id, \
                 nullIf(oa.asset_code, '') AS asset_code, \
-                nullIf(iss.account_id, '') AS asset_issuer, \
                 arrayMap(x -> lower(hex(x)), oa.pool_ids) AS pool_ids, \
                 oa.application_order, \
                 oa.ledger_sequence, \
                 l.closed_at AS created_at \
              FROM operations_appearances oa FINAL \
-             LEFT JOIN accounts          src FINAL ON src.id = oa.source_id \
-             LEFT JOIN accounts          dst FINAL ON dst.id = oa.destination_id \
-             LEFT JOIN soroban_contracts sc  FINAL ON sc.id  = oa.contract_id \
-             LEFT JOIN accounts          iss FINAL ON iss.id = oa.asset_issuer_id \
-             INNER JOIN ledgers          l         ON l.sequence = oa.ledger_sequence \
+             INNER JOIN ledgers l ON l.sequence = oa.ledger_sequence \
              WHERE oa.transaction_id = ? \
                AND oa.ledger_sequence = ? \
                AND intDiv(oa.ledger_sequence, 500000) = intDiv(?, 500000) \
@@ -772,9 +799,49 @@ pub async fn fetch_operations(
         .bind(transaction_id)
         .bind(ledger_sequence)
         .bind(ledger_sequence)
-        .fetch_all::<OpChRow>()
+        .fetch_all::<OpRawRow>()
         .await?;
-    Ok(rows.into_iter().map(Into::into).collect())
+
+    let account_ids = raw
+        .iter()
+        .flat_map(|r| [r.source_id, r.destination_id, r.asset_issuer_id])
+        .flatten()
+        .collect();
+    let contract_ids = raw.iter().filter_map(|r| r.contract_id).collect();
+    let accounts = resolve_accounts(client, account_ids).await?;
+    let contracts = resolve_contracts(client, contract_ids).await?;
+
+    Ok(raw
+        .into_iter()
+        .map(|r| OpRow {
+            // CH `operations_appearances` dropped the BIGSERIAL surrogate
+            // (PR #175); `application_order` is the natural per-op key.
+            appearance_id: i64::from(r.application_order),
+            type_name: operation_type_label(r.op_type),
+            op_type: r.op_type,
+            source_account: r
+                .source_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            destination_account: r
+                .destination_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            contract_id: r
+                .contract_id
+                .and_then(|id| contracts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            asset_code: r.asset_code.filter(|s| !s.is_empty()),
+            asset_issuer: r
+                .asset_issuer_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            pool_ids: r.pool_ids,
+            application_order: Some(r.application_order),
+            ledger_sequence: r.ledger_sequence,
+            created_at: millis_to_utc(r.created_at),
+        })
+        .collect())
 }
 
 pub async fn fetch_participants(
@@ -782,22 +849,27 @@ pub async fn fetch_participants(
     transaction_id: i64,
     ledger_sequence: i64,
 ) -> Result<Vec<String>, clickhouse::error::Error> {
-    let rows = client
+    let raw = client
         .query(
-            "SELECT a.account_id \
+            "SELECT tp.account_id AS id \
              FROM transaction_participants tp FINAL \
-             JOIN accounts a FINAL ON a.id = tp.account_id \
              WHERE tp.transaction_id = ? \
                AND tp.ledger_sequence = ? \
-               AND intDiv(tp.ledger_sequence, 500000) = intDiv(?, 500000) \
-             ORDER BY a.account_id",
+               AND intDiv(tp.ledger_sequence, 500000) = intDiv(?, 500000)",
         )
         .bind(transaction_id)
         .bind(ledger_sequence)
         .bind(ledger_sequence)
-        .fetch_all::<AccountIdRow>()
+        .fetch_all::<SurrogateIdRow>()
         .await?;
-    Ok(rows.into_iter().map(|r| r.account_id).collect())
+    let accounts = resolve_accounts(client, raw.iter().map(|r| r.id).collect()).await?;
+    // INNER JOIN semantics: drop participants whose account row is absent.
+    let mut out: Vec<String> = raw
+        .into_iter()
+        .filter_map(|r| accounts.get(&r.id).cloned())
+        .collect();
+    out.sort();
+    Ok(out)
 }
 
 pub async fn fetch_event_appearances(
@@ -810,28 +882,40 @@ pub async fn fetch_event_appearances(
     // appearance fold count; the CH analogue is the per-contract event
     // `count()` in this tx. Both are non-token "how many" counters, so the
     // wire shape and semantic match (`amount` is never a stroop value).
-    let rows = client
+    let raw = client
         .query(
             "SELECT \
-                any(sc.contract_id) AS contract_id, \
+                se.contract_id AS id, \
                 se.ledger_sequence, \
                 toInt64(count()) AS amount, \
                 any(l.closed_at) AS created_at \
              FROM soroban_events se FINAL \
-             LEFT JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
              JOIN ledgers l ON l.sequence = se.ledger_sequence \
              WHERE se.transaction_id = ? \
                AND se.ledger_sequence = ? \
                AND intDiv(se.ledger_sequence, 500000) = intDiv(?, 500000) \
-             GROUP BY se.contract_id, se.ledger_sequence \
-             ORDER BY se.ledger_sequence, contract_id",
+             GROUP BY se.contract_id, se.ledger_sequence",
         )
         .bind(transaction_id)
         .bind(ledger_sequence)
         .bind(ledger_sequence)
-        .fetch_all::<EventAppearanceChRow>()
+        .fetch_all::<EventAppearanceRawRow>()
         .await?;
-    Ok(rows.into_iter().map(Into::into).collect())
+    let contracts = resolve_contracts(client, raw.iter().map(|r| r.id).collect()).await?;
+    let mut out: Vec<EventAppearanceRow> = raw
+        .into_iter()
+        .map(|r| EventAppearanceRow {
+            contract_id: contracts.get(&r.id).cloned().unwrap_or_default(),
+            ledger_sequence: r.ledger_sequence,
+            amount: r.amount,
+            created_at: millis_to_utc(r.created_at),
+        })
+        .collect();
+    // Matches the old `ORDER BY se.ledger_sequence, contract_id` (resolved StrKey).
+    out.sort_by(|a, b| {
+        (a.ledger_sequence, &a.contract_id).cmp(&(b.ledger_sequence, &b.contract_id))
+    });
+    Ok(out)
 }
 
 pub async fn fetch_invocation_appearances(
@@ -839,29 +923,50 @@ pub async fn fetch_invocation_appearances(
     transaction_id: i64,
     ledger_sequence: i64,
 ) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    let rows = client
+    let raw = client
         .query(
             "SELECT \
-                sc.contract_id, \
-                nullIf(caller.account_id, '') AS caller_account, \
+                sia.contract_id AS contract_surrogate, \
+                sia.caller_id, \
                 sia.ledger_sequence, \
                 sia.amount, \
                 l.closed_at AS created_at \
              FROM soroban_invocations_appearances sia FINAL \
-             LEFT JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \
-             LEFT JOIN accounts caller FINAL ON caller.id = sia.caller_id \
              INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
              WHERE sia.transaction_id = ? \
                AND sia.ledger_sequence = ? \
-               AND intDiv(sia.ledger_sequence, 500000) = intDiv(?, 500000) \
-             ORDER BY sia.ledger_sequence, sc.contract_id",
+               AND intDiv(sia.ledger_sequence, 500000) = intDiv(?, 500000)",
         )
         .bind(transaction_id)
         .bind(ledger_sequence)
         .bind(ledger_sequence)
-        .fetch_all::<InvocationAppearanceChRow>()
+        .fetch_all::<InvocationAppearanceRawRow>()
         .await?;
-    Ok(rows.into_iter().map(Into::into).collect())
+    let contracts =
+        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()).await?;
+    let accounts =
+        resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()).await?;
+    let mut out: Vec<InvocationAppearanceRow> = raw
+        .into_iter()
+        .map(|r| InvocationAppearanceRow {
+            contract_id: contracts
+                .get(&r.contract_surrogate)
+                .cloned()
+                .unwrap_or_default(),
+            caller_account: r
+                .caller_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            ledger_sequence: r.ledger_sequence,
+            amount: r.amount,
+            created_at: millis_to_utc(r.created_at),
+        })
+        .collect();
+    // Matches the old `ORDER BY sia.ledger_sequence, sc.contract_id` (resolved StrKey).
+    out.sort_by(|a, b| {
+        (a.ledger_sequence, &a.contract_id).cmp(&(b.ledger_sequence, &b.contract_id))
+    });
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

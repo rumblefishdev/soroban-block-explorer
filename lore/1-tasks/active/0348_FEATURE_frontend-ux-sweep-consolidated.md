@@ -87,6 +87,12 @@ Refs: `docs/architecture/database-schema/endpoint-queries-clickhouse/11_get_cont
 have transactions — suspect the native-asset transactions query/data path
 returns empty. Investigate the `/assets/native` transactions endpoint before
 assuming display bug. Ref: `web/src/pages/AssetDetailPage.tsx`.
+**→ DEFERRED to [[0357]] (2026-07-06).** Root-caused: not a display bug — the
+asset-tx query has no native branch (native = empty-string identity). The
+investigation escalated into a system-wide data-model audit; the fundamental
+fix (per-(op,asset) participation index, native first-class) is a backend epic
+tracked in task 0357, not FE polish. The stopgap "variant C" built here was
+reverted. This finding is closed in 0348 as deferred, owned by 0357.
 
 **3. [Bug] Home auto-scrolls ~218px on load**, hiding the hero headline; user
 lands mid-page on the search bar. Almost certainly `autoFocus` on the search
@@ -212,10 +218,44 @@ override. Add a visible theme toggle (and decide a single default).
 
 ---
 
+## Progress (2026-07-06)
+
+Branch `feat/0348` (off develop). This task's own scope is the **non-video
+subset** (F1, F2, F9, F12, F13, F15, F16); the rest (F3–F8, F10, F11, F14,
+F17–F19) is the curated video punch-list tracked in [[0351]].
+
+**Done (on `feat/0348`):**
+
+- **F15** — native XLM asset is a link (`AccountBalances.tsx`, `href:
+routes.asset('native')`). Commit `15cd2a27`.
+- **F13** — single 4/4 truncation standard: collapsed the redundant per-type
+  map to one `DEFAULT_TRUNCATION`, removed inline one-offs (`humanizeOp`,
+  `SignaturesTable`, `ContractEvents` topic), updated 2 tests. Commit
+  `f205fe99`. Verified live on `:4301` (`af27…be98`).
+- **F16** — dropped the redundant per-row type chip in search
+  (`SearchResultRow.tsx`): rows are always tab-scoped, so the chip only repeated
+  the tab label. Uncommitted (working tree).
+
+**Deferred:**
+
+- **F2** (native XLM tx empty) → [[0357]]. Root-caused as a data-model / backend
+  problem (single-asset-slot index + native-as-absence), not FE polish. The
+  stopgap "variant C" built during the investigation was reverted. F2 escalated
+  into a full system-wide audit now living in 0357.
+
+**Remaining in 0348 (FE):**
+
+- **F16** commit + optional `/ux-expert` pass on the landed fixes.
+- **F9** — LP Fee column de-emphasize/drop (all pools = 30 bps, constant column).
+- **F12** — ledger-sequence fields paired with human time app-wide (systemic).
+- **F1** — invocations KPI 0-vs-table: split path — the honest **relabel** is FE
+  (could stay here); the **7-day-window vs all-time data fix** is backend and is
+  captured in 0357 (K4-1). Decide which half lands where.
+
 ## Acceptance Criteria
 
 - [ ] 1 — Contract invocations KPI/badge and table agree (or KPI honestly labeled)
-- [ ] 2 — Native XLM asset detail shows its transactions (or root cause documented)
+- [~] 2 — Native XLM tx — DEFERRED to 0357 (root-caused: data-model, backend epic)
 - [ ] 3 — Home loads at scroll-top, hero visible
 - [ ] 4 — Asset detail supply no longer overlaps Holders
 - [ ] 5 — Time column no longer clips in the wide transaction tables
@@ -226,11 +266,11 @@ override. Add a visible theme toggle (and decide a single default).
 - [ ] 10 — LP TVL filter hidden behind a 0341-style flag
 - [ ] 11 — Accounts list seen-columns relabeled and/or given human time
 - [ ] 12 — Ledger-sequence fields paired with human time app-wide
-- [ ] 13 — Single truncation standard (first 4 + last 4) applied and enforced;
-      one-offs removed; untruncated identifiers found and fixed
-- [ ] 14 — `formatCompactAmount` wired into all large-number display sites
-- [ ] 15 — Native XLM asset is a link
-- [ ] 16 — Search redundant per-row chip removed when tab-scoped
+- [x] 13 — Single truncation standard (first 4 + last 4) applied and enforced;
+      one-offs removed; untruncated identifiers found and fixed — **DONE** (feat/0348 `f205fe99`)
+- [ ] 14 — `formatCompactAmount` wired into all large-number display sites — → **0351** (video subset)
+- [x] 15 — Native XLM asset is a link — **DONE** (feat/0348 `15cd2a27`)
+- [x] 16 — Search redundant per-row chip removed when tab-scoped — **DONE** (feat/0348, uncommitted)
 - [ ] 17 — Home stat counters don't garble mid-animation
 - [ ] 18 — "Stellar Lumens" copy fix
 - [ ] 19 — Visible theme toggle added; single default decided

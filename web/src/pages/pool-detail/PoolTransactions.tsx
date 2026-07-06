@@ -1,5 +1,5 @@
 import ListAltIcon from '@mui/icons-material/ListAlt';
-import { Box, Stack, Typography } from '@mui/material';
+import { Stack, Typography } from '@mui/material';
 import type { PoolTransactionItem } from '@rumblefish/api-types';
 import {
   Chip,
@@ -173,7 +173,7 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
 
   return (
     <SectionCard title="Recent transactions">
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

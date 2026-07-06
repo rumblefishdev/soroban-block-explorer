@@ -115,6 +115,7 @@ export {
   SecondaryNav,
   type SecondaryNavProps,
   type NavItem,
+  ThemeToggle,
   Footer,
   type FooterProps,
   type FooterNavItem,
