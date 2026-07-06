@@ -125,3 +125,36 @@ pub struct NftTransferCursor {
     pub ledger_sequence: i64,
     pub event_order: i16,
 }
+
+// ---------------------------------------------------------------------------
+// Internal query types (not serialized; produced/consumed by queries_ch and
+// the handler). Relocated from the deleted PG queries.rs (task 0244).
+// ---------------------------------------------------------------------------
+
+/// Resolved, validated `GET /v1/nfts` list params handed to `fetch_list`.
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<NftListCursor>,
+    pub filter_collection: Option<String>,
+    pub filter_contract_id: Option<String>,
+    /// Raw substring (no `%` / `_` from caller). SQL composes `%...%`.
+    pub filter_name: Option<String>,
+}
+
+/// NFT list row: the wire [`NftItem`] fields plus the internal
+/// `contract_surrogate` the composite cursor needs for its PK-suffix tiebreak
+/// (not on the wire). `queries_ch` returns this so the handler stays
+/// backend-agnostic after the fetch (same shape as the assets `AssetRow`).
+pub struct NftRow {
+    pub contract_id: String,
+    pub token_id: String,
+    pub collection_name: Option<String>,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub minted_at_ledger: Option<i64>,
+    pub owner_account: Option<String>,
+    pub last_seen_ledger: Option<i64>,
+    /// Internal `soroban_contracts.id` (CH `Int64`) surrogate — cursor
+    /// tiebreak only, never serialized.
+    pub contract_surrogate: i64,
+}

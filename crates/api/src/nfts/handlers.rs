@@ -8,7 +8,6 @@ use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
 use crate::common::cursor;
-use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
@@ -18,19 +17,17 @@ use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
 use super::dto::{
-    ListParams, NftDetailResponse, NftItem, NftListCursor, NftTransferCursor, NftTransferItem,
+    ListParams, NftDetailResponse, NftItem, NftListCursor, NftRow, NftTransferCursor,
+    NftTransferItem, ResolvedListParams,
 };
-use super::queries::{self, NftRow, ResolvedListParams};
 use super::queries_ch;
 
-/// Unified per-call fetch error so the handlers dispatch between PG (`sqlx`)
-/// and CH (`clickhouse`) without leaking driver types up the call stack —
-/// mirrors `assets::handlers::AssetFetchError`. Only `Display` is observed
-/// (forwarded to the canonical `db_error` envelope + tracing).
+/// Unified per-call fetch error so the handlers do not leak the `clickhouse`
+/// driver type up the call stack — mirrors `assets::handlers::AssetFetchError`.
+/// Only `Display` is observed (forwarded to the canonical `db_error` envelope
+/// + tracing).
 #[derive(Debug, thiserror::Error)]
 enum NftFetchError {
-    #[error("pg: {0}")]
-    Pg(sqlx::Error),
     #[error("ch: {0}")]
     Ch(clickhouse::error::Error),
 }
@@ -130,19 +127,14 @@ pub async fn list_nfts(
         filter_name: params.filter_name,
     };
 
-    let source = DataSource::for_module(Module::Nfts);
-    let fetched: Result<Vec<NftRow>, NftFetchError> = match source {
-        DataSource::Pg => queries::fetch_list(&state.db, &resolved, direction)
+    let fetched: Result<Vec<NftRow>, NftFetchError> =
+        queries_ch::fetch_list(&state.ch(), &resolved, direction)
             .await
-            .map_err(NftFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(&state.ch(), &resolved, direction)
-            .await
-            .map_err(NftFetchError::Ch),
-    };
+            .map_err(NftFetchError::Ch);
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in list_nfts: {e}");
+            tracing::error!("DB error in list_nfts: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -196,21 +188,15 @@ pub async fn get_nft(
         Err(resp) => return resp,
     };
 
-    let source = DataSource::for_module(Module::Nfts);
-    let fetched: Result<Option<NftItem>, NftFetchError> = match source {
-        DataSource::Pg => queries::fetch_by_composite(&state.db, &contract_id, &token_id)
+    let fetched: Result<Option<NftItem>, NftFetchError> =
+        queries_ch::fetch_by_composite(&state.ch(), &contract_id, &token_id)
             .await
-            .map_err(NftFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_by_composite(&state.ch(), &contract_id, &token_id)
-            .await
-            .map_err(NftFetchError::Ch),
-    };
+            .map_err(NftFetchError::Ch);
     let row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
             tracing::error!(
-                source = ?source,
                 contract_id = %contract_id,
                 token_id = %token_id,
                 "DB error fetching nft: {e}"
@@ -310,54 +296,31 @@ pub async fn list_nft_transfers(
     let fetch_limit = pagination.fetch_limit();
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
-    let source = DataSource::for_module(Module::Nfts);
 
-    // Existence first (404-vs-empty disambiguation), then the page — both per
-    // source. PG resolves the composite to the internal `nfts.id i32` surrogate
-    // and joins `nft_ownership.nft_id`; CH keys `nft_ownership` on
-    // `(contract_id, token_id)` directly, so the surrogate indirection is gone.
-    // `Ok(None)` = the NFT does not exist → 404.
-    let fetched: Result<Option<Vec<NftTransferItem>>, NftFetchError> = match source {
-        DataSource::Pg => {
-            match queries::nft_exists_by_composite(&state.db, &contract_id, &token_id).await {
-                Ok(Some(nft_id)) => queries::fetch_transfers(
-                    &state.db,
-                    nft_id,
-                    pagination.cursor.as_ref(),
-                    fetch_limit,
-                    direction,
-                )
-                .await
-                .map(Some)
-                .map_err(NftFetchError::Pg),
-                Ok(None) => Ok(None),
-                Err(e) => Err(NftFetchError::Pg(e)),
-            }
-        }
-        DataSource::Ch => {
-            match queries_ch::nft_exists(&state.ch(), &contract_id, &token_id).await {
-                Ok(true) => queries_ch::fetch_transfers(
-                    &state.ch(),
-                    &contract_id,
-                    &token_id,
-                    pagination.cursor.as_ref(),
-                    fetch_limit,
-                    direction,
-                )
-                .await
-                .map(Some)
-                .map_err(NftFetchError::Ch),
-                Ok(false) => Ok(None),
-                Err(e) => Err(NftFetchError::Ch(e)),
-            }
-        }
-    };
+    // Existence first (404-vs-empty disambiguation), then the page. CH keys
+    // `nft_ownership` on `(contract_id, token_id)` directly, so no surrogate
+    // indirection. `Ok(None)` = the NFT does not exist → 404.
+    let fetched: Result<Option<Vec<NftTransferItem>>, NftFetchError> =
+        match queries_ch::nft_exists(&state.ch(), &contract_id, &token_id).await {
+            Ok(true) => queries_ch::fetch_transfers(
+                &state.ch(),
+                &contract_id,
+                &token_id,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+            .map(Some)
+            .map_err(NftFetchError::Ch),
+            Ok(false) => Ok(None),
+            Err(e) => Err(NftFetchError::Ch(e)),
+        };
     let mut rows = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
             tracing::error!(
-                source = ?source,
                 contract_id = %contract_id,
                 token_id = %token_id,
                 "DB error in nft transfers: {e}"

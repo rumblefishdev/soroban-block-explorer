@@ -1,11 +1,10 @@
 //! ClickHouse queries for the NFT endpoints (task 0243 — NFT slice).
 //!
-//! Mirrors the PG path (`queries.rs`) one-for-one — same [`NftRow`] /
-//! [`NftItem`] / [`NftTransferItem`] shapes, so the handler stays
-//! backend-agnostic after the fetch. CH is the production datastore; PG
-//! survives only for local-dev (task 0243 scope correction).
+//! Returns the [`NftRow`] / [`NftItem`] / [`NftTransferItem`] shapes, so the
+//! handler stays backend-agnostic after the fetch. CH is the sole datastore
+//! (PG removed, task 0244).
 //!
-//! CH-vs-PG divergences worth calling out (all verified against
+//! Schema notes worth calling out (all verified against
 //! `crates/db-clickhouse/schema/init.sql`):
 //!
 //! - **`nfts.{name,media_url,collection_name}` are vestigial NULL on CH.**
@@ -55,8 +54,7 @@ use serde::Deserialize;
 use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
-use super::dto::{NftItem, NftTransferCursor, NftTransferItem};
-use super::queries::{NftRow, ResolvedListParams};
+use super::dto::{NftItem, NftRow, NftTransferCursor, NftTransferItem, ResolvedListParams};
 
 /// `nft_ownership.event_type` SMALLINT → canonical label, matching the PG
 /// `nft_event_type_name` function. Discriminants confirmed from
@@ -484,7 +482,6 @@ mod tests {
 mod decode_smoke {
     use super::*;
     use crate::common::cursor::Direction;
-    use crate::nfts::queries::ResolvedListParams;
 
     fn client() -> Option<clickhouse::Client> {
         let url = std::env::var("CH_URL").ok()?;
