@@ -2,7 +2,7 @@
 id: '0244'
 title: 'REFACTOR: remove Postgres/sqlx entirely — CH is the only DB (API collapse + dead crates + dev tools)'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0047']
 related_tasks: ['0243', '0239', '0318']
 tags:
@@ -51,6 +51,11 @@ history:
       No pg variant stays in live code. sqlx and the "postgres" workspace feature
       are dropped entirely. Recon map produced this session (see Scope below);
       search CH path verified real (not a stub — 0318 completed, 880 lines).
+  - date: '2026-07-06'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active. Starting the full PG removal (buckets A+B+C).
 ---
 
 # Remove Postgres/sqlx entirely — ClickHouse is the only DB
