@@ -2,15 +2,13 @@
 //!
 //! `:id` is multi-form (contract StrKey / `CODE-ISSUER` composite / the
 //! reserved `native` token); resolution lives in `handlers::parse_asset_id`.
-//! All three reads (list / detail / transactions) dispatch PG (`sqlx`) or CH
-//! (`clickhouse`) per `DataSource::for_module(Module::Assets)` (task 0243).
-//! `/transactions` carries a datasource-tagged `TxListCursor`; the CH identity
-//! seek over `operations_appearances` has a read-cost caveat (see
-//! `queries_ch::fetch_transactions`) — operator smoke before the prod flag flip.
+//! All three reads (list / detail / transactions) are served from ClickHouse
+//! (`queries_ch`); PG was retired (task 0244). `/transactions` carries a
+//! `TxListCursor`; the CH identity seek over `operations_appearances` has a
+//! read-cost caveat (see `queries_ch::fetch_transactions`).
 
 pub mod dto;
 mod handlers;
-mod queries;
 mod queries_ch;
 
 use utoipa_axum::router::OpenApiRouter;

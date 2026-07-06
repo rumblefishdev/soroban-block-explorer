@@ -54,7 +54,7 @@ use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::queries::{AssetRow, AssetTxRow, ResolvedListParams};
+use super::dto::{AssetRow, AssetTxRow, ResolvedListParams};
 
 /// `asset_type` SMALLINT → canonical label, matching the PG
 /// `token_asset_type_name` function. `None` for an out-of-range code (the PG
