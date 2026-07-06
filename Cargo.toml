@@ -4,7 +4,6 @@ members = [
     "crates/api",
     "crates/indexer",
     "crates/xdr-parser",
-    "crates/db",
     "crates/domain",
     "crates/backfill-runner",
     "crates/audit-harness",

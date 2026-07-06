@@ -392,30 +392,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-sdk-secretsmanager"
-version = "1.103.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae64963d3d16d8070aaa2fb79c11cd3b13f44d2f13bba3fe8f49dcd2c42f2987"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http 0.63.6",
- "aws-smithy-json 0.62.5",
- "aws-smithy-observability",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand",
- "http 0.2.12",
- "http 1.4.0",
- "regex-lite",
- "tracing",
-]
-
-[[package]]
 name = "aws-sdk-sqs"
 version = "1.97.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1423,17 +1399,6 @@ name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
-
-[[package]]
-name = "db"
-version = "0.1.0"
-dependencies = [
- "aws-config",
- "aws-sdk-secretsmanager",
- "percent-encoding",
- "serde_json",
- "sqlx",
-]
 
 [[package]]
 name = "db-clickhouse"
