@@ -87,12 +87,12 @@ Refs: `docs/architecture/database-schema/endpoint-queries-clickhouse/11_get_cont
 have transactions — suspect the native-asset transactions query/data path
 returns empty. Investigate the `/assets/native` transactions endpoint before
 assuming display bug. Ref: `web/src/pages/AssetDetailPage.tsx`.
-**→ DEFERRED to [[0357]] (2026-07-06).** Root-caused: not a display bug — the
+**→ DEFERRED to [[0359]] (2026-07-06).** Root-caused: not a display bug — the
 asset-tx query has no native branch (native = empty-string identity). The
 investigation escalated into a system-wide data-model audit; the fundamental
 fix (per-(op,asset) participation index, native first-class) is a backend epic
-tracked in task 0357, not FE polish. The stopgap "variant C" built here was
-reverted. This finding is closed in 0348 as deferred, owned by 0357.
+tracked in task 0359, not FE polish. The stopgap "variant C" built here was
+reverted. This finding is closed in 0348 as deferred, owned by 0359.
 
 **3. [Bug] Home auto-scrolls ~218px on load**, hiding the hero headline; user
 lands mid-page on the search bar. Almost certainly `autoFocus` on the search
@@ -225,7 +225,7 @@ subset** (F1, F2, F9, F12, F13, F15, F16); the rest (F3–F8, F10, F11, F14,
 F17–F19) is the curated video punch-list tracked in [[0351]].
 
 **Status: non-video subset COMPLETE.** All FE findings landed on `feat/0348`
-(F1, F9, F13, F15, F16); F12 skipped (permanent); F2 deferred to [[0357]].
+(F1, F9, F13, F15, F16); F12 skipped (permanent); F2 deferred to [[0359]].
 `/ux-expert` regression/orphan pass on the five landed fixes — **clean, no
 orphans, no regressions** (verified: search chip was truly tab-scoped
 redundant; no fee-based pool filter orphaned by the column drop; contract-tab
@@ -245,13 +245,13 @@ routes.asset('native')`). Commit `15cd2a27`.
 
 **Deferred:**
 
-- **F2** (native XLM tx empty) → [[0357]]. Root-caused as a data-model / backend
+- **F2** (native XLM tx empty) → [[0359]]. Root-caused as a data-model / backend
   problem (single-asset-slot index + native-as-absence), not FE polish. The
   stopgap "variant C" built during the investigation was reverted. F2 escalated
-  into a full system-wide audit now living in 0357.
+  into a full system-wide audit now living in 0359.
 
 **Remaining in 0348 (FE):** none — non-video subset complete (see Status
-above). Follow-on work lives in [[0351]] (video punch-list) and [[0357]]
+above). Follow-on work lives in [[0351]] (video punch-list) and [[0359]]
 (data-model epic: F2 + the F1 all-time-count half).
 
 Prior remaining items, now closed:
@@ -275,7 +275,7 @@ fee) > 1`). Typecheck + 111 web tests green.
   were an item-count → "0" over a full table on the 84.6% of contracts dormant
   > 7d. Fix (Option A): dropped `count` from the Invocations + Events tab badges;
   > KPI cards keep the honest "(last 7 days)" label. All-time-total badge (Option
-  > B) deferred to [[0357]] K4-1 — invocations all-time is cheap, events all-time
+  > B) deferred to [[0359]] K4-1 — invocations all-time is cheap, events all-time
   > isn't → product call.
 
 ## Acceptance Criteria
@@ -283,9 +283,9 @@ fee) > 1`). Typecheck + 111 web tests green.
 - [x] 1 — Invocations/Events tab badges no longer show a 7d count over an
       all-time table (FE relabel half) — **DONE** (feat/0348, uncommitted). The
       all-time-count _data_ half (make the badge show a real total) stays in
-      [[0357]] K4-1: invocations all-time is a cheap seek, but events all-time
+      [[0359]] K4-1: invocations all-time is a cheap seek, but events all-time
       is a 9.5B-row cost problem → product decision, not FE polish.
-- [~] 2 — Native XLM tx — DEFERRED to 0357 (root-caused: data-model, backend epic)
+- [~] 2 — Native XLM tx — DEFERRED to 0359 (root-caused: data-model, backend epic)
 - [ ] 3 — Home loads at scroll-top, hero visible
 - [ ] 4 — Asset detail supply no longer overlaps Holders
 - [ ] 5 — Time column no longer clips in the wide transaction tables

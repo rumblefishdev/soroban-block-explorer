@@ -9,23 +9,23 @@
   appropriate to its workload class.
 -->
 <clickhouse>
-    <profiles>
-        <admin>
-            <readonly>0</readonly>
-            <allow_ddl>1</allow_ddl>
-            <max_memory_usage>20000000000</max_memory_usage>
-            <http_receive_timeout>7200</http_receive_timeout>
-            <http_send_timeout>7200</http_send_timeout>
-            <receive_timeout>7200</receive_timeout>
-            <send_timeout>7200</send_timeout>
-        </admin>
+  <profiles>
+    <admin>
+      <readonly>0</readonly>
+      <allow_ddl>1</allow_ddl>
+      <max_memory_usage>20000000000</max_memory_usage>
+      <http_receive_timeout>7200</http_receive_timeout>
+      <http_send_timeout>7200</http_send_timeout>
+      <receive_timeout>7200</receive_timeout>
+      <send_timeout>7200</send_timeout>
+    </admin>
 
-        <read_only>
-            <readonly>1</readonly>
-            <allow_ddl>0</allow_ddl>
-            <max_memory_usage>4000000000</max_memory_usage>
-            <max_execution_time>30</max_execution_time>
-            <!-- Whitelist ONLY `log_comment` as changeable under readonly=1
+    <read_only>
+      <readonly>1</readonly>
+      <allow_ddl>0</allow_ddl>
+      <max_memory_usage>4000000000</max_memory_usage>
+      <max_execution_time>30</max_execution_time>
+      <!-- Whitelist ONLY `log_comment` as changeable under readonly=1
                  (task 0338). `api_reader` runs readonly=1, which otherwise
                  rejects EVERY query-time setting change with a db_error — so the
                  per-request correlation id the API stamps as `log_comment` (B2)
@@ -33,31 +33,42 @@
                  as the non-readonly `default` user). This punches a hole for
                  `log_comment` alone — harmless, it just annotates
                  system.query_log — leaving every other setting locked (the 4 GB
-                 / 30 s per-query caps stay enforced). Requires the server flag
-                 `settings_constraints_replace_previous=true`
+                 / 30 s per-query caps stay enforced). Requires the server flag `settings_constraints_replace_previous=true`
                  (config.d/access-control.xml), else `changeable_in_readonly` is
                  ignored and the db_error persists. -->
-            <constraints>
-                <log_comment>
-                    <changeable_in_readonly/>
-                </log_comment>
-            </constraints>
-        </read_only>
+      <constraints>
+        <log_comment>
+          <changeable_in_readonly/>
+        </log_comment>
+      </constraints>
+    </read_only>
 
-        <write_no_ddl>
-            <readonly>0</readonly>
-            <allow_ddl>0</allow_ddl>
-            <max_memory_usage>8000000000</max_memory_usage>
-            <max_insert_block_size>1048576</max_insert_block_size>
-            <min_insert_block_size_rows>262144</min_insert_block_size_rows>
-            <http_receive_timeout>7200</http_receive_timeout>
-            <http_send_timeout>7200</http_send_timeout>
-            <receive_timeout>7200</receive_timeout>
-            <send_timeout>7200</send_timeout>
-        </write_no_ddl>
+    <write_no_ddl>
+      <readonly>0</readonly>
+      <allow_ddl>0</allow_ddl>
+      <max_memory_usage>8000000000</max_memory_usage>
+      <max_insert_block_size>1048576</max_insert_block_size>
+      <min_insert_block_size_rows>262144</min_insert_block_size_rows>
+      <http_receive_timeout>7200</http_receive_timeout>
+      <http_send_timeout>7200</http_send_timeout>
+      <receive_timeout>7200</receive_timeout>
+      <send_timeout>7200</send_timeout>
+    </write_no_ddl>
 
-        <!-- partition_only + migration_full profiles removed in task 0241
+    <prices_write_ddl>
+      <readonly>0</readonly>
+      <allow_ddl>1</allow_ddl>
+      <max_memory_usage>8000000000</max_memory_usage>
+      <max_insert_block_size>1048576</max_insert_block_size>
+      <min_insert_block_size_rows>262144</min_insert_block_size_rows>
+      <http_receive_timeout>7200</http_receive_timeout>
+      <http_send_timeout>7200</http_send_timeout>
+      <receive_timeout>7200</receive_timeout>
+      <send_timeout>7200</send_timeout>
+    </prices_write_ddl>
+
+    <!-- partition_only + migration_full profiles removed in task 0241
              along with their only consumers (the partition + migration
              Lambdas). -->
-    </profiles>
+  </profiles>
 </clickhouse>

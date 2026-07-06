@@ -55,11 +55,24 @@ optional. Grouped so they can be picked up (or declined) together.
 
 ## Acceptance Criteria
 
-- [ ] Nit 1 — `fee_charged` raw-stroops + 7-decimals contract documented on the field
-- [ ] Nit 2 — appearance `amount` fields renamed to `*_count` (DTO + api-types regen + FE)
-- [ ] Nit 3 — decision recorded: move `share_percentage` to FE, or keep as an accepted server-side ratio
-- [ ] **Docs updated** — if nit 2's rename changes the API shape, update `docs/architecture/**` frontend-data-contract refs.
-- [ ] **API types regenerated** — nit 2 changes `crates/api/**` + `libs/api-types/**` → run `npx nx run @rumblefish/api-types:generate`. Nits 1 & 3 as scoped: N/A / doc-only.
+- [x] Nit 1 — `fee_charged` raw-stroops + 7-decimals contract documented on the field
+      (transactions/accounts/assets/liquidity_pools DTOs; ledgers reuses `TransactionListItem`).
+- [x] Nit 2 — **superseded: field REMOVED entirely, not renamed.** Big-picture recon showed
+      the fold-count is doubly dead — FE never reads it AND on the live CH backend it is always
+      `1` (fold has meaning only on the retired PG path). So it was a leaky storage detail on the
+      API contract, redundant (endpoint already expands folds to per-event rows) and derivable.
+      Removed from all four DTOs (`EventItem`, `InvocationItem`, `EventAppearanceItem`,
+      `InvocationAppearanceItem`) + every now-dead internal read (PG row structs/SELECTs, CH
+      intermediate rows/SELECTs, handler construction, CH test). Kept: `SUM(amount)` for
+      `ContractStats.recent_events` (live, different use) + the DB column + indexer dual-write.
+      api-types regenerated. FE untouched (never consumed it).
+- [x] Nit 3 — **decision: keep `share_percentage` server-side.** It is a ratio
+      (`shares * 100 / total_shares`), not amount-scaling, so it is an accepted server-side
+      exception to the "FE derives" rule. Not worth the churn of returning raw shares + FE divide.
+- [x] **Docs updated** — `docs/architecture/**/14_get_contracts_events.sql` DTO-field ref
+      updated (`EventItem.amount` → `.fold_count`). Schema docs describe the DB _column_ `amount`
+      (unchanged) — accurate as-is. No FE-data-contract doc surfaces these fields.
+- [x] **API types regenerated** — `npx nx run @rumblefish/api-types:generate` run; `openapi.json` + `generated/*` updated. Nits 1 & 3: doc/decision-only, no shape change.
 
 ## Notes
 

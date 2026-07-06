@@ -126,21 +126,19 @@ pub struct InvocationItem {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
     pub caller_account: Option<String>,
-    /// Folded invocation-tree node count for this appearance.
-    pub amount: i32,
     pub created_at: DateTime<Utc>,
     pub successful: bool,
 }
 
-/// One row per event — an appearance with `amount > 1` expands to that
-/// many rows (per-tx fields repeated, per-event fields unique).
+/// One row per event. On the PG path a folded appearance row expands to
+/// many `EventItem`s (per-tx fields repeated, per-event fields unique); on
+/// CH each row is already one event.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EventItem {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
     pub transaction_id: i64,
     pub successful: bool,
-    pub amount: i64,
     pub created_at: DateTime<Utc>,
     pub event_type: String,
     pub topics: Vec<serde_json::Value>,
