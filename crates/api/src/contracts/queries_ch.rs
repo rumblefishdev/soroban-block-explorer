@@ -33,7 +33,7 @@ use serde::Deserialize;
 
 use domain::ContractEventType;
 
-use crate::common::ch::millis_to_utc;
+use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -268,7 +268,7 @@ struct ContractHeaderChRow {
     contract_id: String,
     wasm_hash: Option<String>,
     wasm_uploaded_at_ledger: Option<i64>,
-    deployer: Option<String>,
+    deployer_id: Option<i64>,
     deployed_at_ledger: Option<i64>,
     contract_type: Option<i16>,
     is_sac: bool,
@@ -300,14 +300,13 @@ pub async fn fetch_contract(
                 sc.contract_id, \
                 lower(hex(sc.wasm_hash))               AS wasm_hash, \
                 nullIf(sc.wasm_uploaded_at_ledger, 0)  AS wasm_uploaded_at_ledger, \
-                nullIf(deployer.account_id, '')        AS deployer, \
+                sc.deployer_id                         AS deployer_id, \
                 sc.deployed_at_ledger                  AS deployed_at_ledger, \
                 sc.contract_type                       AS contract_type, \
                 sc.is_sac                              AS is_sac, \
                 toInt8(if(JSONHas(wim.metadata, 'upgradeable'), \
                           JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable \
              FROM soroban_contracts sc FINAL \
-             LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
              LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
@@ -316,13 +315,20 @@ pub async fn fetch_contract(
         .fetch_optional::<ContractHeaderChRow>()
         .await?;
 
-    Ok(row.map(|r| ContractRow {
+    let Some(r) = row else { return Ok(None) };
+    // Resolve the deployer StrKey by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN … ON deployer.id = sc.deployer_id` (task 0345).
+    let accounts = resolve_accounts(client, r.deployer_id.into_iter().collect()).await?;
+    Ok(Some(ContractRow {
         upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable),
         id: r.id,
         contract_id: r.contract_id,
         wasm_hash: r.wasm_hash,
         wasm_uploaded_at_ledger: r.wasm_uploaded_at_ledger,
-        deployer: r.deployer,
+        deployer: r
+            .deployer_id
+            .and_then(|id| accounts.get(&id).cloned())
+            .filter(|s| !s.is_empty()),
         deployed_at_ledger: r.deployed_at_ledger,
         contract_type_name: r.contract_type.and_then(contract_type_name),
         contract_type: r.contract_type,
@@ -578,7 +584,7 @@ pub async fn fetch_wasm_interface(
 struct InvocationKeyRow {
     ledger_sequence: i64,
     transaction_id: i64,
-    caller_account: Option<String>,
+    caller_id: Option<i64>,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -636,7 +642,7 @@ pub async fn fetch_invocation_appearances(
         "SELECT \
             m.ledger_sequence AS ledger_sequence, \
             m.transaction_id AS transaction_id, \
-            nullIf(caller.account_id, '') AS caller_account \
+            m.caller_id AS caller_id \
          FROM ( \
             SELECT ledger_sequence, transaction_id, caller_id \
             FROM soroban_invocations_appearances \
@@ -646,7 +652,6 @@ pub async fn fetch_invocation_appearances(
             ORDER BY ledger_sequence {order}, transaction_id {order} \
             LIMIT ? \
          ) m \
-         LEFT JOIN accounts caller ON caller.id = m.caller_id \
          LIMIT 1 BY m.ledger_sequence, m.transaction_id"
     );
     let key_rows = client
@@ -659,6 +664,14 @@ pub async fn fetch_invocation_appearances(
     if key_rows.is_empty() {
         return Ok(Vec::new());
     }
+
+    // Resolve caller StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN … ON caller.id = m.caller_id` (task 0345).
+    let accounts = resolve_accounts(
+        client,
+        key_rows.iter().filter_map(|r| r.caller_id).collect(),
+    )
+    .await?;
 
     let keys: Vec<(i64, i64)> = key_rows
         .iter()
@@ -710,7 +723,10 @@ pub async fn fetch_invocation_appearances(
             transaction_hash: tx.hash.clone(),
             ledger_sequence: key.ledger_sequence,
             created_at: millis_to_utc(tx.created_at),
-            caller_account: key.caller_account.clone(),
+            caller_account: key
+                .caller_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
             successful: tx.successful,
         });
     }

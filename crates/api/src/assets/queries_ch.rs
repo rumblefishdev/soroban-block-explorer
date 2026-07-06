@@ -50,7 +50,7 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{self, millis_to_utc};
+use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -486,7 +486,7 @@ struct AssetTxPageChRow {
     id: i64,
     hash: String,
     ledger_sequence: i64,
-    source_account: Option<String>,
+    source_id: i64,
     fee_charged: i64,
     successful: bool,
     operation_count: i16,
@@ -601,14 +601,13 @@ pub async fn fetch_transactions(
             t.id AS id, \
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence AS ledger_sequence, \
-            nullIf(src.account_id, '') AS source_account, \
+            t.source_id AS source_id, \
             t.fee_charged AS fee_charged, \
             t.successful AS successful, \
             t.operation_count AS operation_count, \
             t.has_soroban AS has_soroban, \
             l.closed_at AS created_at \
          FROM transactions t \
-         LEFT JOIN accounts src ON src.id = t.source_id \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
          WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
@@ -619,6 +618,10 @@ pub async fn fetch_transactions(
     );
     let page_rows = page_rows?;
     let aggregates = aggregates?;
+    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN accounts src` (task 0354).
+    let accounts =
+        resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()).await?;
 
     // Index by id, then emit in the driver's keyset order, merging
     // operation_types. `contract_ids` from the helper is intentionally unused —
@@ -640,7 +643,11 @@ pub async fn fetch_transactions(
             id: row.id,
             hash: row.hash,
             ledger_sequence: row.ledger_sequence,
-            source_account: row.source_account.unwrap_or_default(),
+            source_account: accounts
+                .get(&row.source_id)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default(),
             successful: row.successful,
             fee_charged: row.fee_charged,
             created_at: millis_to_utc(row.created_at),

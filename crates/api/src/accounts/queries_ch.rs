@@ -25,7 +25,7 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{self, millis_to_utc};
+use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
 
@@ -303,7 +303,7 @@ pub async fn fetch_deleted_status(
 struct AccountBalanceChRow {
     asset_type: i16,
     asset_code: Option<String>,
-    asset_issuer: Option<String>,
+    issuer_id: i64,
     contract_id: Option<String>,
     name: Option<String>,
     symbol: Option<String>,
@@ -327,7 +327,7 @@ pub async fn fetch_balances(
             "SELECT \
                 a.asset_type                  AS asset_type, \
                 nullIf(a.asset_code, '')      AS asset_code, \
-                nullIf(iss.account_id, '')    AS asset_issuer, \
+                a.issuer_id                   AS issuer_id, \
                 nullIf(sc.contract_id, '')    AS contract_id, \
                 coalesce(nullIf(ae.name, ''), nullIf(m.name, '')) AS name, \
                 nullIf(m.symbol, '')          AS symbol, \
@@ -336,7 +336,6 @@ pub async fn fetch_balances(
                 b.last_updated_ledger         AS last_updated_ledger \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
-             LEFT JOIN accounts iss ON iss.id = a.issuer_id \
              LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
              LEFT JOIN ( \
                  SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
@@ -355,13 +354,19 @@ pub async fn fetch_balances(
         .fetch_all::<AccountBalanceChRow>()
         .await?;
 
+    // Resolve issuer StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN … ON iss.id = a.issuer_id` (task 0345).
+    let accounts = resolve_accounts(client, rows.iter().map(|r| r.issuer_id).collect()).await?;
     Ok(rows
         .into_iter()
         .map(|r| AccountBalanceRow {
             asset_type_name: asset_type_name(r.asset_type),
             asset_type: r.asset_type,
             asset_code: r.asset_code,
-            asset_issuer: r.asset_issuer,
+            asset_issuer: accounts
+                .get(&r.issuer_id)
+                .cloned()
+                .filter(|s| !s.is_empty()),
             contract_id: r.contract_id,
             name: r.name,
             symbol: r.symbol,
@@ -388,7 +393,7 @@ struct AccountTxPageChRow {
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
-    source_account: Option<String>,
+    source_id: i64,
     fee_charged: i64,
     successful: bool,
     operation_count: i16,
@@ -482,14 +487,13 @@ pub async fn fetch_transactions(
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence, \
             t.application_order, \
-            nullIf(src.account_id, '') AS source_account, \
+            t.source_id AS source_id, \
             t.fee_charged, \
             t.successful, \
             t.operation_count, \
             t.has_soroban, \
             l.closed_at AS created_at \
          FROM transactions t \
-         LEFT JOIN accounts src ON src.id = t.source_id \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
          WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
@@ -500,6 +504,11 @@ pub async fn fetch_transactions(
     );
     let page_rows = page_rows?;
     let aggregates = aggregates?;
+
+    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN … ON src.id = t.source_id` (task 0345).
+    let accounts =
+        resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()).await?;
 
     // Step 3: index page rows by id (a re-ingested tx collapses — values are
     // immutable), then emit in the driver's keyset order, merging
@@ -524,7 +533,11 @@ pub async fn fetch_transactions(
             hash: row.hash,
             ledger_sequence: row.ledger_sequence,
             application_order: row.application_order,
-            source_account: row.source_account.unwrap_or_default(),
+            source_account: accounts
+                .get(&row.source_id)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default(),
             fee_charged: row.fee_charged,
             successful: row.successful,
             operation_count: row.operation_count,

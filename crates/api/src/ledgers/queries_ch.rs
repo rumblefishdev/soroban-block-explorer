@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{self, millis_to_utc};
+use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
 
 use super::dto::LedgerListItem;
@@ -81,7 +81,7 @@ struct LedgerTxPageChRow {
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
-    source_account: Option<String>,
+    source_id: i64,
     fee_charged: i64,
     inner_tx_hash: Option<String>,
     successful: bool,
@@ -97,13 +97,17 @@ impl LedgerTxPageChRow {
     /// `TsIdCursor.id` tie-break for embedded-tx pagination): CH
     /// `transactions.id` is a deterministic hash surrogate and must not
     /// define in-ledger order, so the cursor keys on `application_order`.
-    fn into_ledger_tx_row(self, agg: ch::TxListAggregates) -> LedgerTxRow {
+    fn into_ledger_tx_row(
+        self,
+        agg: ch::TxListAggregates,
+        source_account: Option<String>,
+    ) -> LedgerTxRow {
         LedgerTxRow {
             id: i64::from(self.application_order),
             hash: self.hash,
             ledger_sequence: self.ledger_sequence,
             application_order: self.application_order,
-            source_account: self.source_account.filter(|s| !s.is_empty()),
+            source_account,
             fee_charged: self.fee_charged,
             inner_tx_hash: self.inner_tx_hash.filter(|s| !s.is_empty()),
             successful: self.successful,
@@ -207,7 +211,7 @@ pub async fn fetch_transactions(
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence, \
             t.application_order, \
-            nullIf(src.account_id, '') AS source_account, \
+            t.source_id AS source_id, \
             t.fee_charged, \
             lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
             t.successful, \
@@ -216,7 +220,6 @@ pub async fn fetch_transactions(
             l.closed_at AS created_at \
         FROM transactions t FINAL \
         INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-        LEFT JOIN accounts src FINAL ON src.id = t.source_id \
         WHERE t.ledger_sequence = ? \
           AND intDiv(t.ledger_sequence, 500000) = intDiv(?, 500000) \
           AND (isNull(?) OR (l.closed_at, toInt64(t.application_order)) {op} (fromUnixTimestamp64Milli(ifNull(?, 0)), ifNull(?, 0))) \
@@ -242,12 +245,19 @@ pub async fn fetch_transactions(
         .iter()
         .map(|r| (r.ledger_sequence, r.tx_surrogate))
         .collect();
+    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN … FINAL ON src.id = t.source_id` (task 0354).
+    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
     let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
     Ok(page
         .into_iter()
         .map(|r| {
             let agg = aggregates.remove(&r.tx_surrogate).unwrap_or_default();
-            r.into_ledger_tx_row(agg)
+            let source_account = accounts
+                .get(&r.source_id)
+                .cloned()
+                .filter(|s| !s.is_empty());
+            r.into_ledger_tx_row(agg, source_account)
         })
         .collect())
 }

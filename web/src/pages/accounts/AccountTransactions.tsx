@@ -1,4 +1,4 @@
-import { Box, Typography } from '@mui/material';
+import { Typography } from '@mui/material';
 import type { AccountTransactionItem } from '@rumblefish/api-types';
 import {
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
@@ -138,7 +138,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
 
   return (
     <SectionCard title="Recent transactions">
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

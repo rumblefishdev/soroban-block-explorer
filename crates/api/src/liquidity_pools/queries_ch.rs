@@ -26,7 +26,7 @@ use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc};
+use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -306,7 +306,6 @@ pub async fn pool_exists(
 
 #[derive(Debug, Row, Deserialize)]
 struct ParticipantChRow {
-    account: String,
     account_id_surrogate: i64,
     shares: String,
     share_percentage: Option<String>,
@@ -350,7 +349,6 @@ pub async fn fetch_participants(
     // single value to every position row (PG `LEFT JOIN latest_snap ON TRUE`).
     let sql = format!(
         "SELECT \
-            acc.account_id                       AS account, \
             lpp.account_id                       AS account_id_surrogate, \
             toString(lpp.shares)                 AS shares, \
             if(snap.ts IS NULL OR snap.ts = toDecimal128(0, 7), NULL, \
@@ -358,7 +356,6 @@ pub async fn fetch_participants(
             lpp.first_deposit_ledger             AS first_deposit_ledger, \
             lpp.last_updated_ledger              AS last_updated_ledger \
          FROM lp_positions lpp FINAL \
-         JOIN accounts acc FINAL ON acc.id = lpp.account_id \
          CROSS JOIN ( \
             SELECT (SELECT total_shares FROM liquidity_pool_snapshots \
                      WHERE pool_id = unhex(?) \
@@ -382,15 +379,26 @@ pub async fn fetch_participants(
         .fetch_all::<ParticipantChRow>()
         .await?;
 
+    // Resolve the provider StrKey by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `JOIN accounts acc FINAL` (task 0354). INNER-JOIN drop
+    // semantics preserved via filter_map (a position always has its account).
+    let accounts = resolve_accounts(
+        client,
+        rows.iter().map(|r| r.account_id_surrogate).collect(),
+    )
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|r| ParticipantRow {
-            account: r.account,
-            account_id_surrogate: r.account_id_surrogate,
-            shares: r.shares,
-            share_percentage: r.share_percentage,
-            first_deposit_ledger: r.first_deposit_ledger,
-            last_updated_ledger: r.last_updated_ledger,
+        .filter_map(|r| {
+            let account = accounts.get(&r.account_id_surrogate)?.clone();
+            Some(ParticipantRow {
+                account,
+                account_id_surrogate: r.account_id_surrogate,
+                shares: r.shares,
+                share_percentage: r.share_percentage,
+                first_deposit_ledger: r.first_deposit_ledger,
+                last_updated_ledger: r.last_updated_ledger,
+            })
         })
         .collect())
 }
@@ -400,7 +408,7 @@ struct PoolTxChRow {
     id: i64,
     hash: String,
     ledger_sequence: i64,
-    source_account: String,
+    source_id: i64,
     fee_charged: i64,
     successful: bool,
     operation_count: i16,
@@ -571,14 +579,13 @@ pub async fn fetch_pool_transactions(
             t.id                                 AS id, \
             lower(hex(t.hash))                   AS hash, \
             t.ledger_sequence                    AS ledger_sequence, \
-            src.account_id                       AS source_account, \
+            t.source_id                          AS source_id, \
             t.fee_charged                        AS fee_charged, \
             t.successful                         AS successful, \
             t.operation_count                    AS operation_count, \
             t.has_soroban                        AS has_soroban, \
             toUnixTimestamp64Milli(l.closed_at)  AS created_at_ms \
          FROM transactions t \
-         INNER JOIN accounts src ON src.id = t.source_id \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
          WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
@@ -601,26 +608,31 @@ pub async fn fetch_pool_transactions(
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
     let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
+    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
+    // preserved via filter_map (a tx always has its source account).
+    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
 
     Ok(page
         .into_iter()
-        .map(|r| {
+        .filter_map(|r| {
+            let source_account = accounts.get(&r.source_id)?.clone();
             let operation_types = aggregates
                 .get(&r.id)
                 .map(|a| a.operation_types.clone())
                 .unwrap_or_default();
-            PoolTxRow {
+            Some(PoolTxRow {
                 id: r.id,
                 hash: r.hash,
                 ledger_sequence: r.ledger_sequence,
-                source_account: r.source_account,
+                source_account,
                 fee_charged: r.fee_charged,
                 successful: r.successful,
                 operation_count: r.operation_count,
                 has_soroban: r.has_soroban,
                 operation_types,
                 created_at: millis_to_utc(r.created_at_ms),
-            }
+            })
         })
         .collect())
 }
@@ -722,12 +734,12 @@ struct PoolListChRow {
     pool_id_hex: String,
     asset_a_type: i16,
     asset_a_code: Option<String>,
-    asset_a_issuer: Option<String>,
+    asset_a_issuer_id: i64,
     asset_a_contract_id: Option<String>,
     asset_a_icon_url: Option<String>,
     asset_b_type: i16,
     asset_b_code: Option<String>,
-    asset_b_issuer: Option<String>,
+    asset_b_issuer_id: i64,
     asset_b_contract_id: Option<String>,
     asset_b_icon_url: Option<String>,
     fee_bps: i32,
@@ -872,12 +884,6 @@ pub async fn fetch_pool_list(
              ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
-         iss AS ( \
-             SELECT id, any(account_id) AS account_id FROM accounts \
-             WHERE id IN (SELECT asset_a_issuer_id FROM page WHERE asset_a_issuer_id != 0 \
-                          UNION ALL SELECT asset_b_issuer_id FROM page WHERE asset_b_issuer_id != 0) \
-             GROUP BY id \
-         ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
                     max(sc.contract_id) AS contract_id, \
@@ -900,12 +906,12 @@ pub async fn fetch_pool_list(
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
              lp.asset_a_type                                 AS asset_a_type, \
              nullIf(lp.asset_a_code, '')                     AS asset_a_code, \
-             nullIf(iss_a.account_id, '')                    AS asset_a_issuer, \
+             lp.asset_a_issuer_id                            AS asset_a_issuer_id, \
              nullIf(sac_a.contract_id, '')                   AS asset_a_contract_id, \
              sac_a.icon_url                                  AS asset_a_icon_url, \
              lp.asset_b_type                                 AS asset_b_type, \
              nullIf(lp.asset_b_code, '')                     AS asset_b_code, \
-             nullIf(iss_b.account_id, '')                    AS asset_b_issuer, \
+             lp.asset_b_issuer_id                            AS asset_b_issuer_id, \
              nullIf(sac_b.contract_id, '')                   AS asset_b_contract_id, \
              sac_b.icon_url                                  AS asset_b_icon_url, \
              lp.fee_bps                                      AS fee_bps, \
@@ -940,8 +946,6 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
-         LEFT JOIN iss iss_a ON iss_a.id = lp.asset_a_issuer_id \
-         LEFT JOIN iss iss_b ON iss_b.id = lp.asset_b_issuer_id \
          LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
                             AND sac_a.issuer_id = lp.asset_a_issuer_id \
                             AND lp.asset_a_code != '' \
@@ -964,6 +968,19 @@ pub async fn fetch_pool_list(
     }
     let rows = query.fetch_all::<PoolListChRow>().await?;
 
+    // Resolve issuer StrKeys by surrogate id (bloom seek). The old in-query `iss`
+    // CTE used `WHERE id IN (SELECT … FROM page)` — the subquery form does not
+    // trigger the `idx_acc_id` bloom, so it scanned `accounts.id` (task 0345).
+    let issuer_ids = rows
+        .iter()
+        .flat_map(|r| [r.asset_a_issuer_id, r.asset_b_issuer_id])
+        // Exclude the native sentinel `0` — the old `iss` CTE filtered
+        // `WHERE … != 0`. A no-op on real data (`accounts.id = cityhash64(strkey)`
+        // is never 0), but keeps the resolution unconditionally identical.
+        .filter(|&id| id != 0)
+        .collect();
+    let accounts = resolve_accounts(client, issuer_ids).await?;
+
     Ok(rows
         .into_iter()
         .map(|r| PoolRow {
@@ -971,13 +988,19 @@ pub async fn fetch_pool_list(
             asset_a_type: r.asset_a_type,
             asset_a_type_name: asset_type_name(r.asset_a_type),
             asset_a_code: r.asset_a_code,
-            asset_a_issuer: r.asset_a_issuer,
+            asset_a_issuer: accounts
+                .get(&r.asset_a_issuer_id)
+                .cloned()
+                .filter(|s| !s.is_empty()),
             asset_a_contract_id: r.asset_a_contract_id,
             asset_a_icon_url: r.asset_a_icon_url,
             asset_b_type: r.asset_b_type,
             asset_b_type_name: asset_type_name(r.asset_b_type),
             asset_b_code: r.asset_b_code,
-            asset_b_issuer: r.asset_b_issuer,
+            asset_b_issuer: accounts
+                .get(&r.asset_b_issuer_id)
+                .cloned()
+                .filter(|s| !s.is_empty()),
             asset_b_contract_id: r.asset_b_contract_id,
             asset_b_icon_url: r.asset_b_icon_url,
             fee_bps: r.fee_bps,

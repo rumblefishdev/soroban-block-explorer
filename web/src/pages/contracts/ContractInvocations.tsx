@@ -130,7 +130,7 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
 
   return (
     <Box>
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

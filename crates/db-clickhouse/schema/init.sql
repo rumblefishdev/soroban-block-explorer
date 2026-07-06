@@ -169,9 +169,13 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
     deployer_id              Nullable(Int64),
     deployed_at_ledger       Nullable(Int64),
     contract_type            Nullable(Int16),
-    is_sac                   Bool
+    is_sac                   Bool,
     -- `name` DROPPED (task 0304): dead since 0297 (no writer, reader-less,
     -- 0/148663 populated in prod). Prod `ALTER … DROP COLUMN name` pending.
+    -- 0344: tx-detail resolves surrogate `id` -> `contract_id`, but `id` is not
+    -- the sort key; mirror accounts' `idx_acc_id` so `WHERE id IN (…)` is a
+    -- granule seek instead of a full-table `JOIN soroban_contracts FINAL`.
+    INDEX idx_sc_id id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree(wasm_uploaded_at_ledger)
 ORDER BY (contract_id);
