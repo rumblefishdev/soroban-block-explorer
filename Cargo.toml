@@ -8,7 +8,6 @@ members = [
     "crates/db-partition-mgmt",
     "crates/domain",
     "crates/backfill-runner",
-    "crates/audit-harness",
     "crates/enrichment-shared",
     "crates/enrichment-worker",
     "crates/backfill-enrichment-runner",
@@ -65,8 +64,8 @@ aws-sdk-sqs = "1"
 # Error handling
 thiserror = "2"
 
-# HTTP client (used by audit-harness for Horizon API + api crate for SEP-1
-# stellar.toml fetches per task 0188). rustls-tls + json features only —
+# HTTP client (api crate: SEP-1 stellar.toml fetches per task 0188;
+# backfill-runner: Soroban RPC bootstrap). rustls-tls + json features only —
 # no native-tls so the build stays small and reproducible across Lambda /
 # CI / local without OpenSSL system deps.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
