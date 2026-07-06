@@ -71,21 +71,9 @@ pub async fn execute(
     rpc_url: Option<&str>,
     dry_run: bool,
 ) -> Result<UpgradeableBackfillStats, BackfillError> {
-    let client = match sink {
-        Sink::Clickhouse(c) => c,
-        Sink::Postgres(_) => {
-            // No-op (the flag lives only in the CH metadata JSON). Short-circuit
-            // BEFORE the rpc_url check so a Postgres run never needs it.
-            info!("upgradeable_backfill: CH-only; Postgres target is a no-op");
-            return Ok(UpgradeableBackfillStats {
-                dry_run,
-                ..Default::default()
-            });
-        }
-    };
+    let client = sink.client();
 
-    // CH path needs RPC to fetch the WASM bytecode. Required only here, after the
-    // Postgres no-op has had its chance to return.
+    // CH path needs RPC to fetch the WASM bytecode. Required only here.
     let rpc_url = rpc_url.ok_or_else(|| {
         BackfillError::Incomplete(
             "ClickHouse upgradeable-backfill requires --soroban-rpc-url (or SOROBAN_RPC_URL)"

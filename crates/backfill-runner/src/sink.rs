@@ -1,46 +1,31 @@
-//! Sink abstraction over the two write-path targets.
+//! ClickHouse write-path sink for the backfill runner.
 //!
-//! Task 0205 / ADR 0044 collapsed the PG-only write surface into a
-//! target-agnostic `Sink`. Task 0206 (this revision) gains a
-//! **partition-writer lifecycle**: `open_partition` → `write_ledger × N`
-//! → `commit` / `abort`. The PG variant maps these onto today's
-//! per-ledger `process_ledger` (open + commit are no-ops; each
-//! `write_ledger` is its own DB transaction, fast commits intact).
-//! The CH variant drives a [`db_clickhouse::persist::PartitionWriter`] across
-//! the partition so the 14 server-side INSERTs only open once and end
-//! once — see that module's docs for why per-ledger inserts are wrong
-//! for CH (parts explosion, merger overwhelmed).
+//! Task 0205 / ADR 0044 introduced a target-agnostic `Sink`; task 0244
+//! collapsed it to ClickHouse-only when Postgres was removed. Task 0206's
+//! **partition-writer lifecycle** (`open_partition` → `write_ledger × N` →
+//! `commit` / `abort`) drives a [`db_clickhouse::persist::PartitionWriter`]
+//! across the partition so the 14 server-side INSERTs only open once and end
+//! once — see that module's docs for why per-ledger inserts are wrong for CH
+//! (parts explosion, merger overwhelmed).
 //!
-//! The legacy [`Sink::persist_ledger`] method is kept as a thin
-//! wrapper (`open` → `write` → `commit`) for tests and any caller
-//! that wants per-ledger semantics. Production backfill goes through
-//! the lifecycle on `ingest.rs::index_partition`.
+//! The legacy [`Sink::persist_ledger`] method is kept as a thin wrapper
+//! (`open` → `write` → `commit`) for tests and any caller that wants
+//! per-ledger semantics. Production backfill goes through the lifecycle on
+//! `ingest.rs::index_partition`.
 
 use std::collections::HashSet;
 
 use clickhouse::Client as ClickhouseClient;
-use indexer::handler::persist::ClassificationCache;
 use serde::Deserialize;
-use sqlx::PgPool;
 use stellar_xdr::curr::LedgerCloseMeta;
 use tracing::{info, warn};
 
 use crate::error::BackfillError;
-use crate::resume;
 
-/// Write-path target wired up at startup. Variants own the connection
-/// handle for the chosen store. `PgPool` and `clickhouse::Client` are
-/// both `Arc`-backed, but the runner only holds one and passes `&Sink`
-/// down — no clones needed.
-///
-/// `large_enum_variant`: `ClickhouseClient` is ~300 bytes, the `PgPool`
-/// handle is 8 bytes. Boxing the larger variant would add a heap
-/// indirection on every `match` for no gain — exactly one `Sink` exists
-/// per process and it's never stored in a collection.
-#[allow(clippy::large_enum_variant)]
-pub enum Sink {
-    Postgres(PgPool),
-    Clickhouse(ClickhouseClient),
+/// ClickHouse write-path handle wired up at startup. Exactly one `Sink`
+/// exists per process; the runner passes `&Sink` down — no clones needed.
+pub struct Sink {
+    client: ClickhouseClient,
 }
 
 /// Row shape for the resume / status query against ClickHouse. Private
@@ -51,23 +36,23 @@ struct LedgerSeqRow {
 }
 
 impl Sink {
-    /// Confirm the store is reachable. Both arms run `SELECT 1`.
+    /// Wrap a ClickHouse client as the write-path sink.
+    pub fn new(client: ClickhouseClient) -> Self {
+        Self { client }
+    }
+
+    /// Borrow the underlying ClickHouse client (backfill passes read it
+    /// directly for their one-shot maintenance queries).
+    pub fn client(&self) -> &ClickhouseClient {
+        &self.client
+    }
+
+    /// Confirm the store is reachable (`SELECT 1`).
     ///
-    /// Same posture as the previous PG-only `preflight_db`: a failure
-    /// here is a config / environment error, so the caller panics on
-    /// it. We still return `Result` so the panic site stays in
-    /// `run.rs` and not in this module.
+    /// A failure here is a config / environment error, so the caller panics
+    /// on it. We still return `Result` so the panic site stays in `run.rs`.
     pub async fn preflight(&self) -> Result<(), BackfillError> {
-        match self {
-            Sink::Postgres(pool) => {
-                sqlx::query_scalar::<_, i32>("SELECT 1")
-                    .fetch_one(pool)
-                    .await?;
-            }
-            Sink::Clickhouse(client) => {
-                let _ = client.query("SELECT 1").fetch_one::<u8>().await?;
-            }
-        }
+        let _ = self.client.query("SELECT 1").fetch_one::<u8>().await?;
         Ok(())
     }
 
@@ -79,86 +64,67 @@ impl Sink {
         start: u32,
         end: u32,
     ) -> Result<HashSet<u32>, BackfillError> {
-        let set = match self {
-            // PG path stays in `resume::load_completed` — keeps the
-            // existing tests load-bearing and concentrates PG SQL in
-            // one module.
-            Sink::Postgres(pool) => resume::load_completed(pool, start, end).await?,
-            Sink::Clickhouse(client) => {
-                let rows: Vec<i64> = client
-                    .query("SELECT sequence FROM ledgers WHERE sequence BETWEEN ? AND ?")
-                    .bind(i64::from(start))
-                    .bind(i64::from(end))
-                    .fetch_all::<LedgerSeqRow>()
-                    .await?
-                    .into_iter()
-                    .map(|r| r.sequence)
-                    .collect();
-                // `sequence` is i64 in the CH schema (matches PG bigint) but
-                // ledger sequences are u32-bounded by Stellar protocol. The
-                // SQL `BETWEEN start AND end` already constrains the range,
-                // but defend against bogus / manually-inserted rows by
-                // using `try_from` and warning on anything that doesn't
-                // fit. A silent `as u32` would wrap negatives / overflows.
-                let set: HashSet<u32> = rows
-                    .into_iter()
-                    .filter_map(|s| match u32::try_from(s) {
-                        Ok(v) => Some(v),
-                        Err(_) => {
-                            warn!(
-                                value = s,
-                                "skipping out-of-range sequence from clickhouse ledgers"
-                            );
-                            None
-                        }
-                    })
-                    .collect();
-                info!(
-                    start,
-                    end,
-                    completed = set.len(),
-                    total = u64::from(end) - u64::from(start) + 1,
-                    target = "clickhouse",
-                    "resume state loaded"
-                );
-                set
-            }
-        };
+        let rows: Vec<i64> = self
+            .client
+            .query("SELECT sequence FROM ledgers WHERE sequence BETWEEN ? AND ?")
+            .bind(i64::from(start))
+            .bind(i64::from(end))
+            .fetch_all::<LedgerSeqRow>()
+            .await?
+            .into_iter()
+            .map(|r| r.sequence)
+            .collect();
+        // `sequence` is i64 in the CH schema but ledger sequences are
+        // u32-bounded by Stellar protocol. The SQL `BETWEEN start AND end`
+        // already constrains the range, but defend against bogus /
+        // manually-inserted rows via `try_from` and warn on anything that
+        // doesn't fit. A silent `as u32` would wrap negatives / overflows.
+        let set: HashSet<u32> = rows
+            .into_iter()
+            .filter_map(|s| match u32::try_from(s) {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    warn!(
+                        value = s,
+                        "skipping out-of-range sequence from clickhouse ledgers"
+                    );
+                    None
+                }
+            })
+            .collect();
+        info!(
+            start,
+            end,
+            completed = set.len(),
+            total = u64::from(end) - u64::from(start) + 1,
+            target = "clickhouse",
+            "resume state loaded"
+        );
         Ok(set)
     }
 
-    /// Open a partition writer handle. The CH variant constructs a
-    /// long-lived [`db_clickhouse::persist::PartitionWriter`] that holds one
-    /// `Insert<RowT>` per table across the partition. The PG variant
-    /// is a no-op constructor that just borrows the pool; per-ledger
-    /// transaction semantics are intact (no batching across ledgers).
-    pub fn open_partition(&self) -> PartitionWriterHandle<'_> {
-        match self {
-            Sink::Postgres(pool) => PartitionWriterHandle::Postgres { pool },
-            Sink::Clickhouse(client) => PartitionWriterHandle::Clickhouse(
-                db_clickhouse::persist::PartitionWriter::open(client.clone()),
-            ),
-        }
+    /// Open a partition writer handle — a long-lived
+    /// [`db_clickhouse::persist::PartitionWriter`] holding one `Insert<RowT>`
+    /// per table across the partition.
+    pub fn open_partition(&self) -> PartitionWriterHandle {
+        PartitionWriterHandle(db_clickhouse::persist::PartitionWriter::open(
+            self.client.clone(),
+        ))
     }
 
     /// Parse + persist a single ledger.
     ///
     /// Kept for legacy / per-ledger callers (tests and any direct
     /// invocation that doesn't want to drive the lifecycle). Wraps
-    /// `open_partition` → `write_ledger` → `commit` so the per-ledger
-    /// semantics PG had before task 0206 are preserved byte-for-byte.
+    /// `open_partition` → `write_ledger` → `commit`.
     ///
     /// Production backfill (`ingest.rs::index_partition`) drives the
     /// lifecycle explicitly across the whole partition — never calls
     /// this method.
     #[allow(dead_code)]
-    pub async fn persist_ledger(
-        &self,
-        meta: &LedgerCloseMeta,
-        classification_cache: &ClassificationCache,
-    ) -> Result<(), BackfillError> {
+    pub async fn persist_ledger(&self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
         let mut handle = self.open_partition();
-        if let Err(err) = handle.write_ledger(meta, classification_cache).await {
+        if let Err(err) = handle.write_ledger(meta).await {
             handle.abort().await;
             return Err(err);
         }
@@ -166,126 +132,92 @@ impl Sink {
     }
 }
 
-/// Lifecycle handle for one backfill partition's writes.
-///
-/// PG: thin borrow of the pool + the per-worker classification cache.
-/// Each `write_ledger` is its own atomic transaction.
-///
-/// Clickhouse: owns a [`db_clickhouse::persist::PartitionWriter`] — the actual
-/// 14-handle insert lifecycle described in
-/// `db-clickhouse/src/persist/writer.rs`.
-#[allow(clippy::large_enum_variant)]
-pub enum PartitionWriterHandle<'a> {
-    Postgres { pool: &'a PgPool },
-    Clickhouse(db_clickhouse::persist::PartitionWriter),
-}
+/// Lifecycle handle for one backfill partition's writes. Owns a
+/// [`db_clickhouse::persist::PartitionWriter`] — the 14-handle insert
+/// lifecycle described in `db-clickhouse/src/persist/writer.rs`.
+pub struct PartitionWriterHandle(db_clickhouse::persist::PartitionWriter);
 
-impl PartitionWriterHandle<'_> {
-    pub async fn write_ledger(
-        &mut self,
-        meta: &LedgerCloseMeta,
-        classification_cache: &ClassificationCache,
-    ) -> Result<(), BackfillError> {
-        match self {
-            Self::Postgres { pool } => {
-                indexer::handler::process::process_ledger(meta, pool, None, classification_cache)
-                    .await?;
-                Ok(())
-            }
-            Self::Clickhouse(pw) => {
-                // Parse on every ledger; the CH path doesn't share the
-                // PG-side staging cache. `classification_cache` is
-                // ignored: it's a PG-specific NFT filter helper (task
-                // 0118 Phase 2) and the CH writer doesn't run the NFT
-                // reclassification UPDATE path that needs it.
-                let _ = classification_cache;
-                let parsed = indexer::handler::process::parse_ledger(meta);
-                // ADR 0051 — re-key contract-held type-0/1 balances onto their
-                // wrapped classic/native asset_id, same as the live indexer and
-                // RPC `balance-seed`. The fetch guards on empty balances, so
-                // ledgers with no SAC/token balances skip the query.
-                // ponytail: per-ledger query on the small `asset_sac` table; the
-                // `Run` path is the rarely-used heavy fallback, so no cross-ledger
-                // cache. Add one if a full reprocess ever makes this hot.
-                let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(
-                    pw.client(),
-                    &parsed.soroban_token_balances,
-                )
-                .await?;
-                // Task 0220 — switch to the `_with_sac_overrides` entry
-                // point so the CH writer flips `is_sac=true,
-                // contract_type=Token` on pre-existing SAC skeleton
-                // rows via the forward-derived `ParseOutput.sac_overrides`
-                // list. The legacy `stage::prepare` is kept as a
-                // backwards-compat shim with empty overrides; this is
-                // the production wire-up the PR #186 description called
-                // out as a follow-up.
-                let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
-                    &db_clickhouse::persist::stage::StageInputs {
-                        ledger: &parsed.ledger,
-                        transactions: &parsed.transactions,
-                        operations: &parsed.operations,
-                        events: &parsed.events,
-                        invocations: &parsed.invocations,
-                        contract_interfaces: &parsed.contract_interfaces,
-                        contract_deployments: &parsed.contract_deployments,
-                        account_states: &parsed.account_states,
-                        liquidity_pools: &parsed.liquidity_pools,
-                        pool_snapshots: &parsed.pool_snapshots,
-                        assets: &parsed.assets,
-                        nfts: &parsed.nfts,
-                        nft_events: &parsed.nft_events,
-                        lp_positions: &parsed.lp_positions,
-                        contract_metadata_writes: &parsed.contract_metadata_writes,
-                        // Task 0331 — backfill reprocesses ledger ContractData
-                        // changes through the shared `process.rs`, so this is
-                        // populated for free: the historical-balance seed pass is
-                        // the existing backfill, not a new crate. (TTL-archived
-                        // entries never re-emitted in-window stay absent — the
-                        // open caveat.)
-                        soroban_token_balances: &parsed.soroban_token_balances,
-                        sac_classic: &sac_classic,
-                        sac_overrides: &parsed.sac_overrides,
-                        // Task 0283 live G1/G9 are for the live indexer path only.
-                        // Backfill stays as-is (empty maps = pre-0283 behaviour):
-                        // historical cross-ledger verdicts are reconstructed by
-                        // the batch `ch-maint contract-type-rebuild` + one-shot
-                        // `nft-reclassify`, not inline.
-                        prior_wasm_verdicts: &std::collections::HashMap::new(),
-                        prior_contract_verdicts: &std::collections::HashMap::new(),
-                        // Task 0320 live WASM-upgrade rewrite is live-indexer-only;
-                        // the backfill recovers stale hashes via the dedicated
-                        // `wasm-upgrade-backfill` pass, so pass an empty map here.
-                        prior_contract_rows: &std::collections::HashMap::new(),
-                    },
-                )?;
-                pw.write_ledger(staged).await?;
-                Ok(())
-            }
+impl PartitionWriterHandle {
+    pub async fn write_ledger(&mut self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
+        let pw = &mut self.0;
+        {
+            let parsed = indexer::handler::process::parse_ledger(meta);
+            // ADR 0051 — re-key contract-held type-0/1 balances onto their
+            // wrapped classic/native asset_id, same as the live indexer and
+            // RPC `balance-seed`. The fetch guards on empty balances, so
+            // ledgers with no SAC/token balances skip the query.
+            // ponytail: per-ledger query on the small `asset_sac` table; the
+            // `Run` path is the rarely-used heavy fallback, so no cross-ledger
+            // cache. Add one if a full reprocess ever makes this hot.
+            let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(
+                pw.client(),
+                &parsed.soroban_token_balances,
+            )
+            .await?;
+            // Task 0220 — switch to the `_with_sac_overrides` entry
+            // point so the CH writer flips `is_sac=true,
+            // contract_type=Token` on pre-existing SAC skeleton
+            // rows via the forward-derived `ParseOutput.sac_overrides`
+            // list. The legacy `stage::prepare` is kept as a
+            // backwards-compat shim with empty overrides; this is
+            // the production wire-up the PR #186 description called
+            // out as a follow-up.
+            let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
+                &db_clickhouse::persist::stage::StageInputs {
+                    ledger: &parsed.ledger,
+                    transactions: &parsed.transactions,
+                    operations: &parsed.operations,
+                    events: &parsed.events,
+                    invocations: &parsed.invocations,
+                    contract_interfaces: &parsed.contract_interfaces,
+                    contract_deployments: &parsed.contract_deployments,
+                    account_states: &parsed.account_states,
+                    liquidity_pools: &parsed.liquidity_pools,
+                    pool_snapshots: &parsed.pool_snapshots,
+                    assets: &parsed.assets,
+                    nfts: &parsed.nfts,
+                    nft_events: &parsed.nft_events,
+                    lp_positions: &parsed.lp_positions,
+                    contract_metadata_writes: &parsed.contract_metadata_writes,
+                    // Task 0331 — backfill reprocesses ledger ContractData
+                    // changes through the shared `process.rs`, so this is
+                    // populated for free: the historical-balance seed pass is
+                    // the existing backfill, not a new crate. (TTL-archived
+                    // entries never re-emitted in-window stay absent — the
+                    // open caveat.)
+                    soroban_token_balances: &parsed.soroban_token_balances,
+                    sac_classic: &sac_classic,
+                    sac_overrides: &parsed.sac_overrides,
+                    // Task 0283 live G1/G9 are for the live indexer path only.
+                    // Backfill stays as-is (empty maps = pre-0283 behaviour):
+                    // historical cross-ledger verdicts are reconstructed by
+                    // the batch `ch-maint contract-type-rebuild` + one-shot
+                    // `nft-reclassify`, not inline.
+                    prior_wasm_verdicts: &std::collections::HashMap::new(),
+                    prior_contract_verdicts: &std::collections::HashMap::new(),
+                    // Task 0320 live WASM-upgrade rewrite is live-indexer-only;
+                    // the backfill recovers stale hashes via the dedicated
+                    // `wasm-upgrade-backfill` pass, so pass an empty map here.
+                    prior_contract_rows: &std::collections::HashMap::new(),
+                },
+            )?;
+            pw.write_ledger(staged).await?;
+            Ok(())
         }
     }
 
-    /// End every open insert (CH variant), or a no-op (PG variant).
-    /// Mid-partition failure must call [`Self::abort`] instead.
+    /// End every open insert. Mid-partition failure must call
+    /// [`Self::abort`] instead.
     pub async fn commit(self) -> Result<(), BackfillError> {
-        match self {
-            Self::Postgres { .. } => Ok(()),
-            Self::Clickhouse(pw) => {
-                pw.commit().await?;
-                Ok(())
-            }
-        }
+        self.0.commit().await?;
+        Ok(())
     }
 
-    /// Abandon the partition. PG: nothing to roll back (each ledger
-    /// committed individually). CH: drops in-flight insert handles
-    /// without ending them, ensuring resume finds no `ledgers` rows
-    /// for this partition's range and re-does it cleanly.
+    /// Abandon the partition: drops in-flight insert handles without ending
+    /// them, ensuring resume finds no `ledgers` rows for this partition's
+    /// range and re-does it cleanly.
     pub async fn abort(self) {
-        match self {
-            Self::Postgres { .. } => {}
-            Self::Clickhouse(pw) => pw.abort().await,
-        }
+        self.0.abort().await
     }
 }
 
@@ -294,7 +226,7 @@ mod tests {
     //! ClickHouse-flavored Sink tests. Gated on `CLICKHOUSE_URL` so
     //! `cargo test -p backfill-runner` stays green in CI without a
     //! ClickHouse instance — mirrors the gating posture used by
-    //! `db-clickhouse/tests/smoke.rs` and the PG tests in `resume.rs`.
+    //! `db-clickhouse/tests/smoke.rs`.
     //!
     //! Run locally (against the `docker-compose up clickhouse` instance):
     //!
@@ -323,7 +255,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL set but apply_init_sql failed ({err}) — skipping");
             return None;
         }
-        Some(Sink::Clickhouse(client))
+        Some(Sink::new(client))
     }
 
     async fn ch_cleanup(client: &ClickhouseClient, start: u32, end: u32) {
@@ -367,9 +299,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL not set — skipping");
             return;
         };
-        let Sink::Clickhouse(ref client) = sink else {
-            unreachable!()
-        };
+        let client = sink.client();
 
         let below = TEST_BASE + 100;
         let a = TEST_BASE + 110;

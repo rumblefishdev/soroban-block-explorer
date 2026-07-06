@@ -75,10 +75,7 @@ pub async fn execute(
     sink: &Sink,
     dry_run: bool,
 ) -> Result<ContractTypeRebuildStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("contract_type_rebuild: skipped (PG target — CH-only maintenance)");
-        return Ok(ContractTypeRebuildStats::default());
-    };
+    let client = sink.client();
 
     let mut stats = ContractTypeRebuildStats {
         dry_run,
@@ -301,20 +298,6 @@ async fn assets_type3_count(client: &ClickhouseClient) -> Result<u64, BackfillEr
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = execute(&sink, false)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.flipped_nft, 0);
-        assert_eq!(stats.assets_inserted, 0);
-    }
-
     /// End-to-end against a real ClickHouse — exercises the whole pipeline the
     /// operators actually run (classify → staging → EXCHANGE swap → assets
     /// backfill) and the SQL the unit tests can't reach (`hex()` case-fold,
@@ -384,7 +367,7 @@ mod tests {
         .await
         .expect("seed soroban_contracts");
 
-        let sink = Sink::Clickhouse(cl.clone());
+        let sink = Sink::new(cl.clone());
         let stats = execute(&sink, false).await.expect("rebuild run");
         assert_eq!(stats.flipped_nft, 1, "one Other -> Nft");
         assert_eq!(stats.flipped_fungible, 1, "one Other -> Fungible");

@@ -106,11 +106,7 @@ pub async fn execute(
     dry_run: bool,
 ) -> Result<BalanceSeedStats, BackfillError> {
     // ClickHouse-only — the unified balances model is CH; PG retired.
-    let Sink::Clickhouse(client) = sink else {
-        return Err(BackfillError::Incomplete(
-            "balance-seed is ClickHouse-only (unified balances model; PG retired)".to_string(),
-        ));
-    };
+    let client = sink.client();
 
     let rpc_url = rpc_url.ok_or_else(|| {
         BackfillError::Incomplete(

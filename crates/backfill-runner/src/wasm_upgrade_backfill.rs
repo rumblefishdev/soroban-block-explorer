@@ -79,10 +79,7 @@ pub async fn execute(
     sink: &Sink,
     dry_run: bool,
 ) -> Result<WasmUpgradeBackfillStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("wasm_upgrade_backfill: skipped (PG target — CH-only maintenance)");
-        return Ok(WasmUpgradeBackfillStats::default());
-    };
+    let client = sink.client();
 
     let mut stats = WasmUpgradeBackfillStats {
         dry_run,
@@ -257,20 +254,6 @@ async fn count_corrected(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = execute(&sink, false)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.upgraded_contracts, 0);
-        assert_eq!(stats.corrected, 0);
-    }
-
     /// End-to-end against a real ClickHouse — seed a stale `soroban_contracts`
     /// row + its `executable_update` event, run the backfill, assert the hash is
     /// corrected to the event's new hash and a non-upgraded contract is untouched.
@@ -344,7 +327,7 @@ mod tests {
         .await
         .expect("seed soroban_events");
 
-        let sink = Sink::Clickhouse(cl.clone());
+        let sink = Sink::new(cl.clone());
         let stats = execute(&sink, false).await.expect("backfill run");
         assert_eq!(stats.upgraded_contracts, 1);
         assert_eq!(stats.corrected, 1, "the one stale contract corrected");

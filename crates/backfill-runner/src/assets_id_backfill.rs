@@ -72,10 +72,7 @@ const MAP_TABLE: &str = "assets_id_map_0331";
 const STAGING_TABLE: &str = "assets_staging_id_0331";
 
 pub async fn execute(sink: &Sink, dry_run: bool) -> Result<AssetsIdBackfillStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("assets_id_backfill: skipped (PG target — CH-only maintenance)");
-        return Ok(AssetsIdBackfillStats::default());
-    };
+    let client = sink.client();
 
     let mut stats = AssetsIdBackfillStats {
         dry_run,
@@ -192,19 +189,6 @@ async fn count_id_zero(client: &ClickhouseClient) -> Result<u64, BackfillError> 
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = execute(&sink, false)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.total_rows, 0);
-    }
-
     /// End-to-end against a real ClickHouse in a throwaway database (the run does a
     /// whole-table `EXCHANGE` on `assets`, so it must NEVER touch a shared table).
     /// Gated on `CLICKHOUSE_URL`.
@@ -254,7 +238,7 @@ mod tests {
         .await
         .expect("seed assets");
 
-        let sink = Sink::Clickhouse(cl.clone());
+        let sink = Sink::new(cl.clone());
         let stats = execute(&sink, false).await.expect("backfill run");
         assert_eq!(stats.total_rows, 3);
         assert_eq!(stats.id_zero_before, 3);
