@@ -23,7 +23,7 @@
 ## 1. Purpose and Scope
 
 XDR parsing is the translation layer between canonical Stellar ledger payloads and the
-structured explorer data model stored in PostgreSQL and served by the backend API.
+structured explorer data model stored in ClickHouse and served by the backend API.
 
 This document covers the current XDR parsing design. It does not redefine frontend
 behavior, backend transport contracts, or the full database schema except where those are
@@ -68,7 +68,7 @@ paths.
 > Per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md): Rust-only XDR
 > parsing — the shared `crates/xdr-parser` crate is the single decoder.
 > Per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md):
-> raw XDR is not stored in RDS; heavy-field endpoints re-parse from the public
+> raw XDR is not stored in ClickHouse; heavy-field endpoints re-parse from the public
 > Stellar ledger archive at read time.
 
 **Ingest path (Ledger Processor Lambda).** Every ledger's `LedgerCloseMeta` is
@@ -98,7 +98,7 @@ upgrades and no decode drift between ingest and read.
 
 ### 3.2 What Is Not Stored
 
-Per ADR 0029 the following are **not** stored in RDS:
+Per ADR 0029 the following are **not** stored in ClickHouse:
 
 - `envelope_xdr`, `result_xdr`, `result_meta_xdr` as strings or blobs on the
   `transactions` row
@@ -158,7 +158,7 @@ summary columns:
 - `result_code` is not persisted at ingest; it is re-derived on demand from
   the archive for the advanced view
 
-Raw envelope / result / result-meta XDR is **not** retained in RDS (ADR 0029).
+Raw envelope / result / result-meta XDR is **not** retained in ClickHouse (ADR 0029).
 The advanced transaction view pulls the corresponding `.xdr.zst` from the public
 archive at request time.
 
@@ -585,7 +585,7 @@ public archive):
 
 ### 6.2 Two Phases of Materialization
 
-Ingestion owns writing typed summary + appearance-index rows into PostgreSQL.
+Ingestion owns writing typed summary + appearance-index rows into ClickHouse.
 That is the only phase that runs unconditionally per ledger close.
 
 The backend read path owns re-materializing heavy fields on demand for E3 / E14
@@ -669,7 +669,7 @@ The parsing design assumes protocol upgrades are:
 Responsibility is split along the two-path parsing model:
 
 - **ingestion** (Rust Ledger Processor) owns decode-at-ingest → typed summary
-  columns + appearance indexes written to PostgreSQL (single parser crate,
+  columns + appearance indexes written to ClickHouse (single parser crate,
   shared with the API — `crates/xdr-parser`)
 - **the database schema** owns persistence of typed summaries + appearance
   indexes; it does not hold raw XDR (ADR 0029)

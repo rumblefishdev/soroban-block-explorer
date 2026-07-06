@@ -91,7 +91,7 @@ Responsibility boundaries:
   user-friendly interpretation of already-indexed data.
 - The backend owns query APIs, response shaping, pagination cursors, and entity lookup.
 - The indexing pipeline owns ingestion completeness, normalization, and persistence into
-  PostgreSQL.
+  ClickHouse.
 
 This separation is important because the frontend should remain a thin, deterministic
 consumer of explorer data. Complex chain interpretation should happen upstream where it
