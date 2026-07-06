@@ -298,30 +298,27 @@ fee) > 1`). Typecheck + 111 web tests green.
       [[0359]] K4-1: invocations all-time is a cheap seek, but events all-time
       is a 9.5B-row cost problem → product decision, not FE polish.
 - [~] 2 — Native XLM tx — DEFERRED to 0359 (root-caused: data-model, backend epic)
-- [ ] 3 — Home loads at scroll-top, hero visible
-- [ ] 4 — Asset detail supply no longer overlaps Holders
-- [ ] 5 — Time column no longer clips in the wide transaction tables
-- [ ] 6 — Tables fit their row count for small result sets (no empty void)
-- [ ] 7 — NFT trait values use a body-size variant
-- [ ] 8 — NFT list Collection column resolved; image fallback added
-- [x] 9 — LP Fee column dropped (list) + detail deduped — **DONE** (feat/0348, uncommitted)
-- [ ] 10 — LP TVL filter hidden behind a 0341-style flag
-- [ ] 11 — Accounts list seen-columns relabeled and/or given human time
+- [~] 3 — Home loads at scroll-top, hero visible — DEFERRED → **0351** (video subset)
+- [~] 4 — Asset detail supply no longer overlaps Holders — DEFERRED → **0351**
+- [~] 5 — Time column no longer clips in the wide transaction tables — DEFERRED → **0351**
+- [~] 6 — Tables fit their row count for small result sets — DEFERRED → **0351**
+- [~] 7 — NFT trait values use a body-size variant — DEFERRED → **0351**
+- [~] 8 — NFT list Collection column resolved; image fallback — DEFERRED → **0351**
+- [x] 9 — LP Fee column dropped (list) + detail deduped — **DONE** (feat/0348 `05d0821e`)
+- [~] 10 — LP TVL filter hidden behind a 0341-style flag — DEFERRED → **0351**
+- [~] 11 — Accounts list seen-columns relabeled / human time — DEFERRED → **0351**
 - [~] 12 — Ledger-sequence + human time — **SKIPPED** (2026-07-06, permanent drop)
 - [x] 13 — Single truncation standard (first 4 + last 4) applied and enforced;
       one-offs removed; untruncated identifiers found and fixed — **DONE** (feat/0348 `f205fe99`)
-- [ ] 14 — `formatCompactAmount` wired into all large-number display sites — → **0351** (video subset)
+- [~] 14 — `formatCompactAmount` wired into all large-number sites — DEFERRED → **0351**
 - [x] 15 — Native XLM asset is a link — **DONE** (feat/0348 `15cd2a27`)
-- [x] 16 — Search redundant per-row chip removed when tab-scoped — **DONE** (feat/0348, uncommitted)
-- [ ] 17 — Home stat counters don't garble mid-animation
-- [ ] 18 — "Stellar Lumens" copy fix
-- [ ] 19 — Visible theme toggle added; single default decided
-- [ ] **Docs updated** — N/A unless the invocations-count decision (finding 1)
-      changes an endpoint's documented semantics; if so, update the relevant
-      `docs/architecture/**` query docs in the same PR.
-- [ ] **API types regenerated** — N/A unless finding 1's fix touches
-      `crates/api/**` (if the KPI window/shape changes server-side, run
-      `npx nx run @rumblefish/api-types:generate`).
+- [x] 16 — Search redundant per-row chip removed when tab-scoped — **DONE** (feat/0348 `9e8bb705`)
+- [~] 17 — Home stat counters don't garble mid-animation — DEFERRED → **0351**
+- [~] 18 — "Stellar Lumens" copy fix — DEFERRED → **0351**
+- [~] 19 — Visible theme toggle added; single default decided — DEFERRED → **0351**
+- [x] **Docs updated** — N/A — shipped changes touch no `docs/architecture/**`
+      (finding 1's FE relabel didn't change endpoint semantics).
+- [x] **API types regenerated** — N/A — shipped changes touch no `crates/api/**`.
 
 ## Notes
 
