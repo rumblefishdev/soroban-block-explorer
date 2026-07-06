@@ -15,8 +15,72 @@ use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
+use crate::transactions::dto::TransactionListItem;
 
-use super::dto::{LedgerDetailRow, LedgerListItem, LedgerTxRow};
+use super::dto::LedgerListItem;
+
+// ---------------------------------------------------------------------------
+// Internal query-result rows (not serialized; the handler maps these into the
+// public response DTOs).
+// ---------------------------------------------------------------------------
+
+/// LATERAL-derived navigation pair. Kept separate from the public DTO
+/// because the response type composes this with an embedded paginated
+/// list (`transactions`) that does not come from a single SQL row.
+#[derive(Debug)]
+pub struct LedgerDetailRow {
+    pub sequence: i64,
+    pub hash: String,
+    pub closed_at: DateTime<Utc>,
+    pub protocol_version: i32,
+    pub transaction_count: i32,
+    pub base_fee: i64,
+    pub prev_sequence: Option<i64>,
+    pub next_sequence: Option<i64>,
+}
+
+/// DB-side projection of an embedded transaction row. Owned by the ledgers
+/// domain (kept separate from `transactions::TxListRow` so the ledger module
+/// does not couple to the transaction module's internal query types). Maps to
+/// the shared wire `TransactionListItem`, which the ledger-detail response
+/// intentionally embeds. `id` is the internal cursor tie-break, not on the DTO.
+#[derive(Debug)]
+pub struct LedgerTxRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    /// `None` for Variant A `parse_error` transactions whose envelope was
+    /// unavailable (lore-0209).
+    pub source_account: Option<String>,
+    pub fee_charged: i64,
+    pub inner_tx_hash: Option<String>,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub operation_types: Vec<String>,
+    pub contract_ids: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<LedgerTxRow> for TransactionListItem {
+    fn from(row: LedgerTxRow) -> Self {
+        Self {
+            hash: row.hash,
+            ledger_sequence: row.ledger_sequence,
+            application_order: row.application_order,
+            source_account: row.source_account,
+            fee_charged: row.fee_charged,
+            inner_tx_hash: row.inner_tx_hash,
+            successful: row.successful,
+            operation_count: row.operation_count,
+            has_soroban: row.has_soroban,
+            operation_types: row.operation_types,
+            contract_ids: row.contract_ids,
+            created_at: row.created_at,
+        }
+    }
+}
 
 #[derive(Debug, Row, Deserialize)]
 struct LedgerListRow {
