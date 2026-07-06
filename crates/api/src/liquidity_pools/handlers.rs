@@ -21,9 +21,9 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     ChartParams, ChartResponse, ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor,
-    PoolListParams, PoolRow, PoolTransactionItem, PoolTxRow, ResolvedPoolListParams, SharesCursor,
+    PoolListParams, PoolTransactionItem, SharesCursor,
 };
-use super::queries_ch;
+use super::queries::{self, PoolRow, PoolTxRow, ResolvedPoolListParams};
 
 #[utoipa::path(
     get,
@@ -59,7 +59,7 @@ pub async fn list_participants(
     // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
-    let exists = queries_ch::pool_exists(&state.ch(), &pool_id_hex)
+    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
     match exists {
@@ -76,7 +76,7 @@ pub async fn list_participants(
     let fetch_limit = pagination.fetch_limit();
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
-    let fetched = queries_ch::fetch_participants(
+    let fetched = queries::fetch_participants(
         &state.ch(),
         &pool_id_hex,
         pagination.cursor.as_ref(),
@@ -306,9 +306,9 @@ pub async fn list_pools(
     };
 
     // The CH list keys on `last_updated_ledger` (see
-    // `queries_ch::fetch_pool_list`); the sort key travels in
+    // `queries::fetch_pool_list`); the sort key travels in
     // `PoolRow::cursor_ledger`.
-    let fetched = queries_ch::fetch_pool_list(&state.ch(), &resolved, direction)
+    let fetched = queries::fetch_pool_list(&state.ch(), &resolved, direction)
         .await
         .map_err(|e| e.to_string());
     let mut rows = match fetched {
@@ -362,7 +362,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         Err(resp) => return resp,
     };
 
-    let fetched = queries_ch::fetch_pool_by_id(&state.ch(), &pool_id_hex)
+    let fetched = queries::fetch_pool_by_id(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
     let row = match fetched {
@@ -434,7 +434,7 @@ pub async fn list_pool_transactions(
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
-    let exists = queries_ch::pool_exists(&state.ch(), &pool_id_hex)
+    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
     match exists {
@@ -446,7 +446,7 @@ pub async fn list_pool_transactions(
         }
     }
 
-    let fetched = queries_ch::fetch_pool_transactions(
+    let fetched = queries::fetch_pool_transactions(
         &state.ch(),
         &pool_id_hex,
         pagination.fetch_limit(),
@@ -622,7 +622,7 @@ pub async fn get_pool_chart(
         );
     }
 
-    let exists = queries_ch::pool_exists(&state.ch(), &pool_id_hex)
+    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
     match exists {
@@ -634,7 +634,7 @@ pub async fn get_pool_chart(
         }
     }
 
-    let fetched = queries_ch::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
+    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
         .await
         .map_err(|e| e.to_string());
     let data_points = match fetched {

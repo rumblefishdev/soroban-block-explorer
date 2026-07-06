@@ -30,8 +30,100 @@ use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_account
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{ChartDataPoint, SharesCursor};
-use super::dto::{ParticipantRow, PoolRow, PoolTxRow, ResolvedPoolListParams};
+use super::dto::{ChartDataPoint, PoolListCursor, SharesCursor};
+
+// ---------------------------------------------------------------------------
+// Internal query-result rows + resolved params (not serialized; the handler
+// maps these into the public response DTOs).
+// ---------------------------------------------------------------------------
+
+/// Canonical pool column projection shared between list and detail.
+#[derive(Debug, Clone)]
+pub struct PoolRow {
+    pub pool_id_hex: String,
+    pub asset_a_type: i16,
+    pub asset_a_type_name: Option<String>,
+    pub asset_a_code: Option<String>,
+    pub asset_a_issuer: Option<String>,
+    /// C-strkey of the SAC mirror for the asset-A leg. `None` otherwise (task 0263).
+    pub asset_a_contract_id: Option<String>,
+    /// `icon_url` from the asset-A leg's `assets` row (classic or SAC).
+    pub asset_a_icon_url: Option<String>,
+    pub asset_b_type: i16,
+    pub asset_b_type_name: Option<String>,
+    pub asset_b_code: Option<String>,
+    pub asset_b_issuer: Option<String>,
+    /// C-strkey of the SAC mirror for the asset-B leg. See `asset_a_contract_id`.
+    pub asset_b_contract_id: Option<String>,
+    /// `icon_url` from the asset-B leg's `assets` row. See `asset_a_icon_url`.
+    pub asset_b_icon_url: Option<String>,
+    pub fee_bps: i32,
+    pub fee_percent: String,
+    pub created_at_ledger: i64,
+    /// Ledger value the list keyset orders + paginates on. CH keys on the
+    /// native `last_updated_ledger` ("most recently active"), carried here.
+    /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
+    /// 0008); only this field feeds the cursor builder. Unused by detail.
+    pub cursor_ledger: i64,
+    /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
+    /// Task 0246 — see DTO doc for surfacing rules.
+    pub participant_count: i64,
+    pub latest_snapshot_ledger: Option<i64>,
+    pub reserve_a: Option<String>,
+    pub reserve_b: Option<String>,
+    pub total_shares: Option<String>,
+    pub tvl: Option<String>,
+    pub volume: Option<String>,
+    pub fee_revenue: Option<String>,
+    pub latest_snapshot_at: Option<DateTime<Utc>>,
+}
+
+/// One current LP participant (a positive-shares position). Handler strips the
+/// surrogate before building the API response.
+#[derive(Debug)]
+pub struct ParticipantRow {
+    /// G-StrKey resolved via JOIN on `accounts`.
+    pub account: String,
+    /// `accounts.id` BIGINT — used only to encode the next cursor; not
+    /// exposed in the response DTO.
+    pub account_id_surrogate: i64,
+    /// Numeric carried as text to preserve `NUMERIC(28,7)` precision.
+    pub shares: String,
+    /// `100 * shares / total_pool_shares`, NULL when the pool has no snapshot
+    /// in the 7-day freshness window. Already a decimal string.
+    pub share_percentage: Option<String>,
+    pub first_deposit_ledger: i64,
+    pub last_updated_ledger: i64,
+}
+
+/// Resolved, validated `GET /v1/liquidity-pools` list params.
+pub struct ResolvedPoolListParams {
+    pub limit: i64,
+    pub cursor: Option<PoolListCursor>,
+    pub asset_a_code: Option<String>,
+    pub asset_a_issuer: Option<String>,
+    pub asset_b_code: Option<String>,
+    pub asset_b_issuer: Option<String>,
+    /// Decimal string preserving NUMERIC(28,7) precision.
+    pub min_tvl: Option<String>,
+    /// Single-asset filter (task 0246) — trimmed + uppercased at the handler
+    /// boundary, matched against either leg case-insensitively. NULL = no filter.
+    pub asset_code: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PoolTxRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub source_account: String,
+    pub fee_charged: i64,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub operation_types: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
 
 /// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
 /// ~5 s mainnet cadence). The PG path uses `snapshots.created_at >= NOW() - 7d`;
