@@ -54,7 +54,35 @@ use serde::Deserialize;
 use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
-use super::dto::{NftItem, NftRow, NftTransferCursor, NftTransferItem, ResolvedListParams};
+use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
+
+/// Resolved, validated `GET /v1/nfts` list params handed to `fetch_list`.
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<NftListCursor>,
+    pub filter_collection: Option<String>,
+    pub filter_contract_id: Option<String>,
+    /// Raw substring (no `%` / `_` from caller). SQL composes `%...%`.
+    pub filter_name: Option<String>,
+}
+
+/// NFT list row: the wire [`NftItem`] fields plus the internal
+/// `contract_surrogate` the composite cursor needs for its PK-suffix tiebreak
+/// (not on the wire). Returned by `fetch_list` so the handler stays decoupled
+/// from the CH-decode struct (same shape as the assets `AssetRow`).
+pub struct NftRow {
+    pub contract_id: String,
+    pub token_id: String,
+    pub collection_name: Option<String>,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub minted_at_ledger: Option<i64>,
+    pub owner_account: Option<String>,
+    pub last_seen_ledger: Option<i64>,
+    /// Internal `soroban_contracts.id` (CH `Int64`) surrogate — cursor
+    /// tiebreak only, never serialized.
+    pub contract_surrogate: i64,
+}
 
 /// `nft_ownership.event_type` SMALLINT → canonical label, matching the PG
 /// `nft_event_type_name` function. Discriminants confirmed from
@@ -476,7 +504,7 @@ mod tests {
 ///
 /// ```text
 /// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib nfts::queries_ch::decode_smoke -- --nocapture
+///   cargo test -p api --lib nfts::queries::decode_smoke -- --nocapture
 /// ```
 #[cfg(test)]
 mod decode_smoke {
