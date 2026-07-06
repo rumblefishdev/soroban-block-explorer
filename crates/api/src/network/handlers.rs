@@ -17,15 +17,6 @@ use crate::state::AppState;
 use super::dto::NetworkStats;
 use super::queries_ch;
 
-/// Per-call fetch error so the moka cache initializer does not leak the
-/// `clickhouse` driver type up the call stack. Only the `Display` impl is
-/// observed (forwarded to the canonical `db_error` envelope + tracing).
-#[derive(Debug, thiserror::Error)]
-enum FetchStatsError {
-    #[error("ch: {0}")]
-    Ch(#[from] clickhouse::error::Error),
-}
-
 /// Get top-level chain overview stats.
 ///
 /// Reads the canonical single-statement network-stats query (latest
@@ -63,9 +54,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     // a single-row read over the ledgers ordering key (CH `ORDER BY sequence
     // DESC LIMIT 1` — see `crate::common::head`), orders of magnitude cheaper
     // than the stats statement it guards (task 0291).
-    let head = head::latest_sequence_ch(&state.ch())
-        .await
-        .map_err(FetchStatsError::from);
+    let head = head::latest_sequence_ch(&state.ch()).await;
     let head = match head {
         Ok(head) => head,
         Err(e) => {
@@ -105,12 +94,11 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     // next request retries cleanly. The stats statement pins its latest-ledger
     // row to `head`, so the value stored under key `head` always reports
     // `latest_ledger_sequence == head`.
-    let result: Result<Arc<NetworkStats>, Arc<FetchStatsError>> = state
+    let result: Result<Arc<NetworkStats>, Arc<clickhouse::error::Error>> = state
         .network_cache
         .try_get_with(head, async {
             let stats = queries_ch::fetch_stats(&state.ch(), head)
                 .await
-                .map_err(FetchStatsError::from)
                 .map(Arc::new)?;
             // Runs only on a miss (inside the initializer): record the freshest
             // successfully-computed snapshot for the head-read failure fallback

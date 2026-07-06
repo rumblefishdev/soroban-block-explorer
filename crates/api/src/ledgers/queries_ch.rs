@@ -16,7 +16,8 @@ use serde::Deserialize;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
 
-use super::dto::{LedgerDetailRow, LedgerListItem, LedgerTxRow};
+use super::dto::{LedgerDetailRow, LedgerListItem};
+use crate::transactions::dto::TxListRow;
 
 #[derive(Debug, Row, Deserialize)]
 struct LedgerListRow {
@@ -90,9 +91,9 @@ struct LedgerTxPageChRow {
 }
 
 impl LedgerTxPageChRow {
-    /// Merge this page row with its pre-fetched aggregates into `LedgerTxRow`.
+    /// Merge this page row with its pre-fetched aggregates into `TxListRow`.
     ///
-    /// `LedgerTxRow.id` carries `application_order` on the CH path (the
+    /// `TxListRow.id` carries `application_order` on the CH path (the
     /// `TsIdCursor.id` tie-break for embedded-tx pagination): CH
     /// `transactions.id` is a deterministic hash surrogate and must not
     /// define in-ledger order, so the cursor keys on `application_order`.
@@ -100,8 +101,8 @@ impl LedgerTxPageChRow {
         self,
         agg: ch::TxListAggregates,
         source_account: Option<String>,
-    ) -> LedgerTxRow {
-        LedgerTxRow {
+    ) -> TxListRow {
+        TxListRow {
             id: i64::from(self.application_order),
             hash: self.hash,
             ledger_sequence: self.ledger_sequence,
@@ -196,7 +197,7 @@ pub async fn fetch_transactions(
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: Direction,
-) -> Result<Vec<LedgerTxRow>, clickhouse::error::Error> {
+) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
     let cursor_ts_ms = cursor.map(|c| c.ts.timestamp_millis());
     let cursor_application_order = cursor.map(|c| c.id);
     let (op, order) = keyset_sql_desc(direction);

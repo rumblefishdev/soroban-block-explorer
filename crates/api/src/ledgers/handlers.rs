@@ -22,9 +22,9 @@ use crate::common::pagination::{finalize_ts_id_page, into_envelope};
 use crate::common::path;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
-use crate::transactions::dto::TransactionListItem;
+use crate::transactions::dto::{TransactionListItem, TxListRow};
 
-use super::dto::{LedgerDetailResponse, LedgerDetailRow, LedgerListItem, LedgerTxRow};
+use super::dto::{LedgerDetailResponse, LedgerDetailRow, LedgerListItem};
 use super::queries_ch;
 
 /// Base sort order for `GET /v1/ledgers` — a sticky query param the
@@ -211,7 +211,7 @@ pub async fn get_ledger(
 
     // Phase 2 — DB embedded transactions, keyset-paginated by
     // `?limit=` / `?cursor=` query params validated above.
-    let mut tx_rows: Vec<LedgerTxRow> = match fetch_transactions_for_source(
+    let mut tx_rows: Vec<TxListRow> = match fetch_transactions_for_source(
         &state,
         header_row.sequence,
         header_row.closed_at,
@@ -270,25 +270,21 @@ async fn fetch_list_for_source(
     cursor: Option<&TsIdCursor>,
     sort: SortOrder,
     direction: Direction,
-) -> Result<Vec<LedgerListItem>, LedgerFetchError> {
+) -> Result<Vec<LedgerListItem>, clickhouse::error::Error> {
     // Test-only audit: count heavy-query executions so the conditional-GET
     // tests can prove a 304 short-circuits BEFORE this runs (task 0292).
     #[cfg(test)]
     state
         .list_query_count
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    queries_ch::fetch_list(&state.ch(), limit, cursor, sort, direction)
-        .await
-        .map_err(LedgerFetchError::Ch)
+    queries_ch::fetch_list(&state.ch(), limit, cursor, sort, direction).await
 }
 
 async fn fetch_by_sequence_for_source(
     state: &AppState,
     sequence: i64,
-) -> Result<Option<LedgerDetailRow>, LedgerFetchError> {
-    queries_ch::fetch_by_sequence(&state.ch(), sequence)
-        .await
-        .map_err(LedgerFetchError::Ch)
+) -> Result<Option<LedgerDetailRow>, clickhouse::error::Error> {
+    queries_ch::fetch_by_sequence(&state.ch(), sequence).await
 }
 
 async fn fetch_transactions_for_source(
@@ -298,7 +294,7 @@ async fn fetch_transactions_for_source(
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: crate::common::cursor::Direction,
-) -> Result<Vec<LedgerTxRow>, LedgerFetchError> {
+) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
     queries_ch::fetch_transactions(
         &state.ch(),
         ledger_sequence,
@@ -308,13 +304,6 @@ async fn fetch_transactions_for_source(
         direction,
     )
     .await
-    .map_err(LedgerFetchError::Ch)
-}
-
-#[derive(Debug, thiserror::Error)]
-enum LedgerFetchError {
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
 }
 
 #[cfg(test)]

@@ -22,16 +22,6 @@ use super::dto::{
 };
 use super::queries_ch;
 
-/// Unified per-call fetch error so the handlers do not leak the `clickhouse`
-/// driver type up the call stack — mirrors `assets::handlers::AssetFetchError`.
-/// Only `Display` is observed (forwarded to the canonical `db_error` envelope
-/// + tracing).
-#[derive(Debug, thiserror::Error)]
-enum NftFetchError {
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
-}
-
 /// Map the datasource-agnostic [`NftRow`] to the wire [`NftItem`] (drops the
 /// internal `contract_surrogate` cursor tiebreak).
 fn map_item(r: NftRow) -> NftItem {
@@ -127,10 +117,7 @@ pub async fn list_nfts(
         filter_name: params.filter_name,
     };
 
-    let fetched: Result<Vec<NftRow>, NftFetchError> =
-        queries_ch::fetch_list(&state.ch(), &resolved, direction)
-            .await
-            .map_err(NftFetchError::Ch);
+    let fetched = queries_ch::fetch_list(&state.ch(), &resolved, direction).await;
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
@@ -188,10 +175,7 @@ pub async fn get_nft(
         Err(resp) => return resp,
     };
 
-    let fetched: Result<Option<NftItem>, NftFetchError> =
-        queries_ch::fetch_by_composite(&state.ch(), &contract_id, &token_id)
-            .await
-            .map_err(NftFetchError::Ch);
+    let fetched = queries_ch::fetch_by_composite(&state.ch(), &contract_id, &token_id).await;
     let row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
@@ -300,7 +284,7 @@ pub async fn list_nft_transfers(
     // Existence first (404-vs-empty disambiguation), then the page. CH keys
     // `nft_ownership` on `(contract_id, token_id)` directly, so no surrogate
     // indirection. `Ok(None)` = the NFT does not exist → 404.
-    let fetched: Result<Option<Vec<NftTransferItem>>, NftFetchError> =
+    let fetched: Result<Option<Vec<NftTransferItem>>, clickhouse::error::Error> =
         match queries_ch::nft_exists(&state.ch(), &contract_id, &token_id).await {
             Ok(true) => queries_ch::fetch_transfers(
                 &state.ch(),
@@ -311,10 +295,9 @@ pub async fn list_nft_transfers(
                 direction,
             )
             .await
-            .map(Some)
-            .map_err(NftFetchError::Ch),
+            .map(Some),
             Ok(false) => Ok(None),
-            Err(e) => Err(NftFetchError::Ch(e)),
+            Err(e) => Err(e),
         };
     let mut rows = match fetched {
         Ok(Some(r)) => r,

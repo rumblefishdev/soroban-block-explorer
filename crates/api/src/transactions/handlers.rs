@@ -31,15 +31,6 @@ use super::dto::{
 };
 use super::queries_ch;
 
-/// Unified per-call fetch error so the handlers do not leak the `clickhouse`
-/// driver type up the call stack. Only the `Display` impl is observed
-/// (forwarded to the canonical `db_error` envelope + tracing).
-#[derive(Debug, thiserror::Error)]
-enum TxFetchError {
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
-}
-
 // ---------------------------------------------------------------------------
 // GET /v1/transactions
 // ---------------------------------------------------------------------------
@@ -462,16 +453,14 @@ async fn fetch_list_for_source(
     // candidate scan to the ETag'd head. `None` for cursored pages / when the
     // head was not read.
     head: Option<i64>,
-) -> Result<Vec<TxListRow>, TxFetchError> {
+) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
     // Test-only audit: count actual heavy-query executions so the
     // conditional-GET tests can prove a 304 short-circuits BEFORE this runs.
     #[cfg(test)]
     state
         .list_query_count
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    queries_ch::fetch_list(&state.ch(), params, direction, head)
-        .await
-        .map_err(TxFetchError::Ch)
+    queries_ch::fetch_list(&state.ch(), params, direction, head).await
 }
 
 /// Resolve a tx hash to its DB header. CH keys the detail read by
@@ -480,52 +469,39 @@ async fn fetch_list_for_source(
 async fn lookup_detail_for_source(
     state: &AppState,
     hash_hex: &str,
-) -> Result<Option<TxDetailRow>, TxFetchError> {
-    let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(&state.ch(), hash_hex)
-        .await
-        .map_err(TxFetchError::Ch)?
-    else {
+) -> Result<Option<TxDetailRow>, clickhouse::error::Error> {
+    let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(&state.ch(), hash_hex).await? else {
         return Ok(None);
     };
-    queries_ch::fetch_detail(&state.ch(), hash_hex, ledger_sequence)
-        .await
-        .map_err(TxFetchError::Ch)
+    queries_ch::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await
 }
 
 async fn fetch_operations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<OpRow>, TxFetchError> {
-    queries_ch::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence)
-        .await
-        .map_err(TxFetchError::Ch)
+) -> Result<Vec<OpRow>, clickhouse::error::Error> {
+    queries_ch::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 async fn fetch_participants_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<String>, TxFetchError> {
-    queries_ch::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence)
-        .await
-        .map_err(TxFetchError::Ch)
+) -> Result<Vec<String>, clickhouse::error::Error> {
+    queries_ch::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 async fn fetch_events_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<EventAppearanceRow>, TxFetchError> {
-    queries_ch::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence)
-        .await
-        .map_err(TxFetchError::Ch)
+) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
+    queries_ch::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 async fn fetch_invocations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<InvocationAppearanceRow>, TxFetchError> {
-    queries_ch::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence)
-        .await
-        .map_err(TxFetchError::Ch)
+) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
+    queries_ch::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 #[cfg(test)]

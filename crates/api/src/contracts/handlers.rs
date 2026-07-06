@@ -26,14 +26,6 @@ use super::dto::{
 };
 use super::queries_ch;
 
-/// Unified per-call fetch error so the handlers do not leak the `clickhouse`
-/// driver type. Only `Display` is observed.
-#[derive(Debug, thiserror::Error)]
-enum CtrFetchError {
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
-}
-
 // ---------------------------------------------------------------------------
 // GET /v1/contracts (list)
 // ---------------------------------------------------------------------------
@@ -120,10 +112,8 @@ async fn fetch_contract_list_for_source(
     state: &AppState,
     params: &ResolvedContractsListParams,
     direction: Direction,
-) -> Result<Vec<ContractListRow>, CtrFetchError> {
-    queries_ch::fetch_contract_list(&state.ch(), params, direction)
-        .await
-        .map_err(CtrFetchError::Ch)
+) -> Result<Vec<ContractListRow>, clickhouse::error::Error> {
+    queries_ch::fetch_contract_list(&state.ch(), params, direction).await
 }
 
 #[utoipa::path(
@@ -455,29 +445,23 @@ fn event_cursor_matches_source(cursor: &EventCursor) -> bool {
 async fn fetch_contract_for_source(
     state: &AppState,
     contract_id: &str,
-) -> Result<Option<ContractRow>, CtrFetchError> {
-    queries_ch::fetch_contract(&state.ch(), contract_id)
-        .await
-        .map_err(CtrFetchError::Ch)
+) -> Result<Option<ContractRow>, clickhouse::error::Error> {
+    queries_ch::fetch_contract(&state.ch(), contract_id).await
 }
 
 async fn fetch_stats_for_source(
     state: &AppState,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<ContractStats, CtrFetchError> {
-    queries_ch::fetch_contract_stats(&state.ch(), contract_surrogate_id, window)
-        .await
-        .map_err(CtrFetchError::Ch)
+) -> Result<ContractStats, clickhouse::error::Error> {
+    queries_ch::fetch_contract_stats(&state.ch(), contract_surrogate_id, window).await
 }
 
 async fn fetch_interface_for_source(
     state: &AppState,
     contract_id: &str,
-) -> Result<Option<InterfaceRow>, CtrFetchError> {
-    queries_ch::fetch_wasm_interface(&state.ch(), contract_id)
-        .await
-        .map_err(CtrFetchError::Ch)
+) -> Result<Option<InterfaceRow>, clickhouse::error::Error> {
+    queries_ch::fetch_wasm_interface(&state.ch(), contract_id).await
 }
 
 async fn fetch_invocations_for_source(
@@ -486,7 +470,7 @@ async fn fetch_invocations_for_source(
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
-) -> Result<Vec<InvocationAppearanceRow>, CtrFetchError> {
+) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
     queries_ch::fetch_invocation_appearances(
         &state.ch(),
         contract_surrogate_id,
@@ -495,7 +479,6 @@ async fn fetch_invocations_for_source(
         direction,
     )
     .await
-    .map_err(CtrFetchError::Ch)
 }
 
 /// Build the opaque invocations cursor for a boundary row. CH keys on

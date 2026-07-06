@@ -24,30 +24,19 @@ use super::dto::{
 };
 use super::queries_ch;
 
-/// Unified per-call fetch error so the handlers do not leak the `clickhouse`
-/// driver type up the call stack. Only `Display` is observed (forwarded to the
-/// canonical `db_error` envelope + tracing).
-#[derive(Debug, thiserror::Error)]
-enum AssetFetchError {
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
-}
-
 async fn fetch_list_for_source(
     state: &AppState,
     params: &ResolvedListParams,
     direction: Direction,
-) -> Result<Vec<AssetRow>, AssetFetchError> {
-    queries_ch::fetch_list(&state.ch(), params, direction)
-        .await
-        .map_err(AssetFetchError::Ch)
+) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
+    queries_ch::fetch_list(&state.ch(), params, direction).await
 }
 
 /// `:id` detail-row dispatch — resolves the `AssetRow` from CH.
 async fn fetch_asset_row_for_source(
     state: &AppState,
     parsed: AssetIdRef<'_>,
-) -> Result<Option<AssetRow>, AssetFetchError> {
+) -> Result<Option<AssetRow>, clickhouse::error::Error> {
     match parsed {
         AssetIdRef::Native => queries_ch::fetch_native(&state.ch()).await,
         AssetIdRef::Contract(c) => queries_ch::fetch_by_contract_id(&state.ch(), c).await,
@@ -55,7 +44,6 @@ async fn fetch_asset_row_for_source(
             queries_ch::fetch_by_code_issuer(&state.ch(), code, issuer).await
         }
     }
-    .map_err(AssetFetchError::Ch)
 }
 
 /// Canonical wire id — the single token usable as `/assets/{id}`: the contract
@@ -351,7 +339,7 @@ async fn fetch_asset_tx_for_source(
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
-) -> Result<Vec<AssetTxRow>, AssetFetchError> {
+) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
     queries_ch::fetch_transactions(
         &state.ch(),
         row.asset_code.as_deref(),
@@ -362,7 +350,6 @@ async fn fetch_asset_tx_for_source(
         direction,
     )
     .await
-    .map_err(AssetFetchError::Ch)
 }
 
 /// Build the opaque asset-transactions cursor for a boundary row. CH keys on
