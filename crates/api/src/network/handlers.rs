@@ -15,7 +15,7 @@ use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
 use super::dto::NetworkStats;
-use super::queries_ch;
+use super::queries;
 
 /// Get top-level chain overview stats.
 ///
@@ -97,7 +97,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     let result: Result<Arc<NetworkStats>, Arc<clickhouse::error::Error>> = state
         .network_cache
         .try_get_with(head, async {
-            let stats = queries_ch::fetch_stats(&state.ch(), head)
+            let stats = queries::fetch_stats(&state.ch(), head)
                 .await
                 .map(Arc::new)?;
             // Runs only on a miss (inside the initializer): record the freshest
