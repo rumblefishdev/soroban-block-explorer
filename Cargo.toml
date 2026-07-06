@@ -7,7 +7,6 @@ members = [
     "crates/db",
     "crates/db-partition-mgmt",
     "crates/domain",
-    "crates/backfill-bench",
     "crates/backfill-runner",
     "crates/audit-harness",
     "crates/enrichment-shared",

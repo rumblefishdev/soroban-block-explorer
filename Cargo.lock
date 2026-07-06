@@ -892,22 +892,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "backfill-bench"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "db",
- "db-partition-mgmt",
- "indexer",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "xdr-parser",
-]
-
-[[package]]
 name = "backfill-enrichment-runner"
 version = "0.1.0"
 dependencies = [
