@@ -112,3 +112,75 @@ pub struct AccountTransactionItem {
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
+
+// ---------------------------------------------------------------------------
+// Internal query types (not serialized; produced by queries_ch and mapped to
+// the wire types above by the handler). Relocated from the deleted PG
+// queries.rs (task 0244).
+// ---------------------------------------------------------------------------
+
+/// Keyset cursor for the accounts list. Sort is `last_seen_ledger` with the
+/// surrogate `id` as the unique tiebreak (`last_seen_ledger` is not unique).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountsListCursor {
+    pub last_seen_ledger: i64,
+    pub id: i64,
+}
+
+#[derive(Debug)]
+pub struct AccountListRow {
+    /// Surrogate id — cursor tiebreak only, never on the wire.
+    pub id: i64,
+    pub account_id: String,
+    pub xlm_balance: Option<String>,
+    pub last_seen_ledger: i64,
+    pub first_seen_ledger: i64,
+    pub home_domain: Option<String>,
+}
+
+/// Resolved, validated `GET /v1/accounts` list params handed to `fetch_list`.
+pub struct ResolvedListParams {
+    pub limit: i64,
+    pub cursor: Option<AccountsListCursor>,
+    pub with_domain: bool,
+}
+
+#[derive(Debug)]
+pub struct AccountHeaderRow {
+    /// Surrogate id, threaded into balances query — never on wire.
+    pub id: i64,
+    pub account_id: String,
+    pub first_seen_ledger: i64,
+    pub last_seen_ledger: i64,
+    pub sequence_number: i64,
+    pub home_domain: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AccountBalanceRow {
+    pub asset_type_name: Option<String>,
+    pub asset_type: i16,
+    pub asset_code: Option<String>,
+    pub asset_issuer: Option<String>,
+    pub contract_id: Option<String>,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub balance: String,
+    pub decimals: u32,
+    pub last_updated_ledger: i64,
+}
+
+#[derive(Debug)]
+pub struct AccountTxRow {
+    pub id: i64,
+    pub hash: String,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub source_account: String,
+    pub fee_charged: i64,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub operation_types: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}

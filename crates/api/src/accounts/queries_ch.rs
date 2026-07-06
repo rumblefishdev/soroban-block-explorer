@@ -29,7 +29,7 @@ use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
 
-use super::queries::{
+use super::dto::{
     AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
 };
 
