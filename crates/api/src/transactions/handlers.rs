@@ -1,5 +1,5 @@
 //! Axum handlers for the transactions endpoints. DB reads are served from
-//! ClickHouse (`queries_ch`); PG was retired (task 0244). The archive XDR
+//! ClickHouse (`queries`); PG was retired (task 0244). The archive XDR
 //! enrichment path (ADR 0029) sits on top of the resolved header.
 
 use axum::Json;
@@ -25,11 +25,13 @@ use crate::runtime_enrichment::stellar_archive::merge::merge_e3_response;
 use crate::state::AppState;
 
 use super::dto::{
-    EventAppearanceItem, EventAppearanceRow, InvocationAppearanceItem, InvocationAppearanceRow,
-    ListParams, OpRow, OperationItem, ResolvedListParams, TransactionDetailLight,
-    TransactionListItem, TxDetailRow, TxListCursor, TxListRow,
+    EventAppearanceItem, InvocationAppearanceItem, ListParams, OperationItem,
+    TransactionDetailLight, TransactionListItem, TxListCursor,
 };
-use super::queries_ch;
+use super::queries::{
+    self, EventAppearanceRow, InvocationAppearanceRow, OpRow, ResolvedListParams, TxDetailRow,
+    TxListRow,
+};
 
 // ---------------------------------------------------------------------------
 // GET /v1/transactions
@@ -198,7 +200,7 @@ pub async fn list_transactions(
 ///
 /// - **Statement A** (no filter, the polled hot path) reads `transactions` in
 ///   primary-key order `(ledger_sequence, application_order)` with FINAL
-///   dropped (the `read_rows` quota fix — see `queries_ch::fetch_list`), so its
+///   dropped (the `read_rows` quota fix — see `queries::fetch_list`), so its
 ///   tie-break is `application_order`.
 /// - **Statements B/C** (contract / op_type filter) drive off
 ///   `operations_appearances` and key on the `transactions.id` surrogate, so
@@ -460,7 +462,7 @@ async fn fetch_list_for_source(
     state
         .list_query_count
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    queries_ch::fetch_list(&state.ch(), params, direction, head).await
+    queries::fetch_list(&state.ch(), params, direction, head).await
 }
 
 /// Resolve a tx hash to its DB header. CH keys the detail read by
@@ -470,38 +472,38 @@ async fn lookup_detail_for_source(
     state: &AppState,
     hash_hex: &str,
 ) -> Result<Option<TxDetailRow>, clickhouse::error::Error> {
-    let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(&state.ch(), hash_hex).await? else {
+    let Some(ledger_sequence) = queries::lookup_hash_ledger(&state.ch(), hash_hex).await? else {
         return Ok(None);
     };
-    queries_ch::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await
+    queries::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await
 }
 
 async fn fetch_operations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<OpRow>, clickhouse::error::Error> {
-    queries_ch::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 async fn fetch_participants_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<String>, clickhouse::error::Error> {
-    queries_ch::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 async fn fetch_events_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    queries_ch::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 async fn fetch_invocations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries_ch::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
 }
 
 #[cfg(test)]

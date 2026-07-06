@@ -1184,9 +1184,9 @@ mod tests {
 /// direct, non-null columns (audited — no Nullable-decode risk).
 #[cfg(test)]
 mod decode_smoke {
+    use super::ResolvedPoolListParams;
     use super::*;
     use crate::common::cursor::Direction;
-    use crate::liquidity_pools::dto::ResolvedPoolListParams;
 
     fn client() -> Option<clickhouse::Client> {
         let url = std::env::var("CH_URL").ok()?;
