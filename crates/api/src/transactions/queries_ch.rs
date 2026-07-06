@@ -145,6 +145,13 @@ struct LedgerClosedAtRow {
     closed_at: i64,
 }
 
+/// Driver key row for the filtered-list two-step seek (task 0354).
+#[derive(Debug, Row, Deserialize)]
+struct TxKeyRow {
+    ledger_sequence: i64,
+    transaction_id: i64,
+}
+
 /// Resolve `source_account` + `created_at` for a page of raw rows via key
 /// seeks instead of full-table hash joins (task 0290). `accounts WHERE id IN
 /// (...)` rides the `idx_acc_id` bloom skip-index (accounts is ORDER BY
@@ -414,39 +421,75 @@ pub async fn fetch_list(
                        AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
                 )
             };
-            let sql = format!(
-                "SELECT {SLIM_PROJECTION} \
-                 FROM ( \
-                    SELECT * FROM transactions \
-                    WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
-                 ) t \
-                 INNER JOIN ( \
-                    SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
-                        {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
-                    ) u \
-                    WHERE ledger_sequence <= {head_max} \
-                    ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT {lim_over} \
-                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
-                 LEFT JOIN accounts src ON src.id = t.source_id \
-                 INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE ({src} IS NULL OR t.source_id = {src}) \
-                   AND ({ot} IS NULL OR ( \
-                        SELECT count() FROM operations_appearances oa2 \
-                        WHERE oa2.transaction_id = t.id \
-                          AND oa2.ledger_sequence = t.ledger_sequence \
-                          AND oa2.type = {ot} \
-                          AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
-                   ) > 0) \
-                 ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT 1 BY t.id \
-                 LIMIT {lim_peek}",
+            // Step 1: the 3-arm contract driver → ≤lim_over (ledger, tx) keys.
+            let driver_sql = format!(
+                "SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
+                    {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
+                 ) u \
+                 WHERE ledger_sequence <= {head_max} \
+                 ORDER BY ledger_sequence {order}, transaction_id {order} \
+                 LIMIT {lim_over}",
                 arm_ops = arm("operations_appearances"),
                 arm_inv = arm("soroban_invocations_appearances"),
                 arm_evt = arm("soroban_events"),
             );
-            client.query(&sql).fetch_all::<TxPageChRow>().await?
+            let keys = client.query(&driver_sql).fetch_all::<TxKeyRow>().await?;
+            if keys.is_empty() {
+                Vec::new()
+            } else {
+                // Step 2: SEEK `transactions` by the driver keys instead of
+                // streaming the whole partition as the join's left side (task
+                // 0354: CH can't push `t.id = m.transaction_id` into the scan —
+                // `id` is not a PK prefix — so the old `FROM (SELECT * FROM
+                // transactions WHERE <partition>) t` read the entire ~1e8-row
+                // head partition). Same raw projection as Statement A; source +
+                // closed_at resolve by key-seek in `resolve_source_and_closed_at`
+                // (dropping the whole-`accounts` `LEFT JOIN src`). The seek on
+                // `(ledger_sequence, id) IN (keys)` returns exactly the rows the
+                // INNER JOIN on the same keys did.
+                let in_tuples = keys
+                    .iter()
+                    .map(|k| format!("({},{})", k.ledger_sequence, k.transaction_id))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let partitions = keys
+                    .iter()
+                    .map(|k| k.ledger_sequence / 500_000)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "SELECT \
+                        lower(hex(t.hash)) AS hash, \
+                        t.ledger_sequence AS ledger_sequence, \
+                        t.application_order AS application_order, \
+                        t.source_id AS source_id, \
+                        t.fee_charged AS fee_charged, \
+                        lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+                        t.successful AS successful, \
+                        t.operation_count AS operation_count, \
+                        t.has_soroban AS has_soroban, \
+                        t.id AS id \
+                     FROM transactions t \
+                     WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+                       AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
+                       AND ({src} IS NULL OR t.source_id = {src}) \
+                       AND ({ot} IS NULL OR ( \
+                            SELECT count() FROM operations_appearances oa2 \
+                            WHERE oa2.transaction_id = t.id \
+                              AND oa2.ledger_sequence = t.ledger_sequence \
+                              AND oa2.type = {ot} \
+                              AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
+                       ) > 0) \
+                     ORDER BY t.ledger_sequence {order}, t.id {order} \
+                     LIMIT 1 BY t.id \
+                     LIMIT {lim_peek}",
+                );
+                let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
+                resolve_source_and_closed_at(client, raw).await?
+            }
         }
 
         // --- Statement C: op_type filter only ------------------------------

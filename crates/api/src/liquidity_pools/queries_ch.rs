@@ -306,7 +306,6 @@ pub async fn pool_exists(
 
 #[derive(Debug, Row, Deserialize)]
 struct ParticipantChRow {
-    account: String,
     account_id_surrogate: i64,
     shares: String,
     share_percentage: Option<String>,
@@ -350,7 +349,6 @@ pub async fn fetch_participants(
     // single value to every position row (PG `LEFT JOIN latest_snap ON TRUE`).
     let sql = format!(
         "SELECT \
-            acc.account_id                       AS account, \
             lpp.account_id                       AS account_id_surrogate, \
             toString(lpp.shares)                 AS shares, \
             if(snap.ts IS NULL OR snap.ts = toDecimal128(0, 7), NULL, \
@@ -358,7 +356,6 @@ pub async fn fetch_participants(
             lpp.first_deposit_ledger             AS first_deposit_ledger, \
             lpp.last_updated_ledger              AS last_updated_ledger \
          FROM lp_positions lpp FINAL \
-         JOIN accounts acc FINAL ON acc.id = lpp.account_id \
          CROSS JOIN ( \
             SELECT (SELECT total_shares FROM liquidity_pool_snapshots \
                      WHERE pool_id = unhex(?) \
@@ -382,15 +379,26 @@ pub async fn fetch_participants(
         .fetch_all::<ParticipantChRow>()
         .await?;
 
+    // Resolve the provider StrKey by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `JOIN accounts acc FINAL` (task 0354). INNER-JOIN drop
+    // semantics preserved via filter_map (a position always has its account).
+    let accounts = resolve_accounts(
+        client,
+        rows.iter().map(|r| r.account_id_surrogate).collect(),
+    )
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|r| ParticipantRow {
-            account: r.account,
-            account_id_surrogate: r.account_id_surrogate,
-            shares: r.shares,
-            share_percentage: r.share_percentage,
-            first_deposit_ledger: r.first_deposit_ledger,
-            last_updated_ledger: r.last_updated_ledger,
+        .filter_map(|r| {
+            let account = accounts.get(&r.account_id_surrogate)?.clone();
+            Some(ParticipantRow {
+                account,
+                account_id_surrogate: r.account_id_surrogate,
+                shares: r.shares,
+                share_percentage: r.share_percentage,
+                first_deposit_ledger: r.first_deposit_ledger,
+                last_updated_ledger: r.last_updated_ledger,
+            })
         })
         .collect())
 }
@@ -400,7 +408,7 @@ struct PoolTxChRow {
     id: i64,
     hash: String,
     ledger_sequence: i64,
-    source_account: String,
+    source_id: i64,
     fee_charged: i64,
     successful: bool,
     operation_count: i16,
@@ -571,14 +579,13 @@ pub async fn fetch_pool_transactions(
             t.id                                 AS id, \
             lower(hex(t.hash))                   AS hash, \
             t.ledger_sequence                    AS ledger_sequence, \
-            src.account_id                       AS source_account, \
+            t.source_id                          AS source_id, \
             t.fee_charged                        AS fee_charged, \
             t.successful                         AS successful, \
             t.operation_count                    AS operation_count, \
             t.has_soroban                        AS has_soroban, \
             toUnixTimestamp64Milli(l.closed_at)  AS created_at_ms \
          FROM transactions t \
-         INNER JOIN accounts src ON src.id = t.source_id \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
          WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
@@ -601,26 +608,31 @@ pub async fn fetch_pool_transactions(
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
     let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
+    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
+    // preserved via filter_map (a tx always has its source account).
+    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
 
     Ok(page
         .into_iter()
-        .map(|r| {
+        .filter_map(|r| {
+            let source_account = accounts.get(&r.source_id)?.clone();
             let operation_types = aggregates
                 .get(&r.id)
                 .map(|a| a.operation_types.clone())
                 .unwrap_or_default();
-            PoolTxRow {
+            Some(PoolTxRow {
                 id: r.id,
                 hash: r.hash,
                 ledger_sequence: r.ledger_sequence,
-                source_account: r.source_account,
+                source_account,
                 fee_charged: r.fee_charged,
                 successful: r.successful,
                 operation_count: r.operation_count,
                 has_soroban: r.has_soroban,
                 operation_types,
                 created_at: millis_to_utc(r.created_at_ms),
-            }
+            })
         })
         .collect())
 }
