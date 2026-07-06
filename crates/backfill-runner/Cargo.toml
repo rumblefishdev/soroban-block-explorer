@@ -40,8 +40,8 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 indicatif = "0.18"
 tracing-indicatif = "0.3"
-# Task 0214: HTTP client for the Soroban RPC bootstrap call
-# (rustls-tls + json, no native-tls).
+# Task 0214: HTTP client for the Soroban RPC bootstrap call. Same
+# defaults the audit-harness uses (rustls-tls + json, no native-tls).
 reqwest = { workspace = true }
 # Task 0214: base64-encode `LedgerKey` XDR bytes for the JSON-RPC
 # request body, and decode `LedgerEntryData` XDR bytes from the
