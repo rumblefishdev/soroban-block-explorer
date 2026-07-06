@@ -1,6 +1,6 @@
 //! ClickHouse queries for the liquidity-pool endpoints (task 0243).
 //!
-//! Mirrors the PG path (`queries.rs`) — same `PoolRow` / `PoolTxRow` /
+//! Returns the `PoolRow` / `PoolTxRow` /
 //! `ParticipantRow` / `ChartDataPoint` shapes, so the handlers reuse
 //! `map_pool_item` / cursor builders unchanged after the fetch.
 //!

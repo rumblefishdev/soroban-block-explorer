@@ -1,6 +1,6 @@
 //! ClickHouse queries for the assets endpoints (task 0243).
 //!
-//! Mirrors the PG path (`queries.rs`) one-for-one — same `AssetRow` shape, so
+//! Returns the `AssetRow` shape, so
 //! the handler stays backend-agnostic after the fetch. Assets are addressed by
 //! the composite identity (contract StrKey / `CODE-ISSUER` / the reserved
 //! `native` token); the numeric surrogate was dropped (PR #175), and CH keys

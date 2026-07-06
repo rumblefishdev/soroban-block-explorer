@@ -22,8 +22,7 @@ pub const DEFAULT_URL: &str = "http://localhost:8123";
 
 /// Default ClickHouse user when `CLICKHOUSE_USER` is not set.
 ///
-/// Matches the local-dev posture of the Postgres service: no production
-/// secrets in the compose file.
+/// Local-dev posture only: no production secrets in the compose file.
 pub const DEFAULT_USER: &str = "default";
 
 /// Production CH database — `schema/init.sql` creates every table here.
@@ -74,9 +73,7 @@ pub enum SchemaError {
     #[error("clickhouse query failed: {0}")]
     Query(#[from] clickhouse::error::Error),
     /// Pre-write staging failure (decode error, overflow, malformed
-    /// parser output, …). Mirrors the `HandlerError::Staging` variant
-    /// used by the PG path so the operator sees the same vocabulary
-    /// regardless of target.
+    /// parser output, …) — surfaced before any row hits ClickHouse.
     #[error("clickhouse staging failed: {0}")]
     Staging(String),
 }

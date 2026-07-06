@@ -1,6 +1,6 @@
 //! ClickHouse queries for the contracts endpoints (task 0243).
 //!
-//! Mirrors the PG path (`queries.rs`) — same response shapes, so the handler
+//! Returns the same response shapes across list/detail, so the handler
 //! stays backend-agnostic after the fetch. Contracts are addressed by the
 //! natural C-StrKey throughout (no numeric surrogate on the wire), so there is
 //! no asset-style id-mapping problem.

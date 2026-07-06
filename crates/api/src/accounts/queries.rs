@@ -1,8 +1,8 @@
 //! ClickHouse queries for the accounts endpoints (task 0243).
 //!
-//! Mirrors the PG path (`queries.rs`) one-for-one — same response shapes
-//! (`AccountHeaderRow` / `AccountBalanceRow` / `AccountTxRow`), so the handler
-//! stays backend-agnostic after the fetch. Notable CH-vs-PG divergences:
+//! Returns the `AccountHeaderRow` / `AccountBalanceRow` / `AccountTxRow`
+//! shapes, so the handler stays backend-agnostic after the fetch. Notable
+//! CH translation choices:
 //!
 //! - **`asset_type_name()` is a PG SQL function.** CH has no equivalent, so
 //!   the `asset_type` → label mapping is done in Rust ([`asset_type_name`]),

@@ -1,10 +1,9 @@
 //! ClickHouse implementation of `GET /v1/network/stats`.
 //!
-//! Mirrors `crates/api/src/network/queries.rs` (PG) one-for-one — same
-//! response shape, same empty-cluster handling. Reference SQL lives at
-//! `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`;
-//! the PG semantics for TPS, accounts/contracts estimates, and the
-//! `generated_at` ↔ cache-staleness split carry over verbatim.
+//! Reference SQL lives at
+//! `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`,
+//! which documents the semantics for TPS, accounts/contracts estimates, the
+//! `generated_at` ↔ cache-staleness split, and empty-cluster handling.
 
 use chrono::{DateTime, TimeZone, Utc};
 use clickhouse::Row;
