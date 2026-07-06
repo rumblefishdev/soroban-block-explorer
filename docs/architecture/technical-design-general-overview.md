@@ -8,8 +8,16 @@
 A production-grade, Soroban-first block explorer for the Stellar network. The system
 prioritizes **human-readable transaction display** and first-class Soroban smart contract
 support. The frontend communicates exclusively with a custom Rust/axum REST API (per ADR 0005), which sources
-chain data from the block explorer's own PostgreSQL database — populated by a Galexie-based
+chain data from the block explorer's own ClickHouse store — populated by a Galexie-based
 ingestion pipeline that processes `LedgerCloseMeta` XDR directly from the Stellar network.
+
+> **Store status.** ClickHouse (self-hosted, Hetzner + mTLS) is the sole production
+> datastore per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md);
+> Postgres/sqlx were fully removed from the codebase in task 0244. The §3 Infrastructure
+> topology and the §7 Scaling Model / cost tables below still describe the **frozen
+> pre-cutover AWS-RDS deployment** — physical RDS teardown is scheduled in
+> [task 0239](../../lore/1-tasks/archive/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
+> Phase 6 and those sections will be revised in that PR.
 
 ---
 
@@ -264,9 +272,9 @@ Present across all pages:
 
 ### 2.1 Architecture
 
-The backend is a Rust application (axum + sqlx + utoipa, per ADR 0005) running on AWS Lambda behind API Gateway. It is a
+The backend is a Rust application (axum + utoipa, per ADR 0005) running on AWS Lambda behind API Gateway. It is a
 REST API. The backend does not perform chain indexing; it reads from the block explorer's
-own PostgreSQL database, which is populated by the Galexie-based ingestion pipeline.
+own ClickHouse store, which is populated by the Galexie-based ingestion pipeline.
 
 ```
 ┌──────────┐    HTTPS    ┌─────────────┐              ┌──────────────────────┐
@@ -301,8 +309,8 @@ The backend serves data from the block explorer's own database, adding:
 - **Soroban enrichment** — decorates contract invocations with metadata and function names
   stored at ingestion time
 - **Search** — unified search across transaction hashes, account IDs, contract IDs, token
-  identifiers, NFT identifiers, pool IDs, and indexed metadata using PostgreSQL full-text
-  indexes
+  identifiers, NFT identifiers, pool IDs, and indexed metadata via ClickHouse
+  classification-gated per-bucket lookups (task 0318)
 - **Raw XDR on demand** — for heavy-field endpoints (E3 `/transactions/:hash`,
   E14 `/contracts/:id/events`) the backend fetches the corresponding `.xdr.zst`
   from the public Stellar ledger archive, decompresses and parses it, and merges
@@ -314,7 +322,7 @@ The backend serves data from the block explorer's own database, adding:
   powers the detail endpoints
 
 The backend does **not** call Horizon or any private chain API. Its dependencies are
-(1) the explorer's own RDS for every partition-pruned read and (2) the public Stellar
+(1) the explorer's own ClickHouse store for every partition-pruned read and (2) the public Stellar
 ledger archive for read-time XDR expansion on E3 / E14.
 
 ### 2.3 Endpoints
@@ -535,22 +543,22 @@ expanding to multi-AZ when SLA requirements demand it.
 
 **Hosted by Rumble Fish (AWS sub-account):**
 
-| Component                               | Service                              | Role                                                                                                                                                                                               |
-| --------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Galexie process                         | ECS Fargate (1 task, continuous)     | Streams live ledger data from Stellar network to S3                                                                                                                                                |
-| Historical backfill (`backfill-runner`) | Developer workstation CLI (ADR 0010) | Streams history archives locally; writes directly to RDS. Production tool (task 0145).                                                                                                             |
-| S3 bucket `stellar-ledger-data`         | AWS S3                               | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor                                                                                                                                    |
-| Lambda — Ledger Processor               | AWS Lambda (S3 event-driven)         | Parses XDR; writes explorer records and derived state to RDS                                                                                                                                       |
-| Lambda — Rust/axum API handlers         | AWS Lambda (per API Gateway route)   | Serves all public API requests                                                                                                                                                                     |
-| RDS PostgreSQL                          | AWS RDS (db.r6g.large, Single-AZ)    | Block explorer database (sole production data store; a read-empty ClickHouse pilot lives next to it locally per [ADR 0044](../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md), not in AWS) |
-| API Gateway                             | AWS API Gateway                      | REST API, throttling, request validation, response caching                                                                                                                                         |
-| AWS WAF                                 | AWS WAF                              | Managed rules and abuse protection for public ingress                                                                                                                                              |
-| CloudFront CDN                          | AWS CloudFront                       | Serves React frontend                                                                                                                                                                              |
-| Swagger UI                              | utoipa-swagger-ui `/api-docs`        | OpenAPI spec + interactive documentation                                                                                                                                                           |
-| EventBridge Scheduler                   | AWS EventBridge                      | Cron triggers for operational tasks (e.g. partition management)                                                                                                                                    |
-| Secrets Manager                         | AWS Secrets Manager                  | DB credentials, non-browser integration keys                                                                                                                                                       |
-| CloudWatch + X-Ray                      | AWS CloudWatch                       | Logs, metrics, alarms, distributed tracing                                                                                                                                                         |
-| CI/CD pipeline                          | GitHub Actions → AWS CDK             | Infrastructure-as-code deploy                                                                                                                                                                      |
+| Component                               | Service                              | Role                                                                                                                                                                                                                                                                                |
+| --------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Galexie process                         | ECS Fargate (1 task, continuous)     | Streams live ledger data from Stellar network to S3                                                                                                                                                                                                                                 |
+| Historical backfill (`backfill-runner`) | Developer workstation CLI (ADR 0010) | Streams history archives locally; writes directly to RDS. Production tool (task 0145).                                                                                                                                                                                              |
+| S3 bucket `stellar-ledger-data`         | AWS S3                               | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor                                                                                                                                                                                                                     |
+| Lambda — Ledger Processor               | AWS Lambda (S3 event-driven)         | Parses XDR; writes explorer records and derived state to RDS                                                                                                                                                                                                                        |
+| Lambda — Rust/axum API handlers         | AWS Lambda (per API Gateway route)   | Serves all public API requests                                                                                                                                                                                                                                                      |
+| RDS PostgreSQL                          | AWS RDS (db.r6g.large, Single-AZ)    | Pre-cutover block explorer database; frozen post-cutover — ClickHouse (Hetzner) has since replaced it as the production store per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md), RDS teardown pending (task 0239). See the Store-status note in the intro. |
+| API Gateway                             | AWS API Gateway                      | REST API, throttling, request validation, response caching                                                                                                                                                                                                                          |
+| AWS WAF                                 | AWS WAF                              | Managed rules and abuse protection for public ingress                                                                                                                                                                                                                               |
+| CloudFront CDN                          | AWS CloudFront                       | Serves React frontend                                                                                                                                                                                                                                                               |
+| Swagger UI                              | utoipa-swagger-ui `/api-docs`        | OpenAPI spec + interactive documentation                                                                                                                                                                                                                                            |
+| EventBridge Scheduler                   | AWS EventBridge                      | Cron triggers for operational tasks (e.g. partition management)                                                                                                                                                                                                                     |
+| Secrets Manager                         | AWS Secrets Manager                  | DB credentials, non-browser integration keys                                                                                                                                                                                                                                        |
+| CloudWatch + X-Ray                      | AWS CloudWatch                       | Logs, metrics, alarms, distributed tracing                                                                                                                                                                                                                                          |
+| CI/CD pipeline                          | GitHub Actions → AWS CDK             | Infrastructure-as-code deploy                                                                                                                                                                                                                                                       |
 
 **External services consumed (read-only):**
 
@@ -920,14 +928,20 @@ XDR parsing happens in two places, each with a different scope:
 
 ## 6. Database Schema
 
-The block explorer owns its full PostgreSQL schema. All chain data is stored here;
+The block explorer owns its full schema. All chain data is stored in ClickHouse;
 there is no dependency on an external database.
 
 This section is the narrative overview. Authoritative DDL for every table (column types,
 constraints, indexes, partition names) lives in
 [`database-schema/database-schema-overview.md`](database-schema/database-schema-overview.md),
-which is kept in sync with the live migrations under `crates/db/migrations/` per
+kept in sync with the ClickHouse schema `crates/db-clickhouse/schema/init.sql` per
 [ADR 0032](../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md).
+
+> The DDL and key types in this section are shown in their historical PostgreSQL
+> notation for readability (Postgres was retired in task 0244). For the live ClickHouse
+> form — `ReplacingMergeTree`, `Int64` surrogates, `Decimal128(7)`,
+> `intDiv(ledger_sequence, 500000)` partitioning — see `database-schema-overview.md`
+> and `init.sql`.
 
 Cross-cutting schema disciplines applied to every table:
 
@@ -1368,11 +1382,12 @@ Ledger and transaction history are kept indefinitely.
 > **Note (2026-05-20):** Per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md),
 > the prod datastore for API reads is ClickHouse on Hetzner, not RDS PostgreSQL.
 > Acceptance criteria #2 and #3 below reference "ClickHouse" accordingly. RDS
-> retirement is scheduled in [task 0239](../../lore/1-tasks/backlog/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
-> Phase 6 (M3 — post-launch cost-optimization step). Earlier RDS-centric prose
-> in §6 (Architecture) and §7.3 (Scaling Model) of this document still describes
-> the pre-pivot baseline; a comprehensive sweep is deferred to the
-> docs-architecture cleanup follow-up.
+> retirement is scheduled in [task 0239](../../lore/1-tasks/archive/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
+> Phase 6 (M3 — post-launch cost-optimization step). The store-identity /
+> data-model prose was swept to ClickHouse in task 0244 (see the Store-status note
+> in the intro); the RDS-centric prose that remains — the §3 Infrastructure topology
+> and the §7 Scaling Model / cost tables — deliberately still describes the frozen
+> pre-cutover AWS deployment and is revised when the RDS teardown lands (task 0239).
 >
 > **Note (2026-05-27):** The Ledger Processor trigger mechanism was reworked
 > from per-S3-event Lambda invocations to an **SQS doorbell + ClickHouse-cursor
