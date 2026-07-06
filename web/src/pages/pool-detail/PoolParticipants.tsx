@@ -9,14 +9,13 @@ import {
   PaginationControls,
   QueryErrorState,
   useCursorPagination,
-  usePageHandlers,
   formatAmount,
   formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-import { usePoolParticipants } from '../../api/index.js';
+import { usePagedRows, usePoolParticipants } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
 
@@ -94,9 +93,8 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     usePoolParticipants(poolId, cursor);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

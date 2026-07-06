@@ -63,6 +63,12 @@ export function midpointPollDelay(closedAt: string | undefined): number {
 }
 
 /**
+ * Rows per page for every cursor-paginated list/section. Also the loading
+ * skeleton height, so a full page and its placeholder stay the same size.
+ */
+export const PAGE_SIZE = 20;
+
+/**
  * Default policy for cursor-paginated list queries. `placeholderData:
  * keepPreviousData` keeps the previous page's rows on screen while the
  * next cursor is being fetched, so Next clicks don't flash a spinner

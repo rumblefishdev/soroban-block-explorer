@@ -6,20 +6,19 @@ import {
   DEFAULT_TRUNCATION,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
-  IdentifierDisplay,
   PaginationControls,
   QueryErrorState,
   TableEmptyState,
   truncateMiddle,
   useCursorPagination,
-  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo, type ReactNode } from 'react';
 
-import { useContractEvents } from '../../api/index.js';
+import { useContractEvents, usePagedRows } from '../../api/index.js';
 import { capitalize } from '../../utils/text.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
+import { ledgerColumn } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type EventRow = PaginatedEventItem['data'][number];
@@ -144,14 +143,7 @@ const columns: ExplorerTableColumn<EventRow>[] = [
     width: 200,
     cell: (row) => <DataCell data={row.data} />,
   },
-  {
-    id: 'ledger',
-    header: 'Ledger',
-    width: 120,
-    cell: (row) => (
-      <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
-    ),
-  },
+  ledgerColumn<EventRow>(),
   {
     id: 'time',
     header: 'Time',
@@ -177,9 +169,8 @@ export function ContractEvents({ contractId }: { contractId: string }) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useContractEvents(contractId, cursor);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

@@ -2,11 +2,10 @@ import { Stack } from '@mui/material';
 import {
   type SortDirection,
   useCursorPagination,
-  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback } from 'react';
 
-import { useLedgersList } from '../api/index.js';
+import { useLedgersList, usePagedRows } from '../api/index.js';
 
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
@@ -28,9 +27,8 @@ export default function LedgersListPage() {
     [setSort]
   );
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

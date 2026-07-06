@@ -1,12 +1,9 @@
 import { Stack } from '@mui/material';
 import type { ListContractsData } from '@rumblefish/api-types';
-import {
-  useCursorPagination,
-  usePageHandlers,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { useCursorPagination } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
-import { useContractsList } from '../api/index.js';
+import { PAGE_SIZE, useContractsList, usePagedRows } from '../api/index.js';
 
 import { ContractsFilters } from './contracts/ContractsFilters.js';
 import {
@@ -17,8 +14,6 @@ import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
 type Filters = NonNullable<ListContractsData['query']>;
-
-const PAGE_SIZE = 20;
 
 export default function ContractsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
@@ -39,9 +34,8 @@ export default function ContractsListPage() {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useContractsList(cursor, queryFilters);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );
