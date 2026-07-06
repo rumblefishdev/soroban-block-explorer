@@ -167,76 +167,11 @@ pub enum EventCursor {
         event_index: i16,
     },
 }
-
-// ---------------------------------------------------------------------------
-// Internal query types (not serialized; produced by queries_ch and mapped to
-// the wire types above by the handler). Relocated from the deleted PG
-// queries.rs (task 0244).
-// ---------------------------------------------------------------------------
-
-/// Recent-activity window shared by the detail stats (`fetch_contract_stats`)
-/// and the list's `recent_invocations` column, so both compute the count over
-/// the SAME period. Single source — they cannot drift.
-pub(crate) const STATS_WINDOW: &str = "7 days";
-
-#[derive(Debug)]
-pub struct ContractRow {
-    pub id: i64,
-    pub contract_id: String,
-    pub wasm_hash: Option<String>,
-    pub wasm_uploaded_at_ledger: Option<i64>,
-    pub deployer: Option<String>,
-    pub deployed_at_ledger: Option<i64>,
-    pub contract_type_name: Option<String>,
-    pub contract_type: Option<i16>,
-    pub is_sac: bool,
-    /// Task 0327 — contract mutability, 3-state (`None` = Unknown).
-    pub upgradeable: Option<bool>,
-}
-
 /// Pagination payload for `GET /v1/contracts`. `soroban_contracts` is
 /// unpartitioned with no `created_at`, so the natural order is `id DESC`.
+/// Serialized into the opaque wire cursor (ADR 0008), so it lives on the DTO
+/// boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractIdCursor {
     pub id: i64,
-}
-
-#[derive(Debug)]
-pub struct ContractListRow {
-    pub id: i64,
-    pub contract_id: String,
-    pub contract_type: Option<i16>,
-    pub contract_type_name: Option<String>,
-    pub is_sac: bool,
-    pub deployer: Option<String>,
-    pub deployed_at_ledger: Option<i64>,
-    pub recent_invocations: i64,
-}
-
-/// Resolved, validated `GET /v1/contracts` list params.
-pub struct ResolvedContractsListParams {
-    pub limit: i64,
-    pub cursor: Option<ContractIdCursor>,
-    pub contract_type: Option<i16>,
-    /// Free-text search; matched against `search_vector` (name + contract_id).
-    pub q: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct InterfaceRow {
-    pub contract_id: String,
-    pub wasm_hash: Option<String>,
-    /// `None` for SAC / pre-upload / stub rows.
-    pub interface_metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug)]
-pub struct InvocationAppearanceRow {
-    pub transaction_id: i64,
-    pub transaction_hash: String,
-    pub ledger_sequence: i64,
-    pub created_at: DateTime<Utc>,
-    pub caller_account: Option<String>,
-    pub amount: i32,
-    pub successful: bool,
 }

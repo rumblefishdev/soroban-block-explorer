@@ -37,11 +37,75 @@ use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{
-    ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
-    ResolvedContractsListParams, STATS_WINDOW,
-};
+use chrono::{DateTime, Utc};
+
+use super::dto::ContractIdCursor;
 use super::dto::{ContractStats, EventCursor, EventItem};
+
+// ---------------------------------------------------------------------------
+// Internal query-result rows + resolved params (not serialized; the handler
+// maps these into the public response DTOs).
+// ---------------------------------------------------------------------------
+
+/// Recent-activity window shared by the detail stats (`fetch_contract_stats`)
+/// and the list's `recent_invocations` column, so both compute the count over
+/// the SAME period. Single source — they cannot drift.
+pub(crate) const STATS_WINDOW: &str = "7 days";
+
+#[derive(Debug)]
+pub struct ContractRow {
+    pub id: i64,
+    pub contract_id: String,
+    pub wasm_hash: Option<String>,
+    pub wasm_uploaded_at_ledger: Option<i64>,
+    pub deployer: Option<String>,
+    pub deployed_at_ledger: Option<i64>,
+    pub contract_type_name: Option<String>,
+    pub contract_type: Option<i16>,
+    pub is_sac: bool,
+    /// Task 0327 — contract mutability, 3-state (`None` = Unknown).
+    pub upgradeable: Option<bool>,
+}
+
+#[derive(Debug)]
+pub struct ContractListRow {
+    pub id: i64,
+    pub contract_id: String,
+    pub contract_type: Option<i16>,
+    pub contract_type_name: Option<String>,
+    pub is_sac: bool,
+    pub deployer: Option<String>,
+    pub deployed_at_ledger: Option<i64>,
+    pub recent_invocations: i64,
+}
+
+/// Resolved, validated `GET /v1/contracts` list params.
+pub struct ResolvedContractsListParams {
+    pub limit: i64,
+    pub cursor: Option<ContractIdCursor>,
+    pub contract_type: Option<i16>,
+    /// Free-text search; matched against `search_vector` (name + contract_id).
+    pub q: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct InterfaceRow {
+    pub contract_id: String,
+    pub wasm_hash: Option<String>,
+    /// `None` for SAC / pre-upload / stub rows.
+    pub interface_metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+pub struct InvocationAppearanceRow {
+    pub transaction_id: i64,
+    pub transaction_hash: String,
+    pub ledger_sequence: i64,
+    pub created_at: DateTime<Utc>,
+    pub caller_account: Option<String>,
+    pub amount: i32,
+    pub successful: bool,
+}
 
 /// `contract_type` SMALLINT → label, matching the PG `contract_type_name`
 /// function (migration `20260422000100_contract_type_add_nft_fungible`).
@@ -902,7 +966,7 @@ pub async fn fetch_events(
 
     // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
     // with PK-prefix key-seeks instead of full-table hash joins (mirrors
-    // `transactions::queries_ch::resolve_source_and_closed_at`, task 0290).
+    // `transactions::queries::resolve_source_and_closed_at`, task 0290).
     // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
     // the handful of ledgers on this page, then filters `id IN (...)`; no
     // `FINAL` (a transaction is immutable, so a dup version is identical).
