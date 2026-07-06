@@ -1,10 +1,8 @@
 //! ClickHouse queries backing `GET /v1/search` (task 0318).
 //!
-//! Mirrors the PG path ([`super::queries::fetch_search`]) one-for-one — same
-//! `Vec<(String, SearchHit)>` return shape and the same per-bucket `LIMIT`
-//! semantics, so the handler stays backend-agnostic after the fetch. PG was
-//! retired in prod (ADR 0047; `DATABASE_URL=disabled`), so this is the
-//! production read path once `API_DATASOURCE_SEARCH=ch` is flipped.
+//! Returns `Vec<(String, SearchHit)>` with per-bucket `LIMIT` semantics,
+//! so the handler stays backend-agnostic after the fetch. This is the sole
+//! read path — PG was retired in prod (ADR 0047) and removed (task 0244).
 //!
 //! # Design — classification-gated, concurrent, per-bucket
 //!
@@ -68,8 +66,7 @@ use crate::common::ch::millis_to_utc;
 use crate::common::strkey::pool_id_hex_to_strkey;
 
 use super::classifier::Classified;
-use super::dto::{EntityType, SearchHit};
-use super::queries::IncludeFlags;
+use super::dto::{EntityType, IncludeFlags, SearchHit};
 
 /// Mainnet ledger-partition width (`PARTITION BY intDiv(ledger_sequence,
 /// 500000)` on `transactions`). Used to prune the `transactions` seek to the
@@ -118,7 +115,7 @@ fn asset_route_token(
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-/// CH equivalent of [`super::queries::fetch_search`]. Fires the buckets the
+/// Runs the broad search. Fires the buckets the
 /// classifier proves can match (see module docs), concurrently, and returns the
 /// rows partitioned by `entity_type` for the handler to group. The returned
 /// tuple's `String` is the entity-type literal (the handler ignores it and uses

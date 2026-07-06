@@ -119,6 +119,54 @@ impl EntityType {
     }
 }
 
+/// Which entity buckets the `?type=` filter admits. Parsed from the
+/// query string (backend-agnostic); passed into `fetch_search` to gate
+/// the per-entity CTE branches.
+#[derive(Debug, Clone, Copy)]
+pub struct IncludeFlags {
+    pub transaction: bool,
+    pub contract: bool,
+    pub asset: bool,
+    pub account: bool,
+    pub nft: bool,
+    pub pool: bool,
+}
+
+impl IncludeFlags {
+    pub fn all() -> Self {
+        Self {
+            transaction: true,
+            contract: true,
+            asset: true,
+            account: true,
+            nft: true,
+            pool: true,
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            transaction: false,
+            contract: false,
+            asset: false,
+            account: false,
+            nft: false,
+            pool: false,
+        }
+    }
+
+    pub fn enable(&mut self, t: EntityType) {
+        match t {
+            EntityType::Transaction => self.transaction = true,
+            EntityType::Contract => self.contract = true,
+            EntityType::Asset => self.asset = true,
+            EntityType::Account => self.account = true,
+            EntityType::Nft => self.nft = true,
+            EntityType::Pool => self.pool = true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
