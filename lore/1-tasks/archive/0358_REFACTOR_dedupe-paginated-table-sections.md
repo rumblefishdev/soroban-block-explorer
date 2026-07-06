@@ -2,7 +2,7 @@
 id: '0358'
 title: 'REFACTOR: dedupe paginated-table-section boilerplate — cursor-pagination hook, shared column defs, PAGE_SIZE const'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0351']
 tags: [frontend, refactor, dedup, tables]
@@ -12,6 +12,19 @@ history:
     status: active
     who: karolkow
     note: 'Task created — safe-subset dedup surviving audit; supersedes the rejected DataListCard-migration follow-up'
+  - date: 2026-07-06
+    status: completed
+    who: karolkow
+    note: >
+      All three cuts landed, behaviour- and pixel-preserving. A:
+      usePagedRows hook collapses the identical rows + usePageHandlers tail
+      at 14 call-sites. B: ledgerColumn/hashColumn/statusColumn factories
+      replace the identical column literals (4/4/4 tables); divergent
+      columns untouched. C: single PAGE_SIZE=20 replaces 12 local consts +
+      2 inline literals. 30 files, net -60 LOC. Verified: web typecheck +
+      lint + test (111/111) green; browser boot/render/responsive
+      desktop+mobile, zero runtime errors in refactored code. Delivered via
+      PR (develop <- refactor/0358).
 ---
 
 # REFACTOR: dedupe paginated-table-section boilerplate
@@ -108,22 +121,61 @@ and reference it from the 6 hooks + 2 inline literals.
 
 ## Acceptance Criteria
 
-- [ ] **Zero behaviour change** — every affected list page and detail section
-      renders identically in all five states (first-load skeleton, reloading/
-      pagination skeleton, empty, error, populated) at desktop + mobile widths.
-      Verify by inspection; no snapshot/copy/padding/wrapper changes.
-- [ ] **No prop drilling introduced** — the pagination hook returns values only;
-      no `renderTable` / `renderEmpty` / `renderSkeleton`-style callbacks added
-      to any shared component. Column helpers take at most one trivial arg.
-- [ ] A: ~15 call-sites use the shared cursor-pagination hook.
-- [ ] B: Ledger/Hash/Status columns sourced from shared defs across the tables.
-- [ ] C: single shared `PAGE_SIZE`/`limit` constant.
-- [ ] `nx run web:typecheck`, `web:lint`, `web:test` all green.
-- [ ] **Docs updated** — N/A — pure frontend internal refactor; no change to
+- [x] **Zero behaviour change** — proven by code equivalence (same column
+      defs, same `rows`/handlers logic, same page size) + 111 green component
+      tests that render populated tables and assert cell output. Browser check
+      (desktop+mobile) confirmed shell/skeleton/empty/error render with zero
+      runtime errors in refactored code. NOTE: a live-data pixel diff
+      develop↔branch was NOT run — no backend available in the worktree
+      (Lambda-only, dev proxy key gitignored); populated-state parity rests on
+      code-equivalence + unit tests, not a screenshot comparison.
+- [x] **No prop drilling introduced** — `usePagedRows` returns values only
+      (`rows` + page handlers); no render-prop callbacks added anywhere. Column
+      factories take zero args.
+- [x] A: 14 call-sites use `usePagedRows` (7 list pages + 7 detail sections).
+      LedgerDetailPage left hand-wired (nested `data.transactions.page`).
+- [x] B: Ledger/Hash/Status columns sourced from shared factories in
+      `transactions/cells.tsx` across the tx/event/invocation tables.
+- [x] C: single `PAGE_SIZE` in `api/polling.ts`; 12 local consts + 2 inline
+      `limit:20` literals removed.
+- [x] `nx run web:typecheck`, `web:lint`, `web:test` all green (111/111).
+- [x] **Docs updated** — N/A — pure frontend internal refactor; no change to
       schema, API endpoints, ingestion, infra, or frontend data contracts
       (per [ADR 0032](../2-adrs/0032_docs-architecture-evergreen-maintenance.md)).
-- [ ] **API types regenerated** — N/A — no change under `crates/api/**`,
+- [x] **API types regenerated** — N/A — no change under `crates/api/**`,
       `Cargo.{toml,lock}`, or `libs/api-types/**`.
+
+## Implementation Notes
+
+- **Files:** 30 changed, net −60 LOC. New: `web/src/api/usePagedRows.ts`.
+  Shared column factories added to `web/src/pages/transactions/cells.tsx`.
+- **B scope:** identical columns replaced — ledger×4 (Transactions, Account,
+  ContractInvocations, ContractEvents), hash×4 (Transactions, Latest, Account,
+  PoolTransactions), status×4 (Transactions, Latest, Account,
+  ContractInvocations). Divergent columns (`transaction_hash`,
+  `first_deposit_ledger`, `deployed_at_ledger`) left untouched.
+
+## Design Decisions
+
+### Emerged
+
+1. **A: hook takes the query `data`, not the query hook.** The plan sketched a
+   hook receiving the query hook and returning `isReloading` etc. Passing a hook
+   as a callback breaks `react-hooks/rules-of-hooks` (lint gate), and renaming
+   `isPlaceholderData`→`isReloading` in every caller's JSX is render-logic churn
+   against the zero-visual-change bar. Chose the leaner shape: caller keeps its
+   own status destructure + JSX; hook only collapses the byte-identical
+   `rows` + `usePageHandlers` tail.
+2. **Two ListPage tests + two DetailPage tests re-pointed their mocks.**
+   `Transactions/AssetsListPage.test` now mock the specific hook module (as
+   `AccountsListPage.test` already did) instead of the whole `api/index.js`
+   barrel; `Account/AssetDetailPage.test` feed the real `usePagedRows` via
+   `importActual`. Moving `usePagedRows`/`PAGE_SIZE` into the barrel otherwise
+   made them resolve `undefined` under a barrel mock (sections fell into their
+   error boundary). Test-infra only; assertions unchanged.
+3. **`skeletonRows={20}` in detail sections left as literals.** Out of C's
+   scope (C = the API `limit` constant); the skeleton count is a display concern
+   that only coincidentally equals PAGE_SIZE.
 
 ## Non-Goals (explicitly rejected — do not attempt)
 
