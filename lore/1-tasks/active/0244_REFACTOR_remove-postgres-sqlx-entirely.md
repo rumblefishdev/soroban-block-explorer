@@ -165,6 +165,44 @@ Deletions go to `.trash/` per repo policy, not `rm`.
 - **0243** — all 9 modules on `ch` default ✅ completed
 - **0239** — RDS decommissioned ✅ completed
 
+## Deep-dive addendum — easy-to-miss artifacts (recon 2026-07-06, from task 0350)
+
+A separate deep-dive (3-agent recon during task 0350) mapped the contract
+events/invocations endpoints. Bucket B covers the collapse, but these specific
+PG-only artifacts are **not named** in the plan and are easy to leave behind:
+
+- **PG-only helpers in `crates/api/src/contracts/handlers.rs`** — become dead
+  once the `DataSource::Pg` arm of `list_events` is removed, but they are
+  functions (not just match arms), so deleting the dispatch does NOT delete
+  them. Delete explicitly:
+  - `expand_events()` (~lines 626–671) — the archive-XDR-overlay unfold. This
+    is the "smoking gun": it exists solely to unpack folded PG appearance rows
+    from S3; the CH path has zero equivalent.
+  - `ParsedLedger` struct + `build_parsed_ledgers()` (~185–227)
+  - `fetch_unique_ledgers()` (~147–181) — Stellar-archive fetch for the overlay
+- **Cursor `Pg` variants** — `EventCursor::Pg` (`contracts/dto.rs`) and
+  `TxListCursor::Pg` (`transactions/dto.rs`). After the PG path is gone the
+  `Pg` variant is unreachable, but because it is a serde-`Deserialize` target
+  `cargo check` will **not** flag it as dead — prune by hand. Keep the `Ch`
+  variant + the `*_cursor_matches_source` guards (ADR 0008 fail-clean).
+- **`soroban_events_appearances`** is PG-only for events (CH reads
+  `soroban_events` directly) → fully dead. `soroban_invocations_appearances` is
+  replicated to CH and read live → keep.
+
+### Out of scope for 0244 (flag, do not silently skip)
+
+- **CH-native tx-detail cleanup.** `fetch_event_appearances` (transactions
+  `queries_ch.rs`) synthesizes a PG-shaped "appearance" via `GROUP BY
+(contract, ledger)` over `soroban_events` — the one clearly non-CH-idiom left
+  on the _live_ CH path. Unifying `EventItem`/`EventAppearanceItem` (and the
+  invocation pair) is a **DTO/wire redesign**, not PG removal. Separate
+  follow-up; do not fold into 0244.
+- **AC "response shapes unchanged" caveat (line ~161).** No longer strictly
+  true: task **0350** already removed the `fold_count` field from
+  `EventItem`/`InvocationItem`/`EventAppearanceItem`/`InvocationAppearanceItem`
+  (deliberate breaking change on the public API). 0244's own scope keeps shapes
+  stable, but the `check-generated` baseline shifts once 0350 lands.
+
 ## Notes
 
 - Mostly deletions — review focus is "no orphaned imports, no dead code, no
