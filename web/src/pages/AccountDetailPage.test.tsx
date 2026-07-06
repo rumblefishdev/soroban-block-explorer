@@ -14,9 +14,16 @@ const hookMocks = vi.hoisted(() => ({
   useAccountTransactions: vi.fn(),
 }));
 
-vi.mock('../api/index.js', () => ({
+vi.mock('../api/index.js', async () => ({
   useAccountDetail: hookMocks.useAccountDetail,
   useAccountTransactions: hookMocks.useAccountTransactions,
+  // Pure pagination helper — keep the real implementation so the
+  // transactions section renders instead of hitting its error boundary.
+  usePagedRows: (
+    await vi.importActual<typeof import('../api/usePagedRows.js')>(
+      '../api/usePagedRows.js'
+    )
+  ).usePagedRows,
 }));
 
 const VALID_ACCOUNT =
