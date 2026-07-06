@@ -2720,12 +2720,7 @@
       },
       "EventAppearanceItem": {
         "type": "object",
-        "required": [
-          "contract_id",
-          "ledger_sequence",
-          "fold_count",
-          "created_at"
-        ],
+        "required": ["contract_id", "ledger_sequence", "created_at"],
         "properties": {
           "contract_id": {
             "type": "string"
@@ -2733,11 +2728,6 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
-          },
-          "fold_count": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Appearance fold/expansion count (not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -2747,13 +2737,12 @@
       },
       "EventItem": {
         "type": "object",
-        "description": "One row per event — an appearance with `fold_count > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+        "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
         "required": [
           "transaction_hash",
           "ledger_sequence",
           "transaction_id",
           "successful",
-          "fold_count",
           "created_at",
           "event_type",
           "topics",
@@ -2767,11 +2756,6 @@
           "data": {},
           "event_type": {
             "type": "string"
-          },
-          "fold_count": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Appearance fold/expansion count (not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -2823,12 +2807,7 @@
       },
       "InvocationAppearanceItem": {
         "type": "object",
-        "required": [
-          "contract_id",
-          "ledger_sequence",
-          "fold_count",
-          "created_at"
-        ],
+        "required": ["contract_id", "ledger_sequence", "created_at"],
         "properties": {
           "caller_account": {
             "type": ["string", "null"],
@@ -2841,11 +2820,6 @@
             "type": "string",
             "format": "date-time"
           },
-          "fold_count": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Appearance fold/expansion count (not a monetary amount)."
-          },
           "ledger_sequence": {
             "type": "integer",
             "format": "int64"
@@ -2857,7 +2831,6 @@
         "required": [
           "transaction_hash",
           "ledger_sequence",
-          "fold_count",
           "created_at",
           "successful"
         ],
@@ -2868,11 +2841,6 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
-          },
-          "fold_count": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Folded invocation-tree node count for this appearance (a fold/expansion\ncount, not a monetary amount)."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -3585,13 +3553,12 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row per event — an appearance with `fold_count > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+              "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
                 "transaction_id",
                 "successful",
-                "fold_count",
                 "created_at",
                 "event_type",
                 "topics",
@@ -3605,11 +3572,6 @@
                 "data": {},
                 "event_type": {
                   "type": "string"
-                },
-                "fold_count": {
-                  "type": "integer",
-                  "format": "int64",
-                  "description": "Appearance fold/expansion count (not a monetary amount)."
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -3649,7 +3611,6 @@
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
-                "fold_count",
                 "created_at",
                 "successful"
               ],
@@ -3660,11 +3621,6 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
-                },
-                "fold_count": {
-                  "type": "integer",
-                  "format": "int32",
-                  "description": "Folded invocation-tree node count for this appearance (a fold/expansion\ncount, not a monetary amount)."
                 },
                 "ledger_sequence": {
                   "type": "integer",

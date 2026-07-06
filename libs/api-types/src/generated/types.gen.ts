@@ -598,25 +598,18 @@ export type ErrorEnvelope = {
 export type EventAppearanceItem = {
   contract_id: string;
   created_at: string;
-  /**
-   * Appearance fold/expansion count (not a monetary amount).
-   */
-  fold_count: number;
   ledger_sequence: number;
 };
 
 /**
- * One row per event — an appearance with `fold_count > 1` expands to that
- * many rows (per-tx fields repeated, per-event fields unique).
+ * One row per event. On the PG path a folded appearance row expands to
+ * many `EventItem`s (per-tx fields repeated, per-event fields unique); on
+ * CH each row is already one event.
  */
 export type EventItem = {
   created_at: string;
   data: unknown;
   event_type: string;
-  /**
-   * Appearance fold/expansion count (not a monetary amount).
-   */
-  fold_count: number;
   ledger_sequence: number;
   successful: boolean;
   topics: Array<unknown>;
@@ -646,21 +639,12 @@ export type InvocationAppearanceItem = {
   caller_account?: string | null;
   contract_id: string;
   created_at: string;
-  /**
-   * Appearance fold/expansion count (not a monetary amount).
-   */
-  fold_count: number;
   ledger_sequence: number;
 };
 
 export type InvocationItem = {
   caller_account?: string | null;
   created_at: string;
-  /**
-   * Folded invocation-tree node count for this appearance (a fold/expansion
-   * count, not a monetary amount).
-   */
-  fold_count: number;
   ledger_sequence: number;
   successful: boolean;
   transaction_hash: string;
@@ -1246,10 +1230,6 @@ export type PaginatedEventItem = {
     created_at: string;
     data: unknown;
     event_type: string;
-    /**
-     * Appearance fold/expansion count (not a monetary amount).
-     */
-    fold_count: number;
     ledger_sequence: number;
     successful: boolean;
     topics: Array<unknown>;
@@ -1272,11 +1252,6 @@ export type PaginatedInvocationItem = {
   data: Array<{
     caller_account?: string | null;
     created_at: string;
-    /**
-     * Folded invocation-tree node count for this appearance (a fold/expansion
-     * count, not a monetary amount).
-     */
-    fold_count: number;
     ledger_sequence: number;
     successful: boolean;
     transaction_hash: string;

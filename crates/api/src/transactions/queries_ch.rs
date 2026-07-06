@@ -16,11 +16,10 @@
 //! - **`operations_appearances` has no `id` surrogate** (PR #175). The
 //!   per-op `appearance_id` is the natural-key `application_order`
 //!   (canonical SQL 03 statement C).
-//! - **`soroban_events` is the full-payload table**, with no per-appearance
-//!   fold-count column. The archive-unavailable fallback derives the
-//!   `EventAppearanceItem.fold_count` as the per-contract event `count()` — a
-//!   CH analogue of the PG `soroban_events_appearances.amount` fold count,
-//!   not a token amount (same non-amount semantic as the PG column).
+//! - **`soroban_events` is the full-payload table** (one row per event). The
+//!   archive-unavailable fallback groups per (contract, ledger) to emit one
+//!   appearance row per contract — the same wire shape as the PG appearance
+//!   index (which additionally carries a fold-count column, not surfaced).
 //!
 //! ### List pagination + the partition-prune / read-in-order guard
 //!
@@ -302,7 +301,6 @@ impl From<OpChRow> for OpRow {
 struct EventAppearanceChRow {
     contract_id: String,
     ledger_sequence: i64,
-    amount: i64,
     created_at: i64,
 }
 
@@ -311,7 +309,6 @@ impl From<EventAppearanceChRow> for EventAppearanceRow {
         Self {
             contract_id: row.contract_id,
             ledger_sequence: row.ledger_sequence,
-            amount: row.amount,
             created_at: millis_to_utc(row.created_at),
         }
     }
@@ -322,7 +319,6 @@ struct InvocationAppearanceChRow {
     contract_id: String,
     caller_account: Option<String>,
     ledger_sequence: i64,
-    amount: i32,
     created_at: i64,
 }
 
@@ -332,7 +328,6 @@ impl From<InvocationAppearanceChRow> for InvocationAppearanceRow {
             contract_id: row.contract_id,
             caller_account: row.caller_account.filter(|s| !s.is_empty()),
             ledger_sequence: row.ledger_sequence,
-            amount: row.amount,
             created_at: millis_to_utc(row.created_at),
         }
     }
@@ -805,17 +800,14 @@ pub async fn fetch_event_appearances(
     transaction_id: i64,
     ledger_sequence: i64,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    // CH `soroban_events` is the full-payload table (no fold-count column).
-    // The PG `EventAppearanceItem.fold_count` is a per-(contract, ledger)
-    // appearance fold count; the CH analogue is the per-contract event
-    // `count()` in this tx. Both are non-token "how many" counters, so the
-    // wire shape and semantic match (`fold_count` is never a stroop value).
+    // CH `soroban_events` is the full-payload table (one row per event). We
+    // group per (contract, ledger) to produce one appearance row per contract
+    // in this tx — the same wire shape as the PG appearance index.
     let rows = client
         .query(
             "SELECT \
                 any(sc.contract_id) AS contract_id, \
                 se.ledger_sequence, \
-                toInt64(count()) AS amount, \
                 any(l.closed_at) AS created_at \
              FROM soroban_events se FINAL \
              LEFT JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
@@ -845,7 +837,6 @@ pub async fn fetch_invocation_appearances(
                 sc.contract_id, \
                 nullIf(caller.account_id, '') AS caller_account, \
                 sia.ledger_sequence, \
-                sia.amount, \
                 l.closed_at AS created_at \
              FROM soroban_invocations_appearances sia FINAL \
              LEFT JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \

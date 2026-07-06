@@ -269,7 +269,6 @@ pub struct InvocationAppearanceRow {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
     pub caller_account: Option<String>,
-    pub amount: i32,
     pub successful: bool,
 }
 
@@ -290,7 +289,6 @@ pub async fn fetch_invocation_appearances(
                 sia.ledger_sequence, \
                 sia.created_at, \
                 caller.account_id        AS caller_account, \
-                sia.amount, \
                 t.successful \
          FROM soroban_invocations_appearances sia \
          JOIN transactions t ON t.id = sia.transaction_id AND t.created_at = sia.created_at \
@@ -321,7 +319,6 @@ pub async fn fetch_invocation_appearances(
             ledger_sequence: r.get("ledger_sequence"),
             created_at: r.get("created_at"),
             caller_account: r.get("caller_account"),
-            amount: r.get("amount"),
             successful: r.get("successful"),
         })
         .collect())
@@ -334,7 +331,6 @@ pub struct EventAppearanceRow {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
     pub successful: bool,
-    pub amount: i64,
 }
 
 /// DB appearance index per canonical 14. The handler overlays archive
@@ -352,8 +348,7 @@ pub async fn fetch_event_appearances(
                 encode(t.hash, 'hex')   AS tx_hash, \
                 sea.ledger_sequence, \
                 sea.created_at, \
-                t.successful, \
-                sea.amount \
+                t.successful \
          FROM soroban_events_appearances sea \
          JOIN transactions t ON t.id = sea.transaction_id AND t.created_at = sea.created_at \
          WHERE sea.contract_id = ",
@@ -382,7 +377,6 @@ pub async fn fetch_event_appearances(
             ledger_sequence: r.get("ledger_sequence"),
             created_at: r.get("created_at"),
             successful: r.get("successful"),
-            amount: r.get("amount"),
         })
         .collect())
 }

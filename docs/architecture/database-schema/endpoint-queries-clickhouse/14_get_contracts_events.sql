@@ -8,8 +8,8 @@
 --    read-time XDR decode. Keyset is 3-component
 --    `(ledger_sequence, transaction_id, event_index)`. Divergence from PG: CH
 --    pages per EVENT (one row → one item, `data.len() <= limit`) vs PG's folded
---    appearance (expands to many). `EventItem.fold_count` (vestigial fold-count,
---    not FE-surfaced) is `1` on CH.
+--    appearance (expands to many). The PG fold-count is an internal storage
+--    detail and is not surfaced on the wire.
 -- ============================================================================
 -- Endpoint:     GET /contracts/:contract_id/events
 -- Purpose:      Paginated list of recent events emitted by a contract.

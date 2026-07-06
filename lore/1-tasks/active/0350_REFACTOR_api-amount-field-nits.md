@@ -57,10 +57,15 @@ optional. Grouped so they can be picked up (or declined) together.
 
 - [x] Nit 1 — `fee_charged` raw-stroops + 7-decimals contract documented on the field
       (transactions/accounts/assets/liquidity_pools DTOs; ledgers reuses `TransactionListItem`).
-- [x] Nit 2 — appearance `amount` fields renamed to `fold_count` (DTOs + api-types regen).
-      Renamed all four surfacing DTOs: `EventItem`, `InvocationItem`, `EventAppearanceItem`,
-      `InvocationAppearanceItem`. DB column `soroban_*_appearances.amount` left as-is (correct
-      DB name). FE never read the field → no FE change needed.
+- [x] Nit 2 — **superseded: field REMOVED entirely, not renamed.** Big-picture recon showed
+      the fold-count is doubly dead — FE never reads it AND on the live CH backend it is always
+      `1` (fold has meaning only on the retired PG path). So it was a leaky storage detail on the
+      API contract, redundant (endpoint already expands folds to per-event rows) and derivable.
+      Removed from all four DTOs (`EventItem`, `InvocationItem`, `EventAppearanceItem`,
+      `InvocationAppearanceItem`) + every now-dead internal read (PG row structs/SELECTs, CH
+      intermediate rows/SELECTs, handler construction, CH test). Kept: `SUM(amount)` for
+      `ContractStats.recent_events` (live, different use) + the DB column + indexer dual-write.
+      api-types regenerated. FE untouched (never consumed it).
 - [x] Nit 3 — **decision: keep `share_percentage` server-side.** It is a ratio
       (`shares * 100 / total_shares`), not amount-scaling, so it is an accepted server-side
       exception to the "FE derives" rule. Not worth the churn of returning raw shares + FE divide.

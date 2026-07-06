@@ -138,8 +138,6 @@ pub struct TransactionDetailLight {
 pub struct EventAppearanceItem {
     pub contract_id: String,
     pub ledger_sequence: i64,
-    /// Appearance fold/expansion count (not a monetary amount).
-    pub fold_count: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -149,8 +147,6 @@ pub struct InvocationAppearanceItem {
     /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
     pub caller_account: Option<String>,
     pub ledger_sequence: i64,
-    /// Appearance fold/expansion count (not a monetary amount).
-    pub fold_count: i32,
     pub created_at: DateTime<Utc>,
 }
 

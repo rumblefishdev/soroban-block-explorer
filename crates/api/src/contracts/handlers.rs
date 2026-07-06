@@ -446,7 +446,6 @@ pub async fn list_invocations(
             transaction_hash: row.transaction_hash,
             ledger_sequence: row.ledger_sequence,
             caller_account: row.caller_account,
-            fold_count: row.amount,
             created_at: row.created_at,
             successful: row.successful,
         })
@@ -661,7 +660,6 @@ fn expand_events(
                 ledger_sequence: row.ledger_sequence,
                 transaction_id: row.transaction_id,
                 successful: row.successful,
-                fold_count: row.amount,
                 created_at: row.created_at,
                 event_type: event.event_type.to_string(),
                 topics,
