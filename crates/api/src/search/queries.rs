@@ -29,7 +29,7 @@
 //! `crates/db-clickhouse/schema/init.sql` and the live CH read modules)
 //!
 //! - **Transaction lookup** reads `transaction_hash_index` (ORDER BY `hash`,
-//!   PK point-seek), mirroring [`crate::transactions::queries_ch`]. The
+//!   PK point-seek), mirroring [`crate::transactions::queries`]. The
 //!   canonical `22_get_search.sql` proposes the `transaction_hash_dict`
 //!   Dictionary hot path; that is a CH-only optimisation layerable later
 //!   without changing this contract. `successful` + `last_activity_at` are
@@ -39,7 +39,7 @@
 //!   CH — the live indexer rewrites whole `nfts` rows on every ownership change
 //!   with metadata NULL; task 0231). The canonical SQL's `nfts.name` predicate
 //!   would silently match nothing. We collapse the enrichment with
-//!   `argMax(_, version)` (never `FINAL`) exactly like [`crate::nfts::queries_ch`].
+//!   `argMax(_, version)` (never `FINAL`) exactly like [`crate::nfts::queries`].
 //! - **Contract name** lives in `soroban_contract_metadata` (on-chain METADATA
 //!   struct), NOT the dead `soroban_contracts.name` (no writer since task 0297).
 //!   Contract free-text therefore matches Soroban-native tokens by their
@@ -66,7 +66,55 @@ use crate::common::ch::millis_to_utc;
 use crate::common::strkey::pool_id_hex_to_strkey;
 
 use super::classifier::Classified;
-use super::dto::{EntityType, IncludeFlags, SearchHit};
+use super::dto::{EntityType, SearchHit};
+
+/// Which entity buckets the `?type=` filter admits. Parsed from the query
+/// string (backend-agnostic); passed into `fetch_search` to gate the
+/// per-entity CTE branches.
+#[derive(Debug, Clone, Copy)]
+pub struct IncludeFlags {
+    pub transaction: bool,
+    pub contract: bool,
+    pub asset: bool,
+    pub account: bool,
+    pub nft: bool,
+    pub pool: bool,
+}
+
+impl IncludeFlags {
+    pub fn all() -> Self {
+        Self {
+            transaction: true,
+            contract: true,
+            asset: true,
+            account: true,
+            nft: true,
+            pool: true,
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            transaction: false,
+            contract: false,
+            asset: false,
+            account: false,
+            nft: false,
+            pool: false,
+        }
+    }
+
+    pub fn enable(&mut self, t: EntityType) {
+        match t {
+            EntityType::Transaction => self.transaction = true,
+            EntityType::Contract => self.contract = true,
+            EntityType::Asset => self.asset = true,
+            EntityType::Account => self.account = true,
+            EntityType::Nft => self.nft = true,
+            EntityType::Pool => self.pool = true,
+        }
+    }
+}
 
 /// Mainnet ledger-partition width (`PARTITION BY intDiv(ledger_sequence,
 /// 500000)` on `transactions`). Used to prune the `transactions` seek to the
@@ -74,14 +122,14 @@ use super::dto::{EntityType, IncludeFlags, SearchHit};
 const LEDGER_PARTITION_SIZE: i64 = 500_000;
 
 /// `asset_type` SMALLINT → canonical label, matching the PG `token_asset_type_name`
-/// function (same mapping as [`crate::assets::queries_ch`], NOT the
+/// function (same mapping as [`crate::assets::queries`], NOT the
 /// `AssetType`-XDR `asset_type_name` used by accounts). `None` for an
 /// out-of-range code (the PG `CASE` returns NULL with no `ELSE`).
 fn token_asset_type_name(asset_type: i16) -> Option<String> {
     match asset_type {
         0 => Some("native"),
         1 => Some("classic_credit"),
-        // 2 (`sac`) retired — ADR 0051 (mirrors `assets::queries_ch::asset_type_name`).
+        // 2 (`sac`) retired — ADR 0051 (mirrors `assets::queries::asset_type_name`).
         3 => Some("soroban"),
         _ => None,
     }
@@ -807,7 +855,7 @@ mod tests {
 ///
 /// ```text
 /// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib search::queries_ch::decode_smoke -- --nocapture
+///   cargo test -p api --lib search::queries::decode_smoke -- --nocapture
 /// ```
 #[cfg(test)]
 mod decode_smoke {

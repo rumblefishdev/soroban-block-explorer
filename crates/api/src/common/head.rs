@@ -26,7 +26,7 @@
 //!   read-in-order over the sorting key: a **single granule**, guaranteed
 //!   regardless of whether the server optimises `max()` over the sorting key
 //!   into an index-only read (which is version/setting dependent). This mirrors
-//!   the documented one-granule "latest ledger" idiom in `network/queries_ch.rs`.
+//!   the documented one-granule "latest ledger" idiom in `network/queries.rs`.
 //!
 //! Orders of magnitude cheaper than the network-stats statement it gates.
 //!
@@ -35,7 +35,7 @@
 //! A cold-bootstrap cluster with no ingested ledgers yields `0`: the query
 //! returns zero rows, mapped to `0`. Stellar genesis is ledger 1, so `0` is an
 //! unambiguous "nothing ingested yet" head — consistent with the zero-valued
-//! empty-cluster response in `network/queries_ch.rs`.
+//! empty-cluster response in `network/queries.rs`.
 
 use crate::state::AppState;
 
