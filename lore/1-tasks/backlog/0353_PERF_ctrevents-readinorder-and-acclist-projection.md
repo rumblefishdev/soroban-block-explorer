@@ -14,6 +14,16 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0345 future work — the 2 of 7 entity endpoints needing a different technique than the id-IN resolver.'
+  - date: 2026-07-06
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      acclist spec CORRECTED — measured on prod that `LIMIT 1 BY id` defeats
+      read-in-order (6M rows) vs a raw seek (74k/5ms), so the projection must use
+      approach-B (raw over-fetch + Rust dedup), not `LIMIT 1 BY`. Decision: projection
+      over edge-cache (0346) for freshness. Kept in backlog (0353 id collides with
+      0353_REFACTOR — untangle before promoting); acclist implemented under the 0357
+      cluster. ctrevents part unchanged.
 ---
 
 # PERF: ctrevents read-in-order + acclist projection
@@ -50,14 +60,30 @@ contract (with 0 real duplicates). Two viable fixes:
 - A naive over-fetch buffer is NOT formally safe (rejected — can under-fill the
   page / shift the cursor under re-ingest duplicates).
 
-### acclist (`accounts::fetch_list`) — schema
+### acclist (`accounts::fetch_list`) — schema (projection) + approach-B
 
 `accounts FINAL ORDER BY last_seen_ledger` (non-PK sort) full-scans the table.
-Add a projection `ORDER BY (last_seen_ledger, id)` (+ drop FINAL, rely on
-`LIMIT 1 BY id`). This is a schema change on a ~25M-row table — prod needs
+Add a projection `ORDER BY (last_seen_ledger, id)` so the list SEEKS instead of
+scanning. Schema change on the 22M-row table — prod needs
 `ALTER TABLE accounts ADD PROJECTION … + MATERIALIZE PROJECTION` (heavy one-time
-scan + standing storage/write overhead). Sorting a list by a non-PK column has no
-cheaper structure. Update `docs/architecture/**` (ADR 0032) for the projection.
+scan + standing storage/write overhead). Update `docs/architecture/**` (ADR 0032).
+
+**Correction (2026-07-06 measurement) — do NOT pair it with `LIMIT 1 BY id`.**
+That defeats `optimize_read_in_order` exactly like ctrevents/asttxs. Measured on
+prod (page of 20, isolated), read_rows / ch_dur:
+
+| form                                                 | read_rows | ch_dur   |
+| ---------------------------------------------------- | --------- | -------- |
+| current (FINAL + non-PK ORDER BY)                    | 24.0M     | 1115 ms  |
+| projection + `LIMIT 1 BY id` (the old spec)          | 6.0M      | 105 ms   |
+| **raw read-in-order seek (no FINAL, no LIMIT 1 BY)** | **74k**   | **5 ms** |
+
+So the projected query must use **approach-B** — raw over-fetch on the projection's
+`ORDER BY last_seen_ledger DESC` + Rust consecutive-dedup by account_id (the asttxs
+pattern), NOT `LIMIT 1 BY`. That lands acclist at ~5 ms ch (~74k rows) →
+~110–150 ms total, **fresh + load-resistant, under AC4**. `LIMIT 1 BY` leaves it at
+6M/request. Chosen over edge-cache (0346) deliberately: acclist shows current
+accounts, not a TTL-stale snapshot.
 
 ## Acceptance Criteria
 
