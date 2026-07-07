@@ -31,6 +31,16 @@ history:
       lpdetail/lpchart 0356-blocked, lptxs) + a shared-const refactor (astlist).
       Finding A (limit*128 under-delivery) logged as a shared lptxs+asttxs
       hardening follow-up.
+  - date: 2026-07-06
+    status: active
+    who: stkrolikiewicz
+    note: >
+      lptxs spike: broadly slow (6/6 pools 6–23M), bloom already prunes 99.85%,
+      read-in-order is NOT a clean lever (OFF was faster on a spread pool) → no
+      query-only win, pool_id-MV is the real post-launch fix. Restated the D3 AC4
+      position (point-lookups meet target / lists = documented known-issue+MV /
+      0356 blocked) — literal flat-200ms is unachievable by launch, so AC4 must be
+      reframed with team + SCF before the M3 claim. This feeds the SCF submission.
 ---
 
 # PERF: launch read-path perf cluster
@@ -58,19 +68,19 @@ knowingly reframed — before the mainnet launch.
 
 ## Worklist (ranked by read_rows, 2026-07-06)
 
-| endpoint  | read_rows | state                                                                                                |
-| --------- | --------- | ---------------------------------------------------------------------------------------------------- |
-| nftdetail | 24.7M     | **DONE #314** — resolver swap, 24.7M→103k (235×)                                                     |
-| asttxs    | 23.6M     | **DONE #315** — read-in-order driver, 338M→662k (512×)                                               |
-| acclist   | 24.9M     | **known-issue** (0353) — projection rejected (CH 26.3 blocks RMT); FE-cached 60s, low-traffic browse |
-| lplist    | 24.2M     | `liquidity_pool_snapshots` (295M) latest-per-pool → 0356-class, **blocked**                          |
-| lpdetail  | 14.5M     | 0356 — snapshots FINAL, **blocked** (indexer before/after bug)                                       |
-| lpchart   | 13.2M     | 0356 — snapshots FINAL, **blocked**                                                                  |
-| lptxs     | 18.5M     | at the 0281-C read-in-order **floor**; further = pool_id projection                                  |
-| astlist   | 1.99M     | own task — `assets FINAL` + lookup joins in the shared `ASSET_LIST_CH_SELECT` const                  |
-| astdetail | 1.99M     | 0334 seek done — still 2M, partial                                                                   |
-| search    | 1.0M      | untasked — 4 CH queries, unprofiled                                                                  |
-| txlist    | 2.0M      | untasked — 0290/0333 archived, still ~900 ms                                                         |
+| endpoint  | read_rows | state                                                                                                      |
+| --------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| nftdetail | 24.7M     | **DONE #314** — resolver swap, 24.7M→103k (235×)                                                           |
+| asttxs    | 23.6M     | **DONE #315** — read-in-order driver, 338M→662k (512×)                                                     |
+| acclist   | 24.9M     | **known-issue** (0353) — projection rejected (CH 26.3 blocks RMT); FE-cached 60s, low-traffic browse       |
+| lplist    | 24.2M     | `liquidity_pool_snapshots` (295M) latest-per-pool → 0356-class, **blocked**                                |
+| lpdetail  | 14.5M     | 0356 — snapshots FINAL, **blocked** (indexer before/after bug)                                             |
+| lpchart   | 13.2M     | 0356 — snapshots FINAL, **blocked**                                                                        |
+| lptxs     | 18.5M     | broadly slow (6/6 sampled pools 6–23M); 0281-C floor, RIO not a clean lever; pool_id-MV = real post-launch |
+| astlist   | 1.99M     | own task — `assets FINAL` + lookup joins in the shared `ASSET_LIST_CH_SELECT` const                        |
+| astdetail | 1.99M     | 0334 seek done — still 2M, partial                                                                         |
+| search    | 1.0M      | untasked — 4 CH queries, unprofiled                                                                        |
+| txlist    | 2.0M      | untasked — 0290/0333 archived, still ~900 ms                                                               |
 
 (`ctrevents` sampled fine at 0.25M/52 ms, but 0353's worst case is mega-contracts
 that random id sampling did not hit — keep 0353's fix.)
@@ -102,6 +112,43 @@ raw op-rows don't cover `limit` distinct → `finalize_page` reads a false last 
 dups come only from backfill-overlap and self-heal on merge). Follow-up: a bounded
 `LIMIT 1 BY` fallback on capped under-delivery, applied to BOTH drivers.
 
+**lptxs spike (2026-07-06) — broadly slow; corrected two earlier assumptions.**
+6/6 random pools read 6–23M (not a single outlier). EXPLAIN: `idx_oa_pool_ids`
+already prunes 99.85% (1185/781406 granules) — the residual is the pool's real
+granule footprint (spread across ~1000+ granules of history), not a bloom miss.
+Surprise: `optimize_read_in_order = 0` read LESS + faster (4.67M/40 ms vs
+7M/310 ms) for a spread pool → read-in-order is NOT a clean universal lever (it
+early-terminates only for DENSE pools; can't be globally disabled or dense pools
+explode). No safe query-only win. Isolated ~150–330 ms, but that read-volume ×
+10-VU concurrency is the ~2.4 s from the load test → a broad, scalability-class
+miss. The pool_id-keyed MV (arrayJoin `pool_ids` → `ORDER BY (pool_id, ledger,
+tx)` → prefix-seek, ~tens of k) is a stronger post-launch candidate than first
+thought, not YAGNI.
+
+## D3 AC4 position (2026-07-06) — restated for the SCF claim
+
+The literal AC4 ("p95 < 200 ms" flat across all endpoints) is **unachievable by
+launch** and unrealistic for analytical/list endpoints on single-node ClickHouse.
+Per-endpoint reality, from the load test + the acclist/lptxs spikes:
+
+- **Point-lookups — meet / near target.** nftdetail (#314), account / tx detail.
+  Single-row PK seeks; CH cost is ms, total ≈ the non-CH overhead.
+- **Lists / tx-lists — over target; documented known-issue + post-launch fix.**
+  asttxs fixed (#315); acclist = FE-cached 60 s, low-traffic, cosmetic freshness
+  (projection rejected, CH 26.3 blocks RMT projections); lptxs = broad 6–23M,
+  pool_id-MV post-launch; astlist = shared-const refactor.
+- **Snapshot endpoints — BLOCKED.** lplist / lpdetail / lpchart on 0356 (indexer
+  before/after-image fix), a separate task; not fixable by launch.
+
+**Recommended framing (needs team + SCF sign-off BEFORE the M3 claim):** the AC4
+load-test report states honest per-endpoint p95 — point-lookups meet < 200 ms; the
+list / analytical endpoints are documented known-issues, each with a named cause and
+a post-launch commitment (MVs, the 0356 indexer fix). Defensible (no explorer hits a
+flat 200 ms on every endpoint) and effectively required (a flat target is
+unachievable by launch: 0356 blocked, several endpoints need schema/MV work). Risk:
+if SCF insists on a literal flat 200 ms, M3 slips weeks (MVs + unblocking 0356) —
+confirm the framing with SCF early.
+
 ## Implementation
 
 Per endpoint, same playbook: find the whole-dimension read (a `JOIN` on a
@@ -127,7 +174,7 @@ Order (impact + dependency):
       the working set, verified via `system.query_log`)
 - [ ] Outputs byte-identical to pre-change (prod before/after or local range)
 - [ ] Query-only where possible; any schema / projection / index change noted per endpoint
-- [ ] D3 AC4 position restated with post-fix numbers (feeds the SCF claim)
+- [x] D3 AC4 position restated with post-fix numbers (feeds the SCF claim) — see the "D3 AC4 position" section; needs team + SCF sign-off before the M3 claim
 - [ ] **Docs updated** — N/A unless a projection/index is added → then update the
       schema pages under `docs/architecture/**`
 - [ ] **API types regenerated** — N/A (query-internal; no API surface change)
