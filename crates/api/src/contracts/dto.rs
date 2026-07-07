@@ -127,9 +127,8 @@ pub struct InvocationItem {
     pub successful: bool,
 }
 
-/// One row per event. On the PG path a folded appearance row expands to
-/// many `EventItem`s (per-tx fields repeated, per-event fields unique); on
-/// CH each row is already one event.
+/// One row per event — the full-content `soroban_events` table stores one
+/// row per event (no appearance-fold expansion).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EventItem {
     pub transaction_hash: String,
@@ -146,13 +145,10 @@ pub struct EventItem {
 /// (ADR 0008) so a cursor minted for one backend is rejected after a flag flip;
 /// a legacy/untagged cursor (no `src`) fails to decode → clean 400.
 ///
-/// - `Pg` — `(created_at, transaction_id)` keyset over the folded appearance
-///   index `soroban_events_appearances` (payload overlaid from the Archive at
-///   read time).
-/// - `Ch` — `(ledger_sequence, transaction_id, event_index)` keyset over the
-///   full-content `soroban_events` table (per-event rows; `event_index` is the
-///   multi-event-tx tie-break, non-optional so a CH keyset never binds a NULL
-///   tuple element).
+/// Keyset `(ledger_sequence, transaction_id, event_index)` over the
+/// full-content `soroban_events` table (per-event rows; `event_index` is the
+/// multi-event-tx tie-break, non-optional so a keyset never binds a NULL
+/// tuple element).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum EventCursor {

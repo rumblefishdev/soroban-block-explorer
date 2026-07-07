@@ -597,9 +597,8 @@ export type EventAppearanceItem = {
 };
 
 /**
- * One row per event. On the PG path a folded appearance row expands to
- * many `EventItem`s (per-tx fields repeated, per-event fields unique); on
- * CH each row is already one event.
+ * One row per event — the full-content `soroban_events` table stores one
+ * row per event (no appearance-fold expansion).
  */
 export type EventItem = {
   created_at: string;

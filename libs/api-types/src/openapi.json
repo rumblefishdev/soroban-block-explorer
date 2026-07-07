@@ -2737,7 +2737,7 @@
       },
       "EventItem": {
         "type": "object",
-        "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
+        "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
         "required": [
           "transaction_hash",
           "ledger_sequence",
@@ -3553,7 +3553,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
+              "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
