@@ -1,4 +1,4 @@
-//! Output types that map directly to the PostgreSQL schema.
+//! Output types that map directly to the ClickHouse schema.
 //!
 //! These types are the contract between the XDR parser and the database persistence layer.
 //! Field names match DB column names (snake_case).
@@ -46,7 +46,7 @@ pub struct ExtractedLedger {
     /// hex-encoded (64 chars). Matches Horizon `/ledgers/:N.hash` and every
     /// other Stellar tool — populated by core, never recomputed.
     pub hash: String,
-    /// Ledger close time as Unix timestamp (seconds). `i64` for PostgreSQL BIGINT compatibility.
+    /// Ledger close time as Unix timestamp (seconds). `i64` for the DB `Int64` column.
     pub closed_at: i64,
     /// Stellar protocol version at this ledger.
     pub protocol_version: u32,
@@ -89,7 +89,7 @@ pub struct ExtractedTransaction {
     pub memo_type: Option<String>,
     /// Memo value as string. Nullable.
     pub memo: Option<String>,
-    /// Timestamp derived from parent ledger close time (Unix seconds). `i64` for PostgreSQL BIGINT compatibility.
+    /// Timestamp derived from parent ledger close time (Unix seconds). `i64` for the DB `Int64` column.
     pub created_at: i64,
     /// True if XDR parsing failed for this transaction.
     pub parse_error: bool,
@@ -192,7 +192,7 @@ pub struct ExtractedInvocation {
 /// Extracted contract interface from WASM bytecode at deployment time.
 ///
 /// Produced by `extract_contract_interfaces` when LedgerEntryChanges contain
-/// new `ContractCodeEntry` items. Stored in `soroban_contracts.metadata` JSONB.
+/// new `ContractCodeEntry` items. Stored in the contract `metadata` column.
 #[derive(Debug, Clone)]
 pub struct ExtractedContractInterface {
     /// SHA-256 hash of the WASM bytecode, hex-encoded (64 chars).
@@ -529,6 +529,6 @@ pub struct ExtractedOperation {
     /// source.
     pub source_account: Option<String>,
     /// Type-specific details as a JSON value. Consumed by staging to extract
-    /// identity columns; not persisted as JSONB anywhere in the DB.
+    /// identity columns; not persisted as JSON anywhere in the DB.
     pub details: serde_json::Value,
 }

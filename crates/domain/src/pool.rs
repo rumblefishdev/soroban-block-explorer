@@ -1,5 +1,5 @@
 //! Liquidity-pool domain types matching the `liquidity_pools`,
-//! `liquidity_pool_snapshots`, and `lp_positions` PostgreSQL tables.
+//! `liquidity_pool_snapshots`, and `lp_positions` ClickHouse tables.
 //!
 //! Schema: ADR 0027 Part I §14, §15, §16. Pool identity + asset pair is
 //! fully typed (no JSONB); reserves live in the partitioned snapshots table.

@@ -4,8 +4,8 @@
 //! A generic, IO-free verdict memo over [`ContractType`] — lives in `domain`
 //! because it belongs to no single storage backend (it caches verdicts read
 //! from whatever store the caller uses). Originally the PG NFT-filter cache
-//! (task 0118 Phase 2); now the single home for both the live ClickHouse
-//! NFT-routing fix (task 0283 G9) and the legacy PostgreSQL persist path.
+//! (task 0118 Phase 2); now the home for the live ClickHouse
+//! NFT-routing fix (task 0283 G9).
 //!
 //! The indexer processes many ledgers per Lambda invocation. Without a cache,
 //! every ledger would re-query the store for the same contracts referenced by

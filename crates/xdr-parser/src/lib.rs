@@ -1,7 +1,7 @@
 //! XDR parser for the Soroban block explorer indexer.
 //!
 //! Deserializes `LedgerCloseMeta` payloads from Galexie S3 exports and extracts
-//! structured ledger and transaction data for PostgreSQL persistence.
+//! structured ledger and transaction data for ClickHouse persistence.
 //!
 //! This is the sole XDR parsing path (ADR-0004: Rust-only, ingestion-time).
 

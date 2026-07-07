@@ -1,7 +1,7 @@
 //! ScVal to typed JSON decoder.
 //!
 //! Converts Stellar `ScVal` values into tagged JSON representations
-//! for JSONB storage in PostgreSQL. Used by operations (0025),
+//! for JSON storage in ClickHouse. Used by operations (0025),
 //! events/invocations (0026), and entry changes (0027).
 //!
 //! Output format: `{ "type": "<type_name>", "value": <json_value> }`

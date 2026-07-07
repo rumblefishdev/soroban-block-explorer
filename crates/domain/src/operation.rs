@@ -1,4 +1,4 @@
-//! Operation appearance row matching the `operations_appearances` PostgreSQL
+//! Operation appearance row matching the `operations_appearances` ClickHouse
 //! table (task 0163).
 //!
 //! Schema: ADR 0027 Part I §5 + task 0163. Partitioned on `created_at`,

@@ -1,6 +1,6 @@
 //! Operation extraction from transaction envelopes.
 //!
-//! Extracts per-operation structured data with type-specific JSONB details.
+//! Extracts per-operation structured data with type-specific JSON details.
 //! INVOKE_HOST_FUNCTION operations get enriched extraction: contractId,
 //! functionName, functionArgs (ScVal decoded), and returnValue.
 
