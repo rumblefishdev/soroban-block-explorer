@@ -2,7 +2,7 @@
 id: '0299'
 title: 'REFACTOR: consolidate duplicated route tables — IdentifierDisplay href prop, single source of truth'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0243', '0263', '0264', '0270']
 tags: [frontend, refactor, routing, effort-medium, priority-low, phase-future]
@@ -24,6 +24,20 @@ history:
     note: >
       Promoted to active. Bundled with 0332 onto a single branch
       (feat/0299_0332_routes-consolidation-and-wim-read).
+  - date: '2026-07-07'
+    status: completed
+    who: karolkow
+    note: >
+      Un-bundled from 0332 (unrelated CH read-path work) onto its own branch
+      refactor/0299_routes-consolidation-single-source. Chose Option B (shared
+      source in libs/ui) but landed a leaner 2-export shape after review:
+      `routeSegments` (segment words) + `getIdentifierHref` (the one builder) —
+      the per-type `identifierPaths` table was collapsed away. Also (beyond the
+      original scope, agreed during review): moved `routeForHit` out of libs/ui
+      into web/src/search typed via generated `SearchHit` (dropped hand-rolled
+      `HitLike`; libs/ui stays zero-dep), pointed transaction-detail breadcrumbs
+      at `routes.*`, and un-exported the dead `ELLIPSIS_CHAR`. All AC met;
+      typecheck + 192 FE tests green (pre-commit gate). Commit 7d41e97c.
 ---
 
 # REFACTOR: consolidate duplicated route tables → single source of truth
@@ -86,15 +100,17 @@ package. Decide before implementing.
 
 ## Acceptance Criteria
 
-- [ ] Exactly one place defines each entity's URL shape; the other is deleted
-      or re-exports it.
-- [ ] `IdentifierDisplay` no longer carries an independent route table (it is
-      href-driven, or imports the shared module).
-- [ ] All `<IdentifierDisplay>` callsites render correct links (no broken
+- [x] Exactly one place defines each entity's URL shape; the other is deleted
+      or re-exports it. → `routeSegments` + `getIdentifierHref` in libs/ui;
+      `web/router/routes.ts` and `router/index.tsx` re-use them.
+- [x] `IdentifierDisplay` no longer carries an independent route table (it is
+      href-driven, or imports the shared module). → uses `getIdentifierHref`.
+- [x] All `<IdentifierDisplay>` callsites render correct links (no broken
       hrefs); `routeForHit` + NFT composite + asset `route_token` semantics
       unchanged.
-- [ ] FE tests green (`routeForHit.test.ts` + component tests).
-- [ ] No new `libs/ui → web/` import (dependency direction preserved).
+- [x] FE tests green (`routeForHit.test.ts` + component tests). → 192 tests.
+- [x] No new `libs/ui → web/` import (dependency direction preserved). →
+      `routeForHit` moved the other way (into web); libs/ui stays zero-dep.
 
 ## Future Work
 
