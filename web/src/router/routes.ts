@@ -41,6 +41,8 @@ export const routes = {
     `/${routeSegments.nft}/${contractId}/${encodeURIComponent(tokenId)}`,
 
   pools: `/${routeSegments.pool}`,
+  // `strkey` is the CAP-38 `L...` form (56 chars, base32) — canonical
+  // everywhere; backend `/v1/liquidity-pools/:id` accepts strkey only.
   pool: (strkey: string) => getIdentifierHref('pool', strkey),
 
   search: (q: string) => `/search?q=${encodeURIComponent(q)}`,
