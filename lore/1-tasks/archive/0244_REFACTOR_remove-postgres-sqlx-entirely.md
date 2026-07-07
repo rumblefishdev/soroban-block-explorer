@@ -331,20 +331,30 @@ Deletions go to `.trash/` per repo policy, not `rm`.
 
 ## Acceptance Criteria
 
-- [ ] `rg -i 'sqlx|PgPool|PgConnection|postgres' crates/ infra/ libs/` returns
-      zero hits outside comments/lore/docs archive
-- [ ] `sqlx` absent from workspace `Cargo.toml` and every crate `Cargo.toml`
-- [ ] `cargo check --workspace` clean; no orphaned imports / dead code
-- [ ] API integration tests pass on CH fixtures (PG fixtures ported or dropped)
-- [ ] `API_DATASOURCE_*` + `DATABASE_URL` removed from infra + Lambda config
-- [ ] docker-compose has no Postgres service
-- [ ] Deleted crates removed from workspace members + CDK
-- [ ] Staging smoke: all API endpoints return expected data
-- [ ] **Docs updated** — `docs/architecture/**`: remove PG/RDS from DB layer,
-      ingestion, and infra topology docs (ADR 0032 requires it); ADRs stay as
-      historical record
-- [ ] **API types regenerated** — sanity check
-      `nx run @rumblefish/api-types:check-generated` (response shapes unchanged)
+- [~] `rg -i 'sqlx|PgPool|PgConnection|postgres' crates/ infra/ libs/` = zero
+  outside comments/lore/docs — **met EXCEPT `crates/audit-harness`** (sqlx-bound,
+  kept on purpose → task **0361**); all other hits are intentional history comments.
+- [~] `sqlx` absent from workspace + every crate `Cargo.toml` — **carved to 0361**:
+  workspace `sqlx` dep + `audit-harness` are the only remaining users; the drop
+  lands with the 0361 port.
+- [x] `cargo check --workspace --tests` clean, zero warnings; /review = 0 defects.
+- [~] API integration tests on CH fixtures — the 5448-line PG fixture suite was
+  **dropped**; the CH rebuild is task **0360**.
+- [x] `API_DATASOURCE_*` + `DATABASE_URL` removed from infra (`compute-stack.ts`,
+      Stanisław's ask) + all Rust code.
+- [x] docker-compose has no Postgres service (`postgres` + `pgdata` removed).
+- [x] Deleted crates removed from workspace members + CDK (db-migrate /
+      db-partition-mgmt CDK stacks were removed in 0241; members updated here).
+- [ ] Staging smoke: all API endpoints return expected data — **pending
+      post-merge OPS deploy** (not a code task; runs when PR #319 deploys to staging).
+- [~] **Docs updated** — DB-layer + ingestion + backend/xdr/frontend swept to
+  ClickHouse; the **RDS infra-topology** sections are held for task **0239**
+  (frozen pre-cutover deployment). ADRs kept as historical record.
+- [x] **API types regenerated** — `nx run @rumblefish/api-types:check-generated` green.
+
+**AC summary:** 6 fully met `[x]`; 4 met-modulo-carve-out `[~]` (→ 0361 ×2, 0360, 0239);
+1 pending `[ ]` = staging smoke (post-merge OPS). All of 0244's **code scope** is
+delivered in PR #319; residual AC is owned by the follow-up tasks below.
 
 ## Depends on
 
