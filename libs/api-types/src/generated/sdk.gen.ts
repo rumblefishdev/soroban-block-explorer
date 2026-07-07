@@ -450,11 +450,11 @@ export const listPoolTransactions = <ThrowOnError extends boolean = false>(
  * Get top-level chain overview stats.
  *
  * Reads the canonical single-statement network-stats query (latest
- * ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
+ * ledger row + `ledgers` 60s aggregate for TPS + planner row-count
  * estimates for accounts / contracts) and caches the assembled
  * response **keyed on the chain head** (`latest_ledger_sequence`) in
  * process memory — see `network/cache.rs`. See the task 0045 spec and
- * `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
+ * `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`
  * for the full data-source mapping.
  *
  * Per request we first read the head cheaply (`crate::common::head` —
@@ -551,7 +551,7 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
  * resolves ⇒ navigate; else show the dropdown / list.
  *
  * Authoritative SQL:
- * `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
+ * `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.
  */
 export const getSearch = <ThrowOnError extends boolean = false>(
   options: Options<GetSearchData, ThrowOnError>

@@ -1,5 +1,5 @@
 //! Request and response DTOs for the NFT endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries/{15,16,17}_*.sql`.
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{15,16,17}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

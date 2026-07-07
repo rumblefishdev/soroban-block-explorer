@@ -1,4 +1,4 @@
-//! Asset domain type matching the `assets` PostgreSQL table.
+//! Asset domain type matching the `assets` ClickHouse table.
 //!
 //! Schema: ADR 0027 Part I §11 + ADR 0036 rename. Current shape recorded in
 //! ADR 0037 (task 0164): `icon_url` is the only SEP-1 field on the DB row

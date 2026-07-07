@@ -2,22 +2,17 @@
 name = "backfill-runner"
 version = "0.1.0"
 edition = "2024"
-description = "Production-grade Stellar pubnet backfill runner — public S3 → Postgres or ClickHouse via parse-and-persist"
+description = "Production-grade Stellar pubnet backfill runner — public S3 → ClickHouse via parse-and-persist"
 
 [[bin]]
 name = "backfill-runner"
 path = "src/main.rs"
 
 [dependencies]
-# Task 0241 — indexer's PG persist tree is now feature-gated behind
-# `pg-persist`. backfill-runner's Postgres sink (`--target postgres`)
-# still drives the 15-step PG flow, so we opt into the feature here.
-indexer = { path = "../indexer", features = ["pg-persist"] }
+indexer = { path = "../indexer" }
 xdr-parser = { path = "../xdr-parser" }
-db = { path = "../db" }
-# ClickHouse pilot sink (task 0205, ADR 0044). Persist path currently
-# stubbed; flag-gated via `--target clickhouse`. `aws-mtls` exposes the
-# reusable `client_with_mtls` builder for the mTLS sink path (task 0307,
+# ClickHouse sink (task 0205, ADR 0044). `aws-mtls` exposes the reusable
+# `client_with_mtls` builder for the mTLS sink path (task 0307,
 # `--ch-cert`/`--ch-key`/`--ch-ca`); the Lambda-only extension fetch in that
 # feature compiles unused here (harmless — pub fns).
 db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
@@ -40,7 +35,6 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-sqlx = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 chrono = { workspace = true }
 thiserror = { workspace = true }

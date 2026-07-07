@@ -48,8 +48,8 @@ that source, not an independent redesign.
 
 ## 2. Architectural Role
 
-The backend sits between the public clients and the block explorer's own PostgreSQL
-database. It is the only supported read interface for explorer consumers.
+The backend sits between the public clients and the block explorer's own ClickHouse
+store. It is the only supported read interface for explorer consumers.
 
 Its job is to make indexed chain data usable:
 
@@ -65,9 +65,9 @@ proxy.
 
 ### 3.1 Runtime Model
 
-The backend is a Rust application (axum + sqlx) running on AWS Lambda behind API Gateway. It is a
+The backend is a Rust application (axum) running on AWS Lambda behind API Gateway. It is a
 REST API. The backend does not perform chain indexing; it reads from the block explorer's
-own PostgreSQL database, which is populated by the Galexie-based ingestion pipeline.
+own ClickHouse store, which is populated by the Galexie-based ingestion pipeline.
 
 The public explorer API serves anonymous read traffic. Browser clients do not carry API
 keys; abuse controls are enforced at the ingress layer through throttling, request
@@ -92,7 +92,7 @@ non-browser consumers.
                                                                  │
                                                                  ▼
                                                       ┌──────────────────────┐
-                                                      │  RDS PostgreSQL      │
+                                                      │  ClickHouse (Hetzner)│
                                                       │  (block explorer DB) │
                                                       └──────────────────────┘
 ```
@@ -113,7 +113,7 @@ The backend implementation direction implied by the current design is:
 
 - **axum** for modular API composition and transport-layer structure (per ADR 0005)
 - **Rust** for typed application code with compile-time safety
-- **sqlx** for compile-time checked database queries (per ADR 0005)
+- **ClickHouse** (via the `clickhouse` crate) as the read store (per ADR 0044 / 0047)
 - **utoipa** for OpenAPI spec generation (per ADR 0005). The spec is the single
   source of truth for API contracts and is consumed by the frontend via the
   `libs/api-types` codegen pipeline (task 0096). A secondary `extract_openapi`
@@ -127,11 +127,11 @@ The backend implementation direction implied by the current design is:
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
 - **AWS WAF** for managed-rule abuse protection on public ingress
-- **PostgreSQL** as the only source of indexed chain data served by the API
+- **ClickHouse** as the only source of indexed chain data served by the API
 - **No XDR dependencies** — API serves pre-materialized data; raw XDR is passthrough only (per ADR 0004)
 
 This document assumes the backend follows the implementation direction already
-reflected in the general overview, including axum, sqlx, and utoipa (per ADR 0005), while keeping the API
+reflected in the general overview, including axum and utoipa (per ADR 0005), while keeping the API
 behavior here as the primary contract to preserve.
 
 ## 4. Responsibilities and Boundaries
@@ -146,8 +146,8 @@ The backend serves data from the block explorer's own database, adding:
 - **Soroban enrichment** - decorates contract invocations with metadata and function names
   stored at ingestion time
 - **Search** - unified search across transaction hashes, account IDs, contract IDs, token
-  identifiers, NFT identifiers, pool IDs, and indexed metadata using PostgreSQL full-text
-  indexes
+  identifiers, NFT identifiers, pool IDs, and indexed metadata via ClickHouse
+  classification-gated per-bucket lookups (task 0318)
 - **Runtime details enrichment** — per
   [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md),
   the backend resolves enrichable detail fields at request time rather than
@@ -204,12 +204,11 @@ The backend serves data from the block explorer's own database, adding:
   [ADR 0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md));
   every StrKey in a response comes from a join back to `accounts.account_id`
   or `soroban_contracts.contract_id`. The public API shape is unchanged
-- **Per-module datasource (task 0243)** — read handlers dispatch PG (`sqlx`) or
-  ClickHouse (`clickhouse`) per `DataSource::for_module(Module::X)`
-  (`API_DATASOURCE_<MODULE>` env flag, default PG during the transition;
-  [ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)). Each
-  migrated module carries a `queries_ch.rs` whose rows map to the same
-  `domain::*` / DTO types, so the public response shape is datasource-agnostic.
+- **ClickHouse read store (tasks 0243 / 0244)** — every read handler is served
+  from ClickHouse ([ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md));
+  the per-module PG↔CH `DataSource` dispatch was removed with Postgres. Each
+  module's `queries.rs` maps `clickhouse::Row` results to the same `domain::*` /
+  DTO types, so the public response shape is store-agnostic.
   The `assets` table on ClickHouse has **no numeric surrogate** — it is keyed on
   the natural identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)`,
   which is why `/assets/:id` and the list cursor use the composite token /
@@ -244,7 +243,7 @@ The backend does **not**:
 - call Horizon or any private chain API
 - rely on a third-party explorer database
 
-Backend dependencies at runtime: (1) the explorer's own RDS for every
+Backend dependencies at runtime: (1) the explorer's own ClickHouse store for every
 partition-pruned read, (2) the public Stellar ledger archive for read-time
 XDR expansion on E3 / E14.
 
@@ -406,9 +405,7 @@ tables**, not from the `assets` row — `assets.name` has had no writer since ta
 (classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
 SEP-41 `METADATA`, task 0297) → `'Stellar Lumens'` for native; `symbol` /
 `decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
-classic/SAC). The Postgres read path still reads the legacy `assets.name` and
-surfaces no symbol/decimals until the assets module ports to ClickHouse (task
-0243). See `endpoint-queries-clickhouse/{08,09}_get_assets*.sql`.
+classic/SAC). See `endpoint-queries-clickhouse/{08,09}_get_assets*.sql`.
 
 **`GET /assets/:id/transactions`** - Paginated transactions involving this asset
 (addressed by the same `:id` token forms).
@@ -533,7 +530,7 @@ Behaviour:
   optional); frontend treats absent and empty array identically.
 
 Authoritative SQL:
-[`22_get_search.sql`](../database-schema/endpoint-queries/22_get_search.sql) — UNION ALL
+[`22_get_search.sql`](../database-schema/endpoint-queries-clickhouse/22_get_search.sql) — UNION ALL
 of six narrow CTEs, each `LIMIT $per_group_limit`-bounded, with `:include_*` BOOLEAN
 flags resolved from the optional `?type=` filter (the planner removes branches whose
 flag is FALSE).
@@ -652,7 +649,7 @@ infrastructure contract.
 ### 7.1 Source of Data
 
 List endpoints and all partition-pruned reads come from the block explorer's own
-PostgreSQL database. Heavy-field detail endpoints (E3 `/transactions/:hash`,
+ClickHouse store. Heavy-field detail endpoints (E3 `/transactions/:hash`,
 E14 `/contracts/:id/events`) additionally fetch raw `.xdr.zst` from the **public
 Stellar ledger archive** and re-parse it at request time per
 [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md).
@@ -763,8 +760,8 @@ inconsistent results or duplicated logic across screens.
   sequence. A CloudWatch alarm fires at >60 s lag.
 - **Lambda cold starts** - mitigated via Rust's fast startup on ARM/Graviton2 and provisioned concurrency
   at higher traffic tiers.
-- **Database connection pooling** - RDS Proxy manages connection pools to prevent
-  exhaustion under burst traffic.
+- **Connection handling** - the `clickhouse` HTTP client reuses a hyper connection
+  pool per warm Lambda; there is no external connection proxy.
 
 ### 9.2 Operational Boundary
 

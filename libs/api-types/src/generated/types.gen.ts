@@ -59,7 +59,7 @@ export type AccountDetailResponse = {
   /**
    * `true` when the account was removed from the ledger via `account_merge`
    * and never re-funded (its last lifecycle event is the merge). Derived,
-   * not stored. CH-only — the PG fallback always reports `false`.
+   * not stored.
    */
   deleted: boolean;
   first_seen_ledger: number;
@@ -156,9 +156,8 @@ export type AssetDetailResponse = {
    * the reserved `native` token for native XLM, the contract StrKey
    * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
    * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
-   * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
-   * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
-   * with no surrogate.
+   * the dropped numeric surrogate (PR #175): assets are keyed on
+   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
    */
   id: string;
   issuer?: string | null;
@@ -235,9 +234,8 @@ export type AssetItem = {
    * the reserved `native` token for native XLM, the contract StrKey
    * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
    * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
-   * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
-   * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
-   * with no surrogate.
+   * the dropped numeric surrogate (PR #175): assets are keyed on
+   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
    */
   id: string;
   issuer?: string | null;
@@ -340,7 +338,7 @@ export type ContractDetailResponse = {
    *
    * Derived from the WASM at parse time
    * (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
-   * (none exists). ClickHouse-sourced; always `None` on the retired PG path.
+   * (none exists).
    */
   upgradeable?: boolean | null;
   wasm_hash?: string | null;
@@ -427,11 +425,8 @@ export type ContractStats = {
   /**
    * Event count in the same window as `recent_invocations` (NOT the full
    * `/events` history — that endpoint pages all events with no time bound).
-   * PG sums `soroban_events_appearances.amount` (one appearance row folds
-   * multiple events, `amount > 1`); CH has no appearance-fold table, so it
-   * `count()`s the unfolded `soroban_events` (one row per event). Both tables
-   * are written from the same parser event stream (diagnostics dropped at
-   * parse, System + Contract kept), so the two figures match by construction.
+   * `count()`s the `soroban_events` rows (one row per event) written from the
+   * parser event stream (diagnostics dropped at parse; System + Contract kept).
    */
   recent_events: number;
   recent_invocations: number;
@@ -602,9 +597,8 @@ export type EventAppearanceItem = {
 };
 
 /**
- * One row per event. On the PG path a folded appearance row expands to
- * many `EventItem`s (per-tx fields repeated, per-event fields unique); on
- * CH each row is already one event.
+ * One row per event — the full-content `soroban_events` table stores one
+ * row per event (no appearance-fold expansion).
  */
 export type EventItem = {
   created_at: string;
@@ -691,9 +685,7 @@ export type LedgerDetailResponse = {
 
 /**
  * Slim ledger row returned in the list endpoint and reused inside the
- * detail response as the header block. Doubles as the `sqlx::FromRow`
- * target for `fetch_list` — the SQL projection aliases match this
- * struct's field names so no manual mapping is needed.
+ * detail response as the header block.
  */
 export type LedgerListItem = {
   base_fee: number;
@@ -710,10 +702,8 @@ export type LedgerListItem = {
 /**
  * Top-level chain overview returned by `GET /v1/network/stats`.
  *
- * Field naming and semantics match canonical SQL in task 0167
- * one-for-one. `total_accounts` and `total_contracts` are planner
- * estimates from `pg_class.reltuples` (refreshed by autovacuum /
- * ANALYZE), not exact counts. `latest_ledger_closed_at` is `None`
+ * `total_accounts` and `total_contracts` are planner
+ * estimates, not exact counts. `latest_ledger_closed_at` is `None`
  * only on a cold-bootstrap cluster where no ledger has been indexed
  * yet.
  *
@@ -743,13 +733,11 @@ export type NetworkStats = {
    */
   latest_ledger_sequence: number;
   /**
-   * Estimated indexed account count from `pg_class.reltuples` for
-   * `public.accounts`.
+   * Estimated indexed account count (planner estimate, not exact).
    */
   total_accounts: number;
   /**
-   * Estimated indexed Soroban contract count from `pg_class.reltuples`
-   * for `public.soroban_contracts`.
+   * Estimated indexed Soroban contract count (planner estimate, not exact).
    */
   total_contracts: number;
   /**
@@ -904,13 +892,9 @@ export type OperationItem = {
    * offers that filled against a pool (task 0261/0268 — replaces the
    * former nullable scalar `pool_id`).
    *
-   * **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
-   * pool" **only** for ClickHouse-served responses. The Postgres backend
-   * (default until each module flips to CH, per task 0243) never received
-   * the claim-atom extraction, so it returns `[]` for *every* path-payment
-   * and offer op regardless of whether a pool was crossed — only LP
-   * deposit/withdraw carry a pool there. Treat `[]` as authoritative for
-   * pool absence only once the module reads from CH.
+   * Empty `[]` means "no pool crossed" — authoritative on the ClickHouse
+   * read path, which extracts pool crossings from claim atoms across
+   * path-payment, offer, and LP deposit/withdraw ops.
    */
   pool_ids: Array<string>;
   source_account?: string | null;
@@ -1107,9 +1091,8 @@ export type PaginatedAssetItem = {
      * the reserved `native` token for native XLM, the contract StrKey
      * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
      * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
-     * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
-     * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
-     * with no surrogate.
+     * the dropped numeric surrogate (PR #175): assets are keyed on
+     * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
      */
     id: string;
     issuer?: string | null;
@@ -1498,9 +1481,9 @@ export type PaginatedTransactionListItem = {
      * only (primary-key seek): a contract reached solely via a nested
      * sub-invocation or an emitted event — never a root-op `contract_id` — is
      * NOT listed. For the overwhelming majority of Soroban transactions the
-     * invoked contract IS the root-op `contract_id`, so this matches the PG
-     * path in practice; the full 3-source set was dropped because its scan
-     * blew the read_rows quota (task 0243; see `common::ch`).
+     * invoked contract IS the root-op `contract_id`, so this matches the
+     * full 3-source result in practice; the full set was dropped because its
+     * scan blew the read_rows quota (task 0243; see `common::ch`).
      */
     contract_ids: Array<string>;
     created_at: string;
@@ -1542,7 +1525,7 @@ export type PaginatedTransactionListItem = {
 
 /**
  * One participant row returned by the participants list. Shape pinned to
- * `docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`.
+ * `docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.
  */
 export type ParticipantItem = {
   /**
@@ -1853,9 +1836,9 @@ export type TransactionListItem = {
    * only (primary-key seek): a contract reached solely via a nested
    * sub-invocation or an emitted event — never a root-op `contract_id` — is
    * NOT listed. For the overwhelming majority of Soroban transactions the
-   * invoked contract IS the root-op `contract_id`, so this matches the PG
-   * path in practice; the full 3-source set was dropped because its scan
-   * blew the read_rows quota (task 0243; see `common::ch`).
+   * invoked contract IS the root-op `contract_id`, so this matches the
+   * full 3-source result in practice; the full set was dropped because its
+   * scan blew the read_rows quota (task 0243; see `common::ch`).
    */
   contract_ids: Array<string>;
   created_at: string;
@@ -2328,10 +2311,8 @@ export type ListEventsData = {
   };
   query?: {
     /**
-     * Items per page (1–100, default 20). On the PG datasource the page is per
-     * `(contract, transaction, ledger)` appearance — one appearance can expand to
-     * multiple events, so `data.len()` may exceed `limit`. On the CH datasource the
-     * page is per event (one row → one item), so `data.len() <= limit`.
+     * Items per page (1–100, default 20). The page is per event
+     * (one row → one item), so `data.len() <= limit`.
      */
     limit?: number;
     /**

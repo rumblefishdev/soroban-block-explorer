@@ -1,18 +1,12 @@
-//! Axum handlers for the accounts endpoints.
-//!
-//! Both endpoints dispatch their DB reads through
-//! `DataSource::for_module(Module::Accounts)` — PG (`sqlx`) or CH
-//! (`clickhouse`) per the `API_DATASOURCE_ACCOUNTS` flag (task 0243). The
-//! public response shape and the opaque cursor wire format are
-//! datasource-agnostic; only the row fetches differ.
+//! Axum handlers for the accounts endpoints. DB reads are served from
+//! ClickHouse (`queries`); PG was retired (task 0244).
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
-use crate::common::cursor::{self, Direction, SortOrder, TsIdCursor, parse_sort_order};
-use crate::common::datasource::{DataSource, Module};
+use crate::common::cursor::{self, Direction, SortOrder, parse_sort_order};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::pagination::{finalize_page, into_envelope};
@@ -23,22 +17,12 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
-    AccountTxListParams, AccountsListParams,
+    AccountTxListParams, AccountsListCursor, AccountsListParams,
 };
-use super::queries::{AccountBalanceRow, AccountHeaderRow, AccountTxRow};
-use super::queries::{AccountListRow, AccountsListCursor, ResolvedListParams, fetch_list};
-use super::{queries, queries_ch};
+use super::queries::{
+    self, AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
+};
 
-/// Unified per-call fetch error so the handlers dispatch between PG and CH
-/// without leaking driver types up the call stack. Only `Display` is observed
-/// (forwarded to the canonical `db_error` envelope + tracing).
-#[derive(Debug, thiserror::Error)]
-enum AcctFetchError {
-    #[error("pg: {0}")]
-    Pg(sqlx::Error),
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
-}
 // ---------------------------------------------------------------------------
 // GET /v1/accounts (list)
 // ---------------------------------------------------------------------------
@@ -84,12 +68,11 @@ pub async fn list_accounts(
         with_domain: params.filter_with_domain.unwrap_or(false),
     };
 
-    let source = DataSource::for_module(Module::Accounts);
     let mut rows: Vec<AccountListRow> =
-        match fetch_list_for_source(&state, source, &resolved, sort, direction).await {
+        match fetch_list_for_source(&state, &resolved, sort, direction).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!(source = ?source, "DB error in list_accounts: {e}");
+                tracing::error!("DB error in list_accounts: {e}");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -155,13 +138,11 @@ pub async fn get_account(
         return resp;
     }
 
-    let source = DataSource::for_module(Module::Accounts);
-
-    let header = match fetch_account_for_source(&state, source, &account_id).await {
+    let header = match fetch_account_for_source(&state, &account_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error fetching account {account_id}: {e}");
+            tracing::error!("DB error fetching account {account_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -183,17 +164,15 @@ pub async fn get_account(
             })
             .collect(),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error fetching balances for {account_id}: {e}");
+            tracing::error!("DB error fetching balances for {account_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    let deleted = match fetch_deleted_for_source(&state, source, header.id, header.last_seen_ledger)
-        .await
-    {
+    let deleted = match fetch_deleted_for_source(&state, header.id, header.last_seen_ledger).await {
         Ok(d) => d,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error deriving deleted status for {account_id}: {e}");
+            tracing::error!("DB error deriving deleted status for {account_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -254,24 +233,21 @@ pub async fn list_account_transactions(
         Err(err) => return err.into_response(),
     };
 
-    let source = DataSource::for_module(Module::Accounts);
-
-    // Reject a cursor minted for the other datasource (e.g. a PG cursor
-    // replayed after a flag flip to CH). Its keyset is meaningless under the
-    // active backend, so per ADR 0008 fail with `invalid_cursor` instead of
-    // silently mis-paginating. A legacy/untagged cursor already fails decode
+    // Reject a stale cursor minted under the retired PG backend. Its keyset is
+    // meaningless under CH, so per ADR 0008 fail with `invalid_cursor` instead
+    // of silently mis-paginating. A legacy/untagged cursor already fails decode
     // upstream in the extractor; this guards the decodes-but-wrong-intent case.
     if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(source, cursor)
+        && !cursor_matches_source(cursor)
     {
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
-    let header = match fetch_account_for_source(&state, source, &account_id).await {
+    let header = match fetch_account_for_source(&state, &account_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error resolving account {account_id}: {e}");
+            tracing::error!("DB error resolving account {account_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -281,7 +257,6 @@ pub async fn list_account_transactions(
 
     let mut rows = match fetch_account_tx_for_source(
         &state,
-        source,
         header.id,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
@@ -292,7 +267,7 @@ pub async fn list_account_transactions(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in list_account_transactions: {e}");
+            tracing::error!("DB error in list_account_transactions: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -302,7 +277,7 @@ pub async fn list_account_transactions(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&account_tx_cursor_for(source, r), dir),
+        |dir, r| cursor::encode(&account_tx_cursor_for(r), dir),
     );
     let data: Vec<AccountTransactionItem> = rows
         .into_iter()
@@ -331,125 +306,60 @@ pub async fn list_account_transactions(
 
 async fn fetch_list_for_source(
     state: &AppState,
-    source: DataSource,
     params: &ResolvedListParams,
     sort: SortOrder,
     direction: Direction,
-) -> Result<Vec<AccountListRow>, AcctFetchError> {
-    match source {
-        DataSource::Pg => fetch_list(&state.db, params, sort, direction)
-            .await
-            .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, sort, direction)
-            .await
-            .map_err(AcctFetchError::Ch),
-    }
+) -> Result<Vec<AccountListRow>, clickhouse::error::Error> {
+    queries::fetch_list(&state.ch(), params, sort, direction).await
 }
 
 async fn fetch_account_for_source(
     state: &AppState,
-    source: DataSource,
     account_strkey: &str,
-) -> Result<Option<AccountHeaderRow>, AcctFetchError> {
-    match source {
-        DataSource::Pg => queries::fetch_account(&state.db, account_strkey)
-            .await
-            .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_account(&state.ch(), account_strkey)
-            .await
-            .map_err(AcctFetchError::Ch),
-    }
+) -> Result<Option<AccountHeaderRow>, clickhouse::error::Error> {
+    queries::fetch_account(&state.ch(), account_strkey).await
 }
 
-/// Derived `deleted` status (task 0324). CH-only: prod serves accounts from
-/// CH, so the PG branch returns `false` rather than carrying a duplicate
-/// derivation. See `queries_ch::fetch_deleted_status`.
+/// Derived `deleted` status (task 0324). See `queries::fetch_deleted_status`.
 async fn fetch_deleted_for_source(
     state: &AppState,
-    source: DataSource,
     account_surrogate_id: i64,
     last_seen_ledger: i64,
-) -> Result<bool, AcctFetchError> {
-    match source {
-        DataSource::Pg => Ok(false),
-        DataSource::Ch => {
-            queries_ch::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger)
-                .await
-                .map_err(AcctFetchError::Ch)
-        }
-    }
+) -> Result<bool, clickhouse::error::Error> {
+    queries::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
 }
 
 async fn fetch_account_balances(
     state: &AppState,
     account_id: i64,
-) -> Result<Vec<AccountBalanceRow>, AcctFetchError> {
-    // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331);
-    // the legacy PG portfolio path was cut (PG retired).
-    queries_ch::fetch_balances(&state.ch(), account_id)
-        .await
-        .map_err(AcctFetchError::Ch)
+) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
+    // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331).
+    queries::fetch_balances(&state.ch(), account_id).await
 }
 
 async fn fetch_account_tx_for_source(
     state: &AppState,
-    source: DataSource,
     account_id: i64,
     limit: i64,
     cursor: Option<&TxListCursor>,
     sort: SortOrder,
     direction: Direction,
-) -> Result<Vec<AccountTxRow>, AcctFetchError> {
-    match source {
-        DataSource::Pg => {
-            // PG keys on `(created_at, transaction_id)`; extract that anchor
-            // from the tagged cursor (the cross-source guard above guarantees
-            // any present cursor is the `Pg` variant).
-            let ts_cursor = cursor.and_then(|c| match c {
-                TxListCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
-                TxListCursor::Ch { .. } => None,
-            });
-            queries::fetch_transactions(
-                &state.db,
-                account_id,
-                limit,
-                ts_cursor.as_ref(),
-                sort,
-                direction,
-            )
-            .await
-            .map_err(AcctFetchError::Pg)
-        }
-        DataSource::Ch => {
-            queries_ch::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction)
-                .await
-                .map_err(AcctFetchError::Ch)
-        }
+) -> Result<Vec<AccountTxRow>, clickhouse::error::Error> {
+    queries::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
+}
+
+/// Build the opaque account-transactions cursor for a boundary row. CH keys on
+/// `(ledger_sequence, id)` (the `transaction_participants` / `transactions`
+/// keyset).
+fn account_tx_cursor_for(r: &AccountTxRow) -> TxListCursor {
+    TxListCursor::Ch {
+        ledger_sequence: r.ledger_sequence,
+        tiebreak: r.id,
     }
 }
 
-/// Build the opaque account-transactions cursor for a boundary row. PG keys on
-/// `(created_at, id)`; CH keys on `(ledger_sequence, id)` (the
-/// `transaction_participants` / `transactions` keyset). Tagged with the active
-/// datasource so a later request rejects a cursor minted for the other backend.
-fn account_tx_cursor_for(source: DataSource, r: &AccountTxRow) -> TxListCursor {
-    match source {
-        DataSource::Pg => TxListCursor::Pg {
-            ts: r.created_at,
-            id: r.id,
-        },
-        DataSource::Ch => TxListCursor::Ch {
-            ledger_sequence: r.ledger_sequence,
-            tiebreak: r.id,
-        },
-    }
-}
-
-/// True when the decoded cursor was minted for the currently-active datasource
-/// (ADR 0008 fail-clean on a cross-datasource replay).
-fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
-    matches!(
-        (source, cursor),
-        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
-    )
+/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
+/// under the retired PG backend is rejected (ADR 0008 fail-clean).
+fn cursor_matches_source(cursor: &TxListCursor) -> bool {
+    matches!(cursor, TxListCursor::Ch { .. })
 }

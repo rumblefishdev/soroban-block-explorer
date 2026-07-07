@@ -9,36 +9,22 @@ use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
 use crate::common::conditional;
-use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::head;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
 use super::dto::NetworkStats;
-use super::{queries, queries_ch};
-
-/// Unified per-call fetch error so the moka cache initializer can dispatch
-/// between the PG and CH backends without leaking driver types up the
-/// call stack. Only the `Display` impl is observed (forwarded to the
-/// canonical `db_error` envelope + tracing); the variant is for
-/// diagnostics on the log side.
-#[derive(Debug, thiserror::Error)]
-enum FetchStatsError {
-    #[error("pg: {0}")]
-    Pg(#[from] sqlx::Error),
-    #[error("ch: {0}")]
-    Ch(#[from] clickhouse::error::Error),
-}
+use super::queries;
 
 /// Get top-level chain overview stats.
 ///
 /// Reads the canonical single-statement network-stats query (latest
-/// ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
+/// ledger row + `ledgers` 60s aggregate for TPS + planner row-count
 /// estimates for accounts / contracts) and caches the assembled
 /// response **keyed on the chain head** (`latest_ledger_sequence`) in
 /// process memory — see `network/cache.rs`. See the task 0045 spec and
-/// `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
+/// `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`
 /// for the full data-source mapping.
 ///
 /// Per request we first read the head cheaply (`crate::common::head` —
@@ -63,26 +49,16 @@ enum FetchStatsError {
     ),
 )]
 pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let source = DataSource::for_module(Module::Network);
-
     // Cheap head read gates the cache: the head is the cache key, so a new
     // ledger changes it and the next request misses + recomputes. The probe is
-    // a single-row read over the ledgers ordering key (PG `max(sequence)` over
-    // the PK; CH `ORDER BY sequence DESC LIMIT 1` — see `crate::common::head`),
-    // orders of magnitude cheaper than the stats statement it guards (task
-    // 0291).
-    let head = match source {
-        DataSource::Pg => head::latest_sequence_pg(&state.db)
-            .await
-            .map_err(FetchStatsError::from),
-        DataSource::Ch => head::latest_sequence_ch(&state.ch())
-            .await
-            .map_err(FetchStatsError::from),
-    };
+    // a single-row read over the ledgers ordering key (CH `ORDER BY sequence
+    // DESC LIMIT 1` — see `crate::common::head`), orders of magnitude cheaper
+    // than the stats statement it guards (task 0291).
+    let head = head::latest_sequence_ch(&state.ch()).await;
     let head = match head {
         Ok(head) => head,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error reading head in get_network_stats: {e}");
+            tracing::error!("DB error reading head in get_network_stats: {e}");
             // Availability: the head read is a new hard dependency in front of
             // the cache (it did not exist under the old TTL design, where a
             // warm HIT served with no DB round-trip). A transient head-read
@@ -118,18 +94,12 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     // next request retries cleanly. The stats statement pins its latest-ledger
     // row to `head`, so the value stored under key `head` always reports
     // `latest_ledger_sequence == head`.
-    let result: Result<Arc<NetworkStats>, Arc<FetchStatsError>> = state
+    let result: Result<Arc<NetworkStats>, Arc<clickhouse::error::Error>> = state
         .network_cache
         .try_get_with(head, async {
-            let stats = match source {
-                DataSource::Pg => queries::fetch_stats(&state.db, head)
-                    .await
-                    .map_err(FetchStatsError::from),
-                DataSource::Ch => queries_ch::fetch_stats(&state.ch(), head)
-                    .await
-                    .map_err(FetchStatsError::from),
-            }
-            .map(Arc::new)?;
+            let stats = queries::fetch_stats(&state.ch(), head)
+                .await
+                .map(Arc::new)?;
             // Runs only on a miss (inside the initializer): record the freshest
             // successfully-computed snapshot for the head-read failure fallback
             // above. The std `RwLock` write is never held across an `.await`.
@@ -141,7 +111,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     match result {
         Ok(stats) => ok_response(stats),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in get_network_stats: {e}");
+            tracing::error!("DB error in get_network_stats: {e}");
             errors::internal_error(errors::DB_ERROR, "Unable to retrieve network statistics.")
         }
     }
@@ -168,31 +138,27 @@ fn ok_response(stats: Arc<NetworkStats>) -> Response {
 mod tests {
     //! End-to-end shape check for `/v1/network/stats`.
     //!
-    //! Mirrors the `DATABASE_URL`-gated pattern used by
-    //! `crates/indexer/tests/persist_integration.rs` — runs only when
-    //! the env var is set and reachable, skips cleanly otherwise so
-    //! `cargo test` is green on a workstation without the compose
-    //! stack up.
+    //! `CH_URL`-gated — runs only when the env var is set and reachable,
+    //! skips cleanly otherwise so `cargo test` is green on a workstation
+    //! without a ClickHouse up.
     //!
-    //!   docker compose up -d
-    //!   npm run db:migrate
-    //!   DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer \
+    //!   CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
     //!       cargo test -p api --bin api network -- --test-threads=1
     use axum::Router;
     use axum::body::{self, Body};
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
-    use sqlx::PgPool;
     use tower::ServiceExt;
     use utoipa_axum::router::OpenApiRouter;
 
+    use crate::common::ch::test_client_from_env;
     use crate::network;
     use crate::runtime_enrichment::RuntimeEnrichment;
     use crate::runtime_enrichment::sep1::Sep1Fetcher;
     use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
     use crate::state::AppState;
 
-    fn app(db: PgPool) -> Router {
+    fn app(ch: clickhouse::Client) -> Router {
         let runtime_enrichment = RuntimeEnrichment {
             stellar_archive: StellarArchiveFetcher::new(
                 crate::runtime_enrichment::stellar_archive::test_client(),
@@ -201,7 +167,7 @@ mod tests {
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        let state = AppState::for_tests(db, runtime_enrichment);
+        let state = AppState::for_tests(ch, runtime_enrichment);
 
         let (router, _spec) = OpenApiRouter::new()
             .nest("/v1", network::router())
@@ -215,19 +181,12 @@ mod tests {
     /// parallel tests cannot trample each other's cache state.
     #[tokio::test]
     async fn stats_endpoint_returns_documented_shape_against_real_db() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
-            eprintln!("DATABASE_URL unset — skipping network stats integration test");
+        let Some(ch) = test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping network stats integration test");
             return;
         };
-        let pool = match PgPool::connect(&database_url).await {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("DATABASE_URL unreachable ({err}) — skipping network stats test");
-                return;
-            }
-        };
 
-        let resp = app(pool)
+        let resp = app(ch)
             .oneshot(
                 Request::builder()
                     .uri("/v1/network/stats")

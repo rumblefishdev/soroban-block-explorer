@@ -14,45 +14,33 @@
 //!
 //! ## Why it is cheap (and why the two engines use different SQL)
 //!
-//! Both forms read a single row off the ordering key, not the row body — and
+//! The form reads a single row off the ordering key, not the row body — and
 //! this matters: with version-keying the head is read on **every** request
 //! (not just per cache miss), so its cost is multiplied by the full request
 //! rate. A form that scanned even a moderate slice would risk the CH
 //! `read_rows` quota that this codebase has already tripped (`QUOTA_EXCEEDED`,
-//! see `common/ch.rs`). Each form is therefore the provably-minimal idiom for
-//! its engine:
+//! see `common/ch.rs`). It is therefore the provably-minimal idiom for CH:
 //!
-//! - **PG** — `SELECT max(sequence)`. `sequence` is the `BIGINT PRIMARY KEY`
-//!   (migration `0002_identity_and_ledgers`), and Postgres rewrites
-//!   `max()`/`min()` over an indexed column into an `Index Only Scan Backward`
-//!   with `LIMIT 1`: one index entry (plus at most one heap page for MVCC
-//!   visibility), no heap scan. Microseconds.
-//! - **CH** — `SELECT sequence ORDER BY sequence DESC LIMIT 1`, **not**
-//!   `max(sequence)`. `ledgers` is `ORDER BY (sequence)` (schema `init.sql`),
-//!   so this is a read-in-order over the sorting key: a **single granule**,
-//!   guaranteed regardless of whether the server optimises `max()` over the
-//!   sorting key into an index-only read (which is version/setting dependent).
-//!   This mirrors the documented one-granule "latest ledger" idiom in
-//!   `network/queries_ch.rs`.
+//! - `SELECT sequence ORDER BY sequence DESC LIMIT 1`, **not** `max(sequence)`.
+//!   `ledgers` is `ORDER BY (sequence)` (schema `init.sql`), so this is a
+//!   read-in-order over the sorting key: a **single granule**, guaranteed
+//!   regardless of whether the server optimises `max()` over the sorting key
+//!   into an index-only read (which is version/setting dependent). This mirrors
+//!   the documented one-granule "latest ledger" idiom in `network/queries.rs`.
 //!
-//! Both are orders of magnitude cheaper than the network-stats statement they
-//! gate.
+//! Orders of magnitude cheaper than the network-stats statement it gates.
 //!
 //! ## Empty-table sentinel
 //!
-//! A cold-bootstrap cluster with no ingested ledgers yields `0`: both queries
-//! return zero rows (PG `max()` returns one `NULL` row), mapped to `0`.
-//! Stellar genesis is ledger 1, so `0` is an unambiguous "nothing ingested
-//! yet" head — consistent with the zero-valued empty-cluster response in
-//! `network/queries{,_ch}.rs`.
+//! A cold-bootstrap cluster with no ingested ledgers yields `0`: the query
+//! returns zero rows, mapped to `0`. Stellar genesis is ledger 1, so `0` is an
+//! unambiguous "nothing ingested yet" head — consistent with the zero-valued
+//! empty-cluster response in `network/queries.rs`.
 
-use sqlx::PgPool;
-
-use crate::common::datasource::DataSource;
 use crate::state::AppState;
 
-/// Non-fatal, datasource-aware head read for conditional GET on the live list
-/// endpoints (task 0292).
+/// Non-fatal head read for conditional GET on the live list endpoints
+/// (task 0292).
 ///
 /// Unlike the network-stats path — where the head is the cache key and a
 /// read failure falls back to the last-good snapshot — a list handler that
@@ -60,31 +48,14 @@ use crate::state::AppState;
 /// failed probe is swallowed (logged at `warn`) and returns `None`; the caller
 /// falls through to its normal query path. The probe itself is the cheap
 /// single-row read documented above.
-pub async fn current_head_opt(state: &AppState, source: DataSource) -> Option<i64> {
-    let head = match source {
-        DataSource::Pg => latest_sequence_pg(&state.db)
-            .await
-            .map_err(|e| e.to_string()),
-        DataSource::Ch => latest_sequence_ch(&state.ch())
-            .await
-            .map_err(|e| e.to_string()),
-    };
-    match head {
+pub async fn current_head_opt(state: &AppState) -> Option<i64> {
+    match latest_sequence_ch(&state.ch()).await {
         Ok(h) => Some(h),
         Err(e) => {
-            tracing::warn!(source = ?source, "head read failed; serving list without ETag: {e}");
+            tracing::warn!("head read failed; serving list without ETag: {e}");
             None
         }
     }
-}
-
-/// Latest `ledgers.sequence` from Postgres (B-tree max over the PK).
-/// Returns `0` for an empty `ledgers` table (see module docs).
-pub async fn latest_sequence_pg(pool: &PgPool) -> Result<i64, sqlx::Error> {
-    let head: Option<i64> = sqlx::query_scalar("SELECT max(sequence) FROM ledgers")
-        .fetch_one(pool)
-        .await?;
-    Ok(head.unwrap_or(0))
 }
 
 /// Latest `ledgers.sequence` from ClickHouse: a one-granule read-in-order over

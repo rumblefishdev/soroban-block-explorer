@@ -962,7 +962,6 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let event = ExtractedEvent {
@@ -1110,7 +1109,6 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other, // parser default; classifier overrides
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let nft = synthetic_nft(&contract, "tk1");
@@ -1180,7 +1178,6 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other, // parser default; prior verdict overrides
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let nft = synthetic_nft(&contract, "tk1");
@@ -1246,7 +1243,6 @@ fn prepare_emits_soroban_asset_row_for_fungible_contract() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
 
@@ -1298,7 +1294,6 @@ fn prepare_no_soroban_asset_row_for_nft_contract() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
 
@@ -1484,7 +1479,6 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Token,
         is_sac: true,
-        name: None,
         sac_asset: None,
     };
     let prior: std::collections::HashMap<[u8; 32], ContractType> =
@@ -1540,7 +1534,6 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
 
@@ -1595,7 +1588,6 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let nft = synthetic_nft(&contract, "tk1");
@@ -1796,7 +1788,6 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Token,
         is_sac: true,
-        name: None,
         sac_asset: Some(SacAssetIdentity::Native),
     };
     let overrides = vec![SacOverride {
@@ -1879,7 +1870,6 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         contract_id: None,
         sac_contract_id: None,
         sac_deployed: false,
-        name: None,
         total_supply: None,
         holder_count: None,
     };

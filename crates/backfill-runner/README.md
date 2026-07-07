@@ -1,36 +1,27 @@
 # backfill-runner
 
 Production-grade backfill of the Soroban-era Stellar pubnet archive into
-Postgres. Syncs 64k-ledger partitions from the public
+ClickHouse (ADR 0044). Syncs 64k-ledger partitions from the public
 `aws-public-blockchain` bucket via `aws s3 sync`, decompresses +
-deserializes each ledger, and persists to the ADR 0027 schema via
-`indexer::handler::process::process_ledger` — the shared parse-and-persist
-contract. No reimplementation of the write path.
+deserializes each ledger, and persists via the `db_clickhouse::persist`
+partition-writer lifecycle — reusing the shared `indexer` parse path. No
+reimplementation of the write path.
 
-Also drives the ClickHouse pilot store (ADR 0044) behind
-`--target clickhouse`. As of task 0206 that path writes real rows
-into the 17 mirrored CH tables via partition-aligned streaming
-inserts — see [Targets](#targets) below.
+Real rows are written into the CH tables via partition-aligned streaming
+inserts — see [Writes](#writes) below.
 
 ## Prerequisites
 
 - The `aws` CLI on `PATH` (subprocess driver — no native SDK dependency).
   Startup fails fast if `aws --version` can't run.
-- A reachable Postgres with the project schema migrated (ADR 0027).
-  Startup fails fast if `SELECT 1` fails.
-- **Monthly partitions exist on every partitioned parent.** The runner
-  itself does **not** create partitions — assumes they're already
-  provisioned (in production, by the EventBridge-triggered partition-mgmt
-  Lambda; locally, by the CLI below). Without them, every ingested row
-  lands in `_default`, defeating partition pruning and forcing a costly
-  detach-and-migrate later. Run once before the backfill:
-  ```bash
-  cargo run -p db-partition-mgmt --bin cli   # uses $DATABASE_URL
-  ```
-  Idempotent — re-runs are a no-op once monthly children exist for the
-  Soroban era. See task **0130** + `lore/3-wiki/backfill-execution-plan.md`
-  for context.
-- `DATABASE_URL` exported, or passed via `--database-url`.
+- A reachable ClickHouse with the schema applied (`db-clickhouse-init` /
+  `init.sql`). Startup fails fast if `SELECT 1` fails. ClickHouse
+  partitions declaratively (`PARTITION BY intDiv(ledger_sequence, 500000)`),
+  so there is no partition-provisioning step.
+- `CLICKHOUSE_URL` exported (or `--clickhouse-url`); `CLICKHOUSE_USER` /
+  `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` default via
+  `db_clickhouse::Config::from_env`. For the mTLS Caddy endpoint pass
+  `--ch-cert` / `--ch-key` / `--ch-ca` (task 0307).
 - Run from `us-east-1` (same region as the public archive) to avoid
   cross-region ingress costs.
 - Local scratch disk: **~2 × partition_size** (a couple of GB). The runner
@@ -53,27 +44,21 @@ cargo run -p backfill-runner -- status --start 50457424 --end 50460000
 |---------------------|--------------------------|-----------------------------------------------------|
 | `--start`           | required                 | First ledger sequence (inclusive).                  |
 | `--end`             | required                 | Last ledger sequence (inclusive).                   |
-| `--target`          | `postgres`               | One of `postgres` \| `clickhouse`. See [Targets](#targets). |
-| `--database-url`    | env `DATABASE_URL`       | Postgres DSN (required when `--target postgres`).   |
-| `--clickhouse-url`  | env `CLICKHOUSE_URL`     | ClickHouse HTTP endpoint (used when `--target clickhouse`). |
+| `--clickhouse-url`  | env `CLICKHOUSE_URL`     | ClickHouse HTTP endpoint.                            |
+| `--ch-cert`/`--ch-key`/`--ch-ca` | env `CLICKHOUSE_CERT`/`_KEY`/`_CA` | mTLS PEMs for the Caddy endpoint (all three or none). |
 | `--temp-dir`        | `.temp/backfill-runner`  | Local scratch dir (env `BACKFILL_TEMP_DIR`).        |
 | `--keep-partitions` | off                      | Don't delete each partition's local folder after a successful index. Iteration / debug flag — see [Iteration](#iteration). |
 | `--verbose`/`-v`    | off                      | Enable per-ledger + per-partition info logs. Without it only warnings print during the run. |
 
-## Targets
+## Writes
 
-The runner writes to one of two parallel stores, selected by `--target`.
-Default is `postgres` so existing invocations (CI scripts, runbooks, the
-aws-public-blockchain workflow) keep working byte-for-byte without edits.
+The runner writes to ClickHouse (ADR 0044); Postgres was retired (task
+0244). Env / flags: `--clickhouse-url` / `CLICKHOUSE_URL`, plus
+`CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE`
+(defaults from `db_clickhouse::Config::from_env`); mTLS via
+`--ch-cert`/`--ch-key`/`--ch-ca`.
 
-| Target       | Status              | Required env / flag                                                                        |
-|--------------|---------------------|--------------------------------------------------------------------------------------------|
-| `postgres`   | production          | `--database-url` / `DATABASE_URL`                                                          |
-| `clickhouse` | pilot (task 0206)   | `--clickhouse-url` / `CLICKHOUSE_URL`, plus `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` (defaults from `db_clickhouse::Config::from_env`) |
-
-### `--target clickhouse`
-
-The CH path drives a **partition-writer lifecycle** (task 0206):
+The write path drives a **partition-writer lifecycle** (task 0206):
 `open_partition` → `write_ledger × N` → `commit` (or `abort` on
 error). The CH writer
 (`db_clickhouse::persist::PartitionWriter`) holds one long-lived
@@ -91,16 +76,11 @@ merger's comfort zone. Full design rationale lives in
 [`docs/architecture/database-schema/clickhouse-pilot.md`](../../docs/architecture/database-schema/clickhouse-pilot.md#writers).
 
 ```bash
-# Real ClickHouse run.
+# ClickHouse run.
 CLICKHOUSE_URL=http://localhost:8123 \
     cargo run -p backfill-runner -- \
-    --target clickhouse \
     run --start 62016000 --end 62016099
 ```
-
-The PG variant of the partition-writer lifecycle is a no-op around
-the existing per-ledger transaction — `--target postgres` behaviour
-is byte-for-byte equivalent to the pre-task-0206 path.
 
 ### Parallel partition runs
 
@@ -118,7 +98,6 @@ for i in 0 1 2 3; do
     END=$((START + 63999))
     CLICKHOUSE_URL=http://localhost:8123 \
         cargo run -p backfill-runner --release -- \
-        --target clickhouse \
         run --start "$START" --end "$END" &
 done
 wait
@@ -137,14 +116,12 @@ local folder right after it indexes (`partition local folder cleaned up`
 log line) to bound disk at ~2 × partition_size — see [Shape](#shape).
 For real backfills that's what you want.
 
-For tight iteration loops — typically against `--target clickhouse`
-where the persist path is a stub and you want to re-run the same range
+For tight iteration loops — when you want to re-run the same range
 many times — pass `--keep-partitions`:
 
 ```bash
 CLICKHOUSE_URL=http://localhost:8123 \
     cargo run -p backfill-runner -- \
-    --target clickhouse \
     --keep-partitions \
     run --start 62016000 --end 62016099
 ```
@@ -189,9 +166,9 @@ built at startup:
 1. **Pre-sync partition skip** — partitions whose clamped range
    (`max(start, p.start)..=min(end, p.end)`) is fully present in the set
    are filtered out and neither synced nor indexed. Re-running a
-   fully-done range does zero S3 work and zero `process_ledger` calls.
+   fully-done range does zero S3 work and zero `write_ledger` calls.
 2. **Per-ledger skip (inside a partition)** — for partitions that survive
-   the pre-sync filter, `process_ledger` is skipped for any sequence
+   the pre-sync filter, `write_ledger` is skipped for any sequence
    already in the set. Handles mid-partition crashes where the partition
    is only partially in DB.
 
@@ -309,28 +286,6 @@ of re-downloading from zero. If forensics aren't needed after a failure,
 Reference throughput per partition is **to be measured** on a `us-east-1`
 instance against the production DB. Update this section after the first
 dry-run.
-
-## Diff vs `crates/backfill-bench`
-
-Both crates target the **same sink** (Postgres, ADR 0027, via
-`process_ledger`) and use the **same unit of work** (one 64k-ledger
-partition via `aws s3 sync`). `backfill-bench` is the prototype /
-benchmark; `backfill-runner` is the operator-facing production tool.
-They coexist intentionally.
-
-| Axis                     | backfill-bench             | backfill-runner                      |
-|--------------------------|----------------------------|--------------------------------------|
-| S3 fetch                 | `aws s3 sync` subprocess   | `aws s3 sync` subprocess             |
-| Scratch dir              | `.temp/`                   | `.temp/backfill-runner/` (flag)      |
-| Cleanup after index      | no                         | yes (disk bounded at ~2 × partition) |
-| Concurrency              | sequential + prefetch      | sequential + prefetch (same)         |
-| Retry                    | none                       | 3× exp backoff on `aws s3 sync`      |
-| Subcommands              | single run                 | `run`, `status`                      |
-| Pre-flight checks        | none                       | `aws --version` + `SELECT 1`         |
-| Resume — partition level | none                       | pre-sync skip against DB             |
-| Resume — ledger level    | none                       | per-ledger skip against DB           |
-| Per-stage timing logs    | minimal                    | every ledger + per-partition totals  |
-| `DEFAULT` partition boot | yes (dev shortcut)         | no — assumes provisioned             |
 
 ## Nx targets
 

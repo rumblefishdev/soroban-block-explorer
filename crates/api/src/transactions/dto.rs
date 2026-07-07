@@ -35,10 +35,10 @@ pub struct ListParams {
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
-/// freely; the flip side is that a cursor which decodes but carries the
-/// *other* backend's intent MUST be rejected with `invalid_cursor` rather
+/// freely; the flip side is that a cursor which decodes but carries a
+/// legacy backend's intent MUST be rejected with `invalid_cursor` rather
 /// than silently mis-paginating. `list_transactions` enforces that the
-/// decoded variant matches the active `DataSource`, and a legacy/untagged
+/// decoded variant is the current `Ch` keyset, and a legacy/untagged
 /// cursor (pre-0243, no `src`) fails to decode at all — both surface as a
 /// clean HTTP 400, exactly the "fail, don't silent-promote" contract ADR
 /// 0008 prescribes. The tie-break is non-optional on the `Ch` variant, so a
@@ -46,7 +46,6 @@ pub struct ListParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    Pg { ts: DateTime<Utc>, id: i64 },
     Ch { ledger_sequence: i64, tiebreak: i64 },
 }
 
@@ -80,9 +79,9 @@ pub struct TransactionListItem {
     /// only (primary-key seek): a contract reached solely via a nested
     /// sub-invocation or an emitted event — never a root-op `contract_id` — is
     /// NOT listed. For the overwhelming majority of Soroban transactions the
-    /// invoked contract IS the root-op `contract_id`, so this matches the PG
-    /// path in practice; the full 3-source set was dropped because its scan
-    /// blew the read_rows quota (task 0243; see `common::ch`).
+    /// invoked contract IS the root-op `contract_id`, so this matches the
+    /// full 3-source result in practice; the full set was dropped because its
+    /// scan blew the read_rows quota (task 0243; see `common::ch`).
     pub contract_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -177,13 +176,9 @@ pub struct OperationItem {
     /// offers that filled against a pool (task 0261/0268 — replaces the
     /// former nullable scalar `pool_id`).
     ///
-    /// **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
-    /// pool" **only** for ClickHouse-served responses. The Postgres backend
-    /// (default until each module flips to CH, per task 0243) never received
-    /// the claim-atom extraction, so it returns `[]` for *every* path-payment
-    /// and offer op regardless of whether a pool was crossed — only LP
-    /// deposit/withdraw carry a pool there. Treat `[]` as authoritative for
-    /// pool absence only once the module reads from CH.
+    /// Empty `[]` means "no pool crossed" — authoritative on the ClickHouse
+    /// read path, which extracts pool crossings from claim atoms across
+    /// path-payment, offer, and LP deposit/withdraw ops.
     pub pool_ids: Vec<String>,
     /// 1-based per-tx apply position carrying on-chain operation order
     /// (task 0192). For folded appearance rows (multiple identical-identity
@@ -196,22 +191,11 @@ pub struct OperationItem {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::cursor::{self, CursorError, Direction};
     use chrono::TimeZone;
-
-    #[test]
-    fn pg_cursor_round_trips() {
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let c = TxListCursor::Pg { ts, id: 42 };
-        let encoded = cursor::encode(&c, Direction::Next);
-        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-        assert_eq!(dir, Direction::Next);
-        assert!(matches!(decoded, TxListCursor::Pg { id: 42, .. }));
-    }
 
     #[test]
     fn ch_cursor_round_trips() {
@@ -237,13 +221,9 @@ mod tests {
 
     #[test]
     fn variant_carries_the_src_tag_on_the_wire() {
-        // The `src` discriminant is what lets `list_transactions` detect a
-        // cross-datasource cursor and reject it (ADR 0008 fail-clean).
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        assert_eq!(
-            serde_json::to_value(TxListCursor::Pg { ts, id: 1 }).unwrap()["src"],
-            "pg"
-        );
+        // The `src` discriminant is what lets `list_transactions` reject a
+        // stale PG cursor (ADR 0008 fail-clean): a decoded cursor without the
+        // current `ch` tag is refused.
         assert_eq!(
             serde_json::to_value(TxListCursor::Ch {
                 ledger_sequence: 1,

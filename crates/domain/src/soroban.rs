@@ -1,5 +1,5 @@
 //! Soroban domain types matching the `soroban_contracts` and
-//! `wasm_interface_metadata` PostgreSQL tables.
+//! `wasm_interface_metadata` ClickHouse tables.
 //!
 //! Schema: ADR 0027 Part I §7, §8.
 //! `soroban_contracts.search_vector` is a generated TSVECTOR — DB-only, omitted.
@@ -28,7 +28,7 @@ pub struct SorobanContract {
 }
 
 /// ABI / WASM metadata keyed by wasm_hash (ADR 0027 §8).
-/// Metadata JSONB carries `{ functions: [...], wasm_byte_len: <int> }`.
+/// Metadata JSON carries `{ functions: [...], wasm_byte_len: <int> }`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmInterfaceMetadata {
     pub wasm_hash: Vec<u8>,

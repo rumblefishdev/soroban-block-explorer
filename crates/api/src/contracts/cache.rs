@@ -7,7 +7,7 @@
 //!
 //! TTL is fixed at 45 seconds (midpoint of the 30–60 s window in task 0050)
 //! so repeated explorer page-views of the same contract avoid re-issuing
-//! the detail + stats queries against Postgres. `MAX_ENTRIES` keeps the map
+//! the detail + stats queries against ClickHouse. `MAX_ENTRIES` keeps the map
 //! bounded so a high-cardinality scrape cannot balloon Lambda memory.
 
 use std::sync::Arc;

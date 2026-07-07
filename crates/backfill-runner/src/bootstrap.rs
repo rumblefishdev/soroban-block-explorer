@@ -78,15 +78,13 @@
 //!
 //! The runner CLI exposes `--soroban-rpc-url`. If unset, the
 //! bootstrap step logs `info!("bootstrap skipped — no rpc endpoint")`
-//! and returns `Ok(0)`. PG-target runs always skip the bootstrap
-//! (PG's account-state population is independent — task 0119 +
-//! ADR 0027 §7 cover it via a different path).
+//! and returns `Ok(0)`.
 
 use std::collections::HashSet;
 
 use clickhouse::Client as ClickhouseClient;
 use serde::Deserialize;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::error::BackfillError;
 use crate::rpc_snapshot::{
@@ -108,8 +106,7 @@ pub struct BootstrapStats {
 
 /// Run the bootstrap step for the window `[start, end]`.
 ///
-/// CH-only — PG target short-circuits to `Ok(default)` and logs the
-/// skip. No-op when `rpc_url` is `None` (lets the runner be exercised
+/// No-op when `rpc_url` is `None` (lets the runner be exercised
 /// without Soroban RPC connectivity in CI / dev).
 pub async fn bootstrap_account_state(
     sink: &Sink,
@@ -117,10 +114,7 @@ pub async fn bootstrap_account_state(
     start: u32,
     end: u32,
 ) -> Result<BootstrapStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        debug!("bootstrap_account_state: skipped (PG target)");
-        return Ok(BootstrapStats::default());
-    };
+    let client = sink.client();
     let Some(rpc_url) = rpc_url else {
         info!(
             start,
@@ -403,8 +397,7 @@ mod tests {
     //! 1. **Pure-decoder unit tests** — live in `rpc_snapshot::tests`
     //!    next to the code under test. Lock the XDR → snapshot field
     //!    contract.
-    //! 2. **PG short-circuit** — no env vars, runs everywhere.
-    //! 3. **CH-gated smoke** — `CLICKHOUSE_URL` set, exercises
+    //! 2. **CH-gated smoke** — `CLICKHOUSE_URL` set, exercises
     //!    `collect_skeleton_accounts` against real CH (no RPC needed —
     //!    we fabricate a skeleton row and verify discovery picks it up).
     //! 4. **End-to-end with a live RPC** — open as operational
@@ -419,23 +412,6 @@ mod tests {
     /// can't collide with this one's window.
     const TEST_BASE: u32 = 4_000_010_000;
 
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        // Build a placeholder PG sink — we never connect; the function
-        // pattern-matches on the variant and exits before touching it.
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = bootstrap_account_state(&sink, Some("http://does-not-matter"), 0, 1)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.discovered, 0);
-        assert_eq!(stats.fetched, 0);
-        assert_eq!(stats.staged_accounts, 0);
-    }
-
     async fn build_ch_sink() -> Option<Sink> {
         let url = std::env::var("CLICKHOUSE_URL").ok()?;
         let cfg = db_clickhouse::Config {
@@ -447,7 +423,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL set but apply_init_sql failed ({err}) — skipping");
             return None;
         }
-        Some(Sink::Clickhouse(client))
+        Some(Sink::new(client))
     }
 
     /// Fabricate a "skeleton" account row + a participant row referencing
@@ -460,9 +436,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL not set — skipping");
             return;
         };
-        let Sink::Clickhouse(ref client) = sink else {
-            unreachable!()
-        };
+        let client = sink.client();
 
         let ledger = TEST_BASE + 5;
         let strkey = "GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55";
@@ -611,9 +585,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL not set — skipping");
             return;
         };
-        let Sink::Clickhouse(ref client) = sink else {
-            unreachable!()
-        };
+        let client = sink.client();
 
         // Use a deterministic StrKey not used by any other smoke.
         let strkey = "GAAA3DLOXJWE74P3GAAQNVGPS5DKWWZRBP5DSE74RGD3UPNYI2NXTUYC";

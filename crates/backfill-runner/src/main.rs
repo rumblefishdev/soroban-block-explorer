@@ -1,8 +1,8 @@
-//! backfill-runner — production-grade Stellar pubnet backfill to Postgres.
+//! backfill-runner — production-grade Stellar pubnet backfill to ClickHouse.
 //!
 //! Source: `aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` (unsigned).
-//! Sink:   Postgres, ADR 0027 schema, via
-//!         `indexer::handler::process::process_ledger` (parse-and-persist).
+//! Sink:   ClickHouse (ADR 0044), via the `db_clickhouse::persist`
+//!         partition-writer lifecycle.
 
 mod assets_id_backfill;
 mod balance_seed;
@@ -16,7 +16,6 @@ mod nft_reclassify;
 mod nft_reparse;
 mod partition;
 mod repair_tier1;
-mod resume;
 mod rpc_snapshot;
 mod run;
 mod sink;
@@ -28,23 +27,12 @@ mod wasm_upgrade_backfill;
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 /// Default local scratch dir. CLI `--temp-dir` or `BACKFILL_TEMP_DIR`
 /// overrides. Single source of truth — `run` and `status` both receive
 /// it via their `execute` args, no duplicated constant.
 const DEFAULT_TEMP_DIR: &str = ".temp/backfill-runner";
-
-/// Which parallel store to write to. Defaults to `postgres` so existing
-/// invocations (CI scripts, runbooks, the aws-public-blockchain workflow)
-/// keep working byte-for-byte without edits. `clickhouse` writes are
-/// currently **stubbed** — the parse pipeline runs end-to-end but no
-/// rows are persisted (task 0205, ADR 0044).
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum Target {
-    Postgres,
-    Clickhouse,
-}
 
 #[derive(Parser)]
 #[command(name = "backfill-runner", version, about)]
@@ -52,19 +40,11 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Which store to write to. Defaults to `postgres`.
-    #[arg(long, value_enum, default_value = "postgres")]
-    target: Target,
-
-    /// PostgreSQL connection string. Required when `--target postgres`.
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
-
     /// ClickHouse HTTP endpoint (e.g. `http://localhost:8123`).
-    /// Overrides `CLICKHOUSE_URL` for the duration of the run when
-    /// `--target clickhouse` is set. Other ClickHouse env vars
-    /// (`CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`)
-    /// are picked up by `db_clickhouse::Config::from_env()` as usual.
+    /// Overrides `CLICKHOUSE_URL` for the duration of the run. Other
+    /// ClickHouse env vars (`CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`,
+    /// `CLICKHOUSE_DATABASE`) are picked up by
+    /// `db_clickhouse::Config::from_env()` as usual.
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
 
@@ -91,7 +71,7 @@ struct Cli {
     /// `AccountEntry` state for accounts referenced in the window
     /// but never updated inside it. Optional — when unset, the
     /// bootstrap step is skipped and accounts persist as the
-    /// participants-driven skeleton rows. PG target ignores this flag.
+    /// participants-driven skeleton rows.
     #[arg(long, env = "SOROBAN_RPC_URL")]
     soroban_rpc_url: Option<String>,
 
@@ -151,8 +131,7 @@ enum Command {
     /// earlier `Run` was invoked without `--soroban-rpc-url` and left
     /// the dataset with elevated skeleton counts.
     ///
-    /// CH-only — Postgres target short-circuits with an info log
-    /// (PG's account-state population is independent per task 0119).
+    /// No-op when `--soroban-rpc-url` is unset.
     Bootstrap {
         /// First ledger sequence (inclusive). Used by the discovery
         /// query's `transaction_participants` JOIN.
@@ -178,8 +157,7 @@ enum Command {
     /// `ReplacingMergeTree` collapse. The remaining 6 columns
     /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
     /// tables) are filled by Stage 2 enrichment (task 0231).
-    /// Per-table staging + EXCHANGE TABLES atomic swap. CH-only —
-    /// PG target short-circuits.
+    /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop
         /// them — do not EXCHANGE. Use on laptop 1's local CH as a
@@ -319,8 +297,6 @@ async fn main() {
     // `.expect` converts any residual Err into an immediate panic with a
     // clear message and no graceful-exit path.
     let sink = build_sink(
-        cli.target,
-        cli.database_url.as_deref(),
         cli.clickhouse_url.as_deref(),
         cli.ch_cert.as_deref(),
         cli.ch_key.as_deref(),
@@ -416,8 +392,7 @@ async fn main() {
             );
         }
         Command::UpgradeableBackfill { dry_run } => {
-            // rpc_url is required only on the ClickHouse path; `execute` enforces
-            // that after the Postgres no-op short-circuits, so pass it through.
+            // rpc_url is required by `execute`; pass it through.
             let stats =
                 upgradeable_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
                     .await
@@ -501,69 +476,55 @@ async fn main() {
     }
 }
 
-/// Build the `Sink` for the chosen target. Panics loudly at startup if
-/// the URL required for the chosen target is missing — same posture as
-/// the existing pre-flight panics.
+/// Build the ClickHouse `Sink`. Panics loudly at startup on a bad config
+/// (mismatched mTLS flags, unreadable PEM) — same posture as the existing
+/// pre-flight panics.
 ///
-/// The CH side reads remaining ClickHouse env vars (user, password,
-/// database) via `db_clickhouse::Config::from_env`; the `--clickhouse-url`
-/// CLI flag already overrides `CLICKHOUSE_URL` for the URL field
-/// because clap is reading the same env var.
+/// Reads ClickHouse env vars (user, password, database) via
+/// `db_clickhouse::Config::from_env`; the `--clickhouse-url` CLI flag already
+/// overrides `CLICKHOUSE_URL` for the URL field because clap reads the same
+/// env var.
 ///
-/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the CH
-/// sink instead connects over mTLS to the Caddy-fronted endpoint: the PEMs are
-/// read into an `MtlsBundle` and `client_with_mtls` presents the client cert
-/// (whose CN Caddy maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url`
-/// must be the https Caddy host; user/password are ignored on that path.
+/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the sink
+/// connects over mTLS to the Caddy-fronted endpoint: the PEMs are read into an
+/// `MtlsBundle` and `client_with_mtls` presents the client cert (whose CN Caddy
+/// maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url` must be the https
+/// Caddy host; user/password are ignored on that path.
 fn build_sink(
-    target: Target,
-    database_url: Option<&str>,
     clickhouse_url: Option<&str>,
     ch_cert: Option<&Path>,
     ch_key: Option<&Path>,
     ch_ca: Option<&Path>,
 ) -> sink::Sink {
-    match target {
-        Target::Postgres => {
-            let url = database_url.unwrap_or_else(|| {
-                panic!("--target postgres requires --database-url or DATABASE_URL env")
-            });
-            let pool = db::pool::create_pool(url).expect("failed to construct Postgres pool");
-            sink::Sink::Postgres(pool)
+    let mut cfg = db_clickhouse::Config::from_env();
+    if let Some(url) = clickhouse_url {
+        cfg.url = url.to_string();
+    }
+    match (ch_cert, ch_key, ch_ca) {
+        (Some(cert), Some(key), Some(ca)) => {
+            let read = |p: &Path| {
+                std::fs::read_to_string(p)
+                    .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
+            };
+            let bundle = db_clickhouse::mtls::MtlsBundle {
+                cert_pem: read(cert),
+                key_pem: read(key),
+                ca_pem: read(ca),
+            };
+            // `client_with_mtls` prepends `https://`, so hand it the
+            // bare host — strip any scheme / trailing slash from cfg.url.
+            let domain = cfg
+                .url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            let client = db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
+                .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
+            sink::Sink::new(client)
         }
-        Target::Clickhouse => {
-            let mut cfg = db_clickhouse::Config::from_env();
-            if let Some(url) = clickhouse_url {
-                cfg.url = url.to_string();
-            }
-            match (ch_cert, ch_key, ch_ca) {
-                (Some(cert), Some(key), Some(ca)) => {
-                    let read = |p: &Path| {
-                        std::fs::read_to_string(p)
-                            .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
-                    };
-                    let bundle = db_clickhouse::mtls::MtlsBundle {
-                        cert_pem: read(cert),
-                        key_pem: read(key),
-                        ca_pem: read(ca),
-                    };
-                    // `client_with_mtls` prepends `https://`, so hand it the
-                    // bare host — strip any scheme / trailing slash from cfg.url.
-                    let domain = cfg
-                        .url
-                        .trim_start_matches("https://")
-                        .trim_start_matches("http://")
-                        .trim_end_matches('/');
-                    let client =
-                        db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
-                            .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
-                    sink::Sink::Clickhouse(client)
-                }
-                (None, None, None) => sink::Sink::Clickhouse(db_clickhouse::client(&cfg)),
-                _ => panic!(
-                    "--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted"
-                ),
-            }
+        (None, None, None) => sink::Sink::new(db_clickhouse::client(&cfg)),
+        _ => {
+            panic!("--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted")
         }
     }
 }

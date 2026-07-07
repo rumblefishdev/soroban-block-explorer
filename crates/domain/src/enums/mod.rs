@@ -4,8 +4,8 @@
 //! domain is now `SMALLINT NOT NULL` (or `SMALLINT` nullable for
 //! `soroban_contracts.contract_type`) guarded by a `CHECK` range.
 //! The Rust enum pins on-disk layout via `#[repr(i16)]`, decodes/encodes
-//! as SMALLINT through `sqlx::Type`, and renders the canonical string at
-//! the API boundary through serde.
+//! as SMALLINT, and renders the canonical string at the API boundary
+//! through serde.
 //!
 //! Readable SQL labels for psql / BI live in the
 //! `20260422000000_enum_label_functions` migration (one IMMUTABLE helper
@@ -33,7 +33,8 @@ pub use token_asset_type::TokenAssetType;
 /// string parsed from an API request) does not correspond to any known
 /// variant of the target enum.
 ///
-/// Surfaces as a decode error in sqlx, and as a 400 in API request parsing.
+/// Surfaces as a decode error when reading from the DB, and as a 400 in API
+/// request parsing.
 #[derive(Debug, thiserror::Error)]
 pub enum EnumDecodeError {
     #[error("unknown {enum_name} discriminant: {value}")]

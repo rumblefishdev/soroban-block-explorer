@@ -4,11 +4,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BackfillError {
-    /// Pool initialization failed — not an indexer error, a config/boot error.
-    #[error("database pool init: {0}")]
-    Db(#[from] sqlx::Error),
-
-    /// ClickHouse client / query failure (task 0205, `--target clickhouse`).
+    /// ClickHouse client / query failure (task 0205).
     #[error("clickhouse: {0}")]
     Ch(#[from] clickhouse::error::Error),
 

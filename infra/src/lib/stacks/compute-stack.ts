@@ -303,72 +303,8 @@ export class ComputeStack extends cdk.Stack {
             TURNSTILE_SECRET: authSecrets.turnstile.secretValue.unsafeUnwrap(),
             API_KEYS: authSecrets.apiKeys.secretValue.unsafeUnwrap(),
           }),
-        // Transitional PG placeholder. The API binary still constructs a sqlx
-        // PG pool at boot unconditionally (crates/api/src/main.rs); it uses
-        // `connect_lazy`, so this URL is NEVER dialed for CH-routed modules.
-        // RDS has been removed (ADR 0047), so without *some* value here
-        // `db::secrets::resolve_or_env()` returns MissingEnvVar and boot panics
-        // (502 on every route). This keeps boot healthy. The not-yet-migrated
-        // PG modules (Assets/NFTs/LiquidityPools/Search)
-        // still error on query until they get a CH path — expected. Removing
-        // this hack needs the PG pool made optional at boot (deferred
-        // follow-up); until then a `cdk deploy` MUST keep it, or it regresses
-        // prod to the boot panic.
-        DATABASE_URL: 'postgres://disabled:disabled@127.0.0.1:5432/disabled',
-        // ClickHouse read-path cutover (task 0243 / ADR 0047). Each
-        // `API_DATASOURCE_<MODULE>=ch` flips that handler module from the
-        // sqlx/PG path to the `clickhouse` path; absence (or any non-`ch`
-        // value) keeps PG. CH host (`CH_DOMAIN`) + the mTLS bundle
-        // (`MTLS_SECRET_NAME`, granted below) are already wired, so a flag
-        // is all it takes to opt a module in. Rollback per module = delete
-        // its line and redeploy.
-        //
-        // Enabled here: modules whose CH read path is merged on `develop` —
-        // Network (pilot, PR #221), Ledgers (PR #226), Transactions
-        // (PR #235), Accounts (PR #236), Contracts (PR #237), LiquidityPools
-        // (task 0243; PRs #246/#248/#250 — all 5 LP endpoints on CH, validated
-        // live on prod), Assets (task 0243; PR #260), NFTs (task 0243; PR #274).
-        // The remaining module (Search) has no CH path yet.
-        //
-        // PRECONDITIONS before this deploy goes live (see PR checklist):
-        //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
-        //      otherwise the API serves stale data.
-        //   2. Operator CH smoke passed for the enabled modules. The list
-        //      read paths now read in primary-key order (no FINAL-over-
-        //      partition scan) and `contract_ids` is ops-only, so the polled
-        //      paths are cheap. The remaining read-heavy path is the contract
-        //      / op_type *filter* (Statement B/C driver scans a partition by a
-        //      non-PK column, ~2e8 rows) — bounded and user-initiated; watch
-        //      the api_reader `read_rows` quota (CH Code: 201) rather than the
-        //      memory limit.
-        API_DATASOURCE_NETWORK: 'ch',
-        API_DATASOURCE_LEDGERS: 'ch',
-        API_DATASOURCE_TRANSACTIONS: 'ch',
-        API_DATASOURCE_ACCOUNTS: 'ch',
-        API_DATASOURCE_CONTRACTS: 'ch',
-        API_DATASOURCE_LIQUIDITY_POOLS: 'ch',
-        // Assets list + detail were orphaned on the PG default after the
-        // CH cutover (PG is no longer the live store), so both endpoints
-        // served nothing. The CH path (`assets/queries_ch.rs`) mirrors the
-        // contracts/accounts modules already on CH. Operator must run the
-        // CH read-rows smoke (per `queries_ch.rs` header) before relying on
-        // this in prod.
-        API_DATASOURCE_ASSETS: 'ch',
-        // NFTs read path (task 0243 NFT slice, PR #274). Same precondition as
-        // Assets: prod CH must carry `nft_enrichment` (else NULL name/media —
-        // ~84% enriched per task 0306) and the operator CH read-rows smoke must
-        // pass (`nfts/queries_ch.rs`) before relying on this in prod.
-        API_DATASOURCE_NFTS: 'ch',
-        // Search read path (task 0318) — the last PG-only module. On PG the
-        // endpoint 504'd (~29s) since PG was disabled in prod (ADR 0047).
-        // `search/queries_ch.rs` fires classification-gated, concurrent
-        // per-entity buckets (no full-table hash joins → no CH Code 241).
-        // Preconditions before relying on this in prod: prod CH must carry
-        // `soroban_contract_metadata` + `nft_enrichment` (else contract/NFT
-        // name search returns empty, not an error), and the operator CH
-        // read-rows/memory smoke must pass (bounded full-scans: asset_code
-        // substring + contract-name/nft metadata).
-        API_DATASOURCE_SEARCH: 'ch',
+        // ClickHouse is the sole datastore (ADR 0047; Postgres removed, task
+        // 0244). CH host + mTLS are wired via CH_DOMAIN / MTLS_SECRET_NAME.
         // Load-test correlation (task 0338): arm the `common::request_id`
         // middleware + CH `log_comment` stamping ONLY in a load-test deploy.
         // Tied to the SAME `loadTesting` flag that lifts the API Gateway

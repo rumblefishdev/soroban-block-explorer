@@ -77,11 +77,6 @@ pub const INVALID_SEQUENCE: &str = "invalid_sequence";
 /// cause is logged server-side and never returned to the client.
 pub const DB_ERROR: &str = "db_error";
 
-/// Archive XDR fetch (S3, per ADR 0029) failed or returned incomplete
-/// data. Surfaces as HTTP 500; per project policy S3 is a hard
-/// dependency for endpoints that runtime-fetch ledger XDR.
-pub const ARCHIVE_ERROR: &str = "archive_error";
-
 /// `wasm_interface_metadata.metadata` JSONB was present (passed the
 /// `? 'functions'` SQL gate) but failed to decode into the typed schema —
 /// real shape drift between indexer output and the API DTO, or a

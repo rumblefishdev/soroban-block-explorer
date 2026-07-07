@@ -1,4 +1,4 @@
-//! Wire shapes mirror canonical SQL `endpoint-queries/{06,07}_*.sql`.
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{06,07}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -91,7 +91,7 @@ pub struct AccountDetailResponse {
     pub last_seen_ledger: i64,
     /// `true` when the account was removed from the ledger via `account_merge`
     /// and never re-funded (its last lifecycle event is the merge). Derived,
-    /// not stored. CH-only — the PG fallback always reports `false`.
+    /// not stored.
     pub deleted: bool,
 }
 
@@ -112,4 +112,12 @@ pub struct AccountTransactionItem {
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
+}
+/// Keyset cursor for the accounts list — sorts on `last_seen_ledger` with the
+/// surrogate `id` as the unique tiebreak. Serialized (base64/JSON) into the
+/// opaque wire cursor (ADR 0008), so it lives on the DTO boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountsListCursor {
+    pub last_seen_ledger: i64,
+    pub id: i64,
 }

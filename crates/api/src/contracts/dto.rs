@@ -1,5 +1,5 @@
 //! Request and response DTOs for the contracts endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries/{11..14}_*.sql`.
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{11..14}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -47,11 +47,8 @@ pub struct ContractStats {
     pub recent_unique_callers: i64,
     /// Event count in the same window as `recent_invocations` (NOT the full
     /// `/events` history — that endpoint pages all events with no time bound).
-    /// PG sums `soroban_events_appearances.amount` (one appearance row folds
-    /// multiple events, `amount > 1`); CH has no appearance-fold table, so it
-    /// `count()`s the unfolded `soroban_events` (one row per event). Both tables
-    /// are written from the same parser event stream (diagnostics dropped at
-    /// parse, System + Contract kept), so the two figures match by construction.
+    /// `count()`s the `soroban_events` rows (one row per event) written from the
+    /// parser event stream (diagnostics dropped at parse; System + Contract kept).
     pub recent_events: i64,
     /// Echoed window label (e.g. `"7 days"`) so the UI can label "last N days".
     pub stats_window: String,
@@ -76,7 +73,7 @@ pub struct ContractDetailResponse {
     ///
     /// Derived from the WASM at parse time
     /// (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
-    /// (none exists). ClickHouse-sourced; always `None` on the retired PG path.
+    /// (none exists).
     pub upgradeable: Option<bool>,
     pub stats: ContractStats,
 }
@@ -130,9 +127,8 @@ pub struct InvocationItem {
     pub successful: bool,
 }
 
-/// One row per event. On the PG path a folded appearance row expands to
-/// many `EventItem`s (per-tx fields repeated, per-event fields unique); on
-/// CH each row is already one event.
+/// One row per event — the full-content `soroban_events` table stores one
+/// row per event (no appearance-fold expansion).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EventItem {
     pub transaction_hash: String,
@@ -149,23 +145,24 @@ pub struct EventItem {
 /// (ADR 0008) so a cursor minted for one backend is rejected after a flag flip;
 /// a legacy/untagged cursor (no `src`) fails to decode → clean 400.
 ///
-/// - `Pg` — `(created_at, transaction_id)` keyset over the folded appearance
-///   index `soroban_events_appearances` (payload overlaid from the Archive at
-///   read time).
-/// - `Ch` — `(ledger_sequence, transaction_id, event_index)` keyset over the
-///   full-content `soroban_events` table (per-event rows; `event_index` is the
-///   multi-event-tx tie-break, non-optional so a CH keyset never binds a NULL
-///   tuple element).
+/// Keyset `(ledger_sequence, transaction_id, event_index)` over the
+/// full-content `soroban_events` table (per-event rows; `event_index` is the
+/// multi-event-tx tie-break, non-optional so a keyset never binds a NULL
+/// tuple element).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum EventCursor {
-    Pg {
-        ts: DateTime<Utc>,
-        id: i64,
-    },
     Ch {
         ledger_sequence: i64,
         transaction_id: i64,
         event_index: i16,
     },
+}
+/// Pagination payload for `GET /v1/contracts`. `soroban_contracts` is
+/// unpartitioned with no `created_at`, so the natural order is `id DESC`.
+/// Serialized into the opaque wire cursor (ADR 0008), so it lives on the DTO
+/// boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractIdCursor {
+    pub id: i64,
 }

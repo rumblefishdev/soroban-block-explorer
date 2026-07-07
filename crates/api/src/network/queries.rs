@@ -1,106 +1,102 @@
-//! Database queries backing `GET /v1/network/stats`.
+//! ClickHouse implementation of `GET /v1/network/stats`.
 //!
-//! Implementation of the canonical SQL in
-//! `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
-//! (deliverable of task 0167) — one statement, one round-trip.
-//!
-//! Cost profile per cache miss:
-//!   * latest ledger:    index lookup on `idx_ledgers_closed_at DESC`, 1 row.
-//!   * tps_60s:          index range on the same index, ~12 rows (5s × 60s).
-//!   * total_accounts:   `pg_class.reltuples` catalog read, microseconds.
-//!   * total_contracts:  `pg_class.reltuples` catalog read, microseconds.
-//!
-//! No `count(*)` over user tables — at chain scale (10s of millions of
-//! accounts) an exact count is a full heap scan that would dominate this
-//! hot dashboard path. Reltuples is refreshed by autovacuum / ANALYZE
-//! and is well within the accuracy a "total accounts" UI cell needs.
-//!
-//! Repeat-call traffic is absorbed by the version-keyed in-process cache (see
-//! `cache.rs`); the DB sees one statement per chain head (~1 / ledger).
+//! Reference SQL lives at
+//! `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`,
+//! which documents the semantics for TPS, accounts/contracts estimates, the
+//! `generated_at` ↔ cache-staleness split, and empty-cluster handling.
 
-use sqlx::{PgPool, Row};
+use chrono::{DateTime, TimeZone, Utc};
+use clickhouse::Row;
+use serde::Deserialize;
 
 use super::dto::NetworkStats;
 
-/// Run the canonical network-stats statement against `pool` and assemble
-/// the response DTO. `head` is the chain head the caller version-keys the
-/// cache on (`crate::common::head`); the statement **pins** the latest-ledger
-/// row to `WHERE sequence = head` rather than re-deriving "latest" itself, so
-/// the response's `latest_ledger_sequence` always equals the cache key (no
-/// TOCTOU between the head read and this query, and no divergence between
-/// `max(sequence)` and `ORDER BY closed_at DESC`).
-///
-/// Returns `sqlx::Error` on any DB failure; the handler turns this into
-/// the canonical `db_error` envelope. Written in raw SQL (not the
-/// `query!` macro) so it does not require `DATABASE_URL` at build time
-/// — consistent with `crates/api/src/transactions/queries.rs`.
-///
-/// Field naming and semantics match canonical SQL one-for-one:
-/// `latest_ledger_closed_at` is the raw close-time of the head
-/// ledger; `generated_at` is `NOW()` at SELECT time. Frontend uses
-/// the pair to derive two distinct signals — indexer-health lag
-/// (`generated_at − latest_ledger_closed_at`) and cache staleness
-/// (`Date.now() − generated_at`) — without confusing them when the
-/// version-keyed cache replays a stored response.
-///
-/// `::float8` matches canonical SQL — TPS is a 0–1000 display metric
-/// with FE-side rounding, f64 has 14-digit headroom, and avoiding the
-/// `rust_decimal` dep keeps the cache-miss decode path native.
-///
-/// Empty-`ledgers` case (cold-bootstrap cluster, no rows ingested yet):
-/// the caller passes `head = 0`, `WHERE sequence = 0` matches no row, the
-/// SELECT yields zero rows, and we map that to a zero-valued response with
-/// `latest_ledger_closed_at = None` and `generated_at = Utc::now()`.
-pub async fn fetch_stats(pool: &PgPool, head: i64) -> Result<NetworkStats, sqlx::Error> {
-    let row_opt = sqlx::query(
+/// Single-row projection of the canonical CH network-stats statement.
+/// Field order matches the SELECT column order in `01_get_network_stats.sql`;
+/// `clickhouse::Row` decodes by position, not by name.
+#[derive(Debug, Row, Deserialize)]
+struct StatsRow {
+    latest_ledger_sequence: i64,
+    /// `DateTime64(3, 'UTC')` decoded as ms since Unix epoch.
+    latest_ledger_closed_at: i64,
+    generated_at: i64,
+    tps_60s: f64,
+    total_accounts: u64,
+    total_contracts: u64,
+}
+
+pub async fn fetch_stats(
+    client: &clickhouse::Client,
+    head: i64,
+) -> Result<NetworkStats, clickhouse::error::Error> {
+    // `ledgers` is ORDER BY `sequence`, NOT `closed_at`. Ordering or filtering
+    // by `closed_at` forces a full 12M-row table scan (measured) — and this
+    // endpoint is polled, so that scan recurs and eats the `read_rows` quota.
+    // We drive both reads off `sequence`, pinned to the caller's `head` (the
+    // chain head the cache version-keys on — `crate::common::head`):
+    //   * the latest ledger via `WHERE sequence = head` (primary-key point
+    //     read, one granule) — so `latest_ledger_sequence` always equals the
+    //     cache key (no TOCTOU, no re-derivation of "latest" here);
+    //   * the 60s TPS window via a `sequence > head - 200` prune that bounds
+    //     the scan to the most recent ~200 ledgers (~20 min of headroom for a
+    //     60s window) before the `closed_at` predicate refines it.
+    // `head` is a trusted i64 from our own head probe, so it is inlined (no
+    // injection surface) — matching the i64-inlining convention in
+    // `crates/api/src/common/ch.rs`. This also drops the previous inner
+    // `(SELECT max(sequence) FROM ledgers)` subquery — one fewer read.
+    let sql = format!(
         "SELECT \
             latest.sequence AS latest_ledger_sequence, \
             latest.closed_at AS latest_ledger_closed_at, \
-            now() AS generated_at, \
-            ( \
-                SELECT COALESCE( \
-                    SUM(transaction_count)::float8 \
-                        / NULLIF(EXTRACT(EPOCH FROM (MAX(closed_at) - MIN(closed_at))), 0), \
-                    0 \
-                )::float8 \
-                FROM ledgers \
-                WHERE closed_at >= now() - INTERVAL '60 seconds' \
-            ) AS tps_60s, \
-            (SELECT reltuples::bigint FROM pg_class \
-                WHERE oid = 'public.accounts'::regclass) AS total_accounts, \
-            (SELECT reltuples::bigint FROM pg_class \
-                WHERE oid = 'public.soroban_contracts'::regclass) AS total_contracts \
+            now64() AS generated_at, \
+            toFloat64(ifNull( \
+                (SELECT sum(transaction_count) \
+                        / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0) \
+                 FROM ledgers \
+                 WHERE sequence > {head} - 200 \
+                   AND closed_at >= now64() - INTERVAL 60 SECOND), \
+                0 \
+            )) AS tps_60s, \
+            ifNull((SELECT total_rows FROM system.tables \
+                WHERE database = currentDatabase() AND name = 'accounts'), 0) \
+                AS total_accounts, \
+            ifNull((SELECT total_rows FROM system.tables \
+                WHERE database = currentDatabase() AND name = 'soroban_contracts'), 0) \
+                AS total_contracts \
          FROM ( \
              SELECT sequence, closed_at \
              FROM ledgers \
-             WHERE sequence = $1 \
-         ) latest",
-    )
-    .bind(head)
-    .fetch_optional(pool)
-    .await?;
+             WHERE sequence = {head} \
+         ) AS latest"
+    );
+    let row_opt = client.query(&sql).fetch_optional::<StatsRow>().await?;
 
     let Some(row) = row_opt else {
-        // `head = 0` (empty cluster) or the head row vanished — no latest
-        // ledger to report. Sequence 0 is a safe sentinel (Stellar genesis is
-        // ledger 1); close-time is undefined. `generated_at` falls back to
-        // wall-clock now (microsecond-equivalent to the DB's `now()` call).
         return Ok(NetworkStats {
             tps_60s: 0.0,
             total_accounts: 0,
             total_contracts: 0,
             latest_ledger_sequence: 0,
             latest_ledger_closed_at: None,
-            generated_at: chrono::Utc::now(),
+            generated_at: Utc::now(),
         });
     };
 
     Ok(NetworkStats {
-        tps_60s: row.get("tps_60s"),
-        total_accounts: row.get("total_accounts"),
-        total_contracts: row.get("total_contracts"),
-        latest_ledger_sequence: row.get("latest_ledger_sequence"),
-        latest_ledger_closed_at: row.get("latest_ledger_closed_at"),
-        generated_at: row.get("generated_at"),
+        tps_60s: row.tps_60s,
+        // CH `system.tables.total_rows` is UInt64 but real chain-scale
+        // totals (~1e8) fit Int64 with eight orders of magnitude to spare,
+        // and the wire shape is `i64` (matches the PG path).
+        total_accounts: row.total_accounts as i64,
+        total_contracts: row.total_contracts as i64,
+        latest_ledger_sequence: row.latest_ledger_sequence,
+        latest_ledger_closed_at: Some(millis_to_utc(row.latest_ledger_closed_at)),
+        generated_at: millis_to_utc(row.generated_at),
     })
+}
+
+fn millis_to_utc(ms: i64) -> DateTime<Utc> {
+    Utc.timestamp_millis_opt(ms)
+        .single()
+        .unwrap_or_else(Utc::now)
 }

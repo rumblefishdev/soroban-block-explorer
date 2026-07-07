@@ -91,17 +91,14 @@ pub struct NftReparseStats {
 }
 
 /// Re-parse `soroban_events` in `[from_ledger, to_ledger]` and write recovered
-/// NFT candidates to the pending tables. CH-only — PG target short-circuits.
+/// NFT candidates to the pending tables. CH-only.
 pub async fn execute(
     sink: &Sink,
     from_ledger: u32,
     to_ledger: u32,
     dry_run: bool,
 ) -> Result<NftReparseStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("nft_reparse: skipped (PG target — CH-direct recovery only)");
-        return Ok(NftReparseStats::default());
-    };
+    let client = sink.client();
 
     let mut stats = NftReparseStats {
         dry_run,

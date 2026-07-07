@@ -643,7 +643,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Items per page (1–100, default 20). On the PG datasource the page is per\n`(contract, transaction, ledger)` appearance — one appearance can expand to\nmultiple events, so `data.len()` may exceed `limit`. On the CH datasource the\npage is per event (one row → one item), so `data.len() <= limit`.",
+            "description": "Items per page (1–100, default 20). The page is per event\n(one row → one item), so `data.len() <= limit`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -1422,7 +1422,7 @@
       "get": {
         "tags": ["network"],
         "summary": "Get top-level chain overview stats.",
-        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`\nestimates for accounts / contracts) and caches the assembled\nresponse **keyed on the chain head** (`latest_ledger_sequence`) in\nprocess memory — see `network/cache.rs`. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
+        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + planner row-count\nestimates for accounts / contracts) and caches the assembled\nresponse **keyed on the chain head** (`latest_ledger_sequence`) in\nprocess memory — see `network/cache.rs`. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
         "operationId": "get_network_stats",
         "responses": {
           "200": {
@@ -1700,7 +1700,7 @@
       "get": {
         "tags": ["search"],
         "summary": "Unified search across all entity types.",
-        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.",
+        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.",
         "operationId": "get_search",
         "parameters": [
           {
@@ -1994,7 +1994,7 @@
           },
           "deleted": {
             "type": "boolean",
-            "description": "`true` when the account was removed from the ledger via `account_merge`\nand never re-funded (its last lifecycle event is the merge). Derived,\nnot stored. CH-only — the PG fallback always reports `false`."
+            "description": "`true` when the account was removed from the ledger via `account_merge`\nand never re-funded (its last lifecycle event is the merge). Derived,\nnot stored."
           },
           "first_seen_ledger": {
             "type": "integer",
@@ -2136,7 +2136,7 @@
               },
               "id": {
                 "type": "string",
-                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
+                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175): assets are keyed on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
               },
               "issuer": {
                 "type": ["string", "null"]
@@ -2218,7 +2218,7 @@
           },
           "id": {
             "type": "string",
-            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
+            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175): assets are keyed on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
           },
           "issuer": {
             "type": ["string", "null"]
@@ -2378,7 +2378,7 @@
           },
           "upgradeable": {
             "type": ["boolean", "null"],
-            "description": "Task 0327: contract mutability, 3-state.\n- `Some(true)` → **Upgradeable**: the current WASM imports\n  `update_current_contract_wasm` (a self-upgrade path).\n- `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC\n  has no WASM and is always `Some(false)`).\n- `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /\n  pre-0327 row) — the frontend renders no chip.\n\nDerived from the WASM at parse time\n(`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag\n(none exists). ClickHouse-sourced; always `None` on the retired PG path."
+            "description": "Task 0327: contract mutability, 3-state.\n- `Some(true)` → **Upgradeable**: the current WASM imports\n  `update_current_contract_wasm` (a self-upgrade path).\n- `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC\n  has no WASM and is always `Some(false)`).\n- `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /\n  pre-0327 row) — the frontend renders no chip.\n\nDerived from the WASM at parse time\n(`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag\n(none exists)."
           },
           "wasm_hash": {
             "type": ["string", "null"]
@@ -2496,7 +2496,7 @@
           "recent_events": {
             "type": "integer",
             "format": "int64",
-            "description": "Event count in the same window as `recent_invocations` (NOT the full\n`/events` history — that endpoint pages all events with no time bound).\nPG sums `soroban_events_appearances.amount` (one appearance row folds\nmultiple events, `amount > 1`); CH has no appearance-fold table, so it\n`count()`s the unfolded `soroban_events` (one row per event). Both tables\nare written from the same parser event stream (diagnostics dropped at\nparse, System + Contract kept), so the two figures match by construction."
+            "description": "Event count in the same window as `recent_invocations` (NOT the full\n`/events` history — that endpoint pages all events with no time bound).\n`count()`s the `soroban_events` rows (one row per event) written from the\nparser event stream (diagnostics dropped at parse; System + Contract kept)."
           },
           "recent_invocations": {
             "type": "integer",
@@ -2737,7 +2737,7 @@
       },
       "EventItem": {
         "type": "object",
-        "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
+        "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
         "required": [
           "transaction_hash",
           "ledger_sequence",
@@ -2909,7 +2909,7 @@
       },
       "LedgerListItem": {
         "type": "object",
-        "description": "Slim ledger row returned in the list endpoint and reused inside the\ndetail response as the header block. Doubles as the `sqlx::FromRow`\ntarget for `fetch_list` — the SQL projection aliases match this\nstruct's field names so no manual mapping is needed.",
+        "description": "Slim ledger row returned in the list endpoint and reused inside the\ndetail response as the header block.",
         "required": [
           "sequence",
           "hash",
@@ -2947,7 +2947,7 @@
       },
       "NetworkStats": {
         "type": "object",
-        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\nField naming and semantics match canonical SQL in task 0167\none-for-one. `total_accounts` and `total_contracts` are planner\nestimates from `pg_class.reltuples` (refreshed by autovacuum /\nANALYZE), not exact counts. `latest_ledger_closed_at` is `None`\nonly on a cold-bootstrap cluster where no ledger has been indexed\nyet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
+        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\n`total_accounts` and `total_contracts` are planner\nestimates, not exact counts. `latest_ledger_closed_at` is `None`\nonly on a cold-bootstrap cluster where no ledger has been indexed\nyet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
         "required": [
           "tps_60s",
           "total_accounts",
@@ -2974,12 +2974,12 @@
           "total_accounts": {
             "type": "integer",
             "format": "int64",
-            "description": "Estimated indexed account count from `pg_class.reltuples` for\n`public.accounts`."
+            "description": "Estimated indexed account count (planner estimate, not exact)."
           },
           "total_contracts": {
             "type": "integer",
             "format": "int64",
-            "description": "Estimated indexed Soroban contract count from `pg_class.reltuples`\nfor `public.soroban_contracts`."
+            "description": "Estimated indexed Soroban contract count (planner estimate, not exact)."
           },
           "tps_60s": {
             "type": "number",
@@ -3167,7 +3167,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Liquidity pools crossed by this operation, as SEP-23 strkeys\n(`L...`, 56 chars). Encoded from the DB hex form at the response\nboundary so cross-entity link targets match the\n`/v1/liquidity-pools/:id` route shape. Single-element for LP\ndeposit/withdraw; the full crossed-pool list for path payments and\noffers that filled against a pool (task 0261/0268 — replaces the\nformer nullable scalar `pool_id`).\n\n**Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means \"no\npool\" **only** for ClickHouse-served responses. The Postgres backend\n(default until each module flips to CH, per task 0243) never received\nthe claim-atom extraction, so it returns `[]` for *every* path-payment\nand offer op regardless of whether a pool was crossed — only LP\ndeposit/withdraw carry a pool there. Treat `[]` as authoritative for\npool absence only once the module reads from CH."
+            "description": "Liquidity pools crossed by this operation, as SEP-23 strkeys\n(`L...`, 56 chars). Encoded from the DB hex form at the response\nboundary so cross-entity link targets match the\n`/v1/liquidity-pools/:id` route shape. Single-element for LP\ndeposit/withdraw; the full crossed-pool list for path payments and\noffers that filled against a pool (task 0261/0268 — replaces the\nformer nullable scalar `pool_id`).\n\nEmpty `[]` means \"no pool crossed\" — authoritative on the ClickHouse\nread path, which extracts pool crossings from claim atoms across\npath-payment, offer, and LP deposit/withdraw ops."
           },
           "source_account": {
             "type": ["string", "null"]
@@ -3396,7 +3396,7 @@
                 },
                 "id": {
                   "type": "string",
-                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
+                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175): assets are keyed on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
                 },
                 "issuer": {
                   "type": ["string", "null"]
@@ -3553,7 +3553,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row per event. On the PG path a folded appearance row expands to\nmany `EventItem`s (per-tx fields repeated, per-event fields unique); on\nCH each row is already one event.",
+              "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
@@ -3649,7 +3649,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Slim ledger row returned in the list endpoint and reused inside the\ndetail response as the header block. Doubles as the `sqlx::FromRow`\ntarget for `fetch_list` — the SQL projection aliases match this\nstruct's field names so no manual mapping is needed.",
+              "description": "Slim ledger row returned in the list endpoint and reused inside the\ndetail response as the header block.",
               "required": [
                 "sequence",
                 "hash",
@@ -3807,7 +3807,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`.",
+              "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
               "required": [
                 "account",
                 "shares",
@@ -4025,7 +4025,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the PG\npath in practice; the full 3-source set was dropped because its scan\nblew the read_rows quota (task 0243; see `common::ch`)."
+                  "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the\nfull 3-source result in practice; the full set was dropped because its\nscan blew the read_rows quota (task 0243; see `common::ch`)."
                 },
                 "created_at": {
                   "type": "string",
@@ -4080,7 +4080,7 @@
       },
       "ParticipantItem": {
         "type": "object",
-        "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`.",
+        "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
         "required": [
           "account",
           "shares",
@@ -4483,7 +4483,7 @@
             "items": {
               "type": "string"
             },
-            "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the PG\npath in practice; the full 3-source set was dropped because its scan\nblew the read_rows quota (task 0243; see `common::ch`)."
+            "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the\nfull 3-source result in practice; the full set was dropped because its\nscan blew the read_rows quota (task 0243; see `common::ch`)."
           },
           "created_at": {
             "type": "string",
