@@ -5,6 +5,7 @@ import {
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 import { SectionCard } from '../detail/SectionCard.js';
 
@@ -38,7 +39,7 @@ export function TransactionDetailSkeleton() {
       <Box>
         <PageBreadcrumb
           items={[
-            { label: 'Transactions', to: '/transactions' },
+            { label: 'Transactions', to: routes.transactions },
             {
               label: truncateMiddle(hash, getDefaultTruncation('transaction')),
             },

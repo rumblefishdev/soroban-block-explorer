@@ -1,7 +1,7 @@
 import type { EntityType, TruncationConfig } from './types.js';
 
 /** Single-glyph ellipsis (`…`) — the canonical truncation marker. */
-export const ELLIPSIS_CHAR = '…';
+const ELLIPSIS_CHAR = '…';
 
 /**
  * The single truncation standard: first 4 + last 4 (`GCSO…DB2Z`).

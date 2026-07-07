@@ -7,7 +7,7 @@ export {
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
 } from './IdentifierWithCopy.js';
-export { routeForHit } from './routes.js';
+export { getIdentifierHref, routeSegments } from './routes.js';
 export {
   DEFAULT_TRUNCATION,
   getDefaultTruncation,

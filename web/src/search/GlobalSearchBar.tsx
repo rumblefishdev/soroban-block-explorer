@@ -3,8 +3,8 @@ import { type KeyboardEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { SearchHit } from '@rumblefish/api-types';
-import { routeForHit } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
 import { useSearchResults } from './useSearchResults.js';
 

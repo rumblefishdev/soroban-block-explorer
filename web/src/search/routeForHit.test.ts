@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { routeForHit } from './routes.js';
+import { routeForHit } from './routeForHit.js';
 
 const ACCOUNT = 'GBHH24YAUSBA3C5MKMRTDZHU6P4BRYPGDO2RTDNOXERFRBQ7SVXMOQBC';
 const CONTRACT = 'CCII7OQKIRNLXZFQ6N4H7CQP7RZO6BMIEPGBF2Y2P6SAVXTBRE7RR275';

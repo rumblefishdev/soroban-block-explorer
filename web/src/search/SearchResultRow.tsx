@@ -5,9 +5,10 @@ import type { SearchHit } from '@rumblefish/api-types';
 import {
   IdentifierDisplay,
   RelativeTimestamp,
-  routeForHit,
   StatusChip,
 } from '@rumblefish/soroban-block-explorer-ui';
+
+import { routeForHit } from './routeForHit.js';
 
 interface SearchResultRowProps {
   hit: SearchHit;

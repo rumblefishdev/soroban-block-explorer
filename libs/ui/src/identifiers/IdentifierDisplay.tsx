@@ -110,7 +110,8 @@ export function IdentifierDisplay({
   // pool ids) read in the mono font where fixed width aids scanning. Asset
   // "ids" are human ticker codes (USDC, AQUA) and ledger ids are plain
   // sequence numbers — both read in the body font like the value beside
-  // them (matches Figma). Ledger stays a link, just not mono.
+  // them (matches Figma). Ledger stays a link, just not mono — but a ledger
+  // HASH cell overrides via `mono` (see prop doc).
   const isMono = mono ?? (type !== 'asset' && type !== 'ledger');
   const cfg = truncation ?? getDefaultTruncation(type);
   const formatted = formatForDisplay(type, value);
