@@ -2,7 +2,7 @@
 id: '0244'
 title: 'REFACTOR: remove Postgres/sqlx entirely — CH is the only DB (API collapse + dead crates + dev tools)'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0047']
 related_tasks: ['0243', '0239', '0318']
 tags:
@@ -85,6 +85,19 @@ history:
       deleted then reverted → kept + PORT (task 0361). Codebase PG-free except
       audit-harness (sqlx→CH port = 0361, workspace sqlx dep gated on it) and
       infra compute-stack.ts (RDS teardown = 0239, consent-gated).
+  - date: '2026-07-07'
+    status: completed
+    who: karolkow
+    note: >
+      Completed → PR #319 against develop (260 files, ~-30k lines). Merged latest
+      develop (perf 0350/0355/0357) via un-rename→merge→re-rename; verified no PG
+      regressed back in. /review clean — 0 correctness defects across 3 finder
+      passes (Sink collapse, merge decode/amount, API teardown). Also completed
+      Stanisław's ask: dropped the dead API_DATASOURCE flag + DATABASE_URL from
+      compute-stack.ts. Postgres/sqlx fully removed from the codebase. Residuals
+      carved to separate tasks: audit-harness sqlx→CH port (0361), API
+      integration-test rebuild (0360), RDS infra teardown (0239),
+      soroban_contracts.name/assets.name column DROP (0304/0310).
 ---
 
 # Remove Postgres/sqlx entirely — ClickHouse is the only DB
