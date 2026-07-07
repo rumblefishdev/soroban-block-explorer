@@ -3,20 +3,18 @@ import type { EntityType, TruncationConfig } from './types.js';
 /** Single-glyph ellipsis (`…`) — the canonical truncation marker. */
 export const ELLIPSIS_CHAR = '…';
 
-// Prefix/suffix lengths verified against the Figma tables (home + the
-// Transactions list page both truncate tx hashes 6/4 and accounts 4/4).
-const defaultByType: Record<EntityType, TruncationConfig> = {
-  transaction: { prefix: 6, suffix: 4 },
-  account: { prefix: 4, suffix: 4 },
-  contract: { prefix: 6, suffix: 4 },
-  asset: { prefix: 6, suffix: 4 },
-  pool: { prefix: 6, suffix: 4 },
-  nft: { prefix: 6, suffix: 4 },
-  ledger: { prefix: 0, suffix: 0 },
-};
+/**
+ * The single truncation standard: first 4 + last 4 (`GCSO…DB2Z`).
+ * Locked decision (task 0348 finding 13) — one standard for every identifier
+ * reference, no per-type variants. Ledger is the sole exception (see below).
+ */
+export const DEFAULT_TRUNCATION: TruncationConfig = { prefix: 4, suffix: 4 };
+
+/** Never-truncate config — ledger ids are plain sequence numbers, not hashes. */
+const NO_TRUNCATION: TruncationConfig = { prefix: 0, suffix: 0 };
 
 export function getDefaultTruncation(type: EntityType): TruncationConfig {
-  return defaultByType[type];
+  return type === 'ledger' ? NO_TRUNCATION : DEFAULT_TRUNCATION;
 }
 
 export function truncateMiddle(

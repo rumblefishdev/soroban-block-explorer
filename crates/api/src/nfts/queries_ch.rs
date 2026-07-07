@@ -20,14 +20,15 @@
 //!   `(minted_at_ledger, contract_id, token_id)`, the transfers timeline keys
 //!   on `(contract_id, token_id)` directly (no `nft_id` indirection).
 //! - **`nfts n FINAL`** collapses re-ingested ownership versions on the base
-//!   RMT. Lookup joins to `accounts` / `soroban_contracts` carry NO `FINAL`
-//!   (their projected identity columns are version-stable, and an `accounts
-//!   FINAL` over ~23M rows is ruinous — fix c468c356).
-//! - **`accounts` reverse lookup (owner_id → G-StrKey)** on the multi-row list
-//!   / transfers paths uses a restricted CTE (`WHERE id IN (page ids) GROUP BY
-//!   id`, no `FINAL`) so the 23M-row scan prunes to the bloom-indexed page keys
-//!   (`idx_acc_id`). The single-row detail uses a plain no-`FINAL` `LEFT JOIN`
-//!   — one id is a cheap bloom probe, the CTE would be over-engineering.
+//!   RMT. Identity lookups (`accounts` / `soroban_contracts`) are never a
+//!   whole-dimension JOIN — a hash JOIN reads the entire right table (~23M /
+//!   ~25M rows), which a `WHERE id IN (lit)` bloom seek (`idx_acc_id`) avoids
+//!   (task 0355 / fix c468c356).
+//! - **`accounts` reverse lookup (owner_id → G-StrKey)** uses that bloom seek:
+//!   the list / transfers paths via a page-scoped restricted CTE (`WHERE id IN
+//!   (page ids) GROUP BY id`, no `FINAL`); the single-row detail resolves its
+//!   one owner id in Rust via [`resolve_accounts`] (the shared `WHERE id IN`
+//!   resolver), and echoes the contract StrKey straight from the request input.
 //! - **`nullIf(...)`** maps a JOIN miss / sentinel to `None`. We do NOT use
 //!   `SETTINGS join_use_nulls = 1` — `api_reader` runs `readonly = 1` and
 //!   rejects per-query setting overrides.
@@ -51,7 +52,7 @@
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::millis_to_utc;
+use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
@@ -250,38 +251,30 @@ pub async fn fetch_list(
 // ---------------------------------------------------------------------------
 
 /// SELECT column order MUST match [`fetch_by_composite`] (positional decode).
+/// `current_owner_id` is the raw `Nullable(Int64)` surrogate (unowned NFT →
+/// NULL); its G-StrKey is resolved in Rust via [`resolve_accounts`], not a
+/// whole-`accounts` JOIN. The `contract_id` StrKey is the request input, echoed
+/// back (no `soroban_contracts` JOIN).
 #[derive(Debug, Row, Deserialize)]
 struct NftChRow {
-    contract_id: String,
+    current_owner_id: Option<i64>,
     token_id: String,
     collection_name: Option<String>,
     name: Option<String>,
     media_url: Option<String>,
     minted_at_ledger: Option<i64>,
-    owner_account: Option<String>,
     last_seen_ledger: Option<i64>,
-}
-
-fn map_detail_row(r: NftChRow) -> NftItem {
-    NftItem {
-        contract_id: r.contract_id,
-        token_id: r.token_id,
-        collection_name: r.collection_name,
-        name: r.name,
-        media_url: r.media_url,
-        minted_at_ledger: r.minted_at_ledger,
-        owner_account: r.owner_account,
-        last_seen_ledger: r.last_seen_ledger,
-    }
 }
 
 /// `GET /v1/nfts/{contract_id}/{token_id}` — single-row composite lookup.
 ///
-/// Two PK seeks: resolve the C-StrKey → Int64 surrogate (`cid`, bound once,
-/// referenced by both the enrichment scope and the `nfts` filter), then the
-/// `nfts` PK seek on `(contract_id, token_id)`. Plain no-`FINAL` lookup joins
-/// — one owner id is a cheap `idx_acc_id` bloom probe, so the restricted CTE
-/// the list uses would be over-engineering here (panel review).
+/// One `nfts` PK seek (`(contract_id, token_id)`, resolving the C-StrKey → Int64
+/// surrogate in the `cid` CTE) plus a scoped `nft_enrichment` collapse. The
+/// owner G-StrKey is resolved in Rust via [`resolve_accounts`] (a `WHERE id IN`
+/// bloom seek on the single owner id) instead of a whole-`accounts` JOIN, and
+/// the contract StrKey is echoed from the request input instead of a
+/// whole-`soroban_contracts` JOIN — the two joins that turned this into a
+/// ~25M-row dimension scan (task 0355; same swap as 0344/0345/0354).
 pub async fn fetch_by_composite(
     client: &clickhouse::Client,
     contract_id: &str,
@@ -291,17 +284,14 @@ pub async fn fetch_by_composite(
                    SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1 \
                ) \
                SELECT \
-                   sc.contract_id                    AS contract_id, \
+                   n.current_owner_id                AS current_owner_id, \
                    n.token_id                        AS token_id, \
                    nullIf(ne.collection_name, '')    AS collection_name, \
                    nullIf(ne.name, '')               AS name, \
                    nullIf(ne.media_url, '')          AS media_url, \
                    n.minted_at_ledger                AS minted_at_ledger, \
-                   nullIf(own.account_id, '')        AS owner_account, \
                    nullIf(n.current_owner_ledger, 0) AS last_seen_ledger \
                FROM nfts n FINAL \
-               LEFT JOIN soroban_contracts sc ON sc.id = n.contract_id \
-               LEFT JOIN  accounts          own ON own.id = n.current_owner_id \
                LEFT JOIN ( \
                    SELECT contract_id, token_id, \
                           argMax(name, version)            AS name, \
@@ -314,13 +304,36 @@ pub async fn fetch_by_composite(
                WHERE n.contract_id IN (SELECT id FROM cid) \
                  AND n.token_id = ? \
                LIMIT 1";
-    let row = client
+    let Some(r) = client
         .query(sql)
         .bind(contract_id)
         .bind(token_id)
         .fetch_optional::<NftChRow>()
-        .await?;
-    Ok(row.map(map_detail_row))
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    // Owner G-StrKey via a single-id `WHERE id IN` bloom seek (unowned → None).
+    // `.filter(non-empty)` preserves the old `nullIf(own.account_id, '')` shape.
+    let owner_account = match r.current_owner_id {
+        Some(id) => resolve_accounts(client, vec![id])
+            .await?
+            .remove(&id)
+            .filter(|s| !s.is_empty()),
+        None => None,
+    };
+
+    Ok(Some(NftItem {
+        contract_id: contract_id.to_string(),
+        token_id: r.token_id,
+        collection_name: r.collection_name,
+        name: r.name,
+        media_url: r.media_url,
+        minted_at_ledger: r.minted_at_ledger,
+        owner_account,
+        last_seen_ledger: r.last_seen_ledger,
+    }))
 }
 
 /// Existence probe for the transfers endpoint's 404-vs-empty disambiguation.

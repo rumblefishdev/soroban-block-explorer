@@ -97,7 +97,8 @@ export type AccountTransactionItem = {
   application_order: number;
   created_at: string;
   /**
-   * Stroops.
+   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+   * there is no `decimals` field — the frontend scales by 1e7.
    */
   fee_charged: number;
   has_soroban: boolean;
@@ -272,6 +273,10 @@ export type AssetItem = {
  */
 export type AssetTransactionItem = {
   created_at: string;
+  /**
+   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+   * there is no `decimals` field — the frontend scales by 1e7.
+   */
   fee_charged: number;
   has_soroban: boolean;
   hash: string;
@@ -503,7 +508,8 @@ export type E3ResponseTransactionDetailLight = {
   application_order: number;
   created_at: string;
   /**
-   * Fee charged in stroops.
+   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+   * there is no `decimals` field — the frontend scales by 1e7.
    */
   fee_charged: number;
   has_soroban: boolean;
@@ -585,18 +591,17 @@ export type ErrorEnvelope = {
 };
 
 export type EventAppearanceItem = {
-  amount: number;
   contract_id: string;
   created_at: string;
   ledger_sequence: number;
 };
 
 /**
- * One row per event — an appearance with `amount > 1` expands to that
- * many rows (per-tx fields repeated, per-event fields unique).
+ * One row per event. On the PG path a folded appearance row expands to
+ * many `EventItem`s (per-tx fields repeated, per-event fields unique); on
+ * CH each row is already one event.
  */
 export type EventItem = {
-  amount: number;
   created_at: string;
   data: unknown;
   event_type: string;
@@ -623,7 +628,6 @@ export type InterfaceResponse = {
 };
 
 export type InvocationAppearanceItem = {
-  amount: number;
   /**
    * Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
    */
@@ -634,10 +638,6 @@ export type InvocationAppearanceItem = {
 };
 
 export type InvocationItem = {
-  /**
-   * Folded invocation-tree node count for this appearance.
-   */
-  amount: number;
   caller_account?: string | null;
   created_at: string;
   ledger_sequence: number;
@@ -1031,7 +1031,8 @@ export type PaginatedAccountTransactionItem = {
     application_order: number;
     created_at: string;
     /**
-     * Stroops.
+     * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+     * there is no `decimals` field — the frontend scales by 1e7.
      */
     fee_charged: number;
     has_soroban: boolean;
@@ -1138,6 +1139,10 @@ export type PaginatedAssetItem = {
 export type PaginatedAssetTransactionItem = {
   data: Array<{
     created_at: string;
+    /**
+     * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+     * there is no `decimals` field — the frontend scales by 1e7.
+     */
     fee_charged: number;
     has_soroban: boolean;
     hash: string;
@@ -1206,7 +1211,6 @@ export type PaginatedContractListItem = {
  */
 export type PaginatedEventItem = {
   data: Array<{
-    amount: number;
     created_at: string;
     data: unknown;
     event_type: string;
@@ -1230,10 +1234,6 @@ export type PaginatedEventItem = {
  */
 export type PaginatedInvocationItem = {
   data: Array<{
-    /**
-     * Folded invocation-tree node count for this appearance.
-     */
-    amount: number;
     caller_account?: string | null;
     created_at: string;
     ledger_sequence: number;
@@ -1440,6 +1440,10 @@ export type PaginatedPoolItem = {
 export type PaginatedPoolTransactionItem = {
   data: Array<{
     created_at: string;
+    /**
+     * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+     * there is no `decimals` field — the frontend scales by 1e7.
+     */
     fee_charged: number;
     has_soroban: boolean;
     hash: string;
@@ -1485,7 +1489,8 @@ export type PaginatedTransactionListItem = {
     contract_ids: Array<string>;
     created_at: string;
     /**
-     * Fee charged in stroops.
+     * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+     * there is no `decimals` field — the frontend scales by 1e7.
      */
     fee_charged: number;
     /**
@@ -1651,6 +1656,10 @@ export type PoolItem = {
  */
 export type PoolTransactionItem = {
   created_at: string;
+  /**
+   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+   * there is no `decimals` field — the frontend scales by 1e7.
+   */
   fee_charged: number;
   has_soroban: boolean;
   hash: string;
@@ -1770,7 +1779,8 @@ export type TransactionDetailLight = {
   application_order: number;
   created_at: string;
   /**
-   * Fee charged in stroops.
+   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+   * there is no `decimals` field — the frontend scales by 1e7.
    */
   fee_charged: number;
   has_soroban: boolean;
@@ -1834,7 +1844,8 @@ export type TransactionListItem = {
   contract_ids: Array<string>;
   created_at: string;
   /**
-   * Fee charged in stroops.
+   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+   * there is no `decimals` field — the frontend scales by 1e7.
    */
   fee_charged: number;
   /**

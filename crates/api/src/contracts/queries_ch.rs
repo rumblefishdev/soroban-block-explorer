@@ -14,8 +14,8 @@
 //! `(ledger_sequence, transaction_id, event_index)` (`event_index` = the
 //! multi-event-tx tie-break). Pagination unit differs from PG: CH pages per
 //! EVENT (one row → one `EventItem`), PG pages per folded APPEARANCE (one row →
-//! many events). `EventItem.amount` (a vestigial fold-count, not surfaced by the
-//! FE) is `1` on CH — each row is one unfolded event.
+//! many events, expanded at read time). The PG fold-count is an internal
+//! storage detail and is not surfaced on the wire.
 //!
 //! Read-cost notes (lessons from the global tx-list firefight):
 //! - `soroban_contracts` is ORDER BY `(contract_id)`; `soroban_invocations_appearances`
@@ -103,7 +103,6 @@ pub struct InvocationAppearanceRow {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
     pub caller_account: Option<String>,
-    pub amount: i32,
     pub successful: bool,
 }
 
@@ -649,7 +648,6 @@ struct InvocationKeyRow {
     ledger_sequence: i64,
     transaction_id: i64,
     caller_id: Option<i64>,
-    amount: i32,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -707,10 +705,9 @@ pub async fn fetch_invocation_appearances(
         "SELECT \
             m.ledger_sequence AS ledger_sequence, \
             m.transaction_id AS transaction_id, \
-            m.caller_id AS caller_id, \
-            m.amount AS amount \
+            m.caller_id AS caller_id \
          FROM ( \
-            SELECT ledger_sequence, transaction_id, caller_id, amount \
+            SELECT ledger_sequence, transaction_id, caller_id \
             FROM soroban_invocations_appearances \
             WHERE contract_id = ? \
               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
@@ -793,7 +790,6 @@ pub async fn fetch_invocation_appearances(
                 .caller_id
                 .and_then(|id| accounts.get(&id).cloned())
                 .filter(|s| !s.is_empty()),
-            amount: key.amount,
             successful: tx.successful,
         });
     }
@@ -878,9 +874,6 @@ fn map_event_row(r: EventChRow) -> ChEvent {
             ledger_sequence: r.ledger_sequence,
             transaction_id: r.transaction_id,
             successful: r.successful,
-            // CH is per-event (unfolded); the PG fold-count is vestigial and not
-            // surfaced by the FE — each CH row is one event.
-            amount: 1,
             created_at: millis_to_utc(r.created_at),
             event_type,
             topics,
@@ -1082,7 +1075,6 @@ mod tests {
         ));
         assert_eq!(ev.event_index, 2); // cursor tie-break preserved off the wire
         assert_eq!(ev.item.event_type, "contract");
-        assert_eq!(ev.item.amount, 1); // CH per-event (unfolded)
         assert_eq!(ev.item.topics.len(), 2); // JSON array → its elements
         assert_eq!(ev.item.data["value"], "1000");
         assert_eq!(ev.item.transaction_hash, "deadbeef");

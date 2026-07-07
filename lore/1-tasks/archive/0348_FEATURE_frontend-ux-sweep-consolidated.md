@@ -2,7 +2,7 @@
 id: '0348'
 title: 'Frontend UX sweep — consolidated fixes (19 findings across all pages)'
 type: FEATURE # bundle of bug-fixes + UX polish from a full-page audit
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0341', '0351']
 tags: ['frontend', 'ux', 'phase-polish', 'effort-large', 'priority-medium']
@@ -29,6 +29,16 @@ history:
     who: karolkow
     note: >
       Promoted to active to begin the consolidated fix pass.
+  - date: 2026-07-06
+    status: completed
+    who: karolkow
+    note: >
+      Non-video subset shipped in PR #316: F1 (contract tab badge), F9 (LP fee
+      column + detail dedup), F13 (4/4 truncation), F15 (native XLM link), F16
+      (search chip). F12 skipped (permanent). F2 deferred to the data-model
+      epic 0359. The remaining video-subset criteria (F3–F8, F10, F11, F14,
+      F17–F19) are owned by 0351 — not 0348's work. `/ux-expert` regression
+      pass on the five landed fixes came back clean.
 ---
 
 # Frontend UX sweep — consolidated fixes (19 findings)
@@ -42,9 +52,11 @@ formatting standards. This task bundles them so they can be fixed as one
 coherent polish pass rather than 19 micro-tasks. Each finding below carries
 its root cause and the exact file(s) to touch.
 
-## Status: Backlog
+## Status: Completed
 
-**Current state:** Audit complete, root-caused, not started. No files changed.
+**Current state:** Non-video subset shipped in PR #316 (F1, F9, F13, F15, F16);
+F12 skipped; F2 → 0359. Video subset (F3–F8, F10, F11, F14, F17–F19) owned by
+[[0351]]. See the Progress section for per-finding detail.
 
 > **Video-prep subset → [[0351]].** The eye-catching, FE-only findings needed
 > before the milestone-2 video are tracked in 0351: **F3, F4, F5, F6, F7, F8,
@@ -87,6 +99,12 @@ Refs: `docs/architecture/database-schema/endpoint-queries-clickhouse/11_get_cont
 have transactions — suspect the native-asset transactions query/data path
 returns empty. Investigate the `/assets/native` transactions endpoint before
 assuming display bug. Ref: `web/src/pages/AssetDetailPage.tsx`.
+**→ DEFERRED to [[0359]] (2026-07-06).** Root-caused: not a display bug — the
+asset-tx query has no native branch (native = empty-string identity). The
+investigation escalated into a system-wide data-model audit; the fundamental
+fix (per-(op,asset) participation index, native first-class) is a backend epic
+tracked in task 0359, not FE polish. The stopgap "variant C" built here was
+reverted. This finding is closed in 0348 as deferred, owned by 0359.
 
 **3. [Bug] Home auto-scrolls ~218px on load**, hiding the hero headline; user
 lands mid-page on the search bar. Almost certainly `autoFocus` on the search
@@ -212,34 +230,95 @@ override. Add a visible theme toggle (and decide a single default).
 
 ---
 
+## Progress (2026-07-06)
+
+Branch `feat/0348` (off develop). This task's own scope is the **non-video
+subset** (F1, F2, F9, F12, F13, F15, F16); the rest (F3–F8, F10, F11, F14,
+F17–F19) is the curated video punch-list tracked in [[0351]].
+
+**Status: non-video subset COMPLETE.** All FE findings landed on `feat/0348`
+(F1, F9, F13, F15, F16); F12 skipped (permanent); F2 deferred to [[0359]].
+`/ux-expert` regression/orphan pass on the five landed fixes — **clean, no
+orphans, no regressions** (verified: search chip was truly tab-scoped
+redundant; no fee-based pool filter orphaned by the column drop; contract-tab
+badge removal is consistent with keeping the honest search-tab counts).
+
+**Done (on `feat/0348`):**
+
+- **F15** — native XLM asset is a link (`AccountBalances.tsx`, `href:
+routes.asset('native')`). Commit `15cd2a27`.
+- **F13** — single 4/4 truncation standard: collapsed the redundant per-type
+  map to one `DEFAULT_TRUNCATION`, removed inline one-offs (`humanizeOp`,
+  `SignaturesTable`, `ContractEvents` topic), updated 2 tests. Commit
+  `f205fe99`. Verified live on `:4301` (`af27…be98`).
+- **F16** — dropped the redundant per-row type chip in search
+  (`SearchResultRow.tsx`): rows are always tab-scoped, so the chip only repeated
+  the tab label. Commit `9e8bb705`.
+
+**Deferred:**
+
+- **F2** (native XLM tx empty) → [[0359]]. Root-caused as a data-model / backend
+  problem (single-asset-slot index + native-as-absence), not FE polish. The
+  stopgap "variant C" built during the investigation was reverted. F2 escalated
+  into a full system-wide audit now living in 0359.
+
+**Remaining in 0348 (FE):** none — non-video subset complete (see Status
+above). Follow-on work lives in [[0351]] (video punch-list) and [[0359]]
+(data-model epic: F2 + the F1 all-time-count half).
+
+Prior remaining items, now closed:
+
+- ~~**F9** — LP Fee column de-emphasize/drop~~ → **DONE** (2026-07-06).
+  Verified: `fee_bps` parsed from on-chain XDR (`LiquidityPoolEntry.params.fee`,
+  `xdr-parser/src/state.rs:855`); prod is 100% `30` across all 51,969 pools —
+  protocol-fixed (`LIQUIDITY_POOL_FEE_V18`), not a bug, structurally constant
+  for classic pools (Soroban AMMs are a separate contract data-path, not this
+  table). Dropped the list column + the loud header `FeePill`; kept the quiet
+  Summary "Fee: 0.30%" cell (canonical per-pool fact). `FeePill.tsx` → `.trash`
+  (dead). Upgrade path: if a Soroban-AMM pool source is ever unified into this
+  list, re-introduce Fee as a data-driven column (render iff `COUNT(DISTINCT
+fee) > 1`). Typecheck + 111 web tests green.
+- ~~**F12** — ledger-sequence fields paired with human time app-wide~~ →
+  **SKIPPED** (2026-07-06, permanent drop — not deferred).
+- ~~**F1** — invocations KPI 0-vs-table~~ → FE relabel half **DONE**
+  (2026-07-06). Root cause: `recent_invocations`/`recent_events` are a 7-day
+  activity window (bounded mainly to cap the 9.5B-row events count); the table
+  pages all-time and never counts. The tab badge reused the 7d number as if it
+  were an item-count → "0" over a full table on the 84.6% of contracts dormant
+  > 7d. Fix (Option A): dropped `count` from the Invocations + Events tab badges;
+  > KPI cards keep the honest "(last 7 days)" label. All-time-total badge (Option
+  > B) deferred to [[0359]] K4-1 — invocations all-time is cheap, events all-time
+  > isn't → product call.
+
 ## Acceptance Criteria
 
-- [ ] 1 — Contract invocations KPI/badge and table agree (or KPI honestly labeled)
-- [ ] 2 — Native XLM asset detail shows its transactions (or root cause documented)
-- [ ] 3 — Home loads at scroll-top, hero visible
-- [ ] 4 — Asset detail supply no longer overlaps Holders
-- [ ] 5 — Time column no longer clips in the wide transaction tables
-- [ ] 6 — Tables fit their row count for small result sets (no empty void)
-- [ ] 7 — NFT trait values use a body-size variant
-- [ ] 8 — NFT list Collection column resolved; image fallback added
-- [ ] 9 — LP Fee column de-emphasized/dropped
-- [ ] 10 — LP TVL filter hidden behind a 0341-style flag
-- [ ] 11 — Accounts list seen-columns relabeled and/or given human time
-- [ ] 12 — Ledger-sequence fields paired with human time app-wide
-- [ ] 13 — Single truncation standard (first 4 + last 4) applied and enforced;
-      one-offs removed; untruncated identifiers found and fixed
-- [ ] 14 — `formatCompactAmount` wired into all large-number display sites
-- [ ] 15 — Native XLM asset is a link
-- [ ] 16 — Search redundant per-row chip removed when tab-scoped
-- [ ] 17 — Home stat counters don't garble mid-animation
-- [ ] 18 — "Stellar Lumens" copy fix
-- [ ] 19 — Visible theme toggle added; single default decided
-- [ ] **Docs updated** — N/A unless the invocations-count decision (finding 1)
-      changes an endpoint's documented semantics; if so, update the relevant
-      `docs/architecture/**` query docs in the same PR.
-- [ ] **API types regenerated** — N/A unless finding 1's fix touches
-      `crates/api/**` (if the KPI window/shape changes server-side, run
-      `npx nx run @rumblefish/api-types:generate`).
+- [x] 1 — Invocations/Events tab badges no longer show a 7d count over an
+      all-time table (FE relabel half) — **DONE** (feat/0348, uncommitted). The
+      all-time-count _data_ half (make the badge show a real total) stays in
+      [[0359]] K4-1: invocations all-time is a cheap seek, but events all-time
+      is a 9.5B-row cost problem → product decision, not FE polish.
+- [~] 2 — Native XLM tx — DEFERRED to 0359 (root-caused: data-model, backend epic)
+- [~] 3 — Home loads at scroll-top, hero visible — DEFERRED → **0351** (video subset)
+- [~] 4 — Asset detail supply no longer overlaps Holders — DEFERRED → **0351**
+- [~] 5 — Time column no longer clips in the wide transaction tables — DEFERRED → **0351**
+- [~] 6 — Tables fit their row count for small result sets — DEFERRED → **0351**
+- [~] 7 — NFT trait values use a body-size variant — DEFERRED → **0351**
+- [~] 8 — NFT list Collection column resolved; image fallback — DEFERRED → **0351**
+- [x] 9 — LP Fee column dropped (list) + detail deduped — **DONE** (feat/0348 `05d0821e`)
+- [~] 10 — LP TVL filter hidden behind a 0341-style flag — DEFERRED → **0351**
+- [~] 11 — Accounts list seen-columns relabeled / human time — DEFERRED → **0351**
+- [~] 12 — Ledger-sequence + human time — **SKIPPED** (2026-07-06, permanent drop)
+- [x] 13 — Single truncation standard (first 4 + last 4) applied and enforced;
+      one-offs removed; untruncated identifiers found and fixed — **DONE** (feat/0348 `f205fe99`)
+- [~] 14 — `formatCompactAmount` wired into all large-number sites — DEFERRED → **0351**
+- [x] 15 — Native XLM asset is a link — **DONE** (feat/0348 `15cd2a27`)
+- [x] 16 — Search redundant per-row chip removed when tab-scoped — **DONE** (feat/0348 `9e8bb705`)
+- [~] 17 — Home stat counters don't garble mid-animation — DEFERRED → **0351**
+- [~] 18 — "Stellar Lumens" copy fix — DEFERRED → **0351**
+- [~] 19 — Visible theme toggle added; single default decided — DEFERRED → **0351**
+- [x] **Docs updated** — N/A — shipped changes touch no `docs/architecture/**`
+      (finding 1's FE relabel didn't change endpoint semantics).
+- [x] **API types regenerated** — N/A — shipped changes touch no `crates/api/**`.
 
 ## Notes
 

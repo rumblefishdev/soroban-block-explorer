@@ -3,6 +3,7 @@ import type { PaginatedEventItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
+  DEFAULT_TRUNCATION,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
@@ -76,7 +77,7 @@ function TopicsCell({ topics }: { topics: readonly unknown[] }) {
               component="span"
               sx={(theme) => ({ color: theme.palette.text.success })}
             >
-              {`"${truncateMiddle(topic, { prefix: 4, suffix: 4 })}"`}
+              {`"${truncateMiddle(topic, DEFAULT_TRUNCATION)}"`}
             </Box>
           ) : (
             JSON.stringify(topic) ?? String(topic)
@@ -98,6 +99,9 @@ function DataCell({ data }: { data: unknown }) {
       return String(data);
     }
   }, [data]);
+  // Event payload is arbitrary content, not an identifier reference, so it
+  // keeps a wider content cap rather than the 4/4 identifier standard
+  // (DEFAULT_TRUNCATION) — 4/4 would gut a readable payload to `ABCD…WXYZ`.
   const display =
     typeof data === 'string' && data.length > 24
       ? truncateMiddle(data, { prefix: 10, suffix: 10 })

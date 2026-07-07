@@ -34,16 +34,17 @@ describe('truncateMiddle', () => {
 });
 
 describe('getDefaultTruncation', () => {
-  it('returns the per-entity Figma defaults', () => {
+  it('returns the single 4/4 standard for every identifier type', () => {
+    // Locked decision (task 0348 finding 13): first 4 + last 4 everywhere.
     expect(getDefaultTruncation('transaction')).toEqual({
-      prefix: 6,
+      prefix: 4,
       suffix: 4,
     });
     expect(getDefaultTruncation('account')).toEqual({ prefix: 4, suffix: 4 });
-    expect(getDefaultTruncation('contract')).toEqual({ prefix: 6, suffix: 4 });
-    expect(getDefaultTruncation('asset')).toEqual({ prefix: 6, suffix: 4 });
-    expect(getDefaultTruncation('pool')).toEqual({ prefix: 6, suffix: 4 });
-    expect(getDefaultTruncation('nft')).toEqual({ prefix: 6, suffix: 4 });
+    expect(getDefaultTruncation('contract')).toEqual({ prefix: 4, suffix: 4 });
+    expect(getDefaultTruncation('asset')).toEqual({ prefix: 4, suffix: 4 });
+    expect(getDefaultTruncation('pool')).toEqual({ prefix: 4, suffix: 4 });
+    expect(getDefaultTruncation('nft')).toEqual({ prefix: 4, suffix: 4 });
   });
 
   it('uses the no-truncate (0, 0) config for ledger entities (numeric, not hash)', () => {

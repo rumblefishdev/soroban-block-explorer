@@ -61,7 +61,8 @@ pub struct TransactionListItem {
     /// could not be decoded (lore-0209). Always populated for ordinary
     /// (successful or failed-but-decoded) transactions.
     pub source_account: Option<String>,
-    /// Fee charged in stroops.
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     /// Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise.
     pub inner_tx_hash: Option<String>,
@@ -108,7 +109,8 @@ pub struct TransactionDetailLight {
     /// `null` for Variant A `parse_error` transactions whose envelope
     /// could not be decoded (lore-0209).
     pub source_account: Option<String>,
-    /// Fee charged in stroops.
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     /// Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise.
     pub inner_tx_hash: Option<String>,
@@ -135,7 +137,6 @@ pub struct TransactionDetailLight {
 pub struct EventAppearanceItem {
     pub contract_id: String,
     pub ledger_sequence: i64,
-    pub amount: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -145,7 +146,6 @@ pub struct InvocationAppearanceItem {
     /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
     pub caller_account: Option<String>,
     pub ledger_sequence: i64,
-    pub amount: i32,
     pub created_at: DateTime<Utc>,
 }
 
