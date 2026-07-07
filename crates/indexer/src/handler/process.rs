@@ -43,12 +43,6 @@ pub struct ParseOutput {
     pub nfts: Vec<ExtractedNft>,
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
-    /// Legacy `Symbol("name")` writes for the PG `soroban_contracts.name`
-    /// retroactive UPDATE path (ADR 0042 / task 0156). Its only reader was the
-    /// PG `process_ledger` path (removed with `pg-persist`, task 0244); still
-    /// populated by the parser. Full removal deferred to task 0304.
-    #[allow(dead_code)]
-    pub contract_name_writes: Vec<(String, String)>,
     /// On-chain Soroban token metadata (name/symbol/decimals) from
     /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
     /// table (task 0297). SACs already excluded by the producer.
@@ -64,7 +58,7 @@ pub struct ParseOutput {
     #[allow(dead_code)]
     pub operation_trees: Vec<(String, serde_json::Value)>,
     /// Parse-half wall time in ms. Surfaced for diagnostic logs;
-    /// backfill-runner / backfill-bench track their own timings, the
+    /// backfill-runner tracks its own timings, the
     /// CH-write Lambda no longer logs this in-band.
     #[allow(dead_code)]
     pub parse_ms: u128,
@@ -96,7 +90,7 @@ pub struct NetworkIdError;
 /// subsequent calls return the cached value. Lambda binary calls this
 /// in `main()` BEFORE `lambda_runtime::run` so a missing passphrase
 /// fails the Lambda init (CW `Init Errors`), not the first per-event
-/// `parse_ledger`. Backfill-runner / backfill-bench bins call it from
+/// `parse_ledger`. Backfill-runner calls it from
 /// their own startup before driving the parse loop.
 ///
 /// **Whitespace handling**: `SHA256(b"   ")` is a deterministic but
@@ -297,7 +291,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
     let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
     let mut all_soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance> = Vec::new();
-    let mut all_contract_name_writes: Vec<(String, String)> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
         let deployments = xdr_parser::extract_contract_deployments(
             changes,
@@ -328,7 +321,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
         all_contract_metadata_writes.extend(xdr_parser::extract_contract_metadata_writes(changes));
         all_soroban_token_balances.extend(xdr_parser::extract_soroban_token_balances(changes));
-        all_contract_name_writes.extend(xdr_parser::extract_contract_data_name_writes(changes));
     }
 
     all_assets.push(xdr_parser::native_asset_singleton());
@@ -364,7 +356,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nfts: all_nfts,
         nft_events,
         lp_positions: all_lp_positions,
-        contract_name_writes: all_contract_name_writes,
         contract_metadata_writes: all_contract_metadata_writes,
         soroban_token_balances: all_soroban_token_balances,
         operation_trees: all_operation_trees,

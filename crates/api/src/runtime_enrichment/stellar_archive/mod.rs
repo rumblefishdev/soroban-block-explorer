@@ -266,7 +266,7 @@ mod tests {
         use stellar_xdr::curr::LedgerCloseMeta;
 
         let fetcher = StellarArchiveFetcher::new(unsigned_client().await);
-        // First Soroban-era ledger per backfill-bench how-to-run.
+        // First Soroban-era ledger (backfill runbook).
         let seq = 50_457_424_u32;
 
         let meta = fetcher.fetch_ledger(seq).await.expect("fetch failed");

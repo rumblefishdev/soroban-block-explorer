@@ -307,7 +307,6 @@ mod tests {
             contract_id: contract.map(String::from),
             sac_contract_id: None,
             sac_deployed: false,
-            name: None,
             total_supply: None,
             holder_count: None,
         }

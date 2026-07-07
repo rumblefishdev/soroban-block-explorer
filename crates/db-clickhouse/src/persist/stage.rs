@@ -681,10 +681,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // (task 0297) On-chain token name/symbol/decimals → the dedicated
     // `soroban_contract_metadata` side table. A pure 1:1 map of the producer's
     // output (extraction + SAC-skip already done), built here like the other
-    // `out.*` rows rather than post-`prepare`. This coexists with the legacy
-    // `Symbol("name")` path (parser `extract_contract_data_name_writes`, deploy
-    // second pass, `soroban_contracts.name`); full removal of that path is
-    // deferred to task 0304.
+    // `out.*` rows rather than post-`prepare`. (The legacy `Symbol("name")` →
+    // `soroban_contracts.name` write path was removed with Postgres in task
+    // 0244; the dead-column DROP is task 0304 / 0310.)
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
     // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
     // `assets`) isn't in the pre-fetched DB `asset_sac` map yet — it's written to
