@@ -19,7 +19,7 @@ use super::dto::{
     AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
     AccountTxListParams, AccountsListCursor, AccountsListParams,
 };
-use super::queries::{
+use super::queries_ch::{
     self, AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
 };
 
@@ -310,23 +310,23 @@ async fn fetch_list_for_source(
     sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountListRow>, clickhouse::error::Error> {
-    queries::fetch_list(&state.ch(), params, sort, direction).await
+    queries_ch::fetch_list(&state.ch(), params, sort, direction).await
 }
 
 async fn fetch_account_for_source(
     state: &AppState,
     account_strkey: &str,
 ) -> Result<Option<AccountHeaderRow>, clickhouse::error::Error> {
-    queries::fetch_account(&state.ch(), account_strkey).await
+    queries_ch::fetch_account(&state.ch(), account_strkey).await
 }
 
-/// Derived `deleted` status (task 0324). See `queries::fetch_deleted_status`.
+/// Derived `deleted` status (task 0324). See `queries_ch::fetch_deleted_status`.
 async fn fetch_deleted_for_source(
     state: &AppState,
     account_surrogate_id: i64,
     last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    queries::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
+    queries_ch::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
 }
 
 async fn fetch_account_balances(
@@ -334,7 +334,7 @@ async fn fetch_account_balances(
     account_id: i64,
 ) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
     // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331).
-    queries::fetch_balances(&state.ch(), account_id).await
+    queries_ch::fetch_balances(&state.ch(), account_id).await
 }
 
 async fn fetch_account_tx_for_source(
@@ -345,7 +345,7 @@ async fn fetch_account_tx_for_source(
     sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, clickhouse::error::Error> {
-    queries::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
+    queries_ch::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
 }
 
 /// Build the opaque account-transactions cursor for a boundary row. CH keys on

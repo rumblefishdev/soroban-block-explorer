@@ -504,7 +504,7 @@ mod tests {
 ///
 /// ```text
 /// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib nfts::queries::decode_smoke -- --nocapture
+///   cargo test -p api --lib nfts::queries_ch::decode_smoke -- --nocapture
 /// ```
 #[cfg(test)]
 mod decode_smoke {
