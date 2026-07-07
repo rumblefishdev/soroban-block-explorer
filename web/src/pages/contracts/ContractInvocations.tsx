@@ -8,16 +8,15 @@ import {
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
-  StatusChip,
   TableEmptyState,
   useCursorPagination,
-  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-import { useContractInvocations } from '../../api/index.js';
+import { useContractInvocations, usePagedRows } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
+import { ledgerColumn, statusColumn } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type InvocationRow = PaginatedInvocationItem['data'][number];
@@ -45,20 +44,8 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
         <Dash />
       ),
   },
-  {
-    id: 'status',
-    header: 'Status',
-    width: 120,
-    cell: (row) => <StatusChip successful={row.successful} />,
-  },
-  {
-    id: 'ledger',
-    header: 'Ledger',
-    width: 120,
-    cell: (row) => (
-      <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
-    ),
-  },
+  statusColumn<InvocationRow>(),
+  ledgerColumn<InvocationRow>(),
   {
     id: 'time',
     header: 'Time',
@@ -84,9 +71,8 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useContractInvocations(contractId, cursor);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

@@ -1,12 +1,9 @@
 import { Stack } from '@mui/material';
 import type { ListPoolsData } from '@rumblefish/api-types';
-import {
-  useCursorPagination,
-  usePageHandlers,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { useCursorPagination } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
-import { usePoolsList } from '../api/index.js';
+import { PAGE_SIZE, usePoolsList, usePagedRows } from '../api/index.js';
 
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
@@ -14,8 +11,6 @@ import { PoolsFilterBar } from './liquidity-pools/PoolsFilterBar.js';
 import { POOL_COLUMN_COUNT, PoolsTable } from './liquidity-pools/PoolsTable.js';
 
 type Filters = NonNullable<ListPoolsData['query']>;
-
-const PAGE_SIZE = 20;
 
 /**
  * Liquidity-pools list page (`/liquidity-pools`) — every liquidity pool
@@ -42,9 +37,8 @@ export default function LiquidityPoolsListPage() {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     usePoolsList(cursor, queryFilters);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

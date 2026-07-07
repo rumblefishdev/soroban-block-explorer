@@ -4,11 +4,10 @@ import {
   isAccountId,
   isContractId,
   useCursorPagination,
-  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
-import { useTransactionsList } from '../api/index.js';
+import { PAGE_SIZE, useTransactionsList, usePagedRows } from '../api/index.js';
 
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
@@ -20,8 +19,6 @@ import {
 } from './transactions/TransactionsTable.js';
 
 type Filters = NonNullable<ListTransactionsData['query']>;
-
-const PAGE_SIZE = 20;
 
 export default function TransactionsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
@@ -51,9 +48,8 @@ export default function TransactionsListPage() {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useTransactionsList(cursor, queryFilters);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

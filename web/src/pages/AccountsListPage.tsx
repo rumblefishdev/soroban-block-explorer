@@ -3,11 +3,10 @@ import type { ListAccountsData } from '@rumblefish/api-types';
 import {
   type SortDirection,
   useCursorPagination,
-  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
-import { useAccountsList } from '../api/index.js';
+import { PAGE_SIZE, useAccountsList, usePagedRows } from '../api/index.js';
 
 import { AccountsFilters } from './accounts/AccountsFilters.js';
 import {
@@ -18,8 +17,6 @@ import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
 type Filters = NonNullable<ListAccountsData['query']>;
-
-const PAGE_SIZE = 20;
 
 export default function AccountsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, setSort, clearFilters } =
@@ -41,9 +38,8 @@ export default function AccountsListPage() {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useAccountsList(cursor, queryFilters);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );
