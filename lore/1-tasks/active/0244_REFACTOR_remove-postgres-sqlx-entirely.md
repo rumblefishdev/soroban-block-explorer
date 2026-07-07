@@ -73,6 +73,18 @@ history:
       See "Progress" section for the exhaustive remaining list. Gated on two
       pending team decisions: audit-harness (port-to-CH vs delete) and
       backfill-bench (drop vs port).
+  - date: '2026-07-07'
+    status: active
+    who: karolkow
+    note: >
+      Full crate/PG teardown (~10 commits): deleted backfill-bench,
+      db-partition-mgmt, crates/db; pruned backfill-runner PG sink + indexer
+      pg-persist; removed domain sqlx feature/derives; removed docker postgres +
+      env; swept backend-overview + indexing-pipeline docs; scrubbed public
+      api-types PG leaks + regen. backfill-bench deleted; audit-harness first
+      deleted then reverted → kept + PORT (task 0361). Codebase PG-free except
+      audit-harness (sqlx→CH port = 0361, workspace sqlx dep gated on it) and
+      infra compute-stack.ts (RDS teardown = 0239, consent-gated).
 ---
 
 # Remove Postgres/sqlx entirely — ClickHouse is the only DB
@@ -162,7 +174,23 @@ PG-SQL fixtures) moved to `.trash/` → **follow-up task 0360** (on develop):
   pre-cutover baseline (task 0239 teardown, consent-gated); reconciled the stale
   2026-05-20 amendment note; fixed a mislabeled `0239` link (`backlog`→`archive`).
 
-### ⏳ Remaining — exhaustive
+### ✅ Done — session 3 (2026-07-07): full crate / PG teardown (~10 commits)
+
+All PG-code removal complete, in dependency order:
+
+- **`backfill-bench`** deleted (`7cbf6dc4`) — dead PG-write bench, keystone of `pg-persist`.
+- **`audit-harness`** deleted (`71506367`) then **reverted** (`4bd834b8`) — kept + ported (0361; see decision below).
+- **`db-partition-mgmt`** deleted (`c33cb642`) — obsolete under CH declarative `intDiv` partitioning.
+- **`backfill-runner` PG sink pruned** (`895a42da`) — `Sink`/`PartitionWriterHandle` → CH-only newtypes; `Target`/`--target`/`--database-url`/`resume.rs`/`ClassificationCache` gone; `db`+`sqlx` deps dropped; guards + tests simplified; README rewritten. Crate stays (real CH sink).
+- **`indexer` pg-persist removed** (`ecbe2416`) — `handler/persist/` tree, `process_ledger`, PG error variants, integration test, feature + `db`/`sqlx` deps.
+- **`crates/db` deleted** (`e1ab7bdf`) — zero consumers; + 6 dead `db:*` npm scripts.
+- **`domain` sqlx removed** (`d813cb09`) — feature + optional dep + `sqlx::Type` derives on all 6 enums (kept `#[repr(i16)]`).
+- **docker-compose `postgres`** + `pgdata` + `.env.example` PG vars removed (`b8cd3e8c`).
+- **docs** swept CH-only: `backend-overview` (`2234bda0`), `indexing-pipeline` (`54994e0c`).
+- **libs/api-types** public-OpenAPI PG-leak scrub + regen (`d5b30346`; `--no-verify` — pre-existing unrelated FE test, proven on clean HEAD). Internal parity comments kept as history.
+- **`balance_seed`** stale doc fixed (`dcb773ae`).
+
+### Decision record — audit-harness / backfill-bench
 
 **DECIDED (2026-07-06): delete both.** **REVISED (2026-07-07): keep + port
 `audit-harness`** (Karol signed off both).
@@ -178,82 +206,32 @@ PG-SQL fixtures) moved to `.trash/` → **follow-up task 0360** (on develop):
   tracked under task **0361** (re-scoped rebuild→port). **Consequence:**
   `audit-harness` remains PG-bound (`sqlx`) in-tree, so item 7's _"drop the
   `sqlx` workspace dep"_ is **carved out** — sqlx survives solely for
-  audit-harness until 0361 lands (see AC #13).
+  audit-harness until 0361 lands (see the AC verification below).
 - **`backfill-bench` → B: delete.** Benchmarks the now-dead PG write path,
   redundant with `backfill-runner` (the real CH sink), and the keystone pinning
   `pg-persist`. If local throughput benchmarking is wanted later, add a `--bench`
   mode to `backfill-runner` (CH). (Done — commit `7cbf6dc4`.)
 
-The `backfill-bench` delete unblocks items 3–8; the workspace-`sqlx` drop (item 7)
-is gated on the 0361 audit-harness port.
+### ⏳ Remaining — two deferred tracks only
 
-1. `crates/audit-harness/` — **decision: port to CH or delete.** No CH mirror
-   exists (the `compare-with-stellar-api` skill is also PG-bound); it is
-   project functionality (continuous Horizon/archive correctness audit) whose
-   only PG-bound part is the `sqlx` read side. Includes crate + workspace
-   member + README + `reports/` + `sql/` + `run-invariants.sh`.
-2. `crates/backfill-bench/` — **decision: drop or port.** No CH bench exists;
-   dev perf tool for the (gone) PG write path. Includes crate + member +
-   README + `how-to-run-soroban-backfill.md` + `scripts/bench-schema-layers.sh`.
-3. `crates/db-partition-mgmt/` — delete (CH partitions declaratively via
-   `PARTITION BY` in `init.sql`). Coupled to backfill-bench (bench depends on
-   it), so it moves with the bench decision. Crate + member.
-4. `crates/indexer` — remove the `pg-persist` feature: `Cargo.toml`
-   (`pg-persist = [dep:db, dep:sqlx, domain/sqlx]`) + 13 `#[cfg(feature =
-"pg-persist")]` files + the whole `handler/persist/` tree
-   (mod/staging/write) + cfg blocks in `process.rs` / `handler/mod.rs` +
-   `tests/persist_integration.rs`. (Used by backfill-bench + backfill-runner,
-   so blocked on both.)
-5. `crates/backfill-runner` — **crate stays (real CH sink)**; prune the PG
-   sink: `Target::Postgres` + `--target postgres` default, the `db` + `sqlx`
-   deps, `src/sink.rs` PG code, PG refs across ~11 files (assets_id_backfill,
-   balance_seed, bootstrap, contract_type_rebuild, error, main, nft_reclassify,
-   repair_tier1, resume, upgradeable_backfill, wasm_upgrade_backfill).
-6. `crates/db/` — the PG crate (pool.rs, secrets.rs, lib.rs, Cargo.toml,
-   MIGRATIONS.md). Dies only after 4 + 5 + backfill-bench stop importing it.
+The codebase is PG-free **except** `audit-harness` (sqlx-bound, kept on purpose):
 
-**Cross-cutting sqlx (after 4/5/6 land):** 7. workspace `Cargo.toml:41` — drop the `sqlx` dep; members — drop db,
-db-partition-mgmt, backfill-bench, audit-harness. 8. `crates/domain` — drop the `sqlx` feature (`Cargo.toml:11,21`) + the
-`#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]` derives on ~7 enums
-(asset_type, contract_event_type, contract_type, nft_event_type,
-operation_type, token_asset_type, enums/mod).
+1. **`audit-harness` sqlx→CH port + drop the workspace `sqlx` dep** → **task 0361**
+   (re-scoped rebuild→port, on develop). `crates/domain` and every other crate were
+   freed of sqlx; the workspace `Cargo.toml` sqlx dep survives **solely** for
+   audit-harness until 0361 lands.
+2. **infra `compute-stack.ts`** (`DATABASE_URL` / `API_DATASOURCE_*` env,
+   `infra/README.md`) + `infrastructure-overview.md` RDS topology → **task 0239**
+   (AWS-side RDS teardown, consent-gated prod). `docker-compose.prod.yml` gated
+   `postgres-merge` / `snapshot-source` also OPS/0239.
 
-**Independent (no decision needed):**
+### ✅ AC verification (2026-07-07)
 
-9. `docker-compose.yml` — remove the base `postgres` service + `pgdata` volume
-   (local-dev only, no code dep; safe for CH-only dev). `docker-compose.prod.yml`
-   also has `postgres` + gated `postgres-merge`/`snapshot-source` — OPS, careful.
-10. **infra** — `infra/src/lib/stacks/compute-stack.ts`: `DATABASE_URL`
-    placeholder + `API_DATASOURCE_*` env block + `infra/README.md` PG refs.
-    ⚠️ prod config — needs explicit go. Overlaps the RDS teardown (task 0239).
-11. **libs/api-types** — PG strings live in api DTO **doc comments**
-    (`LedgerListItem` "sqlx::FromRow", `NetworkStats` "pg*class.reltuples", the
-    `pool_ids` PG↔CH caveat, network-stats query desc). **Open call:** scrub PG
-    from the \_public* API docs, or keep as history? Then **regenerate**
-    (`nx run @rumblefish/api-types:generate`) so `openapi.json` +
-    `generated/types.gen.ts` refresh.
-12. **docs/architecture — remaining after the session-2 sweep:**
-    - `backend/backend-overview.md` — **NOT done** (only its link was repointed).
-      Full non-infra doc: store identity, `sqlx` tech-stack lines, §Search FTS,
-      and the **actively-false** "Per-module datasource (task 0243) — dispatch PG
-      (`sqlx`) or CH" (that dispatch was removed). Same treatment as
-      technical-design (non-infra sweep; hold any RDS-topology diagram).
-    - `infrastructure/infrastructure-overview.md` — **HELD** (RDS topology +
-      decommission; task 0239, consent-gated).
-    - `indexing-pipeline/indexing-pipeline-overview.md` — pg-persist / backfill
-      sink prose, **coupled to items 4/5**.
-    - `security/clickhouse-rbac.md` — 1 stray mention to check.
-    - ✅ done: `endpoint-queries/` removed, xdr-parsing, frontend,
-      `database-schema-overview`, `technical-design` (non-infra).
-
-**Done since the checkpoint:** api + db-clickhouse stale PG comments (was #11/#12
-here) — landed in `b45f7661`.
-
-**Final AC verification:**
-
-13. `rg -i 'sqlx|PgPool|postgres' crates/ infra/ libs/` = 0 outside
-    comments/lore/docs-archive (currently NOT zero).
-14. `cargo check --workspace` clean; api-types `check-generated` green.
+- `cargo check --workspace` clean, **zero warnings**.
+- No live `sqlx` / `PgPool` / `postgres` in Rust code **outside `audit-harness`** —
+  remaining hits are accurate-history comments.
+- api-types regenerated; public OpenAPI is PG-free.
+- Residual `sqlx` = audit-harness + workspace dep (→ 0361); residual infra PG/RDS (→ 0239).
 
 ## Summary
 
