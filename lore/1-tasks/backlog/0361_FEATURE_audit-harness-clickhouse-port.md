@@ -47,11 +47,11 @@ audit-harness is the sole remaining `sqlx` user.
 
 Measured on the reverted code:
 
-| Binary | Lines | `sqlx` lines | Store-agnostic logic (ports as-is) |
-|--------|------:|-------------:|------------------------------------|
-| `horizon-diff` | 1272 | 15 | Horizon client + field diff |
-| `archive-diff` | 625 | 6 | archive `.xdr.zst` re-parse + CAP-0038 pool-id |
-| `operations-order-diff` | 863 | 11 | apply-order preservation check |
+| Binary                  | Lines | `sqlx` lines | Store-agnostic logic (ports as-is)             |
+| ----------------------- | ----: | -----------: | ---------------------------------------------- |
+| `horizon-diff`          |  1272 |           15 | Horizon client + field diff                    |
+| `archive-diff`          |   625 |            6 | archive `.xdr.zst` re-parse + CAP-0038 pool-id |
+| `operations-order-diff` |   863 |           11 | apply-order preservation check                 |
 
 **~2760 binary lines, ~32 touch `sqlx`.** The valuable parts — Horizon fetch,
 archive XDR re-parse, CAP-0038 pool-id reconstruction — are store-agnostic and
