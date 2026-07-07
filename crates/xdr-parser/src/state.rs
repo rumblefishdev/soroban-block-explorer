@@ -745,6 +745,10 @@ pub fn extract_liquidity_pools(
             .to_string();
 
         let is_creation = matches!(change.change_type.as_str(), "created" | "restored");
+        let is_mutating = matches!(
+            change.change_type.as_str(),
+            "created" | "updated" | "restored"
+        );
         let pool = ExtractedLiquidityPool {
             pool_id: pool_id.clone(),
             asset_a: asset_a.clone(),
@@ -762,22 +766,64 @@ pub fn extract_liquidity_pools(
             created_at: change.created_at,
         };
 
-        let snapshot = ExtractedLiquidityPoolSnapshot {
-            pool_id,
-            ledger_sequence: change.ledger_sequence,
-            created_at: change.created_at,
-            reserves,
-            total_shares,
-            tvl: None,
-            volume: None,
-            fee_revenue: None,
-        };
-
         pools.push(pool);
-        snapshots.push(snapshot);
+
+        // lore-0356: emit a snapshot ONLY from a mutating change
+        // (created/updated/restored). The read-only `state` (before-image) still
+        // feeds the pool dimension above (FK/dimension purpose, lore-0189) but
+        // must not produce a competing snapshot: otherwise a pool touched in a
+        // ledger yields >=2 rows with different reserves and a non-deterministic
+        // DB dedup (PG `DO NOTHING` / CH `ReplacingMergeTree` without a version
+        // column) keeps an arbitrary intra-ledger image. `dedup_final_pool_snapshots`
+        // then keeps the last mutating image per (pool, ledger) = end-of-ledger.
+        if is_mutating {
+            snapshots.push(ExtractedLiquidityPoolSnapshot {
+                pool_id,
+                ledger_sequence: change.ledger_sequence,
+                created_at: change.created_at,
+                reserves,
+                total_shares,
+                tvl: None,
+                volume: None,
+                fee_revenue: None,
+            });
+        }
     }
 
     (pools, snapshots)
+}
+
+/// Collapse pool snapshots to exactly one per `(pool_id, ledger_sequence)`: the
+/// LAST one in ledger apply order, i.e. the end-of-ledger (final) reserves.
+///
+/// Producers push snapshots in apply order (transaction order, then operation
+/// order) and only from mutating changes (see `extract_liquidity_pools`), so the
+/// last snapshot for a `(pool, ledger)` is the final `updated`/`created`/
+/// `restored` image. Deduping here makes the stored snapshot a deterministic
+/// function of the ledger — re-ingesting the same ledger yields the same row —
+/// instead of leaving "one row per (pool, ledger)" to a non-deterministic DB
+/// dedup (PG `DO NOTHING` keeps first-inserted; CH `ReplacingMergeTree` without a
+/// version column keeps an arbitrary one). See lore-0356.
+///
+/// Call once per ledger, after aggregating every transaction's snapshots.
+pub fn dedup_final_pool_snapshots(
+    snapshots: Vec<ExtractedLiquidityPoolSnapshot>,
+) -> Vec<ExtractedLiquidityPoolSnapshot> {
+    use std::collections::HashMap;
+
+    let mut position: HashMap<(String, u32), usize> = HashMap::new();
+    let mut deduped: Vec<ExtractedLiquidityPoolSnapshot> = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        let key = (snapshot.pool_id.clone(), snapshot.ledger_sequence);
+        match position.get(&key) {
+            Some(&index) => deduped[index] = snapshot, // keep the last (final) image
+            None => {
+                position.insert(key, deduped.len());
+                deduped.push(snapshot);
+            }
+        }
+    }
+    deduped
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,6 +1351,83 @@ mod tests {
             created_at: 1700000000,
             token_metadata: None,
         }
+    }
+
+    // -- lore-0356: LP snapshot = final-only + deterministic dedup --
+
+    fn lp_change(
+        change_type: &str,
+        pool_id: &str,
+        reserve_a: i64,
+        reserve_b: i64,
+        shares: i64,
+    ) -> ExtractedLedgerEntryChange {
+        make_change(
+            "liquidity_pool",
+            change_type,
+            json!({}),
+            Some(json!({
+                "pool_id": pool_id,
+                "params": { "asset_a": null, "asset_b": null, "fee": 30 },
+                "reserve_a": reserve_a,
+                "reserve_b": reserve_b,
+                "total_pool_shares": shares,
+            })),
+        )
+    }
+
+    #[test]
+    fn lp_snapshot_only_from_mutating_change() {
+        // Core writes `state` (before) then `updated` (after) per op. Only the
+        // mutating `updated` may become a snapshot; `state` feeds the pool
+        // dimension but must not emit a competing (before-image) snapshot.
+        let (pools, snapshots) = extract_liquidity_pools(&[
+            lp_change("state", "POOL1", 100, 200, 50),
+            lp_change("updated", "POOL1", 110, 182, 50),
+        ]);
+        assert_eq!(pools.len(), 2, "dimension extracted from both changes");
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "only the mutating change yields a snapshot"
+        );
+        assert_eq!(snapshots[0].reserves, json!({ "a": 110, "b": 182 }));
+    }
+
+    #[test]
+    fn lp_snapshot_absent_when_pool_only_referenced() {
+        // A pool present only as read-only `state` gets a dimension row but no
+        // snapshot for that ledger (lore-0189 case).
+        let (pools, snapshots) =
+            extract_liquidity_pools(&[lp_change("state", "POOL1", 100, 200, 50)]);
+        assert_eq!(pools.len(), 1);
+        assert!(snapshots.is_empty());
+    }
+
+    #[test]
+    fn dedup_keeps_last_mutating_image_per_pool_ledger() {
+        // Multi-op pool: keep the last (end-of-ledger) image, not before/intermediate.
+        let (_pools, snapshots) = extract_liquidity_pools(&[
+            lp_change("state", "POOL1", 100, 200, 50),
+            lp_change("updated", "POOL1", 110, 190, 50),
+            lp_change("state", "POOL1", 110, 190, 50),
+            lp_change("updated", "POOL1", 121, 181, 50), // final
+            lp_change("updated", "POOL2", 7, 8, 3),
+        ]);
+        assert_eq!(
+            snapshots.len(),
+            3,
+            "POOL1 x2 updated + POOL2 x1 (no state snapshots)"
+        );
+
+        let deduped = dedup_final_pool_snapshots(snapshots);
+        assert_eq!(deduped.len(), 2, "one snapshot per (pool, ledger)");
+        let p1 = deduped.iter().find(|s| s.pool_id == "POOL1").unwrap();
+        assert_eq!(
+            p1.reserves,
+            json!({ "a": 121, "b": 181 }),
+            "final image, not before/intermediate"
+        );
     }
 
     // -- Contract Deployment Tests --
@@ -2258,8 +2381,9 @@ mod tests {
         // as a `state` snapshot (no reserves change), but a pool_share trustline
         // for that pool was simultaneously `removed` — producing an `lp_positions`
         // emit with a pool_id that, pre-fix, was not present in `pool_rows`.
-        // Post-fix, `state` is included in the filter so the pool dimension is
-        // captured from the snapshot.
+        // Post-fix (lore-0189), `state` is included so the pool dimension is
+        // captured. lore-0356: `state` no longer emits a competing snapshot — it
+        // feeds the dimension only, so a state-only pool gets zero snapshots.
         let changes = vec![make_change(
             "liquidity_pool",
             "state",
@@ -2282,7 +2406,11 @@ mod tests {
 
         let (pools, snapshots) = extract_liquidity_pools(&changes);
         assert_eq!(pools.len(), 1, "state change_type must produce 1 pool row");
-        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots.len(),
+            0,
+            "lore-0356: `state` feeds the dimension but emits no snapshot"
+        );
 
         let pool = &pools[0];
         assert_eq!(

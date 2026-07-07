@@ -45,10 +45,11 @@ pub use sac::{
 };
 pub use scval::scval_to_typed_json;
 pub use state::{
-    SacBalanceValue, decode_sac_balance_value, detect_assets, detect_classic_credit_assets,
-    detect_nfts, extract_account_states, extract_contract_deployments,
-    extract_contract_metadata_writes, extract_liquidity_pools, extract_lp_positions,
-    extract_nft_ownership_events, extract_soroban_token_balances, native_asset_singleton,
+    SacBalanceValue, decode_sac_balance_value, dedup_final_pool_snapshots, detect_assets,
+    detect_classic_credit_assets, detect_nfts, extract_account_states,
+    extract_contract_deployments, extract_contract_metadata_writes, extract_liquidity_pools,
+    extract_lp_positions, extract_nft_ownership_events, extract_soroban_token_balances,
+    native_asset_singleton,
 };
 pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};
