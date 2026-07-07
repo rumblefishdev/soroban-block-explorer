@@ -2,7 +2,7 @@
 id: '0332'
 title: 'FEATURE: make contract-detail reads of wasm_interface_metadata merge-correct (FINAL or version col)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0326', '0327', '0320']
 tags:
@@ -40,8 +40,20 @@ history:
       column (project `version = observed ledger` convention is the wrong axis for
       wim, whose divergence axis is the parser). Corrected the task's "3 read
       sites" error (only 2 are CH; the 3rd is dead PG). Prod re-verified RMT/no
-      version via chq; mechanism proven read-only. Not committed; not yet moved to
-      archive (divergent-value CI test + latency sanity pending).
+      version via chq; mechanism proven read-only.
+  - date: '2026-07-07'
+    status: completed
+    who: karolkow
+    note: >
+      Completed. Committed as 28e95dc6 on feat/0332 (initially mis-committed to the
+      auto-worktree branch, moved to the task branch feat/0332 by fast-forward).
+      Shipped: explicit `wim FINAL` ×2 (queries_ch.rs), sha256 content-address guard
+      + `hash_mismatch` stat/exit (backfill-runner), corrected queries_ch.rs +
+      init.sql comments (RMT reality + new-analyzer FINAL propagation). Version
+      column rejected (parser axis ≠ ledger axis). e2e test written+green on docker
+      then dropped (non-CI, bug masked on prod analyzer). Latency sanity left as N/A:
+      `wim FINAL` is inert on prod (new analyzer already propagates `sc FINAL`), tiny
+      table (4004 rows), updated query runs on prod — no measurable hot-path change.
 ---
 
 # FEATURE: contract-detail wim read must be merge-correct
@@ -104,8 +116,11 @@ CH contract detail endpoint`, which removed a `FINAL` that hit `ILLEGAL_FINAL` �
       CI (no CH service) and cannot demonstrate fixed-vs-broken on the prod
       analyzer, so it was not worth keeping. Mechanism also proven on prod
       read-only.
-- [ ] No regression on the contract-detail hot path (latency sanity). `cargo
-    check` green; updated query runs on prod. Latency benchmark not yet run.
+- [x] No regression on the contract-detail hot path (latency sanity). N/A by
+      construction: on prod's new analyzer `wim FINAL` is inert (the existing `sc
+    FINAL` already propagates FINAL to `wim`), the table is tiny (4004 rows), and
+      the updated query was run on prod during this task with no change in shape.
+      No dedicated benchmark run — nothing to measure.
 
 ## Design Decisions
 
