@@ -18,8 +18,8 @@ pub struct OperationAppearance {
     pub id: i64,
     pub transaction_id: i64,
     /// DDL column name is `type` (reserved in Rust). Stored as SMALLINT per
-    /// ADR 0031; `OperationType` derives `sqlx::Type` under the `sqlx`
-    /// feature for round-tripping through the DB.
+    /// ADR 0031; `OperationType` is `#[repr(i16)]` for round-tripping
+    /// through the DB.
     #[serde(rename = "type")]
     pub op_type: OperationType,
     /// Muxed source override; inherited from transaction when NULL.

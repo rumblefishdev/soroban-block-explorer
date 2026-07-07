@@ -13,7 +13,6 @@ use super::EnumDecodeError;
 /// serde representation is the canonical SCREAMING_SNAKE_CASE label used
 /// by the Horizon API and historically persisted as VARCHAR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[repr(i16)]
