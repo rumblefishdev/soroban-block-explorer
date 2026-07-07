@@ -4,6 +4,7 @@ import { createBrowserRouter } from 'react-router-dom';
 import {
   DetailSkeleton,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
+  routeSegments,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { AccountDetailSkeleton } from '../pages/accounts/AccountDetailSkeleton.js';
 import { AssetDetailSkeleton } from '../pages/assets/AssetDetailSkeleton.js';
@@ -42,14 +43,14 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'transactions',
+        path: routeSegments.transaction,
         element: page(
           () => import('../pages/TransactionsListPage.js'),
           <ListPageSkeleton />
         ),
       },
       {
-        path: 'transactions/:hash',
+        path: `${routeSegments.transaction}/:hash`,
         element: page(
           () => import('../pages/TransactionDetailPage.js'),
           <TransactionDetailSkeleton />
@@ -57,7 +58,7 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'ledgers',
+        path: routeSegments.ledger,
         element: page(
           () => import('../pages/LedgersListPage.js'),
           <ListPageSkeleton
@@ -67,7 +68,7 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: 'ledgers/:sequence',
+        path: `${routeSegments.ledger}/:sequence`,
         element: page(
           () => import('../pages/LedgerDetailPage.js'),
           <LedgerDetailSkeleton />
@@ -75,14 +76,14 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'accounts',
+        path: routeSegments.account,
         element: page(
           () => import('../pages/AccountsListPage.js'),
           <ListPageSkeleton />
         ),
       },
       {
-        path: 'accounts/:accountId',
+        path: `${routeSegments.account}/:accountId`,
         element: page(
           () => import('../pages/AccountDetailPage.js'),
           <AccountDetailSkeleton />
@@ -90,14 +91,14 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'assets',
+        path: routeSegments.asset,
         element: page(
           () => import('../pages/AssetsListPage.js'),
           <ListPageSkeleton rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL} />
         ),
       },
       {
-        path: 'assets/:id',
+        path: `${routeSegments.asset}/:id`,
         element: page(
           () => import('../pages/AssetDetailPage.js'),
           <AssetDetailSkeleton />
@@ -105,14 +106,14 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'contracts',
+        path: routeSegments.contract,
         element: page(
           () => import('../pages/ContractsListPage.js'),
           <ListPageSkeleton />
         ),
       },
       {
-        path: 'contracts/:contractId',
+        path: `${routeSegments.contract}/:contractId`,
         element: page(
           () => import('../pages/ContractDetailPage.js'),
           <ContractDetailSkeleton />
@@ -120,14 +121,14 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'nfts',
+        path: routeSegments.nft,
         element: page(
           () => import('../pages/NftsListPage.js'),
           <ListPageSkeleton rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL} />
         ),
       },
       {
-        path: 'nfts/:contractId/:tokenId',
+        path: `${routeSegments.nft}/:contractId/:tokenId`,
         element: page(
           () => import('../pages/NftDetailPage.js'),
           <NftDetailSkeleton />
@@ -135,14 +136,14 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'liquidity-pools',
+        path: routeSegments.pool,
         element: page(
           () => import('../pages/LiquidityPoolsListPage.js'),
           <ListPageSkeleton rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL} />
         ),
       },
       {
-        path: 'liquidity-pools/:id',
+        path: `${routeSegments.pool}/:id`,
         element: page(
           () => import('../pages/LiquidityPoolDetailPage.js'),
           <PoolDetailSkeleton />

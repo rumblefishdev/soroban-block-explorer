@@ -1,68 +1,48 @@
 import type { EntityType } from './types.js';
 
-const routes: Record<EntityType, (id: string) => string> = {
-  transaction: (id) => `/transactions/${encodeURIComponent(id)}`,
-  account: (id) => `/accounts/${encodeURIComponent(id)}`,
-  contract: (id) => `/contracts/${encodeURIComponent(id)}`,
-  asset: (id) => `/assets/${encodeURIComponent(id)}`,
-  pool: (id) => `/liquidity-pools/${encodeURIComponent(id)}`,
-  ledger: (id) => `/ledgers/${encodeURIComponent(id)}`,
-  // Defensive: NFT identity is composite `(contract_id, token_id)` per
-  // ADR 0030 / task 0264 Phase 8a, so single-arg dispatch cannot build a
-  // valid `/nfts/:c/:t` URL. Kept here for `Record<EntityType, …>`
-  // exhaustiveness; loud throw beats a silent broken URL if a future
-  // regression routes an `'nft'` through this builder.
-  //
-  // The NFT search-hit dispatch lives in `routeForHit` (this module)
-  // which short-circuits on `entity_type === 'nft'` and builds the
-  // composite URL inline. `IdentifierDisplay` callers that render an
-  // NFT identifier must pass `href` explicitly (no production callsite
-  // does today).
-  nft: () => {
-    throw new Error(
-      'getIdentifierHref("nft", id) is not supported — NFT routing is ' +
-        'composite `(contract_id, token_id)`. Use `routeForHit(hit)` for ' +
-        'search hits, or pass `href` explicitly to `IdentifierDisplay`.'
-    );
-  },
-};
-
-export function getIdentifierHref(type: EntityType, id: string): string {
-  return routes[type](id);
-}
-
-interface HitLike {
-  entity_type: EntityType;
-  identifier: string;
-  route_token?: string | null;
-  contract_id?: string | null;
-  token_id?: string | null;
-}
+/**
+ * Canonical URL path SEGMENTS — the single source of truth for the plural
+ * segment word of every entity route (`transactions`, `liquidity-pools`, …).
+ *
+ * Consumed by `getIdentifierHref` below (the URL builder), by
+ * `web/src/router/routes.ts` (index routes + `NAV_LINKS`) and by
+ * `web/src/router/index.tsx` (the React Router `path` patterns). Renaming a
+ * segment (e.g. `/liquidity-pools` → `/pools`) is therefore a one-line edit
+ * here — the route builders and the router matcher stay in lock-step (task
+ * 0299 acceptance criteria).
+ */
+export const routeSegments = {
+  transaction: 'transactions',
+  ledger: 'ledgers',
+  account: 'accounts',
+  asset: 'assets',
+  contract: 'contracts',
+  nft: 'nfts',
+  pool: 'liquidity-pools',
+} as const satisfies Record<EntityType, string>;
 
 /**
- * Build a navigation URL from a search hit or redirect payload.
- * Handles NFT composite routing inline (`/nfts/:contract/:token`)
- * because the single-arg `routes.nft` throws — NFT identity is
- * composite per ADR 0030 / task 0264 Phase 8a.
+ * The single URL builder: a detail-page href from an entity type + id
+ * (`/accounts/:id`, `/assets/:id`, …), assembled from {@link routeSegments}.
  *
- * For every other type the routing key is `route_token` when the
- * backend supplies one (today only `asset`, whose display `identifier`
- * is the non-routable asset code — `route_token` carries the canonical
- * `/assets/:id` token: contract StrKey | `CODE-ISSUER` | `native`).
- * For transaction / account / contract / pool the display `identifier`
- * IS the routable id, so `route_token` is absent and we route on it.
+ * The one place that turns `(type, id)` into a URL. `IdentifierDisplay` uses
+ * it for static links; `web`'s `routes` and search `routeForHit` re-use it
+ * (the `web → libs/ui` dependency direction is allowed; the reverse is not,
+ * which is why the source lives here).
+ *
+ * NFT is unsupported: its identity is composite `(contract_id, token_id)`
+ * per ADR 0030 / task 0264 Phase 8a, so a single-id build cannot produce a
+ * valid `/nfts/:c/:t` URL. NFT routing is built inline from a full hit
+ * (`web`'s `routeForHit` and `routes.nft`). Loud throw beats a silent broken
+ * URL if a future regression routes an `'nft'` here.
  */
-export function routeForHit(hit: HitLike): string {
-  if (hit.entity_type === 'nft') {
-    if (hit.contract_id && hit.token_id) {
-      return `/nfts/${encodeURIComponent(hit.contract_id)}/${encodeURIComponent(
-        hit.token_id
-      )}`;
-    }
-    // Backend `nft_hits` CTE always projects both. Missing payload
-    // would be a contract bug — fall back to the NFT index.
-    return '/nfts';
+export function getIdentifierHref(type: EntityType, id: string): string {
+  if (type === 'nft') {
+    throw new Error(
+      'getIdentifierHref("nft", id) is not supported — NFT routing is ' +
+        'composite `(contract_id, token_id)`. Build the `/nfts/:c/:t` URL ' +
+        'from the hit, or pass `href` explicitly to `IdentifierDisplay`.'
+    );
   }
-  const idForUrl = hit.route_token ?? hit.identifier;
-  return getIdentifierHref(hit.entity_type, idForUrl);
+  return `/${routeSegments[type]}/${encodeURIComponent(id)}`;
 }

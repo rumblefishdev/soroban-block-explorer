@@ -9,6 +9,7 @@ import {
 import { useState } from 'react';
 
 import { useTransactionDetail } from '../../api/index.js';
+import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 
 import { EventsSection } from './advanced/EventsSection.js';
@@ -56,7 +57,7 @@ export default function TransactionDetailPage() {
       <Box>
         <PageBreadcrumb
           items={[
-            { label: 'Transactions', to: '/transactions' },
+            { label: 'Transactions', to: routes.transactions },
             {
               label: truncateMiddle(hash, getDefaultTruncation('transaction')),
             },
