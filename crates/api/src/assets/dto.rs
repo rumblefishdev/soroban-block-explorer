@@ -36,9 +36,8 @@ pub struct AssetItem {
     /// the reserved `native` token for native XLM, the contract StrKey
     /// (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
     /// `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
-    /// the dropped numeric surrogate (PR #175 / the PG→CH composite move):
-    /// CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
-    /// with no surrogate.
+    /// the dropped numeric surrogate (PR #175): assets are keyed on
+    /// `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
     pub id: String,
     /// `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
     /// only on schema drift.

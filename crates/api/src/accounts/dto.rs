@@ -91,7 +91,7 @@ pub struct AccountDetailResponse {
     pub last_seen_ledger: i64,
     /// `true` when the account was removed from the ledger via `account_merge`
     /// and never re-funded (its last lifecycle event is the merge). Derived,
-    /// not stored. CH-only — the PG fallback always reports `false`.
+    /// not stored.
     pub deleted: bool,
 }
 

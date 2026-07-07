@@ -78,9 +78,9 @@ pub struct TransactionListItem {
     /// only (primary-key seek): a contract reached solely via a nested
     /// sub-invocation or an emitted event — never a root-op `contract_id` — is
     /// NOT listed. For the overwhelming majority of Soroban transactions the
-    /// invoked contract IS the root-op `contract_id`, so this matches the PG
-    /// path in practice; the full 3-source set was dropped because its scan
-    /// blew the read_rows quota (task 0243; see `common::ch`).
+    /// invoked contract IS the root-op `contract_id`, so this matches the
+    /// full 3-source result in practice; the full set was dropped because its
+    /// scan blew the read_rows quota (task 0243; see `common::ch`).
     pub contract_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -176,13 +176,9 @@ pub struct OperationItem {
     /// offers that filled against a pool (task 0261/0268 — replaces the
     /// former nullable scalar `pool_id`).
     ///
-    /// **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
-    /// pool" **only** for ClickHouse-served responses. The Postgres backend
-    /// (default until each module flips to CH, per task 0243) never received
-    /// the claim-atom extraction, so it returns `[]` for *every* path-payment
-    /// and offer op regardless of whether a pool was crossed — only LP
-    /// deposit/withdraw carry a pool there. Treat `[]` as authoritative for
-    /// pool absence only once the module reads from CH.
+    /// Empty `[]` means "no pool crossed" — authoritative on the ClickHouse
+    /// read path, which extracts pool crossings from claim atoms across
+    /// path-payment, offer, and LP deposit/withdraw ops.
     pub pool_ids: Vec<String>,
     /// 1-based per-tx apply position carrying on-chain operation order
     /// (task 0192). For folded appearance rows (multiple identical-identity

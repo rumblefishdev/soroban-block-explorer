@@ -20,7 +20,7 @@ use super::queries;
 /// Get top-level chain overview stats.
 ///
 /// Reads the canonical single-statement network-stats query (latest
-/// ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
+/// ledger row + `ledgers` 60s aggregate for TPS + planner row-count
 /// estimates for accounts / contracts) and caches the assembled
 /// response **keyed on the chain head** (`latest_ledger_sequence`) in
 /// process memory — see `network/cache.rs`. See the task 0045 spec and

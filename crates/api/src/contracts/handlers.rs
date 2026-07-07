@@ -349,7 +349,7 @@ pub async fn list_invocations(
     params(
         ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
         ("limit" = Option<u32>, Query,
-         description = "Items per page (1–100, default 20). On the PG datasource the page is per\n`(contract, transaction, ledger)` appearance — one appearance can expand to\nmultiple events, so `data.len()` may exceed `limit`. On the CH datasource the\npage is per event (one row → one item), so `data.len() <= limit`.",
+         description = "Items per page (1–100, default 20). The page is per event\n(one row → one item), so `data.len() <= limit`.",
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query,
          description = "Opaque pagination cursor from a previous response."),
