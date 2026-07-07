@@ -2,7 +2,7 @@
 id: '0304'
 title: 'FEATURE: 0297 metadata follow-ups — backfill, deploy/flip, validation, frontend amounts, cleanup'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0050']
 related_tasks: ['0297', '0231', '0243']
 tags:
@@ -53,6 +53,18 @@ history:
       banner-marked the superseded PG endpoint-queries doc set, synced ADR-0032
       docs (backend-overview + CH 08/11 SQL). Column DROP delegated to task 0310
       (owns the assets dead-column prod ALTER). See Design Decisions → Emerged.
+  - date: 2026-07-07
+    status: completed
+    who: karolkow
+    note: >
+      Closed. All 4 PRs merged (#278 backfill worker, #282 FE symbol, #284
+      ADR-0032 sync, #306 drop dead name columns + cleanup). Remaining open
+      boxes reconciled against prod reality: prod ALTER DROP COLUMN name is
+      DONE (chq 2026-07-07 — name absent from soroban_contracts + assets); the
+      PG-side name plumbing / contract_name_writes chain was removed by the PG
+      retirement task 0244 (commit d72eeca2, PR #319). Only the galexie
+      created-vs-updated cross-check remains — nice-to-have, non-blocking,
+      carried in Future Work.
 ---
 
 # 0297 metadata follow-ups (ops / validation / frontend / cleanup)
@@ -128,14 +140,13 @@ drop lives here — NOT in 0310 (that task's dead-column story is 0293's
       dropped from `init.sql` (both tables) + `lib.rs` note. Column-order pinning
       tests updated. Indexer now writes the column as DEFAULT NULL on the existing
       prod table — safe until the ALTER.
-- [ ] Prod `ALTER TABLE {soroban_contracts,assets} DROP COLUMN name` — gated on
-      the new indexer being deployed + old versions drained. **Deploy-timing
-      coordination with 0310:** `assets.name` shares the `AssetRow` struct + the
-      `assets` table with 0310's `total_supply`/`holder_count` drop, so run both
-      `assets` ALTERs in the same 0310 deploy-drain window (one cycle, not two).
-      Ownership stays 0304; 0310 is only the shared prod-run slot.
-- [ ] Upstream parser/PG-staging `name` plumbing — **deferred to full PG
-      retirement, NOT optional-quick.** Correction (2026-07-02): the earlier
+- [x] Prod `ALTER TABLE {soroban_contracts,assets} DROP COLUMN name` — **DONE**
+      (chq 2026-07-07: `name` absent from `soroban_contracts` + `assets`). Ran in
+      0310's assets deploy-drain window as planned; `assets.name` batched with
+      0310's `total_supply`/`holder_count` ALTERs. Ownership stayed 0304.
+- [x] Upstream parser/PG-staging `name` plumbing — **removed by PG retirement
+      task 0244** (commit d72eeca2, PR #319: "remove dead PG contract-name-write
+      chain"). Correction (2026-07-02): the earlier
       "always `None` / fully un-threaded" claim was wrong. `ExtractedContractDeployment.name`
       is still populated (`state.rs:125-141` second pass + `extract_contract_data_name_writes`)
       and consumed by the **PG** staging path (`indexer/process.rs:421,457`
@@ -146,13 +157,12 @@ drop lives here — NOT in 0310 (that task's dead-column story is 0293's
 
 ### Cleanup (code)
 
-- [~] Legacy `contract_name_writes` / `Symbol("name")` path — **only the CH side
-  is un-threaded.** Correction (2026-07-02): 0297 removed the CH-side name
-  consumption, but the extraction (`extract_contract_data_name_writes`, the
-  deploy second pass) and `ParseOutput.contract_name_writes` are STILL live,
-  feeding the compiled **PG** staging path (`indexer/.../staging.rs`).
-  `ExtractedContractDeployment.name` is populated, not `None`. Full removal is
-  part of PG retirement (Future Work), not done here.
+- [x] Legacy `contract_name_writes` / `Symbol("name")` path — **fully removed by
+      PG retirement task 0244** (commit d72eeca2). 0297 removed the CH-side name
+      consumption; 0244 then ripped out the extraction (`extract_contract_data_name_writes`,
+      the deploy second pass), `ParseOutput.contract_name_writes`,
+      `ExtractedContractDeployment.name`, and the PG staging path along with the
+      whole compiled PG write path. No `name` extraction chain remains.
 
 ### Docs (ADR 0032)
 
