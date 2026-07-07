@@ -257,8 +257,7 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
 5. emit a CW custom metric `LastProcessedLedgerSequence` after each
    ledger's commit — fire-and-forget; failures are warn-logged but do not
    abort the batch
-6. **enrichment SQS publish is stubbed** (task 0241) — the legacy lookup
-   queries hit Postgres, which is frozen post-cutover. Re-enablement
+6. **enrichment SQS publish is stubbed** (task 0241) — re-enablement
    awaits the paired CH-aware rewrite of producer + `enrichment-worker`
    write path. See [`enrichment.md`](./enrichment.md) for the design intent
    The per-table column-by-column write order, FK dependencies, and the
@@ -272,12 +271,11 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    [task 0228 phase-6 invariants](../../runbooks/0228_phase6_validation.md);
    the live-tail indexer leaves them to those passes.
 
-The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) used by the
-backfill / bench tools under `--features pg-persist` lives in
-`crates/indexer/src/handler/persist/mod.rs` and follows the order documented in
-[ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md);
-the PG schema's design rationale (BYTEA hashes, surrogate `BIGINT` IDs, etc.)
-remains in effect for those tools per ADRs 0024 / 0026 / 0029 / 0030 / 0031.
+The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) was removed with
+Postgres (task 0244); its ordering rationale is preserved in
+[ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md).
+The schema design rationale it relied on (BYTEA hashes, surrogate IDs, etc.)
+carries forward to the ClickHouse schema per ADRs 0024 / 0026 / 0029 / 0030 / 0031.
 
 ### 5.3 Write Target
 
@@ -316,11 +314,10 @@ the indexing pipeline itself never calls the public archive.
 ### 6.1 Backfill Source and Runtime
 
 Per [ADR 0010](../../../lore/2-adrs/0010_local-backfill-over-fargate.md),
-historical backfill runs as a **local CLI tool** (`crates/backfill-runner` for
-production runs, `crates/backfill-bench` for benchmarks) on a developer
-workstation. It streams from Stellar's **public history archives** (the same
+historical backfill runs as a **local CLI tool** (`crates/backfill-runner`) on a
+developer workstation. It streams from Stellar's **public history archives** (the same
 archives Horizon used for `db reingest`) and writes directly to ClickHouse on
-Hetzner via `--target clickhouse`. The historical 3-way parallel-backfill
+Hetzner. The historical 3-way parallel-backfill
 merge of [task 0228](../../../lore/1-tasks/archive/0228_FEATURE_parallel-backfill-merge-and-validation/README.md)
 completed at `L_last_closed = 62,527,999` with zero gaps and ≤ 0.01 %
 mismatch against Horizon on 980 stratified samples.
@@ -333,7 +330,7 @@ indexer crate's `parse_ledger` half is shared; the persist half is two-flavored:
 - **live (Lambda):** Galexie (ECS Fargate eu-central-1) → S3
   `stellar-ledger-data` → `ledger-ingest` SQS → Ledger Processor Lambda →
   Caddy mTLS → Hetzner CH
-- **backfill (CLI):** `backfill-runner --target clickhouse` → same parse path
+- **backfill (CLI):** `backfill-runner` → same parse path
   → `db_clickhouse::persist::PartitionWriter` → Hetzner CH
 
 The CH writer module (`crates/db-clickhouse/src/persist/writer.rs`) drives
@@ -347,26 +344,13 @@ ledger) — fewer parts per partition than the long-running backfill writer,
 but appropriate to the per-S3-event Lambda model and to per-ledger commit
 isolation under retry.
 
-The legacy PG sink (`backfill-runner --target postgres`, also used by
-`backfill-bench`) still works under the indexer crate's `pg-persist` feature
-but targets a database that no longer has a production deployment; it is kept
-for parity benches and one-off diffs only.
-
-`backfill-runner` also accepts `--target clickhouse` (task
-[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
-shipped the runner plumbing; task
-[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md)
-landed the real writer) to drive the ClickHouse pilot store
-([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
-The CH path uses **partition-aligned streaming inserts** —
-`Sink::open_partition` → `write_ledger × N` → `commit` — so the
-server sees one `INSERT` per CH table per backfill partition, not
-per ledger. The `--target postgres` flag still drives the legacy PG
-sink (the partition-writer lifecycle is a no-op around the existing
-per-ledger transaction on the PG path) but targets a database that
-no longer has a production deployment after task 0241. Full design
-plus the `soroban_events` ADR 0044
-§Decision §4a unfold are documented in
+The `backfill-runner` CH writer plumbing shipped in task
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md);
+the real partition-aligned writer landed in task
+[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md).
+The legacy Postgres sink was removed in task 0244 — the runner is
+ClickHouse-only. Full design plus the `soroban_events` ADR 0044 §Decision §4a
+unfold are documented in
 [`docs/architecture/database-schema/clickhouse-pilot.md#writers`](../database-schema/clickhouse-pilot.md#writers).
 
 CH-target runs additionally accept an optional `--soroban-rpc-url` /
