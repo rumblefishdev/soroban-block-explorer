@@ -70,10 +70,10 @@ PG-removal sweep.)
    `From<OpChRow> for OpRow` conversion (`:334`), but the **live** operations
    read path decodes `OpRawRow` (`:777`) → `OpRow` directly (`:898`). `OpChRow`
    is exercised only by one unit test (`:1123`) — a dead test-only seam, both
-   structs CH-shaped (NOT PG legacy). \*\*Fix = delete `OpChRow` + its `From` impl
-   - the OpChRow-only round-trip test.\*\* Trivial; live path never touches it, no
-     behavior change, no api-types impact (internal decode struct, not a DTO).
-     (Found during the 0244 PG-removal dead-code sweep, 2026-07-07.)
+   structs CH-shaped (NOT PG legacy). **Fix:** delete `OpChRow`, its `From` impl,
+   and the OpChRow-only round-trip test. Trivial; live path never touches it, no
+   behavior change, no api-types impact (internal decode struct, not a DTO).
+   (Found during the 0244 PG-removal dead-code sweep, 2026-07-07.)
 
 ## Acceptance Criteria
 
