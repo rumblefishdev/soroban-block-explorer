@@ -91,7 +91,7 @@ pub struct NftReparseStats {
 }
 
 /// Re-parse `soroban_events` in `[from_ledger, to_ledger]` and write recovered
-/// NFT candidates to the pending tables. CH-only
+/// NFT candidates to the pending tables. CH-only.
 pub async fn execute(
     sink: &Sink,
     from_ledger: u32,

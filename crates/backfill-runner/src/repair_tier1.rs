@@ -96,7 +96,7 @@ pub struct RepairTier1Stats {
 
 /// Run the full Tier-1 column rebuild pass.
 ///
-/// CH-only Each table
+/// CH-only. Each table
 /// rebuilds sequentially so a failure mid-way leaves the live tables
 /// untouched (failures happen on staging-table writes; EXCHANGE only
 /// fires after the INSERT completes).
