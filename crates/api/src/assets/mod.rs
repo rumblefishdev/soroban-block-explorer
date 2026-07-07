@@ -5,11 +5,11 @@
 //! All three reads (list / detail / transactions) are served from ClickHouse
 //! (`queries`); PG was retired (task 0244). `/transactions` carries a
 //! `TxListCursor`; the CH identity seek over `operations_appearances` has a
-//! read-cost caveat (see `queries_ch::fetch_transactions`).
+//! read-cost caveat (see `queries::fetch_transactions`).
 
 pub mod dto;
 mod handlers;
-mod queries_ch;
+mod queries;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;

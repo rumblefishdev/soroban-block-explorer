@@ -130,7 +130,7 @@ struct AccountListBalanceRow {
     balance: String,
 }
 
-/// CH equivalent of the PG `queries_ch::fetch_list` (task 0274). Same response
+/// CH equivalent of the PG `queries::fetch_list` (task 0274). Same response
 /// shape + same opaque cursor (`AccountsListCursor{last_seen_ledger, id}` —
 /// both columns exist on CH `accounts`, so the cursor is datasource-agnostic).
 ///

@@ -2,7 +2,7 @@
 //!
 //! The public response shape intentionally mirrors the PostgreSQL path —
 //! the frontend consumes the generated `@rumblefish/api-types`, so the CH
-//! path maps `clickhouse::Row` structs back into the same `queries_ch::*Row`
+//! path maps `clickhouse::Row` structs back into the same `queries::*Row`
 //! types the handler already knows. Notable CH-vs-PG divergences handled
 //! here:
 //!

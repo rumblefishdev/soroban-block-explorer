@@ -129,7 +129,7 @@ fn token_asset_type_name(asset_type: i16) -> Option<String> {
     match asset_type {
         0 => Some("native"),
         1 => Some("classic_credit"),
-        // 2 (`sac`) retired — ADR 0051 (mirrors `assets::queries_ch::asset_type_name`).
+        // 2 (`sac`) retired — ADR 0051 (mirrors `assets::queries::asset_type_name`).
         3 => Some("soroban"),
         _ => None,
     }
@@ -855,7 +855,7 @@ mod tests {
 ///
 /// ```text
 /// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib search::queries_ch::decode_smoke -- --nocapture
+///   cargo test -p api --lib search::queries::decode_smoke -- --nocapture
 /// ```
 #[cfg(test)]
 mod decode_smoke {

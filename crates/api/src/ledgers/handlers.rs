@@ -25,7 +25,7 @@ use crate::state::AppState;
 use crate::transactions::dto::TransactionListItem;
 
 use super::dto::{LedgerDetailResponse, LedgerListItem};
-use super::queries_ch::{self, LedgerDetailRow, LedgerTxRow};
+use super::queries::{self, LedgerDetailRow, LedgerTxRow};
 
 /// Base sort order for `GET /v1/ledgers` — a sticky query param the
 /// client re-sends on every page. `order=asc|desc` sets the base sort for all
@@ -277,14 +277,14 @@ async fn fetch_list_for_source(
     state
         .list_query_count
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    queries_ch::fetch_list(&state.ch(), limit, cursor, sort, direction).await
+    queries::fetch_list(&state.ch(), limit, cursor, sort, direction).await
 }
 
 async fn fetch_by_sequence_for_source(
     state: &AppState,
     sequence: i64,
 ) -> Result<Option<LedgerDetailRow>, clickhouse::error::Error> {
-    queries_ch::fetch_by_sequence(&state.ch(), sequence).await
+    queries::fetch_by_sequence(&state.ch(), sequence).await
 }
 
 async fn fetch_transactions_for_source(
@@ -295,7 +295,7 @@ async fn fetch_transactions_for_source(
     limit: i64,
     direction: crate::common::cursor::Direction,
 ) -> Result<Vec<LedgerTxRow>, clickhouse::error::Error> {
-    queries_ch::fetch_transactions(
+    queries::fetch_transactions(
         &state.ch(),
         ledger_sequence,
         closed_at,

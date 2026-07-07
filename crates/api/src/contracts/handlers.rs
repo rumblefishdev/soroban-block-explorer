@@ -22,7 +22,7 @@ use super::dto::{
     ContractDetailResponse, ContractIdCursor, ContractInterfaceMetadata, ContractListItem,
     ContractStats, ContractsListParams, EventCursor, EventItem, InterfaceResponse, InvocationItem,
 };
-use super::queries_ch::{
+use super::queries::{
     self, ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
     ResolvedContractsListParams, STATS_WINDOW,
 };
@@ -114,7 +114,7 @@ async fn fetch_contract_list_for_source(
     params: &ResolvedContractsListParams,
     direction: Direction,
 ) -> Result<Vec<ContractListRow>, clickhouse::error::Error> {
-    queries_ch::fetch_contract_list(&state.ch(), params, direction).await
+    queries::fetch_contract_list(&state.ch(), params, direction).await
 }
 
 #[utoipa::path(
@@ -394,7 +394,7 @@ pub async fn list_events(
     // Full-content `soroban_events` (per-event rows, inline JSON payload) —
     // one row → one `EventItem`, no Archive overlay. Keyset is 3-component
     // `(ledger_sequence, id, event_index)`.
-    let mut rows = match queries_ch::fetch_events(
+    let mut rows = match queries::fetch_events(
         &state.ch(),
         contract.id,
         pagination.fetch_limit(),
@@ -439,14 +439,14 @@ fn event_cursor_matches_source(cursor: &EventCursor) -> bool {
 
 // ---------------------------------------------------------------------------
 // Fetch helpers. Events read CH `soroban_events` directly (full-content,
-// inline JSON payload); see `queries_ch::fetch_events`.
+// inline JSON payload); see `queries::fetch_events`.
 // ---------------------------------------------------------------------------
 
 async fn fetch_contract_for_source(
     state: &AppState,
     contract_id: &str,
 ) -> Result<Option<ContractRow>, clickhouse::error::Error> {
-    queries_ch::fetch_contract(&state.ch(), contract_id).await
+    queries::fetch_contract(&state.ch(), contract_id).await
 }
 
 async fn fetch_stats_for_source(
@@ -454,14 +454,14 @@ async fn fetch_stats_for_source(
     contract_surrogate_id: i64,
     window: &str,
 ) -> Result<ContractStats, clickhouse::error::Error> {
-    queries_ch::fetch_contract_stats(&state.ch(), contract_surrogate_id, window).await
+    queries::fetch_contract_stats(&state.ch(), contract_surrogate_id, window).await
 }
 
 async fn fetch_interface_for_source(
     state: &AppState,
     contract_id: &str,
 ) -> Result<Option<InterfaceRow>, clickhouse::error::Error> {
-    queries_ch::fetch_wasm_interface(&state.ch(), contract_id).await
+    queries::fetch_wasm_interface(&state.ch(), contract_id).await
 }
 
 async fn fetch_invocations_for_source(
@@ -471,7 +471,7 @@ async fn fetch_invocations_for_source(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries_ch::fetch_invocation_appearances(
+    queries::fetch_invocation_appearances(
         &state.ch(),
         contract_surrogate_id,
         limit,

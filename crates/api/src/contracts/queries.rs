@@ -149,7 +149,7 @@ struct ContractDeployerRow {
     account_id: String,
 }
 
-/// CH equivalent of the PG `queries_ch::fetch_contract_list` (task 0275). Same
+/// CH equivalent of the PG `queries::fetch_contract_list` (task 0275). Same
 /// response shape + same opaque cursor (`ContractIdCursor{id}` — `id` exists on
 /// CH `soroban_contracts`, so the cursor is datasource-agnostic).
 ///
@@ -959,7 +959,7 @@ pub async fn fetch_events(
 
     // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
     // with PK-prefix key-seeks instead of full-table hash joins (mirrors
-    // `transactions::queries_ch::resolve_source_and_closed_at`, task 0290).
+    // `transactions::queries::resolve_source_and_closed_at`, task 0290).
     // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
     // the handful of ledgers on this page, then filters `id IN (...)`; no
     // `FINAL` (a transaction is immutable, so a dup version is identical).

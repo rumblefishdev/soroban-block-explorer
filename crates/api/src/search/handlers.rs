@@ -14,7 +14,7 @@ use crate::state::AppState;
 
 use super::classifier;
 use super::dto::{EntityType, SearchGroups, SearchHit, SearchResults};
-use super::queries_ch::{self, IncludeFlags};
+use super::queries::{self, IncludeFlags};
 
 /// Default per-group cap when caller omits `?limit=` (matches
 /// `22_get_search.sql` recommendation).
@@ -132,7 +132,7 @@ pub async fn get_search(
     // 5. Broad search — runs the canonical six-CTE UNION on ClickHouse
     //    (the production read path, ADR 0047). Returns
     //    `Vec<(String, SearchHit)>`, so grouping below is backend-agnostic.
-    let fetched = queries_ch::fetch_search(&state.ch(), q_raw, &classified, &include, limit as i32)
+    let fetched = queries::fetch_search(&state.ch(), q_raw, &classified, &include, limit as i32)
         .await
         .map_err(|e| tracing::error!("CH error in get_search broad: {e}"));
     let rows = match fetched {
@@ -218,7 +218,7 @@ fn parse_limit(raw: Option<&str>) -> Result<u32, Response> {
 /// Partition rows from the union query into per-entity buckets.
 ///
 /// Matches on the typed `EntityType` carried by `SearchHit` (already
-/// parsed by `queries_ch::fetch_search`). Exhaustive match — adding a
+/// parsed by `queries::fetch_search`). Exhaustive match — adding a
 /// 7th variant fails to compile here, forcing the new bucket to be
 /// wired through `SearchGroups` in the same change.
 fn group_hits(rows: Vec<(String, SearchHit)>) -> SearchGroups {
