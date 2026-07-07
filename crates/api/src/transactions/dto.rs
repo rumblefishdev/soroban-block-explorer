@@ -35,10 +35,10 @@ pub struct ListParams {
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
-/// freely; the flip side is that a cursor which decodes but carries the
-/// *other* backend's intent MUST be rejected with `invalid_cursor` rather
+/// freely; the flip side is that a cursor which decodes but carries a
+/// legacy backend's intent MUST be rejected with `invalid_cursor` rather
 /// than silently mis-paginating. `list_transactions` enforces that the
-/// decoded variant matches the active `DataSource`, and a legacy/untagged
+/// decoded variant is the current `Ch` keyset, and a legacy/untagged
 /// cursor (pre-0243, no `src`) fails to decode at all — both surface as a
 /// clean HTTP 400, exactly the "fail, don't silent-promote" contract ADR
 /// 0008 prescribes. The tie-break is non-optional on the `Ch` variant, so a
