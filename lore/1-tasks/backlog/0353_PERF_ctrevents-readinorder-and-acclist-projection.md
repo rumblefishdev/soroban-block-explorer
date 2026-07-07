@@ -24,6 +24,16 @@ history:
       over edge-cache (0346) for freshness. Kept in backlog (0353 id collides with
       0353_REFACTOR — untangle before promoting); acclist implemented under the 0357
       cluster. ctrevents part unchanged.
+  - date: 2026-07-06
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      acclist projection REJECTED after a CH-26.3 local spike: ADD PROJECTION on a
+      ReplacingMergeTree is refused by default (Code 344; rebuild=write-amp,
+      drop=useless). Value case also collapsed — acclist is a low-traffic browse page,
+      already FE-cached 60s, freshness cosmetic. Verdict: launch known-issue, no
+      server-side work; edge-cache/latest-table post-launch only if traffic warrants.
+      See the RESOLVED note. ctrevents part still open.
 ---
 
 # PERF: ctrevents read-in-order + acclist projection
@@ -82,12 +92,31 @@ So the projected query must use **approach-B** — raw over-fetch on the project
 `ORDER BY last_seen_ledger DESC` + Rust consecutive-dedup by account_id (the asttxs
 pattern), NOT `LIMIT 1 BY`. That lands acclist at ~5 ms ch (~74k rows) →
 ~110–150 ms total, **fresh + load-resistant, under AC4**. `LIMIT 1 BY` leaves it at
-6M/request. Chosen over edge-cache (0346) deliberately: acclist shows current
-accounts, not a TTL-stale snapshot.
+6M/request.
+
+**RESOLVED — 2026-07-06: projection REJECTED, acclist = launch known-issue.**
+A CH-26.3 local spike (throwaway container == prod version) killed it: `ADD
+PROJECTION` on a `ReplacingMergeTree` is refused by default
+(`deduplicate_merge_projection_mode = throw`, Code 344) — CH itself flags the
+projection + RMT-dedup combo as unsafe. Both allowed modes lose: `rebuild`
+re-sorts the whole projection on every merge of the hot 22M table (heavy standing
+write-amp), `drop` deletes the projection on merge (useless on a constantly-merging
+table). The value case collapsed too: acclist is a **low-traffic browse page**
+(`GET /v1/accounts`, only the FE `AccountsListPage`, sole sort = last_seen), already
+**FE-cached 60 s** (React Query `listPolicy`), and its freshness is **cosmetic** (a
+≤60 s-stale "recently active" list is fine). So:
+
+- **Launch:** no server-side work. FE cache absorbs repeats; the residual cold
+  first-load (~5 s) is a documented known-issue, NOT an AC4 blocker (account
+  point-lookups are fast; this is only the browse list).
+- **Post-launch, only if traffic data warrants:** edge-cache (0346) is marginal at
+  low traffic (cold edge); a fresh origin would need a latest-accounts table
+  (indexer-maintained collapsing structure) — a real indexer task, likely YAGNI.
+- The ctrevents part of this task is unaffected.
 
 ## Acceptance Criteria
 
 - [ ] `ctrevents` reads ~page-size, not the contract's whole event slice; output byte-identical (before/after diff on a hot contract); approach (A or B) chosen + its deploy cost noted
-- [ ] `acclist` no longer full-scans `accounts`; output byte-identical; projection materialised on prod
+- [~] `acclist` — projection REJECTED (CH 26.3 blocks RMT projections; spike-confirmed); accepted as a launch known-issue (FE-cached 60 s, low-traffic browse, cosmetic freshness). Not fixed server-side. See RESOLVED note above.
 - [ ] Also fold in `ctrinvoc` read-in-order residual (same `LIMIT 1 BY` shape) if approach B is taken
-- [ ] Docs updated (ADR 0032) for the acclist projection
+- [ ] ~~Docs (ADR 0032) for the acclist projection~~ — N/A, projection rejected (no schema change)

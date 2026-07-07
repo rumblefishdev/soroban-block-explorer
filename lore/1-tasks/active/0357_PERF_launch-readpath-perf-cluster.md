@@ -58,19 +58,19 @@ knowingly reframed — before the mainnet launch.
 
 ## Worklist (ranked by read_rows, 2026-07-06)
 
-| endpoint  | read_rows | state                                                                               |
-| --------- | --------- | ----------------------------------------------------------------------------------- |
-| nftdetail | 24.7M     | **DONE #314** — resolver swap, 24.7M→103k (235×)                                    |
-| asttxs    | 23.6M     | **DONE #315** — read-in-order driver, 338M→662k (512×)                              |
-| acclist   | 24.9M     | 0353 — `accounts` (22M); schema projection, not a swap                              |
-| lplist    | 24.2M     | `liquidity_pool_snapshots` (295M) latest-per-pool → 0356-class, **blocked**         |
-| lpdetail  | 14.5M     | 0356 — snapshots FINAL, **blocked** (indexer before/after bug)                      |
-| lpchart   | 13.2M     | 0356 — snapshots FINAL, **blocked**                                                 |
-| lptxs     | 18.5M     | at the 0281-C read-in-order **floor**; further = pool_id projection                 |
-| astlist   | 1.99M     | own task — `assets FINAL` + lookup joins in the shared `ASSET_LIST_CH_SELECT` const |
-| astdetail | 1.99M     | 0334 seek done — still 2M, partial                                                  |
-| search    | 1.0M      | untasked — 4 CH queries, unprofiled                                                 |
-| txlist    | 2.0M      | untasked — 0290/0333 archived, still ~900 ms                                        |
+| endpoint  | read_rows | state                                                                                                |
+| --------- | --------- | ---------------------------------------------------------------------------------------------------- |
+| nftdetail | 24.7M     | **DONE #314** — resolver swap, 24.7M→103k (235×)                                                     |
+| asttxs    | 23.6M     | **DONE #315** — read-in-order driver, 338M→662k (512×)                                               |
+| acclist   | 24.9M     | **known-issue** (0353) — projection rejected (CH 26.3 blocks RMT); FE-cached 60s, low-traffic browse |
+| lplist    | 24.2M     | `liquidity_pool_snapshots` (295M) latest-per-pool → 0356-class, **blocked**                          |
+| lpdetail  | 14.5M     | 0356 — snapshots FINAL, **blocked** (indexer before/after bug)                                       |
+| lpchart   | 13.2M     | 0356 — snapshots FINAL, **blocked**                                                                  |
+| lptxs     | 18.5M     | at the 0281-C read-in-order **floor**; further = pool_id projection                                  |
+| astlist   | 1.99M     | own task — `assets FINAL` + lookup joins in the shared `ASSET_LIST_CH_SELECT` const                  |
+| astdetail | 1.99M     | 0334 seek done — still 2M, partial                                                                   |
+| search    | 1.0M      | untasked — 4 CH queries, unprofiled                                                                  |
+| txlist    | 2.0M      | untasked — 0290/0333 archived, still ~900 ms                                                         |
 
 (`ctrevents` sampled fine at 0.25M/52 ms, but 0353's worst case is mega-contracts
 that random id sampling did not hit — keep 0353's fix.)
