@@ -2,7 +2,7 @@
 id: '0356'
 title: 'PERF/BUG: lpdetail+lpchart snapshots FINAL (blocked) + non-deterministic snapshot data bug (indexer emits before+after images)'
 type: PERF
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0354', '0338']
 tags:
@@ -33,6 +33,15 @@ history:
       delegated to a non-deterministic DB dedup (PG `DO NOTHING` keeps first-
       inserted; CH ReplacingMergeTree-without-version keeps an arbitrary one).
       Fix belongs in the indexer. Details below.
+  - date: 2026-07-07
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active. Raw-meta re-parse of ledger 62075700 (public
+      archive) confirmed the diagnosis — all 41 touched pools have
+      before≠final, validated 41/41 vs Horizon effects. Implementing the
+      indexer fix: snapshot only from mutating changes + ledger-scope
+      keep-last dedup (deterministic final per (pool, ledger)).
 ---
 
 # PERF/BUG: lpdetail+lpchart snapshots FINAL + non-deterministic snapshot bug
