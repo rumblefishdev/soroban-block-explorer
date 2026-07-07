@@ -1,23 +1,6 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    ports:
-      - '${POSTGRES_PORT:-5432}:5432'
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: soroban_block_explorer
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres']
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # ClickHouse pilot store (ADR 0044, task 0204). Stands next to Postgres,
-  # not as a replacement. Read-empty for now — populated by a follow-up
-  # ADR/task once the schema stabilises.
+  # ClickHouse — the sole store for local dev (ADR 0044 / 0047; Postgres
+  # retired, task 0244).
   #
   # Task 0240 split auth two ways: external clients (Caddy in prod,
   # curl in dev) present a verified mTLS cert that Caddy maps to a
@@ -109,7 +92,6 @@ services:
     restart: 'no'
 
 volumes:
-  pgdata:
   clickhouse-data:
 
 # Pin compose bridge subnet (task 0240). users.d/services.xml's
