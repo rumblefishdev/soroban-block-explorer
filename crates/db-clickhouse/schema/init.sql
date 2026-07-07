@@ -110,10 +110,25 @@ ORDER BY (sequence);
 -- ReplacingMergeTree (was plain MergeTree): written in the entity phase
 -- (before the `ledgers` commit marker), so a crash-resume / backfill re-run
 -- re-emits the same `(wasm_hash, metadata)` row. Plain MergeTree never dedups
--- → permanent byte-identical duplicates that double `contracts/interface`
--- JOINs and needed a manual `OPTIMIZE … DEDUPLICATE BY wasm_hash` (task 0228).
--- Content is immutable per `wasm_hash`, so no version column — any duplicate is
--- byte-identical and RMT collapses it on merge; reads stay FINAL-free. (lore-0293)
+-- → permanent duplicates that double `contracts/interface` JOINs and needed a
+-- manual `OPTIMIZE … DEDUPLICATE BY wasm_hash` (task 0228).
+--
+-- NOTE (task 0332): this was an immutable content-addressed lookup — metadata
+-- is a pure function of the WASM bytes, so any duplicate WAS byte-identical and
+-- reads stayed FINAL-free. The 0327 `upgradeable-backfill` broke that invariant:
+-- it re-INSERTs an existing `wasm_hash` with DIVERGENT `metadata` (adds the
+-- `upgradeable` key), so old + new parts can carry different content until a
+-- background merge. Contract-detail reads therefore join `wim FINAL`
+-- (queries_ch.rs) as explicit hardening: with no FINAL a join fans out to both
+-- parts and picks one at random. On CH 26.x's new analyzer (`enable_analyzer=1`,
+-- prod default) the `soroban_contracts sc FINAL` in that query ALREADY
+-- propagates FINAL to the joined `wim`, so the fan-out is masked while `sc` keeps
+-- its FINAL; the explicit `wim FINAL` decouples `wim`'s correctness from that.
+-- No version column: `wim`'s divergence axis is the PARSER version, not ledger
+-- time, so the `state table → RMT(version = observed ledger)` convention below
+-- does NOT fit; the rare stale-write-lands-last case is handled operationally
+-- (deploy indexer before any re-derivation backfill / one-shot OPTIMIZE, cf.
+-- task 0326). (lore-0293, lore-0332)
 CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
     wasm_hash FixedString(32),
     metadata  String CODEC(ZSTD(3))

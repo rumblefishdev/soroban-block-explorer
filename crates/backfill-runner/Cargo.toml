@@ -67,6 +67,9 @@ hex = { workspace = true }
 # CH-direct NFT re-parse (`nft_reparse`). Runtime dep of the main bin, not just
 # tests — the dev-dependency below is for pool-ids-backfill tests only.
 domain = { path = "../domain" }
+# Task 0332: content-address guard in `upgradeable_backfill` — verify
+# `sha256(fetched code) == requested wasm_hash` before trusting RPC bytecode.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture

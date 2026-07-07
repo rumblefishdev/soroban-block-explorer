@@ -34,6 +34,7 @@ use clickhouse::Row;
 use db_clickhouse::persist::rows::WasmInterfaceMetadataRow;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use stellar_xdr::curr::LedgerEntryData;
 use tracing::{info, warn};
 
@@ -56,6 +57,11 @@ pub struct UpgradeableBackfillStats {
     /// Rows whose stored `metadata` was not a JSON object — skipped, never
     /// overwritten (left Unknown). Unreachable for real rows; defense-in-depth.
     pub malformed_metadata: u64,
+    /// RPC returned bytecode whose `sha256` does not equal the requested
+    /// `wasm_hash` — corrupt/truncated/tampered response, skipped (left Unknown),
+    /// never written. A wasm_hash IS the sha256 of its code, so this must hold
+    /// for any honest response (task 0332).
+    pub hash_mismatch: u64,
     pub dry_run: bool,
 }
 
@@ -134,10 +140,28 @@ pub async fn execute(
         let Some(metadata) = by_hash.get(&hash) else {
             continue;
         };
-        let upgradeable = xdr_parser::contract::wasm_imports_upgrade_fn(cce.code.as_slice());
         // RPC resolved this WASM regardless of what we do next — mark it seen so a
-        // skipped-malformed row is never miscounted as missing_on_rpc.
+        // skipped row is never miscounted as missing_on_rpc.
         seen.insert(hash);
+        // Content-address guard (task 0332): a `wasm_hash` IS the sha256 of its
+        // bytecode. We derive the `upgradeable` flag from whatever bytes the
+        // public RPC returns and write it to prod, so verify the bytes actually
+        // hash to the requested key BEFORE trusting them. A corrupt / truncated /
+        // tampered response would otherwise write a WRONG flag with no detection.
+        // Mismatch → skip + warn (mirrors the `malformed_metadata` posture), never
+        // write a flag.
+        let digest: [u8; 32] = Sha256::digest(cce.code.as_slice()).into();
+        if digest != hash {
+            stats.hash_mismatch += 1;
+            warn!(
+                requested_wasm_hash = %hex::encode(hash),
+                returned_code_sha256 = %hex::encode(digest),
+                "upgradeable_backfill: RPC bytecode does not hash to the requested \
+                 wasm_hash — skipping (left Unknown), not writing a derived flag"
+            );
+            continue;
+        }
+        let upgradeable = xdr_parser::contract::wasm_imports_upgrade_fn(cce.code.as_slice());
         // Merge into the EXISTING metadata. If the stored JSON is not an object we
         // SKIP the row (leave it Unknown) rather than fabricate a fresh object —
         // overwriting would drop the row's `functions` / `wasm_byte_len`. The
@@ -176,6 +200,7 @@ pub async fn execute(
             upgradeable = stats.upgradeable,
             frozen = stats.frozen,
             missing_on_rpc = stats.missing_on_rpc,
+            hash_mismatch = stats.hash_mismatch,
             "upgradeable_backfill: dry-run, no rows written"
         );
         return Ok(stats);

@@ -943,6 +943,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "stellar-strkey 0.0.16",
  "stellar-xdr",

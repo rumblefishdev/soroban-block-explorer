@@ -282,13 +282,33 @@ pub async fn fetch_contract(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<ContractRow>, clickhouse::error::Error> {
-    // Two FINAL/aliasing pitfalls, both 500'd every contract detail (regression
-    // from task 0327):
-    //   1. `wasm_interface_metadata` is a plain `MergeTree`, so it must NOT carry
-    //      `FINAL` — CH rejects `FINAL` on a non-replacing engine with
-    //      `Code: 181 (ILLEGAL_FINAL)`. Only `soroban_contracts` (Replacing)
-    //      takes `FINAL`. (The events stats query below already joins `wim`
-    //      FINAL-free.)
+    // Two load-bearing details on this query:
+    //   1. BOTH tables are `ReplacingMergeTree` and BOTH carry `FINAL`, for
+    //      DIFFERENT invariants — do not strip either (task 0332):
+    //        * `sc FINAL` — `soroban_contracts` is RMT(`wasm_uploaded_at_ledger`);
+    //          a WASM upgrade rewrites `wasm_hash` under the same key, so a
+    //          non-FINAL read can serve the stale hash (task 0320).
+    //        * `wim FINAL` — `wasm_interface_metadata` is RMT with NO version
+    //          column. It was an immutable content-addressed lookup until the
+    //          0327 `upgradeable-backfill` re-INSERTed existing `wasm_hash`es
+    //          with DIVERGENT `metadata` (now carrying `upgradeable`). Old + new
+    //          parts coexist until a background merge; a join with NO FINAL fans
+    //          out to both parts and `LIMIT 1` picks one at random → the chip
+    //          flickers to Unknown. This `wim FINAL` is EXPLICIT HARDENING, not a
+    //          behavior change on today's engine: CH 26.x's new analyzer
+    //          (`enable_analyzer=1`, prod default) already PROPAGATES `sc FINAL`
+    //          to joined RMT tables, so `sc FINAL LEFT JOIN wim` collapses `wim`
+    //          even without this keyword — verified on prod. The explicit `wim
+    //          FINAL` DECOUPLES `wim`'s correctness from `sc` happening to carry
+    //          `FINAL`: if a future refactor drops `sc FINAL`, `wim` stays
+    //          collapsed. (The OLD analyzer ignores FINAL on a join's right side
+    //          entirely — that, plus the d258c93b `ILLEGAL_FINAL` on a then-plain
+    //          `MergeTree`, is why FINAL was removed once; prod + init.sql are RMT
+    //          now, so it is legal.) No version column: `wim`'s divergence axis is
+    //          the PARSER version, not ledger time, so the project's `version =
+    //          observed ledger` convention does not fit; the rare
+    //          stale-write-lands-last case is handled operationally (deploy
+    //          indexer before any re-derivation backfill).
     //   2. `sc.id` MUST be aliased `AS id`: `id` is ambiguous across the joined
     //      tables (`soroban_contracts`, `accounts`), so CH names the result
     //      column `sc.id`, which the `clickhouse` row deserialiser can't match
@@ -307,7 +327,7 @@ pub async fn fetch_contract(
                 toInt8(if(JSONHas(wim.metadata, 'upgradeable'), \
                           JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable \
              FROM soroban_contracts sc FINAL \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
@@ -556,7 +576,7 @@ pub async fn fetch_wasm_interface(
                 lower(hex(sc.wasm_hash))        AS wasm_hash, \
                 ifNull(wim.metadata, '')        AS metadata \
              FROM soroban_contracts sc FINAL \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
