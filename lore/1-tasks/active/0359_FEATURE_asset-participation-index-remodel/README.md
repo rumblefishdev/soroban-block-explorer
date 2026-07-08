@@ -205,6 +205,20 @@ history:
       ("activate task") moved the file to active/ but did NOT flip the frontmatter
       (a `git add` pathspec error left the status edit unstaged); this commit sets
       status: active for real. Implementation proceeds on feat/0359.
+  - date: 2026-07-08
+    status: active
+    who: karolkow
+    note: >
+      Governing decision recorded (new "## Plan" section, authoritative). ONE
+      task, step by step, ZERO plasters/hotfixes — rule: if a step is subsumed by
+      a later step, it is NOT built. Reaffirms the 2026-07-06 single-task call,
+      SUPERSEDING the G-spawn-plan 7-sibling split AND the Phase-0 interim. Dropped
+      on the no-plaster rule: Phase-0 native read-side (→ native = positive
+      surrogate straight in the fan-out) + the F-F cheap-win OR-branch (→ full SAC
+      union ships as the lasting stream). Recorded the independence map (stages
+      A–F independent/semi vs the F0-bound core chain) + the 12 ordered fundamental
+      steps. Banners added to the now-superseded "Revised plan" + acceptance-criteria
+      phasing note. Committed on feat/0359 (not develop — implementation branch).
 ---
 
 # Asset-participation index re-model
@@ -250,7 +264,91 @@ are conditional and collapse into "you need the fan-out anyway".
 Full six-option analysis + the softened verdicts →
 [S-design-options](notes/S-design-options.md) and [S-devils-advocate](notes/S-devils-advocate.md).
 
-## Revised plan — post devils-advocate (2026-07-07)
+## Plan (karolkow, 2026-07-08) — one task, fundamental-only, ZERO plasters
+
+**Governing decision — AUTHORITATIVE. Supersedes the "Revised plan" phasing and
+the G-spawn-plan sibling split below.** Reaffirms the original 2026-07-06
+"everything in one task" call ([R-audit-inventory](notes/R-audit-inventory.md)),
+overriding both the 7-sibling spawn ([G-spawn-plan](notes/G-spawn-plan.md)) and the
+Phase-0 interim:
+
+- **One task, step by step.** No sibling spawn. All F-A..F-F + K1–K4 + L2 +
+  fee-bump + search + FE render + hygiene live here. See [[feedback_task_scope]].
+- **Only fundamental fixes — no hotfixes / plasters.** Rule (karolkow): **if a
+  step would be subsumed by a later step, it is NOT built.** Removed on that rule:
+  - **Phase 0 native read-side interim** — subsumed by the fan-out → **dropped**.
+    Native becomes a positive surrogate directly in the fan-out table.
+  - **F-F cheap-win OR-branch** (patch on the old single-slot) — subsumed by the
+    full SAC union → **dropped**; the full `soroban_invocations_appearances` union
+    ships as the lasting read stream.
+- **F0 kept** — shared emission lib + `leg_index` gate + one archive-re-parse
+  harness. Foundation, not a plaster.
+- **Backfill** bounded to the Soroban era (~13 M ledgers, min 50,457,424).
+
+### Independent stages (start anytime — no dep on the fan-out core or each other)
+
+| id  | Stage                                      | Problem (TL;DR)                                                                                                                                                                                                              | Fix (TL;DR)                                                                                                                              |
+| --- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| A   | Contract-as-holder/owner (F-D, K2-8, K2-5) | Contract holding classic/native orphaned when its SAC un-sighted (`HAVING max(sac_deployed)=1`, persist.rs:297) → under-counts supply/holders. NFT contract-owner NULL (22% NFT, 51% transfer rows, nfts/queries_ch.rs:174). | Read-side union `soroban_contracts` in balances-holders + NFT owner/transfer. Data intact, read-only.                                    |
+| B   | Fee-bump (K3-2, K2-4)                      | `inner_tx_hash` never indexed → hard **404** on inner-hash lookup. Fee-source **~45% txs** unattributed (envelope.rs:238; stage.rs:455/753).                                                                                 | Index `inner_tx_hash` in transaction_hash_index; attribute fee_source/fee_charged per account.                                           |
+| C   | Search (K2-9, K3-6)                        | No asset findable by name ("USD Coin"→USDC, "lumens"→XLM); SAC C-address doesn't resolve to wrapped asset (search/queries_ch.rs:588,592).                                                                                    | By-name asset search + SAC C-address→asset resolve.                                                                                      |
+| D   | FE render (humanizeOp)                     | Normal one-liner **factually misleading** ("Sent 1 XLM" for a bubba swap); humanizeOp handles only PAYMENT/PATH_PAYMENT/INVOKE/CREATE_ACCOUNT, rest → "X processed" (humanizeOp.ts:52-61).                                   | Per-op-type human headline + progressive detail; path-payment uses `result` for received. Claim-CB line waits on meta; rest independent. |
+| E   | Aggregate/detail hygiene (K4-\*, K2-6)     | KPI 7d-window vs all-time (K4-1); operation_count vs folded operations[] (K4-2); nullable-aggregate 500 trap (K4-5); NFT pending **71K** invisible (K2-6).                                                                   | KPI-window alignment, fold-vs-count consistency, nullable-aggregate sweep, pending-NFT promotion.                                        |
+
+### Semi-independent (own decode + backfill; unions in only at the read query)
+
+| id  | Stage                                                 | Problem (TL;DR)                                                                                                                                                                                                                               | Fix (TL;DR)                                                                                                                                                                          |
+| --- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F   | L2 `soroban_events` decode (K1-3, K2-3/2-7, K3-3/3-4) | `soroban_events` (**9.5 B**) — transfer/mint/burn from/to/amount **never decoded** to columns (dead `parse_transfer`, event_filters.rs:44), amount hardcoded 1; non-G participants dropped; `contract_ids[]` drops nested (100% Soroban txs). | Decode from/to/amount → columns; index participants incl. contracts; union into asset + account pages. Own backfill via the shared harness; couples only at the composed read query. |
+
+### Core — one interlocked chain (NOT independently splittable)
+
+All routed through **F0** (shared emission lib + `leg_index` gate + one harness)
+and the **composed read query** — so these are one sequence, not separate stages:
+
+- **Fan-out** `operation_asset_appearances` + native surrogate (F-A, F-E)
+- **F-B** LP native leg (lp_a/lp_b rows + pool_id)
+- **F-F** full SAC-invocations union (lasting read stream)
+- **F-C** account roles → `transaction_participants` (shares F0 lib)
+- **Read rewrite** `/assets/:id/transactions` = `fan-out ∪ SAC ∪ soroban-events`
+- **Soroban-era backfill**
+
+### Ordered fundamental steps
+
+Steps 1–5 + 7 = the core chain (F0-bound). Steps 6, 8–12 = the independent /
+semi-independent stages (A–F), run as capacity allows.
+
+1. **Foundation + gate** — shared lib `emit_asset_participations(details, result)`;
+   deterministic `leg_index` (fixed XDR-order enumeration, no HashMap); full 25
+   op-type → role map; **differential test** live↔backfill byte-identical
+   (blocking gate — nothing ships until green). [G-schema-and-roles](notes/G-schema-and-roles.md).
+2. **Schema** — `operation_asset_appearances` RMT
+   `(asset_id, ledger_sequence, transaction_id, application_order, role, leg_index)`
+   - `pool_id`, native surrogate, drop amount-fold. Inline-amount columns = a THIN
+     perf choice (default: skip).
+3. **Live ingest** — wire the lib into the `stage` write path (rows per-(op,asset,role) forward).
+4. **Backfill** (new crate — [[feedback_backfill_new_crate]]) — one archive-re-parse
+   harness over the Soroban era, emitting for ALL consumers (fan-out + L2 +
+   participants) in a SINGLE sweep, not N full passes.
+5. **Read rewrite** — composed `fan-out ∪ SAC ∪ soroban-events`, native surrogate,
+   keyset pagination, drop empty-native early-return. F-F full union + F-B land here.
+6. **L2 `soroban_events` decode** — from/to/amount columns, participant index,
+   contribute the stream to step 5.
+7. **Account roles (F-C)** — crossed-offer counterparty / claimants / inflationDest
+   / revoke-target → `transaction_participants` (own dedup + backfill via the lib).
+8. **Contract-as-holder (F-D, K2-5)** — read-side `soroban_contracts` union.
+9. **Fee-bump** — `inner_tx_hash` index + fee_source attribution.
+10. **Search** — by-name asset + SAC C-address resolve.
+11. **Hygiene (K4)** — KPI-window, fold-vs-count, nullable-aggregate sweep, NFT pending.
+12. **FE render** — per-op-type headline + progressive detail.
+
+Cross-cutting each step: `docs/architecture/**` (ADR 0032), API-types regen on any
+shape change, validate vs Horizon / stellar.expert.
+
+## Revised plan — post devils-advocate (2026-07-07) — SUPERSEDED by the Plan above
+
+> **SUPERSEDED (karolkow, 2026-07-08) by "## Plan" above.** The Phase-0 interim and
+> the sibling-split are DROPPED (no plasters, one task). Kept for history / rationale.
 
 A 7-agent adversarial pass ([S-devils-advocate](notes/S-devils-advocate.md))
 confirmed the diagnosis but found the single-epic packaging and several
@@ -351,10 +449,11 @@ path.
 
 ## Acceptance criteria
 
-> Sequenced post devils-advocate (see Revised plan): the list below is the FULL
-> end-state. **Phase 0** = native surrogate + F-F (`/assets/native/transactions`
-> real + LP native filter); **Phase 1** = offers by asset; **Phase 2** = the rest
-> (the fan-out ADR + backfill), gated on a frontend render spec + the two CRITICAL
+> **SUPERSEDED (karolkow, 2026-07-08) — the Phase 0/1/2 sequencing below is DROPPED;
+> see "## Plan" above.** No Phase-0 interim, no gate-on-FE-spec. The list stays the
+> FULL end-state; ordering is now the "Ordered fundamental steps" in the Plan.
+> (Original note:) Sequenced post devils-advocate: **Phase 0** = native surrogate +
+> F-F; **Phase 1** = offers; **Phase 2** = the rest gated on a render spec + the two
 > gates. Don't treat these as one atomic gate.
 
 - [ ] Design recorded in task (no separate ADR — karolkow) + `docs/architecture/**` updated (schema + query docs)
