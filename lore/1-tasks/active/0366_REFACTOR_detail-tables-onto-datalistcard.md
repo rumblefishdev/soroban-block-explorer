@@ -1,5 +1,5 @@
 ---
-id: '0353'
+id: '0366'
 title: 'REFACTOR: migrate 8 detail-page tables onto shared DataListCard'
 type: REFACTOR
 status: active
@@ -16,6 +16,28 @@ history:
       hand-rolled detail-page table sections; the duplicated body / skeleton /
       pagination layout remains. Migrate them onto the shared `DataListCard`
       (already used by the 7 list pages) to delete the duplication at the root.
+  - date: 2026-07-07
+    status: active
+    who: karolkow
+    note: >
+      Renumbered 0353 → 0364 to resolve an id collision: PERF task
+      "ctrevents read-in-order + acclist projection" also held 0353 and is the
+      rightful owner (reserved by 0345 "deferred to 0353"; referenced by
+      0354/0357). This REFACTOR had no external lore refs, so it moved. Git
+      branch `feat/0353_detail-tables-datalistcard` + prior lore-0353 commits
+      are immutable history and left as-is; the lore id is the dedup key.
+  - date: 2026-07-08
+    status: active
+    who: karolkow
+    note: >
+      Renumbered 0364 → 0366 to resolve a *second* id collision: the
+      2026-07-07 renumber (0353 → 0364) landed this REFACTOR on top of PERF
+      task "astlist + astdetail bounded assets-FINAL read", which already held
+      0364 on develop and is referenced by the 0357 read-path cluster
+      (0357/0354/0334). Same dedup rule as before — the externally-referenced
+      PERF task keeps 0364; this REFACTOR (still no external lore refs) moves to
+      the next free id, 0366 (0365 = PERF oa-entity-keyed-mv). Git branch name
+      left as-is; lore id is the dedup key.
 ---
 
 # REFACTOR: migrate detail tables onto DataListCard

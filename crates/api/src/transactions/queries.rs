@@ -318,45 +318,6 @@ async fn resolve_source_and_closed_at(
 }
 
 #[derive(Debug, Row, Deserialize)]
-struct OpChRow {
-    op_type: i16,
-    source_account: Option<String>,
-    destination_account: Option<String>,
-    contract_id: Option<String>,
-    asset_code: Option<String>,
-    asset_issuer: Option<String>,
-    pool_ids: Vec<String>,
-    application_order: i16,
-    ledger_sequence: i64,
-    created_at: i64,
-}
-
-impl From<OpChRow> for OpRow {
-    fn from(row: OpChRow) -> Self {
-        Self {
-            // CH `operations_appearances` dropped the BIGSERIAL surrogate
-            // (PR #175); `application_order` is the natural per-op key and
-            // the documented `appearance_id` replacement (canonical SQL 03
-            // statement C). `OperationItem.appearance_id` is already
-            // documented as an internal ordering artefact, so reusing the
-            // apply-order index here is contract-safe.
-            appearance_id: i64::from(row.application_order),
-            type_name: operation_type_label(row.op_type),
-            op_type: row.op_type,
-            source_account: row.source_account.filter(|s| !s.is_empty()),
-            destination_account: row.destination_account.filter(|s| !s.is_empty()),
-            contract_id: row.contract_id.filter(|s| !s.is_empty()),
-            asset_code: row.asset_code.filter(|s| !s.is_empty()),
-            asset_issuer: row.asset_issuer.filter(|s| !s.is_empty()),
-            pool_ids: row.pool_ids,
-            application_order: Some(row.application_order),
-            ledger_sequence: row.ledger_sequence,
-            created_at: millis_to_utc(row.created_at),
-        }
-    }
-}
-
-#[derive(Debug, Row, Deserialize)]
 struct SurrogateIdRow {
     id: i64,
 }
@@ -1112,31 +1073,5 @@ mod tests {
         );
         assert_eq!(mapped.contract_ids, vec!["C1".to_string()]);
         assert_eq!(mapped.created_at, ch::millis_to_utc(1_700_000_000_000));
-    }
-
-    #[test]
-    fn op_row_uses_application_order_as_appearance_id() {
-        // CH `operations_appearances` has no BIGSERIAL surrogate (PR #175);
-        // `appearance_id` is the natural-key `application_order`, and the
-        // op type code is mapped to its label in Rust (no `op_type_name`
-        // SQL function on CH).
-        let row = OpChRow {
-            op_type: 1,
-            source_account: Some("GSRC".to_string()),
-            destination_account: Some(String::new()),
-            contract_id: None,
-            asset_code: Some(String::new()),
-            asset_issuer: None,
-            pool_ids: Vec::new(),
-            application_order: 3,
-            ledger_sequence: 100,
-            created_at: 1_700_000_000_000,
-        };
-        let mapped: OpRow = row.into();
-        assert_eq!(mapped.appearance_id, 3);
-        assert_eq!(mapped.application_order, Some(3));
-        assert_eq!(mapped.type_name, "PAYMENT");
-        assert_eq!(mapped.source_account, Some("GSRC".to_string()));
-        assert_eq!(mapped.destination_account, None); // empty sentinel → None
     }
 }

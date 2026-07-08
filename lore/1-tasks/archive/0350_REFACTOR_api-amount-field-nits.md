@@ -2,7 +2,7 @@
 id: '0350'
 title: 'API contract nits: amount-field naming + fee decimals doc + LP share_percentage purity'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [api, api-types, clarity, priority-low, effort-small, optional]
@@ -28,6 +28,15 @@ history:
       operations path decodes OpRawRow → OpRow directly. NOT PG legacy;
       parked here as the thematically-closest home for a small API
       query-layer cleanup. Reopens the task (Nit 4 AC unchecked).
+  - date: 2026-07-07
+    status: completed
+    who: karolkow
+    note: >
+      Nit 4 done — deleted OpChRow struct + From<OpChRow> for OpRow impl +
+      its only consumer (op_row_uses_application_order_as_appearance_id test)
+      from transactions/queries.rs. Pure dead-seam removal; live OpRawRow→OpRow
+      read path untouched, no api-types/DTO impact. Nits 1–3 landed earlier in
+      PR #312 (merged 2026-07-06). All ACs closed; archiving.
 ---
 
 # API contract nits (optional — not bugs)
@@ -91,8 +100,10 @@ PG-removal sweep.)
 - [x] Nit 3 — **decision: keep `share_percentage` server-side.** It is a ratio
       (`shares * 100 / total_shares`), not amount-scaling, so it is an accepted server-side
       exception to the "FE derives" rule. Not worth the churn of returning raw shares + FE divide.
-- [ ] Nit 4 — `OpChRow` + `From<OpChRow> for OpRow` (`transactions/queries.rs:321,334`) + the OpChRow-only round-trip test removed; live `OpRawRow` → `OpRow` path
-      unaffected. No api-types change (internal decode struct, not a DTO).
+- [x] Nit 4 — `OpChRow` + `From<OpChRow> for OpRow` + the OpChRow-only round-trip test
+      (`op_row_uses_application_order_as_appearance_id`) removed from `transactions/queries.rs`.
+      Live `OpRawRow` → `OpRow` path unaffected; `operation_type_label` / `millis_to_utc`
+      still used elsewhere in the file. No api-types change (internal decode struct, not a DTO).
 - [x] **Docs updated** — `docs/architecture/**/14_get_contracts_events.sql` DTO-field ref
       updated (`EventItem.amount` → `.fold_count`). Schema docs describe the DB _column_ `amount`
       (unchanged) — accurate as-is. No FE-data-contract doc surfaces these fields.
