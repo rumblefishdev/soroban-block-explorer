@@ -2,7 +2,7 @@
 id: '0359'
 title: 'Asset-participation index re-model — native XLM first-class + complete per-asset activity (offers, all path-payment legs)'
 type: FEATURE # fundamental data-model fix: schema + ingestion + XDR re-parse backfill + query rewrites
-status: backlog
+status: active
 related_adr: ['0044', '0051'] # 0044 operations_appearances schema; 0051 SAC-as-facet / native surrogate convention
 related_tasks: ['0348', '0331', '0334', '0243', '0333'] # 0348 = F2 origin; 0331/0334 = balances native-surrogate precedent; 0243/0333 = assets CH queries + bloom idx
 tags:
@@ -197,6 +197,14 @@ history:
       overwrite); un-folded F-C into its own sibling #7 (different table + own
       backfill = scope creep if folded); marked Phase 0 read-path interim, FE
       claim-CB line meta-dependent, priorities provisional.
+  - date: 2026-07-08
+    status: active
+    who: karolkow
+    note: >
+      Activated (backlog → active). Note: the earlier commit 04a00699
+      ("activate task") moved the file to active/ but did NOT flip the frontmatter
+      (a `git add` pathspec error left the status edit unstaged); this commit sets
+      status: active for real. Implementation proceeds on feat/0359.
 ---
 
 # Asset-participation index re-model
