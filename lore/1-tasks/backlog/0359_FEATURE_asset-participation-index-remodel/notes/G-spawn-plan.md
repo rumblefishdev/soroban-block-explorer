@@ -1,10 +1,10 @@
 ---
-title: 'Spawn plan — task decomposition + coverage map (SUPERSEDED — no split)'
+title: 'Spawn plan — task decomposition + coverage map (ready for develop)'
 type: generation
-status: superseded
+status: developing
 spawned_from: notes/S-devils-advocate.md
 spawns: []
-tags: ['spawn-plan', 'decomposition', 'coverage-map', 'superseded']
+tags: ['spawn-plan', 'decomposition', 'coverage-map', 'ready']
 links: []
 history:
   - date: 2026-07-08
@@ -15,17 +15,6 @@ history:
       to a home (nothing lost); concrete child-task specs; spawn order. Spawn the
       children on develop (new-tasks-on-develop convention), each with
       related_tasks: [0359].
-  - date: 2026-07-08
-    status: superseded
-    who: karolkow
-    note: >
-      SUPERSEDED — karolkow ruled: do NOT split into sibling tasks. All work stays
-      in 0359 as ordered STEPS (see README). The child decomposition here is kept
-      only as a coverage reference (every finding still has a home — now a Step,
-      not a task). The by-finding homes still map: Phase-0/native → folded into the
-      fan-out (Step 3); F-F SAC union → Step 5; account roles / contract-holder /
-      search → Step 4; FE render → Step 1; soroban-events → "Owned elsewhere". The
-      "spawn F0 first / spawn children on develop" instructions no longer apply.
 ---
 
 # Spawn plan — 0359 → children
