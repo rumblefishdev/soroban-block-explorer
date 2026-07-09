@@ -255,8 +255,7 @@ mod tests {
         CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt, LedgerKeyTrustLine,
         LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp, LiquidityPoolEntry,
         LiquidityPoolEntryConstantProduct, ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount,
-        PathPaymentStrictSendOp, PaymentOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256,
-        VecM,
+        PathPaymentStrictSendOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256, VecM,
     };
 
     fn acct(b: u8) -> AccountId {
