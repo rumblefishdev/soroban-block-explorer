@@ -3,11 +3,11 @@
 //! The per-asset activity index is **pure presence**, modelled 1:1 on
 //! `transaction_participants` for accounts: one row per (asset, transaction),
 //! `asset_id`-leading so a per-asset page is a PK-prefix seek. This function
-//! turns one operation into every asset it touches from two grains so far:
-//! **body** (asset fields on the op struct) and **meta** (assets the body
+//! turns one operation into every asset it touches from three grains:
+//! **body** (asset fields on the op struct), **meta** (assets the body
 //! references only by id — claimable balances, LP pools — recovered from the
-//! same-op ledger changes). The **result** grain (actual claim-atom crossings)
-//! follows in the next commit.
+//! same-op ledger changes), and **result** (the assets actually crossed by an
+//! offer / path-payment, read off the claim atoms in the op result).
 //!
 //! ONE shared function on the shared parse path (live ingest and the archive
 //! backfill both run it). Duplicates MAY repeat; the RMT sort key collapses them
@@ -15,10 +15,11 @@
 //! is exhaustive (no `_`) so a new op type breaks compile here and its assets
 //! are decided, never silently dropped.
 
+use crate::operation::claim_atoms;
 use stellar_xdr::curr::{
-    Asset, AssetCode, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData,
-    LedgerKey, LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, RevokeSponsorshipOp,
-    TrustLineAsset,
+    Asset, AssetCode, ChangeTrustAsset, ClaimAtom, ClaimableBalanceId, LedgerEntryChange,
+    LedgerEntryData, LedgerKey, LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody,
+    OperationResult, RevokeSponsorshipOp, TrustLineAsset,
 };
 
 /// An asset as it appears in an operation, before surrogate-hashing.
@@ -32,13 +33,15 @@ pub enum AssetRef {
     Credit { code: String, issuer: String },
 }
 
-/// Emit every asset an operation touches from its body + the same-op ledger
-/// changes (meta). `op_source` is the resolved operation source StrKey (the
-/// `AllowTrust` issuer); `op_changes` carries the same-op ledger changes for the
-/// meta grain. The result grain follows in the next commit.
+/// Emit every asset an operation touches across all three grains. `op_source`
+/// is the resolved operation source StrKey (the `AllowTrust` issuer);
+/// `op_result` carries the op's result (claim atoms → result grain); `op_changes`
+/// carries the same-op ledger changes (meta grain). `op_result` is `None` for a
+/// failed tx (no crossings committed) → the result grain is simply empty.
 pub fn emit_asset_appearances(
     body: &OperationBody,
     op_source: &str,
+    op_result: Option<&OperationResult>,
     op_changes: &[LedgerEntryChange],
 ) -> Vec<AssetRef> {
     let mut out: Vec<AssetRef> = Vec::new();
@@ -145,6 +148,18 @@ pub fn emit_asset_appearances(
         | OperationBody::RestoreFootprint(_) => {}
     }
 
+    // RESULT grain: the assets an offer / path-payment ACTUALLY crossed. The body
+    // declares only the endpoints (and, for offers, the pair); the intermediate
+    // assets a market order swept through live in the result's claim atoms. Each
+    // atom carries the sold + bought asset of one crossing.
+    if let Some(res) = op_result {
+        for atom in claim_atoms(res) {
+            let (sold, bought) = claim_atom_assets(atom);
+            out.push(asset_ref(sold));
+            out.push(asset_ref(bought));
+        }
+    }
+
     out
 }
 
@@ -243,17 +258,28 @@ fn lp_pool_assets(changes: &[LedgerEntryChange]) -> Option<(AssetRef, AssetRef)>
     })
 }
 
+/// The (sold, bought) assets of one claim atom — identical fields across all
+/// three atom shapes (v0 / order-book / pool).
+fn claim_atom_assets(atom: &ClaimAtom) -> (&Asset, &Asset) {
+    match atom {
+        ClaimAtom::V0(a) => (&a.asset_sold, &a.asset_bought),
+        ClaimAtom::OrderBook(a) => (&a.asset_sold, &a.asset_bought),
+        ClaimAtom::LiquidityPool(a) => (&a.asset_sold, &a.asset_bought),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use stellar_xdr::curr::{
         AccountId, AllowTrustOp, AlphaNum4, AssetCode4, ChangeTrustOp, ClaimClaimableBalanceOp,
-        ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp, CreateAccountOp,
-        CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt, LedgerKeyTrustLine,
-        LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp, LiquidityPoolEntry,
-        LiquidityPoolEntryConstantProduct, ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount,
-        PathPaymentStrictSendOp, PaymentOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256,
-        VecM,
+        ClaimOfferAtom, ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp,
+        CreateAccountOp, CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt,
+        LedgerKeyTrustLine, LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp,
+        LiquidityPoolEntry, LiquidityPoolEntryConstantProduct, ManageBuyOfferOp,
+        ManageOfferSuccessResult, ManageOfferSuccessResultOffer, ManageSellOfferOp,
+        ManageSellOfferResult, MuxedAccount, OperationResultTr, PathPaymentStrictSendOp, PaymentOp,
+        PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256, VecM,
     };
 
     fn acct(b: u8) -> AccountId {
@@ -275,7 +301,7 @@ mod tests {
         }
     }
     fn emit(body: &OperationBody) -> Vec<AssetRef> {
-        emit_asset_appearances(body, "", &[])
+        emit_asset_appearances(body, "", None, &[])
     }
 
     #[test]
@@ -357,7 +383,7 @@ mod tests {
         });
         let src = issuer_str(0x09);
         assert_eq!(
-            emit_asset_appearances(&body, &src, &[]),
+            emit_asset_appearances(&body, &src, None, &[]),
             vec![cr("USDC", &src)]
         );
     }
@@ -444,7 +470,7 @@ mod tests {
             cb_state_change(xdr_credit(b"AQUA", 0x07), 0x11),
         ];
         assert_eq!(
-            emit_asset_appearances(&body, "", &changes),
+            emit_asset_appearances(&body, "", None, &changes),
             vec![cr("AQUA", &issuer_str(0x07))]
         );
         // No meta → nothing (never guesses).
@@ -481,9 +507,47 @@ mod tests {
             ext: LedgerEntryExt::V0,
         })];
         assert_eq!(
-            emit_asset_appearances(&body, "", &changes),
+            emit_asset_appearances(&body, "", None, &changes),
             vec![AssetRef::Native, cr("USDC", &issuer_str(0x05))]
         );
         assert!(emit(&body).is_empty());
+    }
+
+    // --- RESULT grain: assets crossed, read off the op result's claim atoms ---
+
+    #[test]
+    fn offer_result_adds_crossed_atom_legs() {
+        // A sell offer (native → USDC in the body) that fills against two atoms:
+        // one crossing an intermediate EURT leg. Body pair + both atom legs.
+        let body = OperationBody::ManageSellOffer(ManageSellOfferOp {
+            selling: Asset::Native,
+            buying: xdr_credit(b"USDC", 0x01),
+            amount: 500,
+            price: Price { n: 1, d: 2 },
+            offer_id: 0,
+        });
+        let atom = ClaimAtom::OrderBook(ClaimOfferAtom {
+            seller_id: acct(0x08),
+            offer_id: 1,
+            asset_sold: xdr_credit(b"EURT", 0x02),
+            amount_sold: 10,
+            asset_bought: Asset::Native,
+            amount_bought: 20,
+        });
+        let result = OperationResult::OpInner(OperationResultTr::ManageSellOffer(
+            ManageSellOfferResult::Success(ManageOfferSuccessResult {
+                offers_claimed: vec![atom].try_into().unwrap(),
+                offer: ManageOfferSuccessResultOffer::Deleted,
+            }),
+        ));
+        assert_eq!(
+            emit_asset_appearances(&body, "", Some(&result), &[]),
+            vec![
+                AssetRef::Native,
+                cr("USDC", &issuer_str(0x01)),
+                cr("EURT", &issuer_str(0x02)),
+                AssetRef::Native,
+            ]
+        );
     }
 }
