@@ -56,7 +56,6 @@ pub fn extract_operations(
             let asset_appearances = crate::asset_appearances::emit_asset_appearances(
                 &op.body,
                 op_source,
-                op_results.and_then(|rs| rs.get(i)),
                 op_meta_changes(tx_meta, i),
             );
             let (op_type, details) = extract_op_details(
@@ -112,19 +111,8 @@ pub fn tx_op_results(result: &TransactionResult) -> Option<&[OperationResult]> {
 /// keeping it generic means the 0266 single-pass re-parse captures offer-
 /// crossed pools too, with no second historical pass.
 fn claim_lp_atoms(op_result: &OperationResult) -> impl Iterator<Item = &ClaimLiquidityAtom> {
-    claim_atoms(op_result).iter().filter_map(|a| match a {
-        ClaimAtom::LiquidityPool(lp) => Some(lp),
-        _ => None,
-    })
-}
-
-/// Every claim atom (order-book + pool + v0) crossed by a successful op result,
-/// as a raw slice. Empty for any non-success branch and non-atom-bearing ops.
-/// The shared extractor: `claim_lp_atoms` filters this to pool crossings (0261),
-/// asset_appearances reads both legs of every atom (0359 result grain).
-pub(crate) fn claim_atoms(op_result: &OperationResult) -> &[ClaimAtom] {
     use OperationResultTr::*;
-    match op_result {
+    let offers: &[ClaimAtom] = match op_result {
         OperationResult::OpInner(PathPaymentStrictSend(PathPaymentStrictSendResult::Success(
             s,
         ))) => s.offers.as_slice(),
@@ -139,7 +127,11 @@ pub(crate) fn claim_atoms(op_result: &OperationResult) -> &[ClaimAtom] {
             m.offers_claimed.as_slice()
         }
         _ => &[],
-    }
+    };
+    offers.iter().filter_map(|a| match a {
+        ClaimAtom::LiquidityPool(lp) => Some(lp),
+        _ => None,
+    })
 }
 
 /// Append `poolIds` + `claimedAtoms` to an op's details when its result shows
