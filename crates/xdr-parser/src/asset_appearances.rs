@@ -3,20 +3,20 @@
 //! The per-asset activity index is **pure presence**, modelled 1:1 on
 //! `transaction_participants` for accounts: one row per (asset, transaction),
 //! `asset_id`-leading so a per-asset page is a PK-prefix seek. This function
-//! turns one operation into the assets it DECLARES in its body — the same
-//! "declared participants" grain `transaction_participants` uses. ONE shared
-//! function on the shared parse path (live ingest and the archive backfill both
-//! run it). Duplicates MAY repeat; the RMT sort key collapses them to one
-//! (asset, tx) row and no read path can observe the difference.
+//! turns one operation into every asset DECLARED in its body — the "body" grain.
+//! Two later grains complete it: **meta** (assets the body references only by id
+//! — claimable balances, LP pools) and **result** (actual claim-atom crossings).
 //!
-//! Scope (minimal, karolkow 2026-07-09): body-declared assets only. Assets that
-//! live only in the result claim atoms (path hops, offer crossings) or in the
-//! operation meta (`claim_claimable_balance`, `liquidity_pool_deposit/withdraw`
-//! carry only an id) are NOT recovered here — that is deferred completeness, the
-//! same class as the crossed-offer counterparties still missing from
-//! `transaction_participants`. Added by the completeness follow-up, not before.
+//! ONE shared function on the shared parse path (live ingest and the archive
+//! backfill both run it). Duplicates MAY repeat; the RMT sort key collapses them
+//! to one (asset, tx) row and no read path can observe the difference. The match
+//! is exhaustive (no `_`) so a new op type breaks compile here and its assets
+//! are decided, never silently dropped.
 
-use stellar_xdr::curr::{Asset, ChangeTrustAsset, OperationBody};
+use stellar_xdr::curr::{
+    Asset, AssetCode, ChangeTrustAsset, LedgerKey, LiquidityPoolParameters, OperationBody,
+    RevokeSponsorshipOp, TrustLineAsset,
+};
 
 /// An asset as it appears in an operation, before surrogate-hashing.
 ///
@@ -29,18 +29,25 @@ pub enum AssetRef {
     Credit { code: String, issuer: String },
 }
 
-/// Emit the assets declared in a single operation's body, in fixed XDR slot
-/// order. See the module docs for the (deliberately minimal) scope.
-pub fn emit_asset_appearances(body: &OperationBody) -> Vec<AssetRef> {
+/// Emit every asset an operation declares in its body. `op_source` is the
+/// resolved operation source StrKey (the `AllowTrust` issuer). See the module
+/// docs for the meta / result grains added by the following commits.
+pub fn emit_asset_appearances(body: &OperationBody, op_source: &str) -> Vec<AssetRef> {
     let mut out: Vec<AssetRef> = Vec::new();
+
     match body {
         OperationBody::Payment(op) => out.push(asset_ref(&op.asset)),
+        // Path payment declares a VARIABLE asset count in its body: source gives
+        // `send_asset`, receiver gets `dest_asset`, and it routes THROUGH each
+        // `path[]` hop (up to 5). All body-declared → all indexed, in route order.
         OperationBody::PathPaymentStrictReceive(op) => {
             out.push(asset_ref(&op.send_asset));
+            out.extend(op.path.iter().map(asset_ref));
             out.push(asset_ref(&op.dest_asset));
         }
         OperationBody::PathPaymentStrictSend(op) => {
             out.push(asset_ref(&op.send_asset));
+            out.extend(op.path.iter().map(asset_ref));
             out.push(asset_ref(&op.dest_asset));
         }
         OperationBody::ManageSellOffer(op) => {
@@ -55,19 +62,21 @@ pub fn emit_asset_appearances(body: &OperationBody) -> Vec<AssetRef> {
             out.push(asset_ref(&op.selling));
             out.push(asset_ref(&op.buying));
         }
-        // A trustline to a pool SHARE is a pool-dimension event, not activity of
-        // asset A or B — PoolShare emits nothing here.
         OperationBody::ChangeTrust(op) => match &op.line {
             ChangeTrustAsset::Native => out.push(AssetRef::Native),
-            ChangeTrustAsset::CreditAlphanum4(a) => out.push(AssetRef::Credit {
-                code: asset_code_str(a.asset_code.as_slice()),
-                issuer: a.issuer.0.to_string(),
-            }),
-            ChangeTrustAsset::CreditAlphanum12(a) => out.push(AssetRef::Credit {
-                code: asset_code_str(a.asset_code.as_slice()),
-                issuer: a.issuer.0.to_string(),
-            }),
-            ChangeTrustAsset::PoolShare(_) => {}
+            ChangeTrustAsset::CreditAlphanum4(a) => {
+                out.push(credit(a.asset_code.as_slice(), &a.issuer.0.to_string()))
+            }
+            ChangeTrustAsset::CreditAlphanum12(a) => {
+                out.push(credit(a.asset_code.as_slice(), &a.issuer.0.to_string()))
+            }
+            // A pool-share trustline declares BOTH pool assets in its params.
+            ChangeTrustAsset::PoolShare(LiquidityPoolParameters::LiquidityPoolConstantProduct(
+                p,
+            )) => {
+                out.push(asset_ref(&p.asset_a));
+                out.push(asset_ref(&p.asset_b));
+            }
         },
         OperationBody::CreateClaimableBalance(op) => out.push(asset_ref(&op.asset)),
         OperationBody::Clawback(op) => out.push(asset_ref(&op.asset)),
@@ -76,18 +85,32 @@ pub fn emit_asset_appearances(body: &OperationBody) -> Vec<AssetRef> {
             out.push(AssetRef::Native)
         }
         OperationBody::SetTrustLineFlags(op) => out.push(asset_ref(&op.asset)),
-        // Asset lives only in the operation meta (a balance/pool id in the body),
-        // deferred completeness — see module docs.
+        // allow_trust: the code is in the body; the issuer is the OP SOURCE (the
+        // account authorizing the trustline). Deprecated (SetTrustLineFlags) but
+        // still recovered.
+        OperationBody::AllowTrust(op) => {
+            out.push(credit(asset_code_bytes(&op.asset), op_source))
+        }
+        // Sponsorship revoke of a TRUSTLINE declares its asset in the ledger key
+        // (pool-share trustlines carry a pool id, not an asset → skipped).
+        OperationBody::RevokeSponsorship(RevokeSponsorshipOp::LedgerEntry(
+            LedgerKey::Trustline(k),
+        )) => {
+            if let Some(a) = trustline_asset_ref(&k.asset) {
+                out.push(a);
+            }
+        }
+        // Asset lives only in the op META (a balance/pool id in the body) — added
+        // in the meta-grain commit. Listed here as body-empty for now.
         OperationBody::ClaimClaimableBalance(_)
         | OperationBody::ClawbackClaimableBalance(_)
         | OperationBody::LiquidityPoolDeposit(_)
         | OperationBody::LiquidityPoolWithdraw(_) => {}
-        // No classic asset in the body — listed (never `_`) so a NEW
-        // OperationBody variant breaks compile HERE and its asset appearance is
-        // decided, never silently dropped (the exact gap that let offers store
-        // zero assets).
-        OperationBody::AllowTrust(_)
-        | OperationBody::SetOptions(_)
+        // No classic asset anywhere in these ops. Listed (never `_`) so a NEW
+        // OperationBody variant breaks compile HERE. `RevokeSponsorship(_)`
+        // catches every non-trustline revoke (offer / account / CB / pool / data
+        // keys carry no single asset).
+        OperationBody::SetOptions(_)
         | OperationBody::Inflation
         | OperationBody::ManageData(_)
         | OperationBody::BumpSequence(_)
@@ -99,6 +122,7 @@ pub fn emit_asset_appearances(body: &OperationBody) -> Vec<AssetRef> {
         | OperationBody::ExtendFootprintTtl(_)
         | OperationBody::RestoreFootprint(_) => {}
     }
+
     out
 }
 
@@ -106,14 +130,39 @@ pub fn emit_asset_appearances(body: &OperationBody) -> Vec<AssetRef> {
 fn asset_ref(asset: &Asset) -> AssetRef {
     match asset {
         Asset::Native => AssetRef::Native,
-        Asset::CreditAlphanum4(a) => AssetRef::Credit {
-            code: asset_code_str(a.asset_code.as_slice()),
-            issuer: a.issuer.0.to_string(),
-        },
-        Asset::CreditAlphanum12(a) => AssetRef::Credit {
-            code: asset_code_str(a.asset_code.as_slice()),
-            issuer: a.issuer.0.to_string(),
-        },
+        Asset::CreditAlphanum4(a) => credit(a.asset_code.as_slice(), &a.issuer.0.to_string()),
+        Asset::CreditAlphanum12(a) => credit(a.asset_code.as_slice(), &a.issuer.0.to_string()),
+    }
+}
+
+/// A `TrustLineAsset` → [`AssetRef`]; `None` for a pool-share (a pool id, not an
+/// asset).
+fn trustline_asset_ref(asset: &TrustLineAsset) -> Option<AssetRef> {
+    match asset {
+        TrustLineAsset::Native => Some(AssetRef::Native),
+        TrustLineAsset::CreditAlphanum4(a) => {
+            Some(credit(a.asset_code.as_slice(), &a.issuer.0.to_string()))
+        }
+        TrustLineAsset::CreditAlphanum12(a) => {
+            Some(credit(a.asset_code.as_slice(), &a.issuer.0.to_string()))
+        }
+        TrustLineAsset::PoolShare(_) => None,
+    }
+}
+
+/// The raw code bytes of an `AssetCode` (allow_trust's issuer-less code).
+fn asset_code_bytes(code: &AssetCode) -> &[u8] {
+    match code {
+        AssetCode::CreditAlphanum4(c) => c.as_slice(),
+        AssetCode::CreditAlphanum12(c) => c.as_slice(),
+    }
+}
+
+/// Build a credit [`AssetRef`] from raw code bytes + an issuer StrKey.
+fn credit(code_bytes: &[u8], issuer: &str) -> AssetRef {
+    AssetRef::Credit {
+        code: asset_code_str(code_bytes),
+        issuer: issuer.to_string(),
     }
 }
 
@@ -131,11 +180,11 @@ fn asset_code_str(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use stellar_xdr::curr::{
-        AccountId, AlphaNum4, AssetCode4, ChangeTrustOp, ClaimClaimableBalanceOp,
+        AccountId, AllowTrustOp, AlphaNum4, AssetCode4, ChangeTrustOp, ClaimClaimableBalanceOp,
         ClaimableBalanceId, ClawbackOp, CreateAccountOp, CreateClaimableBalanceOp, Hash,
-        LiquidityPoolDepositOp, ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount,
-        PathPaymentStrictSendOp, PaymentOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256,
-        VecM,
+        LedgerKeyTrustLine, LiquidityPoolConstantProductParameters, ManageBuyOfferOp,
+        ManageSellOfferOp, MuxedAccount, PathPaymentStrictSendOp, PaymentOp, Price, PublicKey,
+        SetTrustLineFlagsOp, Uint256, VecM,
     };
 
     fn acct(b: u8) -> AccountId {
@@ -150,17 +199,19 @@ mod tests {
             issuer: acct(issuer),
         })
     }
-    fn credit(code: &str, issuer: &str) -> AssetRef {
+    fn cr(code: &str, issuer: &str) -> AssetRef {
         AssetRef::Credit {
             code: code.into(),
             issuer: issuer.into(),
         }
     }
+    fn emit(body: &OperationBody) -> Vec<AssetRef> {
+        emit_asset_appearances(body, "")
+    }
 
     #[test]
-    fn sell_offer_emits_both_assets() {
-        // Offers store ZERO assets in the legacy single slot (the flagship bug).
-        let body = OperationBody::ManageSellOffer(ManageSellOfferOp {
+    fn offers_emit_both_assets() {
+        let sell = OperationBody::ManageSellOffer(ManageSellOfferOp {
             selling: Asset::Native,
             buying: xdr_credit(b"USDC", 0x01),
             amount: 500,
@@ -168,14 +219,10 @@ mod tests {
             offer_id: 0,
         });
         assert_eq!(
-            emit_asset_appearances(&body),
-            vec![AssetRef::Native, credit("USDC", &issuer_str(0x01))]
+            emit(&sell),
+            vec![AssetRef::Native, cr("USDC", &issuer_str(0x01))]
         );
-    }
-
-    #[test]
-    fn buy_offer_emits_both_assets() {
-        let body = OperationBody::ManageBuyOffer(ManageBuyOfferOp {
+        let buy = OperationBody::ManageBuyOffer(ManageBuyOfferOp {
             selling: xdr_credit(b"AAA\0", 0x02),
             buying: Asset::Native,
             buy_amount: 500,
@@ -183,8 +230,8 @@ mod tests {
             offer_id: 0,
         });
         assert_eq!(
-            emit_asset_appearances(&body),
-            vec![credit("AAA", &issuer_str(0x02)), AssetRef::Native]
+            emit(&buy),
+            vec![cr("AAA", &issuer_str(0x02)), AssetRef::Native]
         );
     }
 
@@ -195,87 +242,99 @@ mod tests {
             asset: Asset::Native,
             amount: 10,
         });
-        assert_eq!(emit_asset_appearances(&body), vec![AssetRef::Native]);
+        assert_eq!(emit(&body), vec![AssetRef::Native]);
     }
 
     #[test]
-    fn credit_payment_emits_single_asset() {
-        let body = OperationBody::Payment(PaymentOp {
-            destination: MuxedAccount::Ed25519(Uint256([0xBB; 32])),
-            asset: xdr_credit(b"USDC", 0x01),
-            amount: 100,
-        });
-        assert_eq!(
-            emit_asset_appearances(&body),
-            vec![credit("USDC", &issuer_str(0x01))]
-        );
-    }
-
-    #[test]
-    fn path_payment_emits_both_endpoints() {
+    fn path_payment_emits_send_hops_dest() {
+        // Variable count: send + each path[] hop + dest (the up-to-7 case).
         let body = OperationBody::PathPaymentStrictSend(PathPaymentStrictSendOp {
             send_asset: Asset::Native,
             send_amount: 1_000,
             destination: MuxedAccount::Ed25519(Uint256([0xBB; 32])),
             dest_asset: xdr_credit(b"USDC", 0x01),
             dest_min: 900,
-            path: VecM::default(),
+            path: vec![xdr_credit(b"EURT", 0x02), xdr_credit(b"BTC\0", 0x03)]
+                .try_into()
+                .unwrap(),
         });
         assert_eq!(
-            emit_asset_appearances(&body),
-            vec![AssetRef::Native, credit("USDC", &issuer_str(0x01))]
+            emit(&body),
+            vec![
+                AssetRef::Native,
+                cr("EURT", &issuer_str(0x02)),
+                cr("BTC", &issuer_str(0x03)),
+                cr("USDC", &issuer_str(0x01)),
+            ]
         );
     }
 
     #[test]
-    fn change_trust_emits_asset_pool_share_nothing() {
+    fn change_trust_pool_share_emits_both_pool_assets() {
         let body = OperationBody::ChangeTrust(ChangeTrustOp {
-            line: ChangeTrustAsset::CreditAlphanum4(AlphaNum4 {
-                asset_code: AssetCode4(*b"USDC"),
-                issuer: acct(0x01),
-            }),
+            line: ChangeTrustAsset::PoolShare(
+                LiquidityPoolParameters::LiquidityPoolConstantProduct(
+                    LiquidityPoolConstantProductParameters {
+                        asset_a: Asset::Native,
+                        asset_b: xdr_credit(b"USDC", 0x05),
+                        fee: 30,
+                    },
+                ),
+            ),
             limit: 100,
         });
         assert_eq!(
-            emit_asset_appearances(&body),
-            vec![credit("USDC", &issuer_str(0x01))]
+            emit(&body),
+            vec![AssetRef::Native, cr("USDC", &issuer_str(0x05))]
         );
     }
 
     #[test]
-    fn create_claimable_balance_and_clawback_emit_body_asset() {
-        let cb = OperationBody::CreateClaimableBalance(CreateClaimableBalanceOp {
-            asset: xdr_credit(b"AQUA", 0x07),
-            amount: 200,
-            claimants: VecM::default(),
+    fn allow_trust_uses_op_source_as_issuer() {
+        let body = OperationBody::AllowTrust(AllowTrustOp {
+            trustor: acct(0x03),
+            asset: AssetCode::CreditAlphanum4(AssetCode4(*b"USDC")),
+            authorize: 1,
         });
-        assert_eq!(
-            emit_asset_appearances(&cb),
-            vec![credit("AQUA", &issuer_str(0x07))]
-        );
-        let cb2 = OperationBody::Clawback(ClawbackOp {
-            asset: xdr_credit(b"USDC", 0x01),
-            from: MuxedAccount::Ed25519(Uint256([0xAA; 32])),
-            amount: 5,
-        });
-        assert_eq!(
-            emit_asset_appearances(&cb2),
-            vec![credit("USDC", &issuer_str(0x01))]
-        );
+        let src = issuer_str(0x09);
+        assert_eq!(emit_asset_appearances(&body, &src), vec![cr("USDC", &src)]);
     }
 
     #[test]
-    fn set_trustline_flags_emits_asset() {
-        let body = OperationBody::SetTrustLineFlags(SetTrustLineFlagsOp {
+    fn revoke_sponsorship_of_trustline_emits_its_asset() {
+        let body = OperationBody::RevokeSponsorship(RevokeSponsorshipOp::LedgerEntry(
+            LedgerKey::Trustline(LedgerKeyTrustLine {
+                account_id: acct(0x03),
+                asset: TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: acct(0x01),
+                }),
+            }),
+        ));
+        assert_eq!(emit(&body), vec![cr("USDC", &issuer_str(0x01))]);
+    }
+
+    #[test]
+    fn set_trustline_flags_and_clawback_emit_asset() {
+        let flags = OperationBody::SetTrustLineFlags(SetTrustLineFlagsOp {
             trustor: acct(0x03),
             asset: xdr_credit(b"USDC", 0x01),
             clear_flags: 1,
             set_flags: 2,
         });
-        assert_eq!(
-            emit_asset_appearances(&body),
-            vec![credit("USDC", &issuer_str(0x01))]
-        );
+        assert_eq!(emit(&flags), vec![cr("USDC", &issuer_str(0x01))]);
+        let cb = OperationBody::CreateClaimableBalance(CreateClaimableBalanceOp {
+            asset: xdr_credit(b"AQUA", 0x07),
+            amount: 200,
+            claimants: VecM::default(),
+        });
+        assert_eq!(emit(&cb), vec![cr("AQUA", &issuer_str(0x07))]);
+        let claw = OperationBody::Clawback(ClawbackOp {
+            asset: xdr_credit(b"USDC", 0x01),
+            from: MuxedAccount::Ed25519(Uint256([0xAA; 32])),
+            amount: 5,
+        });
+        assert_eq!(emit(&claw), vec![cr("USDC", &issuer_str(0x01))]);
     }
 
     #[test]
@@ -285,29 +344,20 @@ mod tests {
             starting_balance: 100,
         });
         let merge = OperationBody::AccountMerge(MuxedAccount::Ed25519(Uint256([0x05; 32])));
-        assert_eq!(emit_asset_appearances(&create), vec![AssetRef::Native]);
-        assert_eq!(emit_asset_appearances(&merge), vec![AssetRef::Native]);
+        assert_eq!(emit(&create), vec![AssetRef::Native]);
+        assert_eq!(emit(&merge), vec![AssetRef::Native]);
     }
 
     #[test]
-    fn meta_only_and_non_asset_ops_emit_nothing() {
-        // Deferred completeness: asset lives in meta, not the body.
+    fn meta_only_and_non_asset_ops_emit_nothing_from_body() {
+        // Meta grain not wired yet — claim-CB / LP emit nothing from the body.
         let claim = OperationBody::ClaimClaimableBalance(ClaimClaimableBalanceOp {
             balance_id: ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([0x11; 32])),
         });
-        assert!(emit_asset_appearances(&claim).is_empty());
-        let lp = OperationBody::LiquidityPoolDeposit(LiquidityPoolDepositOp {
-            liquidity_pool_id: PoolId(Hash([0x44; 32])),
-            max_amount_a: 10,
-            max_amount_b: 20,
-            min_price: Price { n: 1, d: 2 },
-            max_price: Price { n: 2, d: 1 },
-        });
-        assert!(emit_asset_appearances(&lp).is_empty());
-        // bump_sequence touches no asset — recorded N/A, not a silent drop.
+        assert!(emit(&claim).is_empty());
         let bump = OperationBody::BumpSequence(stellar_xdr::curr::BumpSequenceOp {
             bump_to: stellar_xdr::curr::SequenceNumber(42),
         });
-        assert!(emit_asset_appearances(&bump).is_empty());
+        assert!(emit(&bump).is_empty());
     }
 }

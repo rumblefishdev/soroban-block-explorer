@@ -36,6 +36,8 @@ pub fn extract_operations(
     };
 
     let return_value = tx_meta.and_then(soroban_return_value);
+    // Resolved once; the fallback issuer for `allow_trust` ops that inherit it.
+    let tx_source = envelope.source_account();
 
     ops.iter()
         .enumerate()
@@ -46,6 +48,13 @@ pub fn extract_operations(
             // `XdrOperationDto`. See task 0172 / ADR 0028.
             let op_index = i + 1;
             let source_account = op.source_account.as_ref().map(muxed_to_g_strkey);
+            // Task 0359: every asset the op touches — body + same-op meta changes
+            // + result claim atoms. `op_source` (op override or tx source) is the
+            // AllowTrust issuer; it borrows `source_account`, released before the
+            // move below.
+            let op_source = source_account.as_deref().unwrap_or(&tx_source);
+            let asset_appearances =
+                crate::asset_appearances::emit_asset_appearances(&op.body, op_source);
             let (op_type, details) = extract_op_details(
                 &op.body,
                 return_value.as_ref(),
@@ -61,7 +70,7 @@ pub fn extract_operations(
                 op_type,
                 source_account,
                 details,
-                asset_appearances: crate::asset_appearances::emit_asset_appearances(&op.body),
+                asset_appearances,
             }
         })
         .collect()
