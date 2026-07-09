@@ -521,15 +521,11 @@ fn format_asset(asset: &Asset) -> Value {
     match asset {
         Asset::Native => json!("native"),
         Asset::CreditAlphanum4(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
         Asset::CreditAlphanum12(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
     }
@@ -539,15 +535,11 @@ fn format_change_trust_asset(asset: &ChangeTrustAsset) -> Value {
     match asset {
         ChangeTrustAsset::Native => json!("native"),
         ChangeTrustAsset::CreditAlphanum4(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
         ChangeTrustAsset::CreditAlphanum12(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
         ChangeTrustAsset::PoolShare(params) => {
@@ -557,16 +549,7 @@ fn format_change_trust_asset(asset: &ChangeTrustAsset) -> Value {
 }
 
 fn format_asset_code(code: &AssetCode) -> Value {
-    let s = match code {
-        AssetCode::CreditAlphanum4(c) => std::str::from_utf8(c.as_slice())
-            .unwrap_or("<invalid>")
-            .trim_end_matches('\0')
-            .to_string(),
-        AssetCode::CreditAlphanum12(c) => std::str::from_utf8(c.as_slice())
-            .unwrap_or("<invalid>")
-            .trim_end_matches('\0')
-            .to_string(),
-    };
+    let s = crate::asset_code::asset_code_str(crate::asset_code::asset_code_bytes(code));
     json!(s)
 }
 

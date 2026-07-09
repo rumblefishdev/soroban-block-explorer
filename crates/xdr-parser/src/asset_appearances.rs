@@ -18,9 +18,10 @@
 //! is exhaustive (no `_`) so a new op type breaks compile here and its assets
 //! are decided, never silently dropped.
 
+use crate::asset_code::{asset_code_bytes, asset_code_str};
 use stellar_xdr::curr::{
-    Asset, AssetCode, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData,
-    LedgerKey, LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, RevokeSponsorshipOp,
+    Asset, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData, LedgerKey,
+    LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, RevokeSponsorshipOp,
     TrustLineAsset,
 };
 
@@ -175,30 +176,14 @@ fn trustline_asset_ref(asset: &TrustLineAsset) -> Option<AssetRef> {
     }
 }
 
-/// The raw code bytes of an `AssetCode` (allow_trust's issuer-less code).
-fn asset_code_bytes(code: &AssetCode) -> &[u8] {
-    match code {
-        AssetCode::CreditAlphanum4(c) => c.as_slice(),
-        AssetCode::CreditAlphanum12(c) => c.as_slice(),
-    }
-}
-
-/// Build a credit [`AssetRef`] from raw code bytes + an issuer StrKey.
+/// Build a credit [`AssetRef`] from raw code bytes + an issuer StrKey. Uses the
+/// shared [`asset_code_str`] (same normalizer as `operation::format_asset`) so
+/// the derived `asset_id` surrogate matches the `assets` table's key.
 fn credit(code_bytes: &[u8], issuer: &str) -> AssetRef {
     AssetRef::Credit {
         code: asset_code_str(code_bytes),
         issuer: issuer.to_string(),
     }
-}
-
-/// Normalize a 4/12-byte asset code the SAME way `operation::format_asset` does
-/// (strict UTF-8, `<invalid>` fallback, trim trailing NULs) so the derived
-/// `asset_id` surrogate matches the `assets` table's key for the same asset.
-fn asset_code_str(bytes: &[u8]) -> String {
-    std::str::from_utf8(bytes)
-        .unwrap_or("<invalid>")
-        .trim_end_matches('\0')
-        .to_string()
 }
 
 /// Recover a claimed/clawed claimable balance's asset from the op's ledger
@@ -250,12 +235,13 @@ fn lp_pool_assets(changes: &[LedgerEntryChange]) -> Option<(AssetRef, AssetRef)>
 mod tests {
     use super::*;
     use stellar_xdr::curr::{
-        AccountId, AllowTrustOp, AlphaNum4, AssetCode4, ChangeTrustOp, ClaimClaimableBalanceOp,
-        ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp, CreateAccountOp,
-        CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt, LedgerKeyTrustLine,
-        LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp, LiquidityPoolEntry,
-        LiquidityPoolEntryConstantProduct, ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount,
-        PathPaymentStrictSendOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256, VecM,
+        AccountId, AllowTrustOp, AlphaNum4, AssetCode, AssetCode4, ChangeTrustOp,
+        ClaimClaimableBalanceOp, ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp,
+        CreateAccountOp, CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt,
+        LedgerKeyTrustLine, LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp,
+        LiquidityPoolEntry, LiquidityPoolEntryConstantProduct, ManageBuyOfferOp, ManageSellOfferOp,
+        MuxedAccount, PathPaymentStrictSendOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp,
+        Uint256, VecM,
     };
 
     fn acct(b: u8) -> AccountId {
