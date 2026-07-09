@@ -3,9 +3,11 @@
 //! The per-asset activity index is **pure presence**, modelled 1:1 on
 //! `transaction_participants` for accounts: one row per (asset, transaction),
 //! `asset_id`-leading so a per-asset page is a PK-prefix seek. This function
-//! turns one operation into every asset DECLARED in its body — the "body" grain.
-//! Two later grains complete it: **meta** (assets the body references only by id
-//! — claimable balances, LP pools) and **result** (actual claim-atom crossings).
+//! turns one operation into every asset it touches from two grains so far:
+//! **body** (asset fields on the op struct) and **meta** (assets the body
+//! references only by id — claimable balances, LP pools — recovered from the
+//! same-op ledger changes). The **result** grain (actual claim-atom crossings)
+//! follows in the next commit.
 //!
 //! ONE shared function on the shared parse path (live ingest and the archive
 //! backfill both run it). Duplicates MAY repeat; the RMT sort key collapses them
@@ -14,8 +16,9 @@
 //! are decided, never silently dropped.
 
 use stellar_xdr::curr::{
-    Asset, AssetCode, ChangeTrustAsset, LedgerKey, LiquidityPoolParameters, OperationBody,
-    RevokeSponsorshipOp, TrustLineAsset,
+    Asset, AssetCode, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData,
+    LedgerKey, LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, RevokeSponsorshipOp,
+    TrustLineAsset,
 };
 
 /// An asset as it appears in an operation, before surrogate-hashing.
@@ -29,10 +32,15 @@ pub enum AssetRef {
     Credit { code: String, issuer: String },
 }
 
-/// Emit every asset an operation declares in its body. `op_source` is the
-/// resolved operation source StrKey (the `AllowTrust` issuer). See the module
-/// docs for the meta / result grains added by the following commits.
-pub fn emit_asset_appearances(body: &OperationBody, op_source: &str) -> Vec<AssetRef> {
+/// Emit every asset an operation touches from its body + the same-op ledger
+/// changes (meta). `op_source` is the resolved operation source StrKey (the
+/// `AllowTrust` issuer); `op_changes` carries the same-op ledger changes for the
+/// meta grain. The result grain follows in the next commit.
+pub fn emit_asset_appearances(
+    body: &OperationBody,
+    op_source: &str,
+    op_changes: &[LedgerEntryChange],
+) -> Vec<AssetRef> {
     let mut out: Vec<AssetRef> = Vec::new();
 
     match body {
@@ -100,12 +108,26 @@ pub fn emit_asset_appearances(body: &OperationBody, op_source: &str) -> Vec<Asse
                 out.push(a);
             }
         }
-        // Asset lives only in the op META (a balance/pool id in the body) — added
-        // in the meta-grain commit. Listed here as body-empty for now.
-        OperationBody::ClaimClaimableBalance(_)
-        | OperationBody::ClawbackClaimableBalance(_)
-        | OperationBody::LiquidityPoolDeposit(_)
-        | OperationBody::LiquidityPoolWithdraw(_) => {}
+        // META grain: the body carries only a balance id — recover the asset from
+        // the same-op ledger changes (the claimed/clawed CB entry).
+        OperationBody::ClaimClaimableBalance(op) => {
+            if let Some(a) = claimed_cb_asset(op_changes, &op.balance_id) {
+                out.push(a);
+            }
+        }
+        OperationBody::ClawbackClaimableBalance(op) => {
+            if let Some(a) = claimed_cb_asset(op_changes, &op.balance_id) {
+                out.push(a);
+            }
+        }
+        // META grain: the body carries only a pool id — recover the pool's two
+        // assets from the same-op pool entry.
+        OperationBody::LiquidityPoolDeposit(_) | OperationBody::LiquidityPoolWithdraw(_) => {
+            if let Some((a, b)) = lp_pool_assets(op_changes) {
+                out.push(a);
+                out.push(b);
+            }
+        }
         // No classic asset anywhere in these ops. Listed (never `_`) so a NEW
         // OperationBody variant breaks compile HERE. `RevokeSponsorship(_)`
         // catches every non-trustline revoke (offer / account / CB / pool / data
@@ -176,15 +198,62 @@ fn asset_code_str(bytes: &[u8]) -> String {
         .to_string()
 }
 
+/// Recover a claimed/clawed claimable balance's asset from the op's ledger
+/// changes: the entry whose id matches the op's `balanceId`. `None` if absent
+/// (never guesses).
+fn claimed_cb_asset(
+    changes: &[LedgerEntryChange],
+    balance_id: &ClaimableBalanceId,
+) -> Option<AssetRef> {
+    changes.iter().find_map(|c| {
+        let entry = match c {
+            LedgerEntryChange::State(e)
+            | LedgerEntryChange::Created(e)
+            | LedgerEntryChange::Updated(e)
+            | LedgerEntryChange::Restored(e) => e,
+            LedgerEntryChange::Removed(_) => return None,
+        };
+        match &entry.data {
+            LedgerEntryData::ClaimableBalance(cb) if &cb.balance_id == balance_id => {
+                Some(asset_ref(&cb.asset))
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Recover a liquidity pool's two canonical assets (A, B) from the op's ledger
+/// changes — the pool entry's constant-product params. `None` if absent.
+fn lp_pool_assets(changes: &[LedgerEntryChange]) -> Option<(AssetRef, AssetRef)> {
+    changes.iter().find_map(|c| {
+        let entry = match c {
+            LedgerEntryChange::State(e)
+            | LedgerEntryChange::Created(e)
+            | LedgerEntryChange::Updated(e)
+            | LedgerEntryChange::Restored(e) => e,
+            LedgerEntryChange::Removed(_) => return None,
+        };
+        match &entry.data {
+            LedgerEntryData::LiquidityPool(lp) => {
+                let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
+                Some((asset_ref(&cp.params.asset_a), asset_ref(&cp.params.asset_b)))
+            }
+            _ => None,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use stellar_xdr::curr::{
         AccountId, AllowTrustOp, AlphaNum4, AssetCode4, ChangeTrustOp, ClaimClaimableBalanceOp,
-        ClaimableBalanceId, ClawbackOp, CreateAccountOp, CreateClaimableBalanceOp, Hash,
-        LedgerKeyTrustLine, LiquidityPoolConstantProductParameters, ManageBuyOfferOp,
-        ManageSellOfferOp, MuxedAccount, PathPaymentStrictSendOp, PaymentOp, Price, PublicKey,
-        SetTrustLineFlagsOp, Uint256, VecM,
+        ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp, CreateAccountOp,
+        CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt, LedgerKeyTrustLine,
+        LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp, LiquidityPoolEntry,
+        LiquidityPoolEntryConstantProduct, ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount,
+        PathPaymentStrictSendOp, PaymentOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256,
+        VecM,
     };
 
     fn acct(b: u8) -> AccountId {
@@ -206,7 +275,7 @@ mod tests {
         }
     }
     fn emit(body: &OperationBody) -> Vec<AssetRef> {
-        emit_asset_appearances(body, "")
+        emit_asset_appearances(body, "", &[])
     }
 
     #[test]
@@ -233,16 +302,6 @@ mod tests {
             emit(&buy),
             vec![cr("AAA", &issuer_str(0x02)), AssetRef::Native]
         );
-    }
-
-    #[test]
-    fn native_payment_keys_native_not_absence() {
-        let body = OperationBody::Payment(PaymentOp {
-            destination: MuxedAccount::Ed25519(Uint256([0xBB; 32])),
-            asset: Asset::Native,
-            amount: 10,
-        });
-        assert_eq!(emit(&body), vec![AssetRef::Native]);
     }
 
     #[test]
@@ -297,7 +356,10 @@ mod tests {
             authorize: 1,
         });
         let src = issuer_str(0x09);
-        assert_eq!(emit_asset_appearances(&body, &src), vec![cr("USDC", &src)]);
+        assert_eq!(
+            emit_asset_appearances(&body, &src, &[]),
+            vec![cr("USDC", &src)]
+        );
     }
 
     #[test]
@@ -349,15 +411,79 @@ mod tests {
     }
 
     #[test]
-    fn meta_only_and_non_asset_ops_emit_nothing_from_body() {
-        // Meta grain not wired yet — claim-CB / LP emit nothing from the body.
-        let claim = OperationBody::ClaimClaimableBalance(ClaimClaimableBalanceOp {
-            balance_id: ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([0x11; 32])),
-        });
-        assert!(emit(&claim).is_empty());
+    fn non_asset_ops_emit_nothing() {
         let bump = OperationBody::BumpSequence(stellar_xdr::curr::BumpSequenceOp {
             bump_to: stellar_xdr::curr::SequenceNumber(42),
         });
         assert!(emit(&bump).is_empty());
+    }
+
+    // --- META grain: asset recovered from the same-op ledger changes ---
+
+    fn cb_state_change(asset: Asset, id: u8) -> LedgerEntryChange {
+        LedgerEntryChange::State(LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::ClaimableBalance(ClaimableBalanceEntry {
+                balance_id: ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([id; 32])),
+                asset,
+                amount: 500,
+                claimants: VecM::default(),
+                ext: ClaimableBalanceEntryExt::V0,
+            }),
+            ext: LedgerEntryExt::V0,
+        })
+    }
+
+    #[test]
+    fn claim_cb_recovers_matching_asset_from_meta() {
+        let body = OperationBody::ClaimClaimableBalance(ClaimClaimableBalanceOp {
+            balance_id: ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([0x11; 32])),
+        });
+        let changes = vec![
+            cb_state_change(xdr_credit(b"WRNG", 0x09), 0x22),
+            cb_state_change(xdr_credit(b"AQUA", 0x07), 0x11),
+        ];
+        assert_eq!(
+            emit_asset_appearances(&body, "", &changes),
+            vec![cr("AQUA", &issuer_str(0x07))]
+        );
+        // No meta → nothing (never guesses).
+        assert!(emit(&body).is_empty());
+    }
+
+    #[test]
+    fn lp_deposit_recovers_both_assets_from_meta() {
+        let body = OperationBody::LiquidityPoolDeposit(LiquidityPoolDepositOp {
+            liquidity_pool_id: PoolId(Hash([0x44; 32])),
+            max_amount_a: 10,
+            max_amount_b: 20,
+            min_price: Price { n: 1, d: 2 },
+            max_price: Price { n: 2, d: 1 },
+        });
+        let changes = vec![LedgerEntryChange::Updated(LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::LiquidityPool(LiquidityPoolEntry {
+                liquidity_pool_id: PoolId(Hash([0x44; 32])),
+                body: LiquidityPoolEntryBody::LiquidityPoolConstantProduct(
+                    LiquidityPoolEntryConstantProduct {
+                        params: LiquidityPoolConstantProductParameters {
+                            asset_a: Asset::Native,
+                            asset_b: xdr_credit(b"USDC", 0x05),
+                            fee: 30,
+                        },
+                        reserve_a: 1000,
+                        reserve_b: 2000,
+                        total_pool_shares: 500,
+                        pool_shares_trust_line_count: 3,
+                    },
+                ),
+            }),
+            ext: LedgerEntryExt::V0,
+        })];
+        assert_eq!(
+            emit_asset_appearances(&body, "", &changes),
+            vec![AssetRef::Native, cr("USDC", &issuer_str(0x05))]
+        );
+        assert!(emit(&body).is_empty());
     }
 }

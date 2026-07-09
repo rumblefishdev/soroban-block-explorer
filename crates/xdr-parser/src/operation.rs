@@ -53,8 +53,11 @@ pub fn extract_operations(
             // AllowTrust issuer; it borrows `source_account`, released before the
             // move below.
             let op_source = source_account.as_deref().unwrap_or(&tx_source);
-            let asset_appearances =
-                crate::asset_appearances::emit_asset_appearances(&op.body, op_source);
+            let asset_appearances = crate::asset_appearances::emit_asset_appearances(
+                &op.body,
+                op_source,
+                op_meta_changes(tx_meta, i),
+            );
             let (op_type, details) = extract_op_details(
                 &op.body,
                 return_value.as_ref(),
@@ -189,6 +192,26 @@ fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
             .as_ref()
             .and_then(|m| m.return_value.clone()),
         _ => None,
+    }
+}
+
+/// The ledger changes of operation `op_idx` (0-based), index-aligned with the
+/// envelope's operations. Task 0359 uses these for the meta grain — the assets
+/// of ops that name a claimable balance / LP only by id. Empty for the pre-V3
+/// metas (no per-op changes there) and any out-of-range index.
+fn op_meta_changes(tx_meta: Option<&TransactionMeta>, op_idx: usize) -> &[LedgerEntryChange] {
+    match tx_meta {
+        Some(TransactionMeta::V3(v3)) => v3
+            .operations
+            .get(op_idx)
+            .map(|m| m.changes.as_slice())
+            .unwrap_or(&[]),
+        Some(TransactionMeta::V4(v4)) => v4
+            .operations
+            .get(op_idx)
+            .map(|m| m.changes.as_slice())
+            .unwrap_or(&[]),
+        _ => &[],
     }
 }
 
