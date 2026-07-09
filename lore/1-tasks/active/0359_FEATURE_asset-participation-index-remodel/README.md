@@ -219,6 +219,27 @@ history:
       A–F independent/semi vs the F0-bound core chain) + the 12 ordered fundamental
       steps. Banners added to the now-superseded "Revised plan" + acceptance-criteria
       phasing note. Committed on feat/0359 (not develop — implementation branch).
+  - date: 2026-07-09
+    status: active
+    who: karolkow
+    note: >
+      MVP SHIPPED as a 4-commit stack (acafe7a4 minimal fan-out → bf17e87a body →
+      7f1ef50d meta → f1bbffa5 result). Superseded the role-tagged build: the
+      earlier participations.rs / leg_index / amount / meta.rs+asset_code.rs work
+      was judged scope-creep, soft-reset + stashed, rewritten MINIMAL as pure
+      presence modelled 1:1 on transaction_participants — operation_asset_appearances
+      (asset_id, ledger_sequence, transaction_id), NO role/app_order/leg_index. The
+      emitter (asset_appearances.rs) does 100% asset extraction across 3 grains
+      (body/meta/result), split into reviewable commits. Refreshed the Status
+      snapshot to describe what SHIPPED (the step-by-step "BUILT" sections below now
+      describe the superseded build). meta.rs + asset_code.rs did NOT survive the
+      reset (op_meta_changes still _ => &[]; asset_code_str keeps <invalid>).
+      Write path touches ONLY the new table; read path is the one swap (backfill
+      must ride the same rollout). Legacy asset columns on operations_appearances
+      are NOT droppable — still read by fetch_operations (tx-detail op render) +
+      audit-harness. Ran /devils-advocate on B1/B2/B3: verdict ship-with-changes,
+      headline = drop B3/result grain (redundant for presence; atoms ⊆ body). Wrote
+      G-handoff-mvp. Nothing pushed. Next: drop B3 + close the meta-V5 wildcard.
 ---
 
 # Asset-participation index re-model
@@ -242,40 +263,83 @@ in ClickHouse, so it cannot be recovered by re-keying existing rows — the sour
 XDR is the only place both legs exist). Cost of the backfill is explicitly
 accepted.
 
-## Status snapshot (2026-07-09)
+## Status snapshot (2026-07-09) — MVP shipped as a 4-commit stack
 
-**Core (steps 1–7) BUILT + pre-backfill hardening DONE** — all UNCOMMITTED on
-`feat/0359_asset-participation-index-remodel`; full-workspace `cargo test` +
-`cargo clippy -D warnings` green.
+**MVP = pure-presence asset fan-out, MINIMAL.** Committed on
+`feat/0359_asset-participation-index-remodel` (NOT pushed); `xdr-parser` 296
+tests green, `cargo clippy -D warnings` clean. See
+[G-handoff-mvp](notes/G-handoff-mvp.md) for the full pick-up brief.
 
-- ✅ **Done:** **pure-presence** asset-appearance emitter (`asset_appearances.rs`)
-  - `operation_asset_appearances` table `(asset_id, ledger_sequence,
-transaction_id)` — the EXACT `transaction_participants` shape with `asset_id`
-    for `account_id` + live-ingest / staging / writer + 2-arm
-    `/assets/:id/transactions` read + token-event participant registration +
-    account counterparties (F-C) + contract passive-receipt arm. Bugs fixed:
-    arm-A pagination (`LIMIT 1 BY`), missing commit-fence. Hardening: `meta.rs`
-    (no-wildcard `TransactionMeta`, fail-loud on non-Soroban meta), `asset_code.rs`
-    (one canonical normalizer, no `<invalid>` sentinel).
-- 🔑 **Decision (karolkow 2026-07-09): PURE PRESENCE** — dropped `role` +
-  `application_order` + the whole `ParticipationRole` enum. A role is a
-  per-OPERATION property but the asset page lists TRANSACTIONS (deduped per tx),
-  and the tx-detail view re-parses the archive to describe ops; other explorers
-  (Etherscan Transfers, Horizon `/trades`+`/payments`) facet at the endpoint,
-  not via a stored per-tx role. If a typed/operation view is ever wanted →
-  re-backfill then (same "re-parse when needed" model as the provenance drop).
-- ⏳ **Remaining (none is pre-backfill):** independent stages A–E
-  (contract-as-holder, fee-bump 404, search, K4 hygiene, FE render) + F (L2
-  `soroban_events` from/to/amount columns — participant registration done,
-  columns cut pending a reader); refactors R1 (feed engine) / R2 (OpFacts IR,
-  post-backfill) / R3 (dead-schema cleanup); **OPS** (manual `CREATE TABLE`,
-  Soroban-era backfill, Horizon validation, docs/architecture, amount-column
-  decision).
-- ❌ **Dropped from scope (karolkow):** provenance (`parser_version`) — a
-  parser bug means a FULL re-backfill, not targeted re-heals; table-grain shrink;
-  disk mitigation.
-- ▶️ **Next:** granular commits — cosmetic/docs first, big logical last; no push
-  yet.
+**Pivot (karolkow 2026-07-09):** the earlier role-tagged / `leg_index` / amount /
+`meta.rs`+`asset_code.rs` hardening build was judged scope-creep → soft-reset +
+`git stash`, rewrite MINIMAL modelled 1:1 on `transaction_participants`. Every
+"BUILT" claim in the step-by-step sections BELOW describes that superseded build,
+NOT what shipped. What actually shipped:
+
+- **Table** `operation_asset_appearances (asset_id, ledger_sequence,
+transaction_id)` — the EXACT `transaction_participants` shape. RMT,
+  `PARTITION BY intDiv(ledger,500000)`, `ORDER BY (asset_id, ledger, tx)`. **NO**
+  role, application_order, leg_index, amount, pool_id, type.
+- **Emitter** `xdr-parser/src/asset_appearances.rs` —
+  `emit_asset_appearances(body, op_source, op_result, op_changes) -> Vec<AssetRef>`.
+  Pure presence, 100% asset extraction across 3 grains, committed as a reviewable
+  stack (each clippy-clean + tests green):
+  - `acafe7a4` minimal body-declared fan-out (schema + rows + stage + writer +
+    read-seek + tests)
+  - `bf17e87a` **BODY** grain (payment, path send/hops/dest, offers, change-trust
+    incl. PoolShare, allow_trust=op-source issuer, revoke-trustline, create/merge
+    = native)
+  - `7f1ef50d` **META** grain (claim-CB / clawback-CB / LP deposit+withdraw assets
+    recovered from same-op `LedgerEntryChanges`; no match → no row, never guesses)
+  - `f1bbffa5` **RESULT** grain (claim-atom crossings, both legs) — ⚠️
+    **devils-advocate verdict: REDUNDANT for a presence index** (claim-atom assets
+    are always ⊆ the op's body-declared assets; offers trade only their
+    selling/buying pair, path-payments execute exactly their declared route). Zero
+    marginal presence, and it is THE unbounded row-write swell driver → slated to
+    be dropped (concern 1). Was load-bearing only in the old role-tagged model
+    (realized amounts / trade legs).
+- **Read** `assets/queries.rs::fetch_transactions` = single-arm leading-key seek
+  on `operation_asset_appearances` + `max(sequence)` commit fence + `LIMIT 1 BY`
+  dedup (replaced the old non-leading density-scan → the asttxs perf fix). Native
+  = `ids::asset_id(0,"",0,0)` first-class.
+- **Write isolation:** staging only APPENDS to `op_asset_rows` (new table). Zero
+  change to any other table's rows — nothing existing can break. The read swap is
+  the only cross-table effect.
+- 🔑 **PURE PRESENCE (karolkow 2026-07-09):** dropped `role` + `application_order`
+  - the whole `ParticipationRole` enum. Role is per-OPERATION but the asset page
+    lists TRANSACTIONS (deduped per tx); tx-detail re-parses the archive to describe
+    ops; other explorers facet at the endpoint, not via a stored per-tx role. Want a
+    typed view later → re-backfill then.
+
+**NOT in this MVP (out of scope / deferred):** `meta.rs` central accessor (stashed
+— `op_meta_changes` still `_ => &[]`, the silent-V5 gap is OPEN — concern 2);
+`asset_code.rs` unification (stashed — `asset_code_str` = strict-utf8 +
+`<invalid>`, matches `operation.rs` so `asset_id` matches the `assets` table, but
+the 3-way fracture is unfixed); SAC-invocations union arm (F-F); LP native leg
+(F-B); account roles (F-C); `soroban_events` L2 (F); amount column.
+
+**Pre-backfill quick-wins still open (small, ride the same re-parse):**
+`op_meta_changes` explicit `V0|V1|V2` arm (close the meta wildcard w/o full
+meta.rs — concern 2). **NOT the legacy-column drop** —
+`operations_appearances.asset_code` + `asset_issuer_id` are STILL load-bearing:
+`fetch_operations` (`transactions/queries.rs:829`, the tx-detail operation list) +
+`audit-harness` render each op's asset from them. Our fan-out replaced only the
+asset-transactions density-scan, not the per-op render. Retiring them is a real
+task (migrate `fetch_operations`' op-asset source first), not a quick win; the
+audit's R3 "drop old asset columns" conflated the two readers.
+
+**Devils-advocate (2026-07-09) — verdict Ship-with-changes.** Body + meta hold
+(complete + minimal). Findings: (1) drop B3/result — redundant, done; (2) meta V5
+silent-miss — fix; (3) `<invalid>` collision — ride the re-parse; (4) claim-CB
+`State`-before-`Removed` invariant — add a test; (5) failed-tx body rows — confirm
+product intent (parity default); (6) native page needs a native `assets` row (F2).
+
+- ❌ **Dropped from scope (karolkow):** provenance (`parser_version`) — a parser
+  bug means a FULL re-backfill, not targeted re-heals; table-grain shrink; disk
+  mitigation.
+- ▶️ **Next:** fix concern 1 (drop B3) + concern 2 (meta V5). Then OPS: manual
+  `CREATE TABLE` + Soroban-era backfill (from ledger 50,457,424) in the SAME
+  rollout as the read swap. No push yet.
 
 ## Design decision (current)
 
@@ -921,6 +985,7 @@ path.
 - [S-tx-render-audit](notes/S-tx-render-audit.md) — /ux-expert audit of the transaction-detail render (normal misleading "Sent 1 XLM" + advanced raw dump); root cause in `humanizeOp.ts`; redesign wireframe + spec; **separate FE task** (on develop)
 - [G-architecture-audit](notes/G-architecture-audit.md) — serialized 28-item pattern/anti-pattern catalog + R1-R3 strangler plan + adoptions #1-3
 - [G-role-crossref](notes/G-role-crossref.md) — role ↔ XDR field ↔ Horizon effect (official grounding + per-arm ops validation contract)
+- [G-handoff-mvp](notes/G-handoff-mvp.md) — pick-up brief for the shipped MVP: the 4-commit stack, safety facts, the devils-advocate verdict (drop B3), pre-backfill quick-wins, OPS runbook
 - [G-spawn-plan](notes/G-spawn-plan.md) — spawn-readiness review: child-task specs (Phase 0, Layer-2, contract-holder, fee-bump, search, FE render), full finding→home coverage map, spawn order
 
 ## Notes / open questions
