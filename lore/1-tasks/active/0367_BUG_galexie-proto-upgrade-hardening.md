@@ -79,7 +79,7 @@ staging) → `sha256:81a9e829…` so CI/staging track the same image.
       5-min window (`galexieLagMinutes` 15→5), `treatMissingData: BREACHING`
 - [ ] CloudWatch stack deployed to prod (`make deploy-production-cloudwatch`)
 - [ ] One-time alarm test: `aws cloudwatch set-alarm-state --alarm-name
-    production-galexie-ingestion-lag --state-value ALARM --state-reason test`,
+production-galexie-ingestion-lag --state-value ALARM --state-reason test`,
       confirm it posts to the Slack channel (then let it self-reset); confirm SSM
       `slack-workspace-id`/`slack-channel-id` are set on prod so delivery works
 - [ ] GitHub env `GALEXIE_IMAGE_DIGEST` updated to `sha256:81a9e829…` (prod + staging)
