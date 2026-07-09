@@ -61,6 +61,7 @@ pub fn extract_operations(
                 op_type,
                 source_account,
                 details,
+                asset_appearances: crate::asset_appearances::emit_asset_appearances(&op.body),
             }
         })
         .collect()

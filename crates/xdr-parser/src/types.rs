@@ -531,4 +531,9 @@ pub struct ExtractedOperation {
     /// Type-specific details as a JSON value. Consumed by staging to extract
     /// identity columns; not persisted as JSON anywhere in the DB.
     pub details: serde_json::Value,
+    /// The assets declared in this operation's body (task 0359). Pure presence,
+    /// staged into `operation_asset_appearances`. Deterministic: identical
+    /// between live ingest and the archive backfill re-parse (both run this
+    /// parser).
+    pub asset_appearances: Vec<crate::asset_appearances::AssetRef>,
 }

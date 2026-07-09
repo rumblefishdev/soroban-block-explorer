@@ -46,6 +46,7 @@ use serde_json::Value;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
+use xdr_parser::asset_appearances::AssetRef;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
@@ -113,6 +114,9 @@ pub struct StagedLedger {
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
     pub op_rows: Vec<OperationAppearanceRow>,
+    /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
+    /// the asset-dimension twin of `participant_rows`.
+    pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
@@ -926,6 +930,28 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             continue;
         }
         for op in ops {
+            // ---- operation_asset_appearances (task 0359, pure presence) ----
+            // Asset-dimension twin of transaction_participants: one row per
+            // (asset the op touches, tx). Duplicates collapse in RMT. Native is a
+            // FIRST-CLASS surrogate (never the empty-string sentinel); classic
+            // credit hashes code:issuer_surrogate — both via `ids::asset_id`.
+            if !op.asset_appearances.is_empty() {
+                let tx_id = tx_id_by_hash[tx_hash];
+                for asset in &op.asset_appearances {
+                    let asset_id = match asset {
+                        AssetRef::Native => ids::asset_id(0, "", 0, 0),
+                        AssetRef::Credit { code, issuer } => {
+                            ids::asset_id(1, code, ids::account_id(issuer), 0)
+                        }
+                    };
+                    out.op_asset_rows.push(OperationAssetAppearanceRow {
+                        asset_id,
+                        ledger_sequence: ledger_sequence_i64,
+                        transaction_id: tx_id,
+                    });
+                }
+            }
+
             let typed = OpTyped::from_details(op.op_type, &op.details);
             let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
             for h in &typed.pool_ids_hex {

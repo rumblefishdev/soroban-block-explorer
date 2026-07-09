@@ -341,16 +341,7 @@ async fn fetch_asset_tx_for_source(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
-    queries::fetch_transactions(
-        &state.ch(),
-        row.asset_code.as_deref(),
-        row.issuer_id,
-        row.contract_surrogate_id,
-        limit,
-        cursor,
-        direction,
-    )
-    .await
+    queries::fetch_transactions(&state.ch(), row.id, limit, cursor, direction).await
 }
 
 /// Build the opaque asset-transactions cursor for a boundary row. CH keys on
@@ -540,6 +531,7 @@ mod tests {
             contract_surrogate_id: 0,
             sac_contract_surrogate: 0,
             sac_deployed: false,
+            id: 0,
         }
     }
 

@@ -415,6 +415,7 @@ mod tests {
             operation_index: 1,
             op_type: domain::OperationType::PathPaymentStrictSend,
             source_account: None,
+            asset_appearances: vec![],
             details: serde_json::json!({ "claimedAtoms": claimed }),
         }
     }

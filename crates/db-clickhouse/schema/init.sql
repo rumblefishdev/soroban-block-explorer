@@ -600,6 +600,24 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (account_id, ledger_sequence, transaction_id);
 
+-- operation_asset_appearances: per-(asset, transaction) presence index (task
+-- 0359). The EXACT transaction_participants shape, with asset_id for account_id.
+-- Fixes the single-asset-slot loss on operations_appearances -- offers store
+-- ZERO assets there, path payments keep only destAsset, native XLM is an
+-- empty-string sentinel. Here every asset DECLARED in any op body of a tx is one
+-- row, keyed asset-first so a per-asset activity page is a PK-prefix seek.
+-- asset_id = cityhash64 surrogate (ids::asset_id); native = hash64('native'), a
+-- first-class key, never an empty sentinel. Pure presence: duplicate (asset, tx)
+-- rows within a tx collapse in the RMT.
+CREATE TABLE IF NOT EXISTS operation_asset_appearances (
+    asset_id        Int64,
+    ledger_sequence Int64,
+    transaction_id  Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (asset_id, ledger_sequence, transaction_id);
+
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
 -- first-topic Symbol, lifted for cheap `WHERE signature = 'transfer'`.

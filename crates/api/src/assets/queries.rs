@@ -106,6 +106,9 @@ pub struct AssetRow {
     pub sac_contract_surrogate: i64,
     /// Whether the `sac_contract_surrogate` SAC is deployed on-chain (ADR 0051).
     pub sac_deployed: bool,
+    /// `assets.id` — the `ids::asset_id` surrogate (task 0331). The single asset
+    /// key for the `operation_asset_appearances` fan-out seek (task 0359).
+    pub id: i64,
 }
 
 #[derive(Debug)]
@@ -226,7 +229,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      a.issuer_id                  AS issuer_id_key, \
      a.contract_id                AS contract_id_key, \
      sac.sac_contract_id          AS sac_contract_surrogate, \
-     sac.sac_deployed             AS sac_deployed \
+     sac.sac_deployed             AS sac_deployed, \
+     a.id                         AS id \
      FROM assets a FINAL \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
      LEFT JOIN ( \
@@ -272,6 +276,7 @@ struct AssetListChRow {
     contract_id_key: i64,
     sac_contract_surrogate: i64,
     sac_deployed: bool,
+    id: i64,
 }
 
 /// Issuer resolve row: `accounts` → `id` (surrogate) + `account_id` StrKey +
@@ -316,6 +321,7 @@ fn list_row_to_asset_row(r: AssetListChRow, iss: Option<(String, Option<String>)
         contract_surrogate_id: r.contract_id_key,
         sac_contract_surrogate: r.sac_contract_surrogate,
         sac_deployed: r.sac_deployed,
+        id: r.id,
     }
 }
 
@@ -606,33 +612,12 @@ struct AssetTxPageChRow {
 /// raw — same convention as the PG `fetch_transactions`.
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
-    asset_code: Option<&str>,
-    asset_issuer_id: i64,
-    contract_surrogate_id: i64,
+    asset_id: i64,
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
-    let has_classic = asset_code.is_some() && asset_issuer_id != 0;
-    let has_contract = contract_surrogate_id != 0;
-    if !has_classic && !has_contract {
-        return Ok(Vec::new());
-    }
     let (op, order) = keyset_sql_desc(direction);
-
-    // Identity predicate. `asset_issuer_id` / `contract_surrogate_id` are i64
-    // surrogates (no injection surface) → interpolated; `asset_code` is a DB
-    // string value → bound.
-    let mut branches: Vec<String> = Vec::new();
-    if has_classic {
-        branches.push(format!(
-            "(oa.asset_code = ? AND oa.asset_issuer_id = {asset_issuer_id})"
-        ));
-    }
-    if has_contract {
-        branches.push(format!("(oa.contract_id = {contract_surrogate_id})"));
-    }
-    let predicate = branches.join(" OR ");
 
     // CH cursor only; a `Pg` variant never reaches here (the handler's
     // cross-source guard rejects it). Inlined i64 — no injection surface; the
@@ -642,54 +627,36 @@ pub async fn fetch_transactions(
             ledger_sequence,
             tiebreak,
         }) => format!(
-            " AND (oa.ledger_sequence, oa.transaction_id) {op} ({ledger_sequence}, {tiebreak})"
+            " AND (p.ledger_sequence, p.transaction_id) {op} ({ledger_sequence}, {tiebreak})"
         ),
         _ => String::new(),
     };
 
-    // Step 1: driver seek over `operations_appearances` (ORDER BY
-    // `(ledger_sequence, transaction_id, application_order)`). The identity
-    // predicate is NOT the leading key, so we lean on `optimize_read_in_order`:
-    // read from the tip in `(ledger, tx)` order and EARLY-TERMINATE once the page
-    // fills. A `LIMIT 1 BY` here DEFEATS read-in-order → full-history scan (the
-    // 0281-C finding on the LP path, box-measured), so instead we over-fetch RAW
-    // op-rows and collapse a tx's adjacent op-rows in Rust. Over-fetch (`limit*4`)
-    // absorbs the multi-op-per-tx fan-out; a capped under-delivery re-fetches ONCE
-    // at the hard bound `limit*128` (a Stellar tx has <=100 ops, so that always
-    // covers `limit` distinct txs). `keys` stays keyset-ordered and `limit`-bounded
-    // — the same page the old `LIMIT 1 BY … LIMIT` returned.
-    let mut overfetch = limit.saturating_mul(4);
-    let keys: Vec<(i64, i64)> = loop {
-        let driver_sql = format!(
-            "SELECT oa.ledger_sequence AS ledger_sequence, oa.transaction_id AS transaction_id \
-             FROM operations_appearances oa \
-             WHERE ({predicate}) AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-             ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
-             LIMIT {overfetch}"
-        );
-        let mut driver = client.query(&driver_sql);
-        if has_classic {
-            driver = driver.bind(asset_code.expect("guarded by has_classic"));
-        }
-        let raw = driver.fetch_all::<AssetTxKeyChRow>().await?;
-        let capped = raw.len() as i64 >= overfetch;
-
-        // A tx's op-rows are adjacent in read-in-order, so collapsing consecutive
-        // equal `(ledger, tx)` is exactly the `LIMIT 1 BY` we replaced.
-        let mut distinct: Vec<(i64, i64)> = Vec::with_capacity(raw.len());
-        for r in &raw {
-            let k = (r.ledger_sequence, r.transaction_id);
-            if distinct.last().is_none_or(|last| *last != k) {
-                distinct.push(k);
-            }
-        }
-
-        if (distinct.len() as i64) >= limit || !capped || overfetch >= limit.saturating_mul(128) {
-            distinct.truncate(limit.max(0) as usize);
-            break distinct;
-        }
-        overfetch = limit.saturating_mul(128);
-    };
+    // Step 1: leading-key seek over `operation_asset_appearances`. `asset_id` IS
+    // the leading sort key, so this is a bounded PK-prefix range read — not the
+    // old non-leading density-scan on `operations_appearances` that timed out
+    // (the perf fix for this endpoint IS the fan-out — asttxs convergence).
+    // `LIMIT 1 BY (ledger, tx)` collapses per-op fan-out to one row per tx on the
+    // asset-contiguous range (does NOT defeat read-in-order here). The
+    // `max(sequence)` fence keeps the seek behind the ledgers commit marker, so a
+    // head key whose tx header isn't written yet cannot truncate the page.
+    let driver_sql = format!(
+        "SELECT p.ledger_sequence AS ledger_sequence, p.transaction_id AS transaction_id \
+         FROM operation_asset_appearances p \
+         WHERE p.asset_id = {asset_id} \
+           AND p.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+         ORDER BY p.ledger_sequence {order}, p.transaction_id {order} \
+         LIMIT 1 BY p.ledger_sequence, p.transaction_id \
+         LIMIT {limit}"
+    );
+    let raw = client
+        .query(&driver_sql)
+        .fetch_all::<AssetTxKeyChRow>()
+        .await?;
+    let keys: Vec<(i64, i64)> = raw
+        .iter()
+        .map(|r| (r.ledger_sequence, r.transaction_id))
+        .collect();
 
     if keys.is_empty() {
         return Ok(Vec::new());

@@ -280,6 +280,14 @@ fn column_order_transaction_participants() {
 }
 
 #[test]
+fn column_order_operation_asset_appearances() {
+    assert_columns::<OperationAssetAppearanceRow>(
+        "operation_asset_appearances",
+        &["asset_id", "ledger_sequence", "transaction_id"],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",
@@ -612,6 +620,7 @@ fn prepare_folds_identical_operations() {
         operation_index: idx,
         op_type: OperationType::Payment,
         source_account: None,
+        asset_appearances: vec![],
         details: serde_json::json!({
             "destination": dest,
             "asset": "native",
@@ -646,6 +655,63 @@ fn prepare_folds_identical_operations() {
 }
 
 #[test]
+fn prepare_stages_operation_asset_appearances() {
+    use xdr_parser::asset_appearances::AssetRef;
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x35);
+    let issuer = "G".to_string() + &"I".repeat(55);
+    // A sell offer: ZERO assets in the legacy slot, two appearances here — native
+    // must key as the FIRST-CLASS surrogate, not an empty sentinel.
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::ManageSellOffer,
+        source_account: None,
+        asset_appearances: vec![
+            AssetRef::Native,
+            AssetRef::Credit {
+                code: "USDC".into(),
+                issuer: issuer.clone(),
+            },
+        ],
+        details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_asset_rows.len(), 2);
+    // Native = ids::asset_id(0,"",0,0) — the golden-pinned first-class key.
+    assert_eq!(staged.op_asset_rows[0].asset_id, ids::asset_id(0, "", 0, 0));
+    // Classic credit hashes code:issuer_surrogate (issuer StrKey hashed first).
+    assert_eq!(
+        staged.op_asset_rows[1].asset_id,
+        ids::asset_id(1, "USDC", ids::account_id(&issuer), 0)
+    );
+    // Same tx as the legacy fold row — join-back key intact.
+    assert_eq!(
+        staged.op_asset_rows[0].transaction_id,
+        staged.op_rows[0].transaction_id
+    );
+}
+
+#[test]
 fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x31);
@@ -657,6 +723,7 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
         operation_index: idx,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
+        asset_appearances: vec![],
         details: serde_json::json!({
             "destination": dest,
             "destAsset": "native",
@@ -719,6 +786,7 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
         operation_index: 1,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
+        asset_appearances: vec![],
         details: serde_json::json!({
             "poolIds": [traded],
             "claimedAtoms": [
@@ -789,6 +857,7 @@ fn prepare_lp_deposit_single_element_pool_ids() {
         operation_index: 1,
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
+        asset_appearances: vec![],
         details: serde_json::json!({ "liquidityPoolId": pool }),
     };
     let ops = vec![(tx.hash.clone(), vec![op])];
@@ -828,6 +897,7 @@ fn prepare_offer_op_pool_ids_from_details() {
         operation_index: 1,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
+        asset_appearances: vec![],
         details: serde_json::json!({
             "offerId": 0,
             "poolIds": [pool],

@@ -5,6 +5,7 @@
 //!
 //! This is the sole XDR parsing path (ADR-0004: Rust-only, ingestion-time).
 
+pub mod asset_appearances;
 pub mod classification;
 pub mod contract;
 pub mod error;
