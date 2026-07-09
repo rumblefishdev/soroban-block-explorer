@@ -238,10 +238,10 @@ mod tests {
         AccountId, AllowTrustOp, AlphaNum4, AssetCode, AssetCode4, ChangeTrustOp,
         ClaimClaimableBalanceOp, ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp,
         CreateAccountOp, CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt,
-        LedgerKeyTrustLine, LiquidityPoolConstantProductParameters, LiquidityPoolDepositOp,
-        LiquidityPoolEntry, LiquidityPoolEntryConstantProduct, ManageBuyOfferOp, ManageSellOfferOp,
-        MuxedAccount, PathPaymentStrictSendOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp,
-        Uint256, VecM,
+        LedgerKeyClaimableBalance, LedgerKeyTrustLine, LiquidityPoolConstantProductParameters,
+        LiquidityPoolDepositOp, LiquidityPoolEntry, LiquidityPoolEntryConstantProduct,
+        ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount, PathPaymentStrictSendOp, PoolId, Price,
+        PublicKey, SetTrustLineFlagsOp, Uint256, VecM,
     };
 
     fn acct(b: u8) -> AccountId {
@@ -437,6 +437,29 @@ mod tests {
         );
         // No meta → nothing (never guesses).
         assert!(emit(&body).is_empty());
+    }
+
+    #[test]
+    fn claim_cb_reads_asset_off_state_when_a_removed_entry_follows() {
+        // The REAL claim meta shape: the CB entry appears as `State` (pre-image,
+        // carries the asset) then `Removed` (key only, no data). `claimed_cb_asset`
+        // returns None for the Removed entry, so this pins that we still recover
+        // the asset off the preceding State — the unstated invariant the other
+        // tests (bare State) did not cover (devils-advocate concern 4).
+        let id = ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([0x33; 32]));
+        let body = OperationBody::ClaimClaimableBalance(ClaimClaimableBalanceOp {
+            balance_id: id.clone(),
+        });
+        let changes = vec![
+            cb_state_change(xdr_credit(b"AQUA", 0x07), 0x33),
+            LedgerEntryChange::Removed(LedgerKey::ClaimableBalance(LedgerKeyClaimableBalance {
+                balance_id: id,
+            })),
+        ];
+        assert_eq!(
+            emit_asset_appearances(&body, "", &changes),
+            vec![cr("AQUA", &issuer_str(0x07))]
+        );
     }
 
     #[test]
