@@ -197,10 +197,21 @@ fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
 
 /// The ledger changes of operation `op_idx` (0-based), index-aligned with the
 /// envelope's operations. Task 0359 uses these for the meta grain — the assets
-/// of ops that name a claimable balance / LP only by id. Empty for the pre-V3
-/// metas (no per-op changes there) and any out-of-range index.
+/// of ops that name a claimable balance / LP only by id. Empty for the out-of-
+/// range index.
+///
+/// The `TransactionMeta` match is EXHAUSTIVE (no `_`) on purpose: a future
+/// variant (e.g. a Protocol-24 `V5`) must break the build HERE, not silently
+/// yield zero meta changes and drop every claim-CB / LP asset on those ledgers
+/// (the meta grain is their ONLY source). The legacy pre-Soroban metas (V0–V2)
+/// map to `&[]` deliberately: they predate the CB/LP ops recovered here and the
+/// 0359 backfill window is the Soroban era (V3+), so their per-op changes are
+/// never consumed.
 fn op_meta_changes(tx_meta: Option<&TransactionMeta>, op_idx: usize) -> &[LedgerEntryChange] {
     match tx_meta {
+        None | Some(TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_)) => {
+            &[]
+        }
         Some(TransactionMeta::V3(v3)) => v3
             .operations
             .get(op_idx)
@@ -211,7 +222,6 @@ fn op_meta_changes(tx_meta: Option<&TransactionMeta>, op_idx: usize) -> &[Ledger
             .get(op_idx)
             .map(|m| m.changes.as_slice())
             .unwrap_or(&[]),
-        _ => &[],
     }
 }
 

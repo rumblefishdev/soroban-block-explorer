@@ -3,11 +3,14 @@
 //! The per-asset activity index is **pure presence**, modelled 1:1 on
 //! `transaction_participants` for accounts: one row per (asset, transaction),
 //! `asset_id`-leading so a per-asset page is a PK-prefix seek. This function
-//! turns one operation into every asset it touches from two grains so far:
+//! turns one operation into every asset it touches from two grains:
 //! **body** (asset fields on the op struct) and **meta** (assets the body
 //! references only by id — claimable balances, LP pools — recovered from the
-//! same-op ledger changes). The **result** grain (actual claim-atom crossings)
-//! follows in the next commit.
+//! same-op ledger changes). A **result** grain (claim-atom crossings) was tried
+//! and dropped: for a presence index it is redundant — every claim atom's assets
+//! are already declared in the op body (offers trade only their selling/buying
+//! pair; path-payments execute exactly their declared send → path[] → dest
+//! route), so it added only duplicate rows at unbounded write cost.
 //!
 //! ONE shared function on the shared parse path (live ingest and the archive
 //! backfill both run it). Duplicates MAY repeat; the RMT sort key collapses them
@@ -35,7 +38,7 @@ pub enum AssetRef {
 /// Emit every asset an operation touches from its body + the same-op ledger
 /// changes (meta). `op_source` is the resolved operation source StrKey (the
 /// `AllowTrust` issuer); `op_changes` carries the same-op ledger changes for the
-/// meta grain. The result grain follows in the next commit.
+/// meta grain (see the module docs for why there is no result grain).
 pub fn emit_asset_appearances(
     body: &OperationBody,
     op_source: &str,
