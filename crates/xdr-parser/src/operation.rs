@@ -9,7 +9,7 @@ use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedOperation;
 use domain::OperationType;
 use serde_json::{Value, json};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 /// Extract all operations from a transaction envelope, with optional return
 /// value from the transaction meta (for INVOKE_HOST_FUNCTION).

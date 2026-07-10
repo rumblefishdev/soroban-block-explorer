@@ -10,12 +10,11 @@ import {
   StatusChip,
   TableEmptyState,
   useCursorPagination,
-  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-import { useAssetTransactions } from '../../api/index.js';
+import { useAssetTransactions, usePagedRows } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
@@ -80,9 +79,8 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useAssetTransactions(assetId, cursor);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

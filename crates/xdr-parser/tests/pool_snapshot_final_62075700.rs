@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
+use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
 use xdr_parser::{
     decompress_zstd, dedup_final_pool_snapshots, deserialize_batch, extract_ledger_entry_changes,
     extract_liquidity_pools,

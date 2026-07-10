@@ -11,7 +11,7 @@ const assetsHookMock = vi.hoisted(() => ({
   useAssetsList: vi.fn(),
 }));
 
-vi.mock('../api/index.js', () => ({
+vi.mock('../api/hooks/useAssetsList.js', () => ({
   useAssetsList: assetsHookMock.useAssetsList,
 }));
 

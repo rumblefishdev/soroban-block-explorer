@@ -11,7 +11,7 @@ const hookMocks = vi.hoisted(() => ({
   useTransactionsList: vi.fn(),
 }));
 
-vi.mock('../api/index.js', () => ({
+vi.mock('../api/hooks/useTransactionsList.js', () => ({
   useTransactionsList: hookMocks.useTransactionsList,
 }));
 

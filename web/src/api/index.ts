@@ -8,10 +8,12 @@ export {
   listPolicy,
   detailPolicy,
   searchPolicy,
+  PAGE_SIZE,
 } from './polling.js';
 export {
   invalidateResource,
   matchResource,
   type Resource,
 } from './queryKeys.js';
+export { usePagedRows } from './usePagedRows.js';
 export * from './hooks/index.js';

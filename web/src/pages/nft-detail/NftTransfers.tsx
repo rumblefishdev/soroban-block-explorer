@@ -11,12 +11,11 @@ import {
   QueryErrorState,
   TableSectionHeader,
   useCursorPagination,
-  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-import { useNftTransfers } from '../../api/index.js';
+import { useNftTransfers, usePagedRows } from '../../api/index.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 import { NftEventBadge } from './NftEventBadge.js';
@@ -88,9 +87,8 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useNftTransfers(contractId, tokenId, cursor);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

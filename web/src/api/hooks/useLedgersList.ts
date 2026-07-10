@@ -1,7 +1,7 @@
 import { listLedgersOptions } from '@rumblefish/api-types';
 import { useQuery } from '@tanstack/react-query';
 
-import { listPolicy } from '../polling.js';
+import { listPolicy, PAGE_SIZE } from '../polling.js';
 
 type Order = 'asc' | 'desc';
 
@@ -17,11 +17,9 @@ export const useLedgersList = (
   cursor: string | null = null,
   order: Order = 'desc'
 ) => {
-  // Explicit page size — matches the 20/page used by every other list view
-  // (the other pages set it via `PAGE_SIZE`; ledgers has no filters object so
-  // it goes here). Without it the endpoint silently falls back to the backend
-  // default.
-  const query: Record<string, string | number> = { order, limit: 20 };
+  // Explicit page size — ledgers has no filters object so it goes here.
+  // Without it the endpoint silently falls back to the backend default.
+  const query: Record<string, string | number> = { order, limit: PAGE_SIZE };
   if (cursor) query.cursor = cursor;
   return useQuery({
     ...listLedgersOptions({

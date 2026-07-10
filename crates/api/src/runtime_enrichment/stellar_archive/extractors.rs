@@ -8,7 +8,7 @@
 //! Endpoints (wired in a follow-up task) call these after `StellarArchiveFetcher` hands
 //! back the `LedgerCloseMeta` from the public archive.
 
-use stellar_xdr::curr::{LedgerCloseMeta, TransactionEnvelope, TransactionMeta};
+use stellar_xdr::{LedgerCloseMeta, TransactionEnvelope, TransactionMeta};
 use tracing::instrument;
 
 use super::dto::{E3HeavyFields, E14HeavyEventFields, SignatureDto, XdrEventDto, XdrOperationDto};
@@ -219,7 +219,7 @@ pub fn collect_tx_metas(meta: &LedgerCloseMeta) -> Vec<&TransactionMeta> {
 }
 
 fn envelope_signatures(env: &TransactionEnvelope) -> Vec<SignatureDto> {
-    let sigs: &[stellar_xdr::curr::DecoratedSignature] = match env {
+    let sigs: &[stellar_xdr::DecoratedSignature] = match env {
         TransactionEnvelope::TxV0(v0) => &v0.signatures,
         TransactionEnvelope::Tx(v1) => &v1.signatures,
         TransactionEnvelope::TxFeeBump(fb) => &fb.signatures,

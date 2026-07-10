@@ -127,27 +127,47 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // Alarm 1: Galexie ingestion lag
-    // Fires when Ledger Processor has 0 invocations across an N-minute window.
-    // Window-based (not N consecutive 1-min periods) because the SQS-doorbell
-    // indexer runs one invocation up to ~9 min long with reserved concurrency
-    // = 1, so most 1-min buckets between two invocations legitimately report
-    // 0 invocations — a per-minute alarm flaps non-stop. Sum over a window
-    // long enough to span the worst-case invocation duration is steady-state
-    // ≥ 1, and only collapses to 0 if invocations truly stop.
+    // Fires when NO new ledger has landed in S3 for `galexieLagMinutes` — i.e.
+    // the S3 → SNS → SQS doorbell rate on the ingest queue dropped to 0.
+    //
+    // Why this signal (SQS NumberOfMessagesSent) and not Lambda Invocations:
+    // the indexer's reconcile drains a contiguous backlog for up to 9 min per
+    // invocation (RECONCILE_DEADLINE = 540 s), so invocation STARTS can be ~9
+    // min apart even when healthy (any catchup/backlog burst). An
+    // invocation-based window therefore can't drop below ~10 min without
+    // false-firing. The doorbell rate tracks Galexie's ACTUAL output — one S3
+    // object (→ one SNS→SQS message) per ledger close, ~every 5-6 s —
+    // regardless of how the indexer batches, so a 5-min window is both safe and
+    // fast: 5 min with zero new objects ≈ 50 missed writes = Galexie stopped.
+    // A deliberate indexer pause (concurrency 0) does NOT trip this — doorbells
+    // still land in the queue; that is the point of measuring the input, not
+    // the consumer (indexer health is covered by the alarms below).
+    //
+    // treatMissingData: BREACHING is REQUIRED, not cosmetic. SQS (like Lambda)
+    // publishes no datapoint when idle — a true stop makes the metric go
+    // ABSENT, not 0. Under NOT_BREACHING that absence reads as healthy and the
+    // alarm can NEVER fire on the one condition it exists to catch. That bit us
+    // 2026-07-08: Galexie stalled ~16 h on the pubnet proto-27 upgrade and the
+    // old NOT_BREACHING invocations alarm stayed green the whole time (see
+    // lore-0367). BREACHING makes "no data" = alarm. Do NOT revert.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(this, 'GalexieLagAlarm', {
         alarmName: `${config.envName}-galexie-ingestion-lag`,
         alarmDescription:
-          'Ledger Processor invocations dropped to 0 — Galexie may have stopped writing to S3.',
-        metric: processorFunction.metricInvocations({
+          'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window — Galexie may have stopped writing.',
+        // Queue name is deterministic (see ComputeStack ledger-ingest queue).
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/SQS',
+          metricName: 'NumberOfMessagesSent',
+          dimensionsMap: { QueueName: `${config.envName}-ledger-ingest` },
           period: cdk.Duration.minutes(config.galexieLagMinutes),
           statistic: cloudwatch.Stats.SUM,
         }),
         threshold: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
         evaluationPeriods: 1,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
       })
     );
 

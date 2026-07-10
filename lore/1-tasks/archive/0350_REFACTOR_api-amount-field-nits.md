@@ -2,7 +2,7 @@
 id: '0350'
 title: 'API contract nits: amount-field naming + fee decimals doc + LP share_percentage purity'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [api, api-types, clarity, priority-low, effort-small, optional]
@@ -18,14 +18,35 @@ history:
     status: active
     who: karolkow
     note: Promoted to active to begin work.
+  - date: 2026-07-07
+    status: active
+    who: karolkow
+    note: >
+      Appended Nit 4 (from the 0244 PG-removal session): OpChRow +
+      From<OpChRow> for OpRow in transactions/queries.rs is a redundant
+      CH-shaped decode seam, exercised only by one unit test — the live
+      operations path decodes OpRawRow → OpRow directly. NOT PG legacy;
+      parked here as the thematically-closest home for a small API
+      query-layer cleanup. Reopens the task (Nit 4 AC unchecked).
+  - date: 2026-07-07
+    status: completed
+    who: karolkow
+    note: >
+      Nit 4 done — deleted OpChRow struct + From<OpChRow> for OpRow impl +
+      its only consumer (op_row_uses_application_order_as_appearance_id test)
+      from transactions/queries.rs. Pure dead-seam removal; live OpRawRow→OpRow
+      read path untouched, no api-types/DTO impact. Nits 1–3 landed earlier in
+      PR #312 (merged 2026-07-06). All ACs closed; archiving.
 ---
 
 # API contract nits (optional — not bugs)
 
 ## Summary
 
-Three small API-contract clarity items. None affect correctness or scaling; all
-optional. Grouped so they can be picked up (or declined) together.
+Small API-contract clarity/cleanup items. None affect correctness or scaling; all
+optional. Grouped so they can be picked up (or declined) together. (Nits 1–3 from
+the amount-scaling review; Nit 4 a dead-decode-seam cleanup found in the 0244
+PG-removal sweep.)
 
 ## Nits
 
@@ -53,6 +74,16 @@ optional. Grouped so they can be picked up (or declined) together.
    Optional: move the ratio to the frontend (return `shares` + `total_shares`,
    let FE divide), or leave as-is and accept the ratio exception.
 
+4. **`OpChRow` + `From<OpChRow> for OpRow` — redundant CH decode seam.**
+   `crates/api/src/transactions/queries.rs:321` defines `OpChRow` with a
+   `From<OpChRow> for OpRow` conversion (`:334`), but the **live** operations
+   read path decodes `OpRawRow` (`:777`) → `OpRow` directly (`:898`). `OpChRow`
+   is exercised only by one unit test (`:1123`) — a dead test-only seam, both
+   structs CH-shaped (NOT PG legacy). **Fix:** delete `OpChRow`, its `From` impl,
+   and the OpChRow-only round-trip test. Trivial; live path never touches it, no
+   behavior change, no api-types impact (internal decode struct, not a DTO).
+   (Found during the 0244 PG-removal dead-code sweep, 2026-07-07.)
+
 ## Acceptance Criteria
 
 - [x] Nit 1 — `fee_charged` raw-stroops + 7-decimals contract documented on the field
@@ -69,6 +100,10 @@ optional. Grouped so they can be picked up (or declined) together.
 - [x] Nit 3 — **decision: keep `share_percentage` server-side.** It is a ratio
       (`shares * 100 / total_shares`), not amount-scaling, so it is an accepted server-side
       exception to the "FE derives" rule. Not worth the churn of returning raw shares + FE divide.
+- [x] Nit 4 — `OpChRow` + `From<OpChRow> for OpRow` + the OpChRow-only round-trip test
+      (`op_row_uses_application_order_as_appearance_id`) removed from `transactions/queries.rs`.
+      Live `OpRawRow` → `OpRow` path unaffected; `operation_type_label` / `millis_to_utc`
+      still used elsewhere in the file. No api-types change (internal decode struct, not a DTO).
 - [x] **Docs updated** — `docs/architecture/**/14_get_contracts_events.sql` DTO-field ref
       updated (`EventItem.amount` → `.fold_count`). Schema docs describe the DB _column_ `amount`
       (unchanged) — accurate as-is. No FE-data-contract doc surfaces these fields.

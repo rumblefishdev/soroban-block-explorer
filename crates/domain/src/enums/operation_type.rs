@@ -2,7 +2,7 @@
 //!
 //! Maps to `operations.type SMALLINT NOT NULL` with
 //! `CHECK (type BETWEEN 0 AND 127)`. Discriminants mirror
-//! `stellar_xdr::curr::OperationType` byte-for-byte so parser output can
+//! `stellar_xdr::OperationType` byte-for-byte so parser output can
 //! be cast with `as i16` — no lookup, no branch.
 
 use serde::{Deserialize, Serialize};

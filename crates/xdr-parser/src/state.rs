@@ -1557,7 +1557,7 @@ mod tests {
     #[test]
     fn extract_balance_real_mainnet_entry() {
         use base64::Engine;
-        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+        use stellar_xdr::{LedgerEntryData, Limits, ReadXdr};
 
         let entry_b64 = "AAAABgAAAAAAAAABpNLnsQaIecmK0DuR3iIEA4DUoHpK2z+hSQS0L4ntArUAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAAAAAAALOU/zUgs2L4DJx225wMqTkYuiH78AX+HaE65g2akcB4AAAABAAAACgAAAAAAAAAAAAAJGFDU+gA=";
         let bytes = base64::engine::general_purpose::STANDARD
@@ -1610,7 +1610,7 @@ mod tests {
     #[test]
     fn decode_sac_balance_value_real_mainnet() {
         use base64::Engine;
-        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+        use stellar_xdr::{LedgerEntryData, Limits, ReadXdr};
 
         for (entry_b64, expected_amount) in [
             (
@@ -1681,7 +1681,7 @@ mod tests {
     #[test]
     fn extract_sac_struct_balance_real_mainnet() {
         use base64::Engine;
-        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+        use stellar_xdr::{LedgerEntryData, Limits, ReadXdr};
 
         let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
         let bytes = base64::engine::general_purpose::STANDARD

@@ -1,9 +1,7 @@
 import { listPoolTransactionsOptions } from '@rumblefish/api-types';
 import { useQuery } from '@tanstack/react-query';
 
-import { listPolicy } from '../polling.js';
-
-const PAGE_SIZE = 20;
+import { listPolicy, PAGE_SIZE } from '../polling.js';
 
 /**
  * `GET /liquidity-pools/:id/transactions` — cursor-paginated transactions

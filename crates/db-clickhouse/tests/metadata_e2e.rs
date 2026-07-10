@@ -25,7 +25,7 @@ use db_clickhouse::persist::rows::SorobanContractMetadataRow;
 use db_clickhouse::persist::stage::build_metadata_rows;
 use db_clickhouse::{Config, apply_init_sql, client};
 use serde::Deserialize;
-use stellar_xdr::curr::{
+use stellar_xdr::{
     ContractExecutable, Hash, ScContractInstance, ScMap, ScMapEntry, ScString, ScSymbol, ScVal,
 };
 use xdr_parser::token_metadata::extract_token_metadata;

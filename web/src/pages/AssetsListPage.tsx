@@ -1,12 +1,9 @@
 import { Stack } from '@mui/material';
 import type { ListAssetsData } from '@rumblefish/api-types';
-import {
-  useCursorPagination,
-  usePageHandlers,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { useCursorPagination } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
-import { useAssetsList } from '../api/index.js';
+import { PAGE_SIZE, useAssetsList, usePagedRows } from '../api/index.js';
 
 import { AssetFilters } from './assets/AssetFilters.js';
 import { ASSET_COLUMN_COUNT, AssetsTable } from './assets/AssetsTable.js';
@@ -14,8 +11,6 @@ import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
 type Filters = NonNullable<ListAssetsData['query']>;
-
-const PAGE_SIZE = 20;
 
 export default function AssetsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, setFilters, clearFilters } =
@@ -43,9 +38,8 @@ export default function AssetsListPage() {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useAssetsList(cursor, queryFilters);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

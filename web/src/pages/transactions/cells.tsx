@@ -1,5 +1,12 @@
 import { Box, Typography } from '@mui/material';
-import { Chip, Dash } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  Chip,
+  Dash,
+  IdentifierDisplay,
+  IdentifierWithCopy,
+  StatusChip,
+  type ExplorerTableColumn,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { formatOperationType } from './operationTypes.js';
 
@@ -23,4 +30,45 @@ export function OperationCell({ types }: { types: readonly string[] }) {
       )}
     </Box>
   );
+}
+
+/**
+ * Ledger-sequence column, identical across the transaction/event/invocation
+ * tables. Generic over the row type — any row exposing `ledger_sequence`.
+ */
+export function ledgerColumn<
+  T extends { ledger_sequence: number }
+>(): ExplorerTableColumn<T> {
+  return {
+    id: 'ledger',
+    header: 'Ledger',
+    width: 120,
+    cell: (row) => (
+      <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
+    ),
+  };
+}
+
+/** Transaction-hash column with copy affordance, shared by the tx tables. */
+export function hashColumn<
+  T extends { hash: string }
+>(): ExplorerTableColumn<T> {
+  return {
+    id: 'hash',
+    header: 'Hash',
+    width: 160,
+    cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
+  };
+}
+
+/** Success/fail status chip column, shared by the tx tables. */
+export function statusColumn<
+  T extends { successful: boolean }
+>(): ExplorerTableColumn<T> {
+  return {
+    id: 'status',
+    header: 'Status',
+    width: 120,
+    cell: (row) => <StatusChip successful={row.successful} />,
+  };
 }
