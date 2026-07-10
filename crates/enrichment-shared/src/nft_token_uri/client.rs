@@ -15,7 +15,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use moka::future::Cache as FutureCache;
 use reqwest::redirect::Policy;
 use serde_json::{Value, json};
-use stellar_xdr::curr::{
+use stellar_xdr::{
     ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Limits, Memo,
     MuxedAccount, Operation, OperationBody, Preconditions, ReadXdr, ScAddress, ScString, ScSymbol,
     ScVal, SequenceNumber, StringM, Transaction, TransactionEnvelope, TransactionExt,

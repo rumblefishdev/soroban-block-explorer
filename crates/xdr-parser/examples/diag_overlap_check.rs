@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use stellar_xdr::curr::{
+use stellar_xdr::{
     ContractEventBody, ContractEventType, LedgerCloseMeta, Limits, TransactionMeta,
     TransactionMetaV4, TransactionResult, TransactionResultResult, WriteXdr,
 };
@@ -332,8 +332,7 @@ fn analyze_v4(
         let mut tx_level_contracts: Vec<String> = Vec::new();
         for tev in v4.events.iter() {
             if let Some(cid) = tev.event.contract_id.as_ref() {
-                tx_level_contracts
-                    .push(stellar_xdr::curr::ScAddress::Contract(cid.clone()).to_string());
+                tx_level_contracts.push(stellar_xdr::ScAddress::Contract(cid.clone()).to_string());
             } else {
                 tx_level_contracts.push("<no-contract>".into());
             }
@@ -343,7 +342,7 @@ fn analyze_v4(
             for ev in op.events.iter() {
                 if let Some(cid) = ev.contract_id.as_ref() {
                     per_op_contracts
-                        .push(stellar_xdr::curr::ScAddress::Contract(cid.clone()).to_string());
+                        .push(stellar_xdr::ScAddress::Contract(cid.clone()).to_string());
                 } else {
                     per_op_contracts.push("<no-contract>".into());
                 }

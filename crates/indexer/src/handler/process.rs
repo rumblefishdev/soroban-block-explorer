@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
+use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
 use tracing::{info, warn};
 use xdr_parser::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,

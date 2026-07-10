@@ -1,6 +1,6 @@
 //! XDR deserialization/serialization limits configuration.
 
-use stellar_xdr::curr::Limits;
+use stellar_xdr::Limits;
 
 /// Default XDR deserialization limits, sized to the input payload.
 ///
