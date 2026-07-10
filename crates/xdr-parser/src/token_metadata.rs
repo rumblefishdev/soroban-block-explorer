@@ -17,7 +17,7 @@
 //! `ScVal::ContractInstance`) in `ledger_entry_changes.rs`; `scval_to_typed_json`
 //! drops `inst.storage`, so the struct must be pulled from the raw `ScVal`.
 
-use stellar_xdr::curr::{ContractExecutable, ScMapEntry, ScVal};
+use stellar_xdr::{ContractExecutable, ScMapEntry, ScVal};
 
 /// Typed token metadata recovered from the instance-storage `METADATA` struct.
 ///
@@ -130,7 +130,7 @@ fn scval_u32(v: &ScVal) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ContractExecutable, Hash, ScBytes, ScContractInstance, ScMap, ScMapEntry, ScString,
         ScSymbol, ScVal,
     };

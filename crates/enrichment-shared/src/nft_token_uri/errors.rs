@@ -97,7 +97,7 @@ pub enum NftTokenUriError {
     /// XDR encode/decode failure (envelope serialisation or ScVal
     /// deserialisation).
     #[error("XDR codec: {0}")]
-    Xdr(#[from] stellar_xdr::curr::Error),
+    Xdr(#[from] stellar_xdr::Error),
 }
 
 /// Classifier for the worker's `EnrichError` mapping. Transient

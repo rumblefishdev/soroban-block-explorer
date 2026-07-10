@@ -867,7 +867,7 @@ mod tests {
         // the same `scval_to_typed_json` the production pipeline uses and proves
         // `detect_nft_events` now surfaces it.
         use crate::scval::scval_to_typed_json;
-        use stellar_xdr::curr::{Limits, ReadXdr, ScVal};
+        use stellar_xdr::{Limits, ReadXdr, ScVal};
 
         // Raw on-chain XDR as hex (padding-free). topic = Symbol("Mint");
         // data = Vec[Address(GB2QDU…), I128(1)].
@@ -1127,7 +1127,7 @@ mod tests {
         // false). Decodes the real XDR through the production `scval_to_typed_json`
         // and proves Shape C now surfaces it.
         use crate::scval::scval_to_typed_json;
-        use stellar_xdr::curr::{Limits, ReadXdr, ScVal};
+        use stellar_xdr::{Limits, ReadXdr, ScVal};
         let dec = |h: &str| ScVal::from_xdr(hex::decode(h).unwrap(), Limits::none()).unwrap();
         let topic0 = dec("0000000f000000046d696e74");
         let topic1 = dec(

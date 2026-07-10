@@ -34,7 +34,7 @@ use clickhouse::Row;
 use db_clickhouse::persist::rows::WasmInterfaceMetadataRow;
 use serde::Deserialize;
 use serde_json::Value;
-use stellar_xdr::curr::LedgerEntryData;
+use stellar_xdr::LedgerEntryData;
 use tracing::{info, warn};
 
 use crate::error::BackfillError;

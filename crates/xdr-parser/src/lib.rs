@@ -61,7 +61,7 @@ pub use types::{
     SacAssetIdentity,
 };
 
-use stellar_xdr::curr::{LedgerCloseMetaBatch, ReadXdr};
+use stellar_xdr::{LedgerCloseMetaBatch, ReadXdr};
 
 /// Maximum decompressed size (64 MiB). Galexie batches are typically 2-5 MiB.
 const MAX_DECOMPRESSED_SIZE: usize = 64 * 1024 * 1024;

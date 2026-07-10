@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use clickhouse::Client as ClickhouseClient;
 use serde::Deserialize;
-use stellar_xdr::curr::LedgerCloseMeta;
+use stellar_xdr::LedgerCloseMeta;
 use tracing::{info, warn};
 
 use crate::error::BackfillError;
