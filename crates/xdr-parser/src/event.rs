@@ -5,7 +5,7 @@
 
 use base64::Engine;
 use serde_json::{Value, json};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 use crate::scval::scval_to_typed_json;
 use crate::types::{EventSource, ExtractedEvent};

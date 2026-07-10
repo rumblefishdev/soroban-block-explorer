@@ -5,7 +5,7 @@
 //! `parse_error = true` — they are never dropped.
 
 use base64::Engine;
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 use tracing::warn;
 
 use crate::envelope::{self, extract_envelopes, inner_transaction, inner_tx_hash};
@@ -241,7 +241,7 @@ mod parse_error_tests {
     use crate::envelope::tx_envelope_hash;
     use crate::{MAINNET_PASSPHRASE, network_id};
     use sha2::{Digest, Sha256};
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ExtensionPoint, Hash, LedgerCloseMetaV0, LedgerEntryChanges, LedgerHeader, LedgerHeaderExt,
         LedgerHeaderHistoryEntry, LedgerHeaderHistoryEntryExt, Memo, MuxedAccount, OperationResult,
         Preconditions, SequenceNumber, StellarValue, StellarValueExt, TimePoint, Transaction,

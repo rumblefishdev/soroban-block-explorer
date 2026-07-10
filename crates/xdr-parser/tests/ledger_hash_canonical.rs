@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use stellar_xdr::curr::{LedgerCloseMeta, LedgerHeaderHistoryEntry};
+use stellar_xdr::{LedgerCloseMeta, LedgerHeaderHistoryEntry};
 
 #[test]
 fn extract_ledger_returns_canonical_entry_hash_for_every_ledger_in_batch() {

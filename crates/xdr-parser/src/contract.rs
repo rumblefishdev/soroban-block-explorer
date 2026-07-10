@@ -5,7 +5,7 @@
 //! `ScSpecEntry` values, and produces `ExtractedContractInterface` with function
 //! signatures for storage in `soroban_contracts.metadata`.
 
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 use crate::types::{ContractFunction, ExtractedContractInterface, FunctionParam};
 

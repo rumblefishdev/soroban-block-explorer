@@ -40,7 +40,7 @@ use clap::{Parser, ValueEnum};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
-use stellar_xdr::curr::{
+use stellar_xdr::{
     AccountId, AlphaNum4, AlphaNum12, Asset, AssetCode4, AssetCode12, LedgerCloseMeta,
     LedgerCloseMetaBatch, Limits, LiquidityPoolConstantProductParameters, LiquidityPoolParameters,
     PublicKey, ReadXdr, Uint256, WriteXdr,

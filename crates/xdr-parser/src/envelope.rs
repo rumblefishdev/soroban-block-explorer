@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 use tracing::warn;
 
 /// Canonicalize a `MuxedAccount` to the underlying ed25519 G-strkey (56 chars).

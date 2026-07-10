@@ -1,6 +1,6 @@
 //! Memo extraction from transaction envelopes.
 
-use stellar_xdr::curr::Memo;
+use stellar_xdr::Memo;
 
 /// Extract memo type and value from a Stellar Memo.
 ///
@@ -26,7 +26,7 @@ mod tests {
 
     #[test]
     fn memo_text_valid_utf8() {
-        let text = stellar_xdr::curr::StringM::try_from("hello".as_bytes().to_vec()).unwrap();
+        let text = stellar_xdr::StringM::try_from("hello".as_bytes().to_vec()).unwrap();
         let (t, v) = extract_memo(&Memo::Text(text));
         assert_eq!(t.unwrap(), "text");
         assert_eq!(v.unwrap(), "hello");
@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn memo_text_invalid_utf8() {
-        let invalid = stellar_xdr::curr::StringM::try_from(vec![0xFF, 0xFE]).unwrap();
+        let invalid = stellar_xdr::StringM::try_from(vec![0xFF, 0xFE]).unwrap();
         let (t, v) = extract_memo(&Memo::Text(invalid));
         assert_eq!(t.unwrap(), "text");
         assert_eq!(v.unwrap(), "<invalid-utf8>");
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn memo_hash() {
         let hash = [0xab; 32];
-        let (t, v) = extract_memo(&Memo::Hash(stellar_xdr::curr::Hash(hash)));
+        let (t, v) = extract_memo(&Memo::Hash(stellar_xdr::Hash(hash)));
         assert_eq!(t.unwrap(), "hash");
         assert_eq!(v.unwrap(), "ab".repeat(32));
     }
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn memo_return() {
         let hash = [0xcd; 32];
-        let (t, v) = extract_memo(&Memo::Return(stellar_xdr::curr::Hash(hash)));
+        let (t, v) = extract_memo(&Memo::Return(stellar_xdr::Hash(hash)));
         assert_eq!(t.unwrap(), "return");
         assert_eq!(v.unwrap(), "cd".repeat(32));
     }

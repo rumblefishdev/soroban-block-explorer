@@ -18,7 +18,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use stellar_xdr::curr::LedgerCloseMeta;
+use stellar_xdr::LedgerCloseMeta;
 use xdr_parser::{decompress_zstd, deserialize_batch, extract_ledger_entry_changes};
 
 struct Args {
@@ -87,7 +87,7 @@ fn ledger_metas(meta: &LedgerCloseMeta) -> Vec<(u32, Vec<TxView>)> {
 
 struct TxView {
     hash: String,
-    meta: stellar_xdr::curr::TransactionMeta,
+    meta: stellar_xdr::TransactionMeta,
 }
 
 fn main() {

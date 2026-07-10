@@ -44,7 +44,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
-use stellar_xdr::curr::{LedgerCloseMeta, LedgerCloseMetaBatch, Limits, ReadXdr, TransactionMeta};
+use stellar_xdr::{LedgerCloseMeta, LedgerCloseMetaBatch, Limits, ReadXdr, TransactionMeta};
 use tokio::sync::{Mutex, OnceCell, Semaphore};
 use xdr_parser::ExtractedOperation;
 

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use stellar_xdr::curr::LedgerCloseMeta;
+use stellar_xdr::LedgerCloseMeta;
 
 #[test]
 fn extract_envelopes_aligns_with_tx_processing() {
@@ -98,7 +98,7 @@ fn locate_fixture() -> Option<PathBuf> {
 /// `envelope.rs` cover the algorithm without a fixture.
 #[test]
 fn inner_tx_hash_matches_stellar_core_for_every_fee_bump_in_audit_ledger() {
-    use stellar_xdr::curr::TransactionResultResult;
+    use stellar_xdr::TransactionResultResult;
     use xdr_parser::envelope::{inner_tx_hash, tx_envelope_hash};
 
     let Some(path) = locate_fixture() else {
@@ -156,7 +156,7 @@ fn inner_tx_hash_matches_stellar_core_for_every_fee_bump_in_audit_ledger() {
     eprintln!("inner_tx_hash verified against stellar-core meta for {fee_bumps_checked} fee-bumps");
 }
 
-fn tx_processing_results(meta: &LedgerCloseMeta) -> Vec<&stellar_xdr::curr::TransactionResult> {
+fn tx_processing_results(meta: &LedgerCloseMeta) -> Vec<&stellar_xdr::TransactionResult> {
     match meta {
         LedgerCloseMeta::V0(v) => v.tx_processing.iter().map(|p| &p.result.result).collect(),
         LedgerCloseMeta::V1(v) => v.tx_processing.iter().map(|p| &p.result.result).collect(),
