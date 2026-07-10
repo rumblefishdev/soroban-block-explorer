@@ -2,7 +2,7 @@
 id: '0370'
 title: 'FEATURE: asset-list search matches display name/symbol, not just asset_code (find Soroban type-3 tokens)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0371']
 tags: ['backend', 'api', 'search', 'assets', 'effort-small']
@@ -17,6 +17,10 @@ history:
       unsearchable in the Asset List view — filter[code] matches only the
       (empty) asset_code. Broaden the list search to the already-joined display
       name/symbol.
+  - date: 2026-07-10
+    status: active
+    who: stkrolikiewicz
+    note: 'Promoted to active; starting implementation.'
 ---
 
 # FEATURE: asset-list search by name/symbol
