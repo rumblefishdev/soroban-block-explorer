@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use stellar_xdr::curr::{
+use stellar_xdr::{
     ContractEventBody, ContractEventType, ContractId, Hash, LedgerCloseMeta, ScAddress, ScVal,
     TransactionMeta,
 };

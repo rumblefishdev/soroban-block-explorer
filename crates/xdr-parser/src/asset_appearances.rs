@@ -19,7 +19,7 @@
 //! are decided, never silently dropped.
 
 use crate::asset_code::{asset_code_bytes, asset_code_str};
-use stellar_xdr::curr::{
+use stellar_xdr::{
     Asset, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData, LedgerKey,
     LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, RevokeSponsorshipOp,
     TrustLineAsset,
@@ -234,7 +234,7 @@ fn lp_pool_assets(changes: &[LedgerEntryChange]) -> Option<(AssetRef, AssetRef)>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         AccountId, AllowTrustOp, AlphaNum4, AssetCode, AssetCode4, ChangeTrustOp,
         ClaimClaimableBalanceOp, ClaimableBalanceEntry, ClaimableBalanceEntryExt, ClawbackOp,
         CreateAccountOp, CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt,
@@ -400,8 +400,8 @@ mod tests {
 
     #[test]
     fn non_asset_ops_emit_nothing() {
-        let bump = OperationBody::BumpSequence(stellar_xdr::curr::BumpSequenceOp {
-            bump_to: stellar_xdr::curr::SequenceNumber(42),
+        let bump = OperationBody::BumpSequence(stellar_xdr::BumpSequenceOp {
+            bump_to: stellar_xdr::SequenceNumber(42),
         });
         assert!(emit(&bump).is_empty());
     }

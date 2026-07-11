@@ -16,7 +16,7 @@
 //! byte-identical to the old strict path, so no surrogate-id churn; only malformed
 //! codes re-key.
 
-use stellar_xdr::curr::AssetCode;
+use stellar_xdr::AssetCode;
 
 /// Normalize raw asset-code bytes to the canonical string used everywhere an
 /// `asset_id` surrogate (or a user-facing asset code) is derived.

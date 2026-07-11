@@ -8,7 +8,7 @@
 //! liquidity_pool, contract_data, contract_code, config_setting, ttl.
 
 use serde_json::{Value, json};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 use crate::scval::scval_to_typed_json;
 use crate::token_metadata::{

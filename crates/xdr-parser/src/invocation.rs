@@ -26,7 +26,7 @@
 //! public archive; the appearance index is goal-of-coverage only.
 
 use serde_json::{Value, json};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 use crate::envelope::{InnerTxRef, muxed_to_g_strkey};
 use crate::scval::scval_to_typed_json;
@@ -1096,7 +1096,7 @@ mod tests {
     fn per_op_muxed_source_collapses_to_underlying_g_strkey() {
         let payload = [0x77; 32];
         let mux_id = 0x0123_4567_89AB_CDEFu64;
-        let muxed_source = MuxedAccount::MuxedEd25519(stellar_xdr::curr::MuxedAccountMed25519 {
+        let muxed_source = MuxedAccount::MuxedEd25519(stellar_xdr::MuxedAccountMed25519 {
             id: mux_id,
             ed25519: Uint256(payload),
         });
@@ -1516,7 +1516,7 @@ mod tests {
     fn diag_root_caller_honours_per_op_source_and_canonicalises_muxed() {
         let payload = [0x77; 32];
         let mux_id = 0x0123_4567_89AB_CDEFu64;
-        let muxed_source = MuxedAccount::MuxedEd25519(stellar_xdr::curr::MuxedAccountMed25519 {
+        let muxed_source = MuxedAccount::MuxedEd25519(stellar_xdr::MuxedAccountMed25519 {
             id: mux_id,
             ed25519: Uint256(payload),
         });

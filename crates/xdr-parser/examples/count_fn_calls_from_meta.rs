@@ -16,7 +16,7 @@ use base64::Engine;
 use std::collections::BTreeMap;
 use std::io::Read;
 
-use stellar_xdr::curr::{
+use stellar_xdr::{
     ContractEventBody, ContractEventType, ContractId, Hash, Limits, ReadXdr, ScAddress, ScVal,
     TransactionMeta,
 };

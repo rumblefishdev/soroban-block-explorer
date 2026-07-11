@@ -20,7 +20,7 @@
 use core::str::FromStr;
 
 use sha2::{Digest, Sha256};
-use stellar_xdr::curr::{
+use stellar_xdr::{
     AccountId, AlphaNum4, AlphaNum12, Asset, AssetCode4, AssetCode12, ContractId,
     ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Hash, HashIdPreimage,
     HashIdPreimageContractId, HostFunction, Limits, OperationBody, ScAddress,
@@ -394,7 +394,7 @@ mod tests {
 
     // -- Factory SAC: CreateContractHostFn carried inside auth entries --
 
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ContractExecutable, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount,
         Operation, Preconditions, ScSymbol, SequenceNumber, SorobanAuthorizationEntry,
         SorobanCredentials, Transaction, TransactionExt, Uint256, VecM,

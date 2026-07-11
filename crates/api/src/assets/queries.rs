@@ -382,15 +382,12 @@ async fn finish_detail(
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
 
-/// **Read-cost caveat:** the keyset/`ORDER BY` is the identity 4-tuple — which
-/// IS the `assets` primary key — so the page is a PK-prefix walk, cheap. The
-/// `FINAL` + lookup joins widen it; needs an operator smoke before the prod
-/// flag flip, same as the other CH lists.
-pub async fn fetch_list(
-    client: &clickhouse::Client,
-    params: &ResolvedListParams,
-    direction: Direction,
-) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
+/// Build the list `SELECT … WHERE … ORDER BY … LIMIT ?` for [`fetch_list`].
+/// Pure (no client) so the predicate shape + placeholder count stay
+/// unit-testable. The `?` placeholders it emits MUST be bound by the caller in
+/// this exact order: `code_clause` (0 or **3** — asset_code, m.name, m.symbol),
+/// then `cursor_clause` (0 or 4), then the trailing `LIMIT ?` (1).
+fn build_list_sql(params: &ResolvedListParams, direction: Direction) -> String {
     let (op, order) = keyset_sql_desc(direction);
 
     let type_clause = params
@@ -406,8 +403,22 @@ pub async fn fetch_list(
     } else {
         ""
     };
+    // Match the caller's needle against the short `asset_code` AND the on-chain
+    // name/symbol from the joined `soroban_contract_metadata` (`m`). Soroban-
+    // native (type-3) assets carry an empty `asset_code` — their identity is the
+    // on-chain name/symbol — so a code-only match leaves them unsearchable in
+    // the list (task 0370). `m.name`/`m.symbol` are populated only for
+    // contract-backed (type-3) rows, so this stays scoped to the tokens that
+    // need it. We deliberately do NOT match `asset_enrichment.name` (`ae`): it
+    // holds classic (type-1) SEP-1 names, and substring-matching ~360k of them
+    // adds noise (e.g. "Opulent Insolvent" matching "solv") for no gain here —
+    // classic assets are already findable by their non-empty `asset_code`.
+    // `coalesce(_, '')` stops a readonly LEFT-JOIN miss (join_use_nulls = 0 → '')
+    // from turning the predicate NULL and dropping the row.
     let code_clause = if params.asset_code.is_some() {
-        " AND positionCaseInsensitive(a.asset_code, ?) > 0"
+        " AND (positionCaseInsensitive(a.asset_code, ?) > 0 \
+           OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
+           OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)"
     } else {
         ""
     };
@@ -417,17 +428,30 @@ pub async fn fetch_list(
         String::new()
     };
 
-    let sql = format!(
+    format!(
         "{ASSET_LIST_CH_SELECT} \
          WHERE 1{type_clause}{sac_clause}{code_clause}{cursor_clause} \
          ORDER BY a.asset_type {order}, a.asset_code {order}, \
                   a.issuer_id {order}, a.contract_id {order} \
          LIMIT ?"
-    );
+    )
+}
+
+/// **Read-cost caveat:** the keyset/`ORDER BY` is the identity 4-tuple — which
+/// IS the `assets` primary key — so the page is a PK-prefix walk, cheap. The
+/// `FINAL` + lookup joins widen it; needs an operator smoke before the prod
+/// flag flip, same as the other CH lists.
+pub async fn fetch_list(
+    client: &clickhouse::Client,
+    params: &ResolvedListParams,
+    direction: Direction,
+) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
+    let sql = build_list_sql(params, direction);
 
     let mut query = client.query(&sql);
     if let Some(code) = &params.asset_code {
-        query = query.bind(code);
+        // Three placeholders in `code_clause`: asset_code, m.name, m.symbol.
+        query = query.bind(code).bind(code).bind(code);
     }
     if let Some(c) = &params.cursor {
         query = query
@@ -752,5 +776,44 @@ mod tests {
         assert_eq!(asset_type_name(2), None);
         assert_eq!(asset_type_name(3).as_deref(), Some("soroban"));
         assert_eq!(asset_type_name(99), None);
+    }
+
+    #[test]
+    fn list_sql_searches_name_and_symbol_when_code_present() {
+        // task 0370: type-3 (Soroban-native) assets have an empty `asset_code`;
+        // their name/symbol live in the joined contract metadata, so the list
+        // search must match those columns too or they are unfindable by name.
+        let params = ResolvedListParams {
+            limit: 10,
+            cursor: None,
+            asset_type: None,
+            asset_code: Some("solv".to_string()),
+            sac_only: false,
+        };
+        let sql = build_list_sql(&params, Direction::Next);
+        assert!(sql.contains("positionCaseInsensitive(a.asset_code"));
+        assert!(sql.contains("coalesce(m.name, '')"));
+        assert!(sql.contains("coalesce(m.symbol, '')"));
+        // Classic enrichment names (ae.name) are intentionally NOT matched —
+        // substring-matching them adds noise ("Opulent Insolvent" ~ "solv").
+        assert!(!sql.contains("coalesce(ae.name, '')"));
+        // 3 needle placeholders (code + m.name + m.symbol) + trailing LIMIT ?.
+        // MUST equal the 3×`.bind(code)` + 1×`.bind(limit)` in `fetch_list`.
+        assert_eq!(sql.matches('?').count(), 4);
+    }
+
+    #[test]
+    fn list_sql_has_no_search_predicate_without_a_term() {
+        let params = ResolvedListParams {
+            limit: 10,
+            cursor: None,
+            asset_type: None,
+            asset_code: None,
+            sac_only: false,
+        };
+        let sql = build_list_sql(&params, Direction::Next);
+        assert!(!sql.contains("positionCaseInsensitive"));
+        // Only the trailing `LIMIT ?` remains.
+        assert_eq!(sql.matches('?').count(), 1);
     }
 }

@@ -9,7 +9,7 @@
 
 use base64::Engine;
 use serde_json::{Value, json};
-use stellar_xdr::curr::ScVal;
+use stellar_xdr::ScVal;
 
 /// Decode an `ScVal` into a tagged JSON value: `{ "type": "...", "value": ... }`.
 pub fn scval_to_typed_json(v: &ScVal) -> Value {
@@ -74,10 +74,10 @@ pub fn scval_to_typed_json(v: &ScVal) -> Value {
         ScVal::Address(a) => ("address", json!(a.to_string())),
         ScVal::ContractInstance(inst) => {
             let executable = match &inst.executable {
-                stellar_xdr::curr::ContractExecutable::Wasm(hash) => {
+                stellar_xdr::ContractExecutable::Wasm(hash) => {
                     json!({ "type": "wasm", "hash": hex::encode(hash.0) })
                 }
-                stellar_xdr::curr::ContractExecutable::StellarAsset => {
+                stellar_xdr::ContractExecutable::StellarAsset => {
                     json!({ "type": "stellar_asset" })
                 }
             };
@@ -92,7 +92,7 @@ pub fn scval_to_typed_json(v: &ScVal) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::*;
+    use stellar_xdr::*;
 
     #[test]
     fn bool_value() {
