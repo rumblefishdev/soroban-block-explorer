@@ -944,7 +944,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 let tx_id = tx_id_by_hash[tx_hash];
                 for asset in &op.asset_appearances {
                     let asset_id = match asset {
-                        AssetRef::Native => ids::asset_id(0, "", 0, 0),
+                        AssetRef::Native => ids::NATIVE_ASSET_ID,
                         AssetRef::Credit { code, issuer } => {
                             ids::asset_id(1, code, ids::account_id(issuer), 0)
                         }
@@ -1508,7 +1508,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             let balance_str = b.get("balance").and_then(Value::as_str).unwrap_or("0");
             let amount = decimal7_string_to_i128(balance_str)?;
             let asset_id = if asset_type == AssetType::Native {
-                ids::asset_id(0, "", 0, 0)
+                ids::NATIVE_ASSET_ID
             } else {
                 let code = b.get("asset_code").and_then(Value::as_str).unwrap_or("");
                 let issuer = b.get("issuer").and_then(Value::as_str).unwrap_or("");
