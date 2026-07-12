@@ -51,8 +51,8 @@ history:
 - [ ] #1 type-3 `/assets/{C}/transactions` empty — 🧊 separate ADR (🔀 = F-F)
 - [x] #7 ADR 0032 `docs/architecture/**` updated (schema-overview §4.5.1 + shape list/tree + rewrote 10_get_assets_transactions.sql)
 - [ ] #8 `LIMIT 1 BY` read-in-order — **BLOCKED**: fan-out table not on prod yet (verified 0 rows in system.tables). Analytically fine (`asset_id =` makes `(ledger, tx)` the residual PK order → read-in-order holds; `LIMIT 1 BY` collapses adjacents without a re-sort). Run `EXPLAIN indexes=1` / `read_rows` on a hot asset **after** the CREATE TABLE + backfill.
-- [ ] #10 dup: `AssetRef ≈ SacAssetIdentity`, `asset_ref ≈ sac::asset_to_identity` (L1; 4th code-copy already removed by C3) — **stale-doc part DONE** (operation.rs + queries.rs comments fixed)
-- [ ] cleanup: or-pattern arms (L1) + micro-perf `const NATIVE_ASSET_ID`/`SmallVec` (L1) — **stale docs DONE**
+- [ ] #10 dup: `asset_ref ≈ sac::asset_to_identity` + `AssetRef ≈ SacAssetIdentity` — **DEFERRED to L2** (not L1): `SacAssetIdentity` = 33 refs / 8 files (write-path SAC→assets + pub API + indexer), and same-shape ≠ same-concept (false-DRY risk). 4th code-copy already removed by C3.
+- [x] cleanup: or-pattern arms (offers 3→1, claim-CB 2→1, LP 2→1), `present_entry` helper (dedup change→entry), `const NATIVE_ASSET_ID`, stale docs — all DONE. `SmallVec` left (perf, not reduction).
 
 ## 4. Core findings (F-A..F-F)
 
