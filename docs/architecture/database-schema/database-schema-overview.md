@@ -109,6 +109,10 @@ Backbone timeline:
   mixed transaction inspection (partitioned; per-op detail recovered from XDR on
   demand per task 0163)
 - `transaction_participants` — derived participant links for account-history reads (partitioned)
+- `operation_asset_appearances` — per-(asset, transaction) presence index powering
+  `/assets/:id/transactions` (task 0359; the asset-dimension twin of
+  `transaction_participants`, keyed asset-first; native XLM is a first-class
+  surrogate, not absence)
 
 Soroban activity model (per ADRs 0033/0034 these are pure appearance indexes — parsed
 contract-event and invocation-tree payloads are fetched at read time from the public
@@ -150,6 +154,7 @@ ledgers
   └─ transactions (partitioned)
        ├─ operations_appearances (partitioned)
        ├─ transaction_participants (partitioned)
+       ├─ operation_asset_appearances (partitioned)
        ├─ soroban_events_appearances (partitioned)
        └─ soroban_invocations_appearances (partitioned)
 
@@ -449,6 +454,43 @@ Design notes:
   cascade driven by the composite FK back to `transactions`
 - `account_id` is the surrogate BIGINT FK per
   [ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md)
+
+### 4.5.1 Operation Asset Appearances (task 0359)
+
+ClickHouse-only (like the `balances` family; see `clickhouse-pilot.md`). The
+**asset-dimension twin of `transaction_participants`** — a per-(asset, transaction)
+presence index so a per-asset activity page is a PK-prefix seek.
+
+```sql
+CREATE TABLE operation_asset_appearances (
+    asset_id        Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
+    ledger_sequence Int64,
+    transaction_id  Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (asset_id, ledger_sequence, transaction_id);
+```
+
+Purpose / design notes:
+
+- Fixes the single-asset-slot loss on `operations_appearances`: offers stored ZERO
+  assets, path payments kept only `destAsset`, and native XLM was an empty-string
+  sentinel. Here **every asset an op touches** is one row, keyed **asset-first** so
+  `/assets/:id/transactions` is a bounded seek (not a non-leading density-scan).
+- **Pure presence** — no `role` / `application_order` / `amount` / `pool_id`.
+  Duplicate (asset, tx) rows within a tx are deduped at write (per-tx set) and
+  collapse in the RMT; the read also applies `LIMIT 1 BY (ledger, tx)`.
+- **Native XLM is first-class**: `ids::asset_id(0,'',0,0)` (a stable non-zero
+  surrogate), never absence — so native has a real per-asset page.
+- Populated by the shared parse path (live ingest + the archive backfill run the
+  same `emit_asset_appearances`), from two grains: **body** (asset fields on the op
+  struct) and **meta** (claimable-balance / LP assets recovered from the same-op
+  `LedgerEntryChanges`). Failed txs keep their body-declared assets (parity with
+  `operations_appearances`); meta assets are naturally absent for a failed op.
+- **Backfill dependency**: needs the Soroban-era XDR re-parse to populate history;
+  run it in the SAME rollout as the read swap or the endpoint shows only
+  post-deploy classic activity.
 
 ### 4.6 Soroban Contracts
 
