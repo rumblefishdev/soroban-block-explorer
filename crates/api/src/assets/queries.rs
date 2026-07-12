@@ -36,14 +36,13 @@
 //!   `.bind()`-ed (user-controlled); `asset_type` is interpolated (typed `i16`).
 //!
 //! `/transactions` (canonical 10) keys on the datasource-tagged `TxListCursor`
-//! (`Ch { ledger_sequence, tiebreak }`), mirroring the accounts sub-resource.
-//! **Read-cost caveat:** the identity predicate (`asset_code`+`asset_issuer_id`
-//! / `contract_id`) is a NON-leading-PK filter on `operations_appearances`
-//! (ORDER BY `ledger_sequence`), so the driver seek scans by descending ledger
-//! until it fills the page — cheap for a hot asset (matches in recent
-//! partitions), but a rare asset walks far back. The cursor bounds each page;
-//! still, an operator read-rows smoke is required before the prod flag flip
-//! (same class as the deferred global tx contract-filter).
+//! (`Ch { ledger_sequence, tiebreak }`), mirroring the accounts sub-resource. It
+//! seeks the `operation_asset_appearances` fan-out on its `asset_id`-leading PK
+//! (task 0359) — a bounded PK-prefix range read behind the `max(sequence)` commit
+//! fence, so a hot asset early-terminates near the tip and a rare asset stays a
+//! bounded seek, replacing the old NON-leading identity-predicate density-scan
+//! over `operations_appearances` (ORDER BY `ledger_sequence`) that walked back by
+//! descending ledger until the page filled.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -603,21 +602,20 @@ struct AssetTxPageChRow {
     created_at: i64,
 }
 
-/// Per-`asset_type` predicate composition over `operations_appearances`,
-/// mirroring the PG `fetch_transactions` branches but on CH surrogate ids:
-///   classic_credit / classic-wrap SAC → `(asset_code, asset_issuer_id)`
-///   native-wrap SAC / soroban          → `contract_id`
-///   native XLM (no identity)           → caller short-circuits (empty page)
+/// Transactions touching a single asset, newest first, keyset-paginated over the
+/// `operation_asset_appearances` fan-out (task 0359 — replaces the old
+/// per-`asset_type` predicate composition over `operations_appearances`).
 ///
-/// `asset_issuer_id` / `contract_surrogate_id` are the surrogate keys carried
-/// on the resolved `AssetRow` (`0` = absent), so no StrKey→id lookup is needed.
-/// Two-step like the accounts sub-resource: a driver seek collapses any
-/// multi-op-per-tx fan-out (`LIMIT 1 BY (ledger_sequence, transaction_id)`),
-/// then the ≤`limit` transaction headers are fetched by
-/// `(ledger_sequence, id) IN (keys)` (PK-prefix prune, multi-partition-safe)
-/// and the `operation_types` aggregate is merged. The caller passes the
-/// handler's `fetch_limit()` (already the `+1` `finalize_page` peek row), bound
-/// raw — same convention as the PG `fetch_transactions`.
+/// `asset_id` is the resolved `ids::asset_id` surrogate (native = a first-class
+/// non-zero key; the caller guards the unresolved `id == 0` sentinel). Two-step
+/// like the accounts sub-resource: a leading-key seek over
+/// `operation_asset_appearances` (`asset_id` IS the leading PK) collapses any
+/// multi-op-per-tx fan-out (`LIMIT 1 BY (ledger_sequence, transaction_id)`) behind
+/// the `max(sequence)` commit fence, then the ≤`limit` transaction headers are
+/// fetched by `(ledger_sequence, id) IN (keys)` (PK-prefix prune,
+/// multi-partition-safe) and the `operation_types` aggregate is merged. The caller
+/// passes the handler's `fetch_limit()` (already the `+1` `finalize_page` peek
+/// row), inlined raw — `asset_id` is a provably-numeric i64.
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
     asset_id: i64,

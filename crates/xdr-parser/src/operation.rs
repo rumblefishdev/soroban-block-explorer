@@ -49,9 +49,9 @@ pub fn extract_operations(
             let op_index = i + 1;
             let source_account = op.source_account.as_ref().map(muxed_to_g_strkey);
             // Task 0359: every asset the op touches — body + same-op meta changes
-            // + result claim atoms. `op_source` (op override or tx source) is the
-            // AllowTrust issuer; it borrows `source_account`, released before the
-            // move below.
+            // (no result grain; see `asset_appearances` docs). `op_source` (op
+            // override or tx source) is the AllowTrust issuer; it borrows
+            // `source_account`, released before the move below.
             let op_source = source_account.as_deref().unwrap_or(&tx_source);
             let asset_appearances = crate::asset_appearances::emit_asset_appearances(
                 &op.body,
