@@ -48,10 +48,10 @@ history:
 - [x] #6 per-tx `HashSet<asset_id>` dedup before push (write volume)
 - [x] #2 native rows written **and now served** (read gate removed via C6; keep-writing is by design)
 - [x] #9 `row.id==0` guard replaces the removed early-return (🔀 = C6)
-- [ ] #1 type-3 `/assets/{C}/transactions` empty — 🧊 separate ADR (🔀 = F-F)
+- [ ] #1 type-3 `/assets/{C}/transactions` empty — **DEGRADED to read-only reuse/link, low value.** Verified: the emitter emits NOTHING for `InvokeHostFunction` (fan-out has zero type-3 rows) and `asset_id(type-3) = contract_id`, so a type-3 token's asset-txs ≡ its `/contracts/{C}/invocations` (same table, same key). **No data is missing (invocations already serve it) and NOTHING is double-written** (Soroban flow lives only in `soroban_invocations_appearances`). So this is pure UX: reuse the invocations query for the type-3 asset tab, or link to the contract page. NOT an ADR, not urgent. (Distinct from F-F, which unions SAC invocations for CLASSIC assets — there the union DOES add data.)
 - [x] #7 ADR 0032 `docs/architecture/**` updated (schema-overview §4.5.1 + shape list/tree + rewrote 10_get_assets_transactions.sql)
 - [ ] #8 `LIMIT 1 BY` read-in-order — **BLOCKED**: fan-out table not on prod yet (verified 0 rows in system.tables). Analytically fine (`asset_id =` makes `(ledger, tx)` the residual PK order → read-in-order holds; `LIMIT 1 BY` collapses adjacents without a re-sort). Run `EXPLAIN indexes=1` / `read_rows` on a hot asset **after** the CREATE TABLE + backfill.
-- [ ] #10 dup: `asset_ref ≈ sac::asset_to_identity` + `AssetRef ≈ SacAssetIdentity` — **DEFERRED to L2** (not L1): `SacAssetIdentity` = 33 refs / 8 files (write-path SAC→assets + pub API + indexer), and same-shape ≠ same-concept (false-DRY risk). 4th code-copy already removed by C3.
+- [ ] #10 dup: `AssetRef ≈ SacAssetIdentity` — **WONTFIX (karolkow).** Real shape-redundancy, but they are two different concepts (asset an op TOUCHES vs asset a SAC WRAPS) — same shape by coincidence. Merge cost (33 refs / 8 files + permanent cross-subsystem coupling) ≫ keeping two 15-line enums → don't dedup by shape. `SmallVec` micro-perf also skipped (perf, not reduction). 4th code-copy already removed by C3.
 - [x] cleanup: or-pattern arms (offers 3→1, claim-CB 2→1, LP 2→1), `present_entry` helper (dedup change→entry), `const NATIVE_ASSET_ID`, stale docs — all DONE. `SmallVec` left (perf, not reduction).
 
 ## 4. Core findings (F-A..F-F)
