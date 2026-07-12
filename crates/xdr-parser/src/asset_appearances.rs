@@ -21,7 +21,7 @@
 use crate::asset_code::{asset_code_bytes, asset_code_str};
 use stellar_xdr::{
     Asset, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData, LedgerKey,
-    LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, RevokeSponsorshipOp,
+    LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, PoolId, RevokeSponsorshipOp,
     TrustLineAsset,
 };
 
@@ -125,9 +125,15 @@ pub fn emit_asset_appearances(
             }
         }
         // META grain: the body carries only a pool id — recover the pool's two
-        // assets from the same-op pool entry.
-        OperationBody::LiquidityPoolDeposit(_) | OperationBody::LiquidityPoolWithdraw(_) => {
-            if let Some((a, b)) = lp_pool_assets(op_changes) {
+        // assets from the same-op pool entry whose id matches.
+        OperationBody::LiquidityPoolDeposit(op) => {
+            if let Some((a, b)) = lp_pool_assets(op_changes, &op.liquidity_pool_id) {
+                out.push(a);
+                out.push(b);
+            }
+        }
+        OperationBody::LiquidityPoolWithdraw(op) => {
+            if let Some((a, b)) = lp_pool_assets(op_changes, &op.liquidity_pool_id) {
                 out.push(a);
                 out.push(b);
             }
@@ -211,8 +217,14 @@ fn claimed_cb_asset(
 }
 
 /// Recover a liquidity pool's two canonical assets (A, B) from the op's ledger
-/// changes — the pool entry's constant-product params. `None` if absent.
-fn lp_pool_assets(changes: &[LedgerEntryChange]) -> Option<(AssetRef, AssetRef)> {
+/// changes — the pool entry whose id matches the op's `liquidityPoolId`. Matching
+/// on the id (not just the first pool entry) mirrors `claimed_cb_asset` and is
+/// robust if the op's changes ever carry more than one pool entry. `None` if
+/// absent (never guesses).
+fn lp_pool_assets(
+    changes: &[LedgerEntryChange],
+    pool_id: &PoolId,
+) -> Option<(AssetRef, AssetRef)> {
     changes.iter().find_map(|c| {
         let entry = match c {
             LedgerEntryChange::State(e)
@@ -222,7 +234,7 @@ fn lp_pool_assets(changes: &[LedgerEntryChange]) -> Option<(AssetRef, AssetRef)>
             LedgerEntryChange::Removed(_) => return None,
         };
         match &entry.data {
-            LedgerEntryData::LiquidityPool(lp) => {
+            LedgerEntryData::LiquidityPool(lp) if &lp.liquidity_pool_id == pool_id => {
                 let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
                 Some((asset_ref(&cp.params.asset_a), asset_ref(&cp.params.asset_b)))
             }
@@ -240,8 +252,8 @@ mod tests {
         CreateAccountOp, CreateClaimableBalanceOp, Hash, LedgerEntry, LedgerEntryExt,
         LedgerKeyClaimableBalance, LedgerKeyTrustLine, LiquidityPoolConstantProductParameters,
         LiquidityPoolDepositOp, LiquidityPoolEntry, LiquidityPoolEntryConstantProduct,
-        ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount, PathPaymentStrictSendOp, PoolId, Price,
-        PublicKey, SetTrustLineFlagsOp, Uint256, VecM,
+        LiquidityPoolWithdrawOp, ManageBuyOfferOp, ManageSellOfferOp, MuxedAccount,
+        PathPaymentStrictSendOp, PoolId, Price, PublicKey, SetTrustLineFlagsOp, Uint256, VecM,
     };
 
     fn acct(b: u8) -> AccountId {
@@ -496,5 +508,39 @@ mod tests {
             vec![AssetRef::Native, cr("USDC", &issuer_str(0x05))]
         );
         assert!(emit(&body).is_empty());
+    }
+
+    #[test]
+    fn lp_ignores_a_pool_entry_with_a_different_id() {
+        // The op names pool 0x44; the change carries a DIFFERENT pool (0x99).
+        // lp_pool_assets must match on the id and emit nothing — not grab the
+        // first pool entry it sees (devils-advocate / PR #4).
+        let body = OperationBody::LiquidityPoolWithdraw(LiquidityPoolWithdrawOp {
+            liquidity_pool_id: PoolId(Hash([0x44; 32])),
+            amount: 5,
+            min_amount_a: 1,
+            min_amount_b: 1,
+        });
+        let changes = vec![LedgerEntryChange::Updated(LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::LiquidityPool(LiquidityPoolEntry {
+                liquidity_pool_id: PoolId(Hash([0x99; 32])),
+                body: LiquidityPoolEntryBody::LiquidityPoolConstantProduct(
+                    LiquidityPoolEntryConstantProduct {
+                        params: LiquidityPoolConstantProductParameters {
+                            asset_a: Asset::Native,
+                            asset_b: xdr_credit(b"USDC", 0x05),
+                            fee: 30,
+                        },
+                        reserve_a: 1000,
+                        reserve_b: 2000,
+                        total_pool_shares: 500,
+                        pool_shares_trust_line_count: 3,
+                    },
+                ),
+            }),
+            ext: LedgerEntryExt::V0,
+        })];
+        assert!(emit_asset_appearances(&body, "", &changes).is_empty());
     }
 }
