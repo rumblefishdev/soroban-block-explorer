@@ -929,12 +929,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         if !tx_id_by_hash.contains_key(tx_hash) {
             continue;
         }
+        // Per-tx dedup for the asset fan-out (PR #6): N ops touching the same
+        // asset in one tx would otherwise write N identical (asset, tx) rows. The
+        // RMT sort key collapses them eventually, but deduping at write cuts the
+        // backfilled volume up front. Scoped per tx — one entry per tx_hash here.
+        let mut seen_tx_asset_ids: HashSet<i64> = HashSet::new();
         for op in ops {
             // ---- operation_asset_appearances (task 0359, pure presence) ----
             // Asset-dimension twin of transaction_participants: one row per
-            // (asset the op touches, tx). Duplicates collapse in RMT. Native is a
-            // FIRST-CLASS surrogate (never the empty-string sentinel); classic
-            // credit hashes code:issuer_surrogate — both via `ids::asset_id`.
+            // (asset the op touches, tx). Native is a FIRST-CLASS surrogate (never
+            // the empty-string sentinel); classic credit hashes
+            // code:issuer_surrogate — both via `ids::asset_id`.
             if !op.asset_appearances.is_empty() {
                 let tx_id = tx_id_by_hash[tx_hash];
                 for asset in &op.asset_appearances {
@@ -944,11 +949,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                             ids::asset_id(1, code, ids::account_id(issuer), 0)
                         }
                     };
-                    out.op_asset_rows.push(OperationAssetAppearanceRow {
-                        asset_id,
-                        ledger_sequence: ledger_sequence_i64,
-                        transaction_id: tx_id,
-                    });
+                    if seen_tx_asset_ids.insert(asset_id) {
+                        out.op_asset_rows.push(OperationAssetAppearanceRow {
+                            asset_id,
+                            ledger_sequence: ledger_sequence_i64,
+                            transaction_id: tx_id,
+                        });
+                    }
                 }
             }
 

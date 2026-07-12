@@ -712,6 +712,59 @@ fn prepare_stages_operation_asset_appearances() {
 }
 
 #[test]
+fn op_asset_appearances_dedup_same_asset_across_ops_in_one_tx() {
+    use xdr_parser::asset_appearances::AssetRef;
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x36);
+    let issuer = "G".to_string() + &"I".repeat(55);
+    // TWO sell-offer ops in ONE tx, each touching {native, USDC} = 4 appearances.
+    // Per-tx dedup collapses to 2 rows, not 4 (PR #6).
+    let mk = |idx: u32| ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: idx,
+        op_type: OperationType::ManageSellOffer,
+        source_account: None,
+        asset_appearances: vec![
+            AssetRef::Native,
+            AssetRef::Credit {
+                code: "USDC".into(),
+                issuer: issuer.clone(),
+            },
+        ],
+        details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_asset_rows.len(), 2);
+    let mut ids_seen: Vec<i64> = staged.op_asset_rows.iter().map(|r| r.asset_id).collect();
+    ids_seen.sort_unstable();
+    let mut want = vec![
+        ids::asset_id(0, "", 0, 0),
+        ids::asset_id(1, "USDC", ids::account_id(&issuer), 0),
+    ];
+    want.sort_unstable();
+    assert_eq!(ids_seen, want);
+}
+
+#[test]
 fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x31);
