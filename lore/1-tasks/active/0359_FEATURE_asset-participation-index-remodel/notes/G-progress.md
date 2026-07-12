@@ -37,17 +37,17 @@ history:
 - [x] C2 — meta-V5 wildcard closed (`op_meta_changes` exhaustive V0..V4)
 - [x] C3 — asset-code unify, injective (no `<invalid>` collision)
 - [x] C4 — claim-CB `[State, Removed]` test
-- [ ] C5 — failed-tx body rows: team decision (accept + document vs drop failed from body too)
-- [ ] C6 — native page needs a native `assets` row + `asset_id==0` guard (F2 symptom)
+- [x] C5 — failed-tx: **accept + document (parity)** decided; documented in the emitter module doc (no emission change)
+- [x] C6 — native page served: `row.id==0` guard replaces the identity gate; native has a non-zero surrogate + `native_asset_singleton` row → F2 fixed
 
 ## 3. PR #324 review (Stanisław — 10 findings + cleanup)
 
 - [x] #3 asset-code divergence (🔀 = C3)
-- [ ] #4 `lp_pool_assets` must match `op.liquidity_pool_id` (write-side, pre-backfill)
-- [ ] #5 failed-tx decision (🔀 = C5)
-- [ ] #6 per-tx `HashSet<asset_id>` dedup before push (write volume, optional pre-backfill)
-- [ ] #2 native rows written but read-gated (volume decision)
-- [ ] #9 removed early-return not replaced by `asset_id==0` guard (🔀 ~ C6)
+- [x] #4 `lp_pool_assets` matches `op.liquidity_pool_id` (write-side, pre-backfill)
+- [x] #5 failed-tx decision (🔀 = C5)
+- [x] #6 per-tx `HashSet<asset_id>` dedup before push (write volume)
+- [x] #2 native rows written **and now served** (read gate removed via C6; keep-writing is by design)
+- [x] #9 `row.id==0` guard replaces the removed early-return (🔀 = C6)
 - [ ] #1 type-3 `/assets/{C}/transactions` empty — 🧊 separate ADR (🔀 = F-F)
 - [ ] #7 ADR 0032 `docs/architecture/**` not updated (process)
 - [ ] #8 `LIMIT 1 BY` read-in-order not validated for hot assets (0281-C; read perf)
@@ -75,7 +75,7 @@ history:
 
 ## 6. K2 — absence-modeling
 
-- [x] K2-1 native asset transactions empty — mechanism done (native surrogate + seek + query); end-to-end native page still depends on C6 (native `assets` row to resolve the id)
+- [x] K2-1 native asset transactions empty — **fixed end-to-end**: native surrogate + seek + query + C6 read gate removed (`native_asset_singleton` provides the `assets` row)
 - [ ] K2-2 LP native XLM leg unmatchable (🔀 = F-B) — 🧊
 - [ ] K2-3 `transaction_participants` drops non-G participants (C/B/L/M) — 🧊
 - [ ] K2-4 fee-bump fee-source unattributed (~45% of txs) — 🧊
