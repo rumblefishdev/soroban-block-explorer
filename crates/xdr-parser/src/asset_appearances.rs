@@ -17,6 +17,19 @@
 //! to one (asset, tx) row and no read path can observe the difference. The match
 //! is exhaustive (no `_`) so a new op type breaks compile here and its assets
 //! are decided, never silently dropped.
+//!
+//! **Failed transactions (policy: accept + document — karolkow 2026-07-11).** The
+//! emitter runs for EVERY tx, failed included — matching the old
+//! `operations_appearances` behaviour and stellar.expert (both list failed txs on
+//! an asset's page). Consequence: the two grains cover failed txs UNEVENLY. The
+//! body grain still emits (the op's declared assets are on the struct regardless
+//! of outcome), but the meta grain cannot — a failed op commits no ledger changes,
+//! so `op_changes` is empty and a failed claim-CB / LP op contributes no row. This
+//! asymmetry is inherent (the assets simply are not observable for a failed
+//! meta-only op), accepted as-is rather than gated: gating the body grain on
+//! tx-success too would DROP failed-tx activity the pre-existing table shows — a
+//! regression. A pure-presence row carries no success flag, so failed vs succeeded
+//! is not distinguishable at read time; that is by design for this index.
 
 use crate::asset_code::{asset_code_bytes, asset_code_str};
 use stellar_xdr::{
