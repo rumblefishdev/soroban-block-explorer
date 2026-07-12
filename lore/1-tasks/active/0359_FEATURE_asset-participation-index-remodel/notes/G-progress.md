@@ -22,6 +22,7 @@ history:
 ❌ killed (never) · 🔀 alias of another id. Cross-refs in parens.
 
 ## 1. MVP core (the fan-out that shipped)
+
 - [x] `operation_asset_appearances (asset_id, ledger, tx)` table — RMT, partitioned, `ORDER BY (asset_id, ledger, tx)`
 - [x] Emitter `asset_appearances.rs` — pure presence, BODY grain
 - [x] Emitter — META grain (claim-CB / clawback-CB / LP from `op_changes`)
@@ -31,6 +32,7 @@ history:
 - [x] Merged develop → stellar-xdr 27 (curr→root)
 
 ## 2. Devils-advocate concerns
+
 - [x] C1 — drop B3 / result grain (redundant; atoms ⊆ body)
 - [x] C2 — meta-V5 wildcard closed (`op_meta_changes` exhaustive V0..V4)
 - [x] C3 — asset-code unify, injective (no `<invalid>` collision)
@@ -39,6 +41,7 @@ history:
 - [ ] C6 — native page needs a native `assets` row + `asset_id==0` guard (F2 symptom)
 
 ## 3. PR #324 review (Stanisław — 10 findings + cleanup)
+
 - [x] #3 asset-code divergence (🔀 = C3)
 - [ ] #4 `lp_pool_assets` must match `op.liquidity_pool_id` (write-side, pre-backfill)
 - [ ] #5 failed-tx decision (🔀 = C5)
@@ -52,6 +55,7 @@ history:
 - [ ] cleanup: or-pattern arms, stale docs (`fetch_transactions` header still says `operations_appearances`; emitter comment re dropped result grain), micro-perf (`const NATIVE_ASSET_ID`, `SmallVec`)
 
 ## 4. Core findings (F-A..F-F)
+
 - [x] F-A asset single-slot (native empty + multi-leg loss) — THE core
 - [ ] F-B LP can't match native XLM leg (16 552 pools / 21.7% invisible) — 🧊
 - [ ] F-C account tx list drops roles (crossed-offer counterparty, claimants, inflationDest, revoke-target, mint/burn recipients) — 🧊 (code in stash)
@@ -60,6 +64,7 @@ history:
 - [ ] F-F SAC-contract activity not unioned into asset page (native 3.9M XLM-SAC) — 🧊 (🔀 = K3-1; MVP is single-arm)
 
 ## 5. K1 — participation-loss
+
 - [x] K1-1 asset single-slot (🔀 = F-A)
 - [x] K1-2 offer carries no asset / path stores only destAsset
 - [ ] K1-3 fungible transfer from/to/amount never decoded (transfer 4.51B / mint 434M / burn 62.8M / clawback 54.3M) — 🧊 (L2)
@@ -69,6 +74,7 @@ history:
 - [ ] K1-7 `soroban_events` RMT key excludes payload (latent row loss)
 
 ## 6. K2 — absence-modeling
+
 - [x] K2-1 native asset transactions empty — mechanism done (native surrogate + seek + query); end-to-end native page still depends on C6 (native `assets` row to resolve the id)
 - [ ] K2-2 LP native XLM leg unmatchable (🔀 = F-B) — 🧊
 - [ ] K2-3 `transaction_participants` drops non-G participants (C/B/L/M) — 🧊
@@ -80,6 +86,7 @@ history:
 - [ ] K2-9 search: no asset findable by name — 🧊
 
 ## 7. K3 — two-hop-not-unioned
+
 - [ ] K3-1 asset SAC not unioned (🔀 = F-F) — 🧊
 - [ ] K3-2 fee-bump `inner_tx_hash` never indexed → hard 404 — 🧊
 - [ ] K3-3 tx `contract_ids[]` drops nested (100% of Soroban txs) — 🧊
@@ -89,6 +96,7 @@ history:
 - [ ] K3-7 NFT collection activity not unioned on contract page — 🧊
 
 ## 8. K4 — aggregate/detail divergence
+
 - [ ] K4-1 contract invocations KPI 7d vs all-time — 🧊
 - [ ] K4-2 tx `operation_count` vs folded `operations[]` — 🧊
 - [ ] K4-3 events amount=1 / archive-vs-non-archive diverge — 🧊
@@ -97,11 +105,13 @@ history:
 - [ ] K4-6 LP `share_percentage` stale (unconfirmed) — 🧊
 
 ## 9. Layers + workstreams
+
 - [ ] L1 classic appearance index = this task — partial (core done, rest 🧊)
 - [ ] L2 `soroban_events` (9.5B) token-flow re-model — 🧊 own epic
 - [ ] WS1 Layer-1 core — partial · WS2 L2 🧊 · WS3 contract-holder read-union 🧊 · WS4 fee-bump 🧊 · WS5 search 🧊 · WS6 DEX/trades 🧊 · WS7 aggregate hygiene 🧊
 
 ## 10. Plan — stages A-F + ordered steps 1-12
+
 - [ ] Stage A contract-holder reads — 🧊
 - [ ] Stage B fee-bump 404 — 🧊
 - [ ] Stage C search — 🧊
@@ -114,6 +124,7 @@ history:
 - [ ] Steps 6-12 (L2 / account-roles / contract-holder / fee-bump / search / hygiene / FE) — 🧊
 
 ## 11. Architecture audit (G-architecture-audit, 28-item)
+
 - [ ] Adoption #1 central `meta.rs` (6 sites, silent-V5) — partial (local `op_meta_changes` done; full `meta.rs` 🧊 stash)
 - [ ] ~~Adoption #2 provenance `ingest_runs` / `parser_version`~~ — ❌ killed
 - [ ] Adoption #3 shared commit-fence builder — partial (fence in query; builder open)
@@ -134,6 +145,7 @@ history:
 - [ ] MISSING pattern: automated verify-range vs Horizon (G-role-crossref = the contract) — 🧊
 
 ## 12. Killed / reverted (do NOT revisit)
+
 - ❌ role + `application_order` + `ParticipationRole` enum (pure presence)
 - ❌ `leg_index`
 - ❌ result grain (B3) — DA C1
@@ -141,11 +153,13 @@ history:
 - ❌ provenance (`parser_version`)
 
 ## 13. OPS / backfill (pending)
+
 - [ ] Manual `CREATE TABLE operation_asset_appearances` on prod (init.sql fresh-only)
 - [ ] Backfill `backfill-runner Run` Soroban era (from ledger 50,457,424) — SAME rollout as read swap
 - [ ] Validate sample assets (incl. native) vs Horizon / stellar.expert
 
 ## 14. Process
+
 - [ ] ADR 0032 `docs/architecture/**` update (🔀 = PR #7)
 - [ ] api-types check post-merge (Cargo.lock touched)
 - [ ] Legacy `operations_appearances.asset_code`/`asset_issuer_id` — NOT dead (read by `fetch_operations` + audit-harness); retire only after migrating that reader
