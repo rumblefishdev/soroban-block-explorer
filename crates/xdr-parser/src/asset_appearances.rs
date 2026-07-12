@@ -33,9 +33,10 @@
 
 use crate::asset_code::{asset_code_bytes, asset_code_str};
 use stellar_xdr::{
-    Asset, ChangeTrustAsset, ClaimableBalanceId, LedgerEntryChange, LedgerEntryData, LedgerKey,
-    LiquidityPoolEntryBody, LiquidityPoolParameters, OperationBody, PoolId, RevokeSponsorshipOp,
-    TrustLineAsset,
+    Asset, ChangeTrustAsset, ClaimClaimableBalanceOp, ClaimableBalanceId, ClawbackClaimableBalanceOp,
+    CreatePassiveSellOfferOp, LedgerEntryChange, LedgerEntryData, LedgerKey, LiquidityPoolDepositOp,
+    LiquidityPoolEntryBody, LiquidityPoolParameters, LiquidityPoolWithdrawOp, ManageBuyOfferOp,
+    ManageSellOfferOp, OperationBody, PoolId, RevokeSponsorshipOp, TrustLineAsset,
 };
 
 /// An asset as it appears in an operation, before surrogate-hashing.
@@ -75,17 +76,14 @@ pub fn emit_asset_appearances(
             out.extend(op.path.iter().map(asset_ref));
             out.push(asset_ref(&op.dest_asset));
         }
-        OperationBody::ManageSellOffer(op) => {
-            out.push(asset_ref(&op.selling));
-            out.push(asset_ref(&op.buying));
-        }
-        OperationBody::ManageBuyOffer(op) => {
-            out.push(asset_ref(&op.selling));
-            out.push(asset_ref(&op.buying));
-        }
-        OperationBody::CreatePassiveSellOffer(op) => {
-            out.push(asset_ref(&op.selling));
-            out.push(asset_ref(&op.buying));
+        // All three offer ops key their `selling` + `buying` pair.
+        OperationBody::ManageSellOffer(ManageSellOfferOp { selling, buying, .. })
+        | OperationBody::ManageBuyOffer(ManageBuyOfferOp { selling, buying, .. })
+        | OperationBody::CreatePassiveSellOffer(CreatePassiveSellOfferOp {
+            selling, buying, ..
+        }) => {
+            out.push(asset_ref(selling));
+            out.push(asset_ref(buying));
         }
         OperationBody::ChangeTrust(op) => match &op.line {
             ChangeTrustAsset::Native => out.push(AssetRef::Native),
@@ -127,26 +125,19 @@ pub fn emit_asset_appearances(
         }
         // META grain: the body carries only a balance id — recover the asset from
         // the same-op ledger changes (the claimed/clawed CB entry).
-        OperationBody::ClaimClaimableBalance(op) => {
-            if let Some(a) = claimed_cb_asset(op_changes, &op.balance_id) {
-                out.push(a);
-            }
-        }
-        OperationBody::ClawbackClaimableBalance(op) => {
-            if let Some(a) = claimed_cb_asset(op_changes, &op.balance_id) {
+        OperationBody::ClaimClaimableBalance(ClaimClaimableBalanceOp { balance_id })
+        | OperationBody::ClawbackClaimableBalance(ClawbackClaimableBalanceOp { balance_id }) => {
+            if let Some(a) = claimed_cb_asset(op_changes, balance_id) {
                 out.push(a);
             }
         }
         // META grain: the body carries only a pool id — recover the pool's two
         // assets from the same-op pool entry whose id matches.
-        OperationBody::LiquidityPoolDeposit(op) => {
-            if let Some((a, b)) = lp_pool_assets(op_changes, &op.liquidity_pool_id) {
-                out.push(a);
-                out.push(b);
-            }
-        }
-        OperationBody::LiquidityPoolWithdraw(op) => {
-            if let Some((a, b)) = lp_pool_assets(op_changes, &op.liquidity_pool_id) {
+        OperationBody::LiquidityPoolDeposit(LiquidityPoolDepositOp { liquidity_pool_id, .. })
+        | OperationBody::LiquidityPoolWithdraw(LiquidityPoolWithdrawOp {
+            liquidity_pool_id, ..
+        }) => {
+            if let Some((a, b)) = lp_pool_assets(op_changes, liquidity_pool_id) {
                 out.push(a);
                 out.push(b);
             }
