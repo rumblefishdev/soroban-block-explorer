@@ -22,7 +22,7 @@ use super::dto::{
     AssetDetailResponse, AssetItem, AssetKeyCursor, AssetTransactionItem, ListParams,
 };
 use super::queries::{
-    self, AssetIdentity, AssetRow, AssetTxRow, ResolvedListParams, asset_predicate_present,
+    self, AssetRow, AssetTxRow, ResolvedListParams,
 };
 
 async fn fetch_list_for_source(
@@ -433,15 +433,14 @@ pub async fn list_asset_transactions(
         );
     }
 
-    let identity = AssetIdentity {
-        asset_code: row.asset_code.as_deref(),
-        issuer: row.issuer.as_deref(),
-        contract_id: row.contract_id.as_deref(),
-    };
-
-    // Native XLM has no DB-side identity referenced by ops — empty page
-    // rather than emit `WHERE ()` SQL.
-    if !asset_predicate_present(&identity) {
+    // Guard the unresolved-asset sentinel: a resolved asset always carries a real
+    // `ids::asset_id` surrogate, so `id == 0` means "no such asset key" — return an
+    // empty page rather than run `WHERE asset_id = 0`. Native is NOT caught here:
+    // it has a first-class surrogate (`ids::asset_id(0,"",0,0)`, non-zero), so the
+    // fan-out seek runs and native activity is served (task 0359 / devils-advocate
+    // C6, PR #9 — this replaces the old identity gate that emptied native because
+    // it has no classic code/issuer/contract).
+    if row.id == 0 {
         let empty = into_envelope::<AssetTransactionItem>(
             Vec::new(),
             PageInfo {

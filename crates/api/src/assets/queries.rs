@@ -138,22 +138,6 @@ pub struct ResolvedListParams {
     pub sac_only: bool,
 }
 
-/// Resolved asset identity used to gate the `/transactions` sub-resource query.
-pub struct AssetIdentity<'a> {
-    pub asset_code: Option<&'a str>,
-    pub issuer: Option<&'a str>,
-    pub contract_id: Option<&'a str>,
-}
-
-/// True when the asset has a DB-side identity ops can key on. Native XLM and
-/// friends have none → the handler short-circuits with an empty page rather
-/// than emit a degenerate `WHERE ()`.
-pub fn asset_predicate_present(identity: &AssetIdentity<'_>) -> bool {
-    let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
-    let has_contract = identity.contract_id.is_some();
-    has_classic || has_contract
-}
-
 /// `asset_type` SMALLINT → canonical label, matching the PG
 /// `token_asset_type_name` function. `None` for an out-of-range code (the PG
 /// `CASE` returns NULL with no `ELSE`).
