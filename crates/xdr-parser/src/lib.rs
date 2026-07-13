@@ -17,6 +17,7 @@ pub mod ledger;
 pub mod ledger_entry_changes;
 pub mod memo;
 pub mod nft;
+pub mod op_participants;
 pub mod op_source;
 pub mod operation;
 pub mod sac;
