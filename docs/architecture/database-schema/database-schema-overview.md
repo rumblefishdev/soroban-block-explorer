@@ -507,8 +507,8 @@ PK-prefix seek instead of the density-dependent `has(pool_ids, X)` scan over
 ```sql
 CREATE TABLE operation_pools (
     pool_id         FixedString(32),  -- raw 32-byte pool hash (no surrogate)
-    ledger_sequence Int64 CODEC(Delta, ZSTD(1)),
-    transaction_id  Int64 CODEC(Delta, ZSTD(1))
+    ledger_sequence Int64,
+    transaction_id  Int64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -522,8 +522,9 @@ Purpose / design notes:
 - **Pure presence** — no `role` / `application_order` / `amount`. Duplicate (pool, tx)
   rows within a tx are deduped at write (per-tx set) and collapse in the RMT; the read
   also applies `LIMIT 1 BY (ledger, tx)`.
-- Populated by the indexer via `arrayJoin(pool_ids)` in staging, written beside
-  `transaction_participants` / `operation_asset_appearances`.
+- Populated by the indexer as a per-op Rust fan-out over each op's `pool_ids`,
+  written beside `transaction_participants` / `operation_asset_appearances`. (The
+  Path B backfill below re-keys history via `arrayJoin(pool_ids)`.)
 - **Backfill (task 0365 Path B)**: unlike the asset twin, the source `pool_ids` is
   already in ClickHouse, so history is backfilled by a plain CH re-key
   (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id

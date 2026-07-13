@@ -508,7 +508,7 @@ struct PoolTxChRow {
     created_at_ms: i64,
 }
 
-/// Page key (one per pool transaction) from the projection-seek driver.
+/// Page key (one per pool transaction) from the `operation_pools` prefix-seek driver.
 #[derive(Debug, Row, Deserialize)]
 struct DriverKeyRow {
     ls: i64,

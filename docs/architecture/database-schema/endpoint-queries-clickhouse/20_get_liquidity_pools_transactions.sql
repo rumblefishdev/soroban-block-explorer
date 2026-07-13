@@ -35,8 +35,8 @@
 -- Notes:
 --   • Driver is `operation_pools` seeked by `pool_id = $1` (task 0365: the
 --     pool-keyed presence twin of transaction_participants, written by the
---     indexer via arrayJoin(pool_ids) — path payments contribute every pool
---     crossed by their claim atoms). Same tx set as PG E20.
+--     indexer as a per-op fan-out over pool_ids — path payments contribute every
+--     pool crossed by their claim atoms). Same tx set as PG E20.
 --   • Cursor drops `created_at` (§5.2). Natural keyset
 --     `(ledger_sequence, transaction_id)`.
 --   • `operation_types[]` projected for frontend §6.14 trade-vs-LP-mgmt

@@ -631,11 +631,11 @@ ORDER BY (asset_id, ledger_sequence, transaction_id);
 -- raw 32-byte pool hash (already how operations_appearances.pool_ids stores each
 -- crossing -- no surrogate). Populated by arrayJoin(pool_ids) in staging; pure
 -- presence, so duplicate (pool, tx) rows within a tx collapse in the RMT.
--- Delta+ZSTD on the two Int64 columns (monotonic within a pool's block).
+-- Plain Int64 columns, matching transaction_participants / operation_asset_appearances.
 CREATE TABLE IF NOT EXISTS operation_pools (
     pool_id         FixedString(32),
-    ledger_sequence Int64 CODEC(Delta, ZSTD(1)),
-    transaction_id  Int64 CODEC(Delta, ZSTD(1))
+    ledger_sequence Int64,
+    transaction_id  Int64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
