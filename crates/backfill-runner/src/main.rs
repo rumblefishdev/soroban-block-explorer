@@ -19,6 +19,7 @@ mod repair_tier1;
 mod rpc_snapshot;
 mod run;
 mod sink;
+mod soroban_token_flow_backfill;
 mod status;
 mod sync;
 mod upgradeable_backfill;
@@ -266,6 +267,27 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Task 0383 — backfill Soroban token-event flow (transfer/mint/burn/
+    /// clawback) into the presence indexes `transaction_participants` +
+    /// `operation_asset_appearances`, re-derived from already-ingested
+    /// `soroban_events` (decoded typed-JSON topics — no S3 re-parse). Registers
+    /// event `from`/`to` as account participants and SAC-wrapped classic/native
+    /// asset presence, using the same decode the live indexer runs so rows dedup
+    /// against live data. Both targets are ReplacingMergeTree → idempotent, safe
+    /// to re-run / resume by range. `--dry-run` counts without writing. CH-only.
+    SorobanTokenFlowBackfill {
+        /// First ledger sequence (inclusive).
+        #[arg(long)]
+        start: u32,
+
+        /// Last ledger sequence (inclusive).
+        #[arg(long)]
+        end: u32,
+
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -471,6 +493,24 @@ async fn main() {
                 stats.events_scanned,
                 stats.nft_pending_rows,
                 stats.ownership_pending_rows,
+            );
+        }
+        Command::SorobanTokenFlowBackfill {
+            start,
+            end,
+            dry_run,
+        } => {
+            let stats = soroban_token_flow_backfill::execute(&sink, start, end, dry_run)
+                .await
+                .expect("soroban_token_flow_backfill failed — idempotent, safe to re-run by range");
+            let verb = if stats.dry_run {
+                "would write"
+            } else {
+                "wrote"
+            };
+            println!(
+                "soroban_token_flow_backfill completed (dry_run={}): events_scanned={} {verb} participant_rows={} asset_rows={}",
+                stats.dry_run, stats.events_scanned, stats.participant_rows, stats.asset_rows,
             );
         }
     }
