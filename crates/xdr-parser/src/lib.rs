@@ -35,7 +35,7 @@ pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
 pub use event::extract_events;
-pub use event_filters::{Transfer, is_transfer_event, parse_transfer, transfer_participants};
+pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_event};
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
