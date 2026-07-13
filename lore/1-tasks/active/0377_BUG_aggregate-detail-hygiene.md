@@ -2,7 +2,7 @@
 id: '0377'
 title: 'Aggregate/detail hygiene: KPI windows, operation_count vs folded, nullable-aggregate 500 trap'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0359']
 tags: [priority-medium, effort-medium, layer-api, aggregates]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0359 tracker. Bundles K4-1, K4-2/K1-4, K4-5.'
+  - date: 2026-07-13
+    status: active
+    who: karolkow
+    note: 'Promoted to active to begin implementation.'
 ---
 
 # Aggregate/detail hygiene
