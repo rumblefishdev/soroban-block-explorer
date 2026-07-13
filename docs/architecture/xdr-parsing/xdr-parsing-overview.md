@@ -286,13 +286,20 @@ entities:
   `contract_id`s so the new verdict takes effect.
 - contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
   task 0297). `name` / `symbol` / `decimals` are read from the contract instance
-  entry's `Symbol("METADATA")` struct (`{decimal, name, symbol}`) via
+  entry's metadata struct (`{decimal?, name, symbol}`) via
   `token_metadata::extract_token_metadata`, collected by
   `state::extract_contract_metadata_writes` on `created` + `updated` instance
-  changes (SACs skipped — derivable from the SAC identity). This corrects the
-  legacy assumption that token names are a standalone `Symbol("name")` entry —
-  they are not (that path matched 0 contracts); the name lives nested in METADATA
-  in instance storage, which `scval_to_typed_json` used to drop.
+  changes (SACs skipped — derivable from the SAC identity). Two on-chain key
+  shapes are matched (`token_metadata::is_metadata_key`): fungible SEP-41 / OZ
+  tokens use `Symbol("METADATA")`; OpenZeppelin **NFTs** use the
+  `NFTStorageKey::Metadata` enum variant, which serializes as
+  `Vec([Symbol("Metadata")])` — so an NFT collection name is captured straight
+  from the ledger (lore-0340). The earlier `Symbol("METADATA")`-only match missed
+  the NFT key: the false "0%" that had wrongly implied a `name()` RPC was needed.
+  This also corrects the legacy assumption that token names are a standalone
+  `Symbol("name")` entry — they are not (that path matched 0 contracts); the name
+  lives nested in the metadata struct in instance storage, which
+  `scval_to_typed_json` used to drop.
 - WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
   wasm_hash BYTEA)
 - account state → `accounts` row + `account_balances_current` entries per
