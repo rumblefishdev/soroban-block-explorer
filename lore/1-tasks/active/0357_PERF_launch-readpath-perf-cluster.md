@@ -41,6 +41,24 @@ history:
       position (point-lookups meet target / lists = documented known-issue+MV /
       0356 blocked) — literal flat-200ms is unachievable by launch, so AC4 must be
       reframed with team + SCF before the M3 claim. This feeds the SCF submission.
+  - date: 2026-07-13
+    status: active
+    who: stkrolikiewicz
+    note: >
+      search PROFILED (prod chq) → PARKED, no launch action. The 4 concurrent
+      buckets are all bounded: tx-hash + pool-id are point seeks (`= unhex(?)`);
+      account + contract are read-in-order prefix ranges; free-text contract name
+      is a GROUP BY over `soroban_contract_metadata` = only **3734 rows** (the
+      original "scan suspect" — cleared). Worst measured = account-prefix `'G'`
+      (matches ~all 22M accounts): **317k read_rows / 15 ms** — NOT a scan or bloom
+      miss, but a read-in-order merge across ~39 parts (leading granule each;
+      `accounts` is a churny RMT, dedup 0.606 → many un-merged parts). 15 ms is well
+      under AC4 and search had **0 load-test timeouts** (unlike lptxs/asttxs 20–27%),
+      so the load-test "1.0M" = sum across buckets, explained not pathological. Only
+      lever if ever needed: fewer `accounts` parts (OPTIMIZE / merge cadence), NOT a
+      query or schema change. (acclist's `accounts_recent` MV does not help search —
+      search needs `account_id` order, not `last_seen`.) Also: acclist moved from
+      known-issue to a real fix — 0385 / PR #328 (`accounts_recent` refreshable MV).
 ---
 
 # PERF: launch read-path perf cluster
@@ -68,19 +86,19 @@ knowingly reframed — before the mainnet launch.
 
 ## Worklist (ranked by read_rows, 2026-07-06)
 
-| endpoint  | read_rows | state                                                                                                      |
-| --------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| nftdetail | 24.7M     | **DONE #314** — resolver swap, 24.7M→103k (235×)                                                           |
-| asttxs    | 23.6M     | **DONE #315** — read-in-order driver, 338M→662k (512×)                                                     |
-| acclist   | 24.9M     | **known-issue** (0353) — projection rejected (CH 26.3 blocks RMT); FE-cached 60s, low-traffic browse       |
-| lplist    | 24.2M     | `liquidity_pool_snapshots` (295M) latest-per-pool → 0356-class, **blocked**                                |
-| lpdetail  | 14.5M     | 0356 — snapshots FINAL, **blocked** (indexer before/after bug)                                             |
-| lpchart   | 13.2M     | 0356 — snapshots FINAL, **blocked**                                                                        |
-| lptxs     | 18.5M     | broadly slow (6/6 sampled pools 6–23M); 0281-C floor, RIO not a clean lever; pool_id-MV = real post-launch |
-| astlist   | 1.99M     | own task — `assets FINAL` + lookup joins in the shared `ASSET_LIST_CH_SELECT` const                        |
-| astdetail | 1.99M     | 0334 seek done — still 2M, partial                                                                         |
-| search    | 1.0M      | untasked — 4 CH queries, unprofiled                                                                        |
-| txlist    | 2.0M      | untasked — 0290/0333 archived, still ~900 ms                                                               |
+| endpoint  | read_rows | state                                                                                                                                              |
+| --------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| nftdetail | 24.7M     | **DONE #314** — resolver swap, 24.7M→103k (235×)                                                                                                   |
+| asttxs    | 23.6M     | **DONE #315** — read-in-order driver, 338M→662k (512×)                                                                                             |
+| acclist   | 24.9M     | **0385 / PR #328** — projection rejected (0353) → `last_seen`-ordered `accounts_recent` refreshable MV; supersedes the FE-cache known-issue        |
+| lplist    | 24.2M     | `liquidity_pool_snapshots` (295M) latest-per-pool → 0356-class, **blocked**                                                                        |
+| lpdetail  | 14.5M     | 0356 — snapshots FINAL, **blocked** (indexer before/after bug)                                                                                     |
+| lpchart   | 13.2M     | 0356 — snapshots FINAL, **blocked**                                                                                                                |
+| lptxs     | 18.5M     | broadly slow (6/6 sampled pools 6–23M); 0281-C floor, RIO not a clean lever; pool_id-MV = real post-launch                                         |
+| astlist   | 1.99M     | own task — `assets FINAL` + lookup joins in the shared `ASSET_LIST_CH_SELECT` const                                                                |
+| astdetail | 1.99M     | 0334 seek done — still 2M, partial                                                                                                                 |
+| search    | 1.0M      | **profiled 2026-07-13 → PARKED** — 4 buckets bounded (worst: account-prefix `'G'` 317k/15ms, many-parts merge not a scan); 0 timeouts; see history |
+| txlist    | 2.0M      | untasked — 0290/0333 archived, still ~900 ms                                                                                                       |
 
 (`ctrevents` sampled fine at 0.25M/52 ms, but 0353's worst case is mega-contracts
 that random id sampling did not hit — keep 0353's fix.)
@@ -163,7 +181,7 @@ Order (impact + dependency):
    candidates as a launch stopgap while the query fix lands.
 3. **re-open the `[~]` "done" ones** — lptxs, asttxs, astdetail, txlist: confirm
    current read_rows and finish to target.
-4. **search** — profile the 4 CH queries, seek the offender.
+4. **search** — DONE (2026-07-13): profiled, all 4 buckets bounded, PARKED (see worklist row + history).
 5. **lpdetail/lpchart (0356)** — blocked on the indexer snapshot fix first.
 
 ## Acceptance Criteria
