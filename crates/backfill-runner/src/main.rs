@@ -111,6 +111,15 @@ enum Command {
         /// Last ledger sequence (inclusive).
         #[arg(long)]
         end: u32,
+
+        /// Re-index ledgers already present in the `ledgers` table. The resume
+        /// check normally skips ledgers already ingested (Run is a gap-filler),
+        /// so re-parsing an already-ingested range to populate a NEW derived
+        /// table over history (e.g. task 0359 `operation_asset_appearances`)
+        /// would be a no-op. Pass this to bypass the resume skip and re-parse
+        /// the full range. All writes are ReplacingMergeTree-idempotent.
+        #[arg(long)]
+        reindex: bool,
     },
 
     /// Report ingested / missing ledgers for a range.
@@ -304,13 +313,18 @@ async fn main() {
     );
 
     match cli.command {
-        Command::Run { start, end } => run::execute(
+        Command::Run {
+            start,
+            end,
+            reindex,
+        } => run::execute(
             &sink,
             &cli.temp_dir,
             start,
             end,
             cli.keep_partitions,
             cli.soroban_rpc_url.as_deref(),
+            reindex,
             &mp,
         )
         .await
