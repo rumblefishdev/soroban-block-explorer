@@ -789,6 +789,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             hash,
             ledger_sequence: ledger_sequence_i64,
         });
+
+        // Fee-bump: also index the inner-tx hash so a lookup by the inner
+        // hash resolves to the wrapping fee-bump (Horizon `inner_transaction`
+        // semantics). `inner_tx_hash → ledger_sequence` is immutable, same as
+        // the outer key (task 0375).
+        if let Some(inner) = inner_tx_hash {
+            out.hash_index_rows.push(TransactionHashIndexRow {
+                hash: inner,
+                ledger_sequence: ledger_sequence_i64,
+            });
+        }
     }
 
     // ---- transaction_participants ----

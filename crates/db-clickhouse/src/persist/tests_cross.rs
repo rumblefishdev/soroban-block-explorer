@@ -501,6 +501,55 @@ fn prepare_surrogate_id_fk_consistency() {
     assert_eq!(tx_row.id, ids::transaction_id(&tx_row.hash));
 }
 
+/// Fee-bump: both the outer and the inner tx hash are indexed to the same
+/// ledger, so a lookup by either resolves to the fee-bump (task 0375).
+#[test]
+fn prepare_fee_bump_indexes_inner_hash() {
+    let ledger = synthetic_ledger();
+    let mut tx = synthetic_tx(0x10);
+    let mut inner = vec![0u8; 32];
+    inner[31] = 0x20;
+    tx.inner_tx_hash = Some(hex::encode(&inner));
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    // Two index rows: outer + inner, both → the tx's ledger.
+    assert_eq!(staged.hash_index_rows.len(), 2);
+    let seq = staged.transaction_rows[0].ledger_sequence;
+    let mut outer = [0u8; 32];
+    outer[31] = 0x10;
+    assert!(
+        staged
+            .hash_index_rows
+            .iter()
+            .any(|r| r.hash == outer && r.ledger_sequence == seq)
+    );
+    let mut inner_bytes = [0u8; 32];
+    inner_bytes[31] = 0x20;
+    assert!(
+        staged
+            .hash_index_rows
+            .iter()
+            .any(|r| r.hash == inner_bytes && r.ledger_sequence == seq)
+    );
+}
+
 #[test]
 fn prepare_extracts_signature_from_first_symbol_topic() {
     let ledger = synthetic_ledger();

@@ -785,9 +785,11 @@ pub async fn fetch_detail(
                 t.parse_error \
              FROM transactions t FINAL \
              INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-             WHERE t.ledger_sequence = ? AND t.hash = unhex(?)",
+             WHERE t.ledger_sequence = ? \
+               AND (t.hash = unhex(?) OR t.inner_tx_hash = unhex(?))",
         )
         .bind(ledger_sequence)
+        .bind(hash_hex)
         .bind(hash_hex)
         .fetch_optional::<TxDetailRawRow>()
         .await?;
