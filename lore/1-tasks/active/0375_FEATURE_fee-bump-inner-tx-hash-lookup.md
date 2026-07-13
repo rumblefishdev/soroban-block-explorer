@@ -2,7 +2,7 @@
 id: '0375'
 title: 'Fee-bump inner_tx_hash lookup — resolve the hard 404'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0359']
 tags: [priority-medium, effort-small, layer-api, fee-bump]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0359 tracker. K3-2.'
+  - date: 2026-07-13
+    status: active
+    who: karolkow
+    note: 'Activated for implementation.'
 ---
 
 # Fee-bump inner_tx_hash lookup
