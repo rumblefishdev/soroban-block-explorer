@@ -332,8 +332,12 @@ fn find_currency<'a>(
         .find(|c| c.code.as_deref() == Some(asset_code) && c.issuer.as_deref() == Some(issuer))
 }
 
-/// `:id/transactions` dispatch. CH keys on `(ledger_sequence, id)` over
-/// `operations_appearances`, using the surrogate ids carried on the row.
+/// `:id/transactions` dispatch — the composed read (task 0359): the
+/// `operation_asset_appearances` fan-out on `id` UNION the
+/// `soroban_invocations_appearances` activity of the asset's contract
+/// surrogate(s). The surrogates make EVERY asset type complete: a Soroban-native
+/// (type-3) token's own contract (its fan-out is empty — the F2/#1 fix), and a
+/// classic/native asset's SAC facet (its SAC-contract activity — F-F).
 async fn fetch_asset_tx_for_source(
     state: &AppState,
     row: &AssetRow,
@@ -341,7 +345,18 @@ async fn fetch_asset_tx_for_source(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
-    queries::fetch_transactions(&state.ch(), row.id, limit, cursor, direction).await
+    // ADR 0051: an asset has ONE associated contract, never both — its own
+    // contract if it is a Soroban-native (type-3) token, else the wrapping SAC of
+    // a classic / native asset. Arm B seeks that contract's invocations.
+    let contract_surrogate = if row.contract_surrogate_id != 0 {
+        Some(row.contract_surrogate_id)
+    } else if row.sac_contract_surrogate != 0 {
+        Some(row.sac_contract_surrogate)
+    } else {
+        None
+    };
+    queries::fetch_transactions(&state.ch(), row.id, contract_surrogate, limit, cursor, direction)
+        .await
 }
 
 /// Build the opaque asset-transactions cursor for a boundary row. CH keys on

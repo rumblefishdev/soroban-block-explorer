@@ -619,50 +619,74 @@ struct AssetTxPageChRow {
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
     asset_id: i64,
+    contract_surrogate: Option<i64>,
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // CH cursor only; a `Pg` variant never reaches here (the handler's
-    // cross-source guard rejects it). Inlined i64 — no injection surface; the
-    // clause is omitted entirely on the first page so no NULL is bound.
+    // CH cursor only (the handler's cross-source guard rejects a `Pg` variant).
+    // Inlined i64 — no injection surface; omitted on the first page so no NULL is
+    // bound. Unqualified columns: each seek is a single-table read, no ambiguity.
     let cursor_clause = match cursor {
         Some(TxListCursor::Ch {
             ledger_sequence,
             tiebreak,
-        }) => format!(
-            " AND (p.ledger_sequence, p.transaction_id) {op} ({ledger_sequence}, {tiebreak})"
-        ),
+        }) => {
+            format!(" AND (ledger_sequence, transaction_id) {op} ({ledger_sequence}, {tiebreak})")
+        }
         _ => String::new(),
     };
 
-    // Step 1: leading-key seek over `operation_asset_appearances`. `asset_id` IS
-    // the leading sort key, so this is a bounded PK-prefix range read — not the
-    // old non-leading density-scan on `operations_appearances` that timed out
-    // (the perf fix for this endpoint IS the fan-out — asttxs convergence).
-    // `LIMIT 1 BY (ledger, tx)` collapses per-op fan-out to one row per tx on the
-    // asset-contiguous range (does NOT defeat read-in-order here). The
-    // `max(sequence)` fence keeps the seek behind the ledgers commit marker, so a
-    // head key whose tx header isn't written yet cannot truncate the page.
-    let driver_sql = format!(
-        "SELECT p.ledger_sequence AS ledger_sequence, p.transaction_id AS transaction_id \
-         FROM operation_asset_appearances p \
-         WHERE p.asset_id = {asset_id} \
-           AND p.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-         ORDER BY p.ledger_sequence {order}, p.transaction_id {order} \
-         LIMIT 1 BY p.ledger_sequence, p.transaction_id \
-         LIMIT {limit}"
-    );
-    let raw = client
-        .query(&driver_sql)
-        .fetch_all::<AssetTxKeyChRow>()
-        .await?;
-    let keys: Vec<(i64, i64)> = raw
-        .iter()
-        .map(|r| (r.ledger_sequence, r.transaction_id))
-        .collect();
+    // Step 1 — one or two keyset arms, merged (task 0359 composed read):
+    //   A. `operation_asset_appearances` on `asset_id` — classic / native activity
+    //      (empty for a pure type-3 token: no classic op names it).
+    //   B. `soroban_invocations_appearances` on the asset's single associated
+    //      contract (ADR 0051 — a type-3 token's OWN contract, or a classic/native
+    //      asset's wrapping SAC, never both). Serves the type-3 asset page (its
+    //      fan-out is empty — the #1 regression fix) and a classic asset's SAC
+    //      activity (F-F). `None` → arm A only.
+    // Same seek both arms: leading-PK range behind the `max(sequence)` fence,
+    // `LIMIT 1 BY` per tx. The union's top-`limit` (sort + dedup + truncate) is the
+    // global page; `dedup` drops a tx returned by both arms.
+    let seek = |table: &str, key_col: &str, key: i64| {
+        format!(
+            "SELECT ledger_sequence, transaction_id FROM {table} \
+             WHERE {key_col} = {key} \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+             ORDER BY ledger_sequence {order}, transaction_id {order} \
+             LIMIT 1 BY ledger_sequence, transaction_id \
+             LIMIT {limit}"
+        )
+    };
+
+    let mut sqls = vec![seek("operation_asset_appearances", "asset_id", asset_id)];
+    if let Some(contract_id) = contract_surrogate {
+        sqls.push(seek("soroban_invocations_appearances", "contract_id", contract_id));
+    }
+
+    let mut keys: Vec<(i64, i64)> = Vec::new();
+    for sql in &sqls {
+        keys.extend(
+            client
+                .query(sql)
+                .fetch_all::<AssetTxKeyChRow>()
+                .await?
+                .iter()
+                .map(|r| (r.ledger_sequence, r.transaction_id)),
+        );
+    }
+
+    // Merge the arms into the global keyset page (order by the page direction,
+    // dedup a tx returned by both, keep the first `limit`).
+    if order == "DESC" {
+        keys.sort_unstable_by(|a, b| b.cmp(a));
+    } else {
+        keys.sort_unstable();
+    }
+    keys.dedup();
+    keys.truncate(limit as usize);
 
     if keys.is_empty() {
         return Ok(Vec::new());
