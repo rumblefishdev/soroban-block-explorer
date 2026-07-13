@@ -351,7 +351,12 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         contract_deployments: all_contract_deployments,
         account_states: all_account_states,
         liquidity_pools: all_liquidity_pools,
-        pool_snapshots: all_pool_snapshots,
+        // lore-0356: collapse to one snapshot per (pool, ledger) = end-of-ledger
+        // reserves. `extract_liquidity_pools` runs per-tx (emitting one snapshot
+        // per mutating change), so dedup must happen here at ledger scope after
+        // aggregating every tx's snapshots — a pool touched by >1 tx cannot be
+        // deduped inside a single per-tx call.
+        pool_snapshots: xdr_parser::dedup_final_pool_snapshots(all_pool_snapshots),
         assets: all_assets,
         nfts: all_nfts,
         nft_events,
