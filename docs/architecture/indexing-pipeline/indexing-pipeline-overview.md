@@ -293,6 +293,17 @@ schema on Hetzner. That write includes both:
 The full table inventory (17 + 2 quarantine + 1 dictionary = 20 schema
 objects) is in `crates/db-clickhouse/schema/init.sql`.
 
+The presence indexes `transaction_participants` and `operation_asset_appearances`
+are fed from **two** sources: classic operation bodies, and decoded Soroban token
+events. Per lore task
+[0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)
+the staging event loop decodes SEP-41 / CAP-67 `transfer` / `mint` / `burn` /
+`clawback` events (`derive_token_event`, see xdr-parsing overview §5.6) and
+registers their `from` / `to` as account participants plus — for SAC-wrapped
+classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`). This is
+pure presence: no amount is stored, so the account and asset activity pages read
+the same indexes unchanged.
+
 Per-ledger replay safety: every state table is `ReplacingMergeTree(version)`
 keyed on a column whose value monotonically reflects the latest observation
 (`last_seen_ledger`, `last_updated_ledger`, `current_owner_ledger`,
@@ -384,6 +395,19 @@ residue = TTL-archived tail + true rebasing). It reads CURRENT chain state, so t
 regardless of indexer lag; live ingest supersedes it on catch-up
 (`ReplacingMergeTree` by `last_updated_ledger`). CH-only, idempotent, `--dry-run`
 supported.
+
+The **`soroban-token-flow-backfill`** one-shot pass (task
+[0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md))
+closes the historical gap for the event-driven presence rows described in §5.3:
+the live hook only writes them for new ledgers, and event-derived asset presence
+never existed for any verb. It scans `soroban_events` (the decoded typed-JSON
+`topics_xdr` — no S3 re-parse) in ledger windows, re-derives participant + asset
+rows with the SAME `derive_token_event` the live path uses (the surrogate hashing
+is `cityhash_102_128`, not CH SQL's `cityHash64()`, so the decode must run in
+Rust to stay bit-identical), and appends to `transaction_participants` +
+`operation_asset_appearances`. Because it only appends into `ReplacingMergeTree`
+(no `EXCHANGE`), it is safe to run **with the indexer live** — any overlap dedups
+on merge. `--start` / `--end` scope the range; `--dry-run` counts without writing.
 
 ### 6.3 Backfill Scope and Execution Model
 

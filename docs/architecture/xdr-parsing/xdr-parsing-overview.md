@@ -551,6 +551,32 @@ parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefo
 contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
 prod/RPC evidence behind these shapes.)
 
+### 5.6 Fungible Token Event Decode (`parse_token_event`)
+
+Fungible SEP-41 / CAP-67 token movements — `transfer` / `mint` / `burn` /
+`clawback` — are decoded by `parse_token_event` (`crates/xdr-parser/src/event_filters.rs`),
+the fungible counterpart to `detect_nft_events`. Where the NFT path keys on a
+`token_id`, this path reads the account operands and the asset identity (lore
+task [0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)):
+
+- **operands** — `transfer [sym, from, to, …]`, `mint [sym, to, …]`,
+  `burn`/`clawback [sym, from, …]`. Missing / non-address operands ⇒ not a token
+  event.
+- **asset** — CAP-67 "unified" SAC events carry the classic asset as a **trailing
+  SEP-11 string topic**: `"native"` → the native XLM asset, `"CODE:ISSUER"` → the
+  classic credit. A bespoke (non-SAC) token omits it, so its asset identity is the
+  emitting contract (`EventAsset::Contract`).
+- **amount** — not decoded here. The presence indexes never store it, and the
+  tx-detail page decodes amounts from archive XDR at read time (E3, ADR 0029), so
+  the flow parser only needs operands + asset (see indexing-pipeline overview §5.3).
+
+The decode is shared by live ingest and the `soroban-token-flow-backfill` one-shot
+pass via `db_clickhouse::persist::stage::derive_token_event`, so both emit
+byte-identical surrogate rows. NFT-shaped events (no SEP-11 asset string) still
+register their account operands as participants but are excluded from the fungible
+asset index — that identity is ambiguous and tracked separately by the NFT path
+above.
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR
