@@ -763,13 +763,19 @@ async fn search_nfts(
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts \
              WHERE id IN (SELECT contract_surrogate FROM page) GROUP BY id \
+         ), \
+         scm AS ( \
+             SELECT contract_id, argMax(name, version) AS name \
+             FROM soroban_contract_metadata \
+             WHERE contract_id IN (SELECT contract_id FROM sc) \
+             GROUP BY contract_id \
          ) \
          SELECT \
              ifNull(p.e_name, '')            AS identifier, \
-             ifNull(p.e_collection_name, '') AS label, \
+             ifNull(coalesce(nullIf(scm.name, ''), nullIf(p.e_collection_name, '')), '') AS label, \
              sc.contract_id                  AS contract_strkey, \
              p.token_id                      AS token_id \
-         FROM page p INNER JOIN sc ON sc.id = p.contract_surrogate"
+         FROM page p INNER JOIN sc ON sc.id = p.contract_surrogate LEFT JOIN scm ON scm.contract_id = sc.contract_id"
     );
     let rows = client
         .query(&sql)

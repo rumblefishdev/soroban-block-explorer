@@ -156,8 +156,20 @@ pub async fn fetch_list(
     } else {
         ""
     };
+    // Filter must match the SERVED value: coalesce(ledger METADATA name,
+    // enrichment collection), ledger-precedence. Branch 1 — contract's latest
+    // METADATA name = ?. Branch 2 — enrichment collection = ?, but only for
+    // contracts with NO ledger name (else coalesce would serve the ledger name,
+    // not the enrichment one). Keeps filter[collection] consistent with the
+    // collection_name the list displays.
     let collection_pred = if params.filter_collection.is_some() {
-        " AND e.collection_name = ?"
+        " AND ( \
+             n.contract_id IN (SELECT sc0.id FROM soroban_contracts sc0 WHERE sc0.contract_id IN \
+                 (SELECT contract_id FROM soroban_contract_metadata GROUP BY contract_id HAVING argMax(name, version) = ?)) \
+             OR (e.collection_name = ? AND n.contract_id NOT IN \
+                 (SELECT sc1.id FROM soroban_contracts sc1 WHERE sc1.contract_id IN \
+                     (SELECT contract_id FROM soroban_contract_metadata GROUP BY contract_id HAVING argMax(name, version) != ''))) \
+         )"
     } else {
         ""
     };
@@ -237,7 +249,9 @@ pub async fn fetch_list(
         query = query.bind(c);
     }
     if let Some(c) = &params.filter_collection {
-        query = query.bind(c);
+        // Two placeholders in `collection_pred`: ledger-name match + enrichment
+        // match (same filter value bound to both).
+        query = query.bind(c).bind(c);
     }
     if let Some(n) = &params.filter_name {
         query = query.bind(n);
