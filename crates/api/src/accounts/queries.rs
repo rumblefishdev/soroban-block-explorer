@@ -136,9 +136,10 @@ struct AccountListBalanceRow {
 ///
 /// Divergences from PG:
 ///
-/// - **`FINAL`** on `accounts` (ReplacingMergeTree, versioned by
-///   `last_seen_ledger`) collapses re-ingested account versions to the latest;
-///   the native-balance subquery is `FINAL` for the same reason.
+/// - **No `accounts FINAL`** (task 0385): Step 1 pages `accounts_recent`, a
+///   refreshable-MV copy already deduped to one row per account and ordered by
+///   `(last_seen_ledger, id)`, so it seeks instead of scanning. The native-balance
+///   seek (Step 2) is `FINAL` on `balances`/`assets` to collapse re-ingest versions.
 /// - **Native balance** is the `asset_type = 0` row of
 ///   `account_balances_current`, mirroring the PG partial-index join. A
 ///   `1 AS matched` marker in the subquery + `if(abc.matched = 1, …, NULL)`
@@ -150,11 +151,12 @@ struct AccountListBalanceRow {
 ///   (the documented defect that forced the transactions list to inline). The
 ///   values are `i64`, so no injection surface.
 ///
-/// **Read-cost caveat:** the sort is `(last_seen_ledger, id)` — NOT the
-/// `accounts` primary key (`account_id`) — so CH scans the whole table to
-/// order it, and the `FINAL` + native-balance join widen that. Needs an
-/// operator read/memory smoke on the first page before the prod flag flip,
-/// same as the transactions no-filter list.
+/// **Read cost (task 0385):** Step 1 is a read-in-order SEEK of `accounts_recent`
+/// on its `(last_seen_ledger, id)` sort key (~page rows), replacing the old
+/// whole-table `accounts FINAL` scan+sort (~24M). A projection on the base RMT
+/// was CH-26.3-rejected (task 0353); the refreshable MV is the accepted
+/// alternative. Output is ≤(MV refresh interval)-stale on the very newest rows —
+/// acceptable for this low-traffic browse list.
 pub async fn fetch_list(
     client: &clickhouse::Client,
     params: &ResolvedListParams,
@@ -180,12 +182,15 @@ pub async fn fetch_list(
         ""
     };
 
-    // Step 1: page the accounts — NO native-balance join (task 0319). The old
-    // `LEFT JOIN (… account_balances_current FINAL WHERE asset_type=0)` built
-    // the join side from EVERY account's native balance (~1.5M of the 2.09M
-    // rows this query read), driving the ~2.2s prod TTFB. (The `accounts FINAL`
-    // + non-PK `last_seen_ledger` scan+sort still costs — that needs a
-    // projection, deliberately out of scope here.)
+    // Step 1: page the accounts — NO native-balance join (task 0319, which removed
+    // the per-account `account_balances_current FINAL` join that drove the ~2.2s
+    // prod TTFB). Source is `accounts_recent` (task 0385): a refreshable-MV copy of
+    // `accounts` ORDER BY (last_seen_ledger, id), full recompute + atomic EXCHANGE,
+    // so this is a read-in-order SEEK on the list's sort key — not the old
+    // `accounts FINAL` + non-PK `last_seen_ledger` whole-dimension scan+sort (a
+    // projection was CH-26.3-rejected on the RMT, task 0353). Reads need no FINAL
+    // (the MV's EXCHANGE publishes an already-deduped table); freshness = the MV
+    // refresh interval.
     let page_sql = format!(
         "SELECT \
             a.id                AS id, \
@@ -193,7 +198,7 @@ pub async fn fetch_list(
             a.last_seen_ledger  AS last_seen_ledger, \
             a.first_seen_ledger AS first_seen_ledger, \
             a.home_domain       AS home_domain \
-         FROM accounts a FINAL \
+         FROM accounts_recent a \
          WHERE 1{cursor_clause}{domain_filter} \
          ORDER BY a.last_seen_ledger {order}, a.id {order} \
          LIMIT ?"
