@@ -2,7 +2,7 @@
 id: '0386'
 title: 'PERF: main txlist — drop FINAL in fetch_tx_list_aggregates (operations_appearances + soroban_contracts whole-table merge)'
 type: PERF
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0357', '0364', '0365']
 tags: [perf, clickhouse, read-path, priority-high, effort-medium]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Task created — split out of 0357 cluster after Stanisław flagged main /transactions list still reads ~2M rows/request'
+  - date: 2026-07-13
+    status: active
+    who: karolkow
+    note: 'Promoted to active'
 ---
 
 # PERF: main txlist — drop FINAL in `fetch_tx_list_aggregates`
