@@ -43,6 +43,7 @@ use std::collections::{HashMap, HashSet};
 
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
+use xdr_parser::EventAsset;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
@@ -447,6 +448,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ---- Accounts universe + per-tx participant union ----
     let mut account_keys: HashSet<String> = HashSet::new();
     let mut participants_per_tx: HashMap<String, HashSet<String>> = HashMap::new();
+    // Task 0383 (K3-4 asset side): (asset_id) touched by a decoded Soroban token
+    // event, per tx. Emitted into `operation_asset_appearances` once tx_ids are
+    // resolved. `HashSet` dedups the common case of many token events per tx.
+    let mut event_assets_per_tx: HashMap<String, HashSet<i64>> = HashMap::new();
     let has_soroban: HashMap<String, bool> = tx_has_soroban_map(operations);
     // O(1) per-tx op count lookup. Built once over `operations` so the
     // transactions loop stays linear in `transactions.len()` rather than
@@ -500,16 +505,40 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
+    // Task 0383 (K2-7 + K3-4): decode SEP-41 / CAP-67 token events
+    // (transfer / mint / burn / clawback) into participant + asset presence.
+    //
+    // Scope: only Soroban-context txs (`has_soroban`). Protocol 23 makes every
+    // classic payment emit a SAC transfer event too, but those txs already
+    // register their accounts + assets via the op path (0359) — measured 99.4%
+    // of transfer events, with 670/670 participant coverage (see lore 0383
+    // S-devils-advocate-findings). The net-new value is the contract-internal
+    // flows a classic op never sees, i.e. exactly the `has_soroban` txs.
+    // Presence only — no amount (the tx-detail page decodes it from archive XDR).
     for (tx_hash, evs) in events {
+        if !has_soroban.get(tx_hash).copied().unwrap_or(false) {
+            continue;
+        }
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
+        let asset_entry = event_assets_per_tx.entry(tx_hash.clone()).or_default();
         for ev in evs {
-            if let Some((from, to)) = xdr_parser::transfer_participants(&ev.topics) {
-                for participant in [from, to] {
-                    if is_strkey_account(&participant) {
-                        account_keys.insert(participant.clone());
-                        entry.insert(participant);
-                    }
-                }
+            // Skip diagnostic-source events — they are host trace/simulation
+            // output, not a real state change, and are dropped from the
+            // persisted `soroban_events` (below). Filtering here keeps live
+            // ingest byte-identical to the backfill (which reads `soroban_events`)
+            // and never registers a participant/asset from a failed-call trace.
+            if is_diagnostic(ev.source) {
+                continue;
+            }
+            let Some(derived) = derive_token_event(&ev.topics) else {
+                continue;
+            };
+            for key in derived.participant_strkeys {
+                account_keys.insert(key.clone());
+                entry.insert(key);
+            }
+            if let Some(asset_id) = derived.asset_id {
+                asset_entry.insert(asset_id);
             }
         }
     }
@@ -1029,6 +1058,23 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             amount: agg.count,
             ledger_sequence: ledger_sequence_i64,
         });
+    }
+
+    // ---- operation_asset_appearances: event-derived (task 0383, K3-4) ----
+    // SAC / bespoke token moves (transfer / mint / burn / clawback) make the
+    // moved asset appear in the tx. Same (asset, tx) grain as the op-derived
+    // rows above; the RMT collapses any overlap. Presence only (model A).
+    for (tx_hash, asset_ids) in &event_assets_per_tx {
+        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
+            continue;
+        };
+        for &asset_id in asset_ids {
+            out.op_asset_rows.push(OperationAssetAppearanceRow {
+                asset_id,
+                ledger_sequence: ledger_sequence_i64,
+                transaction_id: tx_id,
+            });
+        }
     }
 
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a) ----
@@ -2005,6 +2051,140 @@ fn merge_account_state_overrides(
             )
         })
         .collect()
+}
+
+/// The 0383 presence rows derived from one Soroban token event: the G-account
+/// participants and (for SAC-wrapped classic/native only) the touched asset
+/// surrogate. Shared by ingest (below) and the `soroban_token_flow` backfill so
+/// both emit byte-identical rows — the surrogate hashing is `cityhash_102_128`
+/// (see [`ids`]) and cannot be reproduced in CH SQL, so a single Rust source of
+/// truth is the only way to guarantee the backfill dedups against live rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedTokenEvent {
+    /// `from`/`to` operands that are G-accounts (contract `C…` addresses dropped).
+    pub participant_strkeys: Vec<String>,
+    /// SAC-wrapped classic/native asset surrogate; `None` for bespoke/NFT
+    /// (`EventAsset::Contract`) — out of the asset-index scope (task 0383 K1-3).
+    /// The formula matches the op-derived `operation_asset_appearances` keys
+    /// exactly (`NATIVE_ASSET_ID` / `asset_id(1, code, account_id(issuer), 0)`),
+    /// so event rows dedup against op rows.
+    pub asset_id: Option<i64>,
+}
+
+/// Decode one Soroban contract event into its 0383 presence rows. `None` when
+/// the event is not a SEP-41 / CAP-67 token event.
+pub fn derive_token_event(topics: &Value) -> Option<DerivedTokenEvent> {
+    let token = xdr_parser::parse_token_event(topics)?;
+    let participant_strkeys = [token.from, token.to]
+        .into_iter()
+        .flatten()
+        .filter(|k| is_strkey_account(k))
+        .collect();
+    let asset_id = match token.asset {
+        EventAsset::Native => Some(ids::NATIVE_ASSET_ID),
+        EventAsset::Credit { code, issuer } => {
+            Some(ids::asset_id(1, &code, ids::account_id(&issuer), 0))
+        }
+        // Bespoke / NFT: no SEP-11 asset string → out of the asset-index scope.
+        EventAsset::Contract => None,
+    };
+    Some(DerivedTokenEvent {
+        participant_strkeys,
+        asset_id,
+    })
+}
+
+#[cfg(test)]
+mod derive_token_event_tests {
+    use super::*;
+    use serde_json::json;
+
+    const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
+    const G_FROM: &str = "GBLVLKGRDU66WLWY4XRORJXCC4LDZ347AQTUYBEPBABIZTVITW2OAGIP";
+    const G_TO: &str = "GADKLS7RS3OC2MXGEZXQA46JNF3FBVSTHTWLDPRF7TWI6GXVP4OUE3ZR";
+
+    fn addr(v: &str) -> Value {
+        json!({ "type": "address", "value": v })
+    }
+    fn sym(v: &str) -> Value {
+        json!({ "type": "sym", "value": v })
+    }
+    fn strv(v: &str) -> Value {
+        json!({ "type": "string", "value": v })
+    }
+
+    #[test]
+    fn sac_transfer_yields_participants_and_classic_asset() {
+        let d = derive_token_event(&json!([
+            sym("transfer"),
+            addr(G_FROM),
+            addr(G_TO),
+            strv(&format!("USDC:{ISSUER}"))
+        ]))
+        .unwrap();
+        assert_eq!(
+            d.participant_strkeys,
+            vec![G_FROM.to_string(), G_TO.to_string()]
+        );
+        assert_eq!(
+            d.asset_id,
+            Some(ids::asset_id(1, "USDC", ids::account_id(ISSUER), 0))
+        );
+    }
+
+    #[test]
+    fn native_transfer_yields_native_asset() {
+        let d = derive_token_event(&json!([
+            sym("transfer"),
+            addr(G_FROM),
+            addr(G_TO),
+            strv("native")
+        ]))
+        .unwrap();
+        assert_eq!(d.asset_id, Some(ids::NATIVE_ASSET_ID));
+    }
+
+    #[test]
+    fn mint_yields_only_to_participant() {
+        let d = derive_token_event(&json!([
+            sym("mint"),
+            addr(G_TO),
+            strv(&format!("USDC:{ISSUER}"))
+        ]))
+        .unwrap();
+        assert_eq!(d.participant_strkeys, vec![G_TO.to_string()]);
+        assert!(d.asset_id.is_some());
+    }
+
+    #[test]
+    fn bespoke_contract_event_has_participants_but_no_asset() {
+        // NFT / bespoke transfer: no SEP-11 asset string → asset out of scope,
+        // but the accounts are still tx participants.
+        let d = derive_token_event(&json!([sym("transfer"), addr(G_FROM), addr(G_TO)])).unwrap();
+        assert_eq!(
+            d.participant_strkeys,
+            vec![G_FROM.to_string(), G_TO.to_string()]
+        );
+        assert_eq!(d.asset_id, None);
+    }
+
+    #[test]
+    fn contract_address_participant_is_dropped() {
+        // from = a C-contract address → not a G-account, dropped from participants.
+        let d = derive_token_event(&json!([
+            sym("transfer"),
+            addr("CCONTRACTADDR"),
+            addr(G_TO),
+            strv("native")
+        ]))
+        .unwrap();
+        assert_eq!(d.participant_strkeys, vec![G_TO.to_string()]);
+    }
+
+    #[test]
+    fn non_token_event_is_none() {
+        assert!(derive_token_event(&json!([sym("swap"), addr(G_FROM)])).is_none());
+    }
 }
 
 #[cfg(test)]
