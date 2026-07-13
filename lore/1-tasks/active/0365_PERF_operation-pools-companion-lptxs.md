@@ -52,6 +52,17 @@ history:
       Activated (backlog → active). Implementation starts. Template to mirror:
       0359's `operation_asset_appearances` (PR #324) — the same indexer-written,
       entity-leading RMT companion pattern, on the pool dimension instead.
+  - date: 2026-07-10
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Backfill approach chosen — Path B (decoupled CH-side `arrayJoin` re-key), not an
+      XDR re-parse: `oa.pool_ids` is already in CH, so `INSERT … arrayJoin(pool_ids) …
+      WHERE ledger >= 50457424` backfills the Soroban era without S3/XDR. Reviewed the
+      parallel "Backfill planning and execution" session (the 0359 `backfill-runner Run`
+      re-parse): `operation_pools` needs no part of it — but if 0365 ingestion is in that
+      build, it rides the re-parse idempotently (pure presence, versionless RMT, no
+      DELETE/version/doubling). 0365 does not depend on that re-parse.
 ---
 
 # PERF: operation_pools — pool-keyed companion for lptxs prefix-seek
@@ -126,10 +137,28 @@ the identical structure. Choose the **indexer-written table**:
 2. **Indexer** — `stage::prepare` emits `operation_pool_rows` (`arrayJoin` of
    `pool_ids` per op-appearance → `(pool_id, ledger, tx)`); `writer` writes them
    beside `transaction_participants`; re-ingest DELETE-by-ledger parity.
-3. **Backfill** — one-shot `INSERT INTO operation_pools SELECT arrayJoin(pool_ids)
-AS pool_id, ledger_sequence, transaction_id FROM operations_appearances`, or
-   extend the `pool-ids-backfill` worker (already re-parses these ledgers). RMT on
-   `(pool_id, ledger, tx)` makes an overlapping backfill idempotent.
+3. **Backfill — Path B (decoupled CH-side re-key; chosen 2026-07-10).** No XDR
+   re-parse needed: the source `oa.pool_ids` is already in CH (correct
+   post-0261/0268), unlike `operation_asset_appearances` (0359) whose second leg
+   lives only in XDR. After step 2 lands (live ingestion keeps new ledgers current),
+   backfill history with a pure CH re-key:
+
+   ```sql
+   INSERT INTO operation_pools
+   SELECT arrayJoin(pool_ids) AS pool_id, ledger_sequence, transaction_id
+   FROM operations_appearances
+   WHERE ledger_sequence >= 50457424;   -- Soroban era = the oa coverage
+   ```
+
+   Versionless RMT on `(pool_id, ledger, tx)` → idempotent; no DELETE, no version,
+   no page hole (pure presence, no before/after states — unlike LP snapshots).
+   Runnable anytime, independent of the 0359 / #318 / snapshot re-parse chain.
+   **Coordination with the 0359 backfill:** if step 2 is in the build when their
+   `backfill-runner Run` re-parse runs, `operation_pools` joins that write-set and is
+   re-emitted for free — harmless (same `(pool_id, ledger, tx)` dedups). 0365 does
+   NOT depend on it; riding the XDR re-parse would only re-derive from XDR what the
+   CH re-key gets cheaply.
+
 4. **Driver swap** — `liquidity_pools::fetch_pool_transactions` → `WHERE pool_id = ?
 … ORDER BY ledger DESC, tx DESC LIMIT 1 BY (ledger, tx) LIMIT ?` (mirrors the
    acctxs driver on `transaction_participants`). Drop the over-fetch×4 / re-fetch×128
@@ -151,8 +180,9 @@ ledger, tx))` = **363.17M** deduped rows.
 - [ ] Output byte-identical to the current driver (prod before/after), across
       sparse / dense / mega pools; E20 (`/liquidity-pools/:id/transactions` vs
       Horizon) green.
-- [ ] `operation_pools` backfilled over full history; the indexer keeps it current,
-      re-ingest-safe (DELETE-by-ledger parity with `transaction_participants`).
+- [ ] `operation_pools` backfilled over the Soroban era via CH-side `arrayJoin`
+      re-key (Path B, no XDR re-parse); the indexer keeps it current, re-ingest-safe
+      (DELETE-by-ledger parity with `transaction_participants`).
 - [ ] Retire the prod-only `oa_pool_seek` projection (0281).
 - [ ] **Docs updated** — REQUIRED (new schema object + ingestion step): schema +
       ingestion pages under `docs/architecture/**` per
