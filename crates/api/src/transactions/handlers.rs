@@ -281,9 +281,13 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     // other; the heavy path is the dominant cost (cross-region archive fetch +
     // XDR parse), so running the ops query concurrently hides its round-trip
     // under the archive latency instead of paying both serially.
+    // Key the archive fetch on the resolved header hash, not the queried one:
+    // on a fee-bump inner-hash lookup the queried hash never matches the
+    // applied (outer) tx in the ledger meta, so the extractor would blank the
+    // heavy block. `tx.hash` is always the outer hash (task 0375).
     let (op_rows_res, heavy) = tokio::join!(
         fetch_operations_for_source(&state, &tx),
-        compute_heavy(&state, &hash, &tx),
+        compute_heavy(&state, &tx.hash, &tx),
     );
     let op_rows: Vec<OpRow> = match op_rows_res {
         Ok(r) => r,
