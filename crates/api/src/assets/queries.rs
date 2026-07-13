@@ -678,9 +678,11 @@ pub async fn fetch_transactions(
         );
     }
 
-    // Merge the arms into the global keyset page (order by the page direction,
-    // dedup a tx returned by both, keep the first `limit`).
-    if order == "DESC" {
+    // Merge the arms into the global keyset page: sort in the page direction
+    // (`Next` = newest-first DESC, `Prev` = ASC — matching each arm's SQL `order`,
+    // derived from the typed `direction`, not the SQL string), dedup a tx returned
+    // by both arms, keep the first `limit`.
+    if matches!(direction, Direction::Next) {
         keys.sort_unstable_by(|a, b| b.cmp(a));
     } else {
         keys.sort_unstable();
