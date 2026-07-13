@@ -208,11 +208,17 @@ pub async fn fetch_list(
              FROM soroban_contracts \
              WHERE id IN (SELECT contract_surrogate FROM page) \
              GROUP BY id \
+         ), \
+         scm AS ( \
+             SELECT contract_id, argMax(name, version) AS name \
+             FROM soroban_contract_metadata \
+             WHERE contract_id IN (SELECT contract_id FROM sc) \
+             GROUP BY contract_id \
          ) \
          SELECT \
              sc.contract_id                    AS contract_id, \
              p.token_id                        AS token_id, \
-             nullIf(p.e_collection_name, '')   AS collection_name, \
+             coalesce(nullIf(scm.name, ''), nullIf(p.e_collection_name, '')) AS collection_name, \
              nullIf(p.e_name, '')              AS name, \
              nullIf(p.e_media_url, '')         AS media_url, \
              p.minted_at_ledger                AS minted_at_ledger, \
@@ -221,6 +227,7 @@ pub async fn fetch_list(
              p.contract_surrogate              AS contract_surrogate \
          FROM page p \
          INNER JOIN sc  ON sc.id  = p.contract_surrogate \
+         LEFT JOIN  scm ON scm.contract_id = sc.contract_id \
          LEFT JOIN  own ON own.id = p.current_owner_id \
          ORDER BY ifNull(p.minted_at_ledger, 0) {order}, p.contract_surrogate {order}, p.token_id {order}"
     );
@@ -286,7 +293,10 @@ pub async fn fetch_by_composite(
                SELECT \
                    n.current_owner_id                AS current_owner_id, \
                    n.token_id                        AS token_id, \
-                   nullIf(ne.collection_name, '')    AS collection_name, \
+                   coalesce( \
+                       nullIf((SELECT argMax(name, version) FROM soroban_contract_metadata WHERE contract_id = ?), ''), \
+                       nullIf(ne.collection_name, '') \
+                   )                                 AS collection_name, \
                    nullIf(ne.name, '')               AS name, \
                    nullIf(ne.media_url, '')          AS media_url, \
                    n.minted_at_ledger                AS minted_at_ledger, \
@@ -306,6 +316,7 @@ pub async fn fetch_by_composite(
                LIMIT 1";
     let Some(r) = client
         .query(sql)
+        .bind(contract_id)
         .bind(contract_id)
         .bind(token_id)
         .fetch_optional::<NftChRow>()
