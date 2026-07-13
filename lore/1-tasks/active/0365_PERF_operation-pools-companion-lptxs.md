@@ -2,7 +2,7 @@
 id: '0365'
 title: 'PERF: operation_pools — indexer-written pool-keyed companion for lptxs prefix-seek (was: entity-keyed MV for the tx-list family)'
 type: PERF
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0357', '0281', '0354', '0364', '0268', '0266', '0359']
 tags:
@@ -45,6 +45,13 @@ history:
       must own both writes. Precedent: `transaction_participants`. Prod-measured
       size: `sum(length(pool_ids))` = 377.63M (ceiling), `uniq` deduped = 363.17M
       rows → ~2 GB compressed (~1.2 GB with Delta codecs); oa itself is 6.41B rows.
+  - date: 2026-07-10
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated (backlog → active). Implementation starts. Template to mirror:
+      0359's `operation_asset_appearances` (PR #324) — the same indexer-written,
+      entity-leading RMT companion pattern, on the pool dimension instead.
 ---
 
 # PERF: operation_pools — pool-keyed companion for lptxs prefix-seek
