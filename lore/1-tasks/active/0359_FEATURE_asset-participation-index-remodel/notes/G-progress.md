@@ -48,7 +48,7 @@ history:
 - [x] #6 per-tx `HashSet<asset_id>` dedup before push (write volume)
 - [x] #2 native rows written **and now served** (read gate removed via C6; keep-writing is by design)
 - [x] #9 `row.id==0` guard replaces the removed early-return (🔀 = C6)
-- [ ] #1 type-3 `/assets/{C}/transactions` empty — **DEGRADED to read-only reuse/link, low value.** Verified: the emitter emits NOTHING for `InvokeHostFunction` (fan-out has zero type-3 rows) and `asset_id(type-3) = contract_id`, so a type-3 token's asset-txs ≡ its `/contracts/{C}/invocations` (same table, same key). **No data is missing (invocations already serve it) and NOTHING is double-written** (Soroban flow lives only in `soroban_invocations_appearances`). So this is pure UX: reuse the invocations query for the type-3 asset tab, or link to the contract page. NOT an ADR, not urgent. (Distinct from F-F, which unions SAC invocations for CLASSIC assets — there the union DOES add data.)
+- [x] #1 type-3 `/assets/{C}/transactions` empty — **FIXED (composed read).** Deep-dive re-classified it from "low value" to a **regression**: the emitter emits nothing for `InvokeHostFunction` (fan-out has zero type-3 rows) and the old `operations_appearances` contract branch was dropped, so a type-3 token's asset page went EMPTY vs prod. Fix: `fetch_transactions` gained a 2nd keyset arm over `soroban_invocations_appearances` on the token's contract surrogate. Same commit serves F-F (SAC facet of classic/native). Read-side, ships with the deploy.
 - [x] #7 ADR 0032 `docs/architecture/**` updated (schema-overview §4.5.1 + shape list/tree + rewrote 10_get_assets_transactions.sql)
 - [ ] #8 `LIMIT 1 BY` read-in-order — **BLOCKED**: fan-out table not on prod yet (verified 0 rows in system.tables). Analytically fine (`asset_id =` makes `(ledger, tx)` the residual PK order → read-in-order holds; `LIMIT 1 BY` collapses adjacents without a re-sort). Run `EXPLAIN indexes=1` / `read_rows` on a hot asset **after** the CREATE TABLE + backfill.
 - [ ] #10 dup: `AssetRef ≈ SacAssetIdentity` — **WONTFIX (karolkow).** Real shape-redundancy, but they are two different concepts (asset an op TOUCHES vs asset a SAC WRAPS) — same shape by coincidence. Merge cost (33 refs / 8 files + permanent cross-subsystem coupling) ≫ keeping two 15-line enums → don't dedup by shape. `SmallVec` micro-perf also skipped (perf, not reduction). 4th code-copy already removed by C3.
@@ -61,7 +61,7 @@ history:
 - [ ] F-C account tx list drops roles (crossed-offer counterparty, claimants, inflationDest, revoke-target, mint/burn recipients) — 🧊 (code in stash)
 - [ ] F-D contract-held classic/native orphaned when SAC un-sighted — 🧊
 - [x] F-E offers unindexed by asset
-- [ ] F-F SAC-contract activity not unioned into asset page (native 3.9M XLM-SAC) — 🧊 (🔀 = K3-1; MVP is single-arm)
+- [x] F-F SAC-contract activity unioned into asset page (native 3.9M XLM-SAC) — DONE via the composed-read arm B (🔀 = K3-1; shipped with #1)
 
 ## 5. K1 — participation-loss
 
@@ -87,7 +87,7 @@ history:
 
 ## 7. K3 — two-hop-not-unioned
 
-- [ ] K3-1 asset SAC not unioned (🔀 = F-F) — 🧊
+- [x] K3-1 asset SAC unioned (🔀 = F-F) — DONE (composed-read arm B)
 - [ ] K3-2 fee-bump `inner_tx_hash` never indexed → hard 404 — 🧊
 - [ ] K3-3 tx `contract_ids[]` drops nested (100% of Soroban txs) — 🧊
 - [ ] K3-4 account/asset pages not unioned with soroban_events transfers — 🧊
@@ -130,6 +130,7 @@ history:
 - [ ] Adoption #3 shared commit-fence builder — partial (fence in query; builder open)
 - [ ] R1 shared tx-feed engine — 🧊
 - [ ] R2 typed OpFacts IR (post-backfill) — 🧊
+- [ ] **God-Payload / dual-extraction inconsistency (subset of R2)** — 🧊. `ExtractedOperation` now carries a TYPED `asset_appearances` field (0359), but accounts + contracts are still string-matched out of the `details` JSON in staging (`op_participant_str_keys`, `OpTyped::from_details`) — no `accounts_appearances` / `contract_appearances` field. So two extraction patterns coexist. When account coverage (F-C) lands, add a typed `counterparties` field (mirrors `asset_appearances`) — an incremental step toward R2's end-state (details-JSON becomes a derived view; staging drops the 4 string-matchers).
 - [ ] R3 ops cleanup: dead `account_balances_current`, `idx_oa_asset_issuer_id` bloom, legacy asset columns — 🧊
 - [ ] MAJOR: poison-pill quarantine
 - [ ] MAJOR: partition-pinned filtered global lists
