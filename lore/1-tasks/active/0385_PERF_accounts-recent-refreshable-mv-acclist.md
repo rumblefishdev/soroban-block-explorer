@@ -23,6 +23,17 @@ history:
       so acclist gets a real server-side fix under AC instead of relying on the
       FE 60s cache. Design co-designed + prod-sized this session (accounts 5-col
       footprint measured 1.56 GiB compressed). 0353 stays = ctrevents only.
+  - date: 2026-07-13
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Code landed in PR #328 (feat/0385): init.sql `accounts_recent` +
+      `accounts_recent_mv` (REFRESH EVERY 2 MINUTE, mirrors `balance_aggregates_mv`);
+      `accounts::fetch_list` Step 1 read-swap `FROM accounts_recent` (no FINAL) +
+      comments/fn-doc; docs schema overview §4.11. Remaining before done: PR merge →
+      prod manual `CREATE TABLE` + `CREATE MATERIALIZED VIEW` (init.sql is
+      fresh-install-only) → byte-identical `/v1/accounts` before/after + refresh
+      recompute memory check under the 6 GB cap.
 ---
 
 # PERF: accounts_recent — refreshable-MV last_seen seek for acclist
