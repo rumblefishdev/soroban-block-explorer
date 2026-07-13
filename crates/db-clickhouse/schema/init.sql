@@ -609,6 +609,11 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- asset_id = cityhash64 surrogate (ids::asset_id); native = hash64('native'), a
 -- first-class key, never an empty sentinel. Pure presence: duplicate (asset, tx)
 -- rows within a tx collapse in the RMT.
+-- NOT FK-guaranteed against `assets`: a fact row can hold an asset_id with no
+-- `assets` row (an asset touched only by failed txs, a rejected allow_trust with
+-- source != issuer, or a trustline predating the ingest window). Harmless -- the
+-- read path reaches a fact row only via an existing `assets` row, so such orphans
+-- are unreachable dead weight, never wrong output.
 CREATE TABLE IF NOT EXISTS operation_asset_appearances (
     asset_id        Int64,
     ledger_sequence Int64,

@@ -10,11 +10,16 @@
 //! from one issuer collapsed onto a single `<invalid>:ISSUER` id (silent
 //! cross-asset aggregation on the asset page).
 //!
-//! Injective policy: valid UTF-8 with trailing NULs stripped maps to that string;
-//! anything else maps to `0x` + lowercase hex of the raw bytes — never a shared
-//! sentinel, so distinct byte sequences never collide. Conformant codes are
-//! byte-identical to the old strict path, so no surrogate-id churn; only malformed
-//! codes re-key.
+//! Policy: valid UTF-8 with trailing NULs stripped maps to that string; anything
+//! else maps to `0x` + lowercase hex of the raw bytes. This kills the `<invalid>`
+//! collision (every malformed code from one issuer used to collapse onto a single
+//! id). ONE contrived residual remains, not truly injective: a VALID code literally
+//! spelling `0x`+lowercase-hex (e.g. `0xdeadbeef`) collides with the invalid byte
+//! sequence that hex-encodes to it — same issuer → same `asset_id`. Accepted: it
+//! only OVER-merges two exotic codes, the emitter and the `assets`-table key
+//! collide identically (no parity break / orphan), and a real code of that exact
+//! form is vanishingly unlikely. Conformant codes are byte-identical to the old
+//! strict path, so no surrogate-id churn; only malformed codes re-key.
 
 use stellar_xdr::AssetCode;
 
