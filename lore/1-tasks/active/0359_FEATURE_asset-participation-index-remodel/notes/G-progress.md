@@ -158,11 +158,45 @@ history:
 - [ ] Manual `CREATE TABLE operation_asset_appearances` on prod (init.sql fresh-only)
 - [ ] Backfill `backfill-runner Run` Soroban era (from ledger 50,457,424) — SAME rollout as read swap
 - [ ] Validate sample assets (incl. native) vs Horizon / stellar.expert
+- [ ] #8 read-in-order check — `EXPLAIN indexes=1` / `read_rows` on a hot asset. BLOCKED until the table has data (analytically holds: `asset_id =` makes `(ledger, tx)` the residual PK order). Optional pre-deploy: local CREATE TABLE + sample insert to confirm the PLAN (not prod scale)
 
 ## 14. Process
 
 - [ ] ADR 0032 `docs/architecture/**` update (🔀 = PR #7)
 - [ ] api-types check post-merge (Cargo.lock touched)
-- [ ] Legacy `operations_appearances.asset_code`/`asset_issuer_id` — NOT dead (read by `fetch_operations` + audit-harness); retire only after migrating that reader
+- [ ] **SEPARATE TASK (not 0359): migrate `fetch_operations` off legacy asset columns.** `operations_appearances.asset_code`/`asset_issuer_id` are NOT dead — they power the **per-op asset** in the tx operations list ([queries.rs:829](../../../../crates/api/src/transactions/queries.rs)) + audit-harness. The fan-out is per-(asset, tx), NOT per-op → no drop-in replacement. Migrate that reader (new per-op source), THEN drop the columns from init.sql. The 0359 deploy does NOT need this.
 - [ ] Pre-backfill quick-win: sort HashMap output (state.rs / nft.rs)
 - [x] Pre-backfill quick-win: `op_meta_changes` V0..V4 exhaustive (🔀 = C2)
+
+## 15. Roadmap — everything left, in order
+
+Write-side for **classic operations is COMPLETE** (assets + all account roles + fee-bump payer). What remains:
+
+**A. Deploy 0359 (OPS — immediate, gated on explicit go)**
+
+1. `CREATE TABLE operation_asset_appearances` on prod (§13)
+2. Backfill Soroban era (from ledger 50,457,424) + validate vs Horizon/stellar.expert (§13)
+3. #8 read-in-order check — after data lands (§13)
+
+**B. Separate implementation epics (own tasks, post-deploy)**
+
+- **L2 — Soroban event side** (the big one): decode `soroban_events` from/to/**amount** (K1-3) · mint/burn/clawback participants (K2-7) · fix RMT key dropping payload (K1-7). All write into the SAME `transaction_participants` / asset index — different SOURCE (events), 9.5B rows.
+- **K2-3** — non-G participants (contract C / pool L / balance B); today filtered by `starts_with('G')`.
+- **R2 — typed OpFacts IR**: kills the 2nd God-Payload (`OpTyped::from_details`, the op-COLUMN string extractor); `details`-JSON becomes a derived view. Subsumes the `fetch_operations` migration below.
+- **Migrate `fetch_operations` off legacy asset columns** → then drop them from init.sql (§14).
+- **Read-side unions** (land anytime): F-B LP native leg · F-D contract-holder · K3-\* two-hop unions · K2-9 search.
+- NFT gaps: K2-5 contract-owner NULL · K2-6 pending invisible · K1-6 single-owner slot.
+
+**C. Process**
+
+- api-types check if `Cargo.lock` / `crates/api` touched (§14).
+- Quick-win: deterministic HashMap output ordering (state.rs / nft.rs) (§14).
+
+## 16. Pre-backfill adversarial review (2 devils-advocate agents)
+
+- [x] **Accounts write-side — no row-corruption bugs.** Verified: muxed→G (no M-leak), crossed-seller success-gating (no phantom crossings), determinism live=backfill (RMT all-cols in ORDER BY), FK consistency, exhaustive matches, strict superset of old (zero under-inclusion).
+- [x] **Assets write-side — no blocks-backfill bugs.** Verified: `asset_id` parity emitter↔`assets` key, native surrogate, meta-grain id-match, per-tx dedup, index alignment. 3 doc fixes applied (V0..V2 justification factually wrong; `asset_code_str` injectivity overclaim; orphan-FK note) — commit `12d213d2`.
+- [x] **Decision 1c — issuer NOT a participant.** Dropped the issuer-from-`asset_appearances` participant loop: **redundant** with the asset index (issuer derivable from `asset_id`) and would flood a popular issuer's account page. Asset activity lives on its asset page; issuer's account page = own activity only. No read-side issuer-union either.
+- [x] **#2 SetOptions signer — keep as-is** (inflationDest emitted, signer not; inflation is dead on mainnet → near-zero in the P20+ window).
+- [x] **#3 failed-tx body roles — accepted.** Body-grain account roles (destinations, CB claimants, revoke targets, inflationDest) register for failed txs too, consistent with the asset-side failed-tx policy (§2 C5) and the old behaviour; the crossed seller is correctly excluded (result is success-gated). The issuer-on-failed-tx part of the finding dissolved with 1c.
+- [x] **VERDICT: classic-op write-side COMPLETE + adversarially verified → backfill-ready.** Only Soroban-side participants (K2-7 / K2-3) remain, and they ride the separate L2 backfill — not a repeat of this one.
