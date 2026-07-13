@@ -58,7 +58,7 @@ history:
 
 - [x] F-A asset single-slot (native empty + multi-leg loss) — THE core
 - [ ] F-B LP can't match native XLM leg (16 552 pools / 21.7% invisible) — 🧊
-- [ ] F-C account tx list drops roles (crossed-offer counterparty, claimants, inflationDest, revoke-target, mint/burn recipients) — 🧊 (code in stash)
+- [x] F-C account tx list drops roles — classic-op roles DONE (crossed-offer seller, claimants, inflationDest, revoke-target) via typed `extract_counterparties`; God-Payload full-replaced. Residuals split out: mint/burn recipients → K2-7 (L2 events), fee-bump fee-source → K2-4 (next commit)
 - [ ] F-D contract-held classic/native orphaned when SAC un-sighted — 🧊
 - [x] F-E offers unindexed by asset
 - [x] F-F SAC-contract activity unioned into asset page (native 3.9M XLM-SAC) — DONE via the composed-read arm B (🔀 = K3-1; shipped with #1)
@@ -69,7 +69,7 @@ history:
 - [x] K1-2 offer carries no asset / path stores only destAsset
 - [ ] K1-3 fungible transfer from/to/amount never decoded (transfer 4.51B / mint 434M / burn 62.8M / clawback 54.3M) — 🧊 (L2)
 - [ ] K1-4 tx `operations[]` folds identical ops → len < operation_count
-- [ ] K1-5 account roles dropped (🔀 = F-C) — 🧊
+- [x] K1-5 account roles dropped (🔀 = F-C) — typed `extract_counterparties` (all op-body roles + crossed-offer seller) + issuers from `asset_appearances`; string-`details` extractor deleted
 - [ ] K1-6 NFT single current-owner slot (mitigated by /transfers) — 🧊
 - [ ] K1-7 `soroban_events` RMT key excludes payload (latent row loss)
 
@@ -130,7 +130,7 @@ history:
 - [ ] Adoption #3 shared commit-fence builder — partial (fence in query; builder open)
 - [ ] R1 shared tx-feed engine — 🧊
 - [ ] R2 typed OpFacts IR (post-backfill) — 🧊
-- [ ] **God-Payload / dual-extraction inconsistency (subset of R2)** — 🧊. `ExtractedOperation` now carries a TYPED `asset_appearances` field (0359), but accounts + contracts are still string-matched out of the `details` JSON in staging (`op_participant_str_keys`, `OpTyped::from_details`) — no `accounts_appearances` / `contract_appearances` field. So two extraction patterns coexist. When account coverage (F-C) lands, add a typed `counterparties` field (mirrors `asset_appearances`) — an incremental step toward R2's end-state (details-JSON becomes a derived view; staging drops the 4 string-matchers).
+- [x] **God-Payload / dual-extraction inconsistency (subset of R2)** — ACCOUNTS done: `ExtractedOperation` now carries a typed `counterparties` field beside `asset_appearances`, `op_participant_str_keys` (the account string-matcher) deleted, issuers derive from `asset_appearances`. Staging no longer string-matches accounts out of `details`. 🧊 remaining: CONTRACT participants (C-address, `OpTyped::from_details`) still string-matched → folds into K2-3 / R2 end-state (details-JSON as a derived view).
 - [ ] R3 ops cleanup: dead `account_balances_current`, `idx_oa_asset_issuer_id` bloom, legacy asset columns — 🧊
 - [ ] MAJOR: poison-pill quarantine
 - [ ] MAJOR: partition-pinned filtered global lists
