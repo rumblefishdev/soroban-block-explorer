@@ -2,7 +2,7 @@
 id: '0343'
 title: 'Contract Interface: render function doc as an italic comment, preserve rustdoc line breaks'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['area-frontend', 'effort-small', 'priority-low']
@@ -12,6 +12,14 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Task created'
+  - date: 2026-07-13
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Shipped in PR #305 (merged, commit aab120a0). ContractInterface.tsx
+      FunctionRow: fn.doc Typography -> italic + whiteSpace pre-wrap so rustdoc
+      line breaks (bullets, `# Panics`) survive. 1 file, sx-only frontend polish;
+      no schema/API/data-contract change.
 ---
 
 # Contract Interface: render function doc as an italic comment, preserve rustdoc line breaks
@@ -55,15 +63,15 @@ Keep `color: text.tertiary` (already dimmed) and the proportional
 
 ## Acceptance Criteria
 
-- [ ] Function doc renders dimmed + italic in the Interface tab.
-- [ ] Multi-line rustdoc (e.g. `transfer_team`: `-` bullets + `# Panics`) keeps
+- [x] Function doc renders dimmed + italic in the Interface tab.
+- [x] Multi-line rustdoc (e.g. `transfer_team`: `-` bullets + `# Panics`) keeps
       its line breaks instead of collapsing to one line.
-- [ ] Empty-doc functions still render nothing extra (existing `fn.doc !== ''`
+- [x] Empty-doc functions still render nothing extra (existing `fn.doc !== ''`
       guard unchanged).
-- [ ] **Docs updated** — N/A. Pure frontend rendering polish; no change to
+- [x] **Docs updated** — N/A. Pure frontend rendering polish; no change to
       schema, endpoints, ingestion, infra, XDR responsibilities, or the
       frontend data contract (the `doc` field already flows end-to-end).
-- [ ] **API types regenerated** — N/A. No change under `crates/api/**`,
+- [x] **API types regenerated** — N/A. No change under `crates/api/**`,
       `Cargo.{toml,lock}`, or `libs/api-types/**`.
 
 ## Notes

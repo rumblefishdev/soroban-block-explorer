@@ -2,7 +2,7 @@
 id: '0200'
 title: 'SEP-1 fetcher: follow same-eTLD+1 redirects (publicsuffix)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0188']
 tags: [priority-low, effort-small, layer-backend, enrichment, sep1, security]
@@ -35,6 +35,16 @@ history:
       (`enrichment-shared::sep1`) fetchers are affected. Implementing the
       same-eTLD+1 redirect follow (publicsuffix + `validate_host` re-applied per
       Location to keep the SSRF block intact).
+  - date: '2026-07-13'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Shipped in PR #302 (merged develop). `psl`-based same-eTLD+1 redirect
+      policy on both sep1 fetchers (validate_host re-applied per Location,
+      MAX_REDIRECTS cap); enrichment worker enabled (concurrency 0->1) and
+      `--retry-sentinels` recovered ~684 real enrichments. circle.com/USDC/EURC
+      confirmed EXTERNAL (serve no stellar.toml), not a fetcher bug. Verified via
+      unit tests + prod backfill.
 ---
 
 # SEP-1 fetcher: follow same-eTLD+1 redirects (publicsuffix)
@@ -125,14 +135,14 @@ Update `docs/architecture/backend/backend-overview.md` §4.1 sep1 sub-bullet to 
 
 ## Acceptance Criteria
 
-- [ ] `publicsuffix` (or `psl`) workspace dep added with vendored PSL list.
-- [ ] `Sep1Fetcher::new()` uses `Policy::custom` enforcing: same-eTLD+1, validate_host on every Location, max 2 redirects.
-- [ ] At least 5 unit tests covering: same-eTLD+1 follow, cross-eTLD+1 block, IP-literal block on redirect, max-hops block, multi-level TLD (`co.uk`).
-- [ ] Manual smoke test: `circle.com` issuer with matching CURRENCIES → both fields populated.
-- [ ] Module docstring + `backend-overview.md` updated to reflect new policy.
-- [ ] `cargo check -p api`, `cargo clippy -p api -- -D warnings`, `cargo test -p api` clean.
-- [ ] **Docs updated** — `crates/api/src/runtime_enrichment/sep1/client.rs` module docstring + `docs/architecture/backend/backend-overview.md` §4.1. Mark `N/A` for other docs files.
-- [ ] **API types regenerated** — `N/A` — pure internal change, response shape unchanged.
+- [x] `publicsuffix` (or `psl`) workspace dep added with vendored PSL list.
+- [x] `Sep1Fetcher::new()` uses `Policy::custom` enforcing: same-eTLD+1, validate_host on every Location, max 2 redirects.
+- [x] At least 5 unit tests covering: same-eTLD+1 follow, cross-eTLD+1 block, IP-literal block on redirect, max-hops block, multi-level TLD (`co.uk`).
+- [x] Manual smoke test — mechanism verified; `circle.com` itself turned out external (serves no `stellar.toml`, apex 301→www→404), so it was never a valid fixture. Redirect-follow validated in prod: `--retry-sentinels` recovered ~684 real enrichments.
+- [x] Module docstring + `backend-overview.md` updated to reflect new policy.
+- [x] `cargo check -p api`, `cargo clippy -p api -- -D warnings`, `cargo test -p api` clean.
+- [x] **Docs updated** — `crates/api/src/runtime_enrichment/sep1/client.rs` module docstring + `docs/architecture/backend/backend-overview.md` §4.1. Mark `N/A` for other docs files.
+- [x] **API types regenerated** — `N/A` — pure internal change, response shape unchanged.
 
 ## Out of Scope
 

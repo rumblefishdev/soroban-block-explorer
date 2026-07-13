@@ -2,7 +2,7 @@
 id: '0368'
 title: 'Bump stellar-xdr 26→27: decode protocol-27 ledgers (indexer XDR parse failure → DLQ)'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0367']
 tags: [indexer, xdr, protocol-27, production-incident, prices]
@@ -12,6 +12,17 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Task created — prod indexer frozen on first proto27 ledger'
+  - date: 2026-07-13
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Shipped in PR #325 (merged develop, commit 58f22cf2). Workspace
+      stellar-xdr 26->27; stellar_xdr::curr:: -> crate-root import migration
+      across 7 crates; SorobanCredentials proto27 variants (AddressV2,
+      AddressWithDelegates) handled in op_source.rs with 2 new tests; xdr-parser
+      287+2 green. Deployed; indexer ESM re-enabled, DLQ redriven, ingestion
+      caught up to head (proto27 decodes clean). Sibling `prices` repo bump is a
+      separate external-repo follow-up (still open).
 ---
 
 # Bump stellar-xdr 26→27: decode protocol-27 ledgers
@@ -79,15 +90,15 @@ content-free; one reconcile catches up the gap).
 
 ## Acceptance Criteria
 
-- [ ] `cargo build --workspace` green against stellar-xdr 27
-- [ ] Indexer decodes proto27 ledgers (63401875+) without parse error
+- [x] `cargo build --workspace` green against stellar-xdr 27
+- [x] Indexer decodes proto27 ledgers (63401875+) without parse error
 - [ ] Follow-up: `prices-production-ledger-processor` (separate repo) bumped to
-      stellar-xdr 27 before it reaches ledger 63401875
-- [ ] Indexer ESM re-enabled; DLQ drained/redriven; ingestion caught up to head
-- [ ] **Docs updated** — N/A unless XDR parsing responsibilities under
-      `docs/architecture/**` change; verify at PR time
-- [ ] **API types regenerated** — `Cargo.{toml,lock}` changed → run
-      `npx nx run @rumblefish/api-types:generate` and commit the diff
+      stellar-xdr 27 before it reaches ledger 63401875 — external repo, tracked separately
+- [x] Indexer ESM re-enabled; DLQ drained/redriven; ingestion caught up to head
+- [x] **Docs updated** — N/A. XDR parsing responsibilities under
+      `docs/architecture/**` unchanged (verified at PR #325).
+- [x] **API types regenerated** — `Cargo.{toml,lock}` changed → ran
+      `npx nx run @rumblefish/api-types:generate` (landed in PR #325).
 
 ## Notes
 
