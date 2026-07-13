@@ -6,8 +6,9 @@
 //! extraction (a JSON round-trip with a silent `_` fallthrough); this reads the
 //! typed `OperationBody` + `OperationResult` directly, exhaustively.
 //!
-//! Not here: the op source (staged separately), asset issuers (derived from
-//! `asset_appearances`), and the non-op participant sources — fee-bump payer
+//! Not here: the op source (staged separately); asset issuers (deliberately NOT
+//! participants — an asset's activity lives on its asset page, decision 1c); and
+//! the non-op participant sources — fee-bump payer
 //! ([`crate::envelope::envelope_fee_source`]), token-event from/to, invocation
 //! caller — which staging unions in from their own XDR locations.
 
@@ -31,9 +32,11 @@ use stellar_xdr::{
 /// - `CreateClaimableBalance` claimants (previously only their COUNT survived),
 ///   `SetOptions.inflationDest`, revoke-sponsorship targets.
 ///
-/// Asset ISSUERS (also participants) are NOT here — staging derives them from
-/// the op's `asset_appearances` (every credit leg already carries its issuer),
-/// so this stays purely about account ROLES. The op source is registered
+/// Asset ISSUERS are deliberately NOT participants (decision 1c): an asset's
+/// activity lives on its asset page (`operation_asset_appearances`) and the
+/// issuer is derivable from the `asset_id`, so registering the issuer on every
+/// tx touching its asset would be redundant + flood a popular issuer's page.
+/// This stays purely about account ROLES; the op source is registered
 /// separately by staging.
 ///
 /// Raw G-StrKeys in fixed XDR order (deterministic live vs backfill); the

@@ -808,14 +808,16 @@ fn prepare_stages_operation_asset_appearances() {
         staged.op_asset_rows[0].transaction_id,
         staged.op_rows[0].transaction_id
     );
-    // Task 0359 F-C: the credit-leg issuer is now a tx participant, derived from
-    // asset_appearances (the string-`details` extraction used to do this).
+    // Task 0359 decision 1c: the credit-leg issuer is NOT a tx participant. The
+    // asset's activity lives on its asset page (`op_asset_rows` above); flooding
+    // the issuer's participant list with every tx touching its asset would be
+    // redundant with the asset index.
     assert!(
-        staged
+        !staged
             .participant_rows
             .iter()
             .any(|r| r.account_id == ids::account_id(&issuer)),
-        "asset issuer registered as participant via asset_appearances"
+        "asset issuer must NOT be registered as a tx participant (decision 1c)"
     );
 }
 
