@@ -288,6 +288,14 @@ fn column_order_operation_asset_appearances() {
 }
 
 #[test]
+fn column_order_operation_pools() {
+    assert_columns::<OperationPoolRow>(
+        "operation_pools",
+        &["pool_id", "ledger_sequence", "transaction_id"],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",
@@ -1049,6 +1057,13 @@ fn prepare_lp_deposit_single_element_pool_ids() {
 
     assert_eq!(staged.op_rows.len(), 1);
     assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
+    // task 0365: the same crossing fans out into operation_pools (pool, tx).
+    assert_eq!(staged.op_pool_rows.len(), 1);
+    assert_eq!(staged.op_pool_rows[0].pool_id, [0xABu8; 32]);
+    assert_eq!(
+        staged.op_pool_rows[0].transaction_id,
+        staged.op_rows[0].transaction_id
+    );
 }
 
 #[test]
@@ -1093,6 +1108,51 @@ fn prepare_offer_op_pool_ids_from_details() {
 
     assert_eq!(staged.op_rows.len(), 1);
     assert_eq!(staged.op_rows[0].pool_ids, vec![[0xCDu8; 32]]);
+}
+
+#[test]
+fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
+    // Two ops in one tx crossing the SAME pool → one (pool, tx) row (the per-tx
+    // dedup, task 0365). The RMT would collapse residuals anyway; deduping at write
+    // cuts the backfilled volume up front — the pool twin of the asset fan-out.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x34);
+    let pool = "ef".repeat(32);
+    let mk = |idx: u32| ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: idx,
+        op_type: OperationType::LiquidityPoolDeposit,
+        source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
+        details: serde_json::json!({ "liquidityPoolId": pool }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_pool_rows.len(), 1);
+    assert_eq!(staged.op_pool_rows[0].pool_id, [0xEFu8; 32]);
+    assert_eq!(
+        staged.op_pool_rows[0].transaction_id,
+        staged.op_rows[0].transaction_id
+    );
 }
 
 #[test]

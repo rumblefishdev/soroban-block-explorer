@@ -117,6 +117,9 @@ pub struct StagedLedger {
     /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
     /// the asset-dimension twin of `participant_rows`.
     pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
+    /// Per-(pool, tx) presence rows (task 0365) → `operation_pools`, the
+    /// pool-dimension twin of `participant_rows` / `op_asset_rows`.
+    pub op_pool_rows: Vec<OperationPoolRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
@@ -956,6 +959,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // RMT sort key collapses them eventually, but deduping at write cuts the
         // backfilled volume up front. Scoped per tx — one entry per tx_hash here.
         let mut seen_tx_asset_ids: HashSet<i64> = HashSet::new();
+        // Same per-tx dedup for the pool fan-out (task 0365): N ops crossing the
+        // same pool in one tx → one (pool, tx) row.
+        let mut seen_tx_pool_ids: HashSet<[u8; 32]> = HashSet::new();
         for op in ops {
             // ---- operation_asset_appearances (task 0359, pure presence) ----
             // Asset-dimension twin of transaction_participants: one row per
@@ -988,6 +994,27 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             }
             pool_ids.sort_unstable();
             pool_ids.dedup();
+
+            // ---- operation_pools (task 0365, pure presence) ----
+            // Pool-dimension twin of the asset fan-out above: one row per (pool
+            // the op crossed, tx). `pool_ids` is already the sorted+deduped
+            // crossing list; dedup per-tx so N ops crossing the same pool in one
+            // tx write one (pool, tx) row (the RMT collapses any residual). Sourced
+            // from `oa.pool_ids` — no XDR-only data, so a plain CH re-key can
+            // backfill it (task 0365 Path B).
+            if !pool_ids.is_empty() {
+                let tx_id = tx_id_by_hash[tx_hash];
+                for pool_id in &pool_ids {
+                    if seen_tx_pool_ids.insert(*pool_id) {
+                        out.op_pool_rows.push(OperationPoolRow {
+                            pool_id: *pool_id,
+                            ledger_sequence: ledger_sequence_i64,
+                            transaction_id: tx_id,
+                        });
+                    }
+                }
+            }
+
             let key = OpKey {
                 tx_hash_hex: tx_hash.clone(),
                 op_type: op.op_type as i16,

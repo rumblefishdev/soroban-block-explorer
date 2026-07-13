@@ -164,10 +164,12 @@ mod tests {
         // (SAC-ness of a classic/native asset, not a distinct row). 26 → 27.
         // task 0359: added `operation_asset_appearances` — per-(asset, tx) presence
         // index (asset-leading key; native first-class). 27 → 28.
+        // task 0365: added `operation_pools` — per-(pool, tx) presence index
+        // (pool-leading key; the pool-dimension twin of the above). 28 → 29.
         assert_eq!(
             stmts.len(),
-            28,
-            "expected 26 tables + 1 materialized view + 1 dictionary, got {}",
+            29,
+            "expected 27 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

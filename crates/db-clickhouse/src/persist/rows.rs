@@ -348,6 +348,19 @@ pub struct OperationAssetAppearanceRow {
     pub transaction_id: i64,
 }
 
+/// `operation_pools` — fact, the per-(pool, transaction) presence index
+/// (task 0365). The EXACT `transaction_participants` shape with `pool_id` in
+/// place of `account_id` → a per-pool tx-list is a PK-prefix seek. `pool_id` is
+/// the raw 32-byte pool hash (already how `operations_appearances.pool_ids`
+/// stores each crossing — no surrogate). Pure presence: which pools a
+/// transaction crossed; duplicate (pool, tx) rows collapse in the RMT.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct OperationPoolRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+}
+
 /// `soroban_events` — fact, full-content per-event row (ADR 0044
 /// §4a unfold). `signature` is the lifted first-topic Symbol.
 #[derive(Debug, Clone, Row, Serialize)]

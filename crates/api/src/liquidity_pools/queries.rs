@@ -519,24 +519,16 @@ struct DriverKeyRow {
 /// `fetch_pool_transactions` (canonical SQL 20).
 ///
 /// Two cost notes:
-/// - **READ-COST — subquery-wrapped seek on the `oa_pool_seek` projection.**
-///   `operations_appearances` is `ORDER BY (ledger_sequence, …)`, so a raw
-///   `pool_id` filter is NOT a base-table key seek — LP-tagged ops are sparse,
-///   so the original `ORDER BY ledger_sequence DESC … LIMIT` page driver scanned
-///   the whole table (box-measured **7.87B rows / 168 GB per page**, ~80% of the
-///   hourly quota). A normal projection `ORDER BY (pool_id, ledger_sequence,
-///   transaction_id)` was materialized so `pool_id` can seek — but CH's
-///   auto-optimizer routes ONLY a *bare* `pool_id` filter through a normal
-///   projection; a top-level `ORDER BY`/`LIMIT`/`LIMIT 1 BY` flips it back to the
-///   base-PK read-in-order (789M–2.2B box-measured), and `force_optimize_projection`
-///   is rejected for the read-only `api_reader` (Code 164, un-hot-fixable). The
-///   driver therefore wraps the bare filter in a subquery and pages in the OUTER
-///   `GROUP BY (ls, tid) ORDER BY … LIMIT`: CH seeks the inner bare filter via
-///   the projection and aggregates the small result, so the read stays a seek
-///   AND the transfer is bounded to ≤ limit keys — box-proven ~378k–385k
-///   rows/page (holds with the keyset range). STEP 2 enriches the ≤limit keys
+/// - **READ-COST — prefix-seek on the `operation_pools` companion (task 0365).**
+///   `operations_appearances` is `ORDER BY (ledger_sequence, …)`, so the historical
+///   `has(pool_ids, X)` filter was NOT a key seek: a popular pool sits in ~every
+///   granule (the `idx_oa_pool_ids` bloom cannot prune), so the read-in-order page
+///   driver walked back from the tip (box-measured up to 6.75B rows). `operation_pools`
+///   is the pool-keyed presence twin of `transaction_participants`
+///   (`ORDER BY (pool_id, ledger_sequence, transaction_id)`), so STEP 1 is a direct
+///   PK prefix-seek bounded to the pool's own rows; `LIMIT 1 BY (ledger, tx)` yields
+///   `limit` distinct txs with no over-fetch dance. STEP 2 enriches the ≤limit keys
 ///   via the transactions/accounts/ledgers joins.
-///   Transfer is bounded by the pool's op count, not the 6B+ table.
 /// - The cursor is the datasource-tagged [`TxListCursor`] (shared with the
 ///   global transactions list). The CH variant carries `ledger_sequence` +
 ///   `tiebreak` (= `transaction_id`) directly, so the keyset runs on
@@ -565,85 +557,42 @@ pub async fn fetch_pool_transactions(
         Some(TxListCursor::Ch {
             ledger_sequence,
             tiebreak,
-        }) => format!(
-            "AND (oa.ledger_sequence {op} {ls} \
-               OR (oa.ledger_sequence = {ls} AND oa.transaction_id {op} {tb}))",
-            op = op,
-            ls = ledger_sequence,
-            tb = tiebreak,
-        ),
+        }) => {
+            format!(" AND (ledger_sequence, transaction_id) {op} ({ledger_sequence}, {tiebreak})")
+        }
         _ => String::new(),
     };
 
-    // STEP 1 — page keys, bounded by a read-in-order seek. HISTORY: the scalar
-    // `pool_id` era seeked via the `oa_pool_seek` projection with a bare filter
-    // (rationale — auto-optimizer, Code 164, `:ro` users.d — in 0243 / git
-    // history). Task 0261/0268 swapped to `pool_ids Array(FixedString(32))` +
-    // `has(...)`; array membership cannot prefix-seek, and the `idx_oa_pool_ids`
-    // bloom only prunes SPARSE pools — a popular pool sits in ~every granule, so
-    // no prune → 6.75B-row scan (box-measured 2026-06-17).
+    // STEP 1 — leading-key seek over `operation_pools` (task 0365). `pool_id` IS
+    // the sort-key prefix, so this is a direct PK prefix-seek (~page-size),
+    // superseding the density-dependent read-in-order scan over
+    // `operations_appearances` (0281-C): a popular pool sat in ~every granule, so
+    // the `has(pool_ids, X)` filter could not prune and walked back from the tip
+    // (box-measured up to 6.75B rows). Here one row per (pool, ledger, tx);
+    // `LIMIT 1 BY (ledger, tx)` collapses a tx's N pool-op rows to one, so the page
+    // is `limit` DISTINCT txs directly — no over-fetch + Rust-dedup dance. The
+    // `max(sequence)` fence keeps the seek behind the ledgers commit marker.
     //
-    // FIX (0281 C): give the inner read its own `ORDER BY ledger {order} + LIMIT`
-    // so CH's `optimize_read_in_order` reads from the tip and EARLY-TERMINATES —
-    // 6.75B → 7.4M (~900x) on the top pool. The LIMIT counts RAW op-rows, not
-    // distinct txs, so we dedup `(ls, tid)` in Rust (consecutive runs — read-in-
-    // order keeps a tx's op-rows adjacent), NOT via an outer `GROUP BY`. That lets
-    // us tell a CAPPED page (raw rows hit the over-fetch LIMIT → more txs exist)
-    // from an EXHAUSTED one (fewer raw rows → the pool's tail). A pool whose txs
-    // cross it via many op-rows can starve the `limit*4` budget below `limit`
-    // distinct; the earlier outer-GROUP-BY shape silently dropped the peek row and
-    // `finalize_page` read that as the last page (next_cursor=None) → lost-tail
-    // data loss (caught in 0281-C review). On a capped under-delivery we re-fetch
-    // ONCE with the hard bound `limit*128`: a Stellar tx carries <=100 ops, so
-    // `limit*128` raw op-rows always cover `limit` distinct txs. Exhausted / last
-    // pages never re-query. `LIMIT 1 BY` and `DISTINCT` inside the inner both
-    // DEFEAT read-in-order (box-measured 1.13B / 0.97B) — hence raw + Rust dedup.
-    //
-    // `toFixedString(unhex(?), 32)`: `pool_ids` is `Array(FixedString(32))` and
-    // `unhex` yields `String`; the explicit cast makes the needle's type match
-    // the element type so `has` compares as fixed bytes (the input is a
-    // validated 64-char hex → exactly 32 bytes, so the cast never pads/truncates).
-    let mut overfetch = limit.saturating_mul(4);
-    let keys = loop {
-        let driver_sql = format!(
-            "SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
-             FROM operations_appearances oa \
-             WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) \
-               AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
-             ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
-             LIMIT {overfetch}",
-            keyset = keyset,
-            order = order,
-            overfetch = overfetch,
-        );
-        let raw = client
-            .query(&driver_sql)
-            .bind(pool_id_hex)
-            .fetch_all::<DriverKeyRow>()
-            .await?;
-        let capped = raw.len() as i64 >= overfetch;
-
-        // A tx's op-rows are adjacent in read-in-order, so collapsing consecutive
-        // equal `(ls, tid)` is exactly the outer GROUP BY we replaced.
-        let mut distinct: Vec<DriverKeyRow> = Vec::with_capacity(raw.len());
-        for r in raw {
-            if distinct
-                .last()
-                .is_none_or(|l| l.ls != r.ls || l.tid != r.tid)
-            {
-                distinct.push(r);
-            }
-        }
-
-        // Enough distinct txs, OR the pool is exhausted (raw under the cap), OR we
-        // already spent the hard bound → finalize. Otherwise it was a capped
-        // under-delivery: re-fetch once with the `limit*128` guarantee.
-        if (distinct.len() as i64) >= limit || !capped || overfetch >= limit.saturating_mul(128) {
-            distinct.truncate(limit.max(0) as usize);
-            break distinct;
-        }
-        overfetch = limit.saturating_mul(128);
-    };
+    // `toFixedString(unhex(?), 32)`: the validated 64-char-hex pool id → the raw 32
+    // bytes matching the `pool_id FixedString(32)` key (exactly 32 bytes, so the
+    // cast never pads/truncates).
+    let driver_sql = format!(
+        "SELECT ledger_sequence AS ls, transaction_id AS tid \
+         FROM operation_pools \
+         WHERE pool_id = toFixedString(unhex(?), 32) \
+           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
+         ORDER BY ledger_sequence {order}, transaction_id {order} \
+         LIMIT 1 BY ledger_sequence, transaction_id \
+         LIMIT {limit}",
+        keyset = keyset,
+        order = order,
+        limit = limit,
+    );
+    let keys = client
+        .query(&driver_sql)
+        .bind(pool_id_hex)
+        .fetch_all::<DriverKeyRow>()
+        .await?;
     if keys.is_empty() {
         return Ok(Vec::new());
     }
