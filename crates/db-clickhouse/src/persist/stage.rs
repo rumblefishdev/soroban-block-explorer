@@ -471,9 +471,28 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 account_keys.insert(src.clone());
                 entry.insert(src.clone());
             }
-            for key in op_participant_str_keys(op.op_type, &op.details) {
-                account_keys.insert(key.clone());
-                entry.insert(key);
+            // Task 0359 F-C (K1-5): typed parser-emitted counterparties — every
+            // account the op involves besides its source (destinations, crossed-
+            // offer sellers, CB claimants, inflationDest, revoke targets). The
+            // single op-side participant source, replacing the old string-`details`
+            // participant extraction. `is_strkey_account` guards, the
+            // `starts_with('G')` retain below is the final backstop.
+            for key in &op.counterparties {
+                if is_strkey_account(key) {
+                    account_keys.insert(key.clone());
+                    entry.insert(key.clone());
+                }
+            }
+            // Asset issuers are participants too (an issuer's page lists activity
+            // on its asset). Derived from the op's `asset_appearances` — every
+            // credit leg already carries its issuer G-StrKey; native has none.
+            for asset in &op.asset_appearances {
+                if let AssetRef::Credit { issuer, .. } = asset
+                    && is_strkey_account(issuer)
+                {
+                    account_keys.insert(issuer.clone());
+                    entry.insert(issuer.clone());
+                }
             }
         }
     }
@@ -1905,44 +1924,6 @@ fn split_pool_asset(asset: &Value) -> Option<(AssetType, Option<String>, Option<
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     Some((ty, code, issuer))
-}
-
-fn op_participant_str_keys(op_type: OperationType, details: &Value) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut push = |v: Option<String>| {
-        if let Some(s) = v
-            && is_strkey_account(&s)
-        {
-            out.push(s);
-        }
-    };
-    use OperationType as Op;
-    match op_type {
-        Op::CreateAccount
-        | Op::Payment
-        | Op::PathPaymentStrictReceive
-        | Op::PathPaymentStrictSend
-        | Op::AccountMerge => {
-            push(str_field(details, "destination"));
-        }
-        Op::Clawback => {
-            push(str_field(details, "from"));
-        }
-        Op::AllowTrust | Op::SetTrustLineFlags => {
-            push(str_field(details, "trustor"));
-        }
-        Op::BeginSponsoringFutureReserves => {
-            push(str_field(details, "sponsoredId"));
-        }
-        _ => {}
-    }
-    for field in ["asset", "destAsset", "sendAsset"] {
-        if let Some(asset) = details.get(field) {
-            let (_, issuer) = split_asset_ref(asset);
-            push(issuer);
-        }
-    }
-    out
 }
 
 #[derive(Debug, Default)]

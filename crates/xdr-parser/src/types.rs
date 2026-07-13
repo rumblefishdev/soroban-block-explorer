@@ -536,4 +536,10 @@ pub struct ExtractedOperation {
     /// between live ingest and the archive backfill re-parse (both run this
     /// parser).
     pub asset_appearances: Vec<crate::asset_appearances::AssetRef>,
+    /// Account counterparties the operation touches beyond its source (task 0359
+    /// F-C / K1-5): crossed-offer sellers (result claim atoms), claimable-balance
+    /// claimants, `SetOptions.inflationDest`, revoke-sponsorship targets. Raw
+    /// G-StrKeys, staged into `transaction_participants` (deduped there).
+    /// Deterministic between live ingest and the backfill re-parse.
+    pub counterparties: Vec<String>,
 }

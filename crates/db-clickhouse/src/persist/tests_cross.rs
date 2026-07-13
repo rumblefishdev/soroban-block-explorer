@@ -621,6 +621,7 @@ fn prepare_folds_identical_operations() {
         op_type: OperationType::Payment,
         source_account: None,
         asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "destination": dest,
             "asset": "native",
@@ -655,6 +656,56 @@ fn prepare_folds_identical_operations() {
 }
 
 #[test]
+fn prepare_registers_op_counterparties_as_participants() {
+    // Task 0359 F-C (K1-5): a parser-emitted counterparty (here a crossed-offer
+    // seller) lands in transaction_participants and gets an accounts stub — a
+    // role the string-`details` extraction dropped.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x63);
+    let seller = "G".to_string() + &"S".repeat(55);
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::ManageBuyOffer,
+        source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![seller.clone()],
+        details: serde_json::json!({ "selling": "native", "buying": "native" }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged
+            .participant_rows
+            .iter()
+            .any(|r| r.account_id == ids::account_id(&seller)),
+        "crossed-offer seller registered as tx participant"
+    );
+    assert!(
+        staged.account_rows.iter().any(|a| a.id == ids::account_id(&seller)),
+        "seller gets an accounts stub"
+    );
+}
+
+#[test]
 fn prepare_stages_operation_asset_appearances() {
     use xdr_parser::asset_appearances::AssetRef;
     let ledger = synthetic_ledger();
@@ -674,6 +725,7 @@ fn prepare_stages_operation_asset_appearances() {
                 issuer: issuer.clone(),
             },
         ],
+        counterparties: vec![],
         details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
     };
     let ops = vec![(tx.hash.clone(), vec![op])];
@@ -709,6 +761,15 @@ fn prepare_stages_operation_asset_appearances() {
         staged.op_asset_rows[0].transaction_id,
         staged.op_rows[0].transaction_id
     );
+    // Task 0359 F-C: the credit-leg issuer is now a tx participant, derived from
+    // asset_appearances (the string-`details` extraction used to do this).
+    assert!(
+        staged
+            .participant_rows
+            .iter()
+            .any(|r| r.account_id == ids::account_id(&issuer)),
+        "asset issuer registered as participant via asset_appearances"
+    );
 }
 
 #[test]
@@ -731,6 +792,7 @@ fn op_asset_appearances_dedup_same_asset_across_ops_in_one_tx() {
                 issuer: issuer.clone(),
             },
         ],
+        counterparties: vec![],
         details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
     };
     let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
@@ -777,6 +839,7 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
         asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "destination": dest,
             "destAsset": "native",
@@ -840,6 +903,7 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
         asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "poolIds": [traded],
             "claimedAtoms": [
@@ -911,6 +975,7 @@ fn prepare_lp_deposit_single_element_pool_ids() {
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
         asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({ "liquidityPoolId": pool }),
     };
     let ops = vec![(tx.hash.clone(), vec![op])];
@@ -951,6 +1016,7 @@ fn prepare_offer_op_pool_ids_from_details() {
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "offerId": 0,
             "poolIds": [pool],
