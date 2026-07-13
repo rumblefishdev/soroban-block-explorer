@@ -996,6 +996,13 @@ subsystem into backlog tasks, all `related_tasks: ['0359']`:
 - **0377** Aggregate/detail hygiene (K4-1/K4-2/K4-5)
 - **0378** Typed OpFacts IR — kill God-Payload #2 + retire legacy columns (R1/R2/R3 + fetch_operations migration)
 - **0379** OPS: deploy + backfill `operation_asset_appearances` (§13 + #8)
+- **0380** FE: humanize-op render + value-decode fidelity (Stage D + u256/i256 render nit)
+- **0381** Read-path robustness + audit cleanup (§11 MAJOR/MINOR: poison-pill, overscan, dead index/dictionary, muxed-id in details, sibling canary)
+- **0382** Automated verify-range vs Horizon harness (§11 MISSING pattern — the never-silently-miss contract)
+
+**Already done elsewhere:** K2-9 (search asset by name) → 0370 (merged). K3-1/F-F, #1
+type-3 → shipped in this PR (composed read). **WS6 DEX/trades** = no specific
+finding, adjacent to 0374 (offers/AMM) — revisit if a trades view is wanted.
 
 ## Notes
 
