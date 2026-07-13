@@ -46,6 +46,7 @@ use serde_json::Value;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
+use xdr_parser::asset_appearances::AssetRef;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
@@ -113,6 +114,9 @@ pub struct StagedLedger {
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
     pub op_rows: Vec<OperationAppearanceRow>,
+    /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
+    /// the asset-dimension twin of `participant_rows`.
+    pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
@@ -453,11 +457,18 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         .collect();
 
     for tx in transactions {
+        let entry = participants_per_tx.entry(tx.hash.clone()).or_default();
         account_keys.insert(tx.source_account.clone());
-        participants_per_tx
-            .entry(tx.hash.clone())
-            .or_default()
-            .insert(tx.source_account.clone());
+        entry.insert(tx.source_account.clone());
+        // Task 0359 K2-4: the fee-bump payer funds the fee but runs no ops and is
+        // not the inner source — register it so the fee-bump tx shows on the
+        // payer's account page. `Some` only for fee-bump envelopes.
+        if let Some(fee_source) = &tx.fee_source
+            && is_strkey_account(fee_source)
+        {
+            account_keys.insert(fee_source.clone());
+            entry.insert(fee_source.clone());
+        }
     }
 
     for (tx_hash, ops) in operations {
@@ -467,9 +478,28 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 account_keys.insert(src.clone());
                 entry.insert(src.clone());
             }
-            for key in op_participant_str_keys(op.op_type, &op.details) {
-                account_keys.insert(key.clone());
-                entry.insert(key);
+            // Task 0359 F-C (K1-5): typed parser-emitted counterparties — every
+            // account the op involves besides its source (destinations, crossed-
+            // offer sellers, CB claimants, inflationDest, revoke targets). The
+            // single op-side participant source, replacing the old string-`details`
+            // participant extraction. `is_strkey_account` guards, the
+            // `starts_with('G')` retain below is the final backstop.
+            for key in &op.counterparties {
+                if is_strkey_account(key) {
+                    account_keys.insert(key.clone());
+                    entry.insert(key.clone());
+                }
+            }
+            // Asset issuers are participants too (an issuer's page lists activity
+            // on its asset). Derived from the op's `asset_appearances` — every
+            // credit leg already carries its issuer G-StrKey; native has none.
+            for asset in &op.asset_appearances {
+                if let AssetRef::Credit { issuer, .. } = asset
+                    && is_strkey_account(issuer)
+                {
+                    account_keys.insert(issuer.clone());
+                    entry.insert(issuer.clone());
+                }
             }
         }
     }
@@ -925,7 +955,36 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         if !tx_id_by_hash.contains_key(tx_hash) {
             continue;
         }
+        // Per-tx dedup for the asset fan-out (PR #6): N ops touching the same
+        // asset in one tx would otherwise write N identical (asset, tx) rows. The
+        // RMT sort key collapses them eventually, but deduping at write cuts the
+        // backfilled volume up front. Scoped per tx — one entry per tx_hash here.
+        let mut seen_tx_asset_ids: HashSet<i64> = HashSet::new();
         for op in ops {
+            // ---- operation_asset_appearances (task 0359, pure presence) ----
+            // Asset-dimension twin of transaction_participants: one row per
+            // (asset the op touches, tx). Native is a FIRST-CLASS surrogate (never
+            // the empty-string sentinel); classic credit hashes
+            // code:issuer_surrogate — both via `ids::asset_id`.
+            if !op.asset_appearances.is_empty() {
+                let tx_id = tx_id_by_hash[tx_hash];
+                for asset in &op.asset_appearances {
+                    let asset_id = match asset {
+                        AssetRef::Native => ids::NATIVE_ASSET_ID,
+                        AssetRef::Credit { code, issuer } => {
+                            ids::asset_id(1, code, ids::account_id(issuer), 0)
+                        }
+                    };
+                    if seen_tx_asset_ids.insert(asset_id) {
+                        out.op_asset_rows.push(OperationAssetAppearanceRow {
+                            asset_id,
+                            ledger_sequence: ledger_sequence_i64,
+                            transaction_id: tx_id,
+                        });
+                    }
+                }
+            }
+
             let typed = OpTyped::from_details(op.op_type, &op.details);
             let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
             for h in &typed.pool_ids_hex {
@@ -1475,7 +1534,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             let balance_str = b.get("balance").and_then(Value::as_str).unwrap_or("0");
             let amount = decimal7_string_to_i128(balance_str)?;
             let asset_id = if asset_type == AssetType::Native {
-                ids::asset_id(0, "", 0, 0)
+                ids::NATIVE_ASSET_ID
             } else {
                 let code = b.get("asset_code").and_then(Value::as_str).unwrap_or("");
                 let issuer = b.get("issuer").and_then(Value::as_str).unwrap_or("");
@@ -1872,44 +1931,6 @@ fn split_pool_asset(asset: &Value) -> Option<(AssetType, Option<String>, Option<
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     Some((ty, code, issuer))
-}
-
-fn op_participant_str_keys(op_type: OperationType, details: &Value) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut push = |v: Option<String>| {
-        if let Some(s) = v
-            && is_strkey_account(&s)
-        {
-            out.push(s);
-        }
-    };
-    use OperationType as Op;
-    match op_type {
-        Op::CreateAccount
-        | Op::Payment
-        | Op::PathPaymentStrictReceive
-        | Op::PathPaymentStrictSend
-        | Op::AccountMerge => {
-            push(str_field(details, "destination"));
-        }
-        Op::Clawback => {
-            push(str_field(details, "from"));
-        }
-        Op::AllowTrust | Op::SetTrustLineFlags => {
-            push(str_field(details, "trustor"));
-        }
-        Op::BeginSponsoringFutureReserves => {
-            push(str_field(details, "sponsoredId"));
-        }
-        _ => {}
-    }
-    for field in ["asset", "destAsset", "sendAsset"] {
-        if let Some(asset) = details.get(field) {
-            let (_, issuer) = split_asset_ref(asset);
-            push(issuer);
-        }
-    }
-    out
 }
 
 #[derive(Debug, Default)]

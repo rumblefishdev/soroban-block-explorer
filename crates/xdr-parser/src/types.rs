@@ -70,6 +70,11 @@ pub struct ExtractedTransaction {
     pub ledger_sequence: u32,
     /// Transaction source account (G... or M... address, max 56 chars).
     pub source_account: String,
+    /// Fee-bump payer account (`fee_source`), G-StrKey. `Some` only for a
+    /// fee-bump envelope, where the payer funds the fee but is neither the inner
+    /// `source_account` nor an op participant — registered separately into
+    /// `transaction_participants` (task 0359 K2-4). `None` otherwise.
+    pub fee_source: Option<String>,
     /// Actual fee charged in stroops.
     pub fee_charged: i64,
     /// Whether the transaction succeeded.
@@ -531,4 +536,15 @@ pub struct ExtractedOperation {
     /// Type-specific details as a JSON value. Consumed by staging to extract
     /// identity columns; not persisted as JSON anywhere in the DB.
     pub details: serde_json::Value,
+    /// The assets declared in this operation's body (task 0359). Pure presence,
+    /// staged into `operation_asset_appearances`. Deterministic: identical
+    /// between live ingest and the archive backfill re-parse (both run this
+    /// parser).
+    pub asset_appearances: Vec<crate::asset_appearances::AssetRef>,
+    /// Account counterparties the operation touches beyond its source (task 0359
+    /// F-C / K1-5): crossed-offer sellers (result claim atoms), claimable-balance
+    /// claimants, `SetOptions.inflationDest`, revoke-sponsorship targets. Raw
+    /// G-StrKeys, staged into `transaction_participants` (deduped there).
+    /// Deterministic between live ingest and the backfill re-parse.
+    pub counterparties: Vec<String>,
 }

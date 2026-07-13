@@ -162,10 +162,12 @@ mod tests {
         // supply source; one universal method, no seed-only staleness. 27 → 26.
         // ADR 0051 / task 0339 (merged): added the `asset_sac` SAC-facet side table
         // (SAC-ness of a classic/native asset, not a distinct row). 26 → 27.
+        // task 0359: added `operation_asset_appearances` — per-(asset, tx) presence
+        // index (asset-leading key; native first-class). 27 → 28.
         assert_eq!(
             stmts.len(),
-            27,
-            "expected 25 tables + 1 materialized view + 1 dictionary, got {}",
+            28,
+            "expected 26 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

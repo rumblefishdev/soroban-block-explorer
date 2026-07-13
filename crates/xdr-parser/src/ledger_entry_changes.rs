@@ -351,12 +351,12 @@ fn format_trustline_asset(asset: &TrustLineAsset) -> Value {
         TrustLineAsset::Native => json!("native"),
         TrustLineAsset::CreditAlphanum4(a) => json!({
             "type": "credit_alphanum4",
-            "code": String::from_utf8_lossy(a.asset_code.as_slice()).trim_end_matches('\0').to_string(),
+            "code": crate::asset_code::asset_code_str(a.asset_code.as_slice()),
             "issuer": a.issuer.to_string(),
         }),
         TrustLineAsset::CreditAlphanum12(a) => json!({
             "type": "credit_alphanum12",
-            "code": String::from_utf8_lossy(a.asset_code.as_slice()).trim_end_matches('\0').to_string(),
+            "code": crate::asset_code::asset_code_str(a.asset_code.as_slice()),
             "issuer": a.issuer.to_string(),
         }),
         TrustLineAsset::PoolShare(pool_id) => {
@@ -397,12 +397,12 @@ fn format_asset(asset: &Asset) -> Value {
         Asset::Native => json!("native"),
         Asset::CreditAlphanum4(a) => json!({
             "type": "credit_alphanum4",
-            "code": String::from_utf8_lossy(a.asset_code.as_slice()).trim_end_matches('\0').to_string(),
+            "code": crate::asset_code::asset_code_str(a.asset_code.as_slice()),
             "issuer": a.issuer.to_string(),
         }),
         Asset::CreditAlphanum12(a) => json!({
             "type": "credit_alphanum12",
-            "code": String::from_utf8_lossy(a.asset_code.as_slice()).trim_end_matches('\0').to_string(),
+            "code": crate::asset_code::asset_code_str(a.asset_code.as_slice()),
             "issuer": a.issuer.to_string(),
         }),
     }

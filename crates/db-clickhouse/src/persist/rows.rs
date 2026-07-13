@@ -335,6 +335,19 @@ pub struct TransactionParticipantRow {
     pub transaction_id: i64,
 }
 
+/// `operation_asset_appearances` — fact, the per-(asset, transaction) presence
+/// index (task 0359). The EXACT `transaction_participants` shape with `asset_id`
+/// in place of `account_id` → a per-asset activity page is a PK-prefix seek.
+/// Native XLM is a first-class key (`ids::asset_id(0,"",0,0)`), never an empty
+/// sentinel. Pure presence: which assets a transaction touched; duplicate
+/// (asset, tx) rows collapse in the RMT.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct OperationAssetAppearanceRow {
+    pub asset_id: i64,
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+}
+
 /// `soroban_events` — fact, full-content per-event row (ADR 0044
 /// §4a unfold). `signature` is the lifted first-topic Symbol.
 #[derive(Debug, Clone, Row, Serialize)]

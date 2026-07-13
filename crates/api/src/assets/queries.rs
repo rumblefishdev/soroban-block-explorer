@@ -36,14 +36,13 @@
 //!   `.bind()`-ed (user-controlled); `asset_type` is interpolated (typed `i16`).
 //!
 //! `/transactions` (canonical 10) keys on the datasource-tagged `TxListCursor`
-//! (`Ch { ledger_sequence, tiebreak }`), mirroring the accounts sub-resource.
-//! **Read-cost caveat:** the identity predicate (`asset_code`+`asset_issuer_id`
-//! / `contract_id`) is a NON-leading-PK filter on `operations_appearances`
-//! (ORDER BY `ledger_sequence`), so the driver seek scans by descending ledger
-//! until it fills the page — cheap for a hot asset (matches in recent
-//! partitions), but a rare asset walks far back. The cursor bounds each page;
-//! still, an operator read-rows smoke is required before the prod flag flip
-//! (same class as the deferred global tx contract-filter).
+//! (`Ch { ledger_sequence, tiebreak }`), mirroring the accounts sub-resource. It
+//! seeks the `operation_asset_appearances` fan-out on its `asset_id`-leading PK
+//! (task 0359) — a bounded PK-prefix range read behind the `max(sequence)` commit
+//! fence, so a hot asset early-terminates near the tip and a rare asset stays a
+//! bounded seek, replacing the old NON-leading identity-predicate density-scan
+//! over `operations_appearances` (ORDER BY `ledger_sequence`) that walked back by
+//! descending ledger until the page filled.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -106,6 +105,9 @@ pub struct AssetRow {
     pub sac_contract_surrogate: i64,
     /// Whether the `sac_contract_surrogate` SAC is deployed on-chain (ADR 0051).
     pub sac_deployed: bool,
+    /// `assets.id` — the `ids::asset_id` surrogate (task 0331). The single asset
+    /// key for the `operation_asset_appearances` fan-out seek (task 0359).
+    pub id: i64,
 }
 
 #[derive(Debug)]
@@ -133,22 +135,6 @@ pub struct ResolvedListParams {
     /// SAC property filter (ADR 0051): restrict to assets with a SAC
     /// (`sac_contract_id != 0`) — the old `filter[type]=sac` view.
     pub sac_only: bool,
-}
-
-/// Resolved asset identity used to gate the `/transactions` sub-resource query.
-pub struct AssetIdentity<'a> {
-    pub asset_code: Option<&'a str>,
-    pub issuer: Option<&'a str>,
-    pub contract_id: Option<&'a str>,
-}
-
-/// True when the asset has a DB-side identity ops can key on. Native XLM and
-/// friends have none → the handler short-circuits with an empty page rather
-/// than emit a degenerate `WHERE ()`.
-pub fn asset_predicate_present(identity: &AssetIdentity<'_>) -> bool {
-    let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
-    let has_contract = identity.contract_id.is_some();
-    has_classic || has_contract
 }
 
 /// `asset_type` SMALLINT → canonical label, matching the PG
@@ -226,7 +212,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      a.issuer_id                  AS issuer_id_key, \
      a.contract_id                AS contract_id_key, \
      sac.sac_contract_id          AS sac_contract_surrogate, \
-     sac.sac_deployed             AS sac_deployed \
+     sac.sac_deployed             AS sac_deployed, \
+     a.id                         AS id \
      FROM assets a FINAL \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
      LEFT JOIN ( \
@@ -272,6 +259,7 @@ struct AssetListChRow {
     contract_id_key: i64,
     sac_contract_surrogate: i64,
     sac_deployed: bool,
+    id: i64,
 }
 
 /// Issuer resolve row: `accounts` → `id` (surrogate) + `account_id` StrKey +
@@ -316,6 +304,7 @@ fn list_row_to_asset_row(r: AssetListChRow, iss: Option<(String, Option<String>)
         contract_surrogate_id: r.contract_id_key,
         sac_contract_surrogate: r.sac_contract_surrogate,
         sac_deployed: r.sac_deployed,
+        id: r.id,
     }
 }
 
@@ -613,107 +602,97 @@ struct AssetTxPageChRow {
     created_at: i64,
 }
 
-/// Per-`asset_type` predicate composition over `operations_appearances`,
-/// mirroring the PG `fetch_transactions` branches but on CH surrogate ids:
-///   classic_credit / classic-wrap SAC → `(asset_code, asset_issuer_id)`
-///   native-wrap SAC / soroban          → `contract_id`
-///   native XLM (no identity)           → caller short-circuits (empty page)
+/// Transactions touching a single asset, newest first, keyset-paginated over the
+/// `operation_asset_appearances` fan-out (task 0359 — replaces the old
+/// per-`asset_type` predicate composition over `operations_appearances`).
 ///
-/// `asset_issuer_id` / `contract_surrogate_id` are the surrogate keys carried
-/// on the resolved `AssetRow` (`0` = absent), so no StrKey→id lookup is needed.
-/// Two-step like the accounts sub-resource: a driver seek collapses any
-/// multi-op-per-tx fan-out (`LIMIT 1 BY (ledger_sequence, transaction_id)`),
-/// then the ≤`limit` transaction headers are fetched by
-/// `(ledger_sequence, id) IN (keys)` (PK-prefix prune, multi-partition-safe)
-/// and the `operation_types` aggregate is merged. The caller passes the
-/// handler's `fetch_limit()` (already the `+1` `finalize_page` peek row), bound
-/// raw — same convention as the PG `fetch_transactions`.
+/// `asset_id` is the resolved `ids::asset_id` surrogate (native = a first-class
+/// non-zero key; the caller guards the unresolved `id == 0` sentinel). Two-step
+/// like the accounts sub-resource: a leading-key seek over
+/// `operation_asset_appearances` (`asset_id` IS the leading PK) collapses any
+/// multi-op-per-tx fan-out (`LIMIT 1 BY (ledger_sequence, transaction_id)`) behind
+/// the `max(sequence)` commit fence, then the ≤`limit` transaction headers are
+/// fetched by `(ledger_sequence, id) IN (keys)` (PK-prefix prune,
+/// multi-partition-safe) and the `operation_types` aggregate is merged. The caller
+/// passes the handler's `fetch_limit()` (already the `+1` `finalize_page` peek
+/// row), inlined raw — `asset_id` is a provably-numeric i64.
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
-    asset_code: Option<&str>,
-    asset_issuer_id: i64,
-    contract_surrogate_id: i64,
+    asset_id: i64,
+    contract_surrogate: Option<i64>,
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
-    let has_classic = asset_code.is_some() && asset_issuer_id != 0;
-    let has_contract = contract_surrogate_id != 0;
-    if !has_classic && !has_contract {
-        return Ok(Vec::new());
-    }
     let (op, order) = keyset_sql_desc(direction);
 
-    // Identity predicate. `asset_issuer_id` / `contract_surrogate_id` are i64
-    // surrogates (no injection surface) → interpolated; `asset_code` is a DB
-    // string value → bound.
-    let mut branches: Vec<String> = Vec::new();
-    if has_classic {
-        branches.push(format!(
-            "(oa.asset_code = ? AND oa.asset_issuer_id = {asset_issuer_id})"
-        ));
-    }
-    if has_contract {
-        branches.push(format!("(oa.contract_id = {contract_surrogate_id})"));
-    }
-    let predicate = branches.join(" OR ");
-
-    // CH cursor only; a `Pg` variant never reaches here (the handler's
-    // cross-source guard rejects it). Inlined i64 — no injection surface; the
-    // clause is omitted entirely on the first page so no NULL is bound.
+    // CH cursor only (the handler's cross-source guard rejects a `Pg` variant).
+    // Inlined i64 — no injection surface; omitted on the first page so no NULL is
+    // bound. Unqualified columns: each seek is a single-table read, no ambiguity.
     let cursor_clause = match cursor {
         Some(TxListCursor::Ch {
             ledger_sequence,
             tiebreak,
-        }) => format!(
-            " AND (oa.ledger_sequence, oa.transaction_id) {op} ({ledger_sequence}, {tiebreak})"
-        ),
+        }) => {
+            format!(" AND (ledger_sequence, transaction_id) {op} ({ledger_sequence}, {tiebreak})")
+        }
         _ => String::new(),
     };
 
-    // Step 1: driver seek over `operations_appearances` (ORDER BY
-    // `(ledger_sequence, transaction_id, application_order)`). The identity
-    // predicate is NOT the leading key, so we lean on `optimize_read_in_order`:
-    // read from the tip in `(ledger, tx)` order and EARLY-TERMINATE once the page
-    // fills. A `LIMIT 1 BY` here DEFEATS read-in-order → full-history scan (the
-    // 0281-C finding on the LP path, box-measured), so instead we over-fetch RAW
-    // op-rows and collapse a tx's adjacent op-rows in Rust. Over-fetch (`limit*4`)
-    // absorbs the multi-op-per-tx fan-out; a capped under-delivery re-fetches ONCE
-    // at the hard bound `limit*128` (a Stellar tx has <=100 ops, so that always
-    // covers `limit` distinct txs). `keys` stays keyset-ordered and `limit`-bounded
-    // — the same page the old `LIMIT 1 BY … LIMIT` returned.
-    let mut overfetch = limit.saturating_mul(4);
-    let keys: Vec<(i64, i64)> = loop {
-        let driver_sql = format!(
-            "SELECT oa.ledger_sequence AS ledger_sequence, oa.transaction_id AS transaction_id \
-             FROM operations_appearances oa \
-             WHERE ({predicate}) AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-             ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
-             LIMIT {overfetch}"
-        );
-        let mut driver = client.query(&driver_sql);
-        if has_classic {
-            driver = driver.bind(asset_code.expect("guarded by has_classic"));
-        }
-        let raw = driver.fetch_all::<AssetTxKeyChRow>().await?;
-        let capped = raw.len() as i64 >= overfetch;
-
-        // A tx's op-rows are adjacent in read-in-order, so collapsing consecutive
-        // equal `(ledger, tx)` is exactly the `LIMIT 1 BY` we replaced.
-        let mut distinct: Vec<(i64, i64)> = Vec::with_capacity(raw.len());
-        for r in &raw {
-            let k = (r.ledger_sequence, r.transaction_id);
-            if distinct.last().is_none_or(|last| *last != k) {
-                distinct.push(k);
-            }
-        }
-
-        if (distinct.len() as i64) >= limit || !capped || overfetch >= limit.saturating_mul(128) {
-            distinct.truncate(limit.max(0) as usize);
-            break distinct;
-        }
-        overfetch = limit.saturating_mul(128);
+    // Step 1 — one or two keyset arms, merged (task 0359 composed read):
+    //   A. `operation_asset_appearances` on `asset_id` — classic / native activity
+    //      (empty for a pure type-3 token: no classic op names it).
+    //   B. `soroban_invocations_appearances` on the asset's single associated
+    //      contract (ADR 0051 — a type-3 token's OWN contract, or a classic/native
+    //      asset's wrapping SAC, never both). Serves the type-3 asset page (its
+    //      fan-out is empty — the #1 regression fix) and a classic asset's SAC
+    //      activity (F-F). `None` → arm A only.
+    // Same seek both arms: leading-PK range behind the `max(sequence)` fence,
+    // `LIMIT 1 BY` per tx. The union's top-`limit` (sort + dedup + truncate) is the
+    // global page; `dedup` drops a tx returned by both arms.
+    let seek = |table: &str, key_col: &str, key: i64| {
+        format!(
+            "SELECT ledger_sequence, transaction_id FROM {table} \
+             WHERE {key_col} = {key} \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+             ORDER BY ledger_sequence {order}, transaction_id {order} \
+             LIMIT 1 BY ledger_sequence, transaction_id \
+             LIMIT {limit}"
+        )
     };
+
+    let mut sqls = vec![seek("operation_asset_appearances", "asset_id", asset_id)];
+    if let Some(contract_id) = contract_surrogate {
+        sqls.push(seek(
+            "soroban_invocations_appearances",
+            "contract_id",
+            contract_id,
+        ));
+    }
+
+    let mut keys: Vec<(i64, i64)> = Vec::new();
+    for sql in &sqls {
+        keys.extend(
+            client
+                .query(sql)
+                .fetch_all::<AssetTxKeyChRow>()
+                .await?
+                .iter()
+                .map(|r| (r.ledger_sequence, r.transaction_id)),
+        );
+    }
+
+    // Merge the arms into the global keyset page: sort in the page direction
+    // (`Next` = newest-first DESC, `Prev` = ASC — matching each arm's SQL `order`,
+    // derived from the typed `direction`, not the SQL string), dedup a tx returned
+    // by both arms, keep the first `limit`.
+    if matches!(direction, Direction::Next) {
+        keys.sort_unstable_by(|a, b| b.cmp(a));
+    } else {
+        keys.sort_unstable();
+    }
+    keys.dedup();
+    keys.truncate(limit as usize);
 
     if keys.is_empty() {
         return Ok(Vec::new());

@@ -133,6 +133,12 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
 /// persisted. `_ => contract_id` is kept only so the fn stays total on an
 /// unexpected legacy type-2 input; `TokenAssetType::TryFrom` already rejects 2.
 ///
+/// The native XLM asset surrogate — `asset_id(0, "", 0, 0)` = `hash64("native")`,
+/// a stable FIRST-CLASS key (task 0359 / ADR 0051), never the empty-string
+/// sentinel. Named so call sites read as "the native asset" instead of the magic
+/// empty 4-tuple; the golden test pins `NATIVE_ASSET_ID == asset_id(0, "", 0, 0)`.
+pub const NATIVE_ASSET_ID: i64 = -6_959_166_271_784_855_184;
+
 /// Deterministic (replay-idempotent), no central counter.
 #[inline]
 pub fn asset_id(asset_type: i16, asset_code: &str, issuer_id: i64, contract_id: i64) -> i64 {
@@ -197,6 +203,7 @@ mod tests {
         assert_eq!(address_id(g), 4_204_727_763_610_853_148);
         assert_eq!(contract_id(c), -8_283_827_203_770_785_938);
         assert_eq!(asset_id(0, "", 0, 0), -6_959_166_271_784_855_184); // native
+        assert_eq!(NATIVE_ASSET_ID, asset_id(0, "", 0, 0)); // const == fn (dedup pin)
         assert_eq!(
             asset_id(1, "USDC", account_id(g), 0),
             -5_142_557_507_226_545_233

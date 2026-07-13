@@ -238,22 +238,18 @@ fn build_credit_asset(code: &str, issuer: AccountId) -> Result<Asset, ()> {
 fn asset_to_identity(asset: &Asset) -> SacAssetIdentity {
     match asset {
         Asset::Native => SacAssetIdentity::Native,
+        // Shared normalizer (task 0359 concern 3) so a SAC-wrapped asset's
+        // `asset_id` matches the op / balance pipelines for the same asset — no
+        // more per-pipeline identity fracture on malformed codes.
         Asset::CreditAlphanum4(a) => SacAssetIdentity::Credit {
-            code: asset_code_to_string(&a.asset_code.0),
+            code: crate::asset_code::asset_code_str(&a.asset_code.0),
             issuer: a.issuer.0.to_string(),
         },
         Asset::CreditAlphanum12(a) => SacAssetIdentity::Credit {
-            code: asset_code_to_string(&a.asset_code.0),
+            code: crate::asset_code::asset_code_str(&a.asset_code.0),
             issuer: a.issuer.0.to_string(),
         },
     }
-}
-
-fn asset_code_to_string(bytes: &[u8]) -> String {
-    // Asset codes are zero-padded to 4 or 12 bytes; strip trailing NULs so
-    // "USDC\0\0\0\0" round-trips to "USDC".
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 fn push_preimage_identity(
