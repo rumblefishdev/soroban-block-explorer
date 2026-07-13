@@ -2,7 +2,7 @@
 id: '0359'
 title: 'Asset-participation index re-model — native XLM first-class + complete per-asset activity (offers, all path-payment legs)'
 type: FEATURE # fundamental data-model fix: schema + ingestion + XDR re-parse backfill + query rewrites
-status: active
+status: completed
 related_adr: ['0044', '0051'] # 0044 operations_appearances schema; 0051 SAC-as-facet / native surrogate convention
 related_tasks: ['0348', '0331', '0334', '0243', '0333'] # 0348 = F2 origin; 0331/0334 = balances native-surrogate precedent; 0243/0333 = assets CH queries + bloom idx
 tags:
@@ -240,6 +240,22 @@ history:
       audit-harness. Ran /devils-advocate on B1/B2/B3: verdict ship-with-changes,
       headline = drop B3/result grain (redundant for presence; atoms ⊆ body). Wrote
       G-handoff-mvp. Nothing pushed. Next: drop B3 + close the meta-V5 wildcard.
+  - date: 2026-07-13
+    status: completed
+    who: karolkow
+    note: >
+      Write-side COMPLETE + triple adversarially verified (accounts / assets /
+      issuer-drop devils-advocate agents — zero row-corruption). Shipped: asset
+      fan-out (body+meta grains), native first-class surrogate, typed
+      op-participants (F-C: counterparties + issuers, replacing the God-Payload
+      op_participant_str_keys), fee-bump fee-source (K2-4), composed read (#1
+      type-3 + F-F/K3-1). Decision 1c: issuer NOT a participant (redundant with the
+      asset index). PR #324 merged to develop; 3-commit tail (assets-doc +
+      issuer-drop + tracker) merged after. Deploy/backfill spun to 0379 (OPS).
+      Remaining tracker work (F-B/F-D/K1-K4/L2/R1-R3) spawned as 0372-0379, grouped
+      by subsystem. Verified Soroban L2 needs NO S3 — events already in CH (9.68B
+      rows) → L2 = CH transform (0372). See notes/G-progress.md for the full
+      inventory + §16 pre-backfill review.
 ---
 
 # Asset-participation index re-model
@@ -954,23 +970,32 @@ path.
 > F-F; **Phase 1** = offers; **Phase 2** = the rest gated on a render spec + the two
 > gates. Don't treat these as one atomic gate.
 
-- [ ] Design recorded in task (no separate ADR — karolkow) + `docs/architecture/**` updated (schema + query docs)
-- [ ] `operation_asset_appearances` (or agreed shape) live; native = surrogate
-- [ ] Ingestion emits one row per participating asset per op (live)
-- [ ] XDR re-parse backfill complete + validated (spot-check vs Horizon /
-      stellar.expert for a sample of assets incl. native)
-- [ ] `/assets/native/transactions` returns real native activity (payments,
-      path-payment legs, …) — no early-return
-- [ ] Issued-asset lists now include offers + both path-payment legs
-- [ ] F-B: LP pools filterable by native XLM leg
-- [ ] F-C: dropped account roles indexed (crossed-offer counterparty etc.)
-- [ ] F-D: contract-held classic/native not orphaned on un-sighted SAC
-- [ ] F-F: asset page unions its SAC-contract invocations (native shows its
-      ~3.9M XLM-SAC transfers; every classic asset shows its SAC activity).
-      Cheap-win variant (wire `sac_contract_surrogate` into the tx predicate)
-      may ship first, ahead of the full re-model.
-- [ ] API types regenerated if shape changed
-- [ ] Validation vs Horizon / stellar.expert (see [[reference_chq_clickhouse_cli]])
+- [x] Design recorded in task (no separate ADR — karolkow) + `docs/architecture/**` updated (schema + query docs) — PR #7
+- [x] `operation_asset_appearances` live (code); native = surrogate. Prod CREATE + backfill → **0379 (OPS)**
+- [x] Ingestion emits one row per participating asset per op (live)
+- [ ] XDR re-parse backfill complete + validated — **deferred to 0379 (OPS)**
+- [x] `/assets/native/transactions` returns real native activity — no early-return (C6 / composed read)
+- [x] Issued-asset lists now include offers + both path-payment legs
+- [ ] F-B: LP pools filterable by native XLM leg — **deferred to 0374**
+- [x] F-C: dropped account roles indexed (crossed-offer counterparty, claimants, inflationDest, revoke-target) via typed `extract_counterparties`
+- [ ] F-D: contract-held classic/native not orphaned on un-sighted SAC — **deferred to 0373**
+- [x] F-F: asset page unions its SAC-contract invocations — DONE via composed-read arm B (native XLM-SAC + every classic asset's SAC activity)
+- [x] API types regenerated if shape changed — N/A (query-internal, no API shape change)
+- [ ] Validation vs Horizon / stellar.expert — **deferred to 0379 (after backfill)**
+
+## Future Work → spawned tasks
+
+Remaining tracker work (see `notes/G-progress.md` §15 roadmap) is grouped by
+subsystem into backlog tasks, all `related_tasks: ['0359']`:
+
+- **0372** L2 Soroban event token-flow decode (K1-3/K1-7/K2-7/K3-4/K4-3/K4-4) — CH transform, no S3
+- **0373** Contract-as-holder + non-G participants (F-D/K2-8/K2-3/K3-3/K3-6)
+- **0374** LP completeness — native leg + Soroban-AMM (F-B/K2-2/K3-5/K4-6)
+- **0375** Fee-bump inner_tx_hash lookup 404 (K3-2)
+- **0376** NFT completeness (K1-6/K2-5/K2-6/K3-7)
+- **0377** Aggregate/detail hygiene (K4-1/K4-2/K4-5)
+- **0378** Typed OpFacts IR — kill God-Payload #2 + retire legacy columns (R1/R2/R3 + fetch_operations migration)
+- **0379** OPS: deploy + backfill `operation_asset_appearances` (§13 + #8)
 
 ## Notes
 
