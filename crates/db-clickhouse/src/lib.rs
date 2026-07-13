@@ -166,10 +166,12 @@ mod tests {
         // index (asset-leading key; native first-class). 27 → 28.
         // task 0365: added `operation_pools` — per-(pool, tx) presence index
         // (pool-leading key; the pool-dimension twin of the above). 28 → 29.
+        // task 0385: added `accounts_recent` (last_seen_ledger-ordered read-model for
+        // the acclist browse) + its refreshable `accounts_recent_mv`. 29 → 31.
         assert_eq!(
             stmts.len(),
-            29,
-            "expected 27 tables + 1 materialized view + 1 dictionary, got {}",
+            31,
+            "expected 28 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }
