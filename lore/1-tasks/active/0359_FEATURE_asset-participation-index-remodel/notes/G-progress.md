@@ -58,7 +58,7 @@ history:
 
 - [x] F-A asset single-slot (native empty + multi-leg loss) — THE core
 - [ ] F-B LP can't match native XLM leg (16 552 pools / 21.7% invisible) — 🧊
-- [x] F-C account tx list drops roles — classic-op roles DONE (crossed-offer seller, claimants, inflationDest, revoke-target) via typed `extract_counterparties`; God-Payload full-replaced. Residuals split out: mint/burn recipients → K2-7 (L2 events), fee-bump fee-source → K2-4 (next commit)
+- [x] F-C account tx list drops roles — classic-op roles DONE (crossed-offer seller, claimants, inflationDest, revoke-target) via typed `extract_counterparties`; God-Payload full-replaced. Residuals split out: mint/burn recipients → K2-7 (L2 events), fee-bump fee-source → K2-4 (done)
 - [ ] F-D contract-held classic/native orphaned when SAC un-sighted — 🧊
 - [x] F-E offers unindexed by asset
 - [x] F-F SAC-contract activity unioned into asset page (native 3.9M XLM-SAC) — DONE via the composed-read arm B (🔀 = K3-1; shipped with #1)
@@ -78,7 +78,7 @@ history:
 - [x] K2-1 native asset transactions empty — **fixed end-to-end**: native surrogate + seek + query + C6 read gate removed (`native_asset_singleton` provides the `assets` row)
 - [ ] K2-2 LP native XLM leg unmatchable (🔀 = F-B) — 🧊
 - [ ] K2-3 `transaction_participants` drops non-G participants (C/B/L/M) — 🧊
-- [ ] K2-4 fee-bump fee-source unattributed (~45% of txs) — 🧊
+- [x] K2-4 fee-bump fee-source unattributed (~45% of txs) — typed `ExtractedTransaction.fee_source` (via `envelope_fee_source`, muxed→G); staging registers the payer beside the inner source. Parse-side only, no `transactions` column
 - [ ] K2-5 NFT contract-owner NULL (22% NFT / 51% transfer rows) — 🧊
 - [ ] K2-6 pending NFTs invisible (71K) — 🧊
 - [ ] K2-7 mint/burn/clawback participants never registered — 🧊
