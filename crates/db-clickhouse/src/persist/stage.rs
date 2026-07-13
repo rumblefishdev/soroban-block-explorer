@@ -490,17 +490,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                     entry.insert(key.clone());
                 }
             }
-            // Asset issuers are participants too (an issuer's page lists activity
-            // on its asset). Derived from the op's `asset_appearances` — every
-            // credit leg already carries its issuer G-StrKey; native has none.
-            for asset in &op.asset_appearances {
-                if let AssetRef::Credit { issuer, .. } = asset
-                    && is_strkey_account(issuer)
-                {
-                    account_keys.insert(issuer.clone());
-                    entry.insert(issuer.clone());
-                }
-            }
+            // Asset issuers are deliberately NOT registered as participants (task
+            // 0359, decision 1c): an asset's activity lives on its ASSET page
+            // (`operation_asset_appearances`), and the issuer is derivable from the
+            // asset_id — registering the issuer on every tx touching its asset
+            // would be redundant with that index and would flood a popular
+            // issuer's account page. Issuers still enter the `accounts` universe
+            // via detected-asset extraction below.
         }
     }
 

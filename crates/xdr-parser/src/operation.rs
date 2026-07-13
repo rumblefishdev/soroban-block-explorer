@@ -217,9 +217,12 @@ fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
 /// variant (e.g. a Protocol-24 `V5`) must break the build HERE, not silently
 /// yield zero meta changes and drop every claim-CB / LP asset on those ledgers
 /// (the meta grain is their ONLY source). The legacy pre-Soroban metas (V0–V2)
-/// map to `&[]` deliberately: they predate the CB/LP ops recovered here and the
-/// 0359 backfill window is the Soroban era (V3+), so their per-op changes are
-/// never consumed.
+/// map to `&[]` because the 0359 backfill window starts at the Soroban go-live
+/// (ledger 50,457,424 / Protocol 20 / `V3`+), so V0..V2 never occur in the ingest
+/// window. NB this is a WINDOW guarantee, not a protocol one: claimable balances
+/// (Protocol 15) and liquidity pools (Protocol 18) predate `V3`, so their CB/LP
+/// ops on P15..P19 ledgers live in `V2` meta -- a pre-P20 ingest would need `V2`
+/// handling here or it would silently drop those meta-grain assets.
 fn op_meta_changes(tx_meta: Option<&TransactionMeta>, op_idx: usize) -> &[LedgerEntryChange] {
     match tx_meta {
         None | Some(TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_)) => {
