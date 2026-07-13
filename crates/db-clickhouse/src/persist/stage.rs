@@ -457,11 +457,18 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         .collect();
 
     for tx in transactions {
+        let entry = participants_per_tx.entry(tx.hash.clone()).or_default();
         account_keys.insert(tx.source_account.clone());
-        participants_per_tx
-            .entry(tx.hash.clone())
-            .or_default()
-            .insert(tx.source_account.clone());
+        entry.insert(tx.source_account.clone());
+        // Task 0359 K2-4: the fee-bump payer funds the fee but runs no ops and is
+        // not the inner source — register it so the fee-bump tx shows on the
+        // payer's account page. `Some` only for fee-bump envelopes.
+        if let Some(fee_source) = &tx.fee_source
+            && is_strkey_account(fee_source)
+        {
+            account_keys.insert(fee_source.clone());
+            entry.insert(fee_source.clone());
+        }
     }
 
     for (tx_hash, ops) in operations {

@@ -70,6 +70,11 @@ pub struct ExtractedTransaction {
     pub ledger_sequence: u32,
     /// Transaction source account (G... or M... address, max 56 chars).
     pub source_account: String,
+    /// Fee-bump payer account (`fee_source`), G-StrKey. `Some` only for a
+    /// fee-bump envelope, where the payer funds the fee but is neither the inner
+    /// `source_account` nor an op participant — registered separately into
+    /// `transaction_participants` (task 0359 K2-4). `None` otherwise.
+    pub fee_source: Option<String>,
     /// Actual fee charged in stroops.
     pub fee_charged: i64,
     /// Whether the transaction succeeded.

@@ -401,6 +401,7 @@ fn synthetic_tx(hash_seed: u8) -> ExtractedTransaction {
         inner_tx_hash: None,
         ledger_sequence: 10,
         source_account: "G".to_string() + &"A".repeat(55),
+        fee_source: None,
         fee_charged: 100,
         successful: true,
         result_code: "txSuccess".into(),
@@ -653,6 +654,46 @@ fn prepare_folds_identical_operations() {
     assert_eq!(op_row.application_order, 1);
     assert_eq!(op_row.op_type, OperationType::Payment as i16);
     assert_eq!(op_row.destination_id, Some(ids::account_id(&dest)));
+}
+
+#[test]
+fn prepare_registers_fee_bump_fee_source_as_participant() {
+    // Task 0359 K2-4: the fee-bump payer funds the fee but runs no ops and is
+    // not the inner source — it must still land in transaction_participants.
+    let ledger = synthetic_ledger();
+    let mut tx = synthetic_tx(0x64);
+    let payer = "G".to_string() + &"P".repeat(55);
+    tx.fee_source = Some(payer.clone());
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged
+            .participant_rows
+            .iter()
+            .any(|r| r.account_id == ids::account_id(&payer)),
+        "fee-bump payer registered as participant"
+    );
+    assert!(
+        staged.account_rows.iter().any(|a| a.id == ids::account_id(&payer)),
+        "payer gets an accounts stub"
+    );
 }
 
 #[test]
