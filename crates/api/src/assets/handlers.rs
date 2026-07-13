@@ -21,9 +21,7 @@ use crate::transactions::dto::TxListCursor;
 use super::dto::{
     AssetDetailResponse, AssetItem, AssetKeyCursor, AssetTransactionItem, ListParams,
 };
-use super::queries::{
-    self, AssetRow, AssetTxRow, ResolvedListParams,
-};
+use super::queries::{self, AssetRow, AssetTxRow, ResolvedListParams};
 
 async fn fetch_list_for_source(
     state: &AppState,
@@ -355,8 +353,15 @@ async fn fetch_asset_tx_for_source(
     } else {
         None
     };
-    queries::fetch_transactions(&state.ch(), row.id, contract_surrogate, limit, cursor, direction)
-        .await
+    queries::fetch_transactions(
+        &state.ch(),
+        row.id,
+        contract_surrogate,
+        limit,
+        cursor,
+        direction,
+    )
+    .await
 }
 
 /// Build the opaque asset-transactions cursor for a boundary row. CH keys on

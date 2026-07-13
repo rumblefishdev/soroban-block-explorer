@@ -691,7 +691,10 @@ fn prepare_registers_fee_bump_fee_source_as_participant() {
         "fee-bump payer registered as participant"
     );
     assert!(
-        staged.account_rows.iter().any(|a| a.id == ids::account_id(&payer)),
+        staged
+            .account_rows
+            .iter()
+            .any(|a| a.id == ids::account_id(&payer)),
         "payer gets an accounts stub"
     );
 }
@@ -741,7 +744,10 @@ fn prepare_registers_op_counterparties_as_participants() {
         "crossed-offer seller registered as tx participant"
     );
     assert!(
-        staged.account_rows.iter().any(|a| a.id == ids::account_id(&seller)),
+        staged
+            .account_rows
+            .iter()
+            .any(|a| a.id == ids::account_id(&seller)),
         "seller gets an accounts stub"
     );
 }

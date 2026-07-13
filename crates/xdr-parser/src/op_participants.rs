@@ -50,18 +50,14 @@ pub(crate) fn extract_counterparties(
         // Simple destination / target accounts (muxed addresses collapse to
         // their underlying G, as everywhere else).
         OperationBody::Payment(op) => out.push(muxed_to_g_strkey(&op.destination)),
-        OperationBody::PathPaymentStrictReceive(op) => {
-            out.push(muxed_to_g_strkey(&op.destination))
-        }
+        OperationBody::PathPaymentStrictReceive(op) => out.push(muxed_to_g_strkey(&op.destination)),
         OperationBody::PathPaymentStrictSend(op) => out.push(muxed_to_g_strkey(&op.destination)),
         OperationBody::CreateAccount(op) => out.push(op.destination.0.to_string()),
         OperationBody::AccountMerge(dest) => out.push(muxed_to_g_strkey(dest)),
         OperationBody::Clawback(op) => out.push(muxed_to_g_strkey(&op.from)),
         OperationBody::AllowTrust(op) => out.push(op.trustor.0.to_string()),
         OperationBody::SetTrustLineFlags(op) => out.push(op.trustor.0.to_string()),
-        OperationBody::BeginSponsoringFutureReserves(op) => {
-            out.push(op.sponsored_id.0.to_string())
-        }
+        OperationBody::BeginSponsoringFutureReserves(op) => out.push(op.sponsored_id.0.to_string()),
         OperationBody::CreateClaimableBalance(op) => {
             for c in op.claimants.iter() {
                 let Claimant::ClaimantTypeV0(v0) = c;
@@ -222,7 +218,10 @@ mod tests {
             from: MuxedAccount::Ed25519(Uint256([0xC3; 32])),
             amount: 5,
         });
-        assert_eq!(extract_counterparties(&clawback, None), vec![g_strkey(0xC3)]);
+        assert_eq!(
+            extract_counterparties(&clawback, None),
+            vec![g_strkey(0xC3)]
+        );
 
         let allow = OperationBody::AllowTrust(AllowTrustOp {
             trustor: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0xC4; 32]))),
@@ -325,7 +324,10 @@ mod tests {
 
         // OrderBook atom → its seller_id (0xCC, from `order_book_atom`).
         let ob = manage_buy_offer_result(vec![order_book_atom()]);
-        assert_eq!(extract_counterparties(&body, Some(&ob)), vec![g_strkey(0xCC)]);
+        assert_eq!(
+            extract_counterparties(&body, Some(&ob)),
+            vec![g_strkey(0xCC)]
+        );
 
         // LiquidityPool atom → no seller account (the AMM is the counterparty).
         let lp = manage_buy_offer_result(vec![lp_atom([0x33; 32], 1, 1)]);
@@ -344,6 +346,9 @@ mod tests {
             amount_bought: 5,
         });
         let res = manage_buy_offer_result(vec![v0]);
-        assert_eq!(extract_counterparties(&body, Some(&res)), vec![g_strkey(0x0A)]);
+        assert_eq!(
+            extract_counterparties(&body, Some(&res)),
+            vec![g_strkey(0x0A)]
+        );
     }
 }

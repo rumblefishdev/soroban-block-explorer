@@ -33,11 +33,11 @@
 
 use crate::asset_code::{asset_code_bytes, asset_code_str};
 use stellar_xdr::{
-    Asset, ChangeTrustAsset, ClaimClaimableBalanceOp, ClaimableBalanceId, ClawbackClaimableBalanceOp,
-    CreatePassiveSellOfferOp, LedgerEntry, LedgerEntryChange, LedgerEntryData, LedgerKey,
-    LiquidityPoolDepositOp,
-    LiquidityPoolEntryBody, LiquidityPoolParameters, LiquidityPoolWithdrawOp, ManageBuyOfferOp,
-    ManageSellOfferOp, OperationBody, PoolId, RevokeSponsorshipOp, TrustLineAsset,
+    Asset, ChangeTrustAsset, ClaimClaimableBalanceOp, ClaimableBalanceId,
+    ClawbackClaimableBalanceOp, CreatePassiveSellOfferOp, LedgerEntry, LedgerEntryChange,
+    LedgerEntryData, LedgerKey, LiquidityPoolDepositOp, LiquidityPoolEntryBody,
+    LiquidityPoolParameters, LiquidityPoolWithdrawOp, ManageBuyOfferOp, ManageSellOfferOp,
+    OperationBody, PoolId, RevokeSponsorshipOp, TrustLineAsset,
 };
 
 /// An asset as it appears in an operation, before surrogate-hashing.
@@ -217,13 +217,11 @@ fn claimed_cb_asset(
     changes: &[LedgerEntryChange],
     balance_id: &ClaimableBalanceId,
 ) -> Option<AssetRef> {
-    changes.iter().find_map(|c| {
-        match &present_entry(c)?.data {
-            LedgerEntryData::ClaimableBalance(cb) if &cb.balance_id == balance_id => {
-                Some(asset_ref(&cb.asset))
-            }
-            _ => None,
+    changes.iter().find_map(|c| match &present_entry(c)?.data {
+        LedgerEntryData::ClaimableBalance(cb) if &cb.balance_id == balance_id => {
+            Some(asset_ref(&cb.asset))
         }
+        _ => None,
     })
 }
 
@@ -232,18 +230,13 @@ fn claimed_cb_asset(
 /// on the id (not just the first pool entry) mirrors `claimed_cb_asset` and is
 /// robust if the op's changes ever carry more than one pool entry. `None` if
 /// absent (never guesses).
-fn lp_pool_assets(
-    changes: &[LedgerEntryChange],
-    pool_id: &PoolId,
-) -> Option<(AssetRef, AssetRef)> {
-    changes.iter().find_map(|c| {
-        match &present_entry(c)?.data {
-            LedgerEntryData::LiquidityPool(lp) if &lp.liquidity_pool_id == pool_id => {
-                let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
-                Some((asset_ref(&cp.params.asset_a), asset_ref(&cp.params.asset_b)))
-            }
-            _ => None,
+fn lp_pool_assets(changes: &[LedgerEntryChange], pool_id: &PoolId) -> Option<(AssetRef, AssetRef)> {
+    changes.iter().find_map(|c| match &present_entry(c)?.data {
+        LedgerEntryData::LiquidityPool(lp) if &lp.liquidity_pool_id == pool_id => {
+            let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
+            Some((asset_ref(&cp.params.asset_a), asset_ref(&cp.params.asset_b)))
         }
+        _ => None,
     })
 }
 

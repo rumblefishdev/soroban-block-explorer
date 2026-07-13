@@ -663,7 +663,11 @@ pub async fn fetch_transactions(
 
     let mut sqls = vec![seek("operation_asset_appearances", "asset_id", asset_id)];
     if let Some(contract_id) = contract_surrogate {
-        sqls.push(seek("soroban_invocations_appearances", "contract_id", contract_id));
+        sqls.push(seek(
+            "soroban_invocations_appearances",
+            "contract_id",
+            contract_id,
+        ));
     }
 
     let mut keys: Vec<(i64, i64)> = Vec::new();

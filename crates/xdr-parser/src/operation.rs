@@ -61,7 +61,8 @@ pub fn extract_operations(
             // Shared by details (poolIds/claimedAtoms) and counterparties
             // (crossed-offer sellers); both read the same per-op result.
             let op_result = op_results.and_then(|rs| rs.get(i));
-            let counterparties = crate::op_participants::extract_counterparties(&op.body, op_result);
+            let counterparties =
+                crate::op_participants::extract_counterparties(&op.body, op_result);
             let (op_type, details) = extract_op_details(
                 &op.body,
                 return_value.as_ref(),
