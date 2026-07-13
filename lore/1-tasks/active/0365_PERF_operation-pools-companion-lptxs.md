@@ -80,8 +80,8 @@ scans deep from the tip. Array membership **cannot** be a sort-key prefix and
 ```sql
 CREATE TABLE operation_pools (
     pool_id          FixedString(32),
-    ledger_sequence  Int64 CODEC(Delta, ZSTD(1)),
-    transaction_id   Int64 CODEC(Delta, ZSTD(1))
+    ledger_sequence  Int64,
+    transaction_id   Int64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
