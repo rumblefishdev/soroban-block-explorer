@@ -623,6 +623,24 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (asset_id, ledger_sequence, transaction_id);
 
+-- operation_pools: per-(pool, transaction) presence index (task 0365). The
+-- pool-dimension twin of operation_asset_appearances / transaction_participants,
+-- keyed pool-first so GET /liquidity-pools/:id/transactions is a PK-prefix seek
+-- instead of the density-dependent has(pool_ids, X) scan over
+-- operations_appearances (0281-C read-in-order driver, superseded). pool_id = the
+-- raw 32-byte pool hash (already how operations_appearances.pool_ids stores each
+-- crossing -- no surrogate). Populated by arrayJoin(pool_ids) in staging; pure
+-- presence, so duplicate (pool, tx) rows within a tx collapse in the RMT.
+-- Plain Int64 columns, matching transaction_participants / operation_asset_appearances.
+CREATE TABLE IF NOT EXISTS operation_pools (
+    pool_id         FixedString(32),
+    ledger_sequence Int64,
+    transaction_id  Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, transaction_id);
+
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
 -- first-topic Symbol, lifted for cheap `WHERE signature = 'transfer'`.

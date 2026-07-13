@@ -113,6 +113,10 @@ Backbone timeline:
   `/assets/:id/transactions` (task 0359; the asset-dimension twin of
   `transaction_participants`, keyed asset-first; native XLM is a first-class
   surrogate, not absence)
+- `operation_pools` — per-(pool, transaction) presence index powering
+  `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
+  `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
+  hash — the same value `operations_appearances.pool_ids` stores per crossing)
 
 Soroban activity model (per ADRs 0033/0034 these are pure appearance indexes — parsed
 contract-event and invocation-tree payloads are fetched at read time from the public
@@ -155,6 +159,7 @@ ledgers
        ├─ operations_appearances (partitioned)
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
+       ├─ operation_pools (partitioned)
        ├─ soroban_events_appearances (partitioned)
        └─ soroban_invocations_appearances (partitioned)
 
@@ -491,6 +496,39 @@ Purpose / design notes:
 - **Backfill dependency**: needs the Soroban-era XDR re-parse to populate history;
   run it in the SAME rollout as the read swap or the endpoint shows only
   post-deploy classic activity.
+
+### 4.5.2 Operation Pools (task 0365)
+
+ClickHouse-only. The **pool-dimension twin of `transaction_participants`** — a
+per-(pool, transaction) presence index so `/liquidity-pools/:id/transactions` is a
+PK-prefix seek instead of the density-dependent `has(pool_ids, X)` scan over
+`operations_appearances` (the 0281-C read-in-order driver, superseded).
+
+```sql
+CREATE TABLE operation_pools (
+    pool_id         FixedString(32),  -- raw 32-byte pool hash (no surrogate)
+    ledger_sequence Int64,
+    transaction_id  Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, transaction_id);
+```
+
+Purpose / design notes:
+
+- `pool_id` is the raw 32-byte hash — the exact value `operations_appearances.pool_ids`
+  stores per crossing — so no surrogate resolution is needed (unlike the asset twin).
+- **Pure presence** — no `role` / `application_order` / `amount`. Duplicate (pool, tx)
+  rows within a tx are deduped at write (per-tx set) and collapse in the RMT; the read
+  also applies `LIMIT 1 BY (ledger, tx)`.
+- Populated by the indexer as a per-op Rust fan-out over each op's `pool_ids`,
+  written beside `transaction_participants` / `operation_asset_appearances`. (The
+  Path B backfill below re-keys history via `arrayJoin(pool_ids)`.)
+- **Backfill (task 0365 Path B)**: unlike the asset twin, the source `pool_ids` is
+  already in ClickHouse, so history is backfilled by a plain CH re-key
+  (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id
+FROM operations_appearances`) — no XDR re-parse.
 
 ### 4.6 Soroban Contracts
 
