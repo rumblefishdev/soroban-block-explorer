@@ -4,7 +4,7 @@ title: 'PERF: ctrevents read-in-order + acclist projection (deferred from 0345)'
 type: PERF
 status: backlog
 related_adr: []
-related_tasks: ['0345', '0338']
+related_tasks: ['0345', '0338', '0385']
 tags:
   [priority-medium, effort-medium, layer-clickhouse, milestone-3, phase-launch]
 milestone: 3
@@ -34,6 +34,15 @@ history:
       already FE-cached 60s, freshness cosmetic. Verdict: launch known-issue, no
       server-side work; edge-cache/latest-table post-launch only if traffic warrants.
       See the RESOLVED note. ctrevents part still open.
+  - date: 2026-07-13
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      acclist item EXTRACTED to 0385 and its known-issue verdict SUPERSEDED. The
+      refreshable-MV path (a `last_seen`-ordered `accounts_recent` MV, mirror of
+      `balance_aggregates_mv`) is viable — dodges the RMT-projection rejection via
+      a separate plain-MergeTree table — so acclist gets a real server-side fix
+      under AC instead of the FE 60s cache. This task now = ctrevents only.
 ---
 
 # PERF: ctrevents read-in-order + acclist projection
