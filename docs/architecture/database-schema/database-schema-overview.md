@@ -944,6 +944,33 @@ Design notes:
   (see §4.17), not as JSONB on this row. The previously-planned partitioned
   `account_balance_history` companion was dropped per
   [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md)
+- **`accounts_recent` (ClickHouse read-model, task 0385):** the account-list browse
+  (`GET /v1/accounts`) sorts by `last_seen_ledger`, but the CH `accounts` table must
+  be `ORDER BY account_id` — that is the `ReplacingMergeTree` dedup key, and
+  `last_seen_ledger` mutates so it cannot sit in the sort key. A projection on the
+  RMT is refused by ClickHouse 26.3 (task 0353, Code 344), so the last_seen ordering
+  lives in a separate plain-`MergeTree` table filled by a refreshable MV (full
+  recompute + atomic EXCHANGE → reads need no `FINAL`; mirrors `balance_aggregates_mv`,
+  §4.17). `accounts::fetch_list` read-in-order SEEKs it (~page rows) instead of the
+  old `accounts FINAL` whole-dimension scan+sort (~24M). Freshness = the refresh
+  interval — a shared, server-side origin, ≤interval-stale, fine for a browse list.
+
+  ```sql
+  CREATE TABLE accounts_recent (
+      id                Int64,
+      account_id        String,
+      last_seen_ledger  Int64,
+      first_seen_ledger Int64,
+      home_domain       LowCardinality(Nullable(String))
+  ) ENGINE = MergeTree
+  ORDER BY (last_seen_ledger, id);
+
+  CREATE MATERIALIZED VIEW accounts_recent_mv
+  REFRESH EVERY 2 MINUTE
+  TO accounts_recent AS
+  SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+  FROM accounts FINAL;
+  ```
 
 ### 4.12 NFTs
 

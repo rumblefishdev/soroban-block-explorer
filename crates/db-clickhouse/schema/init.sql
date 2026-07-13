@@ -157,6 +157,36 @@ CREATE TABLE IF NOT EXISTS accounts (
 ENGINE = ReplacingMergeTree(last_seen_ledger)
 ORDER BY (account_id);
 
+-- accounts_recent (task 0385): a `last_seen_ledger`-ordered copy of `accounts`
+-- powering the acclist browse (`GET /v1/accounts`, sole sort = last_seen). The
+-- base table is ORDER BY account_id (identity — REQUIRED for RMT dedup, since
+-- last_seen_ledger MUTATES and cannot live in the sort key), so the list's
+-- last_seen sort is a whole-dimension `accounts FINAL` scan+sort (~24M rows). A
+-- projection on the RMT is refused by CH 26.3 (task 0353, Code 344), so the
+-- alternate ordering lives in this separate plain-MergeTree table, filled by a
+-- refreshable MV (full recompute + atomic EXCHANGE → reads need no FINAL; mirrors
+-- `balance_aggregates_mv`). `accounts::fetch_list` then read-in-order SEEKs it.
+CREATE TABLE IF NOT EXISTS accounts_recent (
+    id                Int64,
+    account_id        String,
+    last_seen_ledger  Int64,
+    first_seen_ledger Int64,
+    home_domain       LowCardinality(Nullable(String))
+)
+ENGINE = MergeTree
+ORDER BY (last_seen_ledger, id);
+
+-- Refreshable MV that recomputes `accounts_recent` from `accounts` (defined above
+-- — the source table MUST exist before this CREATE). Full recompute + atomic
+-- EXCHANGE, so reads need no FINAL. Refresh interval = acclist freshness: a
+-- ≤interval-stale "recently active accounts" browse is fine, and it is a shared
+-- server-side origin (strictly better than the old per-client FE 60s cache).
+CREATE MATERIALIZED VIEW IF NOT EXISTS accounts_recent_mv
+REFRESH EVERY 2 MINUTE
+TO accounts_recent AS
+SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+FROM accounts FINAL;
+
 -- soroban_contracts: same hybrid pattern as accounts.
 -- `wasm_uploaded_at_ledger` is the version slot; `DEFAULT 0` is the
 -- stub-row sentinel (Pass 2 stub-rowing for referenced-but-not-deployed
