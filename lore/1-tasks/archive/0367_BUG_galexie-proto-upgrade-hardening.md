@@ -2,7 +2,7 @@
 id: '0367'
 title: 'Galexie protocol-upgrade hardening: durable 27.0.0 pin + fix silent ingestion-lag alarm'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['effort-small', 'priority-high']
@@ -13,6 +13,19 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Created from 2026-07-08 galexie proto-27 stall incident (prod ingestion idle ~16h).'
+  - date: 2026-07-13
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Pin + alarm fix merged (PR #323). Post-merge ops completed 2026-07-13:
+      CloudWatch stack deployed via `cdk deploy Explorer-production-CloudWatch
+      --exclusively` (avoided `make deploy-production-cloudwatch` so it would not
+      also deploy the Compute stack's unrelated pending lambda changes); alarm
+      test fired + delivered to Slack (metric `NumberOfMessagesSent`, alarm
+      `production-galexie-ingestion-lag`, SSM slack config confirmed); GitHub env
+      `GALEXIE_IMAGE_DIGEST` set to Galexie 27.0.0 Docker Hub digest
+      `sha256:81a9e829…c120b6` in prod + staging. Galexie hotfix live since
+      2026-07-09.
 ---
 
 # Galexie protocol-upgrade hardening: durable 27.0.0 pin + fix silent ingestion-lag alarm
@@ -27,11 +40,15 @@ and wrote nothing to S3 → the indexer starved. It ran ~16 h before a human
 noticed. This task (a) durably pins the fixed image and (b) fixes the alarm that
 was _supposed_ to catch this but couldn't fire.
 
-## Status: Active
+## Status: Completed
 
-Hotfix already **live in prod** (Galexie 27.0.0 deployed manually 2026-07-09,
-caught up the full gap, S3 flowing). This PR captures the pin durably and lands
-the alarm fix. Remaining: deploy the CloudWatch stack + one-time alarm test.
+All landed. Hotfix (Galexie 27.0.0) went live in prod 2026-07-09 (caught up the
+full gap, S3 flowing); durable pin + alarm fix merged in PR #323. Post-merge ops
+done 2026-07-13: CloudWatch stack deployed (via `cdk deploy … --exclusively` to
+avoid dragging the Compute stack's unrelated pending lambda changes), alarm test
+fired and delivered to Slack (metric `AWS/SQS NumberOfMessagesSent`, alarm
+`production-galexie-ingestion-lag`), and GitHub env `GALEXIE_IMAGE_DIGEST` set to
+the Galexie 27.0.0 Docker Hub digest in prod + staging.
 
 ## Context
 
@@ -77,12 +94,17 @@ staging) → `sha256:81a9e829…` so CI/staging track the same image.
 - [x] `galexieImageTag` pinned to Galexie 27.0.0 ECR digest in production.json
 - [x] `galexie-ingestion-lag` reworked: SQS `NumberOfMessagesSent` signal,
       5-min window (`galexieLagMinutes` 15→5), `treatMissingData: BREACHING`
-- [ ] CloudWatch stack deployed to prod (`make deploy-production-cloudwatch`)
-- [ ] One-time alarm test: `aws cloudwatch set-alarm-state --alarm-name
-production-galexie-ingestion-lag --state-value ALARM --state-reason test`,
-      confirm it posts to the Slack channel (then let it self-reset); confirm SSM
-      `slack-workspace-id`/`slack-channel-id` are set on prod so delivery works
-- [ ] GitHub env `GALEXIE_IMAGE_DIGEST` updated to `sha256:81a9e829…` (prod + staging)
+- [x] CloudWatch stack deployed to prod — via `cdk deploy
+    Explorer-production-CloudWatch --exclusively` (NOT
+      `make deploy-production-cloudwatch`, which would also deploy the Compute
+      stack's unrelated pending lambda changes)
+- [x] One-time alarm test: fired via `aws cloudwatch set-alarm-state`, confirmed
+      posting to Slack (Amazon Q, metric `AWS/SQS NumberOfMessagesSent`); SSM
+      `slack-workspace-id`/`slack-channel-id` confirmed on prod. Alarm
+      self-resets on the next non-zero datapoint.
+- [x] GitHub env `GALEXIE_IMAGE_DIGEST` updated to
+      `sha256:81a9e82980a60bb5df29135992078a0319aad8ccf08414a78102f99cb7c120b6`
+      (prod + staging)
 - [x] **Docs updated** — N/A. `docs/architecture/**` describe Galexie/alarms only
       generically (no image version, no `treatMissingData` semantics). This is an
       observability data-handling fix + an image-tag config bump; neither changes
