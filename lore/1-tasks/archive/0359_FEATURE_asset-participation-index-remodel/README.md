@@ -252,9 +252,10 @@ history:
       type-3 + F-F/K3-1). Decision 1c: issuer NOT a participant (redundant with the
       asset index). PR #324 merged to develop; 3-commit tail (assets-doc +
       issuer-drop + tracker) merged after. Deploy/backfill spun to 0379 (OPS).
-      Remaining tracker work (F-B/F-D/K1-K4/L2/R1-R3) spawned as 0372-0379, grouped
-      by subsystem. Verified Soroban L2 needs NO S3 — events already in CH (9.68B
-      rows) → L2 = CH transform (0372). See notes/G-progress.md for the full
+      Remaining tracker work (F-B/F-D/K1-K4/L2/R1-R3) spawned as 0373-0383 (0372
+      was taken by a pre-existing SCHEMA task), grouped by subsystem. Verified
+      Soroban L2 needs NO S3 — events already in CH (9.68B rows) → L2 = CH
+      transform (0383). See notes/G-progress.md for the full
       inventory + §16 pre-backfill review.
 ---
 
@@ -988,7 +989,7 @@ path.
 Remaining tracker work (see `notes/G-progress.md` §15 roadmap) is grouped by
 subsystem into backlog tasks, all `related_tasks: ['0359']`:
 
-- **0372** L2 Soroban event token-flow decode (K1-3/K1-7/K2-7/K3-4/K4-3/K4-4) — CH transform, no S3
+- **0383** L2 Soroban event token-flow decode (K1-3/K1-7/K2-7/K3-4/K4-3/K4-4) — CH transform, no S3 (renumbered from 0372 — collided with pre-existing 0372_SCHEMA)
 - **0373** Contract-as-holder + non-G participants (F-D/K2-8/K2-3/K3-3/K3-6)
 - **0374** LP completeness — native leg + Soroban-AMM (F-B/K2-2/K3-5/K4-6)
 - **0375** Fee-bump inner_tx_hash lookup 404 (K3-2)

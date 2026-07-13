@@ -1,5 +1,5 @@
 ---
-id: '0372'
+id: '0383'
 title: 'L2: Soroban event token-flow decode (from/to/amount + event participants)'
 type: FEATURE
 status: backlog
