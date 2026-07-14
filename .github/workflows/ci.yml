@@ -83,6 +83,9 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-rust
       - run: npm ci
       - run: npx nx run @rumblefish/api-types:check-generated
 
@@ -118,6 +121,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-rust
 
       - name: Install cargo-lambda
         run: pip3 install cargo-lambda
