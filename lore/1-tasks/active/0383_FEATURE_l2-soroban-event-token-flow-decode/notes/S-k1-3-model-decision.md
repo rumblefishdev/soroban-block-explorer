@@ -72,10 +72,30 @@ SEP-11 asset string → decodes to `EventAsset::Contract`. Two scoping calls mad
   four verbs regardless of fungible/NFT**. Correct either way — those accounts
   _are_ tx participants. (transfer participants were already registered pre-0383;
   this only adds mint/burn/clawback, exactly K2-7.)
-- **Asset presence (`operation_asset_appearances`)**: **only `Native`/`Credit`**
-  (SAC-wrapped classic/native, asset string present). This follows the K1-3 task
-  text verbatim ("for SAC-wrapped classic assets") and avoids contaminating the
-  fungible asset index with NFT contracts (which have ambiguous fungible/NFT
-  shape and track separately via `nft_ownership`). Bespoke `EventAsset::Contract`
-  is skipped at the call site; `event_asset_id` still maps it (tested) for a
-  future task that wants bespoke type-3 presence.
+- **Asset presence (`operation_asset_appearances`)**: **`Native` + `Credit`
+  written, `Contract` (bespoke) skipped.** Measured split of Soroban-context
+  token events: **Credit 98.9% / Native 0.7% / Contract 0.4%** — so we keep 99.6%
+  of the Soroban asset-flow. The "Soroban = bespoke contracts" intuition is wrong:
+  Soroban activity is overwhelmingly **classic assets (USDC/KALE/BLND…) moving
+  _through_ contracts** (DeFi), which carry `"CODE:ISSUER"` → `Credit`. Pure
+  Soroban-native tokens (no classic issuer → no SEP-11 string → `Contract`) are
+  the 0.4% margin.
+
+  **Why `Contract → None` is correct, not a scope-plaster (verified, /devils-advocate):**
+  a bespoke type-3 token's asset page is already served by **arm B**
+  (`soroban_invocations_appearances`, keyed by `contract_id`). For a type-3 token
+  `asset_id == contract_id` (**4172/4172**), and a contract that emits an event
+  was invoked, so its `(contract, tx)` is already in arm B under that **same key**
+  (**0 absent in 8362** bespoke pairs). Bespoke fungible tokens all have an
+  `assets` row (**100/100**), so their page exists. Writing arm A for bespoke
+  would be a pure duplicate. The earlier "ambiguous with NFT" justification was
+  wrong (bespoke data is 93%+ clearly `i128` fungible, and the WASM classifier
+  `soroban_contracts.contract_type` distinguishes NFT anyway).
+
+  **Caveat (documented dependency):** this couples bespoke asset-page coverage to
+  the invocation graph's completeness — no arm-A backstop if it regresses
+  (auth-tree fallback has a ~53% gap when diagnostics are absent; 0 gaps today).
+  A consistency/robustness alternative (write bespoke-**fungible** to arm A via
+  `contract_type`) was considered and rejected as display-redundant + needing a
+  hot-path classification lookup (`contract_type` is not prefetched for general
+  fungible contracts at ingest). NFT coverage tracked as a separate follow-up.

@@ -2064,9 +2064,10 @@ pub struct DerivedTokenEvent {
     /// `from`/`to` operands that are G-accounts (contract `C…` addresses dropped).
     pub participant_strkeys: Vec<String>,
     /// SAC-wrapped classic/native asset surrogate; `None` for bespoke/NFT
-    /// (`EventAsset::Contract`) — out of the asset-index scope (task 0383 K1-3).
-    /// The formula matches the op-derived `operation_asset_appearances` keys
-    /// exactly (`NATIVE_ASSET_ID` / `asset_id(1, code, account_id(issuer), 0)`),
+    /// (`EventAsset::Contract`) — see the `derive_token_event` body for why
+    /// bespoke is intentionally covered by arm B (invocations), not written here.
+    /// The Native/Credit formula matches the op-derived `operation_asset_appearances`
+    /// keys exactly (`NATIVE_ASSET_ID` / `asset_id(1, code, account_id(issuer), 0)`),
     /// so event rows dedup against op rows.
     pub asset_id: Option<i64>,
 }
@@ -2085,7 +2086,20 @@ pub fn derive_token_event(topics: &Value) -> Option<DerivedTokenEvent> {
         EventAsset::Credit { code, issuer } => {
             Some(ids::asset_id(1, &code, ids::account_id(&issuer), 0))
         }
-        // Bespoke / NFT: no SEP-11 asset string → out of the asset-index scope.
+        // Bespoke (no SEP-11 asset string) = a pure Soroban-native token / NFT
+        // with no classic issuer. Rare: ~0.4% of Soroban-context token events —
+        // classic assets moving through contracts (DeFi) carry "CODE:ISSUER" and
+        // hit the `Credit` arm above (measured 98.9% Credit / 0.7% Native).
+        //
+        // `None` here is NOT "we can't identify it": for a type-3 token
+        // `asset_id == its contract surrogate` (verified 4172/4172), and a
+        // contract that emits an event was invoked, so its `(contract, tx)` is
+        // already in `soroban_invocations_appearances` (asset-page "arm B") under
+        // that SAME key (verified 0 absent). Writing it here would be a pure
+        // duplicate. Caveat: this couples bespoke asset-page coverage to the
+        // invocation graph's completeness — there is no arm-A backstop if that
+        // ever regresses (auth-tree fallback has a ~53% gap when diagnostics are
+        // absent; measured 0 gaps today). See lore 0383 S-external-validation.
         EventAsset::Contract => None,
     };
     Some(DerivedTokenEvent {
