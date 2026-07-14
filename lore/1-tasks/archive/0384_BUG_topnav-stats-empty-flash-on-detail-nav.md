@@ -2,7 +2,7 @@
 id: '0384'
 title: 'BUG: list→detail navigation is a full page reload (plain <a> row links), flashing the TopNav stats bar empty'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [frontend, ux, perf, layer-frontend, priority-medium, effort-small]
@@ -33,6 +33,16 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Activated to implement the fix (plain <a> → React Router Link).'
+  - date: 2026-07-14
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Fixed via a router-agnostic LinkComponent context in libs/ui +
+      RouterLinkAdapter (href → react-router Link) installed above
+      RouterProvider. list→detail is now client-side — verified end-to-end
+      (document not reloaded, performance.now() keeps climbing, stats bar no
+      longer flashes empty). ui+web typecheck/lint/test green (117 tests).
+      PR #337 merged to develop (6 files, +65/-2).
 ---
 
 # BUG: list→detail is a full page reload, flashing the TopNav stats bar empty
@@ -98,13 +108,13 @@ component, distinct issue; fold into the same cleanup if this touches
 
 ## Acceptance Criteria
 
-- [ ] list→detail navigates client-side (no full reload) — verify
+- [x] list→detail navigates client-side (no full reload) — verify
       `performance.now()` keeps climbing and the injected-state / Navigation
       Timing check no longer shows a `navigate` document load.
-- [ ] TopNav stats bar no longer flashes empty entering a detail page.
-- [ ] No regression to list→list, copy buttons, or open-in-new-tab / middle-click
+- [x] TopNav stats bar no longer flashes empty entering a detail page.
+- [x] No regression to list→list, copy buttons, or open-in-new-tab / middle-click
       on identifier links (a real `<a href>` must remain for those).
-- [ ] **Docs updated** — N/A: frontend routing/render fix, no ADR, does not
+- [x] **Docs updated** — N/A: frontend routing/render fix, no ADR, does not
       change the shape of the system (schema/API/pipeline/topology).
-- [ ] **API types regenerated** — N/A: no change under `crates/api/**`,
+- [x] **API types regenerated** — N/A: no change under `crates/api/**`,
       `Cargo.{toml,lock}`, or `libs/api-types/**`.
