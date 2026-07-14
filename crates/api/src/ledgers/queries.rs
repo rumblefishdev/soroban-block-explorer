@@ -59,7 +59,6 @@ pub struct LedgerTxRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
-    pub contract_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -76,7 +75,6 @@ impl From<LedgerTxRow> for TransactionListItem {
             operation_count: row.operation_count,
             has_soroban: row.has_soroban,
             operation_types: row.operation_types,
-            contract_ids: row.contract_ids,
             created_at: row.created_at,
         }
     }
@@ -133,9 +131,9 @@ impl From<LedgerDetailChRow> for LedgerDetailRow {
 }
 
 /// One embedded-transaction page row — slim base columns only.
-/// `operation_types` + `contract_ids` are fetched separately via
+/// `operation_types` is fetched separately via
 /// [`ch::fetch_tx_list_aggregates`] and merged by the surrogate tx id
-/// (CH 26.3 cannot compute them inline with correlated subqueries).
+/// (CH 26.3 cannot compute it inline with a correlated subquery).
 #[derive(Debug, Row, Deserialize)]
 struct LedgerTxPageChRow {
     /// `transactions.id` hash surrogate — the aggregate join key. NOT the
@@ -177,7 +175,6 @@ impl LedgerTxPageChRow {
             operation_count: self.operation_count,
             has_soroban: self.has_soroban,
             operation_types: agg.operation_types,
-            contract_ids: agg.contract_ids,
             created_at: millis_to_utc(self.created_at),
         }
     }
@@ -301,9 +298,9 @@ pub async fn fetch_transactions(
         .fetch_all::<LedgerTxPageChRow>()
         .await?;
 
-    // Second pass: aggregate operation_types + contract_ids for the page's
-    // (ledger_sequence, transaction_id) keys (non-correlated; CH-26-safe),
-    // then merge by the surrogate tx id.
+    // Second pass: aggregate operation_types for the page's (ledger_sequence,
+    // transaction_id) keys (non-correlated; CH-26-safe), then merge by the
+    // surrogate tx id.
     let keys: Vec<(i64, i64)> = page
         .iter()
         .map(|r| (r.ledger_sequence, r.tx_surrogate))
