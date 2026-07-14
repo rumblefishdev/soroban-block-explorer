@@ -129,6 +129,8 @@ export {
   type IdentifierDisplayProps,
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
+  LinkComponentProvider,
+  useLinkComponent,
   getIdentifierHref,
   routeSegments,
   DEFAULT_TRUNCATION,
