@@ -95,7 +95,7 @@ pub struct AccountDetailResponse {
     pub deleted: bool,
 }
 
-/// Slim — `inner_tx_hash` lives on `/v1/transactions` only.
+/// Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccountTransactionItem {
     /// 64-char lowercase hex.

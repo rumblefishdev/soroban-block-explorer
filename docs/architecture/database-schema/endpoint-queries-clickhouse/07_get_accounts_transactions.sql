@@ -1,8 +1,6 @@
 -- ============================================================================
--- ⚠️  `contract_ids` REMOVED from the API (task 0386) — the shared helper now
---     returns `operation_types` only; the `contract_ids` array below is dead.
 -- ⚠️  CH 26.3 CORRECTION (task 0243) — do NOT implement the
---     `operation_types` array with the correlated scalar
+--     `operation_types` / `contract_ids` arrays with the correlated scalar
 --     subqueries shown below (`… WHERE oa.transaction_id = t.id`): ClickHouse
 --     26.3 rejects them with `Code: 48 NOT_IMPLEMENTED`. Use the NON-correlated
 --     two-step the shipped modules use — fetch the page of tx keys, then

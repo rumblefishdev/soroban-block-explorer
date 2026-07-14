@@ -2040,7 +2040,7 @@
       },
       "AccountTransactionItem": {
         "type": "object",
-        "description": "Slim — `inner_tx_hash` lives on `/v1/transactions` only.",
+        "description": "Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.",
         "required": [
           "hash",
           "ledger_sequence",
@@ -3289,7 +3289,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Slim — `inner_tx_hash` lives on `/v1/transactions` only.",
+              "description": "Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.",
               "required": [
                 "hash",
                 "ledger_sequence",
@@ -4011,6 +4011,7 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
+                "contract_ids",
                 "created_at"
               ],
               "properties": {
@@ -4018,6 +4019,13 @@
                   "type": "integer",
                   "format": "int32",
                   "description": "1-based position of this transaction within its ledger."
+                },
+                "contract_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the\nfull 3-source result in practice; the full set was dropped because its\nscan blew the read_rows quota (task 0243; see `common::ch`)."
                 },
                 "created_at": {
                   "type": "string",
@@ -4461,6 +4469,7 @@
           "operation_count",
           "has_soroban",
           "operation_types",
+          "contract_ids",
           "created_at"
         ],
         "properties": {
@@ -4468,6 +4477,13 @@
             "type": "integer",
             "format": "int32",
             "description": "1-based position of this transaction within its ledger."
+          },
+          "contract_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the\nfull 3-source result in practice; the full set was dropped because its\nscan blew the read_rows quota (task 0243; see `common::ch`)."
           },
           "created_at": {
             "type": "string",

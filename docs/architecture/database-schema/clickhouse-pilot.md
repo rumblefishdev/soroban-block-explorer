@@ -750,13 +750,7 @@ correlated column …`. The live read path instead fetches the page of tx
 > correlated projection the reference SQL still shows (those files carry a
 > correction banner).
 
-> **`contract_ids` REMOVED from the API (task 0386).** The per-row
-> `contract_ids` array is no longer returned by any transaction-list endpoint —
-> a dead PG-parity field no frontend rendered, whose only cost was a whole-table
-> `JOIN soroban_contracts FINAL` (~200k rows/page). The live list response
-> carries `operation_types` only. The ops-only note below is kept for history.
->
-> **CH read-cost correction — `contract_ids` was ops-only (task 0243).** The
+> **CH read-cost correction — `contract_ids` is ops-only (task 0243).** The
 > reference SQL builds `contract_ids` from a 3-source UNION
 > (`operations_appearances` + `soroban_invocations_appearances` +
 > `soroban_events`) for full PG parity. Both `soroban_*` tables are

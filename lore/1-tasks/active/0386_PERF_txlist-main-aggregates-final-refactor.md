@@ -16,19 +16,6 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active'
-  - date: 2026-07-14
-    status: active
-    who: karolkow
-    note: >
-      Implemented. Root cause of the soroban_contracts whole-table FINAL was a
-      DEAD field: `contract_ids` (PG-parity scaffolding rendered by NO frontend
-      — grep confirmed only a test fixture). Resolved by DELETING `contract_ids`
-      from TransactionListItem + the shared fetch_tx_list_aggregates helper +
-      ledger-embedded rows, not by optimising the query. Helper 210,334 → 8,192
-      read_rows/page (prod chq, -96%); soroban_contracts gone from the list
-      path. op_sql FINAL kept (seek-bounded, zero read cost). 210 api + 117 web
-      tests green; API types regenerated; docs updated. Remaining ~2M is
-      accounts (785k) + Statement A — out of scope, tracked under 0357.
 ---
 
 # PERF: main txlist — drop FINAL in `fetch_tx_list_aggregates`
@@ -93,93 +80,15 @@ counts move. Confirm read_rows on each entity-scoped variant via
 
 ## Acceptance Criteria
 
-> **Reframed (2026-07-14).** Investigation found the `soroban_contracts FINAL`
-> existed only to populate a **dead field** (`contract_ids`), so it was resolved
-> by DELETING the field, not optimising the query. The original "list stops
-> reading ~2M" criterion was mis-attributed — the ~2M is dominated by `accounts`
-> resolution, outside this helper (see Design Decisions / Issues).
-
-- [x] No whole-dimension read remains in `fetch_tx_list_aggregates` — the
-      `soroban_contracts FINAL` join is GONE (field deleted); the contract-arm
-      `operations_appearances FINAL` went with it. Prod `chq`: helper
-      210,334 → 8,192 read_rows/page (−96%), `soroban_contracts` absent.
-- [x] `op_sql` (operation_types) `FINAL` KEPT deliberately — seek-bounded, zero
-      read cost, explicit RMT collapse (measured identical read_rows vs no-FINAL).
-- [x] `contract_ids` removed from `TransactionListItem` + the shared helper +
-      ledger-embedded rows; our frontend is the only consumer and renders it
-      nowhere (grep: sole reference is a test fixture).
-- [x] Remaining fields byte-identical (`operation_types` unchanged) on
-      `/transactions` + ledger detail.
-- [x] **Docs updated** — canonical SQL `02`/`05`/`07`/`20` + `clickhouse-pilot.md`
-      annotated (API-shape change).
-- [x] **API types regenerated** — `contract_ids` gone from `openapi.json` +
-      generated TS (API surface changed; not the original N/A).
-- [ ] **Out of scope (→ 0357):** `/transactions` still reads ~2M, dominated by
-      the `accounts` id-seek (~785k/page; 22M-row churny RMT) + Statement A
-      candidate scan (~200k). Neither lives in `fetch_tx_list_aggregates`.
-- [ ] acctxs / asttxs / lptxs op_types read_rows re-verified post-backfill
-      (Step 3) — contract cost is now zero there too.
-
-## Implementation Notes
-
-Files touched:
-
-- `crates/api/src/common/ch.rs` — deleted `ctr_sql` + the `JOIN soroban_contracts
-FINAL`, `ContractIdsRow`, the `TxListAggregates.contract_ids` field, and the
-  second `tokio::join!` arm. Helper is now a single `op_sql` (FINAL kept).
-- `transactions/{dto,queries,handlers}.rs`, `ledgers/queries.rs` — removed the
-  `contract_ids` field + every mapping; updated doc comments.
-- `accounts/queries.rs`, `assets/queries.rs`, `accounts/dto.rs` — stale
-  "contract_ids intentionally unused / list on /v1/transactions only" comments.
-- `libs/api-types/src/{openapi.json,generated/*}` — regenerated.
-- `web/src/pages/TransactionsListPage.test.tsx` — dropped the fixture line.
-- docs: `02/05/07/20_*.sql` + `clickhouse-pilot.md` — API-shape notes.
-
-Verification: `cargo test -p api --lib` 210 passed; web `typecheck` + `test`
-117 passed; prod `chq` helper read_rows 210,334 → 8,192.
-
-## Issues Encountered
-
-- **The "~2M" was mis-attributed.** Task premised the win on the contract
-  `FINAL`, but prod measurement showed the contract aggregate was ~202k while
-  the dominant per-page cost is the `accounts` surrogate→StrKey id-seek (~785k
-  on a 22M-row churny RMT, 9 parts) + Statement A candidate scan (~200k). Both
-  are outside `fetch_tx_list_aggregates`. This task cannot bring `/transactions`
-  to "page working set" alone — that needs the accounts lever (0357).
-- **Worktree package resolution.** `@rumblefish/api-types` resolved to the MAIN
-  checkout's stale build (still had `contract_ids`) → false `tsc` failure.
-  Fixed by symlinking `node_modules/@rumblefish/api-types` → worktree libs
-  (gitignored; CI on a clean branch checkout is unaffected).
-
-## Design Decisions
-
-### From Plan
-
-1. **Drop the whole-table `soroban_contracts FINAL`.** Delivered — but by
-   deletion (below), which is strictly better than the planned id-IN seek.
-
-### Emerged
-
-2. **DELETE `contract_ids` instead of optimising it.** The field was fetched by
-   NO frontend component (grep: sole reference a test fixture) — PG-parity
-   scaffolding for a "touched contracts" column that never shipped (confirmed by
-   the 2026-04-28 audit report + canonical SQL header). The contract _filter_
-   runs server-side off a UNION driver, not this per-row array. Confirmed with
-   the user that our frontend is the only API consumer. So the cheapest fix is
-   no query. Removes the cost for all 5 tx-list callers at once.
-3. **Keep `FINAL` on `op_sql` (operation_types).** Measured identical read_rows
-   with/without FINAL (seek-bounded; the merge is over the matched rows only),
-   so there is no perf reason to remove it; kept per user preference to leave
-   the RMT collapse explicit rather than lean on `groupUniqArray` set-dedup.
-4. **API-shape change accepted.** Removing a response field is technically
-   breaking, but the field is unconsumed and the API has no external consumer
-   (user-confirmed) — so removed outright rather than left as a lying `[]`.
-
-## Future Work
-
-- **`accounts` resolution ~785k/page** (the real `/transactions` monster) —
-  belongs to the read-path cluster **0357** (txlist row), not a new task. Lever
-  is merge cadence / `accounts_recent`, not a FINAL/seek change.
+- [ ] Main `/transactions` list read_rows bounded to the page working set (not
+      ~2M); verified via `system.query_log`.
+- [ ] No whole-dimension read remains in `fetch_tx_list_aggregates` —
+      `soroban_contracts FINAL` and both `operations_appearances FINAL` gone.
+- [ ] Output byte-identical to pre-change — op-type badges + `contract_ids`
+      per list row (spot-check native, Soroban-invoke, and multi-op txs).
+- [ ] acctxs / asttxs / lptxs read_rows re-verified post-backfill (Step 3).
+- [ ] **Docs updated** — N/A (query-internal; no schema/index change).
+- [ ] **API types regenerated** — N/A (no DTO/API surface change).
 
 ## Notes
 

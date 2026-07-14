@@ -741,7 +741,8 @@ pub async fn fetch_transactions(
         resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()).await?;
 
     // Index by id, then emit in the driver's keyset order, merging
-    // operation_types (the only aggregate an asset-transaction item carries).
+    // operation_types. `contract_ids` from the helper is intentionally unused —
+    // an asset-transaction item carries only `operation_types`.
     let mut by_id: HashMap<i64, AssetTxPageChRow> = HashMap::with_capacity(page_rows.len());
     for row in page_rows {
         by_id.insert(row.id, row);

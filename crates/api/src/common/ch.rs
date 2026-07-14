@@ -5,49 +5,43 @@
 //! Every endpoint that returns `TransactionListItem`-shaped rows
 //! (`/transactions`, ledger detail's embedded transactions, and the
 //! upcoming accounts / assets / liquidity-pool transaction lists) needs the
-//! per-transaction `operation_types` array. The canonical reference SQL
-//! computed it with a **correlated scalar subquery** in the SELECT projection
-//! (`SELECT groupUniqArray(oa.type) … WHERE oa.transaction_id = t.id`).
-//! ClickHouse 26.3 rejects that with `Code: 48 NOT_IMPLEMENTED: can't find
-//! correlated column …` — correlated subqueries referencing the outer row are
-//! unsupported.
+//! per-transaction `operation_types` + `contract_ids` arrays. The canonical
+//! reference SQL computed them with **correlated scalar subqueries** in the
+//! SELECT projection (`SELECT groupUniqArray(oa.type) … WHERE
+//! oa.transaction_id = t.id`). ClickHouse 26.3 rejects that with
+//! `Code: 48 NOT_IMPLEMENTED: can't find correlated column …` — correlated
+//! subqueries referencing the outer row are unsupported.
 //!
 //! The fix is a **two-step, non-correlated** shape, validated against prod
 //! CH 26.3:
 //!
 //! 1. The caller fetches the page of transactions (≤ `limit + 1` rows),
 //!    yielding a bounded set of `(ledger_sequence, transaction_id)` keys.
-//! 2. [`fetch_tx_list_aggregates`] aggregates `operation_types` for exactly
-//!    that key set — a derived table keyed by `(ledger_sequence,
-//!    transaction_id) IN (…)`, grouped by `transaction_id`, no reference to
-//!    any outer row.
+//! 2. [`fetch_tx_list_aggregates`] aggregates `operation_types` +
+//!    `contract_ids` for exactly that key set — independent derived tables
+//!    keyed by `(ledger_sequence, transaction_id) IN (…)`, grouped by
+//!    `transaction_id`, no reference to any outer row.
 //! 3. The caller merges the aggregates back onto its page rows by
 //!    `transaction_id`.
 //!
 //! Keys are `i64`, so they are inlined into the `IN (…)` list directly — no
 //! injection surface, and it sidesteps binding a tuple array. The key set is
 //! the page (≤ 101 rows) and a partition prune on
-//! `intDiv(ledger_sequence, 500000)` confines the scan to the touched
+//! `intDiv(ledger_sequence, 500000)` confines every scan to the touched
 //! partition(s).
 //!
-//! ## `operation_types` sources `operations_appearances` by primary-key seek
+//! ## Both aggregates source `operations_appearances` only (read cost)
 //!
 //! `operations_appearances` leads its `ORDER BY` with `(ledger_sequence,
 //! transaction_id)`, so the key filter is a **primary-key seek** — it reads
-//! only the page transactions' op rows. `FINAL` is kept: seek-bounded here (the
-//! merge is over the matched rows only — measured identical read_rows vs
-//! no-FINAL), so it keeps the ReplacingMergeTree collapse explicit at zero read
-//! cost, rather than leaning on `groupUniqArray` set-dedup + `type`
-//! immutability.
-//!
-//! ## Removed: the per-row `contract_ids` array (task 0386)
-//!
-//! The list DTOs once carried a `contract_ids` array (every contract a tx
-//! touched). It was PG-parity scaffolding — no frontend rendered it, and the
-//! contract *filter* runs server-side off a UNION driver, not this array.
-//! Computing it forced a whole-table `JOIN soroban_contracts FINAL` (~200k
-//! rows/page, an un-pruned dimension read). The field + its aggregate were
-//! deleted rather than optimised — the cheapest query is no query.
+//! only the page transactions' op rows. An earlier revision unioned
+//! `soroban_events` + `soroban_invocations_appearances` into `contract_ids`
+//! for full PG parity, but both order by `(contract_id, …)`, so the key filter
+//! is NOT a seek on them — it scans the whole pruned partition's index per
+//! page. Production proved this read-prohibitive: a single `/transactions`
+//! page read ~1e8 rows and a handful of requests exhausted the `api_reader`
+//! `read_rows` hourly quota (CH `Code: 201 QUOTA_EXCEEDED`). The `contract_ids`
+//! aggregate is therefore **ops-only** — see the parity caveat at `ctr_sql`.
 
 use std::collections::HashMap;
 
@@ -62,6 +56,8 @@ use serde::Deserialize;
 pub struct TxListAggregates {
     /// Distinct operation type labels (e.g. `["INVOKE_HOST_FUNCTION", "PAYMENT"]`).
     pub operation_types: Vec<String>,
+    /// Distinct C-StrKeys touched anywhere in the transaction.
+    pub contract_ids: Vec<String>,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -70,12 +66,19 @@ struct OpTypeCodesRow {
     codes: Vec<i16>,
 }
 
-/// Aggregate `operation_types` for a bounded page of `(ledger_sequence,
-/// transaction_id)` keys.
+#[derive(Debug, Row, Deserialize)]
+struct ContractIdsRow {
+    transaction_id: i64,
+    contract_ids: Vec<String>,
+}
+
+/// Aggregate `operation_types` + `contract_ids` for a bounded page of
+/// `(ledger_sequence, transaction_id)` keys.
 ///
 /// Returns a map keyed by `transaction_id`. A transaction with no operations
-/// is simply absent (the caller treats a missing entry as the empty vec).
-/// Empty `keys` short-circuits to an empty map with no query.
+/// or no contracts is simply absent from the respective aggregate (the caller
+/// treats a missing entry as the empty vec). Empty `keys` short-circuits to an
+/// empty map with no query.
 ///
 /// Non-correlated by construction (see module docs) — CH-26-safe.
 pub async fn fetch_tx_list_aggregates(
@@ -103,17 +106,34 @@ pub async fn fetch_tx_list_aggregates(
         .collect::<Vec<_>>()
         .join(",");
 
-    // Page-key filter + partition prune — the load-bearing read guard.
-    // `operations_appearances` is ORDER BY `(ledger_sequence, transaction_id,
-    // application_order)`, so this filter is a primary-key seek — it reads only
-    // the page transactions' op rows. `FINAL` is seek-bounded here (the merge is
-    // over the matched rows only, measured identical read_rows vs no-FINAL), so
-    // it is kept: the RMT collapse stays explicit at zero read cost.
+    // Single source of truth for the page-key filter + partition prune — the
+    // load-bearing read guard, applied identically to every scan below.
+    //
+    // Cost note: `operations_appearances` is ORDER BY `(ledger_sequence,
+    // transaction_id, application_order)`, so this filter is a primary-key seek
+    // — it reads only the page transactions' op rows. Both aggregations below
+    // source from `operations_appearances` exclusively for exactly this reason.
+    //
+    // We deliberately do NOT union `soroban_events` /
+    // `soroban_invocations_appearances` into `contract_ids`: both are ORDER BY
+    // `(contract_id, …)`, so this filter is NOT a key seek on them — it scans
+    // the whole pruned partition's index per page. Production proved this
+    // read-prohibitive: a single `/transactions` page read ~1e8 rows and a
+    // handful of requests blew the `api_reader` `read_rows` hourly quota
+    // (CH error 201, QUOTA_EXCEEDED). The parity cost of the ops-only source is
+    // documented at `ctr_sql` below.
+    //
+    // Columns are qualified `oa.` so the filter is unambiguous when reused
+    // inside `ctr_sql`'s JOIN to `soroban_contracts`; both statements below
+    // alias `operations_appearances` as `oa`.
     let key_filter = format!(
         "(oa.ledger_sequence, oa.transaction_id) IN ({in_tuples}) \
          AND intDiv(oa.ledger_sequence, 500000) IN ({partitions})"
     );
 
+    // The two aggregations are independent — build both and run them
+    // concurrently (one round-trip wall-clock, not two). Mirrors the
+    // `tokio::join!` of the detail-fallback reads in `transactions::handlers`.
     let op_sql = format!(
         "SELECT oa.transaction_id AS transaction_id, \
                 groupUniqArray(oa.type) AS codes \
@@ -121,12 +141,38 @@ pub async fn fetch_tx_list_aggregates(
          WHERE {key_filter} \
          GROUP BY oa.transaction_id"
     );
-    let op_rows = client.query(&op_sql).fetch_all::<OpTypeCodesRow>().await?;
+    // `contract_ids` — ops-only (primary-key seek, cheap). Sources the root-op
+    // `contract_id` from `operations_appearances` only.
+    //
+    // PARITY CAVEAT vs PG: a contract touched ONLY via a nested sub-invocation
+    // or an emitted event (never the root-op `contract_id` of any operation in
+    // the transaction) is NOT listed here. For the overwhelming majority of
+    // Soroban transactions the invoked contract IS the root-op `contract_id`
+    // (`INVOKE_HOST_FUNCTION` sets it), so the list-row `contract_ids` match PG;
+    // the gap is nested/event-only contracts. Deliberate trade for a servable
+    // read cost — see the `key_filter` cost note above.
+    let ctr_sql = format!(
+        "SELECT oa.transaction_id AS transaction_id, \
+                groupUniqArray(sc.contract_id) AS contract_ids \
+         FROM operations_appearances oa FINAL \
+         JOIN soroban_contracts sc FINAL ON sc.id = assumeNotNull(oa.contract_id) \
+         WHERE {key_filter} AND isNotNull(oa.contract_id) \
+         GROUP BY oa.transaction_id"
+    );
+    let (op_rows, ctr_rows) = tokio::join!(
+        client.query(&op_sql).fetch_all::<OpTypeCodesRow>(),
+        client.query(&ctr_sql).fetch_all::<ContractIdsRow>(),
+    );
+    let op_rows = op_rows?;
+    let ctr_rows = ctr_rows?;
 
     let mut map: HashMap<i64, TxListAggregates> = HashMap::with_capacity(keys.len());
     for row in op_rows {
         map.entry(row.transaction_id).or_default().operation_types =
             sorted_unique_labels(row.codes);
+    }
+    for row in ctr_rows {
+        map.entry(row.transaction_id).or_default().contract_ids = sorted_unique(row.contract_ids);
     }
     Ok(map)
 }

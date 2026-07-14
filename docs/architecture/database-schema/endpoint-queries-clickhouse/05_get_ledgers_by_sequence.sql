@@ -1,8 +1,6 @@
 -- ============================================================================
--- ⚠️  `contract_ids` REMOVED from the API (task 0386) — the embedded-tx rows
---     now carry `operation_types` only; the `contract_ids` projection is dead.
 -- ⚠️  CH 26.3 CORRECTION (task 0243) — the embedded-transactions
---     `operation_types` projection must NOT use correlated
+--     `operation_types` / `contract_ids` projection must NOT use correlated
 --     scalar subqueries (`… WHERE oa.transaction_id = t.id`): ClickHouse 26.3
 --     rejects them with `Code: 48 NOT_IMPLEMENTED`. The live read path uses a
 --     NON-correlated two-step — fetch the page of tx keys, then aggregate per

@@ -88,7 +88,7 @@ export type AccountListItem = {
 };
 
 /**
- * Slim — `inner_tx_hash` lives on `/v1/transactions` only.
+ * Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.
  */
 export type AccountTransactionItem = {
   /**
@@ -1475,6 +1475,17 @@ export type PaginatedTransactionListItem = {
      * 1-based position of this transaction within its ledger.
      */
     application_order: number;
+    /**
+     * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+     * On the ClickHouse path this is sourced from `operations_appearances`
+     * only (primary-key seek): a contract reached solely via a nested
+     * sub-invocation or an emitted event — never a root-op `contract_id` — is
+     * NOT listed. For the overwhelming majority of Soroban transactions the
+     * invoked contract IS the root-op `contract_id`, so this matches the
+     * full 3-source result in practice; the full set was dropped because its
+     * scan blew the read_rows quota (task 0243; see `common::ch`).
+     */
+    contract_ids: Array<string>;
     created_at: string;
     /**
      * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
@@ -1819,6 +1830,17 @@ export type TransactionListItem = {
    * 1-based position of this transaction within its ledger.
    */
   application_order: number;
+  /**
+   * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+   * On the ClickHouse path this is sourced from `operations_appearances`
+   * only (primary-key seek): a contract reached solely via a nested
+   * sub-invocation or an emitted event — never a root-op `contract_id` — is
+   * NOT listed. For the overwhelming majority of Soroban transactions the
+   * invoked contract IS the root-op `contract_id`, so this matches the
+   * full 3-source result in practice; the full set was dropped because its
+   * scan blew the read_rows quota (task 0243; see `common::ch`).
+   */
+  contract_ids: Array<string>;
   created_at: string;
   /**
    * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
