@@ -114,7 +114,7 @@ jobs:
       - run: cargo fmt --check
 
   rust:
-    name: Rust (clippy, test, lambda build)
+    name: Rust (clippy, test)
     needs: changes
     if: |
       needs.changes.outputs.rust == 'true' ||
@@ -133,9 +133,6 @@ jobs:
         with:
           shared-key: ci-rust
 
-      - name: Install cargo-lambda
-        run: pip3 install cargo-lambda
-
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
@@ -145,6 +142,31 @@ jobs:
       # configurations so neither path bit-rots.
       - run: cargo clippy -p api --all-targets --features swagger-ui -- -D warnings
       - run: cargo test -p api --features swagger-ui
+
+  # The release Lambda build shares no compilation with the debug clippy/test
+  # steps (different profile), so it runs as its own job in parallel with `rust`
+  # instead of serially behind it — roughly halving the Rust critical path.
+  # Distinct rust-cache key (release target/ would thrash the debug job's cache).
+  rust-lambda:
+    name: Rust (lambda build)
+    needs: changes
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04-arm
+    env:
+      SQLX_OFFLINE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-rust-lambda
+
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
 
       - run: cargo lambda build --release --arm64
 
