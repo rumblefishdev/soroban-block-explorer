@@ -12,33 +12,45 @@ who: karolkow
 Ran an adversarial review of the whole 0383 implementation against prod CH
 (`chq`). Two findings change the design; both are measured, not argued.
 
-## Finding 1 — 99.4% of transfer events are redundant classic payments
+## Finding 1 — most token events are redundant classic echoes; keep the Soroban ~16%
 
-Protocol 23 makes **every classic payment emit a SAC `transfer` event**. In a
-10k-ledger window (`has_soroban` split, events⋈transactions):
+Protocol 23 makes **every classic payment emit a SAC `transfer` event**, so the
+`transfer` stream is 99.4% classic echoes. But that 99.4% is **transfer-only** —
+across all four verbs the net-new (Soroban-context) share is **~16.4%**, and it
+is dominated by contract **mint/burn** (DeFi), NOT a sliver. 10k-ledger window,
+split by tx `has_soroban`:
 
-| signature | classic (has_soroban=false) | soroban (true) |
-| --------- | --------------------------- | -------------- |
-| transfer  | 3,491,611 (99.36%)          | 22,556 (0.64%) |
-| mint      | 724,981                     | 622,494        |
-| burn      | 2,251                       | 189,605        |
-| clawback  | 28,560                      | 0 (window)     |
+| verb      |         total | classic (dropped, already covered) | soroban (KEPT = net-new) |
+| --------- | ------------: | ---------------------------------: | -----------------------: |
+| transfer  |     3,514,167 |                  3,491,611 (99.4%) |                   22,556 |
+| mint      |     1,347,475 |                            724,981 |              **622,494** |
+| burn      |       191,856 |                              2,251 |              **189,605** |
+| clawback  |        28,560 |                             28,560 |                        0 |
+| **total** | **5,082,058** |              **4,247,403 (83.6%)** |      **834,655 (16.4%)** |
+
+So 0383 is NOT a 0.6% task — it keeps ~835k events / 10k ledgers, mostly
+contract mint/burn (protocols minting LP/receipt tokens, burning on withdrawal).
+Those have **no classic operation**, so they are invisible without decoding the
+event. Context: Soroban is the majority of txs (18.6M vs 17.0M classic per 100k
+ledgers); only ~18% of Soroban txs move tokens, the rest are oracles/governance.
 
 The classic ones are **already covered** by the 0359 op path
 (`operation_asset_appearances` + `op.counterparties`). Proven, not assumed:
 
-- **Participant superset CONFIRMED — 670/670.** Decoded a 1,500-event sample of
-  classic transfer events → 670 distinct `(account_id, tx)` pairs → **all 670
-  already present in `transaction_participants`**. The op path is a complete
-  superset for classic participants. Classic transfer events add zero accounts.
+- **Tx-level, all four verbs:** 68,482 classic token-event txs in a 2k window →
+  **0 absent** from `transaction_participants`. Every one already registered.
+- **Account-level, transfer:** decoded a 1,500-event classic sample → 670 distinct
+  `(account_id, tx)` pairs → **670/670 already present**. Op path is a superset.
+- **Not token movements:** `fee` (biggest event, handled via `fee_charged`),
+  `approve`/`set_authorized` (allowance/control), and app events (`swap`, `trade`,
+  `withdraw`, `supply`…) carry NO value themselves — the underlying move fires one
+  of the 4 verbs (measured: 1087/1087 `swap` txs also have a `transfer`). So the
+  4 SEP-41/CAP-67 verbs are the complete token-movement vocabulary.
 
 **Fix (fundamental, no plaster):** scope the ingest hook AND the backfill to
-`has_soroban = true`. The `has_soroban` map is already built in `stage.rs:450`;
-the backfill joins `transactions` per window. ~99% less work, zero participant
-loss (measured). The net-new value 0383 actually delivers is the **contract-
-internal** flows: a token moved inside an `InvokeHostFunction` (e.g. a DEX swap)
-has NO classic op, so its `from`/`to`/asset are visible ONLY via the event — and
-those are exactly the `has_soroban = true` events.
+`has_soroban = true`. Drops the 83.6% redundant classic echoes, keeps the 16.4%
+contract-internal flows — the actual point of the task. ~99% less _transfer_
+work, zero participant loss (measured).
 
 ## Finding 2 — asset-side target is not deployed (0359 not shipped)
 
