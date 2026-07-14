@@ -95,7 +95,7 @@ staging) → `sha256:81a9e829…` so CI/staging track the same image.
 - [x] `galexie-ingestion-lag` reworked: SQS `NumberOfMessagesSent` signal,
       5-min window (`galexieLagMinutes` 15→5), `treatMissingData: BREACHING`
 - [x] CloudWatch stack deployed to prod — via `cdk deploy
-    Explorer-production-CloudWatch --exclusively` (NOT
+Explorer-production-CloudWatch --exclusively` (NOT
       `make deploy-production-cloudwatch`, which would also deploy the Compute
       stack's unrelated pending lambda changes)
 - [x] One-time alarm test: fired via `aws cloudwatch set-alarm-state`, confirmed
