@@ -2,7 +2,7 @@
 id: '0384'
 title: 'BUG: list→detail navigation is a full page reload (plain <a> row links), flashing the TopNav stats bar empty'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [frontend, ux, perf, layer-frontend, priority-medium, effort-small]
@@ -29,6 +29,10 @@ history:
       useNetworkStats refetches from zero. list→list uses SecondaryNav
       navigate() (SPA) so it stays. Replaced the earlier hypotheses with the
       confirmed cause + fix.
+  - date: 2026-07-14
+    status: active
+    who: stkrolikiewicz
+    note: 'Activated to implement the fix (plain <a> → React Router Link).'
 ---
 
 # BUG: list→detail is a full page reload, flashing the TopNav stats bar empty
