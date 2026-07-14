@@ -2,7 +2,7 @@
 id: '0387'
 title: 'PERF: tx-list accounts surrogate→StrKey seek reads ~785k/page (22M churny RMT) — residual read-path monster after 0386'
 type: PERF
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0357', '0386']
 tags: [perf, clickhouse, read-path, priority-high, effort-medium, milestone-3]
@@ -16,6 +16,10 @@ history:
       Spawned from 0386. Prod chq measurement showed the accounts id-IN seek —
       NOT the (now-deleted) contract FINAL — is the dominant per-page cost on
       /transactions. Belongs to the 0357 read-path cluster.
+  - date: 2026-07-14
+    status: active
+    who: karolkow
+    note: 'Promoted to active'
 ---
 
 # PERF: accounts surrogate→StrKey seek dominates the tx-list read cost
