@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on a branch — a new push to a PR makes the previous
+# run's remaining minutes wasted. master is never cancelled (merges are rare
+# and the trunk build must always complete).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   changes:
     name: Detect changes
