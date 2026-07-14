@@ -122,6 +122,11 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       SQLX_OFFLINE: 'true'
+      # line-tables debug: keeps file:line in panic backtraces (readable CI logs)
+      # without the full debug info the build doesn't need. RUST_BACKTRACE so a
+      # failing test actually prints where it panicked.
+      CARGO_PROFILE_DEV_DEBUG: '1'
+      RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v4
 
