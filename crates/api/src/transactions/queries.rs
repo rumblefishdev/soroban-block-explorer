@@ -46,12 +46,10 @@
 //! preserve it). The filtered Statements B/C still key on the
 //! `transactions.id` surrogate (they drive off `operations_appearances`).
 //!
-//! `operation_types` + `contract_ids` come from the shared
-//! [`ch::fetch_tx_list_aggregates`] keyed on the ≤ `limit + 1` page rows.
-//! `contract_ids` is **ops-only** there (sourced from `operations_appearances`
-//! by primary-key seek) — the full 3-source parity scan was itself a per-page
-//! partition read that blew the same quota; see `common::ch` for the parity
-//! caveat.
+//! `operation_types` comes from the shared [`ch::fetch_tx_list_aggregates`]
+//! keyed on the ≤ `limit + 1` page rows (sourced from `operations_appearances`
+//! by primary-key seek). The per-row `contract_ids` array it once also returned
+//! was removed (task 0386) — dead field, whole-table `soroban_contracts FINAL`.
 
 use clickhouse::Row;
 use serde::Deserialize;
@@ -85,7 +83,6 @@ pub struct TxListRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
-    pub contract_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -155,9 +152,9 @@ pub struct ResolvedListParams {
 // Row structs (positional decode — SELECT column order MUST match field order)
 // ---------------------------------------------------------------------------
 
-/// One page row — slim base columns only. `operation_types` + `contract_ids`
-/// are fetched separately via [`ch::fetch_tx_list_aggregates`] and merged by
-/// `id` (CH 26.3 cannot compute them inline with correlated subqueries).
+/// One page row — slim base columns only. `operation_types` is fetched
+/// separately via [`ch::fetch_tx_list_aggregates`] and merged by `id` (CH 26.3
+/// cannot compute it inline with a correlated subquery).
 #[derive(Debug, Row, Deserialize)]
 struct TxPageChRow {
     hash: String,
@@ -190,7 +187,6 @@ impl TxPageChRow {
             operation_count: self.operation_count,
             has_soroban: self.has_soroban,
             operation_types: agg.operation_types,
-            contract_ids: agg.contract_ids,
             created_at: millis_to_utc(self.created_at),
         }
     }
@@ -334,9 +330,9 @@ struct LedgerSeqRow {
 /// Slim per-row projection shared by every list statement: the base list
 /// columns plus `t.id` (cursor tie-break / aggregate join key) and
 /// `l.closed_at` (derived `created_at`). References only `t.*` / `l.*` — no
-/// binds, no correlated subqueries. `operation_types` + `contract_ids` are
-/// fetched in a second, non-correlated pass (`ch::fetch_tx_list_aggregates`)
-/// and merged by `id` — CH 26.3 rejects correlated subqueries in SELECT.
+/// binds, no correlated subqueries. `operation_types` is fetched in a second,
+/// non-correlated pass (`ch::fetch_tx_list_aggregates`) and merged by `id` —
+/// CH 26.3 rejects correlated subqueries in SELECT.
 ///
 /// Column order MUST match `TxPageChRow` field order (positional decode).
 ///
@@ -677,9 +673,9 @@ pub async fn fetch_list(
     let mut seen = std::collections::HashSet::with_capacity(rows.len());
     rows.retain(|r| seen.insert(r.id));
 
-    // Second pass: fetch operation_types + contract_ids for the page's keys
-    // (non-correlated derived-table aggregation; CH 26.3 rejects correlated
-    // subqueries in SELECT), then merge them onto the page rows by tx id.
+    // Second pass: fetch operation_types for the page's keys (non-correlated
+    // derived-table aggregation; CH 26.3 rejects correlated subqueries in
+    // SELECT), then merge onto the page rows by tx id.
     let keys: Vec<(i64, i64)> = rows.iter().map(|r| (r.ledger_sequence, r.id)).collect();
     let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
     Ok(rows
@@ -1045,8 +1041,8 @@ mod tests {
     #[test]
     fn page_row_merges_aggregates_and_maps_sentinels() {
         // Slim page row: empty-string sentinels → None, millis → UTC, and the
-        // separately-fetched aggregates (op types + contract ids) merge in by
-        // id. Replaces the old correlated-projection mapping.
+        // separately-fetched aggregate (op types) merges in by id. Replaces the
+        // old correlated-projection mapping.
         let row = TxPageChRow {
             hash: "ab".repeat(32),
             ledger_sequence: 100,
@@ -1062,7 +1058,6 @@ mod tests {
         };
         let agg = ch::TxListAggregates {
             operation_types: vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
-            contract_ids: vec!["C1".to_string()],
         };
         let mapped = row.into_list_row(agg);
         assert_eq!(mapped.source_account, None);
@@ -1073,7 +1068,6 @@ mod tests {
             mapped.operation_types,
             vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
         );
-        assert_eq!(mapped.contract_ids, vec!["C1".to_string()]);
         assert_eq!(mapped.created_at, ch::millis_to_utc(1_700_000_000_000));
     }
 }
