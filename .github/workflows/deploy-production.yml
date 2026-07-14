@@ -1,0 +1,142 @@
+name: Deploy Production
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST-LAUNCH TEMPLATE — deliberately NOT wired in.
+#
+#   • Trigger is `workflow_dispatch` ONLY (manual, deliberate). Do NOT add
+#     push/tag auto-triggers until the team has decided a release cadence.
+#   • Safety model:  build → `cdk diff` (prints) → MANUAL APPROVAL GATE
+#     (GitHub `production` environment: required reviewers) → `cdk deploy`.
+#   • Deploys the CHOSEN stack(s) from an input, NOT a blind `--all`. This
+#     mirrors the operational lesson that a full compute deploy ships unrelated
+#     drift (indexer/enrichment) as a side effect — always diff + pick a stack.
+#
+# Prerequisites before enabling (do these post-launch, deliberately):
+#   1. Create GitHub environment `production` with REQUIRED REVIEWERS — that is
+#      the human gate between the printed diff and the actual deploy.
+#   2. Secrets: AWS_DEPLOY_ROLE_ARN (prod deploy role), AWS_ACCOUNT_ID.
+#   3. Region is eu-central-1 (where prod lives). CloudFront ACM certs remain
+#      us-east-1 internally, but the stacks deploy to eu-central-1 via
+#      production.json — do not change aws-region here.
+#   4. Frontend CONTENT (SPA build → S3 sync → CloudFront invalidation) is a
+#      separate step (`make deploy-production-web`); this workflow deploys the
+#      CDK stacks, not the SPA bundle. Deploy the `Delivery` stack here, then
+#      run the web content sync separately.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      stacks:
+        description: 'Stack id(s) to deploy, space-separated. Prefer ONE stack; avoid a blind --all.'
+        required: true
+        default: 'Explorer-production-ApiGateway'
+      exclusively:
+        description: 'Deploy ONLY the named stack(s), skip dependency stacks (--exclusively)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diff:
+    name: Build + cdk diff (REVIEW this before approving the deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        id: setup-node
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-central-1
+      - name: Build CDK app
+        run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
+      - name: cdk diff — what WOULD change (review before approving deploy)
+        run: |
+          cd infra && npx cdk --app "node dist/bin/production.js" \
+            diff ${{ inputs.stacks }} ${{ inputs.exclusively && '--exclusively' || '' }}
+
+  deploy:
+    name: CDK deploy (gated on manual approval)
+    needs: diff
+    runs-on: ubuntu-latest
+    # ── The human gate: this job WAITS for a required reviewer to approve in the
+    #    GitHub UI (environment protection rule) before it runs. Configure the
+    #    `production` environment with required reviewers, or this deploys
+    #    unattended. ──
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        id: setup-node
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-central-1
+      - name: Build CDK app
+        run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
+      - name: CDK deploy (approval already granted via the environment gate)
+        run: |
+          cd infra && npx cdk --app "node dist/bin/production.js" \
+            deploy ${{ inputs.stacks }} ${{ inputs.exclusively && '--exclusively' || '' }} \
+            --require-approval never
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+      - name: Smoke test — API /health (edge-lock-exempt, no secret needed)
+        run: |
+          API=$(aws cloudformation describe-stacks --region eu-central-1 \
+            --stack-name Explorer-production-ApiGateway \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+            --output text)
+          curl -f --retry 3 --retry-delay 5 "${API%/}/health"
+      - name: Smoke test — Frontend (public, no basic-auth on prod)
+        run: |
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 5 \
+            https://sorobanscan.rumblefish.dev/)
+          if [ "$CODE" != "200" ]; then
+            echo "::error::frontend smoke failed: HTTP ${CODE}"; exit 1
+          fi
+          echo "frontend smoke OK: HTTP ${CODE}"
