@@ -17,11 +17,11 @@ links: []
 history:
   - date: 2026-07-14
     status: backlog
-    who: claude
+    who: stkrolikiewicz
     note: 'Spawned from 0359 oaa backfill — pre-run schema-compat check of repair-tier1.'
   - date: 2026-07-14
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: 'Activated to implement the stale-`name`-column fix (remove from soroban_contracts INSERT+SELECT).'
 ---
 
