@@ -110,14 +110,19 @@ pub async fn enrich_nft_token_uri(
         }
     };
 
-    // task 0340: no real-world Stellar NFT carries `collection` in its
-    // token_uri JSON (measured 0/68 collections on prod) — the collection name
-    // lives behind the contract-level SEP-50 `name()`, fetched via RPC simulate
-    // and cached per CONTRACT in the fetcher (one RPC per collection per run,
-    // never per token). A non-empty JSON `collection` still wins if a contract
-    // ever emits one. Runs after the match on purpose: a permanent token_uri
-    // fail can still yield a collection name (e.g. the 0308 custom-ABI family
-    // that renames token_uri but keeps name()).
+    // task 0340 (parser-first redirect): the OZ NFT collection name is now
+    // captured from the ledger into `soroban_contract_metadata` (Fix A / #330)
+    // and served via COALESCE over this column (Fix B / #331). The `name()` RPC
+    // here is a FALLBACK for contracts the ledger can't reach — hand-rolled ones
+    // with empty instance storage but a WASM-baked `name()` (e.g. the 0308
+    // custom-ABI family). Its write lands in `nft_enrichment.collection_name`,
+    // which the read path COALESCEs UNDER the ledger name, so for a ledger-
+    // covered contract this write is simply ignored at read time (harmless;
+    // cached one RPC per contract; the worker runs at conc=0 regardless). No
+    // real-world NFT carries `collection` in its token_uri JSON (0/68), so
+    // `collection_name` is ~always empty here; a non-empty JSON value still
+    // wins. Runs after the match on purpose: a permanent token_uri fail can
+    // still yield a `name()` collection name.
     if collection_name.is_empty() {
         match fetcher.resolve_collection_name(&contract_strkey).await {
             Ok(Some(n)) => collection_name = n,

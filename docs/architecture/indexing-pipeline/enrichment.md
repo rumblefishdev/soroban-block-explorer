@@ -42,13 +42,18 @@ beyond the indexer's standard stream:
 - **NFT metadata via `token_uri()`** — `nfts.{name, media_url}` are
   produced by the contract's `token_uri(token_id)` view function
   returning a URL to a JSON document hosted on IPFS or HTTPS.
-- **NFT collection name via `name()`** — `nfts.collection_name` comes
-  from the contract-level SEP-50 `name()` view function (task 0340),
-  a SEPARATE RPC `simulateTransaction`. It is **not** in the
-  `token_uri()` JSON (no real-world Stellar NFT emits a `"collection"`
-  field — measured 0/68 collections on prod) nor in any parsed storage
-  slot, so it is reachable only via this contract call. Cached
-  per-CONTRACT (one RPC per collection per run, never per token).
+- **NFT collection name — ledger-primary, `name()` fallback** (task 0340
+  parser-first redirect). The collection name is captured from the contract
+  instance-storage metadata struct into `soroban_contract_metadata` by the
+  indexer (the OpenZeppelin `NFTStorageKey::Metadata` key — Fix A / #330) and
+  served on `nfts.collection_name` via
+  `COALESCE(soroban_contract_metadata.name, nft_enrichment.collection_name)`
+  (Fix B / #331). It is **not** in the `token_uri()` JSON (no real-world
+  Stellar NFT emits a `"collection"` field — 0/68 on prod). The contract-level
+  SEP-50 `name()` RPC `simulateTransaction` is a FALLBACK only, for hand-rolled
+  contracts the ledger can't reach (empty instance storage, `name()` baked in
+  WASM); cached per-CONTRACT (one RPC per collection, never per token), written
+  into the enrichment column the COALESCE reads under the ledger name.
 
 ADR 0043 keeps these off the indexer write path: an extra round-trip
 per row would slow ingest below the ~5 s ledger cadence. Instead the
@@ -137,7 +142,10 @@ via SQS.
 
 The `nft-collection-name` subcommand (task 0340) is the one exception to
 the per-row shape: it walks DISTINCT **contracts** whose `nft_enrichment`
-rows still lack a `collection_name`, fetches `name()` once per contract,
+rows still lack a `collection_name` AND that have no ledger-sourced name in
+`soroban_contract_metadata` (the parser-first redirect made `name()` a
+FALLBACK — ledger-covered contracts are excluded from the cohort, never
+re-fetched). For each it fetches `name()` once per contract,
 then re-INSERTs that contract's rows with the name stamped on and their
 existing `name` / `media_url` PRESERVED (the side table is a
 `ReplacingMergeTree` with whole-row replace — a column-only update is

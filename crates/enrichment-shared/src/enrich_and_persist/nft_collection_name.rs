@@ -1,5 +1,12 @@
 //! Per-CONTRACT `collection_name` backfill from the SEP-50 `name()` RPC
-//! simulate (task 0340).
+//! simulate — the FALLBACK path (task 0340 parser-first redirect).
+//!
+//! Primary is the ledger: the parser captures the OZ NFT collection name into
+//! `soroban_contract_metadata` (Fix A / #330), served via COALESCE (Fix B /
+//! #331). This drain covers only the ledger-uncovered remainder (hand-rolled
+//! contracts: empty instance storage, `name()` baked in WASM). The runner
+//! cohort (`NFT_COLLECTION_BASE`) excludes contracts that already have a ledger
+//! name, so it never re-fetches what the ledger already provides.
 //!
 //! The live path (`nft_token_uri::enrich_nft_token_uri`) fills
 //! `collection_name` for every NEW row it writes; this unit of work repairs

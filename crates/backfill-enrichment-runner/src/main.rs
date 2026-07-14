@@ -468,12 +468,26 @@ async fn select_nft_chunk(
 // `nft-collection-name` — per-contract SEP-50 name() backfill (task 0340)
 // ---------------------------------------------------------------------------
 
-/// Candidate predicate: any enrichment row still lacking a collection name.
-/// The drain walks DISTINCT contracts over it; the per-contract INSERT-SELECT
-/// (`rewrite_nft_collection_name`) re-applies the same predicate, so a re-run
-/// is a no-op for already-stamped rows (idempotent).
-const NFT_COLLECTION_BASE: &str =
-    "FROM nft_enrichment FINAL WHERE ifNull(collection_name, '') = ''";
+/// Candidate predicate: enrichment rows still lacking a collection name AND
+/// whose contract has NO ledger-sourced name — the `name()` RPC is a FALLBACK
+/// only (task 0340 redirect). The parser now captures the OZ NFT collection
+/// name into `soroban_contract_metadata` from the ledger (Fix A / #330) and the
+/// read path serves it via COALESCE (Fix B / #331), so those contracts need no
+/// RPC. This drains only the ledger-uncovered remainder — hand-rolled contracts
+/// (empty instance storage, name baked in WASM). The drain walks DISTINCT
+/// contracts; the per-contract INSERT-SELECT re-applies the predicate, so a
+/// re-run is a no-op for already-stamped rows (idempotent).
+///
+/// `contract_id` here is the `nft_enrichment` surrogate; the ledger exclusion
+/// maps surrogate → StrKey via `soroban_contracts` (`soroban_contract_metadata`
+/// is keyed by StrKey, RMT — `argMax(name, version)` reads the latest).
+const NFT_COLLECTION_BASE: &str = "FROM nft_enrichment FINAL WHERE ifNull(collection_name, '') = '' \
+     AND contract_id NOT IN ( \
+         SELECT sc.id FROM soroban_contracts sc WHERE sc.contract_id IN ( \
+             SELECT contract_id FROM soroban_contract_metadata \
+             GROUP BY contract_id HAVING ifNull(argMax(name, version), '') != '' \
+         ) \
+     )";
 
 async fn run_nft_collection_name(
     client: &Client,
