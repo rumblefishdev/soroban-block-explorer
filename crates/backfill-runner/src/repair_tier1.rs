@@ -314,7 +314,7 @@ async fn rebuild_soroban_contracts(
     // column name (the parser resolves the WHERE reference against
     // the projection list and sees an aggregate there).
     let insert_sql = format!(
-        "INSERT INTO {staging} (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name)
+        "INSERT INTO {staging} (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac)
          SELECT
              sc.id,
              sc.contract_id,
@@ -323,8 +323,7 @@ async fn rebuild_soroban_contracts(
              ifNull(d.deployer_id_rebuilt, sc.deployer_id) AS deployer_id,
              ifNull(d.deployed_at_ledger_rebuilt, sc.deployed_at_ledger) AS deployed_at_ledger,
              sc.contract_type,
-             sc.is_sac,
-             sc.name
+             sc.is_sac
            FROM soroban_contracts AS sc FINAL
            LEFT JOIN (
              SELECT
