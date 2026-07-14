@@ -86,8 +86,25 @@ jobs:
       - run: npm ci
       - run: npx nx run @rumblefish/api-types:check-generated
 
+  # Formatting is compile-free, so it runs as its own tiny job (~30s) instead
+  # of sitting behind clippy/test/lambda in the main rust job. Fast red on the
+  # most common CI failure without waiting on a full workspace build.
+  rust-fmt:
+    name: Rust fmt
+    needs: changes
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
   rust:
-    name: Rust (fmt, clippy, test, lambda build)
+    name: Rust (clippy, test, lambda build)
     needs: changes
     if: |
       needs.changes.outputs.rust == 'true' ||
@@ -100,12 +117,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
 
       - name: Install cargo-lambda
         run: pip3 install cargo-lambda
 
-      - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
