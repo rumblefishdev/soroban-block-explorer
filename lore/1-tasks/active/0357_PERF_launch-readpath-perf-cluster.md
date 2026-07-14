@@ -4,7 +4,7 @@ title: 'PERF: launch read-path perf cluster — scan→seek/projection across sc
 type: PERF
 status: active
 related_adr: []
-related_tasks: ['0338', '0353', '0354', '0355', '0356', '0346']
+related_tasks: ['0338', '0353', '0354', '0355', '0356', '0346', '0386', '0387']
 tags: [priority-high, effort-large, layer-clickhouse, milestone-3, phase-launch]
 milestone: 3
 links:
@@ -59,6 +59,17 @@ history:
       query or schema change. (acclist's `accounts_recent` MV does not help search —
       search needs `account_id` order, not `last_seen`.) Also: acclist moved from
       known-issue to a real fix — 0385 / PR #328 (`accounts_recent` refreshable MV).
+  - date: 2026-07-14
+    status: active
+    who: karolkow
+    note: >
+      txlist row progressed. 0386 (merged/in-PR) removed the dead `contract_ids`
+      whole-table `soroban_contracts FINAL` from the shared aggregate helper
+      (210k → 8k read_rows/page). Prod chq then pinned the txlist residual on the
+      SAME accounts churny-RMT many-parts seek as the search-prefix finding above:
+      the source-account resolve reads ~785k/page (11 ids, 22M-row `accounts`).
+      Spawned 0387 to own that lever (merge cadence / accounts_recent / id-dict) —
+      it is the read-path monster after 0386, not the contract FINAL.
 ---
 
 # PERF: launch read-path perf cluster
