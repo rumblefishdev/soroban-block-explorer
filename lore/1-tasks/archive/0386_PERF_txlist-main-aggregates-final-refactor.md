@@ -2,7 +2,7 @@
 id: '0386'
 title: 'PERF: main txlist — drop FINAL in fetch_tx_list_aggregates (operations_appearances + soroban_contracts whole-table merge)'
 type: PERF
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0357', '0364', '0365']
 tags: [perf, clickhouse, read-path, priority-high, effort-medium]
@@ -29,6 +29,15 @@ history:
       path. op_sql FINAL kept (seek-bounded, zero read cost). 210 api + 117 web
       tests green; API types regenerated; docs updated. Remaining ~2M is
       accounts (785k) + Statement A — out of scope, tracked under 0357.
+  - date: 2026-07-14
+    status: completed
+    who: karolkow
+    note: >
+      Merged via PR #334 (perf/0386 → develop, merge 28eceb3d). Dead
+      contract_ids removed; whole-table soroban_contracts FINAL gone; helper
+      210,334 → 8,192 read_rows/page. Step 3 (post-backfill re-verify) deferred —
+      gated on the accounts_recent backfill. Accounts residual (~785k/page)
+      spawned to 0387 under the 0357 read-path cluster. Archived.
 ---
 
 # PERF: main txlist — drop FINAL in `fetch_tx_list_aggregates`
