@@ -6,6 +6,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { formatInteger } from '../format/index.js';
 import { monoFontFamily, secondaryFontFamily } from '../theme/typography.js';
 
+import { useLinkComponent } from './LinkComponentContext.js';
 import { getIdentifierHref } from './routes.js';
 import { getDefaultTruncation, truncateMiddle } from './truncate.js';
 import type { EntityType, TruncationConfig } from './types.js';
@@ -106,6 +107,10 @@ export function IdentifierDisplay({
   className,
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
+  // Internal links render via the app-provided router link (client-side SPA
+  // nav); falls back to a native `<a>` when no provider is present. A bare
+  // `<a>` would hard-reload the whole app on every list→detail click. lore-0384.
+  const LinkComponent = useLinkComponent();
   // Type-driven font: opaque identifiers (hashes, addresses, contract / tx /
   // pool ids) read in the mono font where fixed width aids scanning. Asset
   // "ids" are human ticker codes (USDC, AQUA) and ledger ids are plain
@@ -127,7 +132,7 @@ export function IdentifierDisplay({
   // override — safety net, not hot path.
   return (
     <Box
-      component={linked ? 'a' : 'span'}
+      component={linked ? LinkComponent : 'span'}
       {...(linked && { href: href ?? getIdentifierHref(type, value) })}
       className={className}
       aria-label={ariaLabel ?? value}

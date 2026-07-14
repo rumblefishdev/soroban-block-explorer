@@ -7,6 +7,10 @@ export {
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
 } from './IdentifierWithCopy.js';
+export {
+  LinkComponentProvider,
+  useLinkComponent,
+} from './LinkComponentContext.js';
 export { getIdentifierHref, routeSegments } from './routes.js';
 export {
   DEFAULT_TRUNCATION,
