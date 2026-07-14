@@ -274,17 +274,10 @@ enum Command {
     /// `soroban_events` (decoded typed-JSON topics — no S3 re-parse). Registers
     /// event `from`/`to` as account participants and SAC-wrapped classic/native
     /// asset presence, using the same decode the live indexer runs so rows dedup
-    /// against live data. Both targets are ReplacingMergeTree → idempotent, safe
-    /// to re-run / resume by range. `--dry-run` counts without writing. CH-only.
+    /// against live data. Runs the whole ingested history (range auto-detected).
+    /// Both targets are ReplacingMergeTree → idempotent, safe to re-run.
+    /// `--dry-run` counts without writing. CH-only.
     SorobanTokenFlowBackfill {
-        /// First ledger sequence (inclusive).
-        #[arg(long)]
-        start: u32,
-
-        /// Last ledger sequence (inclusive).
-        #[arg(long)]
-        end: u32,
-
         #[arg(long)]
         dry_run: bool,
     },
@@ -495,14 +488,10 @@ async fn main() {
                 stats.ownership_pending_rows,
             );
         }
-        Command::SorobanTokenFlowBackfill {
-            start,
-            end,
-            dry_run,
-        } => {
-            let stats = soroban_token_flow_backfill::execute(&sink, start, end, dry_run)
+        Command::SorobanTokenFlowBackfill { dry_run } => {
+            let stats = soroban_token_flow_backfill::execute(&sink, dry_run)
                 .await
-                .expect("soroban_token_flow_backfill failed — idempotent, safe to re-run by range");
+                .expect("soroban_token_flow_backfill failed — idempotent, safe to re-run");
             let verb = if stats.dry_run {
                 "would write"
             } else {

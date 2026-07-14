@@ -31,8 +31,9 @@
 //! ## Idempotency
 //!
 //! Both targets are `ReplacingMergeTree`; re-inserting identically-keyed rows
-//! collapses on merge. Safe to re-run, resume by range, and overlap with live
-//! ingest. `--dry-run` counts the would-be rows without writing.
+//! collapses on merge. Runs the whole ingested history (range auto-detected, no
+//! args); safe to re-run and to overlap with live ingest. `--dry-run` counts the
+//! would-be rows without writing.
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
@@ -77,14 +78,11 @@ struct EventRow {
     topics_xdr: String,
 }
 
-/// Re-derive token-flow presence rows for `[from_ledger, to_ledger]` and write
-/// them to the two indexes. CH-only. Idempotent.
-pub async fn execute(
-    sink: &Sink,
-    from_ledger: u32,
-    to_ledger: u32,
-    dry_run: bool,
-) -> Result<SorobanTokenFlowStats, BackfillError> {
+/// Re-derive token-flow presence rows for the ENTIRE ingested history and write
+/// them to the two indexes. The ledger range is auto-detected from
+/// `soroban_events` (no operator args) and processed in internal `LEDGER_BATCH`
+/// windows. CH-only. Idempotent.
+pub async fn execute(sink: &Sink, dry_run: bool) -> Result<SorobanTokenFlowStats, BackfillError> {
     let client = sink.client();
 
     let mut stats = SorobanTokenFlowStats {
@@ -92,7 +90,10 @@ pub async fn execute(
         ..Default::default()
     };
 
-    let (from, to) = (i64::from(from_ledger), i64::from(to_ledger));
+    let Some((from, to)) = ledger_bounds(client).await? else {
+        info!("soroban_token_flow: soroban_events is empty — nothing to do");
+        return Ok(stats);
+    };
     let mut lo = from;
     while lo <= to {
         let hi = (lo + LEDGER_BATCH - 1).min(to);
@@ -128,6 +129,27 @@ pub async fn execute(
         "soroban_token_flow: completed"
     );
     Ok(stats)
+}
+
+/// Min/max `ledger_sequence` across `soroban_events`, or `None` when empty.
+/// Cheap even full-table: `ledger_sequence` is a sort-key column, so CH answers
+/// min/max from per-part metadata without reading the heavy payload columns.
+async fn ledger_bounds(client: &ClickhouseClient) -> Result<Option<(i64, i64)>, BackfillError> {
+    #[derive(Row, Deserialize)]
+    struct Bounds {
+        lo: i64,
+        hi: i64,
+        n: u64,
+    }
+    let b = client
+        .query(
+            "SELECT min(ledger_sequence) AS lo, max(ledger_sequence) AS hi, count() AS n \
+             FROM soroban_events",
+        )
+        .fetch_one::<Bounds>()
+        .await
+        .map_err(BackfillError::Ch)?;
+    Ok((b.n > 0).then_some((b.lo, b.hi)))
 }
 
 /// Read the Soroban-context token events in a ledger window (see the module
