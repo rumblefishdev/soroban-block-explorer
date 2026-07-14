@@ -579,8 +579,7 @@ pub async fn fetch_transactions(
 
     // Step 3: index page rows by id (a re-ingested tx collapses — values are
     // immutable), then emit in the driver's keyset order, merging
-    // operation_types. `contract_ids` from the helper is intentionally unused:
-    // the account-transaction item carries only `operation_types`.
+    // operation_types (the only aggregate the item carries).
     let mut by_id: HashMap<i64, AccountTxPageChRow> = HashMap::with_capacity(page_rows.len());
     for row in page_rows {
         by_id.insert(row.id, row);
