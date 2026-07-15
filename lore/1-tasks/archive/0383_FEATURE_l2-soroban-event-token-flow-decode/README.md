@@ -2,9 +2,9 @@
 id: '0383'
 title: 'L2: Soroban event token-flow decode (from/to/amount + event participants)'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
-related_tasks: ['0359']
+related_tasks: ['0359', '0390']
 tags: [priority-high, effort-large, layer-indexer, soroban-events]
 links: []
 history:
@@ -12,6 +12,19 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0359 tracker (§15 roadmap B). Bundles K1-3, K1-7, K2-7, K3-4, K4-3, K4-4.'
+  - date: '2026-07-14'
+    status: completed
+    who: karolkow
+    note: >
+      PR #332 merged to develop. Shipped: parse_token_event (transfer/mint/burn/
+      clawback) + shared derive_token_event ingest hook + soroban-token-flow
+      backfill (has_soroban-scoped, ledger-windowed, RMT-idempotent) + docs
+      (xdr-parsing §5.6, indexing §5.3/§6). Presence-only (Option A); dead
+      `amount` removed. Externally validated (Horizon + stellar.expert + raw XDR)
+      and — post-merge — real-prod decode + surrogate parity confirmed on live CH
+      (accounts.id / assets.id byte-match, L/liquidity-pool addresses correctly
+      filtered). Remaining: OPS backfill RUN (now unblocked — see Completion).
+      Spawned 0390 (NFT token-flow coverage audit).
 ---
 
 # L2: Soroban event token-flow decode
@@ -109,3 +122,49 @@ Consequence: **no API read-side change** — account page already reads
 - `docs/architecture/database-schema/**` — N/A: no new table/column (reuses `transaction_participants` + `operation_asset_appearances`)
 - `docs/architecture/backend/**` (API endpoints) — N/A: no endpoint added/removed/renamed; read paths unchanged
 - `docs/architecture/frontend/**` — N/A: no frontend data-contract change
+
+## Completion (2026-07-14)
+
+PR #332 merged to `develop`. CI green (Rust fmt/clippy/test/lambda build).
+
+**Post-merge verification (this session):**
+
+- **Real-prod decode + surrogate parity.** Ran the actual `read_events` SQL on a
+  live CH window (filter cuts the classic firehose 115,478 → 11,687, ~90%), fed
+  the real `soroban_events` bytes through `build_rows`/`derive_token_event`, and
+  confirmed the Rust surrogates **byte-match** what prod stores: `accounts.id`
+  for mint recipients + transfer parties, `assets.id` for KALE / ETH / native
+  (`asset_type=0`). Verbs covered on real data: mint (Credit), transfer (native +
+  Credit).
+- **Address filter validated.** `is_strkey_account` (G-only) drops C (contract) /
+  L (liquidity-pool) legs but keeps every account; measured **0 muxed (M) topics**
+  chain-wide (muxing rides in `data.to_muxed_id`, never the topic) — no real
+  account activity lost. Backfill uses the SAME `derive_token_event` as live, so
+  zero parity drift.
+- **Contract→None vs Credit→arm-A asymmetry confirmed correct.** Asset-page arm B
+  (`soroban_invocations_appearances`) is keyed by the asset's OWN contract; it
+  covers a bespoke type-3 token (asset_id == contract_id) but NOT a Credit asset
+  flowing through a foreign DeFi contract — so `Credit → arm A` is genuinely
+  net-new, not redundant. (assets/queries.rs:664-671.)
+
+**Correction to an earlier note:** `operation_asset_appearances` (0359's table) IS
+live on prod (~9B rows, verified 2026-07-14). The "0359 not deployed" caveat in
+the Devil's-advocate section is **stale** — the asset-side backfill is unblocked.
+
+**Design decisions — Emerged:**
+
+1. **Backfill args removed; full auto-detected range.** Dropped `--start/--end`;
+   `ledger_bounds` (cheap part-metadata min/max) + internal 5000-ledger windows.
+   The window is required (the `has_soroban` semi-join would otherwise be billions
+   of tx ids), but from the operator's view it "just runs on everything."
+2. **Contract→None justification rewritten** to the real reason (arm-B coverage +
+   asset_id==contract_id), after the first ("ambiguous with NFT") was refuted.
+
+**Remaining (OPS, out of code scope):**
+
+- [ ] Run `backfill-runner soroban-token-flow-backfill` on prod, then spot-check
+      account + asset pages. Unblocked. This is the one open acceptance criterion.
+
+**Spawned follow-up:** [0390](../../backlog/0390_RESEARCH_nft-token-flow-coverage-audit/README.md)
+— NFT token-flow coverage audit (confirmed the account-side is already covered;
+the NFT-page gap is the `nfts_pending` promotion drain, owned by 0217/0306/0309).
