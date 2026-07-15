@@ -236,13 +236,46 @@ All 21 `Nft`-verdict pending contracts (**559 tokens**) already have rows in hot
 is **post-June-12 mints of already-visible collections**: known collections
 showing stale token sets, not whole collections vanished.
 
-### 4f. Root-cause refinement
+### 4f. Root-cause — leak vs defer is NOT resolved (do not overclaim)
 
-Point 6 in the README frames Fungible-in-pending as "expected staleness, not a
-routing bug." Sharper: the contract's verdict **is** resolvable from
-`soroban_contracts` at ingest — these 198k/33d rows land in pending only because
-the ingest-time verdict prefetch (0283 G1/G9) is best-effort with a bounded
-window and **fails open to Pending on miss**. A verdict-authoritative lookup for
-already-classified contracts would route them to `Drop` at write time. So the
-leak is fixable at the source, not only by a downstream sweep — which is why the
-fix is NOT a live mirror of the backfill `ALTER … DELETE`. Spawned as **0392**.
+First pass claimed these rows are a write-time **fail-open leak** (verdict was
+resolvable at ingest, the 0283 G1/G9 prefetch missed it). A devil's-advocate
+crux test does **not** support that as the dominant cause. Comparing each
+fungible-verdict pending row's event ledger (`minted_at_ledger`) against its
+contract's `wasm_uploaded_at_ledger`:
+
+| WASM observed vs event               | rows    | share |
+| ------------------------------------ | ------- | ----- |
+| **before** event (→ fail-open, H1)   | 29,909  | 11%   |
+| **at/after** event (→ correct defer) | 47,083  | 17%   |
+| `wasm_uploaded_at_ledger` NULL       | 198,907 | 72%   |
+
+```sql
+SELECT
+  countIf(sc.wasm_uploaded_at_ledger>0 AND sc.wasm_uploaded_at_ledger <  p.minted_at_ledger) AS wasm_before,
+  countIf(sc.wasm_uploaded_at_ledger>0 AND sc.wasm_uploaded_at_ledger >= p.minted_at_ledger) AS wasm_after,
+  countIf(sc.wasm_uploaded_at_ledger=0) AS wasm_zero, count() AS total
+FROM nfts_pending p
+INNER JOIN (SELECT id, wasm_uploaded_at_ledger FROM soroban_contracts FINAL WHERE contract_type=3) sc
+  ON p.contract_id = sc.id
+-- → 29909, 47083, 0, 275899   (remainder = NULL upload ledger)
+```
+
+Three competing mechanisms, not yet separated:
+
+- **H1 fail-open leak** — WASM known before event, verdict computable, prefetch
+  missed it → wrongly quarantined. Only ~11% (of all) / ~39% (of timing-known).
+- **H2 correct defer** — WASM observed at/after the event → could not classify
+  at ingest → _correctly_ pending, awaiting drain. ~17% / ~61% of timing-known.
+  **No write-time fix can prevent these.**
+- **NULL (72%)** — no recorded upload ledger; uninterpretable here. Could be
+  shared-WASM (uploaded once, many deploys) which would lean H1, or unindexed
+  uploads which would lean H2. Not measured.
+
+**Conclusion:** the reconcile/drain gap is real and proven (§4a–4e), but the
+"write-time fail-open leak" is a **minority and unproven** as the dominant
+cause — among timing-known rows the majority are correct defer. So the primary
+fix is a **continuous reconcile** (promote/drop once a contract's verdict
+resolves), NOT a write-time routing change. A write-time verdict-authoritative
+lookup would help only the H1 slice and should be gated on first measuring the
+0283 prefetch miss-rate directly. Spawned as **0392** (reconcile primary).

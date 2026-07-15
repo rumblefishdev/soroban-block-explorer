@@ -36,8 +36,16 @@ history:
       (2026-06-12, last nft-reclassify); live path writes ~6,575 pending
       rows/day, 91% Fungible-verdict false-positives (401/401 confirmed real
       fungible assets); 21 Nft-verdict collections / 559 tokens stranded (all
-      already in hot → post-June mints missing). Root = ingest verdict prefetch
-      fails open to Pending. Spawned 0392 (live routing leak + reconcile).
+      already in hot → post-June mints missing). Spawned 0392 (live reconcile).
+  - date: 2026-07-15
+    status: backlog
+    who: karolkow
+    note: >
+      Devil's-advocate crux test (R §4f) corrected the mechanism claim: the
+      "write-time fail-open leak" is a minority (~11% overall) and unproven — of
+      fungible pending rows with known WASM timing, 61% are correct defer. Fix
+      reframed to continuous-reconcile primary; write-time tightening secondary,
+      gated on prefetch miss-rate. Drain-staleness + reconcile gap stay proven.
 ---
 
 # NFT token-flow coverage audit (0383 follow-up)
@@ -61,12 +69,16 @@ needed** — 0383 did not leave an NFT hole on the account side.
 **Update 2026-07-15:** the audit did surface **new live-flow work** (distinct
 from decode). Re-measuring a day later proved the pending quarantine is not a
 drained-once relic — hot has been frozen at ledger `62,989,407`
-(**2026-06-12**, last manual `nft-reclassify`) for **33 days** while the live
-path keeps writing to pending up to the chain tip, ~91% of it fungible
-false-positives (verdict resolvable from `soroban_contracts` but the write-time
-prefetch fails open to Pending). That is a real live routing/reconcile gap,
+(**2026-06-12**, last manual `nft-reclassify`) for **33 days** (confirmed: new
+`Nft`-verdict rows accrue continuously right up to ~6h before the chain tip yet
+none reach hot), while the live path keeps writing to pending, ~91% of it
+fungible-verdict false-positives. That is a real live **reconcile/drain** gap,
 spawned as **[0392](../0392_BUG_nft-pending-live-routing-reconcile/README.md)**.
-Details in [R §4](notes/R-nft-coverage-measured-state.md).
+Note: a devil's-advocate crux test (R §4f) showed the _mechanism_ is NOT a
+proven write-time fail-open leak — among rows with known WASM-observation timing
+the majority are _correct defer_ (WASM seen at/after the event), so the fix is a
+continuous reconcile, not a write-time routing change. Details in
+[R §4](notes/R-nft-coverage-measured-state.md).
 
 ## Context
 
@@ -146,17 +158,18 @@ top recent contributors are **all `Fungible`-classified** false-positives
 
 **Design conclusion (this task's recommendation):** the promote+drop that
 `nft-reclassify` does as a one-shot **should run continuously on the live path**,
-not only as an operator backfill. Two sub-problems, one shared root
-(write-time verdict resolution): (1) **stop the leak** — the ingest verdict
-prefetch fails open to Pending on miss, so ~91% of pending intake is fungible
-whose verdict _is_ resolvable from `soroban_contracts`; a verdict-authoritative
-write-time lookup routes those to `Drop`. (2) **reconcile the residual** — when a
-contract's verdict later resolves to `Nft`/`Fungible`/`Token`, promote/drop its
-pending rows (event-driven per newly-classified contract, not a full-table
-sweep). A live mirror of the backfill `ALTER … DELETE` would only treat the
-symptom. **Spawned as [0392](../0392_BUG_nft-pending-live-routing-reconcile/README.md).**
+not only as an operator backfill. **Primary fix — continuous reconcile:** when a
+contract's verdict resolves to `Nft`/`Fungible`/`Token`, promote/drop its pending
+rows (event-driven per newly-classified contract, not a full-table sweep). This
+covers the dominant case, because the crux test (R §4f) shows most fungible
+pending arrived as _correct defer_ (WASM not yet observed at ingest), which no
+write-time change can prevent. **Secondary / optional — write-time tightening:** a
+verdict-authoritative lookup would `Drop` the ~11–39% (H1) whose verdict was
+already computable but the prefetch missed; gate this on first measuring the 0283
+prefetch miss-rate. A live mirror of the backfill `ALTER … DELETE` would only
+treat the symptom. **Spawned as [0392](../0392_BUG_nft-pending-live-routing-reconcile/README.md).**
 See [R §4](notes/R-nft-coverage-measured-state.md) for the 2026-07-15 numbers
-(drain 33 days stale; leak is live, not stale residue).
+(drain 33 days stale, proven; leak-vs-defer mechanism unresolved).
 
 ## Acceptance Criteria
 
