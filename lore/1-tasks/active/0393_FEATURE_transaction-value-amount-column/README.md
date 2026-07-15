@@ -2,7 +2,7 @@
 id: '0393'
 title: 'FEATURE: transaction value ("amount moved") column — net-settled per-asset value for tx-list views'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0359', '0383', '0261', '0247']
 tags:
@@ -29,6 +29,11 @@ history:
       surface a "value moved" figure per transaction in list views (fee is
       uninformative for locating a transaction). Definition, storage,
       source, and cost are researched below; implementation not started.
+  - date: '2026-07-15'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active to begin implementation.
 ---
 
 # FEATURE: transaction value ("amount moved") column
