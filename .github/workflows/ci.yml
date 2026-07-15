@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on a branch — a new push to a PR makes the previous
+# run's remaining minutes wasted. master is never cancelled (merges are rare
+# and the trunk build must always complete).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   changes:
     name: Detect changes
@@ -83,11 +90,70 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-rust
       - run: npm ci
       - run: npx nx run @rumblefish/api-types:check-generated
 
+  # Formatting is compile-free, so it runs as its own tiny job (~30s) instead
+  # of sitting behind clippy/test/lambda in the main rust job. Fast red on the
+  # most common CI failure without waiting on a full workspace build.
+  rust-fmt:
+    name: Rust fmt
+    needs: changes
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
   rust:
-    name: Rust (fmt, clippy, test, lambda build)
+    name: Rust (clippy, test)
+    needs: changes
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04-arm
+    env:
+      SQLX_OFFLINE: 'true'
+      # line-tables debug: keeps file:line in panic backtraces (readable CI logs)
+      # without the full debug info the build doesn't need. RUST_BACKTRACE so a
+      # failing test actually prints where it panicked.
+      CARGO_PROFILE_DEV_DEBUG: '1'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-rust
+
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+      # The api crate ships `swagger-ui` as an opt-in feature (task
+      # 0042). Production Lambda builds stay on default features to
+      # keep the binary lean (~4 MB vs ~15 MB). CI validates both
+      # configurations so neither path bit-rots.
+      - run: cargo clippy -p api --all-targets --features swagger-ui -- -D warnings
+      - run: cargo test -p api --features swagger-ui
+
+  # The release Lambda build shares no compilation with the debug clippy/test
+  # steps (different profile), so it runs as its own job in parallel with `rust`
+  # instead of serially behind it — roughly halving the Rust critical path.
+  # Distinct rust-cache key (release target/ would thrash the debug job's cache).
+  rust-lambda:
+    name: Rust (lambda build)
     needs: changes
     if: |
       needs.changes.outputs.rust == 'true' ||
@@ -99,22 +165,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          components: clippy, rustfmt
+          shared-key: ci-rust-lambda
 
       - name: Install cargo-lambda
         run: pip3 install cargo-lambda
-
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-
-      # The api crate ships `swagger-ui` as an opt-in feature (task
-      # 0042). Production Lambda builds stay on default features to
-      # keep the binary lean (~4 MB vs ~15 MB). CI validates both
-      # configurations so neither path bit-rots.
-      - run: cargo clippy -p api --all-targets --features swagger-ui -- -D warnings
-      - run: cargo test -p api --features swagger-ui
 
       - run: cargo lambda build --release --arm64
 

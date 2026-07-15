@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+# Fresh worktrees have no node_modules, so husky's other hooks (lint-staged
+# prettier/rustfmt, affected checks) crash with "Could not find Nx modules"
+# and get skipped — unformatted code then fails CI 12 min later. Symlink the
+# primary worktree's node_modules on checkout so the gate always runs.
+# See .claude/skills/worktree-hooks. ponytail: symlink, npm_modules are
+# lockfile-shareable across worktrees; `npm ci` in-place if that ever changes.
+
+# $3 == 1 → branch checkout (incl. `git worktree add`); 0 → file checkout. Only
+# act on branch checkouts so a `git checkout -- file` never touches node_modules.
+[ "$3" = '1' ] || exit 0
+
+[ -e node_modules ] && exit 0  # already provisioned → no-op (incl. main worktree)
+
+main=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+[ -z "$main" ] || [ "$main" = "$PWD" ] && exit 0
+[ -d "$main/node_modules" ] || exit 0
+
+ln -s "$main/node_modules" node_modules && \
+  echo "husky - symlinked node_modules from $main (worktree provisioning)"
+exit 0
