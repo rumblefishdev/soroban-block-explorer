@@ -2,7 +2,7 @@
 id: '0389'
 title: 'CI: cut ~14min pipeline — Rust/nx cache, concurrency, parallel lambda build'
 type: PERF
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['area-ci', 'effort-small', 'priority-high', 'phase-1']
@@ -28,6 +28,13 @@ history:
       clippy+test 435s->210s (-52%). nx affected + nx cache tried then reverted
       (affected = run-everything choice; nx cache = no-op, nx.json marks no
       cacheable targets). TypeScript now the bottleneck (481s), left as run-many.
+  - date: 2026-07-15
+    status: completed
+    who: karolkow
+    note: >
+      Merged (PR #340) and archived. Scope: CI performance only. Validation ideas
+      that surfaced were deliberately dropped (not spawned). Net: critical path
+      847s->481s (1.75x), Rust -64%, api-types -49%.
 ---
 
 # CI: cut ~14min pipeline — Rust/nx cache, concurrency, parallel lambda build
@@ -50,8 +57,7 @@ concurrency · `.husky/post-checkout` (worktree provisioning) · parallel lambda
 job · dev debuginfo → line-tables.
 
 **Tried and reverted:** `nx affected` (chose full `run-many` always for
-coverage) and `.nx/cache` (measured no-op — see Issues Encountered). Phase 3
-(validation hardening) deferred.
+coverage) and `.nx/cache` (measured no-op — see Issues Encountered).
 
 ## Context
 
@@ -122,30 +128,6 @@ without waiting on a full workspace build.
 5. **Rust debug info → line-tables** (`CARGO_PROFILE_DEV_DEBUG=1` + `RUST_BACKTRACE=1`):
    faster codegen + smaller cached target; backtraces keep file:line for readable logs.
 
-### Phase 3 — validation hardening (scope widened from perf-only; future)
-
-CI perf is near its ceiling; the remaining leverage is catching MORE bugs, not
-running faster. Ranked for this project (a block explorer fails at the parser,
-SQL drift, dep vulns, chain-data fidelity — not where CI currently looks):
-
-6.  **Fuzz the XDR parser** (proptest/cargo-fuzz) — chain data is adversarial; a
-    parser must survive malformed input without panicking. ⭐⭐⭐
-7.  **Contract test vs real chain** — parse a fixed ledger range, diff against
-    Horizon / stellar.expert (see `compare-with-stellar-api` skill); red on parser
-    drift from chain truth. ⭐⭐⭐
-8.  **`.sqlx` freshness gate** — like `API types freshness`: assert the offline
-    query cache matches the schema so `SQLX_OFFLINE` drift can't become a runtime 500. ⭐⭐⭐
-9.  **`cargo deny` / `audit`** — block known-vulnerable deps (GitHub flagged 36, 2
-    critical) + license policy. Triage/allowlist the existing set first; start
-    non-blocking. ⭐⭐
-10. **Coverage gate** (cargo-llvm-cov / vitest) — fail when new code lands
-    untested / coverage regresses. ⭐⭐
-11. **Secret scanning** (gitleaks) — catch committed keys/tokens; public repo. ⭐⭐
-12. **Merge queue** — test each PR against latest trunk before merge so a green PR
-    can't break `develop` in combination. Needs every job's `if:` updated for
-    `merge_group` + the queue enabled in branch protection. ⭐⭐
-13. **Flake detector** / **FE visual+a11y regression** (Playwright + axe). ⭐
-
 ## Acceptance Criteria
 
 - [x] Phase 0: `.husky/post-checkout` committed (tracked, shared) — fresh
@@ -161,7 +143,6 @@ SQL drift, dep vulns, chain-data fidelity — not where CI currently looks):
       artifact verification all still run — unchanged, just reorganized)
 - [x] Phase 2: parallel lambda split — done. `nx affected` + nx cache — reverted
       (affected = run-everything choice; nx cache = measured no-op)
-- [ ] Phase 3 (validation hardening) — deferred, tracked above as future work
 - [x] **Docs updated** — N/A: CI tooling/process only, does not change the shape
       of the system (schema, API, ingestion, infra topology per ADR 0032)
 - [x] **API types regenerated** — N/A: touches only `.github/workflows/ci.yml` +
@@ -205,8 +186,8 @@ SQL drift, dep vulns, chain-data fidelity — not where CI currently looks):
 - **`.nx/cache` no-op** — nx.json declares no cacheable targets (`targetDefaults`
   has only `test`, no `cache: true`), so nx cached nothing (~1MB) and re-ran
   everything. TS got slower (481s→585s→621s) from cache I/O with no replay.
-  Effective nx caching needs an nx.json change (mark targets cacheable + declare
-  inputs/outputs) — deferred to Phase 3 (app-config, correctness risk).
+  Effective nx caching would need an nx.json change (mark targets cacheable +
+  declare inputs/outputs) — not carried forward (app-config, correctness risk).
 - **Vestigial `SQLX_OFFLINE`** — the rust job sets `SQLX_OFFLINE=true` but the
   code has zero compile-checked sqlx macros (all runtime `sqlx::query`, backend is
   ClickHouse). The flag gates nothing. Left as-is; removable.
@@ -216,6 +197,5 @@ SQL drift, dep vulns, chain-data fidelity — not where CI currently looks):
 
 ## Future Work
 
-Phase 3 (validation hardening) above. Top 3 for this project: fuzz the XDR parser,
-contract-test vs chain (golden fixtures), and — if ClickHouse gains a query check
-— a CH query smoke test. Tracked here; not yet spawned as separate backlog tasks.
+None. Scope was CI performance; the validation ideas that came up were
+deliberately not carried forward.
