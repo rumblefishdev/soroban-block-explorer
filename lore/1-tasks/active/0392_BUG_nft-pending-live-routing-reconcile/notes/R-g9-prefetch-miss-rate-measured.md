@@ -62,10 +62,17 @@ then ~2,100–4,400 failures/day, every day (spike 06-29→07-01 ≈ 17k/13k/9k 
 catch-up backlog). Zero G9 warns before 06-29 in the window (indexer down
 06-26→06-29; G9 reached prod with that deploy train).
 
-This fully explains 0391's measurements: ~6,575 pending rows/day at 91%
-fungible-verdict (verdict exists in `soroban_contracts`, G9 dies before
-delivering it → route falls to Pending) **and** the 21 stranded Nft-verdict
-collections (Hot routing needs the same lookup).
+Scope of what this explains (corrected per 0391 §4f, karolkow's crux test,
+merged 2026-07-15): with G9 dead, ALL cross-ledger NFT rows/events fell to
+Pending regardless of WASM timing — but only the **H1 slice** (verdict knowable
+at event time: ≤39% of timing-known fungible pending + some share of the 72%
+NULL-upload-ledger rows) would have routed differently with a working G9. The
+**H2 majority (61% of timing-known)** is correct defer — WASM observed at/after
+the event — and keeps quarantining by design; only Step 1's reconcile drains
+it. The 21 stranded Nft-verdict collections are the same split: hot routing for
+their post-classification events needs this lookup, pre-classification rows
+need the reconcile. Post-deploy, re-run the R §4c split to measure the
+residual fungible intake.
 
 ## G1 is healthy
 
