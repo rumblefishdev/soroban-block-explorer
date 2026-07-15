@@ -18,7 +18,12 @@ history:
   - date: 2026-07-15
     status: active
     who: stkrolikiewicz
-    note: Promoted to active — starting implementation.
+    note: >
+      Promoted to active. Step 1 measured + fixed same day: G9 prefetch was a
+      100% no-op (Nullable(Int16)-as-i16, ch0.15 wire-type check; 20,494
+      failures/7d on prod) — see notes/R-g9-prefetch-miss-rate-measured.md.
+      Fix + red/green e2e in PR #341 (also unbreaks the 0320 prior-row
+      prefetch, stale `name` column). Steps 2-3 remain.
 ---
 
 # NFT pending: stop live fungible-misroute + continuous promote/reconcile
@@ -62,16 +67,17 @@ _only_ genuinely-unresolved contracts, and reconciles them once resolved.
 
 ### Step 1: Stop the leak — verdict-authoritative write-time routing
 
-- For a contract that already has a verdict row in `soroban_contracts`, the
-  ingest path must resolve it (not fail open). Options to evaluate:
-  - Widen / fix the G1/G9 prefetch so already-classified contracts are never
-    missed (measure miss rate first — why is a classified fungible contract's
-    verdict not in the prefetch window?).
-  - Or a fallback point lookup on prefetch miss before defaulting to `Pending`.
-- Target: `Fungible|Token`-verdict transfers route to `Drop`, never `Pending`.
-- Guard cost: this is on the hot ingest path — the lookup must be cheap
-  (cache-backed; no per-event CH round-trip). `ponytail:` measure before adding
-  any new query per event.
+**DONE (PR #341).** Measurement first
+([R-g9-prefetch-miss-rate-measured](notes/R-g9-prefetch-miss-rate-measured.md)):
+there was no "window" problem — the G9 fetch itself failed on 100% of
+row-returning calls (`contract_type` read as bare `i16` vs `Nullable(Int16)`,
+rejected by clickhouse 0.15 RBWNAT validation; 20,494 prod failures/7d, single
+error string, since indexer resume 2026-06-29). Fix is `Option<i16>` — the
+existing prefetch + `ClassificationCache` design was already correct and now
+actually runs, so no new per-event query was needed. Same PR unbreaks the 0320
+prior-row prefetch (SELECTed the 0304-dropped `name` column → Code 47) and adds
+a `CLICKHOUSE_URL`-gated e2e asserting Fungible→Drop / Nft→Hot /
+unknown→Pending + the upgrade-row write (red/green verified locally).
 
 ### Step 2: Reconcile the residual — event-driven, per newly-classified contract
 
