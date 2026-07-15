@@ -151,3 +151,98 @@ WHERE tp.ledger_sequence=61787807 AND tp.transaction_id=8072207398204103224
 
 Recipient present → Path B covers `consecutive_mint` on the account page,
 independently of 0383.
+
+## 4. Follow-up measurement (2026-07-15) — drain is 33 days stale, leak is LIVE
+
+Re-ran the audit one day later to test the hypothesis "the backfill was
+one-shot; the live flow needs a continuous fix." Confirmed on both counts.
+
+### 4a. Hot is frozen; pending tracks the chain tip
+
+| table                   | max ledger | max `closed_at`         |
+| ----------------------- | ---------- | ----------------------- |
+| `nfts` (hot)            | 62,989,407 | **2026-06-12 01:24:45** |
+| `nft_ownership` (hot)   | 62,989,407 | 2026-06-12 01:24:45     |
+| `nfts_pending`          | 63,485,559 | 2026-07-15 09:01        |
+| `nft_ownership_pending` | 63,485,653 | 2026-07-15 09:01:38     |
+| chain tip (`ledgers`)   | —          | 2026-07-15 09:03:03     |
+
+Both hot tables stop at the **exact same** ledger `62,989,407` → a single
+promotion event (the last `nft-reclassify`), **33 days ago**. Nothing has been
+promoted since. Pending runs to the chain tip.
+
+### 4b. Day-over-day growth (07-14 → 07-15)
+
+| table                   | 07-14          | 07-15         | Δ rows |
+| ----------------------- | -------------- | ------------- | ------ |
+| `nfts` (hot)            | 60c / 12,835   | 60c / 12,835  | **0**  |
+| `nft_ownership` (hot)   | 60c / 21,312   | 60c / 21,312  | **0**  |
+| `nfts_pending`          | 794c / 176,604 | 1144c / ~329k | +~152k |
+| `nft_ownership_pending` | 794c / 315,506 | 1144c / ~588k | +~273k |
+
+Hot bit-identical after a full day; pending nearly doubled.
+
+### 4c. What the LIVE path wrote to pending in the last 33 days
+
+`nft_ownership_pending` rows split at the hot cutoff ledger `62,989,407`
+(post-cutoff = ingested after the last drain = necessarily live-written), joined
+to the contract's **current** verdict:
+
+| verdict  | post-cutoff (live, 33d) | pre-cutoff (older) |
+| -------- | ----------------------- | ------------------ |
+| Fungible | **198,290 (91%)**       | 283,399            |
+| Other    | 18,488 (8%)             | 94,515             |
+| Nft      | 203 (0.1%)              | 558                |
+
+≈ **6,575 pending rows/day** accrue, **91% of them Fungible-verdict**. This is
+not stale reparse residue — the live pipeline is pouring fungible transfers into
+NFT-pending _right now_.
+
+### 4d. Fungible-in-pending is 100% genuine false-positives
+
+Of the Fungible-verdict contracts sitting in `nfts_pending`, **401/401 (100%)**
+are also registered as real fungible `assets` (`asset_type IN (2,3)`):
+
+```sql
+SELECT uniqExact(p.contract_id) AS fungible_verdict_pending,
+       uniqExactIf(p.contract_id, a.contract_id IS NOT NULL) AS also_fungible_asset
+FROM nfts_pending p
+INNER JOIN (SELECT id FROM soroban_contracts FINAL WHERE contract_type=3) sc ON p.contract_id=sc.id
+LEFT JOIN (SELECT DISTINCT contract_id FROM assets FINAL WHERE asset_type IN (2,3)) a ON p.contract_id=a.contract_id
+-- → 401, 401
+```
+
+Every fungible-verdict pending contract is a confirmed fungible token. None are
+NFTs. The i128 shape parser mislabels the transfer; the contract's verdict only
+resolves to Fungible _after_ the row is already in pending, and `Fungible→Drop`
+never applies retroactively.
+
+### 4e. The 21 Nft-verdict pending collections are already in hot
+
+```sql
+SELECT count() nft_verdict_contracts, sum(tokens) tokens_stranded,
+       countIf(in_hot=0) contracts_fully_invisible
+FROM (SELECT p.contract_id, uniqExact(p.token_id) tokens,
+             max(h.cid IS NOT NULL) in_hot
+      FROM nfts_pending p
+      INNER JOIN (SELECT id FROM soroban_contracts FINAL WHERE contract_type=2) sc ON p.contract_id=sc.id
+      LEFT JOIN (SELECT DISTINCT contract_id cid FROM nfts) h ON p.contract_id=h.cid
+      GROUP BY p.contract_id)
+-- → 21, 559, 0
+```
+
+All 21 `Nft`-verdict pending contracts (**559 tokens**) already have rows in hot
+`nfts` — they were promoted in the June-12 drain. So the concrete NFT-page miss
+is **post-June-12 mints of already-visible collections**: known collections
+showing stale token sets, not whole collections vanished.
+
+### 4f. Root-cause refinement
+
+Point 6 in the README frames Fungible-in-pending as "expected staleness, not a
+routing bug." Sharper: the contract's verdict **is** resolvable from
+`soroban_contracts` at ingest — these 198k/33d rows land in pending only because
+the ingest-time verdict prefetch (0283 G1/G9) is best-effort with a bounded
+window and **fails open to Pending on miss**. A verdict-authoritative lookup for
+already-classified contracts would route them to `Drop` at write time. So the
+leak is fixable at the source, not only by a downstream sweep — which is why the
+fix is NOT a live mirror of the backfill `ALTER … DELETE`. Spawned as **0392**.

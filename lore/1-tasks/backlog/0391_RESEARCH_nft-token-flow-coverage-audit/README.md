@@ -5,7 +5,18 @@ type: RESEARCH
 status: backlog
 related_adr: []
 related_tasks:
-  ['0383', '0309', '0217', '0306', '0296', '0283', '0320', '0316', '0359']
+  [
+    '0383',
+    '0392',
+    '0309',
+    '0217',
+    '0306',
+    '0296',
+    '0283',
+    '0320',
+    '0316',
+    '0359',
+  ]
 tags:
   ['phase-future', 'effort-small', 'priority-medium', 'nft', 'coverage-audit']
 links: []
@@ -17,6 +28,16 @@ history:
       Spawned from 0383 (Soroban event token-flow decode) future work. Audit
       whether NFT movements get the same account-page + collection-page coverage
       0383 gave fungibles. Measured prod CH; findings in notes/R + notes/S.
+  - date: 2026-07-15
+    status: backlog
+    who: karolkow
+    note: >
+      Follow-up measurement (R §4). Hot frozen 33 days at ledger 62,989,407
+      (2026-06-12, last nft-reclassify); live path writes ~6,575 pending
+      rows/day, 91% Fungible-verdict false-positives (401/401 confirmed real
+      fungible assets); 21 Nft-verdict collections / 559 tokens stranded (all
+      already in hot → post-June mints missing). Root = ingest verdict prefetch
+      fails open to Pending. Spawned 0392 (live routing leak + reconcile).
 ---
 
 # NFT token-flow coverage audit (0383 follow-up)
@@ -36,6 +57,16 @@ the _hot_ `nfts` / `nft_ownership` tables — so NFTs whose contract is not yet
 already owned by existing tasks (0217 drain, 0309 classifier, 0320/0316 WASM
 observation); this audit quantifies it and confirms **no new NFT decode work is
 needed** — 0383 did not leave an NFT hole on the account side.
+
+**Update 2026-07-15:** the audit did surface **new live-flow work** (distinct
+from decode). Re-measuring a day later proved the pending quarantine is not a
+drained-once relic — hot has been frozen at ledger `62,989,407`
+(**2026-06-12**, last manual `nft-reclassify`) for **33 days** while the live
+path keeps writing to pending up to the chain tip, ~91% of it fungible
+false-positives (verdict resolvable from `soroban_contracts` but the write-time
+prefetch fails open to Pending). That is a real live routing/reconcile gap,
+spawned as **[0392](../0392_BUG_nft-pending-live-routing-reconcile/README.md)**.
+Details in [R §4](notes/R-nft-coverage-measured-state.md).
 
 ## Context
 
@@ -115,14 +146,17 @@ top recent contributors are **all `Fungible`-classified** false-positives
 
 **Design conclusion (this task's recommendation):** the promote+drop that
 `nft-reclassify` does as a one-shot **should run continuously on the live path**,
-not only as an operator backfill. Options: (a) a scheduled drain
-(EventBridge → `backfill-runner nft-reclassify`, cheap `ALTER … DELETE` +
-`INSERT … SELECT`); (b) event-driven — when `contract-type-rebuild` writes a
-`Nft`/`Fungible`/`Token` verdict, immediately promote/drop that contract's
-pending rows. Until then NFT pages lag reality by however long since the last
-manual drain, and pending accretes fungible garbage without bound. **Fold this
-into task 0306's scope (make its reclassify step recurring), or spawn a
-dedicated OPS task for the live drain.**
+not only as an operator backfill. Two sub-problems, one shared root
+(write-time verdict resolution): (1) **stop the leak** — the ingest verdict
+prefetch fails open to Pending on miss, so ~91% of pending intake is fungible
+whose verdict _is_ resolvable from `soroban_contracts`; a verdict-authoritative
+write-time lookup routes those to `Drop`. (2) **reconcile the residual** — when a
+contract's verdict later resolves to `Nft`/`Fungible`/`Token`, promote/drop its
+pending rows (event-driven per newly-classified contract, not a full-table
+sweep). A live mirror of the backfill `ALTER … DELETE` would only treat the
+symptom. **Spawned as [0392](../0392_BUG_nft-pending-live-routing-reconcile/README.md).**
+See [R §4](notes/R-nft-coverage-measured-state.md) for the 2026-07-15 numbers
+(drain 33 days stale; leak is live, not stale residue).
 
 ## Acceptance Criteria
 
@@ -143,8 +177,9 @@ dedicated OPS task for the live drain.**
    tokens) onto the pages and evicts the 350 fungible false-positives (161,559
    rows). **But a one-shot run is not enough** — pending refills to the chain
    tip continuously (see "Why `*_pending` grows unbounded" above). The drain
-   must become recurring/live. Fold the recurring cadence into **0306**, or
-   spawn a dedicated OPS task for a scheduled/event-driven drain.
+   must become recurring/live. Live-flow fix (stop leak + reconcile residual)
+   spawned as **[0392](../0392_BUG_nft-pending-live-routing-reconcile/README.md)**;
+   the one-shot prod drain remains **0306**.
 2. **Unclassifiable residual (423 Other collections, 14,632 tokens).** Cannot be
    resolved without observing each contract's WASM interface. Owned by **0309**
    (classifier design), **0320** (WASM-upgrade reclassify), **0316** (WASM
