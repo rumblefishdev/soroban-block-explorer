@@ -1,6 +1,6 @@
 ---
 id: '0392'
-title: 'NFT pending: stop live fungible-misroute (verdict fail-open) + continuous promote/reconcile'
+title: 'NFT pending: continuous live promote/reconcile (drain gap) + optional write-time tightening'
 type: BUG
 status: active
 related_adr: []
