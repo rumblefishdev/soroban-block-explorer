@@ -600,22 +600,14 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     -- floor tight, same rationale as `idx_oa_pool_ids` / the 0290 `idx_acc_id`.
     -- contract_id is Nullable; `= <id>` never matches NULL rows, and granules
     -- holding only NULLs carry no value → skipped.
-    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1,
-    -- Skip index for the CLASSIC / classic-wrap-SAC arm of the asset-transactions
-    -- driver (E10 GET /assets/:id/transactions; task 0334). That driver filters
-    -- `(asset_code = ? AND asset_issuer_id = ?) OR (contract_id = ?)`. For a
-    -- classic-wrap SAC both arms are present, and the `asset_*` arm had NO index —
-    -- so the `OR` defeated `idx_oa_contract_id` entirely (a granule can only be
-    -- skipped if BOTH disjuncts can be ruled out), forcing a FULL scan
-    -- (prod-measured: ~6.2 B rows / ~115 GiB / ~7.5 s per request for `zkSync`,
-    -- still blowing `api_throttle.read_rows` after the 0333 contract-only fix).
-    -- A bloom on `asset_issuer_id` (high-cardinality Int64 surrogate; `asset_code`
-    -- is then checked only within candidate granules) makes the classic arm
-    -- prunable; CH unions it with `idx_oa_contract_id` for the OR (EXPLAIN:
-    -- "<Combined skip indexes>"). Box-measured: 13.18 M (whole table) → 114 K.
-    -- Same `bloom_filter(0.001)` rationale as `idx_oa_contract_id`; asset_issuer_id
-    -- is Nullable (NULL = non-asset op) → NULL-only granules carry no value, skipped.
-    INDEX idx_oa_asset_issuer_id asset_issuer_id TYPE bloom_filter(0.001) GRANULARITY 1
+    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1
+    -- idx_oa_asset_issuer_id (bloom on asset_issuer_id, was here for the E10
+    -- asset-tx CLASSIC arm, task 0334) DROPPED 2026-07-13: task 0359 moved the
+    -- asset-tx driver to the `operation_asset_appearances` fan-out seek, so no
+    -- query filters `operations_appearances` by `asset_issuer_id` anymore — the
+    -- bloom's sole consumer is gone (verified across api / audit-harness /
+    -- backfill). Prod is an existing DB (this file is fresh-only): reclaim the
+    -- ~97 MiB with `ALTER TABLE operations_appearances DROP INDEX idx_oa_asset_issuer_id`.
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
