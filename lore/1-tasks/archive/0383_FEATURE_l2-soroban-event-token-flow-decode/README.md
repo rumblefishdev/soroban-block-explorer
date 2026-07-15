@@ -4,7 +4,7 @@ title: 'L2: Soroban event token-flow decode (from/to/amount + event participants
 type: FEATURE
 status: completed
 related_adr: []
-related_tasks: ['0359', '0390']
+related_tasks: ['0359', '0391']
 tags: [priority-high, effort-large, layer-indexer, soroban-events]
 links: []
 history:
@@ -24,7 +24,7 @@ history:
       and — post-merge — real-prod decode + surrogate parity confirmed on live CH
       (accounts.id / assets.id byte-match, L/liquidity-pool addresses correctly
       filtered). Remaining: OPS backfill RUN (now unblocked — see Completion).
-      Spawned 0390 (NFT token-flow coverage audit).
+      Spawned 0391 (NFT token-flow coverage audit).
 ---
 
 # L2: Soroban event token-flow decode
@@ -165,6 +165,6 @@ the Devil's-advocate section is **stale** — the asset-side backfill is unblock
 - [ ] Run `backfill-runner soroban-token-flow-backfill` on prod, then spot-check
       account + asset pages. Unblocked. This is the one open acceptance criterion.
 
-**Spawned follow-up:** [0390](../../backlog/0390_RESEARCH_nft-token-flow-coverage-audit/README.md)
+**Spawned follow-up:** [0391](../../backlog/0391_RESEARCH_nft-token-flow-coverage-audit/README.md)
 — NFT token-flow coverage audit (confirmed the account-side is already covered;
 the NFT-page gap is the `nfts_pending` promotion drain, owned by 0217/0306/0309).

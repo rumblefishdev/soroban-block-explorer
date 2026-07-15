@@ -2,7 +2,7 @@
 prefix: S
 title: 'NFT coverage — per-question verdicts, gap list, decisions'
 status: mature
-spawned_from: '0390'
+spawned_from: '0391'
 date: 2026-07-14
 who: karolkow
 ---
