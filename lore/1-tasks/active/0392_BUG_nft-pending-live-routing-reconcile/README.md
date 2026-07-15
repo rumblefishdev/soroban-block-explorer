@@ -2,7 +2,7 @@
 id: '0392'
 title: 'NFT pending: stop live fungible-misroute (verdict fail-open) + continuous promote/reconcile'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0391', '0283', '0217', '0306', '0296']
 tags: [priority-high, effort-medium, layer-indexer, layer-db, nft, clickhouse]
@@ -15,6 +15,10 @@ history:
       Spawned from 0391 §"Why *_pending grows unbounded" + R §4. Two sub-bugs,
       one shared root (write-time verdict resolution). Measured: hot frozen 33
       days, live path writes ~6,575 pending rows/day @ 91% fungible false-pos.
+  - date: 2026-07-15
+    status: active
+    who: stkrolikiewicz
+    note: Promoted to active — starting implementation.
 ---
 
 # NFT pending: stop live fungible-misroute + continuous promote/reconcile
