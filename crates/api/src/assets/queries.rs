@@ -499,10 +499,13 @@ fn hydrate_sql(tuples: &str, asset_ids: &str, sc_ids: &str) -> String {
 /// re-ordered to match `keys`. Every side dimension is bounded to `keys` (see
 /// [`hydrate_sql`]). Returns rows keyed back to the phase-1 order via `id`
 /// (unique per asset); a hydration miss (should not happen — the keys came from
-/// `assets`) is skipped.
+/// `assets`) is skipped. `with_sac_wrapper` resolves a SAC-wrapper's deploy
+/// ledger for `deployed_at_ledger` — `true` for the detail (which serialises it),
+/// `false` for the list (which drops it, so it skips the extra wrapper seek).
 async fn hydrate_assets(
     client: &clickhouse::Client,
     keys: &[AssetKeyChRow],
+    with_sac_wrapper: bool,
 ) -> Result<Vec<AssetListChRow>, clickhouse::error::Error> {
     if keys.is_empty() {
         return Ok(Vec::new());
@@ -519,25 +522,29 @@ async fn hydrate_assets(
     };
     let asset_ids = in_list(keys.iter().map(|k| k.id).collect());
 
-    // `soroban_contracts` ids to bound BOTH `sc` (a type-3 token's own contract,
-    // `a.contract_id`) and `sac_sc` (a classic/native asset's SAC-wrapper
-    // contract). The wrapper surrogate is not on `assets`, so seek it from the
-    // bounded `asset_sac` (same rows the `sac` hydration join reads).
+    // `soroban_contracts` ids bounding `sc` (a type-3 token's own contract,
+    // `a.contract_id`). The `sac_sc` join also wants a classic/native asset's
+    // SAC-wrapper contract, whose surrogate is not on `assets` — but only the
+    // DETAIL serialises `deployed_at_ledger`, so the list (`with_sac_wrapper =
+    // false`) skips this extra `asset_sac` seek; `sac_sc` then simply misses the
+    // wrapper (deploy = own contract only, which the list discards).
     let mut sc_ids: BTreeSet<i64> = keys
         .iter()
         .map(|k| k.contract_id)
         .filter(|&c| c != 0)
         .collect();
-    let sac_wrappers = client
-        .query(&format!(
-            "SELECT DISTINCT sac_contract_id AS id \
-             FROM asset_sac \
-             WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
-               AND sac_contract_id != 0"
-        ))
-        .fetch_all::<SurrogateIdRow>()
-        .await?;
-    sc_ids.extend(sac_wrappers.into_iter().map(|r| r.id));
+    if with_sac_wrapper {
+        let sac_wrappers = client
+            .query(&format!(
+                "SELECT DISTINCT sac_contract_id AS id \
+                 FROM asset_sac \
+                 WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+                   AND sac_contract_id != 0"
+            ))
+            .fetch_all::<SurrogateIdRow>()
+            .await?;
+        sc_ids.extend(sac_wrappers.into_iter().map(|r| r.id));
+    }
 
     let rows = client
         .query(&hydrate_sql(&tuples, &asset_ids, &in_list(sc_ids)))
@@ -658,7 +665,7 @@ pub async fn fetch_list(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = hydrate_assets(client, &keys).await?;
+    let rows = hydrate_assets(client, &keys, false).await?;
 
     // Resolve the page's issuer surrogates → (StrKey, home_domain) by a
     // bloom-pruned key-seek (`accounts.idx_acc_id`), replacing the full-table
@@ -739,7 +746,10 @@ pub async fn fetch_by_contract_id(
         .fetch_all::<AssetKeyChRow>()
         .await?;
 
-    let row = hydrate_assets(client, &keys).await?.into_iter().next();
+    let row = hydrate_assets(client, &keys, true)
+        .await?
+        .into_iter()
+        .next();
     finish_detail(client, row).await
 }
 
@@ -776,7 +786,11 @@ pub async fn fetch_by_code_issuer(
         .bind(issuer_row.id)
         .fetch_all::<AssetKeyChRow>()
         .await?;
-    let Some(row) = hydrate_assets(client, &keys).await?.into_iter().next() else {
+    let Some(row) = hydrate_assets(client, &keys, true)
+        .await?
+        .into_iter()
+        .next()
+    else {
         return Ok(None);
     };
 
@@ -804,7 +818,10 @@ pub async fn fetch_native(
         contract_id: 0,
         id: db_clickhouse::persist::ids::NATIVE_ASSET_ID,
     };
-    let row = hydrate_assets(client, &[key]).await?.into_iter().next();
+    let row = hydrate_assets(client, &[key], true)
+        .await?
+        .into_iter()
+        .next();
     finish_detail(client, row).await
 }
 
