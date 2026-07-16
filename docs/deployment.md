@@ -164,18 +164,40 @@ worker) live in `Explorer-production-Compute`:
 make -C infra deploy-production-compute
 ```
 
-**Pausing the indexer or the enrichment worker.** The SQS
-event-source-mapping is created **only when concurrency > 0**
-(`compute-stack.ts`). To pause, set the relevant key in
-`infra/envs/production.json` to `0` and redeploy Compute:
+**Pausing the indexer or the enrichment worker.** Both consume an SQS
+queue via an event-source-mapping (ESM); pausing = stopping that
+consumption. Messages keep landing in the queue and are **not dropped**
+(the S3→SQS notification is not gated on the pause), so either lever below
+is safe and fully reversible. Pick by how long the pause needs to last:
 
-- `indexerLambdaConcurrency: 0` → indexer ESM removed; ledger events keep
-  landing in the queue but nothing processes them.
-- `enrichmentWorkerLambdaConcurrency: 0` → same for the enrichment worker.
+- **Quick / temporary — disable the ESM (no deploy).** The fastest lever:
+  flip the SQS trigger off and the Lambda stops parsing (takes effect in
+  under a minute). Console: Lambda → the function → **Configuration →
+  Triggers** → the SQS trigger → **Disable**. CLI:
 
-Set back to `1` + redeploy to resume. **A redeploy alone does not toggle
-this** — the value in `production.json` is the switch. Because events
-buffer in SQS (they are not dropped), a pause is safe and reversible.
+  ```bash
+  aws lambda list-event-source-mappings \
+    --function-name production-soroban-explorer-indexer \
+    --query 'EventSourceMappings[].UUID' --output text
+  aws lambda update-event-source-mapping --uuid <uuid> --no-enabled   # resume: --enabled
+  ```
+
+  (enrichment worker: `production-soroban-explorer-enrichment-worker`.)
+
+  > ⚠️ **Not durable.** `production.json` still says `concurrency: 1`, so
+  > the **next `make deploy-production-compute` re-enables the ESM** (CDK
+  > reconciles it back to `enabled`). Use this for a short, watched pause —
+  > not to park a worker across deploys.
+
+- **Durable — set concurrency to `0` + redeploy Compute.** Puts the paused
+  state in code so it survives future deploys. The ESM is created **only
+  when concurrency > 0** (`compute-stack.ts`), so:
+
+  - `indexerLambdaConcurrency: 0` → indexer ESM not created at all.
+  - `enrichmentWorkerLambdaConcurrency: 0` → same for the enrichment worker.
+
+  Set back to `1` + redeploy to resume. **A redeploy alone does not toggle
+  this** — the `production.json` value is the switch.
 
 ### Galexie (live ingestion) — Ingestion stack
 
