@@ -661,11 +661,25 @@ pub async fn fetch_list(
             .bind(c.contract_id);
     }
     let raw = query.fetch_all::<AssetKeyChRow>().await?;
+    let raw_len = raw.len();
     // `params.limit` is the handler's `fetch_limit()` (already the peek +1);
     // consecutive-dedup the over-fetched versions to the page, then hydrate it.
     let keys = dedup_consecutive(raw, params.limit as usize);
     if keys.is_empty() {
         return Ok(Vec::new());
+    }
+    // Under-fill guard: the over-fetch must still yield a full page after
+    // version-dedup (holds while max versions-per-key < `SEEK_OVERFETCH`). If a
+    // FULL raw fetch (`raw_len == lim_over`, so more rows existed) still deduped
+    // to < `limit`, bloat exceeded the ceiling and the page silently truncated —
+    // log it loudly instead of dropping the tail.
+    if (keys.len() as i64) < params.limit && raw_len as i64 == params.limit * SEEK_OVERFETCH {
+        tracing::warn!(
+            limit = params.limit,
+            got = keys.len(),
+            over_fetch = SEEK_OVERFETCH,
+            "assets list under-filled after version-dedup — raise SEEK_OVERFETCH"
+        );
     }
     let rows = hydrate_assets(client, &keys, false).await?;
 
