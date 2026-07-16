@@ -50,6 +50,18 @@ pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
 /// function name. Stellar Soroban NFT contracts copy the convention.
 const TOKEN_URI_FN: &str = "token_uri";
 
+/// SEP-50 contract-level `name()` — the collection name (task 0340). Used as a
+/// FALLBACK only: the OZ NFT name lives in instance storage and is captured by
+/// the parser into `soroban_contract_metadata` (#330) + served via COALESCE
+/// (#331). `name()` covers the ledger-uncovered remainder — hand-rolled
+/// contracts with empty instance storage but a WASM-baked `name()`.
+const NAME_FN: &str = "name";
+
+/// Char cap for a fetched collection name — a generous bound that only
+/// sentinels pathological multi-KB values (mirrors the worker's caps on the
+/// `token_uri` JSON fields; the CH column is unbounded `Nullable(String)`).
+const MAX_COLLECTION_NAME_CHARS: usize = 4096;
+
 /// Fetcher for the per-NFT `token_uri()` JSON metadata pipeline
 /// (Soroban RPC + HTTP / IPFS gateway).
 ///
@@ -71,6 +83,12 @@ pub struct NftTokenUriFetcher {
     /// pools so no single endpoint is hammered first (proactive 429 avoidance).
     cursor: Arc<AtomicUsize>,
     cache: FutureCache<String, Arc<Option<Value>>>,
+    /// Per-CONTRACT cache for the SEP-50 `name()` collection name (task 0340).
+    /// Keyed by contract StrKey — `name()` is parameterless, so a full drain
+    /// costs one RPC per collection, never per token. `None` = the contract
+    /// exports no usable name (a PERMANENT fact, cached to stop a big
+    /// collection from re-asking once per token).
+    name_cache: FutureCache<String, Arc<Option<String>>>,
 }
 
 /// Parse a comma-separated env var into a trimmed, non-empty list. `None` if
@@ -135,12 +153,17 @@ impl NftTokenUriFetcher {
             .time_to_live(CACHE_TTL)
             .max_capacity(CACHE_CAPACITY)
             .build();
+        let name_cache = FutureCache::builder()
+            .time_to_live(CACHE_TTL)
+            .max_capacity(CACHE_CAPACITY)
+            .build();
         Ok(Self {
             client,
             rpc_urls: Arc::new(rpc_urls),
             ipfs_gateways: Arc::new(ipfs_gateways),
             cursor: Arc::new(AtomicUsize::new(0)),
             cache,
+            name_cache,
         })
     }
 
@@ -192,6 +215,87 @@ impl NftTokenUriFetcher {
             .await?;
         Ok((*cached).clone())
     }
+
+    /// Resolve the contract-level SEP-50 `name()` → collection name (task 0340).
+    ///
+    /// Failure model differs from [`Self::resolve`] on purpose: a PERMANENT
+    /// "no usable name" (function missing, non-String return, empty/oversize
+    /// value) folds to `Ok(None)` — a stable fact about the contract, so it IS
+    /// cached, and a 10k-token collection without `name()` costs one RPC per
+    /// run instead of one per token. Only transient RPC faults surface as
+    /// `Err` (uncached → retried), so the caller's `Err` arm is
+    /// retry-classification-free: every `Err` is transient.
+    #[instrument(skip(self), fields(contract_id = %contract_id))]
+    pub async fn resolve_collection_name(
+        &self,
+        contract_id: &str,
+    ) -> Result<Option<String>, Arc<NftTokenUriError>> {
+        let client = self.client.clone();
+        let rpc_urls = Arc::clone(&self.rpc_urls);
+        let start = self.cursor.fetch_add(1, Ordering::Relaxed);
+        let contract = contract_id.to_owned();
+
+        let cached = self
+            .name_cache
+            .try_get_with(contract_id.to_owned(), async move {
+                match simulate_name_with_failover(&client, &rpc_urls, start, &contract).await {
+                    // A successful simulate whose retval does not decode to a
+                    // usable String — non-String return or malformed XDR — is a
+                    // PERMANENT contract fact, not a transient fault. Fold it to
+                    // a cached `None` (like the permanent cases below) so a
+                    // contract that will never yield a name is not re-fetched and
+                    // retried on every token / every run. `decode_string_result`'s
+                    // error must NOT `?` out here: the caller treats every `Err`
+                    // as transient.
+                    Ok(xdr) => match decode_string_result(&xdr, NAME_FN) {
+                        Ok(name) => Ok(Arc::new(usable_collection_name(&name))),
+                        Err(e) => {
+                            debug!(error = %e, "name() returned no usable String — caching 'no name'");
+                            Ok(Arc::new(None))
+                        }
+                    },
+                    Err(e) if super::errors::is_transient(&e) => Err(e),
+                    Err(e) => {
+                        debug!(error = %e, "name() permanent fail — caching 'no name'");
+                        Ok(Arc::new(None))
+                    }
+                }
+            })
+            .await?;
+        Ok((*cached).clone())
+    }
+}
+
+/// Trim + bound a decoded `name()` value; empty or pathologically long → `None`.
+fn usable_collection_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty() && trimmed.chars().count() <= MAX_COLLECTION_NAME_CHARS)
+        .then(|| trimmed.to_owned())
+}
+
+/// [`simulate_with_failover`]'s zero-arg sibling for `name()` — same endpoint
+/// rotation, no arity fallback (`name()` is parameterless in every convention).
+async fn simulate_name_with_failover(
+    client: &reqwest::Client,
+    rpc_urls: &[String],
+    start: usize,
+    contract_id: &str,
+) -> Result<String, NftTokenUriError> {
+    let envelope = build_simulate_envelope(contract_id, NAME_FN, None)?;
+    let n = rpc_urls.len();
+    let mut last: Option<NftTokenUriError> = None;
+    for k in 0..n {
+        let url = &rpc_urls[(start + k) % n];
+        match simulate_transaction(client, url, &envelope).await {
+            Ok(xdr) => return Ok(xdr),
+            Err(e) if is_endpoint_fault(&e) => {
+                debug!(rpc = %url, error = %e, "rpc endpoint fault — failing over");
+                last = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.expect("rpc pool is non-empty, so the loop body ran"))
 }
 
 /// Cold path: Soroban RPC + HTTP fetch + Content-Type branch.
@@ -213,7 +317,7 @@ async fn fetch_uncached(
 
     let result_xdr_b64 =
         simulate_with_failover(client, rpc_urls, start, contract_id, token_u32).await?;
-    let uri = decode_token_uri_result(&result_xdr_b64)?;
+    let uri = decode_string_result(&result_xdr_b64, TOKEN_URI_FN)?;
 
     validate_uri(&uri)?;
     debug!(uri = %uri, "nft token_uri resolved; fetching metadata");
@@ -354,12 +458,15 @@ fn non_success_error(
     }
 }
 
-/// Build base64-encoded `TransactionEnvelope` for `token_uri(token_id_u32)`
-/// (SEP-50 / OpenZeppelin convention) or `token_uri()` (SEP-39 /
-/// ERC-721 collection-wide convention) when `token_id_u32` is `None`.
-/// Source account, fee, seq_num are dummy — simulate path ignores them.
+/// Build base64-encoded `TransactionEnvelope` invoking `function_name` on the
+/// contract — `token_uri(token_id_u32)` (SEP-50 / OpenZeppelin convention),
+/// zero-arg `token_uri()` (SEP-39 / ERC-721 collection-wide convention) or
+/// zero-arg `name()` (SEP-50 collection name, task 0340) when `token_id_u32`
+/// is `None`. Source account, fee, seq_num are dummy — simulate path ignores
+/// them.
 fn build_simulate_envelope(
     contract_id: &str,
+    function_name: &str,
     token_id_u32: Option<u32>,
 ) -> Result<String, NftTokenUriError> {
     let contract = stellar_strkey::Contract::from_string(contract_id).map_err(|_| {
@@ -369,7 +476,7 @@ fn build_simulate_envelope(
         }
     })?;
     let contract_address = ScAddress::Contract(ContractId(Hash(contract.0)));
-    let function_name = ScSymbol(StringM::try_from(TOKEN_URI_FN.as_bytes().to_vec())?);
+    let function_name = ScSymbol(StringM::try_from(function_name.as_bytes().to_vec())?);
     let args: VecM<ScVal> = match token_id_u32 {
         Some(id) => vec![ScVal::U32(id)].try_into()?,
         None => VecM::default(),
@@ -453,7 +560,8 @@ async fn simulate_token_uri_with_fallback(
     contract_id: &str,
     token_id_u32: u32,
 ) -> Result<String, NftTokenUriError> {
-    let per_token_envelope = build_simulate_envelope(contract_id, Some(token_id_u32))?;
+    let per_token_envelope =
+        build_simulate_envelope(contract_id, TOKEN_URI_FN, Some(token_id_u32))?;
     match simulate_transaction(client, rpc_url, &per_token_envelope).await {
         Ok(xdr) => Ok(xdr),
         Err(NftTokenUriError::SorobanRpc(msg)) if is_token_uri_arity_mismatch(&msg) => {
@@ -461,7 +569,7 @@ async fn simulate_token_uri_with_fallback(
                 contract_id = %contract_id,
                 "token_uri(token_id) returned arity mismatch; retrying zero-arg token_uri() (SEP-39 contracts)"
             );
-            let collection_envelope = build_simulate_envelope(contract_id, None)?;
+            let collection_envelope = build_simulate_envelope(contract_id, TOKEN_URI_FN, None)?;
             simulate_transaction(client, rpc_url, &collection_envelope).await
         }
         Err(other) => Err(other),
@@ -531,10 +639,12 @@ async fn simulate_transaction(
         .ok_or_else(|| NftTokenUriError::MalformedRpcResponse("missing results[0].xdr".into()))
 }
 
-/// Decode base64 ScVal XDR into URI string. Only `ScVal::String` is
-/// accepted: `ScSymbol` is limited to 32 bytes in XDR and cannot hold a
-/// realistic URI, and any other variant is a producer-side contract bug.
-fn decode_token_uri_result(xdr_b64: &str) -> Result<String, NftTokenUriError> {
+/// Decode base64 ScVal XDR into a string (`function_name` only labels the
+/// error). Only `ScVal::String` is accepted: `ScSymbol` is limited to 32 bytes
+/// in XDR and cannot hold a realistic URI, and any other variant is a
+/// producer-side contract bug. Shared by `token_uri()` and `name()` — both
+/// return `String` in the OpenZeppelin / SEP conventions.
+fn decode_string_result(xdr_b64: &str, function_name: &str) -> Result<String, NftTokenUriError> {
     let raw = BASE64
         .decode(xdr_b64)
         .map_err(|e| NftTokenUriError::MalformedRpcResponse(format!("xdr base64: {e}")))?;
@@ -542,12 +652,13 @@ fn decode_token_uri_result(xdr_b64: &str) -> Result<String, NftTokenUriError> {
         ScVal::String(ScString(s)) => s.into_vec(),
         other => {
             return Err(NftTokenUriError::MalformedRpcResponse(format!(
-                "token_uri returned non-String ScVal: {other:?}"
+                "{function_name} returned non-String ScVal: {other:?}"
             )));
         }
     };
-    String::from_utf8(bytes)
-        .map_err(|e| NftTokenUriError::MalformedRpcResponse(format!("token_uri not UTF-8: {e}")))
+    String::from_utf8(bytes).map_err(|e| {
+        NftTokenUriError::MalformedRpcResponse(format!("{function_name} not UTF-8: {e}"))
+    })
 }
 
 /// `ipfs://...` → `https://<primary-gateway>/ipfs/...`; HTTPS passes through.
@@ -814,7 +925,8 @@ mod tests {
         // the same InvokeContract args. Uses a synthetic strkey so the
         // test doesn't depend on any live contract id.
         let contract = stellar_strkey::Contract([0xAB; 32]).to_string();
-        let envelope_b64 = build_simulate_envelope(&contract, Some(4521)).expect("build ok");
+        let envelope_b64 =
+            build_simulate_envelope(&contract, TOKEN_URI_FN, Some(4521)).expect("build ok");
         let raw = BASE64.decode(&envelope_b64).expect("base64 decode");
         let env = TransactionEnvelope::from_xdr(&raw, Limits::none()).expect("xdr roundtrip");
         let TransactionEnvelope::Tx(v1) = env else {
@@ -836,12 +948,45 @@ mod tests {
     }
 
     #[test]
+    fn build_envelope_for_name_is_zero_arg() {
+        // The SEP-50 `name()` envelope (task 0340): right function symbol,
+        // no arguments.
+        let contract = stellar_strkey::Contract([0xAB; 32]).to_string();
+        let envelope_b64 = build_simulate_envelope(&contract, NAME_FN, None).expect("build ok");
+        let raw = BASE64.decode(&envelope_b64).expect("base64 decode");
+        let env = TransactionEnvelope::from_xdr(&raw, Limits::none()).expect("xdr roundtrip");
+        let TransactionEnvelope::Tx(v1) = env else {
+            panic!("expected V1 envelope");
+        };
+        let op = v1.tx.operations.first().expect("one op");
+        let OperationBody::InvokeHostFunction(invoke) = &op.body else {
+            panic!("expected InvokeHostFunction");
+        };
+        let HostFunction::InvokeContract(args) = &invoke.host_function else {
+            panic!("expected InvokeContract");
+        };
+        assert!(args.args.is_empty());
+        assert_eq!(args.function_name.0.as_slice(), NAME_FN.as_bytes());
+    }
+
+    #[test]
+    fn usable_collection_name_trims_and_bounds() {
+        assert_eq!(usable_collection_name("  Punks  "), Some("Punks".into()));
+        assert_eq!(usable_collection_name(""), None);
+        assert_eq!(usable_collection_name("   "), None);
+        assert_eq!(
+            usable_collection_name(&"x".repeat(MAX_COLLECTION_NAME_CHARS + 1)),
+            None
+        );
+    }
+
+    #[test]
     fn decode_result_handles_scval_string() {
         let uri = b"ipfs://QmTest/4521.json";
         let scval = ScVal::String(ScString(StringM::try_from(uri.to_vec()).unwrap()));
         let b64 = BASE64.encode(scval.to_xdr(Limits::none()).unwrap());
         assert_eq!(
-            decode_token_uri_result(&b64).unwrap(),
+            decode_string_result(&b64, TOKEN_URI_FN).unwrap(),
             "ipfs://QmTest/4521.json"
         );
     }
@@ -851,7 +996,7 @@ mod tests {
         let scval = ScVal::U32(42);
         let b64 = BASE64.encode(scval.to_xdr(Limits::none()).unwrap());
         assert!(matches!(
-            decode_token_uri_result(&b64),
+            decode_string_result(&b64, TOKEN_URI_FN),
             Err(NftTokenUriError::MalformedRpcResponse(_))
         ));
     }
@@ -867,6 +1012,12 @@ mod tests {
             StringM::try_from(uri.as_bytes().to_vec()).unwrap(),
         ));
         BASE64.encode(scval.to_xdr(Limits::none()).unwrap())
+    }
+
+    /// A non-String `name()` retval — exercises the "decode fails → permanent,
+    /// fold to Ok(None)" path.
+    fn scval_u32_b64(n: u32) -> String {
+        BASE64.encode(ScVal::U32(n).to_xdr(Limits::none()).unwrap())
     }
 
     #[tokio::test]
@@ -898,9 +1049,128 @@ mod tests {
             .expect("happy path");
         // RPC layer returns the raw xdr_b64; ScVal decode is a separate fn.
         assert_eq!(
-            decode_token_uri_result(&got).unwrap(),
+            decode_string_result(&got, TOKEN_URI_FN).unwrap(),
             "ipfs://QmDeadBeef/4521.json"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_collection_name_happy_path_hits_rpc_once() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "method": "simulateTransaction",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "latestLedger": 100,
+                    "minResourceFee": "0",
+                    "results": [{ "auth": [], "xdr": scval_string_b64("  Cool Punks  ") }],
+                },
+            })))
+            // The second resolve MUST come from the per-contract cache.
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let fetcher = NftTokenUriFetcher::with_rpc_url(mock.uri()).expect("build fetcher");
+        let contract = stellar_strkey::Contract([0xCD; 32]).to_string();
+        for _ in 0..2 {
+            let got = fetcher
+                .resolve_collection_name(&contract)
+                .await
+                .expect("name() resolves");
+            // Trimmed on the way in.
+            assert_eq!(got.as_deref(), Some("Cool Punks"));
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_collection_name_permanent_fail_is_cached_none() {
+        // A contract without `name()` answers HTTP 200 with a contract-level
+        // error → SorobanRpc → PERMANENT → folded to Ok(None) and CACHED, so a
+        // big collection costs one RPC per run, not one per token.
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "latestLedger": 100,
+                    "error": "host fn error: missing entry",
+                },
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let fetcher = NftTokenUriFetcher::with_rpc_url(mock.uri()).expect("build fetcher");
+        let contract = stellar_strkey::Contract([0xEF; 32]).to_string();
+        for _ in 0..2 {
+            let got = fetcher
+                .resolve_collection_name(&contract)
+                .await
+                .expect("permanent fail folds to Ok");
+            assert_eq!(got, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_collection_name_non_string_return_folds_to_none() {
+        // A contract whose name() returns a non-String ScVal (here U32): the
+        // simulate SUCCEEDS but the retval does not decode to a String. That is
+        // a PERMANENT contract fact — it must fold to a cached Ok(None), never
+        // surface as an Err (every caller treats Err as transient → a retry
+        // storm on every token / every run). `.expect(1)` proves the fold is
+        // cached (the 2nd resolve is a cache hit).
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "latestLedger": 100,
+                    "minResourceFee": "0",
+                    "results": [{ "auth": [], "xdr": scval_u32_b64(42) }],
+                },
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let fetcher = NftTokenUriFetcher::with_rpc_url(mock.uri()).expect("build fetcher");
+        let contract = stellar_strkey::Contract([0xAB; 32]).to_string();
+        for _ in 0..2 {
+            let got = fetcher
+                .resolve_collection_name(&contract)
+                .await
+                .expect("non-String name() folds to Ok(None), never Err");
+            assert_eq!(got, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_collection_name_transient_fail_is_err_and_uncached() {
+        // 503 from every pool endpoint → transient → Err (NOT cached: a later
+        // call re-asks the RPC instead of cementing the outage for the TTL).
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(2)
+            .mount(&mock)
+            .await;
+
+        let fetcher = NftTokenUriFetcher::with_rpc_url(mock.uri()).expect("build fetcher");
+        let contract = stellar_strkey::Contract([0x12; 32]).to_string();
+        for _ in 0..2 {
+            let err = fetcher
+                .resolve_collection_name(&contract)
+                .await
+                .expect_err("503 is transient → Err");
+            assert!(super::super::errors::is_transient(&err));
+        }
     }
 
     #[tokio::test]
@@ -1077,7 +1347,7 @@ mod tests {
         .await
         .expect("must fail over from 429 to the healthy RPC");
         assert_eq!(
-            decode_token_uri_result(&got).unwrap(),
+            decode_string_result(&got, TOKEN_URI_FN).unwrap(),
             "ipfs://QmGood/1.json"
         );
     }
@@ -1236,7 +1506,7 @@ mod tests {
         let xdr_b64 = simulate_transaction(&client, LIVE_RPC_URL, &envelope)
             .await
             .expect("RPC call must succeed for known-good 0-arg token_uri");
-        let uri = decode_token_uri_result(&xdr_b64).expect("ScVal::String decode");
+        let uri = decode_string_result(&xdr_b64, TOKEN_URI_FN).expect("ScVal::String decode");
         eprintln!("✓ live mainnet token_uri returned: {uri}");
         assert!(!uri.is_empty(), "URI must be non-empty");
         // Only the schemes `validate_uri` actually accepts —
