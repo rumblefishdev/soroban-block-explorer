@@ -413,12 +413,6 @@ fn dedup_consecutive(raw: Vec<AssetKeyChRow>, limit: usize) -> Vec<AssetKeyChRow
     out
 }
 
-/// The asset-header projection — the `SELECT … columns` shared by every detail
-/// and list read. Kept separate from the `FROM`/joins so the phase-2 hydration
-/// ([`hydrate_sql`]) can seek the joins bounded to a page/lookup key set instead
-/// of collapsing whole dimensions (task 0364). Column expressions are identical
-/// to the pre-0364 `assets FINAL` select, so the decoded [`AssetListChRow`] is
-/// byte-identical.
 /// Phase-2 hydration query for a resolved page/lookup key set (task 0364).
 ///
 /// `assets` is seeked by its primary key (the identity 4-tuple, no `FINAL`) and
@@ -655,9 +649,12 @@ async fn resolve_soroban_contracts(
 
 /// Over-fetch factor for the phase-1 seek: read `limit * OVERFETCH` raw versions
 /// so the consecutive-dedup still yields a full page under the `assets` version
-/// bloat. **8** is provably enough while the max versions-per-key stays below it:
-/// prod max is 7 (avg ~2.3×, only ~200 keys above 4, none above 7 — measured
-/// 2026-07-16), so `limit * 8` always contains `limit` distinct keys.
+/// bloat. **8** holds while the max versions-per-key stays below it. Version count
+/// is a LIVE property (a `ReplacingMergeTree` merge collapses versions, a re-ingest
+/// grows them): measured avg ~2.3×, max 4–7 depending on merge state (prod,
+/// 2026-07-16), so `limit * 8` contains `limit` distinct keys with headroom. Not a
+/// hard guarantee — the loud under-fill guard in [`fetch_list`] is the backstop if
+/// a re-ingest burst ever pushes a hot key past 8.
 const SEEK_OVERFETCH: i64 = 8;
 
 /// Build the phase-1 list seek: the page's identity keys (4-tuple + `id`) from
@@ -690,8 +687,16 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // empty `asset_code`, so a code-only match leaves them unfindable (task
     // 0370). In the FINAL select `m` was always joined; the seek only joins it
     // (+ `sc`) WHEN searching, so the default page stays a bare `assets` walk. We
-    // do NOT match `asset_enrichment.name` — substring-matching ~0.6M classic
-    // SEP-1 names adds noise for no gain.
+    // do NOT match `asset_enrichment.name` — substring-matching the classic
+    // SEP-1 names adds noise for no gain (classic assets are findable by code).
+    //
+    // ponytail: `sc` is NOT deduped — `soroban_contracts` is version-full (~95% of
+    // ids carry >1 version), so this join multiplies matching rows and can dilute
+    // the over-fetch window on a dense type-3 search page → a rare under-fill
+    // (short page, no next cursor; the guard in `fetch_list` warns). Left as-is:
+    // deduping via `GROUP BY id` measured +30ms on EVERY search (44→78ms) to fix a
+    // near-unreachable edge (assets max versions = 4). Revisit (dedup, or a search
+    // over-fetch bump) if version bloat grows (task 0364 audit F1).
     let (search_join, code_clause) = if params.asset_code.is_some() {
         (
             " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
@@ -803,7 +808,7 @@ async fn resolve_page_issuers(
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let in_list = id_in_list(&ids);
     Ok(client
         .query(&format!(
             "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
@@ -835,26 +840,23 @@ pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    // A bespoke token IS its own contract, and on prod every type-3 asset has an
-    // empty code + no issuer, so its identity is the FULL primary key
-    // `(3, '', 0, surrogate)` — seek that tuple directly (a PK point-lookup,
-    // ~16k rows), NOT a `contract_id = surrogate` scan (that column is the LAST
-    // PK part → ~0.6M-row scan). `surrogate` is `hash64` of the StrKey, the same
-    // value stored as `assets.contract_id`.
+    // A bespoke token IS its own contract: on prod every type-3 asset has an empty
+    // code + no issuer, so its identity is the FULL primary key `(3, '', 0,
+    // surrogate)`, and `asset_id(3, "", 0, surrogate) == surrogate` (the type-3 arm
+    // of `ids::asset_id`), so the `id` is known too. The whole key is determined by
+    // the StrKey — skip the phase-1 seek and hydrate it directly, like
+    // `fetch_native` (task 0364 audit F2). A non-existent contract hydrates to zero
+    // rows → None → 404, identical to an empty seek. `surrogate` is `hash64` of the
+    // StrKey, the same value stored as `assets.contract_id`.
     let contract_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
-    let keys = client
-        .query(&format!(
-            "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
-                    a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
-             FROM assets a \
-             WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) \
-                   = (3, '', 0, {contract_surrogate}) \
-             LIMIT 1"
-        ))
-        .fetch_all::<AssetKeyChRow>()
-        .await?;
-
-    let row = hydrate_assets(client, &keys, true)
+    let key = AssetKeyChRow {
+        asset_type: 3,
+        asset_code: String::new(),
+        issuer_id: 0,
+        contract_id: contract_surrogate,
+        id: contract_surrogate,
+    };
+    let row = hydrate_assets(client, &[key], true)
         .await?
         .into_iter()
         .next();
