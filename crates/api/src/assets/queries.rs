@@ -783,7 +783,7 @@ pub async fn fetch_by_contract_id(
              FROM assets a \
              WHERE a.contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
                AND a.contract_id != 0 \
-             LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id LIMIT 1",
+             LIMIT 1",
         )
         .bind(contract_id)
         .fetch_all::<AssetKeyChRow>()
@@ -798,7 +798,7 @@ pub async fn fetch_by_contract_id(
                  WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ( \
                      SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_sac \
                      WHERE sac_contract_id = {sac_surrogate}) \
-                 LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id LIMIT 1"
+                 LIMIT 1"
             ))
             .fetch_all::<AssetKeyChRow>()
             .await?
@@ -837,8 +837,7 @@ pub async fn fetch_by_code_issuer(
                     a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
              FROM assets a \
              WHERE a.asset_code = ? AND a.issuer_id = ? \
-             ORDER BY a.asset_type \
-             LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id LIMIT 1",
+             ORDER BY a.asset_type LIMIT 1",
         )
         .bind(asset_code)
         .bind(issuer_row.id)
