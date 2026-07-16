@@ -50,9 +50,11 @@ pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
 /// function name. Stellar Soroban NFT contracts copy the convention.
 const TOKEN_URI_FN: &str = "token_uri";
 
-/// SEP-50 contract-level `name()` — the collection name (task 0340). The name
-/// is NOT in any parsed storage slot (measured 0/68 on prod), only behind this
-/// view function, so it is reachable exclusively via RPC simulate.
+/// SEP-50 contract-level `name()` — the collection name (task 0340). Used as a
+/// FALLBACK only: the OZ NFT name lives in instance storage and is captured by
+/// the parser into `soroban_contract_metadata` (#330) + served via COALESCE
+/// (#331). `name()` covers the ledger-uncovered remainder — hand-rolled
+/// contracts with empty instance storage but a WASM-baked `name()`.
 const NAME_FN: &str = "name";
 
 /// Char cap for a fetched collection name — a generous bound that only
@@ -237,9 +239,21 @@ impl NftTokenUriFetcher {
             .name_cache
             .try_get_with(contract_id.to_owned(), async move {
                 match simulate_name_with_failover(&client, &rpc_urls, start, &contract).await {
-                    Ok(xdr) => Ok(Arc::new(usable_collection_name(&decode_string_result(
-                        &xdr, NAME_FN,
-                    )?))),
+                    // A successful simulate whose retval does not decode to a
+                    // usable String — non-String return or malformed XDR — is a
+                    // PERMANENT contract fact, not a transient fault. Fold it to
+                    // a cached `None` (like the permanent cases below) so a
+                    // contract that will never yield a name is not re-fetched and
+                    // retried on every token / every run. `decode_string_result`'s
+                    // error must NOT `?` out here: the caller treats every `Err`
+                    // as transient.
+                    Ok(xdr) => match decode_string_result(&xdr, NAME_FN) {
+                        Ok(name) => Ok(Arc::new(usable_collection_name(&name))),
+                        Err(e) => {
+                            debug!(error = %e, "name() returned no usable String — caching 'no name'");
+                            Ok(Arc::new(None))
+                        }
+                    },
                     Err(e) if super::errors::is_transient(&e) => Err(e),
                     Err(e) => {
                         debug!(error = %e, "name() permanent fail — caching 'no name'");
@@ -1000,6 +1014,12 @@ mod tests {
         BASE64.encode(scval.to_xdr(Limits::none()).unwrap())
     }
 
+    /// A non-String `name()` retval — exercises the "decode fails → permanent,
+    /// fold to Ok(None)" path.
+    fn scval_u32_b64(n: u32) -> String {
+        BASE64.encode(ScVal::U32(n).to_xdr(Limits::none()).unwrap())
+    }
+
     #[tokio::test]
     async fn simulate_transaction_happy_path() {
         let mock = MockServer::start().await;
@@ -1093,6 +1113,40 @@ mod tests {
                 .resolve_collection_name(&contract)
                 .await
                 .expect("permanent fail folds to Ok");
+            assert_eq!(got, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_collection_name_non_string_return_folds_to_none() {
+        // A contract whose name() returns a non-String ScVal (here U32): the
+        // simulate SUCCEEDS but the retval does not decode to a String. That is
+        // a PERMANENT contract fact — it must fold to a cached Ok(None), never
+        // surface as an Err (every caller treats Err as transient → a retry
+        // storm on every token / every run). `.expect(1)` proves the fold is
+        // cached (the 2nd resolve is a cache hit).
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "latestLedger": 100,
+                    "minResourceFee": "0",
+                    "results": [{ "auth": [], "xdr": scval_u32_b64(42) }],
+                },
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let fetcher = NftTokenUriFetcher::with_rpc_url(mock.uri()).expect("build fetcher");
+        let contract = stellar_strkey::Contract([0xAB; 32]).to_string();
+        for _ in 0..2 {
+            let got = fetcher
+                .resolve_collection_name(&contract)
+                .await
+                .expect("non-String name() folds to Ok(None), never Err");
             assert_eq!(got, None);
         }
     }
