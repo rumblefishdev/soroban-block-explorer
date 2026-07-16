@@ -765,40 +765,21 @@ pub async fn fetch_list(
             "assets list under-filled after version-dedup — raise SEEK_OVERFETCH"
         );
     }
-    let rows = hydrate_assets(client, &keys, false).await?;
-
-    // Resolve the page's issuer surrogates → (StrKey, home_domain) by a
-    // bloom-pruned key-seek (`accounts.idx_acc_id`), replacing the full-table
-    // `accounts iss` join (task 0319). `issuer_id = 0` (e.g. native XLM) ⇒ no
-    // issuer. i64 IN-list, bounded by the page limit, no injection surface.
-    let issuers: std::collections::HashMap<i64, (String, Option<String>)> = {
-        let ids = rows
-            .iter()
-            .map(|r| r.issuer_id_key)
-            .filter(|&i| i != 0)
-            .collect::<BTreeSet<_>>();
-        if ids.is_empty() {
-            std::collections::HashMap::new()
-        } else {
-            let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-            client
-                .query(&format!(
-                    // `ORDER BY last_seen_ledger DESC LIMIT 1 BY id`: `accounts`
-                    // is ReplacingMergeTree(last_seen_ledger) and we read without
-                    // FINAL, so pick the latest version per id deterministically
-                    // — `home_domain` is mutable (SET_OPTIONS), so an arbitrary
-                    // version would be non-deterministic (review 0319).
-                    "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
-                     FROM accounts WHERE id IN ({in_list}) \
-                     ORDER BY last_seen_ledger DESC LIMIT 1 BY id"
-                ))
-                .fetch_all::<AssetIssuerRow>()
-                .await?
-                .into_iter()
-                .map(|r| (r.id, (r.account_id, r.home_domain)))
-                .collect()
-        }
-    };
+    // Hydrate the page AND resolve the page's issuers concurrently: both depend
+    // only on the phase-1 keys (`issuer_id` IS part of the identity 4-tuple), so
+    // the issuer seek need not wait for hydration — one fewer serial round-trip
+    // to CH (task 0364; same `tokio::join!` shape as the tx-list two-step).
+    let issuer_ids = keys
+        .iter()
+        .map(|k| k.issuer_id)
+        .filter(|&i| i != 0)
+        .collect::<BTreeSet<_>>();
+    let (rows, issuers) = tokio::join!(
+        hydrate_assets(client, &keys, false),
+        resolve_page_issuers(client, issuer_ids)
+    );
+    let rows = rows?;
+    let issuers = issuers?;
 
     Ok(rows
         .into_iter()
@@ -806,6 +787,33 @@ pub async fn fetch_list(
             let iss = issuers.get(&r.issuer_id_key).cloned();
             list_row_to_asset_row(r, iss)
         })
+        .collect())
+}
+
+/// Resolve a page's issuer surrogates → `(StrKey, home_domain)` by the
+/// bloom-pruned `accounts.id` key-seek (task 0319), replacing the full-table
+/// `accounts iss` join. `id = 0` (native / no issuer) MUST be excluded by the
+/// caller. `ORDER BY last_seen_ledger DESC LIMIT 1 BY id` picks the latest
+/// version deterministically (no `FINAL`) — `home_domain` is mutable
+/// (SET_OPTIONS). Runs off the phase-1 keys so it can overlap hydration.
+async fn resolve_page_issuers(
+    client: &clickhouse::Client,
+    ids: BTreeSet<i64>,
+) -> Result<HashMap<i64, (String, Option<String>)>, clickhouse::error::Error> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    Ok(client
+        .query(&format!(
+            "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
+             FROM accounts WHERE id IN ({in_list}) \
+             ORDER BY last_seen_ledger DESC LIMIT 1 BY id"
+        ))
+        .fetch_all::<AssetIssuerRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, (r.account_id, r.home_domain)))
         .collect())
 }
 
