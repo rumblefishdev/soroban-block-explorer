@@ -435,6 +435,117 @@ fn dedup_consecutive(raw: Vec<AssetKeyChRow>, limit: usize) -> Vec<AssetKeyChRow
     out
 }
 
+/// The asset-header projection — the `SELECT … columns` shared by every detail
+/// and list read. Kept separate from the `FROM`/joins so the phase-2 hydration
+/// ([`hydrate_sql`]) can seek the joins bounded to a page/lookup key set instead
+/// of collapsing whole dimensions (task 0364). Column expressions are identical
+/// to the pre-0364 `assets FINAL` select, so the decoded [`AssetListChRow`] is
+/// byte-identical.
+const ASSET_SELECT_COLS: &str = "SELECT \
+     a.asset_type                 AS asset_type, \
+     nullIf(a.asset_code, '')     AS asset_code, \
+     nullIf(sc.contract_id, '')   AS contract_id, \
+     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), \
+              if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name, \
+     nullIf(m.symbol, '')         AS symbol, \
+     coalesce(m.decimals, 7)      AS decimals, \
+     toString(bagg.total_supply)  AS total_supply, \
+     bagg.holder_count            AS holder_count, \
+     nullIf(coalesce(nullIf(sc.deployed_at_ledger, 0), \
+                     nullIf(sac_sc.deployed_at_ledger, 0)), 0) AS deployed_at_ledger, \
+     nullIf(ae.icon_url, '')      AS icon_url, \
+     a.issuer_id                  AS issuer_id_key, \
+     a.contract_id                AS contract_id_key, \
+     sac.sac_contract_id          AS sac_contract_surrogate, \
+     sac.sac_deployed             AS sac_deployed, \
+     a.id                         AS id";
+
+/// Phase-2 hydration query for a resolved page/lookup key set (task 0364).
+///
+/// The pre-0364 select drove off `assets a FINAL` and hash-joined FIVE whole
+/// side dimensions (`soroban_contracts` ×2, `soroban_contract_metadata FINAL`,
+/// `asset_enrichment` GROUP BY, `asset_sac` GROUP BY, `balance_aggregates`),
+/// reading ~2M rows for a 20-row page. Here `assets` is seeked by its primary
+/// key (the identity 4-tuple, no `FINAL`) and **every** side table is bounded to
+/// the same key set — `soroban_contracts`/`balance_aggregates` by the surrogate
+/// `id`s, `asset_enrichment`/`asset_sac` by the 4-tuple before their GROUP BY —
+/// so read_rows ≈ the working set, not the whole dimension.
+///
+/// `tuples` is a `(asset_type,'asset_code',issuer_id,contract_id)` IN-list
+/// ([`asset_key_tuples`]) — inlined literals (NOT a subquery) so CH uses the
+/// `assets` / `asset_enrichment` / `asset_sac` primary-key index to seek; a
+/// subquery IN would fall back to a full scan. `asset_ids` / `sc_ids` are inlined
+/// `i64` IN-lists (asset surrogate ids, and the union of asset + SAC-wrapper
+/// contract surrogate ids). All are derived from our own `assets`/`asset_sac`
+/// rows in phase 1 — no injection surface. `soroban_contract_metadata` keeps
+/// `FINAL` (≈3.8k rows, negligible; joined on the bounded `sc.contract_id`).
+///
+/// `soroban_contracts` (`sc` and `sac_sc`) is `ReplacingMergeTree(
+/// wasm_uploaded_at_ledger)` and carries low-version STUB rows (a seed writer
+/// inserts `(id, contract_id)` at version 0 with a NULL `deployed_at_ledger`, to
+/// be superseded by the real indexed row at its deploy ledger — ~11% of
+/// contracts currently un-merged). Reading it WITHOUT `FINAL` exposes those
+/// stubs, so a raw join + `LIMIT 1 BY` would non-deterministically surface the
+/// NULL. We dedup version-correctly with `argMax(_, wasm_uploaded_at_ledger)`
+/// (the same "highest version wins" the engine's `FINAL` would apply, and the
+/// invariant the stub design relies on) — NOT bounded `FINAL`, which measured
+/// ~2× the read_rows here because it fights the `idx_sc_id` bloom id-seek.
+/// `id` is not the sort key (`ORDER BY contract_id`), so that bloom seek prunes
+/// to ~1 granule per id (~0.19M for a 20-row page, same house pattern as
+/// `common::ch::resolve_contracts`), NOT a whole-table read.
+/// ponytail: `sc` and `sac_sc` read `soroban_contracts` twice (CH inlines the
+/// join subquery, no single-materialisation); only `sac_sc` (the SAC-wrapper
+/// deploy ledger) is the extra read. Collapse to one read via a Rust-side
+/// pre-resolve if the doubled bloom seek ever shows up under load.
+///
+/// `LIMIT 1 BY` collapses the versions that dropping `FINAL` on `assets`
+/// re-exposes — deterministic because every projected `a` column is immutable
+/// across a key's versions.
+fn hydrate_sql(tuples: &str, asset_ids: &str, sc_ids: &str) -> String {
+    format!(
+        "{ASSET_SELECT_COLS} \
+         FROM assets a \
+         LEFT JOIN ( \
+             SELECT id, \
+                    argMax(contract_id, wasm_uploaded_at_ledger)        AS contract_id, \
+                    argMax(deployed_at_ledger, wasm_uploaded_at_ledger) AS deployed_at_ledger \
+             FROM soroban_contracts WHERE id IN ({sc_ids}) GROUP BY id \
+         ) sc ON sc.id = a.contract_id \
+         LEFT JOIN ( \
+             SELECT contract_id, name, symbol, decimals \
+             FROM soroban_contract_metadata FINAL \
+         ) m ON m.contract_id = sc.contract_id \
+         LEFT JOIN ( \
+             SELECT asset_id, total_supply, holder_count \
+             FROM balance_aggregates WHERE asset_id IN ({asset_ids}) \
+         ) bagg ON bagg.asset_id = a.id \
+         LEFT JOIN ( \
+             SELECT asset_type, asset_code, issuer_id, contract_id, \
+                    argMax(icon_url, version) AS icon_url, \
+                    argMax(name, version)     AS name \
+             FROM asset_enrichment \
+             WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+             GROUP BY asset_type, asset_code, issuer_id, contract_id \
+         ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
+             AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id \
+         LEFT JOIN ( \
+             SELECT asset_type, asset_code, issuer_id, contract_id, \
+                    max(sac_contract_id)        AS sac_contract_id, \
+                    toBool(max(sac_deployed))   AS sac_deployed \
+             FROM asset_sac \
+             WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+             GROUP BY asset_type, asset_code, issuer_id, contract_id \
+         ) sac ON sac.asset_type  = a.asset_type  AND sac.asset_code  = a.asset_code \
+             AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id \
+         LEFT JOIN ( \
+             SELECT id, argMax(deployed_at_ledger, wasm_uploaded_at_ledger) AS deployed_at_ledger \
+             FROM soroban_contracts WHERE id IN ({sc_ids}) GROUP BY id \
+         ) sac_sc ON sac_sc.id = sac.sac_contract_id AND sac.sac_contract_id != 0 \
+         WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ({tuples}) \
+         LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
