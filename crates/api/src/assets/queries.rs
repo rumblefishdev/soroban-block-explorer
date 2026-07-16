@@ -763,29 +763,28 @@ pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sac_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
+    // A `C…` hashes to ONE surrogate (`hash64` of the StrKey), stored identically
+    // as `assets.contract_id` (a bespoke Soroban token IS its own contract) AND
+    // as `asset_sac.sac_contract_id` (a SAC wrapping a classic/native asset) — so
+    // the same `ids::contract_id(…)` value keys both. A `C…` is at most one of
+    // the two, so resolve it to a single `assets` key by two bounded arms off
+    // that one surrogate — the cheap bespoke seek first, the SAC facet as
+    // fallback (task 0364, Dec2(a)):
+    //   A. bespoke — `assets.contract_id = surrogate`. The `!= 0` guard keeps a
+    //      (never-produced) zero surrogate from matching the classic/native rows,
+    //      whose `contract_id` is 0. A single-column scan (~7 ms), not a FINAL
+    //      whole-table collapse.
+    //   B. SAC facet — the asset whose `asset_sac.sac_contract_id = surrogate`.
+    let contract_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
 
-    // Phase 1 — resolve the `C…` to ONE `assets` identity key, seeking rather
-    // than scanning `assets FINAL` (task 0364, Dec2(a)). Two arms, at most one
-    // matches (a SAC address ≠ a deployed-wasm address):
-    //   A. soroban identity — resolve the `soroban_contracts` surrogate for the
-    //      StrKey, then key `assets.contract_id`. The `!= 0` guard is load-
-    //      bearing: an empty scalar subquery yields 0 in CH, which would
-    //      otherwise match classic/native rows (`contract_id = 0`).
-    //   B. SAC facet — the assets whose `asset_sac.sac_contract_id` is the
-    //      hashed surrogate (bounded seek over `asset_sac`).
-    // `contract_id`/`id` are the *last* `assets` PK column, so arm A is a cheap
-    // single-column scan (~7 ms measured), not the whole-table `FINAL` collapse.
     let arm_a = client
-        .query(
+        .query(&format!(
             "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
                     a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
              FROM assets a \
-             WHERE a.contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
-               AND a.contract_id != 0 \
-             LIMIT 1",
-        )
-        .bind(contract_id)
+             WHERE a.contract_id = {contract_surrogate} AND a.contract_id != 0 \
+             LIMIT 1"
+        ))
         .fetch_all::<AssetKeyChRow>()
         .await?;
 
@@ -797,7 +796,7 @@ pub async fn fetch_by_contract_id(
                  FROM assets a \
                  WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ( \
                      SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_sac \
-                     WHERE sac_contract_id = {sac_surrogate}) \
+                     WHERE sac_contract_id = {contract_surrogate}) \
                  LIMIT 1"
             ))
             .fetch_all::<AssetKeyChRow>()
