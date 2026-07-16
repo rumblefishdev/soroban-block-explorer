@@ -219,7 +219,7 @@ async fn build_staging(
            sc.id, sc.contract_id, \
            if(u.upgrade_ledger > 0, u.wasm_hash, sc.wasm_hash) AS wasm_hash, \
            if(u.upgrade_ledger > 0, u.upgrade_ledger, sc.wasm_uploaded_at_ledger) AS wasm_uploaded_at_ledger, \
-           sc.deployer_id, sc.deployed_at_ledger, sc.contract_type, sc.is_sac, sc.name \
+           sc.deployer_id, sc.deployed_at_ledger, sc.contract_type, sc.is_sac \
          FROM soroban_contracts AS sc FINAL \
          LEFT JOIN {upgrade_tbl} AS u ON u.contract_id = sc.id"
     );
@@ -304,9 +304,9 @@ mod tests {
 
         cl.query(&format!(
             "INSERT INTO soroban_contracts \
-             (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name) VALUES \
-             (1001, 'CUPG', unhex('{deploy_hash}'), 100, NULL, 100, 1, false, NULL), \
-             (1002, 'CNOUP', unhex('{untouched_hash}'), 100, NULL, 100, 1, false, NULL)"
+             (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac) VALUES \
+             (1001, 'CUPG', unhex('{deploy_hash}'), 100, NULL, 100, 1, false), \
+             (1002, 'CNOUP', unhex('{untouched_hash}'), 100, NULL, 100, 1, false)"
         ))
         .execute()
         .await
