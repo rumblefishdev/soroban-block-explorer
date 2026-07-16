@@ -2,7 +2,7 @@
 id: '0394'
 title: 'backfill-runner + enrichment-runner: sweep remaining stale `name` column references (0304 drop)'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0388', '0392', '0304', '0359']
 tags: ['effort-small', 'priority-high', 'clickhouse', 'backfill-runner']
@@ -16,6 +16,12 @@ history:
       (repair_tier1). Code-review of 0392 PR #341 (which fixed the live-indexer
       copy) surfaced the un-swept siblings still on develop. Same failure class,
       three more call sites.
+  - date: 2026-07-16
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated to sweep the four remaining stale `name` sites plus two e2e
+      seed fixtures.
 ---
 
 # backfill-runner + enrichment-runner: sweep remaining stale `name` references
