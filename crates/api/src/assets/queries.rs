@@ -393,6 +393,29 @@ impl AssetKeyChRow {
     }
 }
 
+/// Build the `(asset_type,'asset_code',issuer_id,contract_id)` IN-list for the
+/// phase-2 hydration seek. Stellar asset codes are protocol-restricted to ≤12
+/// alphanumeric ASCII chars (native / type-3 carry an empty code), and these
+/// values are read back from our own `assets` table in phase 1 — never user
+/// input — so the single-quoted `asset_code` literal has no injection surface
+/// (debug-asserted). Numeric members are inlined `i64`.
+fn asset_key_tuples(keys: &[AssetKeyChRow]) -> String {
+    keys.iter()
+        .map(|k| {
+            debug_assert!(
+                k.asset_code.chars().all(|c| c.is_ascii_alphanumeric()),
+                "asset_code must be alphanumeric (from assets): {:?}",
+                k.asset_code
+            );
+            format!(
+                "({},'{}',{},{})",
+                k.asset_type, k.asset_code, k.issuer_id, k.contract_id
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 // ---------------------------------------------------------------------------
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
@@ -810,6 +833,27 @@ pub async fn fetch_transactions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_key_tuples_inlines_type_code_issuer_contract() {
+        let keys = vec![
+            AssetKeyChRow {
+                asset_type: 1,
+                asset_code: "USDC".to_string(),
+                issuer_id: 42,
+                contract_id: 0,
+                id: 7,
+            },
+            AssetKeyChRow {
+                asset_type: 0,
+                asset_code: String::new(), // native — empty code
+                issuer_id: 0,
+                contract_id: 0,
+                id: 9,
+            },
+        ];
+        assert_eq!(asset_key_tuples(&keys), "(1,'USDC',42,0),(0,'',0,0)");
+    }
 
     #[test]
     fn asset_type_name_matches_pg_function() {
