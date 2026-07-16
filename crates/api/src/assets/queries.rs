@@ -546,6 +546,69 @@ fn hydrate_sql(tuples: &str, asset_ids: &str, sc_ids: &str) -> String {
     )
 }
 
+/// Phase 2: hydrate a resolved key set into full [`AssetListChRow`] headers,
+/// re-ordered to match `keys`. Every side dimension is bounded to `keys` (see
+/// [`hydrate_sql`]). Returns rows keyed back to the phase-1 order via `id`
+/// (unique per asset); a hydration miss (should not happen — the keys came from
+/// `assets`) is skipped.
+async fn hydrate_assets(
+    client: &clickhouse::Client,
+    keys: &[AssetKeyChRow],
+) -> Result<Vec<AssetListChRow>, clickhouse::error::Error> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tuples = asset_key_tuples(keys);
+    let in_list = |it: BTreeSet<i64>| {
+        if it.is_empty() {
+            // A sentinel that matches nothing but keeps `IN (…)` valid SQL —
+            // surrogate ids are non-zero `cityhash64`, so 0 never hits.
+            "0".to_string()
+        } else {
+            it.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+        }
+    };
+    let asset_ids = in_list(keys.iter().map(|k| k.id).collect());
+
+    // `soroban_contracts` ids to bound BOTH `sc` (a type-3 token's own contract,
+    // `a.contract_id`) and `sac_sc` (a classic/native asset's SAC-wrapper
+    // contract). The wrapper surrogate is not on `assets`, so seek it from the
+    // bounded `asset_sac` (same rows the `sac` hydration join reads).
+    let mut sc_ids: BTreeSet<i64> = keys
+        .iter()
+        .map(|k| k.contract_id)
+        .filter(|&c| c != 0)
+        .collect();
+    let sac_wrappers = client
+        .query(&format!(
+            "SELECT DISTINCT sac_contract_id AS id \
+             FROM asset_sac \
+             WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+               AND sac_contract_id != 0"
+        ))
+        .fetch_all::<SurrogateIdRow>()
+        .await?;
+    sc_ids.extend(sac_wrappers.into_iter().map(|r| r.id));
+
+    let rows = client
+        .query(&hydrate_sql(&tuples, &asset_ids, &in_list(sc_ids)))
+        .fetch_all::<AssetListChRow>()
+        .await?;
+
+    // Re-emit in phase-1 order (the seek's page/tiebreak order). Index by id.
+    let mut by_id: HashMap<i64, AssetListChRow> = HashMap::with_capacity(rows.len());
+    for row in rows {
+        by_id.insert(row.id, row);
+    }
+    Ok(keys.iter().filter_map(|k| by_id.remove(&k.id)).collect())
+}
+
+/// One-column surrogate-id row (`asset_sac.sac_contract_id` seek).
+#[derive(Debug, Row, Deserialize)]
+struct SurrogateIdRow {
+    id: i64,
+}
+
 // ---------------------------------------------------------------------------
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
