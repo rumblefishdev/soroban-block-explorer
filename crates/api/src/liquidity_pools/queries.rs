@@ -749,6 +749,11 @@ pub async fn fetch_pool_chart(
     // ledger (`LIMIT 1 BY ledger_sequence`) with no merge; tvl/volume/fee are
     // identical across a duplicate pair, so which row survives is irrelevant. The
     // outer bucket aggregation is then byte-identical to the old `FINAL` form.
+    //
+    // The inner read is bounded to the window's ledger range (resolved from
+    // `[from, to]` via `ledgers.closed_at`, ~29 ms each). Without it the read
+    // scanned the pool's whole history AND the `JOIN ledgers` built a ~1 GiB /
+    // 26M-row hash (~1.2 s on prod); the bound keeps both to the window.
     let sql = format!(
         "SELECT \
             toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms, \
@@ -760,6 +765,8 @@ pub async fn fetch_pool_chart(
              SELECT ledger_sequence, tvl, volume, fee_revenue \
              FROM liquidity_pool_snapshots \
              WHERE pool_id = unhex(?) \
+               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at <  fromUnixTimestamp64Milli(?)) \
              ORDER BY ledger_sequence DESC \
              LIMIT 1 BY ledger_sequence \
          ) lps \
@@ -774,6 +781,8 @@ pub async fn fetch_pool_chart(
     let rows = client
         .query(&sql)
         .bind(pool_id_hex)
+        .bind(from.timestamp_millis())
+        .bind(to.timestamp_millis())
         .bind(from.timestamp_millis())
         .bind(to.timestamp_millis())
         .fetch_all::<ChartChRow>()
