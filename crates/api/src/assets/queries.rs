@@ -188,62 +188,35 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // re-keyed onto the WRAPPED classic id in `build_balance_rows`, so they sum INTO that
 // classic asset's `balance_aggregates` row — ONE unified supply per asset. (Replaces
 // the retired `asset_aggregates`, which keyed `(asset_code, issuer_id)`.)
-/// Accounts-join-free SELECT, shared by the list (task 0319) AND the detail
-/// paths (task 0334). It drops the `LEFT JOIN accounts iss` (and the two `issuer`
-/// columns it produced) that built its hash side from the whole `accounts` table
-/// (~18M rows on prod) — the dominant cost of both the ~1.35s `/assets` list and
-/// the ~1s `/assets/:id` detail (prod: ~21M read_rows / ~1.58 GB / request, of
-/// which `accounts` was ~18.5M). The issuer StrKey + home_domain are resolved by
-/// a bloom-pruned `accounts.id` key-seek instead — per-page for the list, single
-/// for the detail (see [`resolve_issuer`]).
-const ASSET_LIST_CH_SELECT: &str = "SELECT \
-     a.asset_type                 AS asset_type, \
-     nullIf(a.asset_code, '')     AS asset_code, \
-     nullIf(sc.contract_id, '')   AS contract_id, \
-     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), \
-              if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name, \
-     nullIf(m.symbol, '')         AS symbol, \
-     coalesce(m.decimals, 7)      AS decimals, \
-     toString(bagg.total_supply)  AS total_supply, \
-     bagg.holder_count            AS holder_count, \
-     nullIf(coalesce(nullIf(sc.deployed_at_ledger, 0), \
-                     nullIf(sac_sc.deployed_at_ledger, 0)), 0) AS deployed_at_ledger, \
-     nullIf(ae.icon_url, '')      AS icon_url, \
-     a.issuer_id                  AS issuer_id_key, \
-     a.contract_id                AS contract_id_key, \
-     sac.sac_contract_id          AS sac_contract_surrogate, \
-     sac.sac_deployed             AS sac_deployed, \
-     a.id                         AS id \
-     FROM assets a FINAL \
-     LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
-     LEFT JOIN ( \
-         SELECT contract_id, name, symbol, decimals \
-         FROM soroban_contract_metadata FINAL \
-     ) m ON m.contract_id = sc.contract_id \
-     LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-     LEFT JOIN ( \
-         SELECT asset_type, asset_code, issuer_id, contract_id, \
-                argMax(icon_url, version) AS icon_url, \
-                argMax(name, version)     AS name \
-         FROM asset_enrichment \
-         GROUP BY asset_type, asset_code, issuer_id, contract_id \
-     ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
-         AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id \
-     LEFT JOIN ( \
-         SELECT asset_type, asset_code, issuer_id, contract_id, \
-                max(sac_contract_id)        AS sac_contract_id, \
-                toBool(max(sac_deployed))   AS sac_deployed \
-         FROM asset_sac \
-         GROUP BY asset_type, asset_code, issuer_id, contract_id \
-     ) sac ON sac.asset_type  = a.asset_type  AND sac.asset_code  = a.asset_code \
-         AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id \
-     LEFT JOIN soroban_contracts sac_sc \
-         ON sac_sc.id = sac.sac_contract_id AND sac.sac_contract_id != 0";
 
-/// Row decoded from [`ASSET_LIST_CH_SELECT`] — the asset header WITHOUT the
-/// join-resolved `issuer` / `issuer_home_domain`, which are key-seeked separately
-/// (per-page for the list, task 0319; per-request for the detail, task 0334).
+/// Row decoded from [`hydrate_sql`] — the `assets`-side header (identity,
+/// enrichment name/icon, balances, SAC facet). The `soroban_contracts`-derived
+/// display fields (`contract_id` StrKey, `name` fallback, `symbol`, `decimals`,
+/// `deployed_at_ledger`) are filled in Rust from [`resolve_soroban_contracts`],
+/// then assembled into [`AssetListChRow`] by [`assemble_asset_row`] (task 0364
+/// 2c — moved out of SQL so `soroban_contracts` is read once, not twice).
 #[derive(Debug, Row, Deserialize)]
+struct AssetHydrateRow {
+    asset_type: i16,
+    asset_code: Option<String>,
+    /// `asset_enrichment.name` only — the `soroban_contract_metadata` fallback +
+    /// the native default are applied during assembly.
+    name_enrichment: Option<String>,
+    total_supply: Option<String>,
+    holder_count: Option<i32>,
+    icon_url: Option<String>,
+    issuer_id_key: i64,
+    contract_id_key: i64,
+    sac_contract_surrogate: i64,
+    sac_deployed: bool,
+    id: i64,
+}
+
+/// The asset header WITHOUT the join-resolved `issuer` / `issuer_home_domain`,
+/// which are key-seeked separately (per-page for the list, task 0319;
+/// per-request for the detail, task 0334). Assembled from an [`AssetHydrateRow`]
+/// plus the [`SorobanCtxRow`] map by [`assemble_asset_row`].
+#[derive(Debug)]
 struct AssetListChRow {
     asset_type: i16,
     asset_code: Option<String>,
@@ -274,7 +247,7 @@ struct AssetIssuerRow {
     home_domain: Option<String>,
 }
 
-/// Build an [`AssetRow`] from an [`ASSET_LIST_CH_SELECT`] projection row plus the
+/// Build an [`AssetRow`] from an [`AssetListChRow`] projection row plus the
 /// separately key-seeked issuer (`(StrKey, home_domain)`), consumed by value (no
 /// clone). `iss` is `None` for native / no-issuer assets or a seek miss. Shared
 /// by the list page map and the three detail fetches (task 0334).
@@ -346,7 +319,7 @@ async fn resolve_issuer(
         .map(|r| (r.account_id, r.home_domain)))
 }
 
-/// Finish a detail fetch whose asset row was read from [`ASSET_LIST_CH_SELECT`]:
+/// Finish a detail fetch whose asset row was read from [`AssetListChRow`]:
 /// resolve the issuer by an `accounts.id` key-seek, then map to [`AssetRow`].
 /// Shared by the contract-StrKey and native forms (the CODE-ISSUER form resolves
 /// its issuer up front, so it maps directly). A `None` row ⇒ asset not found.
@@ -362,48 +335,374 @@ async fn finish_detail(
 }
 
 // ---------------------------------------------------------------------------
+// Phase-1 seek + phase-2 hydration (task 0364)
+// ---------------------------------------------------------------------------
+
+/// Identity key for one `assets` version row, read WITHOUT `FINAL` in the
+/// phase-1 seek. The 4-tuple IS the `assets` primary key; `id` is its
+/// deterministic `cityhash64` surrogate. All five columns are immutable across a
+/// key's physical versions (task 0364 — the mutable columns are externalised to
+/// `balance_aggregates` / `asset_enrichment`), so a consecutive-dedup in PK
+/// order is deterministic with no version tiebreak. `asset_code` is the RAW
+/// value (empty for native / type-3), not the `nullIf`'d display form.
+#[derive(Debug, Clone, Row, Deserialize)]
+struct AssetKeyChRow {
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+    contract_id: i64,
+    id: i64,
+}
+
+impl AssetKeyChRow {
+    /// The identity 4-tuple — the dedup / ordering key.
+    fn tuple(&self) -> (i16, &str, i64, i64) {
+        (
+            self.asset_type,
+            &self.asset_code,
+            self.issuer_id,
+            self.contract_id,
+        )
+    }
+}
+
+/// Build the `(asset_type,'asset_code',issuer_id,contract_id)` IN-list for the
+/// phase-2 hydration seek. Stellar asset codes are protocol-restricted to ≤12
+/// alphanumeric ASCII chars (native / type-3 carry an empty code), and these
+/// values are read back from our own `assets` table in phase 1 — never user
+/// input — so the single-quoted `asset_code` literal has no injection surface
+/// (debug-asserted). Numeric members are inlined `i64`.
+fn asset_key_tuples(keys: &[AssetKeyChRow]) -> String {
+    keys.iter()
+        .map(|k| {
+            debug_assert!(
+                k.asset_code.chars().all(|c| c.is_ascii_alphanumeric()),
+                "asset_code must be alphanumeric (from assets): {:?}",
+                k.asset_code
+            );
+            // Defence-in-depth: codes are protocol-alphanumeric + from our own
+            // rows, but escape anyway (CH string-literal rules) so a malformed
+            // ingested code can never break or inject the inlined literal — the
+            // `debug_assert` above is compiled out in release.
+            let code = k.asset_code.replace('\\', "\\\\").replace('\'', "\\'");
+            format!(
+                "({},'{}',{},{})",
+                k.asset_type, code, k.issuer_id, k.contract_id
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Consecutive-dedup the over-fetched phase-1 rows by the identity 4-tuple,
+/// keeping the first version of each key, and truncate to `limit`. Correct
+/// because the seek's `ORDER BY` IS the `assets` primary key, so a key's physical
+/// versions are contiguous; the projected columns are byte-identical across
+/// them, so "keep first" is deterministic (task 0364, approach-B — NOT `LIMIT 1
+/// BY`, which would defeat `optimize_read_in_order` on the seek).
+fn dedup_consecutive(raw: Vec<AssetKeyChRow>, limit: usize) -> Vec<AssetKeyChRow> {
+    let mut out: Vec<AssetKeyChRow> = Vec::with_capacity(limit.min(raw.len()));
+    for r in raw {
+        if out.last().is_none_or(|p| p.tuple() != r.tuple()) {
+            out.push(r);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The asset-header projection — the `SELECT … columns` shared by every detail
+/// and list read. Kept separate from the `FROM`/joins so the phase-2 hydration
+/// ([`hydrate_sql`]) can seek the joins bounded to a page/lookup key set instead
+/// of collapsing whole dimensions (task 0364). Column expressions are identical
+/// to the pre-0364 `assets FINAL` select, so the decoded [`AssetListChRow`] is
+/// byte-identical.
+/// Phase-2 hydration query for a resolved page/lookup key set (task 0364).
+///
+/// `assets` is seeked by its primary key (the identity 4-tuple, no `FINAL`) and
+/// the side tables are bounded to that key set: `asset_enrichment` / `asset_sac`
+/// by the 4-tuple before their GROUP BY, `balance_aggregates` by `asset_id`. The
+/// `soroban_contracts` header (contract StrKey, deploy ledger) + its
+/// `soroban_contract_metadata` (name / symbol / decimals) are NOT joined here —
+/// they resolve ONCE, off the surrogate ids, in [`resolve_soroban_contracts`]
+/// (one bloom seek reused for own + SAC-wrapper, not two inlined joins CH could
+/// not de-duplicate). `tuples` inlines the 4-tuples as literals (so CH uses the
+/// PK index; a subquery IN would full-scan); `asset_ids` inlines the surrogate
+/// ids. `LIMIT 1 BY` collapses the versions that dropping `FINAL` on `assets`
+/// re-exposes — deterministic (every projected `a` column is immutable across
+/// a key's versions).
+fn hydrate_sql(tuples: &str, asset_ids: &str) -> String {
+    format!(
+        "SELECT \
+             a.asset_type                AS asset_type, \
+             nullIf(a.asset_code, '')    AS asset_code, \
+             nullIf(ae.name, '')         AS name_enrichment, \
+             toString(bagg.total_supply) AS total_supply, \
+             bagg.holder_count           AS holder_count, \
+             nullIf(ae.icon_url, '')     AS icon_url, \
+             a.issuer_id                 AS issuer_id_key, \
+             a.contract_id               AS contract_id_key, \
+             sac.sac_contract_id         AS sac_contract_surrogate, \
+             sac.sac_deployed            AS sac_deployed, \
+             a.id                        AS id \
+         FROM assets a \
+         LEFT JOIN ( \
+             SELECT asset_id, total_supply, holder_count \
+             FROM balance_aggregates WHERE asset_id IN ({asset_ids}) \
+         ) bagg ON bagg.asset_id = a.id \
+         LEFT JOIN ( \
+             SELECT asset_type, asset_code, issuer_id, contract_id, \
+                    argMax(icon_url, version) AS icon_url, \
+                    argMax(name, version)     AS name \
+             FROM asset_enrichment \
+             WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+             GROUP BY asset_type, asset_code, issuer_id, contract_id \
+         ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
+             AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id \
+         LEFT JOIN ( \
+             SELECT asset_type, asset_code, issuer_id, contract_id, \
+                    max(sac_contract_id)        AS sac_contract_id, \
+                    toBool(max(sac_deployed))   AS sac_deployed \
+             FROM asset_sac \
+             WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+             GROUP BY asset_type, asset_code, issuer_id, contract_id \
+         ) sac ON sac.asset_type  = a.asset_type  AND sac.asset_code  = a.asset_code \
+             AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id \
+         WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ({tuples}) \
+         LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id"
+    )
+}
+
+/// Phase 2: hydrate a resolved key set into full [`AssetListChRow`] headers,
+/// re-ordered to match `keys`. Every side dimension is bounded to `keys` (see
+/// [`hydrate_sql`]). Returns rows keyed back to the phase-1 order via `id`
+/// (unique per asset); a hydration miss (should not happen — the keys came from
+/// `assets`) is skipped. `with_sac_wrapper` resolves a SAC-wrapper's deploy
+/// ledger for `deployed_at_ledger` — `true` for the detail (which serialises it),
+/// `false` for the list (which drops it, so it skips the extra wrapper seek).
+async fn hydrate_assets(
+    client: &clickhouse::Client,
+    keys: &[AssetKeyChRow],
+    with_sac_wrapper: bool,
+) -> Result<Vec<AssetListChRow>, clickhouse::error::Error> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tuples = asset_key_tuples(keys);
+    let asset_ids = id_in_list(&keys.iter().map(|k| k.id).collect());
+
+    // Resolve the `soroban_contracts` context (StrKey + deploy ledger + metadata)
+    // ONCE, off the surrogate ids — replacing the pre-2c pair of inlined joins.
+    // For the DETAIL (`with_sac_wrapper`) it also seeks a SAC-wrapper's surrogate
+    // from `asset_sac` (for the wrapper's deploy ledger); the list drops
+    // `deployed_at_ledger`, so it skips that. Chained in `ctx_fut` so the resolve
+    // overlaps the header hydration below (one `soroban_contracts` seek total).
+    let ctx_fut = async {
+        let mut sc_ids: BTreeSet<i64> = keys
+            .iter()
+            .map(|k| k.contract_id)
+            .filter(|&c| c != 0)
+            .collect();
+        if with_sac_wrapper {
+            let sac_wrappers = client
+                .query(&format!(
+                    "SELECT DISTINCT sac_contract_id AS id \
+                     FROM asset_sac \
+                     WHERE (asset_type, asset_code, issuer_id, contract_id) IN ({tuples}) \
+                       AND sac_contract_id != 0"
+                ))
+                .fetch_all::<SurrogateIdRow>()
+                .await?;
+            sc_ids.extend(sac_wrappers.into_iter().map(|r| r.id));
+        }
+        resolve_soroban_contracts(client, &sc_ids).await
+    };
+
+    let hydrate = hydrate_sql(&tuples, &asset_ids);
+    let (rows, ctx) = tokio::join!(
+        client.query(&hydrate).fetch_all::<AssetHydrateRow>(),
+        ctx_fut,
+    );
+    let rows = rows?;
+    let ctx = ctx?;
+
+    // Re-emit in phase-1 order (the seek's page/tiebreak order), assembling the
+    // `soroban_contracts`-derived display fields from `ctx`. Index by id.
+    let mut by_id: HashMap<i64, AssetListChRow> = HashMap::with_capacity(rows.len());
+    for row in rows {
+        by_id.insert(row.id, assemble_asset_row(row, &ctx));
+    }
+    Ok(keys.iter().filter_map(|k| by_id.remove(&k.id)).collect())
+}
+
+/// Assemble one [`AssetListChRow`] from its `assets`-side header and the
+/// `soroban_contracts` context map (task 0364 2c). Replicates the pre-2c SQL
+/// projection exactly: `name = coalesce(ae.name, metadata.name, native-default)`,
+/// `decimals = coalesce(metadata.decimals, 7)`, `deployed_at_ledger` prefers the
+/// own contract then the SAC-wrapper (both `nullIf 0`), StrKey / symbol are
+/// non-empty-or-`None`.
+fn assemble_asset_row(h: AssetHydrateRow, ctx: &HashMap<i64, SorobanCtxRow>) -> AssetListChRow {
+    let nonempty = |s: Option<String>| s.filter(|v| !v.is_empty());
+    // Own contract (type-3); `None` for classic/native (`contract_id_key == 0`,
+    // never a `soroban_contracts` id, so absent from `ctx`).
+    let own = ctx.get(&h.contract_id_key);
+    let deploy_of = |id: i64| {
+        ctx.get(&id)
+            .and_then(|c| c.deployed_at_ledger)
+            .filter(|&v| v != 0)
+    };
+
+    AssetListChRow {
+        asset_type: h.asset_type,
+        asset_code: h.asset_code,
+        contract_id: nonempty(own.map(|c| c.contract_id.clone())),
+        // ae.name, then on-chain metadata name, then the native singleton label.
+        name: h
+            .name_enrichment
+            .or_else(|| nonempty(own.and_then(|c| c.name.clone())))
+            .or_else(|| (h.asset_type == 0).then(|| "Stellar Lumens".to_string())),
+        symbol: nonempty(own.and_then(|c| c.symbol.clone())),
+        decimals: own.and_then(|c| c.decimals).unwrap_or(7),
+        total_supply: h.total_supply,
+        holder_count: h.holder_count,
+        // Own contract's deploy ledger, else the SAC-wrapper's (ADR 0051).
+        deployed_at_ledger: deploy_of(h.contract_id_key)
+            .or_else(|| deploy_of(h.sac_contract_surrogate)),
+        icon_url: h.icon_url,
+        issuer_id_key: h.issuer_id_key,
+        contract_id_key: h.contract_id_key,
+        sac_contract_surrogate: h.sac_contract_surrogate,
+        sac_deployed: h.sac_deployed,
+        id: h.id,
+    }
+}
+
+/// One-column surrogate-id row (`asset_sac.sac_contract_id` seek).
+#[derive(Debug, Row, Deserialize)]
+struct SurrogateIdRow {
+    id: i64,
+}
+
+/// `soroban_contracts` context for one surrogate `id`, resolved once per
+/// page/lookup ([`resolve_soroban_contracts`]) and reused for both the asset's
+/// own contract and its SAC-wrapper. Metadata (`name`/`symbol`/`decimals`) is
+/// folded in from the `soroban_contract_metadata` join in the same read.
+#[derive(Debug, Row, Deserialize)]
+struct SorobanCtxRow {
+    id: i64,
+    contract_id: String,
+    deployed_at_ledger: Option<i64>,
+    name: Option<String>,
+    symbol: Option<String>,
+    decimals: Option<u32>,
+}
+
+/// Inline an `i64` set as an `IN (…)` list, with a `0` sentinel for the empty
+/// set (surrogate ids are non-zero `cityhash64`, so `IN (0)` matches nothing but
+/// stays valid SQL).
+fn id_in_list(it: &BTreeSet<i64>) -> String {
+    if it.is_empty() {
+        "0".to_string()
+    } else {
+        it.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+    }
+}
+
+/// Resolve `soroban_contracts` context by surrogate `id` (task 0364 2c) — one
+/// bloom seek (`idx_sc_id`) that replaces the pre-2c pair of inlined joins (the
+/// asset's own contract AND its SAC-wrapper both read `soroban_contracts`). The
+/// `soroban_contract_metadata FINAL` (name/symbol/decimals) is folded in via a
+/// LEFT JOIN on the bounded `contract_id`, so no extra round-trip. Version-
+/// correct dedup with `argMax(_, wasm_uploaded_at_ledger)` skips the low-version
+/// NULL stub rows (see [`hydrate_sql`] history); `id` is not the sort key, so the
+/// read is a bloom seek (~1 granule/id), not a whole-table scan.
+async fn resolve_soroban_contracts(
+    client: &clickhouse::Client,
+    ids: &BTreeSet<i64>,
+) -> Result<HashMap<i64, SorobanCtxRow>, clickhouse::error::Error> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_list = id_in_list(ids);
+    Ok(client
+        .query(&format!(
+            "SELECT sc.id AS id, \
+                    argMax(sc.contract_id, sc.wasm_uploaded_at_ledger)        AS contract_id, \
+                    argMax(sc.deployed_at_ledger, sc.wasm_uploaded_at_ledger) AS deployed_at_ledger, \
+                    any(m.name)     AS name, \
+                    any(m.symbol)   AS symbol, \
+                    any(m.decimals) AS decimals \
+             FROM soroban_contracts sc \
+             LEFT JOIN ( \
+                 SELECT contract_id, name, symbol, decimals \
+                 FROM soroban_contract_metadata FINAL \
+             ) m ON m.contract_id = sc.contract_id \
+             WHERE sc.id IN ({in_list}) \
+             GROUP BY sc.id"
+        ))
+        .fetch_all::<SorobanCtxRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r))
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
 
-/// Build the list `SELECT … WHERE … ORDER BY … LIMIT ?` for [`fetch_list`].
-/// Pure (no client) so the predicate shape + placeholder count stay
-/// unit-testable. The `?` placeholders it emits MUST be bound by the caller in
-/// this exact order: `code_clause` (0 or **3** — asset_code, m.name, m.symbol),
-/// then `cursor_clause` (0 or 4), then the trailing `LIMIT ?` (1).
-fn build_list_sql(params: &ResolvedListParams, direction: Direction) -> String {
+/// Over-fetch factor for the phase-1 seek: read `limit * OVERFETCH` raw versions
+/// so the consecutive-dedup still yields a full page under the `assets` version
+/// bloat. **8** is provably enough while the max versions-per-key stays below it:
+/// prod max is 7 (avg ~2.3×, only ~200 keys above 4, none above 7 — measured
+/// 2026-07-16), so `limit * 8` always contains `limit` distinct keys.
+const SEEK_OVERFETCH: i64 = 8;
+
+/// Build the phase-1 list seek: the page's identity keys (4-tuple + `id`) from
+/// `assets` WITHOUT `FINAL`, in PK order, over-fetched by [`SEEK_OVERFETCH`] for
+/// the Rust consecutive-dedup. Pure (no client) so the predicate shape + `?`
+/// count stay unit-testable: `code_clause` (0 or **3**), then `cursor_clause`
+/// (0 or 4). The trailing `LIMIT` is inlined. Only `sac_only` / search pull side
+/// tables into the seek; the default page is a pure `assets` PK walk.
+fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> String {
     let (op, order) = keyset_sql_desc(direction);
+    let lim_over = params.limit * SEEK_OVERFETCH;
 
     let type_clause = params
         .asset_type
         .map_or_else(String::new, |t| format!(" AND a.asset_type = {t}"));
-    // SAC property filter (ADR 0051): the old `filter[type]=sac` view, now a
-    // facet predicate over the joined `asset_sac` side table. Deployed-only —
-    // `sac_deployed` excludes reserved (un-deployed) SAC addresses, which are
-    // not live contracts (task 0339 UX). A LEFT-JOIN miss decodes as 0/false
-    // under the readonly `join_use_nulls = 0`.
+    // SAC property filter (ADR 0051): the old `filter[type]=sac` view. Was a
+    // post-join predicate `sac.sac_deployed`; now a semi-join over the identity
+    // 4-tuple so the seek stays `assets`-driven (the deployed set comes straight
+    // from `asset_sac`; task 0339 UX: deployed-only excludes reserved addresses).
     let sac_clause = if params.sac_only {
-        " AND sac.sac_deployed"
+        " AND (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ( \
+             SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_sac \
+             GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             HAVING toBool(max(sac_deployed)))"
     } else {
         ""
     };
-    // Match the caller's needle against the short `asset_code` AND the on-chain
-    // name/symbol from the joined `soroban_contract_metadata` (`m`). Soroban-
-    // native (type-3) assets carry an empty `asset_code` — their identity is the
-    // on-chain name/symbol — so a code-only match leaves them unsearchable in
-    // the list (task 0370). `m.name`/`m.symbol` are populated only for
-    // contract-backed (type-3) rows, so this stays scoped to the tokens that
-    // need it. We deliberately do NOT match `asset_enrichment.name` (`ae`): it
-    // holds classic (type-1) SEP-1 names, and substring-matching ~360k of them
-    // adds noise (e.g. "Opulent Insolvent" matching "solv") for no gain here —
-    // classic assets are already findable by their non-empty `asset_code`.
-    // `coalesce(_, '')` stops a readonly LEFT-JOIN miss (join_use_nulls = 0 → '')
-    // from turning the predicate NULL and dropping the row.
-    let code_clause = if params.asset_code.is_some() {
-        " AND (positionCaseInsensitive(a.asset_code, ?) > 0 \
-           OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
-           OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)"
+    // Match the needle against the short `asset_code` AND the on-chain
+    // name/symbol from `soroban_contract_metadata` (`m`). type-3 assets carry an
+    // empty `asset_code`, so a code-only match leaves them unfindable (task
+    // 0370). In the FINAL select `m` was always joined; the seek only joins it
+    // (+ `sc`) WHEN searching, so the default page stays a bare `assets` walk. We
+    // do NOT match `asset_enrichment.name` — substring-matching ~0.6M classic
+    // SEP-1 names adds noise for no gain.
+    let (search_join, code_clause) = if params.asset_code.is_some() {
+        (
+            " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+              LEFT JOIN (SELECT contract_id, name, symbol FROM soroban_contract_metadata FINAL) m \
+                  ON m.contract_id = sc.contract_id",
+            " AND (positionCaseInsensitive(a.asset_code, ?) > 0 \
+               OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
+               OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
+        )
     } else {
-        ""
+        ("", "")
     };
     let cursor_clause = if params.cursor.is_some() {
         format!(" AND (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) {op} (?, ?, ?, ?)")
@@ -412,11 +711,13 @@ fn build_list_sql(params: &ResolvedListParams, direction: Direction) -> String {
     };
 
     format!(
-        "{ASSET_LIST_CH_SELECT} \
+        "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
+                a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
+         FROM assets a{search_join} \
          WHERE 1{type_clause}{sac_clause}{code_clause}{cursor_clause} \
          ORDER BY a.asset_type {order}, a.asset_code {order}, \
                   a.issuer_id {order}, a.contract_id {order} \
-         LIMIT ?"
+         LIMIT {lim_over}"
     )
 }
 
@@ -429,7 +730,7 @@ pub async fn fetch_list(
     params: &ResolvedListParams,
     direction: Direction,
 ) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
-    let sql = build_list_sql(params, direction);
+    let sql = build_list_seek_sql(params, direction);
 
     let mut query = client.query(&sql);
     if let Some(code) = &params.asset_code {
@@ -443,47 +744,42 @@ pub async fn fetch_list(
             .bind(c.issuer_id)
             .bind(c.contract_id);
     }
-    // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
-    let rows = query
-        .bind(params.limit)
-        .fetch_all::<AssetListChRow>()
-        .await?;
-    if rows.is_empty() {
+    let raw = query.fetch_all::<AssetKeyChRow>().await?;
+    let raw_len = raw.len();
+    // `params.limit` is the handler's `fetch_limit()` (already the peek +1);
+    // consecutive-dedup the over-fetched versions to the page, then hydrate it.
+    let keys = dedup_consecutive(raw, params.limit as usize);
+    if keys.is_empty() {
         return Ok(Vec::new());
     }
-
-    // Resolve the page's issuer surrogates → (StrKey, home_domain) by a
-    // bloom-pruned key-seek (`accounts.idx_acc_id`), replacing the full-table
-    // `accounts iss` join (task 0319). `issuer_id = 0` (e.g. native XLM) ⇒ no
-    // issuer. i64 IN-list, bounded by the page limit, no injection surface.
-    let issuers: std::collections::HashMap<i64, (String, Option<String>)> = {
-        let ids = rows
-            .iter()
-            .map(|r| r.issuer_id_key)
-            .filter(|&i| i != 0)
-            .collect::<BTreeSet<_>>();
-        if ids.is_empty() {
-            std::collections::HashMap::new()
-        } else {
-            let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-            client
-                .query(&format!(
-                    // `ORDER BY last_seen_ledger DESC LIMIT 1 BY id`: `accounts`
-                    // is ReplacingMergeTree(last_seen_ledger) and we read without
-                    // FINAL, so pick the latest version per id deterministically
-                    // — `home_domain` is mutable (SET_OPTIONS), so an arbitrary
-                    // version would be non-deterministic (review 0319).
-                    "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
-                     FROM accounts WHERE id IN ({in_list}) \
-                     ORDER BY last_seen_ledger DESC LIMIT 1 BY id"
-                ))
-                .fetch_all::<AssetIssuerRow>()
-                .await?
-                .into_iter()
-                .map(|r| (r.id, (r.account_id, r.home_domain)))
-                .collect()
-        }
-    };
+    // Under-fill guard: the over-fetch must still yield a full page after
+    // version-dedup (holds while max versions-per-key < `SEEK_OVERFETCH`). If a
+    // FULL raw fetch (`raw_len == lim_over`, so more rows existed) still deduped
+    // to < `limit`, bloat exceeded the ceiling and the page silently truncated —
+    // log it loudly instead of dropping the tail.
+    if (keys.len() as i64) < params.limit && raw_len as i64 == params.limit * SEEK_OVERFETCH {
+        tracing::warn!(
+            limit = params.limit,
+            got = keys.len(),
+            over_fetch = SEEK_OVERFETCH,
+            "assets list under-filled after version-dedup — raise SEEK_OVERFETCH"
+        );
+    }
+    // Hydrate the page AND resolve the page's issuers concurrently: both depend
+    // only on the phase-1 keys (`issuer_id` IS part of the identity 4-tuple), so
+    // the issuer seek need not wait for hydration — one fewer serial round-trip
+    // to CH (task 0364; same `tokio::join!` shape as the tx-list two-step).
+    let issuer_ids = keys
+        .iter()
+        .map(|k| k.issuer_id)
+        .filter(|&i| i != 0)
+        .collect::<BTreeSet<_>>();
+    let (rows, issuers) = tokio::join!(
+        hydrate_assets(client, &keys, false),
+        resolve_page_issuers(client, issuer_ids)
+    );
+    let rows = rows?;
+    let issuers = issuers?;
 
     Ok(rows
         .into_iter()
@@ -494,37 +790,74 @@ pub async fn fetch_list(
         .collect())
 }
 
+/// Resolve a page's issuer surrogates → `(StrKey, home_domain)` by the
+/// bloom-pruned `accounts.id` key-seek (task 0319), replacing the full-table
+/// `accounts iss` join. `id = 0` (native / no issuer) MUST be excluded by the
+/// caller. `ORDER BY last_seen_ledger DESC LIMIT 1 BY id` picks the latest
+/// version deterministically (no `FINAL`) — `home_domain` is mutable
+/// (SET_OPTIONS). Runs off the phase-1 keys so it can overlap hydration.
+async fn resolve_page_issuers(
+    client: &clickhouse::Client,
+    ids: BTreeSet<i64>,
+) -> Result<HashMap<i64, (String, Option<String>)>, clickhouse::error::Error> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    Ok(client
+        .query(&format!(
+            "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
+             FROM accounts WHERE id IN ({in_list}) \
+             ORDER BY last_seen_ledger DESC LIMIT 1 BY id"
+        ))
+        .fetch_all::<AssetIssuerRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, (r.account_id, r.home_domain)))
+        .collect())
+}
+
 // ---------------------------------------------------------------------------
 // Detail — GET /v1/assets/:id (canonical 09), three resolution forms
 // ---------------------------------------------------------------------------
 
-/// Resolve by contract StrKey (`C…`) — either a bespoke `soroban` asset (the
-/// contract IS the asset) OR a SAC whose deep-link must resolve to the wrapped
-/// classic / native asset (ADR 0051). Two match arms:
-///   * `sc.contract_id = ?` — soroban identity (the `assets.contract_id` key,
-///     resolved via the `soroban_contracts` join).
-///   * `sac.sac_contract_id = {surrogate}` — the SAC facet (joined `asset_sac`).
-///     The `C…` StrKey is hashed to its `asset_sac.sac_contract_id` surrogate the
-///     same way the writer derives it (`db_clickhouse::persist::ids::contract_id`),
-///     so `/assets/{C…}` for a SAC lands on its classic / native row.
+/// Resolve by contract StrKey (`C…`) — a bespoke `soroban` token, where the
+/// contract IS the asset (type-3).
 ///
-/// A `C…` is at most one of the two (a SAC address ≠ a deployed-wasm address),
-/// so the OR yields a single row. Issuer StrKey + home_domain then resolve by a
-/// single `accounts.id` key-seek (task 0334).
+/// A SAC-wrapped classic/native asset is deliberately NOT resolved here: it is a
+/// FACET of its classic/native asset (ADR 0051), addressed by its canonical
+/// `CODE-ISSUER` (or `native`). Its SAC `C…` is shown only as a contract
+/// reference, never as an `/assets/` link — nothing in the app hits
+/// `/assets/{SAC C…}` (task 0364 dropped the redundant SAC-facet arm; a pasted
+/// SAC address now 404s instead of aliasing the wrapped asset). Issuer StrKey +
+/// home_domain resolve by a single `accounts.id` key-seek (task 0334).
 pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sac_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
-    let sql = format!(
-        "{ASSET_LIST_CH_SELECT} \
-         WHERE sc.contract_id = ? OR sac.sac_contract_id = {sac_surrogate} LIMIT 1"
-    );
-    let row = client
-        .query(&sql)
-        .bind(contract_id)
-        .fetch_optional::<AssetListChRow>()
+    // A bespoke token IS its own contract, and on prod every type-3 asset has an
+    // empty code + no issuer, so its identity is the FULL primary key
+    // `(3, '', 0, surrogate)` — seek that tuple directly (a PK point-lookup,
+    // ~16k rows), NOT a `contract_id = surrogate` scan (that column is the LAST
+    // PK part → ~0.6M-row scan). `surrogate` is `hash64` of the StrKey, the same
+    // value stored as `assets.contract_id`.
+    let contract_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
+    let keys = client
+        .query(&format!(
+            "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
+                    a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
+             FROM assets a \
+             WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) \
+                   = (3, '', 0, {contract_surrogate}) \
+             LIMIT 1"
+        ))
+        .fetch_all::<AssetKeyChRow>()
         .await?;
+
+    let row = hydrate_assets(client, &keys, true)
+        .await?
+        .into_iter()
+        .next();
     finish_detail(client, row).await
 }
 
@@ -545,21 +878,32 @@ pub async fn fetch_by_code_issuer(
         return Ok(None);
     };
 
-    let sql = format!(
-        "{ASSET_LIST_CH_SELECT} \
-         WHERE a.asset_code = ? AND a.issuer_id = ? \
-         ORDER BY a.asset_type LIMIT 1"
-    );
-    let Some(row) = client
-        .query(&sql)
+    // Phase 1 — seek the key by `(asset_code, issuer_id)` (no `FINAL`), then
+    // hydrate bounded (task 0364). `ORDER BY a.asset_type` is the deterministic
+    // tiebreak (post-ADR 0051 a `(code, issuer)` maps to a single classic_credit
+    // row anyway).
+    let keys = client
+        .query(
+            "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
+                    a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
+             FROM assets a \
+             WHERE a.asset_code = ? AND a.issuer_id = ? \
+             ORDER BY a.asset_type LIMIT 1",
+        )
         .bind(asset_code)
         .bind(issuer_row.id)
-        .fetch_optional::<AssetListChRow>()
+        .fetch_all::<AssetKeyChRow>()
+        .await?;
+    let Some(row) = hydrate_assets(client, &keys, true)
         .await?
+        .into_iter()
+        .next()
     else {
         return Ok(None);
     };
 
+    // The issuer StrKey + home_domain came from the up-front seek — map directly,
+    // no second `accounts` lookup.
     let iss = (issuer_row.account_id, issuer_row.home_domain);
     Ok(Some(list_row_to_asset_row(row, Some(iss))))
 }
@@ -571,11 +915,21 @@ pub async fn fetch_by_code_issuer(
 pub async fn fetch_native(
     client: &clickhouse::Client,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!("{ASSET_LIST_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1");
-    let row = client
-        .query(&sql)
-        .fetch_optional::<AssetListChRow>()
-        .await?;
+    // Native XLM is the fixed singleton `(asset_type = 0, code = '', issuer = 0,
+    // contract = 0)` — its identity 4-tuple and surrogate `id` are compile-time
+    // constants, so there is no key to *discover*: skip the phase-1 seek and
+    // hydrate the known key directly (task 0364).
+    let key = AssetKeyChRow {
+        asset_type: 0,
+        asset_code: String::new(),
+        issuer_id: 0,
+        contract_id: 0,
+        id: db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+    };
+    let row = hydrate_assets(client, &[key], true)
+        .await?
+        .into_iter()
+        .next();
     finish_detail(client, row).await
 }
 
@@ -780,6 +1134,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn asset_key_tuples_inlines_type_code_issuer_contract() {
+        let keys = vec![
+            AssetKeyChRow {
+                asset_type: 1,
+                asset_code: "USDC".to_string(),
+                issuer_id: 42,
+                contract_id: 0,
+                id: 7,
+            },
+            AssetKeyChRow {
+                asset_type: 0,
+                asset_code: String::new(), // native — empty code
+                issuer_id: 0,
+                contract_id: 0,
+                id: 9,
+            },
+        ];
+        assert_eq!(asset_key_tuples(&keys), "(1,'USDC',42,0),(0,'',0,0)");
+    }
+
+    #[test]
+    fn dedup_consecutive_keeps_first_version_per_key_and_truncates() {
+        let key = |code: &str, id: i64| AssetKeyChRow {
+            asset_type: 1,
+            asset_code: code.to_string(),
+            issuer_id: 1,
+            contract_id: 0,
+            id,
+        };
+        // Two physical versions of AAA (contiguous in PK order), then BBB, CCC.
+        let raw = vec![key("AAA", 1), key("AAA", 1), key("BBB", 2), key("CCC", 3)];
+        let out = dedup_consecutive(raw, 2);
+        // Collapses AAA's versions, then truncates to the page limit.
+        assert_eq!(
+            out.iter()
+                .map(|k| k.asset_code.as_str())
+                .collect::<Vec<_>>(),
+            ["AAA", "BBB"]
+        );
+    }
+
+    #[test]
     fn asset_type_name_matches_pg_function() {
         assert_eq!(asset_type_name(0).as_deref(), Some("native"));
         assert_eq!(asset_type_name(1).as_deref(), Some("classic_credit"));
@@ -801,16 +1197,16 @@ mod tests {
             asset_code: Some("solv".to_string()),
             sac_only: false,
         };
-        let sql = build_list_sql(&params, Direction::Next);
+        let sql = build_list_seek_sql(&params, Direction::Next);
         assert!(sql.contains("positionCaseInsensitive(a.asset_code"));
         assert!(sql.contains("coalesce(m.name, '')"));
         assert!(sql.contains("coalesce(m.symbol, '')"));
         // Classic enrichment names (ae.name) are intentionally NOT matched —
         // substring-matching them adds noise ("Opulent Insolvent" ~ "solv").
         assert!(!sql.contains("coalesce(ae.name, '')"));
-        // 3 needle placeholders (code + m.name + m.symbol) + trailing LIMIT ?.
-        // MUST equal the 3×`.bind(code)` + 1×`.bind(limit)` in `fetch_list`.
-        assert_eq!(sql.matches('?').count(), 4);
+        // 3 needle placeholders (code + m.name + m.symbol); the LIMIT is now
+        // inlined, so MUST equal the 3×`.bind(code)` in `fetch_list`.
+        assert_eq!(sql.matches('?').count(), 3);
     }
 
     #[test]
@@ -822,9 +1218,11 @@ mod tests {
             asset_code: None,
             sac_only: false,
         };
-        let sql = build_list_sql(&params, Direction::Next);
+        let sql = build_list_seek_sql(&params, Direction::Next);
         assert!(!sql.contains("positionCaseInsensitive"));
-        // Only the trailing `LIMIT ?` remains.
-        assert_eq!(sql.matches('?').count(), 1);
+        // No filter → pure `assets` PK walk: no side-table joins, no placeholders
+        // (the LIMIT is inlined).
+        assert!(!sql.contains("JOIN"));
+        assert_eq!(sql.matches('?').count(), 0);
     }
 }
