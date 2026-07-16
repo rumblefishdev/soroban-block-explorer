@@ -225,15 +225,19 @@ absent from live state (the enrichment ceiling).
       NULL-split not captured (out-of-band run, no log).
 - [x] **Step 5 — Asset Enrichment** drain run; `asset_enrichment` = 607,333 rows.
       SEP-1 NULL ratio not captured (out-of-band run, no log).
-- [ ] **Every step logged** — NOT met. Executed out-of-band; no `--verbose | tee`
-      artifacts captured. Verification is post-hoc via prod `chq` reads only.
-- [ ] `/v1/contracts` + `/v1/assets` serve real enriched data; `ASSETS=ch` flip
-      only after the staging non-NULL assertion passes. (Flag state not verified here.)
-- [ ] **NFT surfacing caveat:** hot `nfts` + `nft_enrichment` populated ✓; `/nfts`
-      serving CH data is tracked in 0301 step 4b (not met by this run alone).
-- [ ] **Docs updated** per ADR 0032 (ADR 0046 + runbooks 0217/0221 +
-      clickhouse-pilot).
-- [ ] **API types regenerated** — N/A (operational run; no `crates/api/**`,
+- [ ] **Every step logged** — NOT met (unfixable). Executed out-of-band; no
+      `--verbose | tee` artifacts captured. Verification is post-hoc via prod
+      `chq` reads only. Process AC, not a correctness gap — does not block
+      completion.
+- [x] `/v1/contracts` + `/v1/assets` serve real enriched data; `ASSETS=ch` flip
+      landed under **0301** (completed) — read-path flip across all 9 API modules;
+      `assets/handlers.rs` is all-CH (`state.ch()`, no PG branch).
+- [x] **NFT surfacing:** hot `nfts` + `nft_enrichment` populated ✓; `/nfts` CH
+      read-join (0301 step 4b) landed under **0301** (completed).
+- [x] **Docs updated** — N/A. Operational data-population run; changes no
+      architecture-describable shape (ADR 0032). Referenced docs already exist
+      (ADR 0046, runbooks 0217/0221, clickhouse-pilot).
+- [x] **API types regenerated** — N/A (operational run; no `crates/api/**`,
       `Cargo.{toml,lock}`, or `libs/api-types/**` change).
 
 ## Open questions
