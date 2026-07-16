@@ -65,14 +65,15 @@ flowchart LR
   end
   classDef mn fill:#e7f0fd,stroke:#1f6feb,color:#0c3e82;
   classDef tn fill:#faf1da,stroke:#b6790a,color:#5a3c06;
-  classDef shared fill:#ffffff,stroke:#41495a,color:#20242c,stroke-width:2px;
-  class gm,sm,cm,am,wm mn;
-  class gt,st,ct,at,wt tn;
-  class im,it shared;
+  class gm,sm,cm,am,wm,im mn;
+  class gt,st,ct,at,wt,it tn;
 ```
 
-White nodes (`Indexer λ`) are the same artifact deployed to both. Each env owns
-its S3, domains and secrets; ClickHouse is **shared** (see decision 2).
+Each environment is a **fully separate stack** — its own Galexie, S3, **Lambda
+functions** (`Indexer λ`, `API λ`) and SPA. The Lambdas and SPA are built from the
+**same source** but deployed as **separate per-env functions**
+(`production-…-indexer` vs `testnet-…-indexer`). Each env owns its S3, domains and
+secrets; only **ClickHouse is shared** (see decision 2).
 
 ### 2. Testnet ClickHouse = a separate `testnet` database on the shared `ch-prod-01`
 
