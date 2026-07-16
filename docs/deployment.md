@@ -7,10 +7,10 @@ Deep-dives live in the per-layer READMEs (linked below). This file does
 **not** duplicate them — it ties them together and is the source of truth
 for _which_ command ships _what_.
 
-> [!IMPORTANT] > **There is no staging environment and no CI-driven deploy.** Production
-> is the only environment, and every deploy is run **manually from an
-> operator laptop**. See [§ No staging, no CI](#no-staging-no-ci) before
-> trusting any `staging` command you find elsewhere in the repo.
+> **Important — there is no staging environment and no CI-driven deploy.**
+> Production is the only environment, and every deploy is run **manually
+> from an operator laptop**. See [§ No staging, no CI](#no-staging-no-ci)
+> before trusting any `staging` command you find elsewhere in the repo.
 
 ---
 
