@@ -746,41 +746,28 @@ pub async fn fetch_list(
 // Detail — GET /v1/assets/:id (canonical 09), three resolution forms
 // ---------------------------------------------------------------------------
 
-/// Resolve by contract StrKey (`C…`) — either a bespoke `soroban` asset (the
-/// contract IS the asset) OR a SAC whose deep-link must resolve to the wrapped
-/// classic / native asset (ADR 0051). Two match arms:
-///   * `sc.contract_id = ?` — soroban identity (the `assets.contract_id` key,
-///     resolved via the `soroban_contracts` join).
-///   * `sac.sac_contract_id = {surrogate}` — the SAC facet (joined `asset_sac`).
-///     The `C…` StrKey is hashed to its `asset_sac.sac_contract_id` surrogate the
-///     same way the writer derives it (`db_clickhouse::persist::ids::contract_id`),
-///     so `/assets/{C…}` for a SAC lands on its classic / native row.
+/// Resolve by contract StrKey (`C…`) — a bespoke `soroban` token, where the
+/// contract IS the asset (type-3).
 ///
-/// A `C…` is at most one of the two (a SAC address ≠ a deployed-wasm address),
-/// so the OR yields a single row. Issuer StrKey + home_domain then resolve by a
-/// single `accounts.id` key-seek (task 0334).
+/// A SAC-wrapped classic/native asset is deliberately NOT resolved here: it is a
+/// FACET of its classic/native asset (ADR 0051), addressed by its canonical
+/// `CODE-ISSUER` (or `native`). Its SAC `C…` is shown only as a contract
+/// reference, never as an `/assets/` link — nothing in the app hits
+/// `/assets/{SAC C…}` (task 0364 dropped the redundant SAC-facet arm; a pasted
+/// SAC address now 404s instead of aliasing the wrapped asset). Issuer StrKey +
+/// home_domain resolve by a single `accounts.id` key-seek (task 0334).
 pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    // A `C…` hashes to ONE surrogate (`hash64` of the StrKey), stored identically
-    // as `assets.contract_id` (a bespoke Soroban token IS its own contract) AND
-    // as `asset_sac.sac_contract_id` (a SAC wrapping a classic/native asset) — so
-    // the same `ids::contract_id(…)` value keys both. A `C…` is at most one of
-    // the two, so resolve it to a single `assets` key by two bounded arms off
-    // that one surrogate — the cheap bespoke seek first, the SAC facet as
-    // fallback (task 0364, Dec2(a)):
-    //   A. bespoke — a Soroban token IS its own contract, and on prod every
-    //      type-3 asset has an empty code + no issuer, so its identity is the FULL
-    //      primary key `(3, '', 0, surrogate)`. Seek that tuple directly — a PK
-    //      point-lookup (~16k rows), NOT a `contract_id = surrogate` scan (that
-    //      column is the LAST PK part, so it would scan ~0.6M rows).
-    //   B. SAC facet — the asset whose `asset_sac.sac_contract_id = surrogate`.
-    //      Only reached when arm A misses, so a bespoke `C…` never pays the
-    //      `asset_sac` scan.
+    // A bespoke token IS its own contract, and on prod every type-3 asset has an
+    // empty code + no issuer, so its identity is the FULL primary key
+    // `(3, '', 0, surrogate)` — seek that tuple directly (a PK point-lookup,
+    // ~16k rows), NOT a `contract_id = surrogate` scan (that column is the LAST
+    // PK part → ~0.6M-row scan). `surrogate` is `hash64` of the StrKey, the same
+    // value stored as `assets.contract_id`.
     let contract_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
-
-    let arm_a = client
+    let keys = client
         .query(&format!(
             "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
                     a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
@@ -791,23 +778,6 @@ pub async fn fetch_by_contract_id(
         ))
         .fetch_all::<AssetKeyChRow>()
         .await?;
-
-    let keys = if arm_a.is_empty() {
-        client
-            .query(&format!(
-                "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
-                        a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
-                 FROM assets a \
-                 WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ( \
-                     SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_sac \
-                     WHERE sac_contract_id = {contract_surrogate}) \
-                 LIMIT 1"
-            ))
-            .fetch_all::<AssetKeyChRow>()
-            .await?
-    } else {
-        arm_a
-    };
 
     let row = hydrate_assets(client, &keys).await?.into_iter().next();
     finish_detail(client, row).await
