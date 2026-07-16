@@ -362,6 +362,38 @@ async fn finish_detail(
 }
 
 // ---------------------------------------------------------------------------
+// Phase-1 seek + phase-2 hydration (task 0364)
+// ---------------------------------------------------------------------------
+
+/// Identity key for one `assets` version row, read WITHOUT `FINAL` in the
+/// phase-1 seek. The 4-tuple IS the `assets` primary key; `id` is its
+/// deterministic `cityhash64` surrogate. All five columns are immutable across a
+/// key's physical versions (task 0364 — the mutable columns are externalised to
+/// `balance_aggregates` / `asset_enrichment`), so a consecutive-dedup in PK
+/// order is deterministic with no version tiebreak. `asset_code` is the RAW
+/// value (empty for native / type-3), not the `nullIf`'d display form.
+#[derive(Debug, Clone, Row, Deserialize)]
+struct AssetKeyChRow {
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+    contract_id: i64,
+    id: i64,
+}
+
+impl AssetKeyChRow {
+    /// The identity 4-tuple — the dedup / ordering key.
+    fn tuple(&self) -> (i16, &str, i64, i64) {
+        (
+            self.asset_type,
+            &self.asset_code,
+            self.issuer_id,
+            self.contract_id,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
 
