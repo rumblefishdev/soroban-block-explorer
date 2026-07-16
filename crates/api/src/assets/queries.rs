@@ -416,6 +416,25 @@ fn asset_key_tuples(keys: &[AssetKeyChRow]) -> String {
         .join(",")
 }
 
+/// Consecutive-dedup the over-fetched phase-1 rows by the identity 4-tuple,
+/// keeping the first version of each key, and truncate to `limit`. Correct
+/// because the seek's `ORDER BY` IS the `assets` primary key, so a key's physical
+/// versions are contiguous; the projected columns are byte-identical across
+/// them, so "keep first" is deterministic (task 0364, approach-B — NOT `LIMIT 1
+/// BY`, which would defeat `optimize_read_in_order` on the seek).
+fn dedup_consecutive(raw: Vec<AssetKeyChRow>, limit: usize) -> Vec<AssetKeyChRow> {
+    let mut out: Vec<AssetKeyChRow> = Vec::with_capacity(limit.min(raw.len()));
+    for r in raw {
+        if out.last().is_none_or(|p| p.tuple() != r.tuple()) {
+            out.push(r);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // List — GET /v1/assets (canonical 08)
 // ---------------------------------------------------------------------------
@@ -853,6 +872,27 @@ mod tests {
             },
         ];
         assert_eq!(asset_key_tuples(&keys), "(1,'USDC',42,0),(0,'',0,0)");
+    }
+
+    #[test]
+    fn dedup_consecutive_keeps_first_version_per_key_and_truncates() {
+        let key = |code: &str, id: i64| AssetKeyChRow {
+            asset_type: 1,
+            asset_code: code.to_string(),
+            issuer_id: 1,
+            contract_id: 0,
+            id,
+        };
+        // Two physical versions of AAA (contiguous in PK order), then BBB, CCC.
+        let raw = vec![key("AAA", 1), key("AAA", 1), key("BBB", 2), key("CCC", 3)];
+        let out = dedup_consecutive(raw, 2);
+        // Collapses AAA's versions, then truncates to the page limit.
+        assert_eq!(
+            out.iter()
+                .map(|k| k.asset_code.as_str())
+                .collect::<Vec<_>>(),
+            ["AAA", "BBB"]
+        );
     }
 
     #[test]
