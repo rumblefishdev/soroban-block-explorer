@@ -770,11 +770,14 @@ pub async fn fetch_by_contract_id(
     // the two, so resolve it to a single `assets` key by two bounded arms off
     // that one surrogate — the cheap bespoke seek first, the SAC facet as
     // fallback (task 0364, Dec2(a)):
-    //   A. bespoke — `assets.contract_id = surrogate`. The `!= 0` guard keeps a
-    //      (never-produced) zero surrogate from matching the classic/native rows,
-    //      whose `contract_id` is 0. A single-column scan (~7 ms), not a FINAL
-    //      whole-table collapse.
+    //   A. bespoke — a Soroban token IS its own contract, and on prod every
+    //      type-3 asset has an empty code + no issuer, so its identity is the FULL
+    //      primary key `(3, '', 0, surrogate)`. Seek that tuple directly — a PK
+    //      point-lookup (~16k rows), NOT a `contract_id = surrogate` scan (that
+    //      column is the LAST PK part, so it would scan ~0.6M rows).
     //   B. SAC facet — the asset whose `asset_sac.sac_contract_id = surrogate`.
+    //      Only reached when arm A misses, so a bespoke `C…` never pays the
+    //      `asset_sac` scan.
     let contract_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
 
     let arm_a = client
@@ -782,7 +785,8 @@ pub async fn fetch_by_contract_id(
             "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
                     a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
              FROM assets a \
-             WHERE a.contract_id = {contract_surrogate} AND a.contract_id != 0 \
+             WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) \
+                   = (3, '', 0, {contract_surrogate}) \
              LIMIT 1"
         ))
         .fetch_all::<AssetKeyChRow>()
