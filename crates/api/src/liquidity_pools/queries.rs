@@ -928,12 +928,19 @@ pub async fn fetch_pool_list(
         binds.push(code.clone());
     }
 
-    // Latest-snapshot + `created_at_ledger` via streaming `argMax(...)` /
-    // `min(...)` GROUP BY pool_id over `liquidity_pool_snapshots FINAL`. FINAL
-    // dedups the RMT before/after image pair at each `(pool_id, ledger_sequence)`
-    // so per-column `argMax` can't tear `reserve_a` from `reserve_b`. Memory is
-    // O(page pools): the streaming aggregate holds ~20 groups regardless of how
-    // many snapshots each pool has.
+    // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
+    // `ledger_sequence` band around the page's `last_updated_ledger` range (the
+    // `band` CTE, ±10k). Page pools are the most-recently-updated, so their
+    // latest snapshot sits in that band — a bounded seek (~0.5M rows / ~50ms)
+    // instead of a full per-pool history scan (30M rows, which OOMed the 4 GB
+    // read-only profile as PR #335's `LIMIT 1 BY` sort). NO `FINAL`: the band's
+    // max ledger per page pool is recent (post-0356/#318 single-image) so
+    // per-column `argMax` can't tear; only a pool whose latest snapshot predates
+    // #318 (inactive for weeks → deep pages) could, which is accepted.
+    // `created_at_ledger` = `min(ledger_sequence)` in the `cr` subquery (cheap
+    // narrow streaming scan, dup-invariant → no `FINAL`); `l_snap` seeks
+    // `ledgers` by the page's ~20 `last_updated_ledger`s (a full `ledgers` join
+    // built a 26M-row / 3.3 GB hash); `sac`/`asset_sac` prune to the page codes.
     //
     // Do NOT rewrite as `ORDER BY ledger_sequence DESC LIMIT 1 BY pool_id`
     // (PR #335, reverted): `LIMIT 1 BY` is NOT a seek — it fully materialises +
@@ -963,6 +970,14 @@ pub async fn fetch_pool_list(
              ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
+         band AS ( \
+             SELECT min(last_updated_ledger) - 10000 AS lo, \
+                    max(last_updated_ledger) + 10000 AS hi FROM page \
+         ), \
+         codes AS ( \
+             SELECT asset_a_code AS c FROM page WHERE asset_a_code != '' \
+             UNION ALL SELECT asset_b_code FROM page WHERE asset_b_code != '' \
+         ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
                     max(sc.contract_id) AS contract_id, \
@@ -971,11 +986,13 @@ pub async fn fetch_pool_list(
              LEFT JOIN ( \
                  SELECT asset_type, asset_code, issuer_id, contract_id, \
                         max(sac_contract_id) AS sac_contract_id \
-                 FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 FROM asset_sac \
+                 WHERE asset_type IN (0, 1) AND asset_code IN (SELECT c FROM codes) \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                    AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
              LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
-             WHERE a.asset_type IN (0, 1) \
+             WHERE a.asset_type IN (0, 1) AND a.asset_code IN (SELECT c FROM codes) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
                    UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \
@@ -994,7 +1011,7 @@ pub async fn fetch_pool_list(
              nullIf(sac_b.contract_id, '')                   AS asset_b_contract_id, \
              sac_b.icon_url                                  AS asset_b_icon_url, \
              lp.fee_bps                                      AS fee_bps, \
-             ifNull(s.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
+             ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.last_updated_ledger                          AS cursor_ledger, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
@@ -1014,12 +1031,18 @@ pub async fn fetch_pool_list(
                 argMax(toNullable(total_shares), ledger_sequence) AS total_shares, \
                 argMax(tvl, ledger_sequence)                      AS tvl, \
                 argMax(volume, ledger_sequence)                   AS volume, \
-                argMax(fee_revenue, ledger_sequence)              AS fee_revenue, \
-                toNullable(min(ledger_sequence))                  AS created_at_ledger \
-             FROM liquidity_pool_snapshots FINAL \
+                argMax(fee_revenue, ledger_sequence)              AS fee_revenue \
+             FROM liquidity_pool_snapshots \
              WHERE pool_id IN (SELECT pool_id FROM page) \
+               AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
              GROUP BY pool_id \
          ) s ON s.pool_id = lp.pool_id \
+         LEFT JOIN ( \
+             SELECT pool_id, toNullable(min(ledger_sequence)) AS created_at_ledger \
+             FROM liquidity_pool_snapshots \
+             WHERE pool_id IN (SELECT pool_id FROM page) \
+             GROUP BY pool_id \
+         ) cr ON cr.pool_id = lp.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, count() AS participant_count FROM lp_positions FINAL \
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
@@ -1031,7 +1054,10 @@ pub async fn fetch_pool_list(
          LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                             AND sac_b.issuer_id = lp.asset_b_issuer_id \
                             AND lp.asset_b_code != '' \
-         LEFT JOIN ledgers l_snap ON l_snap.sequence = s.latest_ledger_sequence \
+         LEFT JOIN ( \
+             SELECT sequence, closed_at FROM ledgers \
+             WHERE sequence IN (SELECT last_updated_ledger FROM page) \
+         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
          ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
         tvl_cte = tvl_cte,
         tvl_pred = tvl_pred,
