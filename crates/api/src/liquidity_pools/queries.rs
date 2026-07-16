@@ -928,20 +928,27 @@ pub async fn fetch_pool_list(
         binds.push(code.clone());
     }
 
-    // Latest-snapshot fields — NO `FINAL` (0356 / PR #318). The `s` subquery
-    // picks the whole latest row per pool via `ORDER BY ledger_sequence DESC` +
-    // `LIMIT 1 BY pool_id` (bounded reverse-PK seek over the page's pools, no
-    // whole-table merge). Whole-row, not per-column `argMax`, so a pre-cleanup
-    // before/after duplicate can't tear `reserve_a` from `reserve_b`.
-    // `created_at_ledger` moves to its own `cr` subquery (`min(ledger_sequence)`,
-    // dup-invariant). These fields wrap in `toNullable(...)` so a no-snapshot pool
-    // yields NULL (not the 0/'' default) on the LEFT JOIN miss — `join_use_nulls`
-    // is rejected for the read-only CH user, so this is the readonly-safe NULL
-    // path. (Every current pool has ≥ 1 snapshot, so this is defensive.)
-    // `nullIf(...)` does the same for the
-    // empty-string-sentinel string columns. Native legs (asset_code = '') are
-    // excluded from the SAC join by the `lp.asset_*_code != ''` guard so they
-    // surface a NULL `contract_id`, matching PG (NULL code → no SAC match).
+    // Latest-snapshot + `created_at_ledger` via streaming `argMax(...)` /
+    // `min(...)` GROUP BY pool_id over `liquidity_pool_snapshots FINAL`. FINAL
+    // dedups the RMT before/after image pair at each `(pool_id, ledger_sequence)`
+    // so per-column `argMax` can't tear `reserve_a` from `reserve_b`. Memory is
+    // O(page pools): the streaming aggregate holds ~20 groups regardless of how
+    // many snapshots each pool has.
+    //
+    // Do NOT rewrite as `ORDER BY ledger_sequence DESC LIMIT 1 BY pool_id`
+    // (PR #335, reverted): `LIMIT 1 BY` is NOT a seek — it fully materialises +
+    // sorts every snapshot of the page's pools (~30M rows for the busiest 20),
+    // OOMing the 4 GB read-only CH profile. A future perf pass must keep the
+    // O(page pools) shape (e.g. `argMax` over a whole-row tuple), not a sort.
+    //
+    // Aggregates wrap in `toNullable(...)` so a no-snapshot pool yields NULL (not
+    // the 0/'' default) on the LEFT JOIN miss — `join_use_nulls` is rejected for
+    // the read-only CH user, so this is the readonly-safe NULL path. (Every
+    // current pool has ≥ 1 snapshot, so this is defensive.) `nullIf(...)` does the
+    // same for the empty-string-sentinel string columns. Native legs
+    // (asset_code = '') are excluded from the SAC join by the `lp.asset_*_code !=
+    // ''` guard so they surface a NULL `contract_id`, matching PG (NULL code → no
+    // SAC match).
     let sql = format!(
         "WITH \
          {tvl_cte} \
@@ -987,7 +994,7 @@ pub async fn fetch_pool_list(
              nullIf(sac_b.contract_id, '')                   AS asset_b_contract_id, \
              sac_b.icon_url                                  AS asset_b_icon_url, \
              lp.fee_bps                                      AS fee_bps, \
-             ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
+             ifNull(s.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.last_updated_ledger                          AS cursor_ledger, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
@@ -1001,22 +1008,18 @@ pub async fn fetch_pool_list(
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
-                    toNullable(ledger_sequence) AS latest_ledger_sequence, \
-                    toNullable(reserve_a)       AS reserve_a, \
-                    toNullable(reserve_b)       AS reserve_b, \
-                    toNullable(total_shares)    AS total_shares, \
-                    tvl, volume, fee_revenue \
-             FROM liquidity_pool_snapshots \
-             WHERE pool_id IN (SELECT pool_id FROM page) \
-             ORDER BY pool_id, ledger_sequence DESC \
-             LIMIT 1 BY pool_id \
-         ) s ON s.pool_id = lp.pool_id \
-         LEFT JOIN ( \
-             SELECT pool_id, toNullable(min(ledger_sequence)) AS created_at_ledger \
-             FROM liquidity_pool_snapshots \
+                toNullable(max(ledger_sequence))                  AS latest_ledger_sequence, \
+                argMax(toNullable(reserve_a), ledger_sequence)    AS reserve_a, \
+                argMax(toNullable(reserve_b), ledger_sequence)    AS reserve_b, \
+                argMax(toNullable(total_shares), ledger_sequence) AS total_shares, \
+                argMax(tvl, ledger_sequence)                      AS tvl, \
+                argMax(volume, ledger_sequence)                   AS volume, \
+                argMax(fee_revenue, ledger_sequence)              AS fee_revenue, \
+                toNullable(min(ledger_sequence))                  AS created_at_ledger \
+             FROM liquidity_pool_snapshots FINAL \
              WHERE pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
-         ) cr ON cr.pool_id = lp.pool_id \
+         ) s ON s.pool_id = lp.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, count() AS participant_count FROM lp_positions FINAL \
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
