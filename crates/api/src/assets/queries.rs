@@ -793,21 +793,29 @@ pub async fn fetch_by_code_issuer(
         return Ok(None);
     };
 
-    let sql = format!(
-        "{ASSET_LIST_CH_SELECT} \
-         WHERE a.asset_code = ? AND a.issuer_id = ? \
-         ORDER BY a.asset_type LIMIT 1"
-    );
-    let Some(row) = client
-        .query(&sql)
+    // Phase 1 — seek the key by `(asset_code, issuer_id)` (no `FINAL`), then
+    // hydrate bounded (task 0364). `ORDER BY a.asset_type` is the deterministic
+    // tiebreak (post-ADR 0051 a `(code, issuer)` maps to a single classic_credit
+    // row anyway).
+    let keys = client
+        .query(
+            "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
+                    a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
+             FROM assets a \
+             WHERE a.asset_code = ? AND a.issuer_id = ? \
+             ORDER BY a.asset_type \
+             LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id LIMIT 1",
+        )
         .bind(asset_code)
         .bind(issuer_row.id)
-        .fetch_optional::<AssetListChRow>()
-        .await?
-    else {
+        .fetch_all::<AssetKeyChRow>()
+        .await?;
+    let Some(row) = hydrate_assets(client, &keys).await?.into_iter().next() else {
         return Ok(None);
     };
 
+    // The issuer StrKey + home_domain came from the up-front seek — map directly,
+    // no second `accounts` lookup.
     let iss = (issuer_row.account_id, issuer_row.home_domain);
     Ok(Some(list_row_to_asset_row(row, Some(iss))))
 }
