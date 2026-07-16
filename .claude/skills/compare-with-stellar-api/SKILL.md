@@ -1,246 +1,254 @@
 ---
 name: compare-with-stellar-api
-description: Verify a database query output against Horizon, stellar.expert, and independently parsed raw XDR.
+description: Verify ClickHouse query output against Horizon, stellar.expert, and independently decoded raw XDR.
 ---
 
-# /compare-with-stellar-api — Verify a DB query's output against Horizon + stellar.expert + raw XDR
+# /compare-with-stellar-api — Verify a ClickHouse query against Stellar APIs + raw XDR
 
-Take a path to a SQL query, run it against the local Docker Postgres, pick 5 representative rows (mix of edge cases + random), then dispatch 3 parallel subagents to cross-check those rows against:
+Take a path to a ClickHouse SQL query, execute it against the **local Docker
+ClickHouse**, select representative rows, and verify the same rows in parallel
+against Horizon, stellar.expert, and independently decoded raw XDR.
 
-1. **Horizon API** — Stellar's canonical REST API
-2. **stellar.expert** — community block explorer
-3. **Raw XDR (parsed independently)** — fetch envelope/result/result_meta XDR and decode it locally; the most authoritative source because it bypasses every display layer
+The result is an evidence report, not an implementation task. Aggregate the
+findings and **STOP**; do not edit code, commit, or create a lore task.
 
-Aggregate the findings into a report and **STOP**. The user runs the local frontend test themselves.
+## Scope and safety
 
-## When to use
-
-After implementing or modifying a backend read query, before claiming the data is correct. Especially useful for `docs/architecture/database-schema/endpoint-queries/*.sql`, but works on any read query that returns identifiable Stellar entities (transaction, account, contract, asset, ledger, NFT, liquidity pool).
+- This is **ClickHouse-only**. Use only
+  `docs/architecture/database-schema/endpoint-queries-clickhouse/` and the
+  ClickHouse client workflow defined below.
+- Default target is the local `clickhouse` Docker Compose service. Never query
+  production ClickHouse unless the user explicitly supplies and authorizes a
+  production connection.
+- Canonical query files live in
+  `docs/architecture/database-schema/endpoint-queries-clickhouse/` and the
+  project runner is `run_endpoint_ch.sh` in that directory.
+- A reference SQL file can lag the live Rust query. Before asserting that an
+  endpoint implementation is correct, compare its shape to the corresponding
+  `crates/api/src/**/queries_ch.rs` path. In particular, transaction list
+  aggregation in the live code is a non-correlated two-step query; do not
+  validate a stale correlated-subquery reference as if it were production.
 
 ## Argument
 
-`/compare-with-stellar-api <path-to-sql-file>` — required. If anything else (endpoint name, table name, empty), **STOP** and ask for a path.
+`/compare-with-stellar-api <path-to-clickhouse-sql-file>` is required. If the
+argument is empty, an endpoint name, a table name, or a SQL path outside the
+ClickHouse endpoint-query directory,
+**STOP** and ask for a path.
 
-## Step 1 — Read the file & resolve which statement to verify
+## Step 1 — Read the SQL and select a statement
 
-Look for `-- @@ split @@` (multi-statement separator from `endpoint-queries/README.md`):
+1. Read the file and verify it is ClickHouse SQL.
+2. Count `-- @@ split @@` separators.
+   - No separator: `selected_statement = 1`.
+   - One or more: enumerate each statement as A, B, C, … using its leading
+     comment or SQL keyword, then **STOP** and ask the user which statement to
+     verify. Do not select one automatically.
+3. Carry `selected_statement` into every later step.
+4. For canonical endpoint files, read the matching endpoint section in
+   `endpoint-queries-clickhouse/README.md` and inspect the equivalent live
+   Rust CH query before sampling. Report `reference query matches live path`,
+   `reference-only`, or `diverges`; a divergent reference may still be
+   syntax-checked, but cannot certify the live implementation.
 
-- **0 occurrences** → single statement. `selected_statement = 1` (the whole file).
-- **1+ occurrences** → **STOP**. Enumerate the statements (print first comment / leading SQL keyword of each, label A, B, C, …) and ask which one to verify. Record the user's choice as `selected_statement = N`. Do not auto-pick.
+## Step 2 — Execute against local Docker ClickHouse
 
-Carry `selected_statement` into every subsequent step.
-
-## Step 2 — Run the query against local Docker Postgres
-
-Two modes — pick one based on the path. **Both must end up with `selected_statement`'s output as JSON-per-row** (`SELECT row_to_json(t) FROM (…) t`) so step 3 can parse it cleanly.
-
-### Mode A — standard endpoint query
-
-Path matches `docs/architecture/database-schema/endpoint-queries/<NN>_*.sql`.
-
-The helper does discovery + substitution + multi-statement orchestration (including `\gset` chaining of intermediate values between statements). Use it for orchestration, then re-issue just the selected statement wrapped in `row_to_json` to get clean structured output.
-
-```bash
-# 1. orchestrate (and learn what params the helper picked from the script's `echo` lines):
-docs/architecture/database-schema/endpoint-queries/run_endpoint.sh <NN> -x
-
-# 2. re-run the selected statement with row_to_json wrap, reusing the same params:
-docker compose exec -T postgres psql -U postgres -d soroban_block_explorer \
-  -v ON_ERROR_STOP=1 -t -A \
-  -c "SELECT row_to_json(t) FROM ( <selected_statement_with_substituted_params> ) t;"
-```
-
-For `\gset`-dependent statements (E3 B-F, E6 B, E11 B), capture the upstream values from the helper's first run, then substitute them into the wrapped re-run.
-
-### Mode B — ad-hoc query
-
-Path is anywhere else.
-
-1. Split the file on `-- @@ split @@` and extract statement `selected_statement` (1-indexed).
-2. Parse the file's `Inputs:` header (per task 0167 convention) for the `$N` placeholders the chosen statement uses. Each entry is `--   $N  :name  TYPE  semantics`.
-3. For each `$N`, write a tiny discovery query against the local DB to pick a sample value. Use `NULL::<type>` for cursor / first-page params.
-4. Run the substituted statement wrapped in `row_to_json`:
+Boot and verify the local canonical schema first:
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d soroban_block_explorer \
-  -v ON_ERROR_STOP=1 -t -A \
-  -c "SELECT row_to_json(t) FROM ( <substituted_statement> ) t;"
+docker compose up -d clickhouse db-clickhouse-init
+docker compose exec -T clickhouse clickhouse-client \
+  --user=default --password=clickhouse --database=default \
+  --query='SELECT 1'
 ```
 
-`-t -A` gives one JSON object per line, no headers, no padding.
+Set these variables once for all commands below; callers may override the
+defaults when their local Compose setup differs:
 
-### STOP conditions for step 2
+```bash
+export SBE_CH_SERVICE=clickhouse
+export SBE_CH_USER=default
+export SBE_CH_PASS=clickhouse
+export SBE_CH_DB=default
+```
 
-- Output has **0 lines** → STOP, report "empty result set; populate the table or check the query".
-- Output has **1 line** → that's your only sample. Skip step 3 and use `n=1` rows in step 4.
-- Otherwise aim for **≥20 lines** so step 3 has variance.
+Every selected statement must ultimately produce **one JSON object per row**:
+`FORMAT JSONEachRow`. Do not use TSV output as the sampling input.
 
-## Step 3 — Pick 5 sample rows
+### Mode A — canonical endpoint-query file
 
-Goal: maximise edge-case coverage. **Do NOT take the first 5.** Parse the JSONL output from step 2 and pick:
+Path matches
+`docs/architecture/database-schema/endpoint-queries-clickhouse/<NN>_*.sql`.
 
-- Nullable columns → at least one row where it's `null` and one where it's filled.
-- Enum / type columns (`asset_type`, `event_type`, `op_type`, etc.) → coverage across distinct values.
-- Boolean columns (`successful`, `has_soroban`, `is_sac`) → at least one of each value.
-- Array / aggregate columns → prefer rows with non-trivial cardinality.
-- Reserve **1-2 slots** for genuinely random rows (don't make the sample fully synthetic).
+1. Run the supplied runner to discover real values and validate the endpoint
+   orchestration:
 
-For each picked row, write a one-line description of _what it exemplifies_ (e.g. "row 3: failed Soroban tx with inner_tx_hash NULL and 4 distinct operation_types"). Carry these descriptions into step 4.
+   ```bash
+   docs/architecture/database-schema/endpoint-queries-clickhouse/run_endpoint_ch.sh <NN>
+   ```
 
-## Step 4 — Dispatch 3 parallel verifier subagents
+2. Reuse the concrete values printed by the runner, extract only
+   `selected_statement`, substitute its `$1`, `$2`, … placeholders exactly as
+   the runner did, remove its trailing semicolon, and append
+   `FORMAT JSONEachRow`.
+3. Run the resulting query through the local service:
 
-**Send a single message with 3 Agent tool calls** so they run in parallel. All three receive the **same** rows + **same** field list — that's the entire point of central sampling.
+   ```bash
+   docker compose exec -T "$SBE_CH_SERVICE" clickhouse-client \
+     --user="$SBE_CH_USER" --password="$SBE_CH_PASS" --database="$SBE_CH_DB" \
+     --query='<selected statement with concrete literals> FORMAT JSONEachRow'
+   ```
 
-### Build the field list (do this carefully, it's a common bug source)
+For statements whose inputs depend on an upstream statement, preserve the
+upstream value chosen by `run_endpoint_ch.sh`; do not invent a second sample.
 
-For `endpoint-queries/` files: open `endpoint-queries/README.md` `## Endpoint response shapes`, find the section for the endpoint, find the table for `selected_statement`. **Include ONLY rows with `DB →` in the Source column.** Exclude:
+### Mode B — ad-hoc ClickHouse query
 
-- `Archive →` (XDR overlay added by API layer at runtime; not in the DB output — and the third subagent will independently verify these against parsed XDR anyway)
-- `S3 →` (off-DB blob; not in the DB output)
-- Synthesized fields like `cursor`, `position` (computed in API)
+1. Extract `selected_statement` by splitting on `-- @@ split @@`.
+2. Parse the `Inputs:` header for `$N` placeholders. Use its ClickHouse type
+   and semantics to write small local discovery queries. Use literal `NULL`
+   only where the query expects a nullable parameter; use CH-native literals
+   such as `toInt64(123)`, `unhex('…')`, or quoted strings for concrete values.
+3. Substitute placeholders from highest number to lowest so `$10` cannot be
+   partially replaced as `$1`.
+4. Remove the final semicolon and append `FORMAT JSONEachRow`, then execute it
+   with `clickhouse-client` as in Mode A.
 
-For ad-hoc queries: use the projected column names directly.
+### Stop conditions
 
-If you skip this filter, every Archive/S3 field will falsely report `MISMATCH` or `SOURCE_MISSING` and the report becomes noise.
+- Query error: report the exact ClickHouse error and **STOP**.
+- Zero JSON rows: report `empty result set; populate local ClickHouse or check
+the query` and **STOP**.
+- One row: use it as the only sample and skip variance selection.
+- Otherwise aim for at least 20 rows before choosing five samples.
 
-### Determine the entity type
+## Step 3 — Select five representative rows
 
-One of: `transaction`, `account`, `contract`, `asset`, `ledger`, `nft`, `liquidity_pool`. Infer from the query's primary table or its endpoint header.
+Parse the JSONEachRow output. Do not take the first five rows.
 
-### Subagent prompt template (use literally — fill placeholders, do not improvise structure)
+- Include both null and non-null values for nullable columns when available.
+- Cover enum/type fields such as `asset_type`, `event_type`, and `op_type`.
+- Cover both values of booleans such as `successful`, `has_soroban`, and
+  `is_sac` when present.
+- Prefer non-trivial arrays and aggregates.
+- Reserve one or two genuinely random rows.
 
-The placeholder formats:
+For each selected row, write a one-line explanation of what it demonstrates.
 
-- `{ROWS_WITH_DESCRIPTIONS}`: 5 (or `n`) numbered markdown blocks. Each block: a `Row N: <description>` heading line, then a JSON code fence with the row object from step 2.
-- `{FIELD_LIST}`: markdown bulleted list, one field per line, no extra prose.
+## Step 4 — Build the verification contract
 
-Subagent prompt:
+Determine one entity type: `transaction`, `account`, `contract`, `asset`,
+`ledger`, `nft`, or `liquidity_pool`.
+
+For canonical files, use the output fields of `selected_statement` plus the
+endpoint response-shape documentation. Include only fields physically supplied
+by ClickHouse. Exclude API-only fields from Soroban RPC, S3, archive/XDR
+overlays, cursors, positions, and other synthesized values. For ad-hoc files,
+use projected column names only.
+
+Record any reference-vs-live-Rust divergence found in Step 1 before dispatch.
+
+## Step 5 — Dispatch three parallel verifiers
+
+Use the host runtime's parallel-agent mechanism to dispatch all three at once.
+Each receives the **identical** selected rows, descriptions, and field list.
+Do not let a verifier choose its own rows.
+
+Use this prompt structure verbatim, filling placeholders:
 
 ```
-You are verifying Stellar entity data from our local Postgres against {SOURCE_NAME} ({SOURCE_BASE_URL}).
+You are verifying Stellar entity data returned by a local ClickHouse query
+against {SOURCE_NAME} ({SOURCE_BASE_URL}).
 
 Entity type: {ENTITY_TYPE}
-URL pattern hint for {SOURCE_NAME}: {URL_PATTERN_HINT}
-(Derive the exact URL per row from the entity identifier in the row data.)
+URL pattern hint: {URL_PATTERN_HINT}
 
-For each of the rows below, fetch the corresponding entity from {SOURCE_NAME} and compare every listed field. Use {FETCH_TOOL}. Report match/mismatch/source-missing per field per row.
+For every supplied row, fetch the corresponding entity and compare every field
+in the list. Do not guess.
 
-Rows to verify (each with a one-line description of what it exemplifies):
-
+Rows to verify:
 {ROWS_WITH_DESCRIPTIONS}
 
-Fields to verify (same list for every row):
-
+Fields to verify:
 {FIELD_LIST}
 
-Output EXACTLY this format, replacing the angle-bracket placeholders with concrete values:
-
-Row 1 (<row 1 description verbatim>):
-  - <field_a>: MATCH
-  - <field_b>: MISMATCH (DB=<db_value>, source=<source_value>)
-  - <field_c>: SOURCE_MISSING (<one-line reason — e.g. 404, not indexed, archived>)
-  - <field_d>: NOT_APPLICABLE (<reason — e.g. Horizon doesn't cover Soroban events>)
-  - <field_e>: UNVERIFIABLE (<reason — page returned JS shell / no XDR available / etc.>)
+Output exactly:
+Row 1 (<description verbatim>):
+  - <field>: MATCH
+  - <field>: MISMATCH (CH=<value>, source=<value>)
+  - <field>: SOURCE_MISSING (<reason>)
+  - <field>: NOT_APPLICABLE (<reason>)
+  - <field>: UNVERIFIABLE (<reason>)
 Row 2 (<description>): …
-…
 
-Notes: <anything else — rate limits, partial fetches, suspected source bugs>
+Notes: <rate limits, partial fetches, source limitations>
 
 Hard rules:
-- Do NOT guess. If you can't extract a field, mark UNVERIFIABLE or SOURCE_MISSING with a reason.
-- Distinguish SOURCE_MISSING (entity not on this source — usually not a DB bug) from MISMATCH (entity present, value differs — likely a real bug).
-- If rate-limited mid-run, finish what you can and note in "Notes:" how many rows you completed.
-- Do NOT pick your own rows. Use exactly the rows provided.
+- `SOURCE_MISSING` means the source lacks the entity; it is not a mismatch.
+- `MISMATCH` requires a present source value that differs.
+- If extraction fails, use `UNVERIFIABLE`, never an inferred value.
+- Use exactly the supplied rows and field list.
 ```
 
-### Per-source overrides for the template
+Dispatch with these source-specific instructions:
 
-| #   | SOURCE_NAME                  | SOURCE_BASE_URL                                                     | URL_PATTERN_HINT                                                                                                                                                                                                                              | FETCH_TOOL      |
-| --- | ---------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| 1   | Horizon API                  | `https://horizon.stellar.org`                                       | `/transactions/<hash>`, `/accounts/<id>`, `/ledgers/<seq>`, `/assets?asset_code=<c>&asset_issuer=<i>`, `/liquidity_pools/<hex>`. **Does not cover Soroban contracts/events/invocations/NFTs** — for those, mark every field `NOT_APPLICABLE`. | WebFetch        |
-| 2   | stellar.expert               | `https://stellar.expert/explorer/public`                            | `/tx/<hash>`, `/account/<id>`, `/asset/<code>-<issuer>`, `/contract/<id>`, `/liquidity-pool/<hex>`.                                                                                                                                           | WebFetch        |
-| 3   | Raw XDR (independent decode) | n/a — fetch from Horizon `/transactions/<hash>` then decode locally | See "Subagent 3 specifics" below.                                                                                                                                                                                                             | WebFetch + Bash |
+| Source         | Base / URL pattern                                                                                                                                             | Scope                                                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Horizon API    | `https://horizon.stellar.org`; `/transactions/<hash>`, `/accounts/<id>`, `/ledgers/<seq>`, `/assets?asset_code=<c>&asset_issuer=<i>`, `/liquidity_pools/<hex>` | Horizon does not cover Soroban contracts, events, invocations, or NFTs; mark those fields `NOT_APPLICABLE`.                                |
+| stellar.expert | `https://stellar.expert/explorer/public`; `/tx/<hash>`, `/account/<id>`, `/asset/<code>-<issuer>`, `/contract/<id>`, `/liquidity-pool/<hex>`                   | Mark unavailable or JS-only fields `UNVERIFIABLE`.                                                                                         |
+| Raw XDR        | Fetch Horizon transaction XDR with `curl`, then decode independently                                                                                           | Applies to transactions and per-transaction facts only. Accounts, aggregate assets, ledgers, NFTs, and pool reserves are `NOT_APPLICABLE`. |
 
-### Subagent 3 specifics (Raw XDR)
+### Raw XDR verifier requirements
 
-This subagent does **independent XDR decoding** so it doesn't trust any explorer's display layer.
+1. Fetch `envelope_xdr`, `result_xdr`, and `result_meta_xdr` with `curl` and
+   `jq`; do not use a browser fetcher for base64 blobs.
+2. Prefer the external-SSD venv installed for this workspace:
 
-**Scope:**
-
-- Applicable to: `transaction`, plus any per-tx-derived field (`contract` events/invocations, ops, participants, signatures, memo) where the data lives inside a transaction's XDR.
-- Not applicable: `account` current state, `asset` totals, `ledger` aggregates, `nft`, `liquidity_pool` reserves — there's no per-entity XDR for these. Mark every field `NOT_APPLICABLE` with reason "no XDR for this entity type".
-
-**Procedure for in-scope entities:**
-
-1. For each row, derive the parent transaction hash from the row data.
-2. Fetch the XDR via `curl` (NOT WebFetch — WebFetch can silently corrupt long base64 strings; observed in practice as random characters inserted mid-string). Use `jq` to extract:
    ```bash
-   curl -s "https://horizon.stellar.org/transactions/<hash>" \
-     | jq -r '{envelope_xdr, result_xdr, result_meta_xdr, inner_transaction}'
+   target/stellar-sdk-venv/bin/python3 -c 'import stellar_sdk'
    ```
-   For fee-bumped rows, also fetch `/transactions/<inner_tx_hash_hex>` if you need the inner envelope separately (or drill into outer's `feeBump.tx.innerTx`).
-3. Decode each XDR blob. Probe order (try each, use first that can handle the envelope type):
 
-   - **py-stellar-sdk** (PREFERRED — covers both classic AND Soroban envelopes, ~100-200 ms per decode):
-     - Probe: `python3 -c "import stellar_sdk"` succeeds, OR `~/.local/venvs/stellar-sdk/bin/python3 -c "import stellar_sdk"` succeeds (project may use a venv on PEP 668 systems).
-     - Usage: pipe base64 via stdin to a small Python script using `stellar_sdk.xdr.TransactionEnvelope.from_xdr(...)` etc., extract fields, print.
-   - **stellar-cli** (CLASSIC ENVELOPES ONLY — hard-fails on Soroban with `"xdr value max length exceeded"`, no flag raises the limit):
-     - **Skip for any row where `has_soroban = true`** — go directly to py-stellar-sdk or UNVERIFIABLE.
-     - Native: `which stellar` → `stellar xdr decode --type <Type> --input single-base64 --output json <base64>`
-     - Docker: `docker image inspect stellar/stellar-cli:latest` (or `docker pull stellar/stellar-cli`) → `docker run --rm -i stellar/stellar-cli xdr decode --type <Type> --input single-base64 --output json <<< "<base64>"` (~200-500 ms per call for container startup).
-   - **stellar-base** (Node): `node -e "require('stellar-base')"` succeeds — fallback if Python is also missing.
-   - **If no decoder is available for the envelope type at hand**: mark every field of that row `UNVERIFIABLE` with reason `"no XDR decoder available; for full coverage (classic + Soroban) install py-stellar-sdk: 'pip install --break-system-packages stellar-sdk' (quick) or 'python3 -m venv ~/.local/venvs/stellar-sdk && ~/.local/venvs/stellar-sdk/bin/pip install stellar-sdk' (clean). stellar-cli alone covers classic envelopes only."`. Finish cleanly. Do NOT compile a Rust runner against `crates/xdr-parser` — too heavy for verification.
+   If absent, try `STELLAR_SDK_PYTHON`, then `python3`, then a user-local venv.
+   `stellar-cli` is a classic-envelope fallback only; skip it for Soroban
+   envelopes. Do not compile a Rust decoder just for this verification.
 
-   Common `--type` values for stellar-cli: `TransactionEnvelope` for `envelope_xdr`, `TransactionResult` for `result_xdr`, `TransactionResultMeta` for `result_meta_xdr`. The CLI returns JSON; parse with `jq` to reach individual fields.
+3. Compare facts from decoded XDR, for example transaction success, operation
+   count, source account, fee charged, memo, operation bodies, event topics and
+   data, and invocation arguments/return values.
+4. If no suitable decoder is available, mark the relevant fields
+   `UNVERIFIABLE` and explain why.
 
-4. From the decoded XDR, extract the field values to compare:
-   - `successful` ← `result_xdr → TransactionResultCode == txSUCCESS`
-   - `operation_count` ← `envelope_xdr → operations.length`
-   - `source_account` ← `envelope_xdr → sourceAccount` (G-StrKey)
-   - `fee_charged` ← `result_xdr → feeCharged`
-   - `memo_type`, `memo_content` ← `envelope_xdr → memo`
-   - per-op `type`, `source_account`, `destination_account`, etc. ← `envelope_xdr → operations[i]`
-   - per-event `topics`, `data` ← `result_meta_xdr → events[]`
-   - per-invocation `function_name`, `args`, `return_value` ← `envelope_xdr → operations[i].body.invokeHostFunctionOp` + `result_meta_xdr`
-5. Report per the standard output format. The whole point: this subagent's MATCH means "the XDR itself confirms the DB", which is much stronger than "Horizon's display agrees".
+Raw XDR has highest authority. If it agrees with ClickHouse and explorers
+disagree, treat the explorer as the likely faulty display layer.
 
-## Step 5 — Frontend-contract check
+## Step 6 — Frontend contract check
 
-`grep` `docs/architecture/frontend/frontend-overview.md` for the route or endpoint name (e.g. `GET /transactions`, `/accounts/:id`, `/liquidity-pools/:id/chart`).
+Search `docs/architecture/frontend/frontend-overview.md` for the endpoint or
+route. If found, compare its required fields with the selected ClickHouse query
+projection and report missing required fields or unconsumed projections. If
+absent, report: `Frontend contract check skipped — no matching route section`.
 
-- If a section listing required fields for that view is found → compare against the columns the query projects. Note (a) frontend-required fields missing from the response, (b) projected columns not consumed by the frontend.
-- If no matching section is found → write one line in the report: `Frontend contract check skipped — no <route> section in frontend-overview.md`. Do not synthesize.
+## Step 7 — Report and stop
 
-## Step 6 — Aggregate and present
+Present:
 
-In chat:
+1. the reference-vs-live-Rust status;
+2. sampled rows and why each was selected;
+3. a compact source matrix per row;
+4. pure mismatches, prioritizing those confirmed by Raw XDR;
+5. all-sources-missing rows;
+6. frontend-contract result; and
+7. caveats such as partial local CH data, rate limits, or unavailable XDR.
 
-1. **Sample rows** — one line each, recapping what each exemplifies.
-2. **Cross-source matrix** — per row, per source (Horizon / stellar.expert / Raw XDR), condensed result. Highlight fields where the 3 sources **disagree with each other** — especially when XDR disagrees with both explorers (strong signal of an explorer bug, not a DB bug).
-3. **Pure mismatches** — fields where DB disagrees with all sources that have the entity. **Mismatches confirmed by Raw XDR are the highest-confidence DB bugs** (XDR is ground truth).
-4. **All-sources-missing rows** — DB has the row, all 3 sources don't. Could be legitimate DB-only data, or could indicate the row shouldn't exist.
-5. **Frontend contract** — pass / gaps / skipped.
-6. **Caveats** — rate limits, missing XDR decoder, Soroban entities Horizon couldn't cover, partial subagent runs.
-
-## Step 7 — STOP
-
-Do not commit, do not modify code, do not spawn lore tasks. Wait for the user to run their local manual test and signal the next step.
-
-## Result terminology (referenced from the subagent template)
-
-| Result           | Meaning                                                  | Action signal                                                                                   |
-| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `MATCH`          | DB and source agree on field value                       | nothing                                                                                         |
-| `MISMATCH`       | source has row, field differs                            | **investigate** — DB or source bug; weight by source authority (XDR > Horizon > stellar.expert) |
-| `SOURCE_MISSING` | source has no such entity                                | usually known divergence — note, don't fix                                                      |
-| `NOT_APPLICABLE` | source by design doesn't cover this                      | structural, ignore                                                                              |
-| `UNVERIFIABLE`   | could not extract value (JS shell, no XDR decoder, etc.) | can't judge                                                                                     |
+Then **STOP** and wait for the user's next instruction.
 
 ## Anti-patterns
 
-- Letting subagents pick their own rows — breaks the entire cross-comparison premise.
-- Running subagents sequentially instead of in one parallel message.
-- Passing Archive/S3 fields to subagents when sourcing the field list from `endpoint-queries/README.md` — every Archive field will falsely report MISMATCH.
-- Conflating `SOURCE_MISSING` with `MISMATCH` in the report.
-- Treating a Horizon/stellar.expert MISMATCH as gospel when Raw XDR says MATCH — explorers can be wrong; XDR is the ground truth.
-- Auto-creating follow-up lore tasks for findings — present in chat; the user decides what becomes a task.
+- Querying a non-ClickHouse database or treating its result as ClickHouse evidence.
+- Querying production ClickHouse without explicit authorization.
+- Using `FORMAT TabSeparated` instead of JSONEachRow for sample selection.
+- Treating the reference SQL as the live Rust implementation without checking.
+- Allowing verifier agents to pick their own rows.
+- Passing non-ClickHouse/API-synthesized fields to verifiers.
+- Confusing `SOURCE_MISSING` with `MISMATCH`.
+- Creating code changes, commits, or lore tasks from a validation report.
