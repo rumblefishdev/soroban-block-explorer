@@ -571,8 +571,10 @@ struct SurrogateIdRow {
 
 /// Over-fetch factor for the phase-1 seek: read `limit * OVERFETCH` raw versions
 /// so the consecutive-dedup still yields a full page under the `assets` version
-/// bloat (measured ~2.3× on prod). Same house value as the tx-list driver seek.
-const SEEK_OVERFETCH: i64 = 4;
+/// bloat. **8** is provably enough while the max versions-per-key stays below it:
+/// prod max is 7 (avg ~2.3×, only ~200 keys above 4, none above 7 — measured
+/// 2026-07-16), so `limit * 8` always contains `limit` distinct keys.
+const SEEK_OVERFETCH: i64 = 8;
 
 /// Build the phase-1 list seek: the page's identity keys (4-tuple + `id`) from
 /// `assets` WITHOUT `FINAL`, in PK order, over-fetched by [`SEEK_OVERFETCH`] for
