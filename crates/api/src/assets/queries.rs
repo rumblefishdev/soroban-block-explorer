@@ -819,11 +819,18 @@ pub async fn fetch_by_code_issuer(
 pub async fn fetch_native(
     client: &clickhouse::Client,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!("{ASSET_LIST_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1");
-    let row = client
-        .query(&sql)
-        .fetch_optional::<AssetListChRow>()
-        .await?;
+    // Native XLM is the fixed singleton `(asset_type = 0, code = '', issuer = 0,
+    // contract = 0)` — its identity 4-tuple and surrogate `id` are compile-time
+    // constants, so there is no key to *discover*: skip the phase-1 seek and
+    // hydrate the known key directly (task 0364).
+    let key = AssetKeyChRow {
+        asset_type: 0,
+        asset_code: String::new(),
+        issuer_id: 0,
+        contract_id: 0,
+        id: db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+    };
+    let row = hydrate_assets(client, &[key]).await?.into_iter().next();
     finish_detail(client, row).await
 }
 
