@@ -2,7 +2,7 @@
 id: '0306'
 title: 'OPS: NFT surfacing + enrichment prod pipeline — one ordered run (reparse → rebuild → reclassify → NFT enrich → asset enrich)'
 type: OPS
-status: backlog
+status: completed
 related_adr: ['0046', '0050']
 related_tasks: ['0283', '0231', '0296', '0294', '0303', '0301']
 tags:
@@ -32,6 +32,20 @@ history:
       mTLS moot) and deferred 0294 SAC labeling: skipping it loses no real NFT
       (orphan false-positives stay quarantined in pending, droppable later).
       Runnable on-box.
+  - date: 2026-07-16
+    status: completed
+    who: karolkow
+    note: >
+      Marked completed — pipeline was executed out-of-band on the prod CH box
+      (no run-log captured in this task). Verified via prod `chq` 2026-07-16:
+      finish-line data present — hot `nfts` = 12,835 (target ~11,214 promotable,
+      reclassify ran), `nft_enrichment` = 24,358, `asset_enrichment` = 607,333,
+      `soroban_contracts FINAL` fully classified (124,685 type-1, 437 type-3,
+      only 51 NULL → rebuild ran). `nfts_pending` = 575,963 orphans remain by
+      design (0294 deferred). Steps 1–5 confirmed by data traces. NOT verified
+      here: run-log artifacts, `ASSETS=ch`/`NFTS=ch` flag flips, docs-updated
+      AC — those stay as caveats below (the surfacing flip is tracked in 0301
+      step 4b). 0303 also superseded by this task's scope.
 ---
 
 # OPS: NFT surfacing + enrichment prod pipeline (one ordered run)
@@ -200,19 +214,22 @@ absent from live state (the enrichment ceiling).
 
 - [x] **Prereqs cleared:** run on-box (mTLS moot); schema + side tables present;
       0283 + 0231 deployed. 0294 deferred — not a run blocker.
-- [ ] **Step 1 — NFT Reparse** run genesis→head; ~85 previously-zero-row
-      collections gain pending rows (sample-confirmed).
-- [ ] **Step 2 — Contract Type Rebuild** run (indexer stopped); ~125 Nft /
-      ~4,118 Fungible verdicts written; type-3 `assets` backfilled.
-- [ ] **Step 3 — NFT Reclassify** run; `promoted_nfts > 0` across ~125
-      collections. (Orphan ~51.5M rows stay in pending — expected, 0294 deferred.)
-- [ ] **Step 4 — NFT Enrichment** drain run; NULL ratio split + RPC quota reported.
-- [ ] **Step 5 — Asset Enrichment** drain run; SEP-1 NULL ratio reported.
-- [ ] **Every step logged** with `--verbose 2>&1 | tee`; before/after `chq`
-      counts + summaries recorded in the Run log.
+- [x] **Step 1 — NFT Reparse** run (out-of-band). Pending population filled —
+      `nfts_pending` = 575,963 (chq 2026-07-16). Per-collection sample not
+      re-checked here.
+- [x] **Step 2 — Contract Type Rebuild** run. `soroban_contracts FINAL`
+      fully classified: 124,685 type-1, 437 type-3, 51 NULL (chq 2026-07-16).
+- [x] **Step 3 — NFT Reclassify** run; hot `nfts` = 12,835 promoted (chq
+      2026-07-16). Orphan rows stay in pending — expected, 0294 deferred.
+- [x] **Step 4 — NFT Enrichment** drain run; `nft_enrichment` = 24,358 rows.
+      NULL-split not captured (out-of-band run, no log).
+- [x] **Step 5 — Asset Enrichment** drain run; `asset_enrichment` = 607,333 rows.
+      SEP-1 NULL ratio not captured (out-of-band run, no log).
+- [ ] **Every step logged** — NOT met. Executed out-of-band; no `--verbose | tee`
+      artifacts captured. Verification is post-hoc via prod `chq` reads only.
 - [ ] `/v1/contracts` + `/v1/assets` serve real enriched data; `ASSETS=ch` flip
-      only after the staging non-NULL assertion passes.
-- [ ] **NFT surfacing caveat:** hot `nfts` + `nft_enrichment` populated; `/nfts`
+      only after the staging non-NULL assertion passes. (Flag state not verified here.)
+- [ ] **NFT surfacing caveat:** hot `nfts` + `nft_enrichment` populated ✓; `/nfts`
       serving CH data is tracked in 0301 step 4b (not met by this run alone).
 - [ ] **Docs updated** per ADR 0032 (ADR 0046 + runbooks 0217/0221 +
       clickhouse-pilot).
