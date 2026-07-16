@@ -356,9 +356,14 @@ fn asset_key_tuples(keys: &[AssetKeyChRow]) -> String {
                 "asset_code must be alphanumeric (from assets): {:?}",
                 k.asset_code
             );
+            // Defence-in-depth: codes are protocol-alphanumeric + from our own
+            // rows, but escape anyway (CH string-literal rules) so a malformed
+            // ingested code can never break or inject the inlined literal — the
+            // `debug_assert` above is compiled out in release.
+            let code = k.asset_code.replace('\\', "\\\\").replace('\'', "\\'");
             format!(
                 "({},'{}',{},{})",
-                k.asset_type, k.asset_code, k.issuer_id, k.contract_id
+                k.asset_type, code, k.issuer_id, k.contract_id
             )
         })
         .collect::<Vec<_>>()
