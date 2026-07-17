@@ -2,9 +2,21 @@
 id: '0357'
 title: 'PERF: launch read-path perf cluster — scan→seek/projection across scan-bound endpoints (2026-07-06 load test)'
 type: PERF
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0338', '0353', '0354', '0355', '0356', '0346', '0386', '0387']
+related_tasks:
+  [
+    '0338',
+    '0353',
+    '0354',
+    '0355',
+    '0356',
+    '0346',
+    '0386',
+    '0400',
+    '0401',
+    '0402',
+  ]
 tags: [priority-high, effort-large, layer-clickhouse, milestone-3, phase-launch]
 milestone: 3
 links:
@@ -129,6 +141,27 @@ history:
       MORE (4.17bn) at CH p50 39 ms. Our queries did not change; the box was
       busy. Series 1 + 2 were verified clean (0.02bn), so every earlier
       conclusion in this task stands.
+  - date: 2026-07-17
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed. 6 of 7 ACs met; the 7th ("Docs updated") is deferred to 0400 with
+      its reason recorded rather than rubber-stamped — the architecture docs
+      still describe Postgres as production, so there is no truthful page to
+      write `closed_at_mm` onto. Outcome: 26 endpoints measured on an open model
+      (~33k requests, 3 series); 10/26 meet p95 < 200 ms at 10M/mo (was 5/26);
+      box read work @50M/mo 78.3bn -> 23.9bn (-69%) and the saturation knee is
+      gone — 50M/mo now costs the same p95 as 10M/mo. AC4 splits: error rate
+      PASSES (0 / ~33k, CI upper 0.009% vs <0.1%), p95 FAILS (576 vs 200 ms) with
+      each tail contributor's cause named. Landed #346/#347/#349 + the prod
+      `closed_at_mm` minmax index (now in `init.sql`). Un-owned future work
+      spawned rather than dropped: 0401 (lplist — the last genuine query
+      offender, re-litigates 0208 Path 1) and 0402 (txdetail — the >=427 ms
+      provably outside ClickHouse). 0400 already owned the schema-drift/docs
+      class. Note: `related_tasks` previously listed 0387, which was deleted and
+      renumbered (18ba218b); the dangling id is dropped here, the history prose
+      above keeps the trail. The AC4 framing still needs team + SCF sign-off
+      before the M3 claim — that is downstream of this task, not part of it.
 ---
 
 # PERF: launch read-path perf cluster
@@ -419,11 +452,11 @@ Order (impact + dependency):
 - **0400** — prod-only CH schema objects absent from `init.sql` (`closed_at_mm`
   found here, `oa_pool_seek` still open) + the stale architecture docs that let
   it through. Spawned from this task's measurement.
-- **`lplist`** — the last genuine query offender (~9.6M rows on
+- **0401** — `lplist`, the last genuine query offender (~9.6M rows on
   `min(ledger_sequence)`). Needs 0208 Path 1 (stored `created_at_ledger`)
   re-litigated; it was rejected on writer/RMT grounds before these numbers existed.
-- **`txdetail`** — 6 CH queries/request, ≥427 ms provably outside ClickHouse.
-  A connection/batching investigation, NOT a query task. Un-owned.
+- **0402** — `txdetail`, 6 CH queries/request, ≥427 ms provably outside
+  ClickHouse. A connection/batching investigation, NOT a query task.
 - **Harness realism** — uniform id sampling defeats `nftdetail`'s LRU(1024) by
   construction (500 random NFTs, ~95 requests → almost every lookup is a first
   hit), so its measured p95 is worst-case, not typical. A Zipf id distribution
