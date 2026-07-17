@@ -101,7 +101,17 @@ CREATE TABLE IF NOT EXISTS ledgers (
     closed_at         DateTime64(3, 'UTC'),
     protocol_version  Int32,
     transaction_count Int32,
-    base_fee          Int64
+    base_fee          Int64,
+    -- `closed_at` is not the sort key (`sequence` is), so a time-bounded read —
+    -- the LP chart resolving a window's ledger range — scanned the whole ~26M-row
+    -- table. `closed_at` is monotonic with `sequence`, so a minmax skip index
+    -- prunes to the matching granule range for a few KB (minmax stores 2 values
+    -- per granule group). Measured on the 2026-07-17 50M req/month load test:
+    -- lpchart 77.9M -> 26.3M read_rows/request (-27.5bn over a 12-min run), CH
+    -- time 411 -> 106 ms. Applied to the live prod table via
+    -- ALTER ... ADD INDEX + MATERIALIZE INDEX (online, 2026-07-17); GRANULARITY 4
+    -- matches what is deployed — keep them in sync.
+    INDEX closed_at_mm closed_at TYPE minmax GRANULARITY 4
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(sequence, 500000)
