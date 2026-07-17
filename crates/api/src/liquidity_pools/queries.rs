@@ -767,10 +767,18 @@ pub async fn fetch_pool_chart(
     // identical across a duplicate pair, so which row survives is irrelevant. The
     // outer bucket aggregation is then byte-identical to the old `FINAL` form.
     //
-    // The inner read is bounded to the window's ledger range (resolved from
-    // `[from, to]` via `ledgers.closed_at`, ~29 ms each). Without it the read
-    // scanned the pool's whole history AND the `JOIN ledgers` built a ~1 GiB /
-    // 26M-row hash (~1.2 s on prod); the bound keeps both to the window.
+    // The inner read is bounded to the window's ledger range, resolved from
+    // `[from, to]` against `ledgers.closed_at` (minmax skip index).
+    //
+    // The upper-bound subquery carries a lower bound too. That reads as
+    // redundant — it is not. A minmax index can only skip granules that
+    // *cannot* match, and `closed_at < to` alone matches all of history, so
+    // that subquery scanned the full 26M-row table to find the last ledger
+    // before `to` — 37% of the box's total read work at 50M req/month. The
+    // extra `closed_at >= from` is what gives the index something to prune
+    // (26M → ~209k). The value is unchanged either way: ledgers close every
+    // ~5 s with no gaps, so the last ledger before `to` always falls inside
+    // `[from, to)`.
     let sql = format!(
         "SELECT \
             toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms, \
@@ -783,7 +791,7 @@ pub async fn fetch_pool_chart(
              FROM liquidity_pool_snapshots \
              WHERE pool_id = unhex(?) \
                AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
-               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at <  fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
              ORDER BY ledger_sequence DESC \
              LIMIT 1 BY ledger_sequence \
          ) lps \
@@ -798,9 +806,10 @@ pub async fn fetch_pool_chart(
     let rows = client
         .query(&sql)
         .bind(pool_id_hex)
-        .bind(from.timestamp_millis())
-        .bind(to.timestamp_millis())
-        .bind(from.timestamp_millis())
+        .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
+        .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
+        .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
+        .bind(from.timestamp_millis()) // outer window filter
         .bind(to.timestamp_millis())
         .fetch_all::<ChartChRow>()
         .await?;
