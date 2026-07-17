@@ -114,9 +114,10 @@ nulling or zeroing everything you left out. Recorded the hard way in 0266 for
 `updated` (after) image per op, so one `(pool, ledger)` got two rows with
 different reserves and version-less RMT picked one **at random** — wrong data,
 not duplicates. The parser fix (`dedup_final_pool_snapshots`, "keep the last
-image") **has landed** and applies to backfill too via the shared path, **but the
-pre-fix rows on prod are not yet cleaned** (0356's cleanup criterion is still
-open).
+image") **has landed** and applies to backfill too via the shared path — but the
+lesson generalises: **any** version-less RMT table where a parse can emit more
+than one row per key is exposed to the same silent corruption, and the bad rows
+survive until someone rewrites them.
 
 ---
 
@@ -163,7 +164,7 @@ Build the binary on your laptop, ship it to the box, run it there against
 `localhost:8123`. No transfer step, so no schema-drift or ATTACH concerns.
 
 ➡️ **Runbook: [`docs/runbooks/backfill_derived_table_reparse_hetzner.md`](runbooks/backfill_derived_table_reparse_hetzner.md)**
-(lands with PR #333) — covers both flavours end to end:
+— covers both flavours end to end:
 
 - **Flavour A — cheap in-DB backfill**, no re-parse (`arrayJoin` an existing
   column, RMT-dedup). Minutes.
@@ -272,13 +273,13 @@ Separate bins: `pool-ids-backfill` (0266), `metadata-backfill` (0304).
 
 **Flags — with the traps:**
 
-| Flag                | Reality                                                                                                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                  |
-| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. **Lands with PR #333** — without it, re-parsing history is a silent 0-row no-op. |
-| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                        |
-| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                               |
-| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                         |
+| Flag                | Reality                                                                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                            |
+| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`. |
+| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                  |
+| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                         |
+| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                   |
 
 **Config** (flag-or-env): `CLICKHOUSE_URL`, `CLICKHOUSE_USER`,
 `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`; `CLICKHOUSE_CERT` / `_KEY` / `_CA`
@@ -296,8 +297,10 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
    Re-run the same slice: the RMT-deduped count must stay identical.
 3. **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md)).
 
-> Worked example in flight: task **0379** (the 0359 `operation_asset_appearances`
-> re-parse) has the write **COMPLETE** but Phase-G validation and `repair-tier1` > **PENDING** — which is exactly why its status is not "done".
+> Steps 1–2 are not bookkeeping. A re-parse that skips `repair-tier1` leaves the
+> 12 Tier-1 columns wrong (rule 3), and the damage is invisible until someone
+> reads `first_seen_ledger` — which is why "the write finished" is not the same
+> as "the backfill is done".
 
 ## Superseded — do not follow
 
