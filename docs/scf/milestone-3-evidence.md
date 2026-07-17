@@ -211,7 +211,15 @@ Endpoints that were **not modified at all** improved by 3–4× as a direct resu
 earlier latency was contention from a saturated database rather than the
 endpoints themselves.
 
-- <TODO: attach the raw results CSVs (per-tier `results.csv` + `client_summary.csv`) under screenshots/ or docs/scf/load-tests/>
+**Raw measurement data:** [`load-tests/`](./load-tests/) holds the three tiers
+quoted above — per tier a `results.csv` (one row per request: client latency
+joined to the ClickHouse query log for that same request via `request_id`, so
+each request carries its own `read_rows` / `ch_queries` / `ch_duration_ms`) and
+a `client_summary.csv` (per-endpoint percentiles). The p50 / p95 figures in this
+section are percentiles of `duration_ms` across a tier's `results.csv`;
+[`load-tests/README.md`](./load-tests/README.md) maps each tier to its run and
+restates the headline numbers.
+
 - <TODO: post-run rollback note — `loadTesting` flag → false, API_KEY rotation>
 
 #### Honest assessment
