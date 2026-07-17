@@ -1,5 +1,5 @@
 ---
-id: '0399'
+id: '0401'
 title: 'REFACTOR: arm-A NFT pollution — root cause + fungible/NFT separation in operation_asset_appearances'
 type: REFACTOR
 status: backlog
