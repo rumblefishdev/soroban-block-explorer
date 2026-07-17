@@ -2,9 +2,21 @@
 id: '0365'
 title: 'PERF: operation_pools — indexer-written pool-keyed companion for lptxs prefix-seek (was: entity-keyed MV for the tx-list family)'
 type: PERF
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0357', '0281', '0354', '0364', '0268', '0266', '0359']
+related_tasks:
+  [
+    '0357',
+    '0281',
+    '0354',
+    '0364',
+    '0268',
+    '0266',
+    '0359',
+    '0372',
+    '0400',
+    '0403',
+  ]
 tags:
   [priority-medium, effort-large, layer-clickhouse, milestone-3, phase-launch]
 milestone: 3
@@ -63,6 +75,31 @@ history:
       re-parse): `operation_pools` needs no part of it — but if 0365 ingestion is in that
       build, it rides the re-parse idempotently (pure presence, versionless RMT, no
       DELETE/version/doubling). 0365 does not depend on that re-parse.
+  - date: 2026-07-17
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed. Code shipped in **PR #327** (2026-07-13): `operation_pools` in
+      `init.sql`, `stage::prepare` + `writer` emitting it beside
+      `transaction_participants`, and the `lptxs` driver swapped to the
+      `pool_id`-leading prefix-seek. Backfilled the same day via the chosen Path B
+      CH-side `arrayJoin` re-key — **~363M deduped rows**, matching this task's
+      363.17M prod-measured prediction, with no XDR re-parse.
+      Result: lptxs went from p95 2671 ms / **26.7% 504-timeouts @100 VU** to
+      **CH 19-52 ms, p95 < 300 ms** (measured in 0357's open-model series over
+      ~33k requests). The design calls held: array membership really could not be
+      a sort-key prefix or a projection, and the indexer-written-table choice over
+      an MV was vindicated by the DELETE-visibility argument.
+      **This file was never updated as the work landed**, so every AC still read
+      `[ ]` four days after the code was live. Ticked now against cited evidence
+      (0357's archived record + the hetzner backfill runbook), with the scope of
+      that evidence stated rather than rounded up: the harness sampled pools
+      uniformly, so no deliberate worst-case per-pool `read_rows` figure exists.
+      Two ACs deferred rather than ticked: byte-identical + E20 → **0403** (never
+      run, evidenced nowhere); `oa_pool_seek` retirement → **0400**, which owns
+      that class by name. The follow-up "drop `pool_ids` from
+      `operations_appearances`" was already owned by **0372**
+      (`blocked_by: ['0365']`) — now unblocked.
 ---
 
 # PERF: operation_pools — pool-keyed companion for lptxs prefix-seek
@@ -174,20 +211,39 @@ ledger, tx))` = **363.17M** deduped rows.
 
 ## Acceptance Criteria
 
-- [ ] lptxs driver reads ~page-size (prefix-seek), not the density scan —
+- [x] lptxs driver reads ~page-size (prefix-seek), not the density scan —
       `read_rows` bounded even for sparse + mega pools; verified via
       `system.query_log` on worst-case pools.
+      **Met, with the scope of the evidence stated:** 0357's open-model load test
+      (~33k requests, client duration joined to `system.query_log`) puts lptxs at
+      **CH 19-52 ms / p95 < 300 ms**, down from 2671 ms p95 and 26.7% 504-timeouts
+      @100 VU. Its AC "no whole-dimension reads remain on fixed endpoints" covers
+      this driver. Caveat kept honest: the harness samples pool ids **uniformly**,
+      so mega pools were hit statistically, not deliberately targeted — the
+      density-scan class is gone, but no per-pool worst-case `read_rows` figure
+      was recorded. See 0357's archived worklist.
 - [ ] Output byte-identical to the current driver (prod before/after), across
       sparse / dense / mega pools; E20 (`/liquidity-pools/:id/transactions` vs
-      Horizon) green.
-- [ ] `operation_pools` backfilled over the Soroban era via CH-side `arrayJoin`
+      Horizon) green. — **deferred to 0403.** Never run; not evidenced anywhere.
+- [x] `operation_pools` backfilled over the Soroban era via CH-side `arrayJoin`
       re-key (Path B, no XDR re-parse); the indexer keeps it current, re-ingest-safe
       (DELETE-by-ledger parity with `transaction_participants`).
-- [ ] Retire the prod-only `oa_pool_seek` projection (0281).
-- [ ] **Docs updated** — REQUIRED (new schema object + ingestion step): schema +
+      **Met 2026-07-13** — `INSERT … SELECT arrayJoin(pool_ids) …` produced
+      **~363M deduped rows**, matching this task's 363.17M prod-measured
+      prediction. Recorded in `docs/runbooks/backfill_derived_table_reparse_hetzner.md`
+      and corroborated by 0379's execution log. No XDR re-parse was needed, as designed.
+- [ ] Retire the prod-only `oa_pool_seek` projection (0281). — **deferred to 0400**,
+      which owns the prod-only-schema-object class by name (`oa_pool_seek` is
+      listed there as still open). Archive 0281 suggests the drop already happened
+      during the 0266 prod window and only a stale comment survives at
+      `crates/backfill-runner/src/bin/pool-ids-backfill.rs:36` — that needs a prod
+      check to confirm, which is 0400's job, not a code change here.
+- [x] **Docs updated** — REQUIRED (new schema object + ingestion step): schema +
       ingestion pages under `docs/architecture/**` per
       [ADR 0032](../../2-adrs/0032_docs-architecture-evergreen-maintenance.md).
-- [ ] **API types regenerated** — N/A (query-internal; no API surface change).
+      **Met** — `docs/architecture/database-schema/database-schema-overview.md`
+      lines 116 / 162 / 508 carry `operation_pools`, plus the backfill runbook.
+- [x] **API types regenerated** — N/A (query-internal; no API surface change).
 
 ## Notes / out of scope
 
