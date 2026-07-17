@@ -201,45 +201,59 @@ is safe and fully reversible. Pick by how long the pause needs to last:
 
 ### Galexie (live ingestion) — Ingestion stack
 
-The Galexie image is **pinned by digest** in
-`infra/envs/production.json → galexieImageTag`, which CDK consumes via
-`ContainerImage.fromEcrRepository(repo, galexieImageTag)` — so the image
-must already exist in the `production-galexie` **ECR** repo.
+The Galexie version is **pinned by ECR image digest** in
+`infra/envs/production.json → galexieImageTag`. CDK resolves it through
+`ContainerImage.fromEcrRepository(repo, galexieImageTag)`, which calls
+`repositoryUriForTagOrDigest` — a `sha256:…` value is therefore treated as a
+**digest** (`repoUri@sha256:…`), not a tag. The image must already be in the
+`production-galexie` ECR repo.
 
-> **Two digests — don't confuse them.** The same image has one digest on
-> Docker Hub and a different one in ECR:
->
-> - `GALEXIE_IMAGE_DIGEST` in the GitHub **`staging` Environment** = the
->   **Docker Hub** digest, i.e. what you `docker pull`.
-> - `galexieImageTag` in **`production.json`** = the **ECR** digest that
->   CDK/ECS actually reference.
->
-> The 27.0.0 pin (lore-0367) set both: Docker Hub `sha256:81a9e829…` (GH env)
-> and ECR `sha256:91eae7af…` (production.json).
->
-> <!-- CONFIRM the exact steps + whether GALEXIE_IMAGE_DIGEST is still load-bearing now that CI is dead -->
+Bump procedure — **pull → tag → push → sha**:
 
-Bump procedure (**pending confirmation of the real steps** — see the review note):
+1. **Mirror the image Docker Hub → ECR:**
 
-1. Mirror the new Docker Hub image into ECR, by digest:
    ```bash
    REPO=$(aws ssm get-parameter --region eu-central-1 \
      --name /soroban-explorer/production/ecr-galexie-repo-uri \
      --query Parameter.Value --output text)
    aws ecr get-login-password --region eu-central-1 | \
      docker login --username AWS --password-stdin "${REPO%%/*}"
-   docker pull  stellar/stellar-galexie@sha256:<dockerhub-digest>
-   docker tag   stellar/stellar-galexie@sha256:<dockerhub-digest> "$REPO:<tag>"
-   docker push  "$REPO:<tag>"        # note the ECR digest ECR reports back
+
+   docker pull stellar/stellar-galexie:<version>          # or @sha256:<hub-digest>
+   docker tag  stellar/stellar-galexie:<version> "$REPO:<version>"
+   docker push "$REPO:<version>"        # ← note the digest ECR prints back
    ```
-2. Set `galexieImageTag` in `production.json` to the **ECR** digest (and record
-   the Docker Hub digest in the `GALEXIE_IMAGE_DIGEST` GH Environment var).
-3. Roll the ECS task:
+
+2. **Put the ECR digest in `production.json → galexieImageTag`.** If you missed
+   what `docker push` printed:
+
+   ```bash
+   aws ecr describe-images --region eu-central-1 \
+     --repository-name production-galexie --image-ids imageTag=<version> \
+     --query 'imageDetails[0].imageDigest' --output text
+   ```
+
+   > ⚠️ **This is NOT the Docker Hub digest.** Docker Hub serves a multi-arch
+   > manifest list; pushing to ECR rewrites the manifest, so the two digests
+   > differ. The 27.0.0 pin is Hub `sha256:81a9e829…` but ECR
+   > `sha256:91eae7af…` — and it is the **ECR** one that belongs in
+   > `production.json`. Copying the Hub digest across yields an image ECS
+   > cannot pull.
+
+3. **Roll the ECS task:**
+
    ```bash
    make -C infra deploy-production-ingestion
    ```
-4. Verify: ECS service healthy + the Galexie ingestion-lag alarm quiet
+
+4. **Verify:** ECS service healthy + the Galexie ingestion-lag alarm quiet
    (a stalled Galexie = an ingestion outage; the lag alarm is your signal).
+
+> **`GALEXIE_IMAGE_DIGEST` (GitHub `staging` Environment) is not part of this.**
+> It is read **only** by `.github/workflows/deploy-staging.yml`, which is dead
+> (see [§ No staging, no CI](#no-staging-no-ci)) — so updating it has **no effect
+> on a manual deploy**. `production.json` is the pin. Task 0367 updated the
+> variable as bookkeeping; treat it as a record, not a lever.
 
 > Do **not** flip `assignPublicIp` on the Galexie task — it is the only
 > egress path (no NAT GW post-0239). There is a CODEOWNERS-flagged inline
