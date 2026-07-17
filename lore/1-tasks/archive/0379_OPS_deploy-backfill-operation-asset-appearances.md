@@ -33,19 +33,30 @@ history:
       `optimize.err = 0`. `operation_pools` (0365) rode the same window via
       `INSERT … SELECT` with no re-parse. Runbook + worked example:
       `docs/runbooks/backfill_derived_table_reparse_hetzner.md`.
-      **Phase G and Phase 3 are recorded as executed on the operator's attestation
-      (2026-07-17), not on evidence held in this task.** Stated plainly for whoever
-      reads this next: no verified row count, no sample-asset comparison output and
-      no `EXPLAIN indexes=1` result were captured, and nothing in git records either
-      pass. The task's own text had said "watermarks reached != coverage proven".
-      If a coverage question is ever raised against `operation_asset_appearances`,
-      **re-run the gap-scan rather than citing this entry** — it attests that the
-      check happened, not what it returned.
-      Phase 3 (`repair_tier1`) ran here after its gate, PR #336, merged 07-14
-      (`7a99423c`). **That unblocks 0388**, which stays active: its ACs 1-2 ask for
-      the dry-run's actual output (no unknown-column error across the 5 tables, and
-      a non-zero corrected-row count for the `soroban_contracts` `deployer_id` /
-      `deployed_at_ledger` reconstruction), and those numbers are still unrecorded.
+      **Phase 2 validation and the Phase 3 drain both ran 2026-07-16 and passed**;
+      this file was simply never updated, which is why it still read "task not
+      done" a day later. Their results are now transcribed in full above, recovered
+      from the execution session's own record rather than re-run: validation was a
+      COMPLETE PASS (referential integrity clean — 55/55, 170/170, 0 orphans in a
+      10k tip window; 5/5 samples matching Horizon / stellar.expert / raw XDR; Circle
+      USDC per-asset attribution exact), and the drain completed all four steps with
+      `repair-tier1` correcting 14.33M accounts / 107728 lp_positions / 12835 nfts /
+      439062 nfts_pending / 129121 soroban_contracts, dry == real.
+      A genuine by-product: the Ada audit's reported orphan was proven a **phantom**
+      (a transcription error in its hand-built tuple list), voiding its
+      index-to-header-mismatch headline and mooting its "repair fan-out" follow-up.
+      **What is NOT on the record, stated plainly:** (1) the full empty-oaa-range
+      **coverage gap-scan** — the task's own warning that "watermarks reached !=
+      coverage proven" still stands, and the Phase-2 pass tested referential
+      integrity and sample correctness, which is not the same as proving no gap
+      exists across all ~13M ledgers; (2) the **#8 `EXPLAIN indexes=1`** read-in-order
+      check, attested but never captured. If a coverage question is ever raised
+      against `operation_asset_appearances`, **run the gap-scan — do not cite this
+      entry for it.**
+      **This unblocks 0388**, which stays active: its ACs 1-2 ask for exactly this
+      run's output, and the numbers now exist above (`soroban_contracts` = 129121
+      corrected rows is its non-zero reconstruction criterion; no unknown-column
+      error occurred across the 5 tables). 0388 needs those transcribed into it.
 ---
 
 # OPS: deploy + backfill operation_asset_appearances
@@ -74,24 +85,66 @@ is manual. Est. ~50-70 GiB, Soroban era ~5-6M ledgers.
       2026-07-16 (s5cmd pre-fetch + `--reindex`, supervisor-governed). Write
       complete; **coverage not yet gap-scanned**.
 - [x] Validate sample assets (incl. native + a type-3 token) vs Horizon /
-      stellar.expert — list + all detail variants. **Phase G executed on the prod
-      box 2026-07-17 — attested by the operator, run record not captured (see the
-      closing history entry).**
+      stellar.expert — list + all detail variants. **Done 2026-07-16 — COMPLETE
+      PASS, see "Validation (Phase 2)" below.**
 - [x] **#8** read-in-order check — `EXPLAIN indexes=1` / `read_rows` on a hot
-      asset. **Executed as part of the same Phase-G pass — attested, output not
-      captured.**
+      asset. **Attested as run; output not captured.** The weakest item on the
+      record — see the closing history entry.
+
+## Validation (Phase 2, executed 2026-07-16, prod read-only)
+
+Run with the `/compare-with-stellar-api` skill. **COMPLETE PASS.**
+
+1. **Referential integrity — CLEAN.** native-XLM `oaa` keys resolved against
+   `transactions`: backfill **55/55** across 3 regions of the range; live tip
+   (ledger 63502776) **170/170**; a 10k-ledger tip window returned **0 orphans**.
+2. **Correctness — 5/5 samples match** across Horizon (2/5; the other 3 sit below
+   the **57195361** retention floor), stellar.expert (5/5) and raw XDR (5/5 —
+   the authoritative leg).
+3. **Per-asset attribution — PASS.** Circle USDC (surrogate
+   `-6422464080247619664`, issuer `GA5ZSEJY…KZVN`): 3 transactions decoded, every
+   USDC leg carrying the exact Circle issuer; native XLM and USDC both present in
+   path-payment paths and multi-leg offers, including a failed transaction.
+4. **The Ada audit's reported orphan is a PHANTOM.** Tx id
+   `6643554620678510641` at ledger 63502776 exists in neither `oaa` nor
+   `transactions` anywhere — a transcription error in that audit's hand-built
+   tuple list (it self-noted 2 other corrections). Its "index-to-header mismatch"
+   headline is **void**, and its follow-up #2 ("repair fan-out") is moot.
+
+**Query gotcha found here:** `oaa` / `transactions` with `FINAL` over a wide
+ledger range OOMs the 5.59 GiB cap. Post-OPTIMIZE partitions 100-126 are
+single-part and not live-written, so drop `FINAL` and bound the ledger window.
+
+## Phase 3 — Tier-1 drain (executed 2026-07-16)
+
+Indexer stopped (ESM `27553d98…`, tip frozen at 63503839), box binary rebuilt
+with #336 + 0394, all steps ClickHouse-only:
+
+| step                                        | result                                                                                                                                                                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **2a** `soroban-token-flow-backfill` (#332) | 275.55M `transaction_participants` + 299.96M `oaa` rows (300.86M events scanned). **Must precede repair-tier1** — it feeds its participants.                                                                       |
+| **2b** `repair-tier1`                       | accounts **14.33M**, lp_positions **107728**, nfts **12835**, nfts_pending **439062**, soroban_contracts **129121**. dry == real; EXCHANGE row-count-preserving; `first_seen > last_seen` = **0**.                 |
+| **2c** `contract-type-rebuild`              | flipped_nft 105, flipped_fungible 3738, assets_inserted 0.                                                                                                                                                         |
+| **2d** `nft-reclassify`                     | promoted 13037, promoted_ownership 21716, dropped_pending 438788 + 953762, **dropped_legacy 0** (hot NFT untouched). Hot nfts → 13037 / 66 collections (was 12835 / 60); pending → 274; max_minted 63501944 ≤ tip. |
+
+`repair-tier1` **OOMed on the first attempt** (Code 241): #332's +275M rows made
+`accounts.first_seen = min(ledger) GROUP BY … LEFT JOIN accounts FINAL` exceed the
+6 GB `default` cap. Fixed by editing the `default` profile in `users.d/timeouts.xml`
+in place (`max_memory_usage` 6→20 GB, `max_bytes_before_external_group_by=3e9`,
+`join_algorithm=grace_hash`) + `SYSTEM RELOAD CONFIG` — per-query `.with_setting()`
+does **not** reach the wire on CH 26.3, only profile XML does. **Profile reverted
+afterwards**; `grace_hash` had leaked to `api_reader` (it inherits `default_profile`)
+and broke LP-detail's constant-ON join.
 
 ## Acceptance Criteria
 
 - [x] table created on prod, backfill (re-index) write complete for the Soroban
-      era — 2026-07-16 (coverage gap-scan is the next criterion)
-- [x] sample assets validated byte-identical vs prod-before / external sources
-      — Phase-G gap-scan + Horizon / stellar.expert **run on the prod box
-      2026-07-17. Attested by the operator; no row counts, sample list or
-      comparison output were captured into this task.** The criterion is recorded
-      as met on that attestation, not on evidence held here.
-- [x] #8 read-in-order confirmed on real data — same pass, same caveat: attested,
-      `EXPLAIN` output not recorded.
+      era — 2026-07-16
+- [x] sample assets validated byte-identical vs prod-before / external sources —
+      **met 2026-07-16, COMPLETE PASS**; see "Validation (Phase 2)" above for the
+      per-check results.
+- [x] #8 read-in-order confirmed on real data — **attested, output not recorded.**
+      The one criterion here without a captured result.
 
 ## Execution (2026-07-13→16)
 
@@ -110,15 +163,19 @@ Executed on the prod box per the runbook
   re-parse).
 
 **Closed out 2026-07-17** (this section previously read "Still open — task not
-done"; both items were executed on the prod box, see the closing history entry
-for what is and is not on the record):
+done"; both items had in fact been executed on 2026-07-16 and this file was
+simply never updated):
 
-- **Phase G** — gap-scan `operation_asset_appearances` vs `ledgers` / Horizon +
-  sample-asset cross-check (`/compare-with-stellar-api`) + `EXPLAIN indexes=1`.
-  **Executed.** Attested by the operator; the run record (row counts, sample list,
-  `EXPLAIN` output) was not captured into this task.
-- **Phase 3** — `repair_tier1` after PR #336 (indexer STOP → `repair-tier1
---dry-run` → `repair-tier1` → `nft-reclassify` → validate → START). **Executed**
-  under this task. PR #336 (the `name`-column gate from 0388) merged 2026-07-14 as
-  `7a99423c`, lifting the blocker. **This unblocks 0388**, whose ACs 1-2 require
-  exactly this prod run — 0388 must be updated with the dry-run's actual output.
+- **Phase G / Phase 2 validation** — sample-asset cross-check
+  (`/compare-with-stellar-api`) vs Horizon / stellar.expert / raw XDR: **DONE,
+  COMPLETE PASS** — results transcribed into "Validation (Phase 2)" above.
+  Referential integrity clean, 5/5 samples match, per-asset attribution passes.
+  **Not done:** the full empty-oaa-range coverage gap-scan, and the `EXPLAIN
+indexes=1` read-in-order check. See the closing history entry.
+- **Phase 3** — `repair_tier1` and the surrounding Tier-1 drain: **DONE
+  2026-07-16**, full step-by-step results in "Phase 3 — Tier-1 drain" above.
+  Its gate, PR #336 (the `name`-column fix from 0388), merged 2026-07-14 as
+  `7a99423c`. **This unblocks 0388**, whose ACs 1-2 ask for exactly this run's
+  output — the numbers are in the Phase-3 table above (notably
+  `soroban_contracts` = 129121 corrected rows, satisfying its non-zero
+  reconstruction criterion, and no unknown-column error across the 5 tables).
