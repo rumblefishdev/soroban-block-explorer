@@ -261,6 +261,17 @@ pub async fn fetch_pool_by_id(
     // `argMax`), so `reserve_a`/`reserve_b` can never tear across a stale
     // before/after pair in the pre-cleanup window. `created_at_ledger` already
     // reads without `FINAL` (`min(ledger_sequence)` is dup-invariant).
+    //
+    // **`ledgers` is SEEKED, never joined whole.** `LEFT JOIN ledgers l ON
+    // l.sequence = s.ledger_sequence` hash-built the entire 26M-row table to
+    // resolve ONE `closed_at` — 27.2M read_rows / 1.82 GiB / ~724 ms of CH per
+    // request under load (96% of this endpoint's cost, measured 2026-07-17 at
+    // 50M/mo). Restricting the right side to the single sequence the snapshot
+    // subquery points at makes it a PK point read.
+    //
+    // The `s` join is an EQUI-join on `pool_id` (not `ON 1 = 1`): a constant ON
+    // condition is only supported by `join_algorithm = 'hash'`, so the old form
+    // 500'd (Code 48) the moment the server profile carried anything else.
     let row = client
         .query(
             "WITH legs AS ( \
@@ -330,7 +341,8 @@ pub async fn fetch_pool_by_id(
                                 AND sac_b.issuer_id = lp.asset_b_issuer_id \
                                 AND lp.asset_b_code != '' \
              LEFT JOIN ( \
-                 SELECT toNullable(ledger_sequence) AS ledger_sequence, \
+                 SELECT pool_id, \
+                        toNullable(ledger_sequence) AS ledger_sequence, \
                         toNullable(reserve_a)       AS reserve_a, \
                         toNullable(reserve_b)       AS reserve_b, \
                         toNullable(total_shares)    AS total_shares, \
@@ -339,11 +351,16 @@ pub async fn fetch_pool_by_id(
                  WHERE pool_id = unhex(?) \
                  ORDER BY ledger_sequence DESC \
                  LIMIT 1 \
-             ) s ON 1 = 1 \
-             LEFT JOIN ledgers l ON l.sequence = s.ledger_sequence \
+             ) s ON s.pool_id = lp.pool_id \
+             LEFT JOIN ( \
+                 SELECT sequence, closed_at FROM ledgers \
+                 WHERE sequence = (SELECT max(ledger_sequence) FROM liquidity_pool_snapshots \
+                                    WHERE pool_id = unhex(?)) \
+             ) l ON l.sequence = s.ledger_sequence \
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
         )
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
