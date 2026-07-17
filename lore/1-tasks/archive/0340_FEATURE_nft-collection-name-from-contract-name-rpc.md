@@ -2,7 +2,7 @@
 id: '0340'
 title: 'NFT collection_name from ledger instance-storage (parser-first; name() RPC demoted to fallback)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0231', '0306', '0301', '0212', '0297']
 tags: ['nft', 'enrichment', 'xdr-parser', 'effort-small']
@@ -37,6 +37,32 @@ history:
       name IS in instance storage (CARTUL5A "SushiSwap V3 Positions NFT-V1",
       CAKSC7JH "Minah"). Fix A (parser, PR #330, MERGED) + Fix B (serving, PR #331)
       source it from the ledger. name() RPC demoted to fallback.
+  - date: '2026-07-17'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed — the parser-first redirect is **vindicated by prod measurement**.
+      `with_name / collections` = **54 / 66 (82%)**, measured on the prod box
+      2026-07-17, against the **0/68** that opened this task in June. Fix A (#330)
+      was in the lore-0359 re-parse build, so the re-parse populated the names for
+      free — the "backfill rides the re-parse, no separate pass" bet paid off
+      exactly as written. `soroban_contract_metadata` holds 3822 rows, all 3822
+      named. The two contracts hand-verified via getLedgerEntries on 07-13 now read
+      from the ledger with no RPC: CAKSC7JH -> "Minah", CARTUL5A -> "SushiSwap V3
+      Positions NFT-V1".
+      The 12 collections without a ledger name are **the fallback population, not a
+      gap** — they include CDA5FGE4 (Bachini), the very contract this task named as
+      the WASM-baked / empty-instance-storage case. So PR #301's `name()` RPC work
+      is settled as the fallback implementation: it has a real job, it is not dead
+      code. All three Future Work items are closed, nothing spawned.
+      The lesson from the Issues section is worth restating, because it nearly cost
+      an RPC-per-collection architecture: the 0/68 that drove the original design
+      was **measuring an extractor bug, not the chain**. Verify a "not in storage"
+      claim against raw getLedgerEntries, never against a side-table populated by
+      the very code under suspicion.
+      Doc drift caught at close: #339 re-framed enrichment.md to ledger-primary but
+      missed one table row, which still sold `name()` RPC as the source and repeated
+      the stale 0/68 — fixed here.
 ---
 
 # NFT collection_name from ledger instance-storage (parser-first)
@@ -105,13 +131,27 @@ the raw S3 `aws-public-blockchain` per-ledger meta.)
 - [x] Served as `COALESCE(ledger, enrichment)` on list / detail / search +
       `filter[collection]` consistent with the displayed value (Fix B, PR #331;
       CH 26.3-verified, incl. precedence).
-- [ ] Prod populated — deferred to the Phase-3 / lore-0359 archive re-parse (Fix A
+- [x] Prod populated — deferred to the Phase-3 / lore-0359 archive re-parse (Fix A
       must be in the deploy build first). Measure `with_name / collections` after.
+      — **MET. Measured on prod 2026-07-17: `with_name / collections` = 54 / 66
+      (82%)**, up from the 0/68 that started this task. Fix A **was** in the
+      re-parse build, and the re-parse populated the names for free exactly as
+      designed — no separate backfill pass was needed. `soroban_contract_metadata`
+      now holds 3822 rows, **all 3822 carrying a name**.
+      Spot-checked the two contracts live-verified during the 07-13 redirect, both
+      correct from the ledger: `CAKSC7JH…` → **"Minah"**, `CARTUL5A…` →
+      **"SushiSwap V3 Positions NFT-V1"**.
+      The 12 collections without a ledger name are **the designed fallback
+      population, not a gap** — they include `CDA5FGE4…` (Bachini), the exact
+      contract this task named as the WASM-baked / empty-instance-storage case that
+      `name()` RPC exists to cover.
 - [x] `name()` RPC demoted from primary to fallback (PR #301 work retained for
       WASM-baked names; not run on the primary path).
-- [x] **Docs updated** — `xdr-parsing-overview.md` (Fix A) + this task doc. Follow-up:
-      `enrichment.md` / runner README still describe `name()` RPC as the source —
-      re-frame as fallback (small doc touch).
+- [x] **Docs updated** — `xdr-parsing-overview.md` (Fix A) + this task doc. The
+      `enrichment.md` / runner README re-frame landed in **#339**; one contradictory
+      row survived it (the NFT "Worker source" table still presented `name()` RPC as
+      the source and repeated the stale "0/68 on prod") and was **fixed at close
+      2026-07-17** — it now states ledger-primary with the measured 54/66.
 - [x] **API types** — N/A for Fix A (no `crates/api/**`); Fix B `check-generated`
       green (query-only change, no openapi drift).
 
@@ -143,6 +183,14 @@ the raw S3 `aws-public-blockchain` per-ledger meta.)
 
 ## Future Work
 
-- Run the prod backfill via the Phase-3 re-parse; measure population.
-- Re-frame `enrichment.md` / runner README: ledger primary, `name()` RPC fallback.
-- Decide PR #301's fate (keep as fallback impl, or fold into a leaner fallback).
+_All three closed out at 2026-07-17 — none left open, nothing spawned._
+
+- ~~Run the prod backfill via the Phase-3 re-parse; measure population.~~ **Done**
+  — the lore-0359 re-parse carried Fix A and populated the names for free;
+  measured 54/66 (see AC3).
+- ~~Re-frame `enrichment.md` / runner README: ledger primary, `name()` RPC
+  fallback.~~ **Done in #339**, plus one contradictory table row fixed at close.
+- ~~Decide PR #301's fate.~~ **Decided: kept as the fallback implementation.**
+  #339 (`f3110276`) demoted `name()` to fallback, and the 12 ledger-less
+  collections measured on prod — `CDA5FGE4…` among them — are exactly the
+  population it serves. The work is doing a job; it is not dead code.
