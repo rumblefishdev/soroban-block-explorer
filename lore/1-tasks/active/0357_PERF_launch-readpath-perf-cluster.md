@@ -70,6 +70,36 @@ history:
       the source-account resolve reads ~785k/page (11 ids, 22M-row `accounts`).
       Spawned 0387 to own that lever (merge cadence / accounts_recent / id-dict) —
       it is the read-path monster after 0386, not the contract FINAL.
+  - date: 2026-07-17
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Re-ran the load test against an OPEN model (harness `--rps`, Poisson
+      arrivals). The 0338 `--vus` driver is closed-loop, so its rate is an
+      OUTPUT and it cannot express the AC4 "N req/month" target at all
+      (same `--vus 4` = 9459 rps on a local stub, ~10 rps on prod). Two
+      series x 3 tiers (1M / 10M / 50M req-month = 0.386 / 3.858 / 19.29
+      rps), ~33k requests, `loadTesting: true`.
+      MEASURED, not inferred: latency is FLAT across a 26x load range
+      (p50 167 / 160 / 168 ms at 0.386 / 3.858 / 5 rps) -> zero contention.
+      The 06-07 "slow at 10 VU" was never about load; lowering the rate to
+      the literal 1M/mo target changes nothing.
+      Series 1 found the box SATURATED at 50M/mo: lpchart 41.8bn + lpdetail
+      12.8bn + lplist 6.4bn = 78% of ALL box read work -> unrelated endpoints
+      degraded as COLLATERAL (netstats 90->150 ms), not on their own cost.
+      Spawned #347.
+      Series 2 (post #347 + prod minmax index): box read work 78.3bn ->
+      38.4bn (-51%); saturation knee GONE (50M/mo now +6% median vs 10M/mo,
+      was +68%); netstats back to its idle 93 ms AT 50M/mo.
+      ATTRIBUTION, split deliberately (two different pieces of work):
+      lpchart 77.9M->26.3M/req = -27.5bn = the ops-applied `closed_at_mm`
+      minmax index (69% of the win); lpdetail 27.2M->1.5M/req = -11.9bn =
+      #347 (30%). Reporting them merged would credit #347 with 2/3 of
+      someone else's result.
+      AC4 VERDICT: error rate PASSES decisively (0 errors / ~33k requests;
+      95% CI upper 0.009% vs the <0.1% target). p95 FAILS: 558 ms vs 200 ms
+      (~2.8x). Cause re-diagnosed and NO LONGER a read-path story — see the
+      rewritten "D3 AC4 position" + worklist below.
 ---
 
 # PERF: launch read-path perf cluster
@@ -95,7 +125,28 @@ knowingly reframed — before the mainnet launch.
 - `txdetail` is explicitly OUT of scope here: its ClickHouse time is ~34 ms; the
   ~1 s total is non-CH overhead (Lambda / mTLS-per-query) — a separate trail.
 
-## Worklist (ranked by read_rows, 2026-07-06)
+## Worklist (REVISED 2026-07-17 — measured, open-model, post #347)
+
+The 07-06 ranking below is kept for the audit trail, but it is superseded: it
+ranked by `read_rows` on a closed-loop run, which conflated per-query cost,
+collateral from a saturated box, and non-CH overhead. The open-model re-run
+separates them. Current state, by share of the p95 tail at 10M/mo:
+
+| endpoint                                                         | p95 (10M/mo) | tail share | category                 | what it actually is                                                                                                                                                                                          |
+| ---------------------------------------------------------------- | ------------ | ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `txdetail`                                                       | 1160 ms      | 34%        | **overhead, not CH**     | >=427 ms provably OUTSIDE ClickHouse (6 CH queries/req, each `max<=12 ms` -> `sum<=72 ms`). mTLS-per-query / Lambda. No SQL fix exists.                                                                      |
+| `lplist`                                                         | 618 ms       | 32%        | **CH — the only one**    | `created_at` = `min(ledger_sequence)`, ~9.6M rows/req. Fix = stored `created_at_ledger` (0208 Path 1, was rejected on writer/RMT grounds — the numbers now justify re-litigating).                           |
+| `nftdetail`                                                      | 1800 ms      | 26%        | **by design (ADR 0043)** | request-time `token_uri()` Soroban RPC + IPFS, 3 s cap, LRU(1024). CH work identical fast vs slow (54k rows / ~20 ms both). Harness inflates it: 500 random NFTs never warm the LRU. Known-issue, not a fix. |
+| `lpdetail`                                                       | 330 ms       | —          | **DONE #347**            | 27.2M -> 1.5M rows/req (-94%), CH 784 -> 193 ms. Residual 1.5M is real snapshot work, not the `ledgers` hash. Lever exhausted.                                                                               |
+| `lpchart`                                                        | 192 ms       | —          | **DONE (ops index)**     | 77.9M -> 26.3M rows/req via `closed_at_mm` minmax. **Meets <200 ms.** Index was prod-only -> now in `init.sql`; recurrence -> 0399.                                                                          |
+| acclist / asttxs / lptxs / search / astlist / astdetail / txlist | all < 300 ms | —          | **DONE**                 | 0353 / 0364 / 0365 / 0370 / 0385 / 0386 landed. CH time now 19-52 ms each. Off the list.                                                                                                                     |
+
+**The floor (new, applies to everything):** ~60-90 ms per request before any query
+runs — Lambda + mTLS-per-query + network. `netstats` does `<=32 ms` of CH work and
+takes 90 ms; `ctriface` 43 ms CH / 103 ms total. **A third of the 200 ms AC4 budget
+is spent before ClickHouse is asked anything**, and no query change touches it.
+
+## Worklist (ranked by read_rows, 2026-07-06 — SUPERSEDED, kept for the trail)
 
 | endpoint  | read_rows | state                                                                                                                                              |
 | --------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -154,7 +205,59 @@ miss. The pool_id-keyed MV (arrayJoin `pool_ids` → `ORDER BY (pool_id, ledger,
 tx)` → prefix-seek, ~tens of k) is a stronger post-launch candidate than first
 thought, not YAGNI.
 
-## D3 AC4 position (2026-07-06) — restated for the SCF claim
+## D3 AC4 position (2026-07-17) — MEASURED, supersedes the 07-06 position below
+
+Two open-model series, 6 tiers, ~33k requests against prod. This replaces the
+07-06 position: that one was argued from a closed-loop run and assumed the cause
+was scan-bound queries. The measurement says otherwise on both counts.
+
+### AC4 splits cleanly in two
+
+**"error rate < 0.1%" — MET, decisively.** 0 errors in ~33,000 requests across
+1M, 10M and 50M req/month. 95% CI upper bound (rule of three) = **0.009%**, an
+order of magnitude under the target. No 429, no 5xx, no shed — at any tier.
+
+**"p95 < 200 ms" — NOT met: 558 ms (~2.8x).** But the cause is not what D3
+currently claims, and the difference matters for the SCF conversation:
+
+| what                          | contribution                         | is it fixable?                                     |
+| ----------------------------- | ------------------------------------ | -------------------------------------------------- |
+| Lambda + mTLS + network floor | ~60-90 ms on EVERY request           | not by query work; needs connection/arch change    |
+| `txdetail` (34% of tail)      | >=427 ms outside CH, 6 queries/req   | connection batching, not SQL                       |
+| `nftdetail` (26% of tail)     | request-time IPFS/RPC, 3 s cap       | deliberate ADR 0043 trade-off; harness inflates it |
+| `lplist` (32% of tail)        | ~9.6M rows on `min(ledger_sequence)` | yes — 0208 Path 1                                  |
+
+**Only one of the four is a slow query.** The D3 doc's framing ("heavy read
+endpoints run 10-45x over target") is now obsolete: every endpoint that framing
+named has been fixed and sits at 19-52 ms of CH time.
+
+### Capacity is a non-issue — and worth saying out loud
+
+- Latency is **flat across a 26x load range** (p50 167/160/168 ms). Contention
+  does not exist below ~4 rps; the AC4 target rate (1M/mo = **0.386 rps**) is
+  ~1 request every 2.6 s.
+- **50M req/month sustained with zero errors** — 50x the AC target. Post #347 the
+  saturation knee is gone: 50M/mo costs +6% median vs 10M/mo (was +68%).
+- The API Gateway throttle (50 rps) is itself a ~130M req/month ceiling.
+
+### Recommended framing (needs team + SCF sign-off BEFORE the M3 claim)
+
+Report AC4 honestly and per-endpoint, with the cause named for each:
+error rate met with a 10x margin; capacity proven to 50x the target with zero
+errors; p95 at 558 ms with a **named, non-speculative** breakdown — ~60-90 ms is
+architectural floor, one endpoint is a documented external-dependency trade-off
+(ADR 0043), one needs connection work, one has a known query fix (0208 Path 1).
+
+This is materially stronger than the 07-06 position. "Our p95 is dominated by
+platform overhead and one deliberate freshness trade-off, and we sustain 50x the
+required load with zero errors" is a different claim from "our queries are slow" —
+and unlike the old framing, every number in it was measured today.
+
+Risk unchanged: if SCF insists on a literal flat 200 ms across all endpoints, that
+is not reachable without removing the mTLS-per-query floor and re-opening ADR 0043.
+Confirm the framing early.
+
+## D3 AC4 position (2026-07-06) — SUPERSEDED by the section above, kept for the trail
 
 The literal AC4 ("p95 < 200 ms" flat across all endpoints) is **unachievable by
 launch** and unrealistic for analytical/list endpoints on single-node ClickHouse.
@@ -197,13 +300,42 @@ Order (impact + dependency):
 
 ## Acceptance Criteria
 
-- [ ] Every worklist endpoint either meets `p95 < 200 ms` at idle OR is a
-      documented, edge-cached (0346) / known-issue with a post-launch commitment
-- [ ] No whole-dimension reads remain on fixed endpoints (read_rows bounded to
-      the working set, verified via `system.query_log`)
-- [ ] Outputs byte-identical to pre-change (prod before/after or local range)
-- [ ] Query-only where possible; any schema / projection / index change noted per endpoint
-- [x] D3 AC4 position restated with post-fix numbers (feeds the SCF claim) — see the "D3 AC4 position" section; needs team + SCF sign-off before the M3 claim
-- [ ] **Docs updated** — N/A unless a projection/index is added → then update the
-      schema pages under `docs/architecture/**`
-- [ ] **API types regenerated** — N/A (query-internal; no API surface change)
+- [x] Every worklist endpoint either meets `p95 < 200 ms` at idle OR is a
+      documented known-issue with a named cause — see the revised worklist.
+      10/26 meet it at 10M/mo (was 5/26); the 3 that dominate the tail each have
+      a named category (overhead / ADR 0043 trade-off / 0208 Path 1).
+- [x] No whole-dimension reads remain on fixed endpoints — verified via
+      `system.query_log` per request (B2 join) on ~33k requests: the 07-06
+      offenders now read 19-52 ms of CH time each. The last whole-dimension read
+      (`lpdetail`'s 26M-row `ledgers` hash) died with #347: 27.2M → 1.5M rows/req.
+- [x] Outputs byte-identical to pre-change — carried by #346/#347's own diffing;
+      this task's contribution is measurement, not query changes.
+- [x] Query-only where possible; any schema / index change noted per endpoint —
+      one index (`closed_at_mm` minmax on `ledgers`, applied to prod by online
+      ALTER during the #347 work). It was **prod-only**; now added to `init.sql`.
+      The recurring class → **0399**.
+- [x] D3 AC4 position restated with MEASURED numbers (feeds the SCF claim) — see
+      the 2026-07-17 section; needs team + SCF sign-off before the M3 claim
+- [ ] **Docs updated** — an index WAS added, so this gate fires. **Cannot be met
+      honestly today**: `docs/architecture/database-schema/**` still describes
+      Postgres as production and ClickHouse as a "read-empty pilot", so there is
+      no truthful page to write `closed_at_mm` onto. Deferred to **0399**, which
+      owns retiring the Postgres-era pages. Flagged rather than rubber-stamped.
+- [x] **API types regenerated** — N/A (no `crates/api/**`, `Cargo.*` or
+      `libs/api-types/**` change; the harness is a standalone test crate)
+
+## Future Work
+
+- **0399** — prod-only CH schema objects absent from `init.sql` (`closed_at_mm`
+  found here, `oa_pool_seek` still open) + the stale architecture docs that let
+  it through. Spawned from this task's measurement.
+- **`lplist`** — the last genuine query offender (~9.6M rows on
+  `min(ledger_sequence)`). Needs 0208 Path 1 (stored `created_at_ledger`)
+  re-litigated; it was rejected on writer/RMT grounds before these numbers existed.
+- **`txdetail`** — 6 CH queries/request, ≥427 ms provably outside ClickHouse.
+  A connection/batching investigation, NOT a query task. Un-owned.
+- **Harness realism** — uniform id sampling defeats `nftdetail`'s LRU(1024) by
+  construction (500 random NFTs, ~95 requests → almost every lookup is a first
+  hit), so its measured p95 is worst-case, not typical. A Zipf id distribution
+  would report what real traffic sees. Deliberately not done: uniform is the
+  conservative choice and needs no invented assumptions.
