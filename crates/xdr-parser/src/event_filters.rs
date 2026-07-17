@@ -23,7 +23,7 @@ pub enum TokenEventKind {
 /// string topic (`"native"` or `"CODE:ISSUER"`). Bespoke non-SAC tokens omit
 /// it — their asset identity is the emitting contract, surfaced here as
 /// `Contract` so the caller (which holds `contract_id`) resolves the surrogate.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EventAsset {
     Native,
     Credit { code: String, issuer: String },
