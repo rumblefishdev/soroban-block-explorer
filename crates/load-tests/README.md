@@ -135,6 +135,38 @@ ulimit -n 65535
   --vus 1000 --duration 1h --harvest 500
 ```
 
+### Pre-flight: check the box is quiet, or your numbers are a lottery
+
+**The ClickHouse box is shared with `stellar-prices-api`** (CH user
+`prices_writer`). Its OHLCV batch is bursty — idle for minutes, then ~1.6bn
+rows/minute — and it is big enough to **double the API's p95 on its own**. This
+is not theoretical: on 2026-07-17 it read 14.2bn rows during a 10-minute tier
+(3x the whole load test) and turned a 568 ms p95 into 1194 ms. A re-run 33
+minutes later on a quiet box, same code and same rate, read *more* of our rows
+in 2.7x less ClickHouse time.
+
+Run this **before every tier**, and again after if a number looks surprising:
+
+```bash
+ssh deploy@<box-ip> "docker exec -i app-clickhouse-1 clickhouse-client --query \"
+SELECT toStartOfMinute(event_time) AS m, round(sum(read_rows)/1e9,2) AS prices_bn
+FROM system.query_log
+WHERE type='QueryFinish' AND user='prices_writer' AND event_time > now() - INTERVAL 5 MINUTE
+GROUP BY m ORDER BY m DESC\" --format PrettyCompact"
+```
+
+All zeros → safe to measure. Anything above ~0.1bn/min → wait; the run will be
+contaminated and there is no way to correct for it after the fact.
+
+To audit a finished run (`log_comment=''` is everything that is not the harness):
+
+```sql
+SELECT user, count() AS queries, round(sum(read_rows)/1e9,2) AS bn
+FROM system.query_log
+WHERE type='QueryFinish' AND log_comment='' AND event_time BETWEEN {start} AND {end}
+GROUP BY user ORDER BY bn DESC;
+```
+
 Run the tiers **in order and one at a time** — they contend with each other, and
 tier A's whole job is to measure an uncontended baseline. Each run writes its own
 `out/<UTC-start>/`, so tiers never mix; steps 4-5 are per-run.
