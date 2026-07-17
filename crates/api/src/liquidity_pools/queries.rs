@@ -261,6 +261,17 @@ pub async fn fetch_pool_by_id(
     // `argMax`), so `reserve_a`/`reserve_b` can never tear across a stale
     // before/after pair in the pre-cleanup window. `created_at_ledger` already
     // reads without `FINAL` (`min(ledger_sequence)` is dup-invariant).
+    //
+    // **`ledgers` is SEEKED, never joined whole.** `LEFT JOIN ledgers l ON
+    // l.sequence = s.ledger_sequence` hash-built the entire 26M-row table to
+    // resolve ONE `closed_at` — 27.2M read_rows / 1.82 GiB / ~724 ms of CH per
+    // request under load (96% of this endpoint's cost, measured 2026-07-17 at
+    // 50M/mo). Restricting the right side to the single sequence the snapshot
+    // subquery points at makes it a PK point read.
+    //
+    // The `s` join is an EQUI-join on `pool_id` (not `ON 1 = 1`): a constant ON
+    // condition is only supported by `join_algorithm = 'hash'`, so the old form
+    // 500'd (Code 48) the moment the server profile carried anything else.
     let row = client
         .query(
             "WITH legs AS ( \
@@ -330,7 +341,8 @@ pub async fn fetch_pool_by_id(
                                 AND sac_b.issuer_id = lp.asset_b_issuer_id \
                                 AND lp.asset_b_code != '' \
              LEFT JOIN ( \
-                 SELECT toNullable(ledger_sequence) AS ledger_sequence, \
+                 SELECT pool_id, \
+                        toNullable(ledger_sequence) AS ledger_sequence, \
                         toNullable(reserve_a)       AS reserve_a, \
                         toNullable(reserve_b)       AS reserve_b, \
                         toNullable(total_shares)    AS total_shares, \
@@ -339,11 +351,16 @@ pub async fn fetch_pool_by_id(
                  WHERE pool_id = unhex(?) \
                  ORDER BY ledger_sequence DESC \
                  LIMIT 1 \
-             ) s ON 1 = 1 \
-             LEFT JOIN ledgers l ON l.sequence = s.ledger_sequence \
+             ) s ON s.pool_id = lp.pool_id \
+             LEFT JOIN ( \
+                 SELECT sequence, closed_at FROM ledgers \
+                 WHERE sequence = (SELECT max(ledger_sequence) FROM liquidity_pool_snapshots \
+                                    WHERE pool_id = unhex(?)) \
+             ) l ON l.sequence = s.ledger_sequence \
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
         )
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
@@ -749,6 +766,11 @@ pub async fn fetch_pool_chart(
     // ledger (`LIMIT 1 BY ledger_sequence`) with no merge; tvl/volume/fee are
     // identical across a duplicate pair, so which row survives is irrelevant. The
     // outer bucket aggregation is then byte-identical to the old `FINAL` form.
+    //
+    // The inner read is bounded to the window's ledger range (resolved from
+    // `[from, to]` via `ledgers.closed_at`, ~29 ms each). Without it the read
+    // scanned the pool's whole history AND the `JOIN ledgers` built a ~1 GiB /
+    // 26M-row hash (~1.2 s on prod); the bound keeps both to the window.
     let sql = format!(
         "SELECT \
             toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms, \
@@ -760,6 +782,8 @@ pub async fn fetch_pool_chart(
              SELECT ledger_sequence, tvl, volume, fee_revenue \
              FROM liquidity_pool_snapshots \
              WHERE pool_id = unhex(?) \
+               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at <  fromUnixTimestamp64Milli(?)) \
              ORDER BY ledger_sequence DESC \
              LIMIT 1 BY ledger_sequence \
          ) lps \
@@ -774,6 +798,8 @@ pub async fn fetch_pool_chart(
     let rows = client
         .query(&sql)
         .bind(pool_id_hex)
+        .bind(from.timestamp_millis())
+        .bind(to.timestamp_millis())
         .bind(from.timestamp_millis())
         .bind(to.timestamp_millis())
         .fetch_all::<ChartChRow>()
@@ -928,20 +954,34 @@ pub async fn fetch_pool_list(
         binds.push(code.clone());
     }
 
-    // Latest-snapshot fields — NO `FINAL` (0356 / PR #318). The `s` subquery
-    // picks the whole latest row per pool via `ORDER BY ledger_sequence DESC` +
-    // `LIMIT 1 BY pool_id` (bounded reverse-PK seek over the page's pools, no
-    // whole-table merge). Whole-row, not per-column `argMax`, so a pre-cleanup
-    // before/after duplicate can't tear `reserve_a` from `reserve_b`.
-    // `created_at_ledger` moves to its own `cr` subquery (`min(ledger_sequence)`,
-    // dup-invariant). These fields wrap in `toNullable(...)` so a no-snapshot pool
-    // yields NULL (not the 0/'' default) on the LEFT JOIN miss — `join_use_nulls`
-    // is rejected for the read-only CH user, so this is the readonly-safe NULL
-    // path. (Every current pool has ≥ 1 snapshot, so this is defensive.)
-    // `nullIf(...)` does the same for the
-    // empty-string-sentinel string columns. Native legs (asset_code = '') are
-    // excluded from the SAC join by the `lp.asset_*_code != ''` guard so they
-    // surface a NULL `contract_id`, matching PG (NULL code → no SAC match).
+    // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
+    // `ledger_sequence` band around the page's `last_updated_ledger` range (the
+    // `band` CTE, ±10k). Page pools are the most-recently-updated, so their
+    // latest snapshot sits in that band — a bounded seek (~0.5M rows / ~50ms)
+    // instead of a full per-pool history scan (30M rows, which OOMed the 4 GB
+    // read-only profile as PR #335's `LIMIT 1 BY` sort). NO `FINAL`: the band's
+    // max ledger per page pool is recent (post-0356/#318 single-image) so
+    // per-column `argMax` can't tear; only a pool whose latest snapshot predates
+    // #318 (inactive for weeks → deep pages) could, which is accepted.
+    // `created_at_ledger` = `min(ledger_sequence)` in the `cr` subquery (cheap
+    // narrow streaming scan, dup-invariant → no `FINAL`); `l_snap` seeks
+    // `ledgers` by the page's ~20 `last_updated_ledger`s (a full `ledgers` join
+    // built a 26M-row / 3.3 GB hash); `sac`/`asset_sac` prune to the page codes.
+    //
+    // Do NOT rewrite as `ORDER BY ledger_sequence DESC LIMIT 1 BY pool_id`
+    // (PR #335, reverted): `LIMIT 1 BY` is NOT a seek — it fully materialises +
+    // sorts every snapshot of the page's pools (~30M rows for the busiest 20),
+    // OOMing the 4 GB read-only CH profile. A future perf pass must keep the
+    // O(page pools) shape (e.g. `argMax` over a whole-row tuple), not a sort.
+    //
+    // Aggregates wrap in `toNullable(...)` so a no-snapshot pool yields NULL (not
+    // the 0/'' default) on the LEFT JOIN miss — `join_use_nulls` is rejected for
+    // the read-only CH user, so this is the readonly-safe NULL path. (Every
+    // current pool has ≥ 1 snapshot, so this is defensive.) `nullIf(...)` does the
+    // same for the empty-string-sentinel string columns. Native legs
+    // (asset_code = '') are excluded from the SAC join by the `lp.asset_*_code !=
+    // ''` guard so they surface a NULL `contract_id`, matching PG (NULL code → no
+    // SAC match).
     let sql = format!(
         "WITH \
          {tvl_cte} \
@@ -956,6 +996,14 @@ pub async fn fetch_pool_list(
              ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
+         band AS ( \
+             SELECT min(last_updated_ledger) - 10000 AS lo, \
+                    max(last_updated_ledger) + 10000 AS hi FROM page \
+         ), \
+         codes AS ( \
+             SELECT asset_a_code AS c FROM page WHERE asset_a_code != '' \
+             UNION ALL SELECT asset_b_code FROM page WHERE asset_b_code != '' \
+         ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
                     max(sc.contract_id) AS contract_id, \
@@ -964,11 +1012,13 @@ pub async fn fetch_pool_list(
              LEFT JOIN ( \
                  SELECT asset_type, asset_code, issuer_id, contract_id, \
                         max(sac_contract_id) AS sac_contract_id \
-                 FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 FROM asset_sac \
+                 WHERE asset_type IN (0, 1) AND asset_code IN (SELECT c FROM codes) \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                    AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
              LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
-             WHERE a.asset_type IN (0, 1) \
+             WHERE a.asset_type IN (0, 1) AND a.asset_code IN (SELECT c FROM codes) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
                    UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \
@@ -1001,15 +1051,17 @@ pub async fn fetch_pool_list(
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
-                    toNullable(ledger_sequence) AS latest_ledger_sequence, \
-                    toNullable(reserve_a)       AS reserve_a, \
-                    toNullable(reserve_b)       AS reserve_b, \
-                    toNullable(total_shares)    AS total_shares, \
-                    tvl, volume, fee_revenue \
+                toNullable(max(ledger_sequence))                  AS latest_ledger_sequence, \
+                argMax(toNullable(reserve_a), ledger_sequence)    AS reserve_a, \
+                argMax(toNullable(reserve_b), ledger_sequence)    AS reserve_b, \
+                argMax(toNullable(total_shares), ledger_sequence) AS total_shares, \
+                argMax(tvl, ledger_sequence)                      AS tvl, \
+                argMax(volume, ledger_sequence)                   AS volume, \
+                argMax(fee_revenue, ledger_sequence)              AS fee_revenue \
              FROM liquidity_pool_snapshots \
              WHERE pool_id IN (SELECT pool_id FROM page) \
-             ORDER BY pool_id, ledger_sequence DESC \
-             LIMIT 1 BY pool_id \
+               AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
+             GROUP BY pool_id \
          ) s ON s.pool_id = lp.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, toNullable(min(ledger_sequence)) AS created_at_ledger \
@@ -1028,7 +1080,10 @@ pub async fn fetch_pool_list(
          LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                             AND sac_b.issuer_id = lp.asset_b_issuer_id \
                             AND lp.asset_b_code != '' \
-         LEFT JOIN ledgers l_snap ON l_snap.sequence = s.latest_ledger_sequence \
+         LEFT JOIN ( \
+             SELECT sequence, closed_at FROM ledgers \
+             WHERE sequence IN (SELECT last_updated_ledger FROM page) \
+         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
          ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
         tvl_cte = tvl_cte,
         tvl_pred = tvl_pred,

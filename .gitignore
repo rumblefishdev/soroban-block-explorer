@@ -82,3 +82,5 @@ docker-compose.override.yaml
 # Playwright MCP runtime artefacts (snapshots + console logs from
 # browser-driven manual verification sessions)
 .playwright-mcp/
+# local deletion graveyard (never committed)
+.trash/
