@@ -1,5 +1,5 @@
 ---
-id: '0401'
+id: '0409'
 title: 'REFACTOR: arm-A NFT pollution — root cause + fungible/NFT separation in operation_asset_appearances'
 type: REFACTOR
 status: backlog
@@ -30,6 +30,13 @@ history:
       bogus amount parsed from token_id) into operation_asset_appearances. Read
       is correct today (INNER JOIN assets is fungible-only), but the rows pollute
       the table at rest. Investigate the root cause and pick a permanent strategy.
+  - date: '2026-07-17'
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered from 0401 (collision): 0401 was already taken on develop by
+      0401_PERF_lplist-stored-created-at-ledger. This lore-0393 follow-up (itself
+      already moved 0399 -> 0401 in 743de1f5) moved again to 0409. No content change.
 ---
 
 # REFACTOR: arm-A NFT pollution — fungible/NFT separation

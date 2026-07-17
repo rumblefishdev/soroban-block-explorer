@@ -1,5 +1,5 @@
 ---
-id: '0400'
+id: '0408'
 title: 'FEATURE: find-by-amount — sort/filter transactions by net-settled value moved'
 type: FEATURE
 status: backlog
@@ -29,6 +29,13 @@ history:
       sort/filter, not just display. 0393 shipped display-only MVP (the Amount
       column renders per (tx, asset) but is not sortable/filterable). This task
       is the sort/filter half.
+  - date: '2026-07-17'
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered from 0400 (collision): 0400 was already taken on develop by
+      0400_OPS_prod-schema-drift-init-sql-and-stale-architecture-docs. This
+      lore-0393 follow-up moved to 0408. No content change.
 ---
 
 # FEATURE: find-by-amount — sort/filter transactions by value moved
