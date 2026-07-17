@@ -17,9 +17,9 @@
 //! avoids the gross double-count. See the task's `S-formula-and-edge-cases`
 //! note for the derivation and the alternatives rejected.
 //!
-//! This reducer is pure and works on resolved **surrogate ids** (`i64` asset
-//! and account). Two rules from the formula are the caller's responsibility,
-//! because they are resolution concerns, not arithmetic:
+//! This reducer is pure: the asset is an already-resolved `i64` surrogate and
+//! the accounts are their StrKey identities. Two rules from the formula are the
+//! caller's responsibility, because they are resolution concerns, not arithmetic:
 //!
 //! - **Native XLM canonicalised to one `asset_id`** — the caller passes the
 //!   single native surrogate (`hash64("native")`) for both native conventions
@@ -28,18 +28,19 @@
 
 use std::collections::BTreeMap;
 
-/// One signed value movement within a single transaction, resolved to
-/// surrogate ids.
+/// One signed value movement within a single transaction.
 ///
-/// `from`/`to` are account surrogates. `None` marks a one-sided event:
-/// `from == None` is a **mint** (value created), `to == None` is a
-/// **burn/clawback** (value destroyed). `amount` is the raw, unscaled token
-/// quantity (non-negative; decimals are applied at read time).
+/// `from`/`to` are account identities: a `G…` account StrKey, or a `C…`
+/// contract address (a C→C transfer must net correctly, so contracts are not
+/// dropped here). `None` marks a one-sided event: `from == None` is a **mint**
+/// (value created), `to == None` is a **burn/clawback** (value destroyed).
+/// `amount` is the raw, unscaled token quantity (non-negative; decimals are
+/// applied at read time).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Movement<A> {
+pub struct Movement {
     pub asset_id: i64,
-    pub from: Option<A>,
-    pub to: Option<A>,
+    pub from: Option<String>,
+    pub to: Option<String>,
     pub amount: i128,
 }
 
@@ -55,16 +56,16 @@ pub struct NetSettled {
 ///
 /// Returns one [`NetSettled`] per distinct `asset_id`, ordered by `asset_id`
 /// for deterministic output. An empty input yields an empty vec.
-pub fn net_settled<A: Ord>(movements: &[Movement<A>]) -> Vec<NetSettled> {
+pub fn net_settled(movements: &[Movement]) -> Vec<NetSettled> {
     // asset_id -> (account -> signed delta)
-    let mut per_asset: BTreeMap<i64, BTreeMap<&A, i128>> = BTreeMap::new();
+    let mut per_asset: BTreeMap<i64, BTreeMap<&str, i128>> = BTreeMap::new();
     for m in movements {
         let deltas = per_asset.entry(m.asset_id).or_default();
         if let Some(to) = &m.to {
-            *deltas.entry(to).or_default() += m.amount;
+            *deltas.entry(to.as_str()).or_default() += m.amount;
         }
         if let Some(from) = &m.from {
-            *deltas.entry(from).or_default() -= m.amount;
+            *deltas.entry(from.as_str()).or_default() -= m.amount;
         }
     }
 
@@ -87,32 +88,32 @@ mod tests {
 
     const X: i64 = 100; // asset X surrogate
     const Y: i64 = 200; // asset Y surrogate
-    const A: i64 = 1;
-    const B: i64 = 2;
-    const C: i64 = 3;
-    const D: i64 = 4;
-    const ISSUER: i64 = 9;
+    const A: &str = "A";
+    const B: &str = "B";
+    const C: &str = "C";
+    const D: &str = "D";
+    const ISSUER: &str = "ISSUER";
 
-    fn transfer(asset: i64, from: i64, to: i64, amount: i128) -> Movement<i64> {
+    fn transfer(asset: i64, from: &str, to: &str, amount: i128) -> Movement {
         Movement {
             asset_id: asset,
-            from: Some(from),
-            to: Some(to),
+            from: Some(from.to_owned()),
+            to: Some(to.to_owned()),
             amount,
         }
     }
-    fn mint(asset: i64, to: i64, amount: i128) -> Movement<i64> {
+    fn mint(asset: i64, to: &str, amount: i128) -> Movement {
         Movement {
             asset_id: asset,
             from: None,
-            to: Some(to),
+            to: Some(to.to_owned()),
             amount,
         }
     }
-    fn burn(asset: i64, from: i64, amount: i128) -> Movement<i64> {
+    fn burn(asset: i64, from: &str, amount: i128) -> Movement {
         Movement {
             asset_id: asset,
-            from: Some(from),
+            from: Some(from.to_owned()),
             to: None,
             amount,
         }
@@ -124,7 +125,7 @@ mod tests {
 
     #[test]
     fn empty_input_yields_empty() {
-        assert_eq!(net_settled::<i64>(&[]), vec![]);
+        assert_eq!(net_settled(&[]), vec![]);
     }
 
     #[test]
