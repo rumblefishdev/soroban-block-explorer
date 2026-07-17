@@ -16,6 +16,7 @@ pub mod invocation;
 pub mod ledger;
 pub mod ledger_entry_changes;
 pub mod memo;
+pub mod meta;
 pub mod net_settled;
 pub mod nft;
 pub mod op_participants;
