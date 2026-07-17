@@ -75,31 +75,20 @@ Bootstrap CDK on the AWS account (once per account + region):
 npm run infra:bootstrap
 ```
 
-### Commands
+### Deploying
+
+**See [`docs/deployment.md`](docs/deployment.md) — the single source of truth**
+for what command ships what. In short: production is the only environment,
+and deploys are run manually from a laptop.
 
 ```bash
-npm run infra:diff:staging        # Preview changes
-npm run infra:deploy:staging      # Deploy to AWS
-npm run infra:synth:staging       # Generate CloudFormation template
+make -C infra diff-production              # preview
+make -C infra deploy-production-compute    # ship the API / indexer / enrichment Lambdas
+make -C infra deploy-production-web        # ship the frontend SPA
+make -C infra deploy-production            # deploy ALL stacks (see gotchas in the guide)
 ```
 
-Replace `staging` with `production` for production deployments.
-
-### CI deploy (staging)
-
-Staging deploys via GitHub Actions, triggered by git tags (see [ADR 0009](lore/2-adrs/0009_staging-deploy-trigger-strategy.md)):
-
-```bash
-./scripts/staging-deploy.sh              # tag and deploy current HEAD on develop
-./scripts/staging-deploy.sh <commit-sha> # rollback: deploy a specific commit
-```
-
-The script creates a `staging-YYYY.MM.DD-N` tag and pushes it. The deploy workflow runs automatically. Manual redeploy without a tag: `gh workflow run deploy-staging.yml --ref develop`.
-
-Or use the Makefile directly from `infra/`:
-
-```bash
-make diff-staging
-make deploy-staging
-make deploy-staging-network    # Deploy single stack
-```
+> There is **no staging environment and no CI-driven deploy** (AWS staging was
+> retired by task 0249). `deploy-staging.yml`, `scripts/staging-deploy.sh`,
+> `npm run infra:*:staging` and any `make deploy-staging*` target are **dead** —
+> they reference files/targets that no longer exist. Do not use them.
