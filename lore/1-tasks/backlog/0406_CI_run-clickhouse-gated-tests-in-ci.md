@@ -1,5 +1,5 @@
 ---
-id: '0405'
+id: '0406'
 title: 'CI: actually run the ClickHouse-gated tests — 25 files of e2e that no pipeline has ever executed'
 type: FEATURE
 status: backlog

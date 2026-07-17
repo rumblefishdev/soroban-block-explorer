@@ -4,7 +4,7 @@ title: 'backfill-runner + enrichment-runner: sweep remaining stale `name` column
 type: BUG
 status: completed
 related_adr: []
-related_tasks: ['0388', '0392', '0304', '0359', '0379', '0405']
+related_tasks: ['0388', '0392', '0304', '0359', '0379', '0406']
 tags: ['effort-small', 'priority-high', 'clickhouse', 'backfill-runner']
 links: []
 history:
@@ -47,7 +47,7 @@ history:
       files' worth of CH-gated tests always skip, and the green "Rust (clippy,
       test)" on PR #342 said nothing about this task's ACs. That is the root cause
       of this whole 0304→0388→0392→0394 family: the tests that would have caught the
-      stale column on the first PR already existed and never ran. Spawned **0405**.
+      stale column on the first PR already existed and never ran. Spawned **0406**.
 ---
 
 # backfill-runner + enrichment-runner: sweep remaining stale `name` references
