@@ -2,9 +2,9 @@
 id: '0335'
 title: 'FEATURE: classify DNS-resolution failures as permanent (sentinel) in enrichment, not transient'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0311', '0306', '0231']
+related_tasks: ['0311', '0306', '0231', '0347', '0200']
 tags: [enrichment, clickhouse, classification, effort-small, priority-medium]
 links: []
 history:
@@ -34,6 +34,31 @@ history:
       `reqwest::Error` in their `Http` variant, so a shared
       `is_dns_failure(&reqwest::Error)` helper fixes both. Code on a branch
       + PR; this status flip pushed direct to develop.
+  - date: '2026-07-17'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed. Shipped in **#292** (`c646ec8d`) and deployed to prod **2026-07-02**;
+      the two ACs marked "Deferred — needs deploy" had in fact been unblocked for
+      **15 days**, this file just never caught up. Both are now measured on prod
+      rather than assumed.
+      **The classifier works.** `asset_enrichment` = 331,091 rows, **319,453
+      sentinel / 11,638 real**, main queue drained to 0 — the dead-domain tail
+      converges instead of looping as perpetual candidates, exactly as designed.
+      **The DLQ check found something better than a green tick.** The DLQ is not
+      empty (11,275 messages), so it was sampled instead of hand-waved: 5/5 were
+      the *same* asset — wBTC, home_domain `atmindividual.org`. That domain
+      **resolves fine** (69.57.162.184, NOERROR, live NS+MX); it fails on a TLS
+      **certificate name mismatch**. So these are not dead domains — the DNS branch
+      is correct and this AC holds. The DLQ flood is the **TLS cert class**, which
+      AC2 of this very task deliberately left transient, and which **0347** owns.
+      Retention is 14 days and the sampled messages were sent **2026-07-16**, so
+      the entire DLQ population post-dates this fix: it is live, ongoing, and not a
+      stale pre-deploy backlog. Numbers written into 0347 as its justification.
+      Worth stating for the next reader: a permanently-broken TLS cert is
+      *deterministically* permanent in the same way NXDOMAIN is. Keeping it
+      transient was a defensible call when this task was written, but prod now shows
+      what it costs — ~11k retries-to-DLQ on a handful of assets.
 ---
 
 # FEATURE: DNS-failure → permanent (sentinel) in enrichment classification
@@ -147,11 +172,26 @@ Unit-test `is_dns_failure` against representative reqwest error strings
       via `None => !is_dns_failure(source)` + NFT (`nft_token_uri::errors`) via
       the `Http` arm. `is_endpoint_fault` intentionally unchanged (DNS-dead host
       still fails over to a different pool endpoint).
-- [ ] After deploy: a `enrich sep1-assets` pass moves the dead-domain tail
+- [x] After deploy: a `enrich sep1-assets` pass moves the dead-domain tail
       from `transient` to `sentinel` (drain converges; candidate count drops).
-      **Deferred — needs build + deploy.**
-- [ ] Lambda steady-state: dead-domain assets no longer reach the DLQ.
-      **Deferred — needs deploy.**
+      — **Met.** Shipped in #292, deployed to prod **2026-07-02** via #302 +
+      `make deploy-production-compute`. Measured on prod **2026-07-17**:
+      `asset_enrichment` holds **331,091 rows — 319,453 sentinel / 11,638 real**.
+      The dead-domain tail is being written as sentinel instead of counted-and-
+      dropped, so the `NOT IN asset_enrichment` candidate query now skips it —
+      the convergence this AC asked for. The main enrichment queue sits at **0**.
+- [x] Lambda steady-state: dead-domain assets no longer reach the DLQ.
+      — **Met for the class this task owns (DNS), verified 2026-07-17 — with the
+      residual named rather than hidden.** The DLQ is _not_ empty (11,275
+      messages), so this was checked rather than assumed: sampling it returned
+      5/5 identical `sep1_assets` messages for **wBTC**, issuer
+      `GDVIQFRC…ATMI`, home_domain **`atmindividual.org`**. That domain
+      **resolves fine** (`69.57.162.184`, NOERROR, live NS + MX) — it is not a
+      dead domain. It fails on **TLS**: `no alternative certificate subject name
+    matches target host name`.
+      So the DNS branch is doing its job; what floods the DLQ is the **TLS
+      cert-verification class**, which this task's AC2 **deliberately kept
+      transient** and which **0347** owns by name. Evidence recorded there.
 
 ## Implementation Notes
 

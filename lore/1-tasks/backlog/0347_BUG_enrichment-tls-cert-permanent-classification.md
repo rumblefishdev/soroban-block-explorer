@@ -37,6 +37,30 @@ history:
       sibling to 0335 (which fixed the DNS-NXDOMAIN case but deliberately
       left ALL TLS failures transient — see 0335 AC line "Connect-refused /
       TLS / timeout / 5xx / 429 stay transient").
+  - date: '2026-07-17'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      **Re-measured on prod while closing 0335 — this got 560x worse, and it is
+      live.** The alarm that spawned this task fired at **20** DLQ messages. Today
+      `production-enrichment-dlq` holds **11,275**.
+      Measured, not inferred: DLQ retention is **14 days** and sampled messages
+      were sent **2026-07-16**, so the entire population post-dates the 0335 deploy
+      (07-02) — this is ongoing intake, not a stale backlog. A 5-message sample came
+      back **5/5 identical**: the same asset (wBTC, issuer `GDVIQFRC…ATMI`,
+      home_domain `atmindividual.org`) re-enqueued over and over. So the flood is a
+      *hot loop on a few broken issuers*, not broad noise — the producer re-emits
+      each un-enriched asset, the fetch fails identically, 3x retry, DLQ, repeat.
+      Confirmed the failure is this task's class and NOT 0335's: `atmindividual.org`
+      **resolves fine** (69.57.162.184, NOERROR, live NS + MX) and fails on
+      `no alternative certificate subject name matches target host name` — a cert
+      name-mismatch, deterministically permanent, exactly the case in the Summary.
+      0335's DNS branch is working correctly; this class is simply left uncovered by
+      design.
+      Practical note for whoever picks this up: the main queue is drained (0) and
+      the worker is live (ESM Enabled, batch 10), so the DLQ is the only symptom
+      surface — and a `--retry-sentinels`-style re-drain will NOT help until the
+      classifier changes, because every retry reproduces the same cert error.
 ---
 
 # BUG: TLS certificate-verification failure → permanent (sentinel), not transient
