@@ -2,9 +2,9 @@
 id: '0385'
 title: 'PERF: accounts_recent — refreshable-MV last_seen-ordered seek for acclist under AC (supersedes 0353 projection-rejected known-issue)'
 type: PERF
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0353', '0357', '0319', '0381']
+related_tasks: ['0353', '0357', '0319', '0381', '0403']
 tags:
   [priority-medium, effort-medium, layer-clickhouse, milestone-3, phase-launch]
 milestone: 3
@@ -34,6 +34,33 @@ history:
       prod manual `CREATE TABLE` + `CREATE MATERIALIZED VIEW` (init.sql is
       fresh-install-only) → byte-identical `/v1/accounts` before/after + refresh
       recompute memory check under the 6 GB cap.
+  - date: 2026-07-17
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed. Shipped in **PR #328** (2026-07-13) and created on prod alongside
+      the 0379 backfill window. The design bet paid off: acclist's Step 1 went
+      from `accounts FINAL` + a non-PK sort — **24M rows / ~1115 ms CH** — to a
+      seek on the `(last_seen_ledger, id)`-ordered MV, measured by 0357 at
+      **CH 19-52 ms**. The refreshable MV was the right escape from the CH 26.3
+      RMT-projection rejection (Code 344); re-keying `accounts` was correctly
+      ruled impossible (mutable `last_seen_ledger` in an RMT sort key breaks dedup).
+      **This file was never updated as the work landed** — all seven ACs still
+      read `[ ]` four days after the code was live. Ticked now only where evidence
+      exists and is cited (0357's archived record, the hetzner runbook, the docs
+      page); three deferred to **0403** rather than rounded up.
+      Two of those deferrals matter and are not paperwork. **(1)** The AC4 p95
+      claim is NOT made: 0357 measured acclist into a "< 300 ms" bucket, which does
+      not settle the literal `p95 < 200 ms`, and 0357's own ~60-90 ms per-request
+      floor means CH time alone cannot settle it. **(2)** The refresh recompute has
+      **never been measured against the prod 6 GB cap** — an `accounts FINAL` scan
+      + sort over ~22-24M rows, running every 2 minutes on prod since 07-13. That
+      is a live risk carried, not closed; 0403 owns it.
+      Note on follow-up coverage: the `accounts-recent-projection-vs-mv` backlog
+      task does **not** cover this — it re-litigates whether the table should exist
+      at all (CH >=24.8 allows RMT projections via
+      `deduplicate_merge_projection_mode='rebuild'`), a design question, not a
+      correctness one.
 ---
 
 # PERF: accounts_recent — refreshable-MV last_seen seek for acclist
@@ -161,19 +188,40 @@ count). Compression is poor (1.26×) because `account_id` (random 56-char strkey
 
 ## Acceptance Criteria
 
-- [ ] `accounts_recent` + `accounts_recent_mv` live (init.sql + prod), refreshing
-- [ ] `fetch_list` Step 1 reads `accounts_recent` (no `FINAL`); `read_rows`
+- [x] `accounts_recent` + `accounts_recent_mv` live (init.sql + prod), refreshing
+      — **Met 2026-07-13.** Landed in `init.sql` via PR #328 and created on prod
+      as a sibling of the 0379 backfill window (recorded in
+      `docs/runbooks/backfill_derived_table_reparse_hetzner.md`: "`accounts_recent`
+      MV (0385) landed as a sibling").
+- [x] `fetch_list` Step 1 reads `accounts_recent` (no `FINAL`); `read_rows`
       bounded to ~page size (seek), verified via `system.query_log` — not the
       24M scan
+      — **Met.** 0357's open-model series (~33k requests, client duration joined
+      to `system.query_log`) puts acclist at **CH 19-52 ms**, and its AC "no
+      whole-dimension reads remain on fixed endpoints" covers this driver. The
+      24M scan+sort is gone.
 - [ ] Output byte-identical to the current driver (prod before/after), modulo
       ≤refresh-interval freshness on the newest rows; both sort directions +
       `home_domain` filter + cursor pagination covered
+      — **deferred to 0403.** Never run; not evidenced anywhere.
 - [ ] acclist p95 under the AC4 target at idle (point from the ~5 ms CH seek +
       the bounded Step-2 balance seek)
+      — **deferred to 0403, deliberately not ticked.** 0357 measured acclist only
+      into a **"< 300 ms"** bucket, which does **not** establish the literal AC4
+      `p95 < 200 ms` either way. 0357 also found a **~60-90 ms floor** on every
+      request before any query runs, so the gap between "CH does 19-52 ms" and
+      "the endpoint clears 200 ms" is real and unmeasured here. Rounding "< 300"
+      up to "meets the target" is exactly the move 0357 refused to make.
 - [ ] Refresh recompute stays under the prod 6 GB cap
-- [ ] **Docs updated** — REQUIRED (new schema objects): schema page under
+      — **deferred to 0403.** This task's own Step 3 called it out as a rollout
+      check and it never ran. It is a **live prod risk**, not paperwork: the MV
+      full-recomputes `accounts FINAL` over ~22-24M rows every 2 minutes against a
+      6 GB `max_memory_usage` cap. Unmeasured since 07-13.
+- [x] **Docs updated** — REQUIRED (new schema objects): schema page under
       `docs/architecture/**` per [ADR 0032](../../2-adrs/0032_docs-architecture-evergreen-maintenance.md)
-- [ ] **API types regenerated** — N/A (query-internal; no DTO/route change)
+      — **Met** — `docs/architecture/database-schema/database-schema-overview.md`
+      §4.11 (lines 947-970) documents the table + MV.
+- [x] **API types regenerated** — N/A (query-internal; no DTO/route change)
 
 ## Notes
 
