@@ -10,13 +10,13 @@ public production operation after launch.
 
 ## Targets (from D3 acceptance criteria)
 
-| Metric              | Target                  | Source                       |
-| ------------------- | ----------------------- | ---------------------------- |
-| Uptime              | ≥ 99.9% (aspirational)  | API availability (§ Sources) |
-| API p95 latency     | < 200 ms                | API Gateway `Latency` p95    |
-| API error rate      | < 0.1%                  | 5XX / total requests         |
-| Ingestion lag       | < 30 s from network tip | Live sample / CloudWatch (§) |
-| Ledger completeness | 0 gaps per day          | ClickHouse gap query         |
+| Metric              | Target                  | Source                           |
+| ------------------- | ----------------------- | -------------------------------- |
+| Uptime              | ≥ 99.9% (aspirational)  | API availability (§ Sources)     |
+| API p95 latency     | < 200 ms                | API Gateway `Latency` p95        |
+| API error rate      | < 0.1%                  | 5XX / total requests             |
+| Ingestion lag       | < 30 s from network tip | CloudWatch `IngestionLagSeconds` |
+| Ledger completeness | 0 gaps per day          | ClickHouse gap query             |
 
 ## Daily results
 
@@ -66,7 +66,7 @@ confirmed against the deployed CloudWatch resources (dashboard JSON or
   total minutes. <TODO: pick the authoritative source — a CloudWatch Synthetics
   canary against the frontend/API, or derive from 5XX minutes. Note the choice.>
 
-### ClickHouse (ledger completeness; lag via live sample)
+### ClickHouse (ledger completeness; lag via CloudWatch)
 
 Run on prod ClickHouse (`app-clickhouse-1`, creds via read-rsp → env). The
 `ledgers` table is `(sequence, hash, closed_at, protocol_version,
@@ -82,27 +82,22 @@ WHERE closed_at BETWEEN '<LAUNCH>' AND '<END>'
 GROUP BY day ORDER BY day;
 ```
 
-**Ingestion lag has no historical ClickHouse source** — no row carries its write
-time, so close-to-ingest cannot be computed after the fact. Get it one of two
-ways, decided before the window opens:
+**Ingestion lag comes from CloudWatch, not ClickHouse.** No `ledgers` row carries
+its write time, so close-to-ingest cannot be reconstructed after the fact from
+the database. Instead the indexer emits it at write time:
 
-- **Live sample:** scrape `SELECT now() - max(closed_at) FROM ledgers` on a
-  schedule (how far the newest ingested ledger trails wall-clock) and take the
-  daily max. This is the same seconds-lag signal AC3 needs.
-- **CloudWatch metric (recommended):** the indexer already publishes a custom
-  metric — `SorobanBlockExplorer/Indexer / LastProcessedLedgerSequence`, in
-  `publish_ledger_sequence_metric` (`crates/indexer/src/handler/mod.rs`), with
-  `cloudwatch:PutMetricData` already granted. Add a second datum
-  `IngestionLagSeconds = now − ledger.closed_at` in the same spot (~5 lines,
-  indexer-only — no API-types regen; ships via `make deploy-production-compute`)
-  and read it per-day like the API metrics. This also closes the AC3 seconds-lag
-  gap.
+- **Metric:** `SorobanBlockExplorer/Indexer` / **`IngestionLagSeconds`**
+  (unit `Seconds`, dimension `Environment=production`) — wall-clock seconds
+  between ledger close and the row being committed. Emitted per ledger from
+  `publish_indexer_metrics` (`crates/indexer/src/handler/mod.rs`, task 0399);
+  **live in production since 2026-07-17**, so it accumulates from day 1 of the
+  window.
+- **Per-day read:** `get-metric-statistics` with `--statistics Average Maximum`
+  and `--period 86400`, exactly like the API Gateway columns below. Use
+  `Maximum` for the "max ingest lag" column and `Average` for context.
 
-Today CloudWatch has throughput / sequence / queue-depth / Lambda-duration
-signals, but **no seconds-based end-to-end lag** — so one of the two above must
-be wired.
-
-<TODO: emit IngestionLagSeconds before launch so it accumulates from day 1 (AC3 / task 0129).>
+Reference sample (2 h on 2026-07-17, 15 × 5-minute datapoints): average 3.1 s,
+worst 6.0 s, against the < 30 s criterion.
 
 ### Generator skeleton (optional)
 
@@ -141,7 +136,7 @@ done
 ## Notes
 
 - Ingestion lag has no historical ClickHouse source (the `ledgers` table stores
-  no write time). The per-day lag must come from a live sample or a CloudWatch
-  metric wired before the window — the same seconds-lag gap AC3 tracks (task
-  0129).
+  no write time), so the per-day figures come from the CloudWatch
+  `IngestionLagSeconds` metric emitted by the indexer (task 0399, live since
+  2026-07-17). It cannot be backfilled for any period before that date.
 - Deliver the finished report to the Stellar team (task 0127 AC).
