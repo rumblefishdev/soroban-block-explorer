@@ -167,7 +167,7 @@ separates them. Current state, by share of the p95 tail at 10M/mo:
 | `lplist`                                                         | 618 ms       | 32%        | **CH — the only one**     | `created_at` = `min(ledger_sequence)`, ~9.6M rows/req. Fix = stored `created_at_ledger` (0208 Path 1, was rejected on writer/RMT grounds — the numbers now justify re-litigating).                                        |
 | `nftdetail`                                                      | 1800 ms      | 26%        | **by design (ADR 0043)**  | request-time `token_uri()` Soroban RPC + IPFS, 3 s cap, LRU(1024). CH work identical fast vs slow (54k rows / ~20 ms both). Harness inflates it: 500 random NFTs never warm the LRU. Known-issue, not a fix.              |
 | `lpdetail`                                                       | 330 ms       | —          | **DONE #347**             | 27.2M -> 1.5M rows/req (-94%), CH 784 -> 193 ms. Residual 1.5M is real snapshot work, not the `ledgers` hash. Lever exhausted.                                                                                            |
-| `lpchart`                                                        | 197 ms       | —          | **DONE #349 + ops index** | 77.9M -> 26.3M (`closed_at_mm` minmax) -> **571k** (#349 bounds the upper seek both ways). CH 411 -> 106 -> 68 ms; p95 @50M 1407 -> 221. **Meets <200 ms.** Index was prod-only -> now in `init.sql`; recurrence -> 0399. |
+| `lpchart`                                                        | 197 ms       | —          | **DONE #349 + ops index** | 77.9M -> 26.3M (`closed_at_mm` minmax) -> **571k** (#349 bounds the upper seek both ways). CH 411 -> 106 -> 68 ms; p95 @50M 1407 -> 221. **Meets <200 ms.** Index was prod-only -> now in `init.sql`; recurrence -> 0400. |
 | acclist / asttxs / lptxs / search / astlist / astdetail / txlist | all < 300 ms | —          | **DONE**                  | 0353 / 0364 / 0365 / 0370 / 0385 / 0386 landed. CH time now 19-52 ms each. Off the list.                                                                                                                                  |
 
 **The floor (new, applies to everything):** ~60-90 ms per request before any query
@@ -394,20 +394,20 @@ Order (impact + dependency):
 - [x] Query-only where possible; any schema / index change noted per endpoint —
       one index (`closed_at_mm` minmax on `ledgers`, applied to prod by online
       ALTER during the #347 work). It was **prod-only**; now added to `init.sql`.
-      The recurring class → **0399**.
+      The recurring class → **0400**.
 - [x] D3 AC4 position restated with MEASURED numbers (feeds the SCF claim) — see
       the 2026-07-17 section; needs team + SCF sign-off before the M3 claim
 - [ ] **Docs updated** — an index WAS added, so this gate fires. **Cannot be met
       honestly today**: `docs/architecture/database-schema/**` still describes
       Postgres as production and ClickHouse as a "read-empty pilot", so there is
-      no truthful page to write `closed_at_mm` onto. Deferred to **0399**, which
+      no truthful page to write `closed_at_mm` onto. Deferred to **0400**, which
       owns retiring the Postgres-era pages. Flagged rather than rubber-stamped.
 - [x] **API types regenerated** — N/A (no `crates/api/**`, `Cargo.*` or
       `libs/api-types/**` change; the harness is a standalone test crate)
 
 ## Future Work
 
-- **0399** — prod-only CH schema objects absent from `init.sql` (`closed_at_mm`
+- **0400** — prod-only CH schema objects absent from `init.sql` (`closed_at_mm`
   found here, `oa_pool_seek` still open) + the stale architecture docs that let
   it through. Spawned from this task's measurement.
 - **`lplist`** — the last genuine query offender (~9.6M rows on

@@ -1,5 +1,5 @@
 ---
-id: '0399'
+id: '0400'
 title: 'OPS: prod-only CH schema objects missing from init.sql + architecture docs describe a retired Postgres world'
 type: OPS
 status: backlog
