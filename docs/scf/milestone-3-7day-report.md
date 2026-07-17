@@ -3,8 +3,14 @@
 Deliverable 3, acceptance criterion 6. Covers the first 7 consecutive days of
 public production operation after launch.
 
-- **Launch (Day 1 start):** <TODO: YYYY-MM-DD HH:MMZ>
-- **Window end (Day 7 end):** <TODO: YYYY-MM-DD HH:MMZ>
+- **Launch (Day 1 start):** 2026-07-17T13:40:00Z — the moment the pre-launch
+  Basic Auth gate was removed (task 0405)
+- **Window end (Day 7 end):** 2026-07-24T13:40:00Z
+
+Each "day" below is a 24-hour period measured from the launch time, **not** a
+calendar day. Day 1 therefore starts at 13:40Z on 2026-07-17; the hours before
+that are pre-launch and must not be included.
+
 - **Region / account:** eu-central-1 / 750702271865
 - **Frontend:** `https://sorobanscan.rumblefish.dev` · **API:** `https://api-sorobanscan.rumblefishdev.com/v1`
 
@@ -20,15 +26,15 @@ public production operation after launch.
 
 ## Daily results
 
-| Day | Date   | Uptime % | API p95 (ms) | Error rate % | Max ingest lag (s) | Ledger gaps |
-| --- | ------ | -------- | ------------ | ------------ | ------------------ | ----------- |
-| 1   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 2   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 3   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 4   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 5   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 6   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 7   | <TODO> | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| Day | Window (UTC)                        | Uptime % | API p95 (ms) | Error rate % | Max ingest lag (s) | Ledger gaps |
+| --- | ----------------------------------- | -------- | ------------ | ------------ | ------------------ | ----------- |
+| 1   | 2026-07-17 13:40 → 2026-07-18 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 2   | 2026-07-18 13:40 → 2026-07-19 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 3   | 2026-07-19 13:40 → 2026-07-20 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 4   | 2026-07-20 13:40 → 2026-07-21 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 5   | 2026-07-21 13:40 → 2026-07-22 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 6   | 2026-07-22 13:40 → 2026-07-23 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 7   | 2026-07-23 13:40 → 2026-07-24 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
 
 ## Summary
 
@@ -73,13 +79,29 @@ Run on prod ClickHouse (`app-clickhouse-1`, creds via read-rsp → env). The
 transaction_count, base_fee)` — `closed_at` is the ledger close time, and there
 is **no ingest/write-time column**.
 
+Day buckets are 24 h from the launch time, so they line up with the table above
+rather than with calendar dates:
+
 ```sql
 -- Ledger gaps per day: expected span − distinct sequences (0 = no gaps)
-SELECT toDate(closed_at) AS day,
+SELECT intDiv(dateDiff('second',
+               toDateTime('2026-07-17 13:40:00', 'UTC'), closed_at), 86400) + 1 AS day,
        (max(sequence) - min(sequence) + 1) - count(DISTINCT sequence) AS gaps
 FROM ledgers
-WHERE closed_at BETWEEN '<LAUNCH>' AND '<END>'
+WHERE closed_at >= toDateTime('2026-07-17 13:40:00', 'UTC')
+  AND closed_at <  toDateTime('2026-07-24 13:40:00', 'UTC')
 GROUP BY day ORDER BY day;
+```
+
+Also run it without the `GROUP BY` to check the window as a whole — a gap that
+falls exactly on a day boundary is invisible to the per-day form, because each
+day's `min`/`max` are taken inside that day:
+
+```sql
+SELECT (max(sequence) - min(sequence) + 1) - count(DISTINCT sequence) AS gaps_total
+FROM ledgers
+WHERE closed_at >= toDateTime('2026-07-17 13:40:00', 'UTC')
+  AND closed_at <  toDateTime('2026-07-24 13:40:00', 'UTC');
 ```
 
 **Ingestion lag comes from CloudWatch, not ClickHouse.** No `ledgers` row carries
@@ -102,34 +124,42 @@ worst 6.0 s, against the < 30 s criterion.
 ### Generator skeleton (optional)
 
 The report is produced once, so a full pipeline is overkill. This skeleton pulls
-the CloudWatch columns for the 7 days; paste the ClickHouse results in by hand.
-Confirm every `<TODO>` dimension first.
+the CloudWatch columns for the 7 days; paste the ClickHouse gap numbers in by
+hand. Only `API_NAME` still needs filling.
 
 ```bash
 #!/usr/bin/env bash
-# ponytail: one-shot report helper; fill <TODO> dims, emits partial md rows.
+# ponytail: one-shot report helper; fill API_NAME, emits partial md rows.
 # Self-check: dry-run one day and eyeball p95 vs the CloudWatch console.
 set -euo pipefail
-API_NAME="<TODO>"; REGION="eu-central-1"; LAUNCH="<TODO: YYYY-MM-DD>"
+API_NAME="<TODO: deployed API Gateway name — aws apigateway get-rest-apis>"
+REGION="eu-central-1"; PROFILE="sorobanscan"
+LAUNCH="2026-07-17T13:40:00Z"   # buckets are 24h from launch, NOT midnight
 for d in 0 1 2 3 4 5 6; do
-  start=$(date -u -j -v+${d}d -f %Y-%m-%d "$LAUNCH" +%Y-%m-%dT00:00:00Z)   # macos date
-  end=$(date -u -j -v+$((d+1))d -f %Y-%m-%d "$LAUNCH" +%Y-%m-%dT00:00:00Z)
-  p95=$(aws cloudwatch get-metric-statistics --region "$REGION" \
+  # macos date; -f must match LAUNCH's format or the offsets silently go wrong
+  start=$(date -u -j -v+${d}d -f %Y-%m-%dT%H:%M:%SZ "$LAUNCH" +%Y-%m-%dT%H:%M:%SZ)
+  end=$(date -u -j -v+$((d+1))d -f %Y-%m-%dT%H:%M:%SZ "$LAUNCH" +%Y-%m-%dT%H:%M:%SZ)
+  p95=$(aws cloudwatch get-metric-statistics --region "$REGION" --profile "$PROFILE" \
     --namespace AWS/ApiGateway --metric-name Latency \
     --dimensions Name=ApiName,Value="$API_NAME" \
     --start-time "$start" --end-time "$end" --period 86400 \
     --extended-statistics p95 --query 'Datapoints[0].ExtendedStatistics.p95' --output text)
-  err5xx=$(aws cloudwatch get-metric-statistics --region "$REGION" \
+  err5xx=$(aws cloudwatch get-metric-statistics --region "$REGION" --profile "$PROFILE" \
     --namespace AWS/ApiGateway --metric-name 5XXError \
     --dimensions Name=ApiName,Value="$API_NAME" \
     --start-time "$start" --end-time "$end" --period 86400 \
     --statistics Sum --query 'Datapoints[0].Sum' --output text)
-  total=$(aws cloudwatch get-metric-statistics --region "$REGION" \
+  total=$(aws cloudwatch get-metric-statistics --region "$REGION" --profile "$PROFILE" \
     --namespace AWS/ApiGateway --metric-name Count \
     --dimensions Name=ApiName,Value="$API_NAME" \
     --start-time "$start" --end-time "$end" --period 86400 \
     --statistics Sum --query 'Datapoints[0].Sum' --output text)
-  echo "| $((d+1)) | ${start%T*} | <lag/gaps from CH> | ${p95:-NA} | 5xx=${err5xx:-0}/${total:-0} |"
+  lag=$(aws cloudwatch get-metric-statistics --region "$REGION" --profile "$PROFILE" \
+    --namespace SorobanBlockExplorer/Indexer --metric-name IngestionLagSeconds \
+    --dimensions Name=Environment,Value=production \
+    --start-time "$start" --end-time "$end" --period 86400 \
+    --statistics Maximum --query 'Datapoints[0].Maximum' --output text)
+  echo "| $((d+1)) | ${start} → ${end} | <uptime> | ${p95:-NA} | 5xx=${err5xx:-0}/${total:-0} | ${lag:-NA} | <gaps from CH> |"
 done
 ```
 
