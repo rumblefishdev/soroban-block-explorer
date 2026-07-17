@@ -274,7 +274,16 @@ enormous reads.
 unilaterally deliver: another team's batch schedule can double it at any moment,
 on traffic 5x below our own saturation point. Options are isolation (CH workload
 scheduling / a `prices_writer` quota or memory cap) or naming it in the AC4 report
-as a known risk. Un-owned — no task spawned yet, pending a decision.
+as a known risk.
+
+**DECIDED 2026-07-17: no task.** Deliberate, not an oversight — do not re-open it
+as an open question. It is recorded here as a **known risk for the AC4 report**,
+which is the cheaper of the two options: the isolation work (CH workload
+scheduling / a `prices_writer` quota) buys nothing for the M3 claim, and the
+contention is bursty and infrequent rather than a standing outage. Revisit only
+if it starts landing on real user traffic rather than on our measurements. What
+this section already gives a future reader is the full evidence, so the decision
+can be reversed cheaply if that changes.
 
 **Harness implication:** every future run needs a pre-flight check that the box is
 quiet, or its numbers are a lottery:
