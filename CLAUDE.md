@@ -57,6 +57,22 @@ Mark each doc file either "updated" or `N/A — reason`; never leave it blank.
 Pure policy / process / tooling changes (e.g. CI configuration) that do not
 affect the described architecture are legitimate `N/A` cases.
 
+## Operational Guides
+
+Single entry points for **running** the system (as opposed to `docs/architecture/**`,
+which describes it). Read the matching one before operating — each links the
+per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
+`docs/runbooks/**`) rather than duplicating them.
+
+| Guide | Read before… | Non-obvious constraint it encodes |
+|-------|--------------|-----------------------------------|
+| [`docs/deployment.md`](./docs/deployment.md) | shipping anything | Production is the only environment and **every deploy is manual** from a laptop. The `staging` CI path is dead — `make deploy-staging` / `npm run infra:*:staging` do not exist. |
+| [`docs/backfills.md`](./docs/backfills.md) | any backfill / re-parse | **`repair-tier1` is mandatory** after a parallel or `--reindex` run — RMT cannot express MIN semantics, so 12 Tier-1 columns corrupt silently. Some subcommands require the indexer stopped (`EXCHANGE TABLES` is the dividing line). |
+| [`docs/backups.md`](./docs/backups.md) | backups / restore | After a restore the Lambdas **will not re-deliver** the rolled-back range — the gap must be re-ingested with `backfill-runner`. |
+
+These encode durable rules. Keep transient state (which task is open, which PR is
+pending) out of them — it rots and makes the guide untrustworthy.
+
 ## Context
 
 @lore/0-session/current-user.md
