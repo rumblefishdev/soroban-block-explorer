@@ -100,6 +100,35 @@ history:
       95% CI upper 0.009% vs the <0.1% target). p95 FAILS: 558 ms vs 200 ms
       (~2.8x). Cause re-diagnosed and NO LONGER a read-path story — see the
       rewritten "D3 AC4 position" + worklist below.
+  - date: 2026-07-17
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Series 3 (post #349, lpchart upper-bound seek). Every prediction landed:
+      box read work @50M 38.4bn -> 23.9bn (-38%, predicted ~24bn); lpchart
+      26.3M -> 571k rows/req and CH 106 -> 68 ms; lpchart p95 1407 -> 221 ms.
+      Tier C @50M: p95 1242 -> 1009 -> **576 ms** across the three series (-54%).
+      THE HEADLINE, stated plainly: 50M/mo now costs the SAME as 10M/mo
+      (p95 576 vs 568). A 5x traffic increase is free; this morning it cost
+      +68% median. Saturation is gone entirely.
+      THE HONEST COROLLARY: #347 + #349 did NOT move the AC4 number. Tier B
+      (10M/mo) p95 went 585 -> 558 -> 568 across all three series — noise. Both
+      PRs removed SATURATION, not per-request cost, so they only pay where
+      saturation existed (50M/mo). The AC4-rate p95 has sat at ~560 ms all day,
+      held by txdetail (overhead) + nftdetail (IPFS) + lplist + the 60-90 ms
+      floor — none of which either PR touched. Today bought capacity and
+      headroom, not the M3 number. Both are worth having; do not conflate them.
+      lplist CONFIRMED as the last genuine query offender: 11.3M rows/req,
+      CH 425 ms, unchanged by #347/#349. The 0208 Path 1 argument now has
+      numbers behind it.
+      NEW RISK FOUND (see "prices_writer" section): the CH box is SHARED with
+      stellar-prices-api. Its OHLCV batch read 14.2bn rows during tier B and
+      DOUBLED our p95 (1194 vs 568) at a rate we cannot saturate ourselves.
+      Proven by re-run, not inferred: same code, same 3.858 rps, 33 min apart —
+      contaminated run read 4.03bn of OUR rows at CH p50 104 ms; clean run read
+      MORE (4.17bn) at CH p50 39 ms. Our queries did not change; the box was
+      busy. Series 1 + 2 were verified clean (0.02bn), so every earlier
+      conclusion in this task stands.
 ---
 
 # PERF: launch read-path perf cluster
@@ -132,14 +161,14 @@ ranked by `read_rows` on a closed-loop run, which conflated per-query cost,
 collateral from a saturated box, and non-CH overhead. The open-model re-run
 separates them. Current state, by share of the p95 tail at 10M/mo:
 
-| endpoint                                                         | p95 (10M/mo) | tail share | category                 | what it actually is                                                                                                                                                                                          |
-| ---------------------------------------------------------------- | ------------ | ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `txdetail`                                                       | 1160 ms      | 34%        | **overhead, not CH**     | >=427 ms provably OUTSIDE ClickHouse (6 CH queries/req, each `max<=12 ms` -> `sum<=72 ms`). mTLS-per-query / Lambda. No SQL fix exists.                                                                      |
-| `lplist`                                                         | 618 ms       | 32%        | **CH — the only one**    | `created_at` = `min(ledger_sequence)`, ~9.6M rows/req. Fix = stored `created_at_ledger` (0208 Path 1, was rejected on writer/RMT grounds — the numbers now justify re-litigating).                           |
-| `nftdetail`                                                      | 1800 ms      | 26%        | **by design (ADR 0043)** | request-time `token_uri()` Soroban RPC + IPFS, 3 s cap, LRU(1024). CH work identical fast vs slow (54k rows / ~20 ms both). Harness inflates it: 500 random NFTs never warm the LRU. Known-issue, not a fix. |
-| `lpdetail`                                                       | 330 ms       | —          | **DONE #347**            | 27.2M -> 1.5M rows/req (-94%), CH 784 -> 193 ms. Residual 1.5M is real snapshot work, not the `ledgers` hash. Lever exhausted.                                                                               |
-| `lpchart`                                                        | 192 ms       | —          | **DONE (ops index)**     | 77.9M -> 26.3M rows/req via `closed_at_mm` minmax. **Meets <200 ms.** Index was prod-only -> now in `init.sql`; recurrence -> 0399.                                                                          |
-| acclist / asttxs / lptxs / search / astlist / astdetail / txlist | all < 300 ms | —          | **DONE**                 | 0353 / 0364 / 0365 / 0370 / 0385 / 0386 landed. CH time now 19-52 ms each. Off the list.                                                                                                                     |
+| endpoint                                                         | p95 (10M/mo) | tail share | category                  | what it actually is                                                                                                                                                                                                       |
+| ---------------------------------------------------------------- | ------------ | ---------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `txdetail`                                                       | 1160 ms      | 34%        | **overhead, not CH**      | >=427 ms provably OUTSIDE ClickHouse (6 CH queries/req, each `max<=12 ms` -> `sum<=72 ms`). mTLS-per-query / Lambda. No SQL fix exists.                                                                                   |
+| `lplist`                                                         | 618 ms       | 32%        | **CH — the only one**     | `created_at` = `min(ledger_sequence)`, ~9.6M rows/req. Fix = stored `created_at_ledger` (0208 Path 1, was rejected on writer/RMT grounds — the numbers now justify re-litigating).                                        |
+| `nftdetail`                                                      | 1800 ms      | 26%        | **by design (ADR 0043)**  | request-time `token_uri()` Soroban RPC + IPFS, 3 s cap, LRU(1024). CH work identical fast vs slow (54k rows / ~20 ms both). Harness inflates it: 500 random NFTs never warm the LRU. Known-issue, not a fix.              |
+| `lpdetail`                                                       | 330 ms       | —          | **DONE #347**             | 27.2M -> 1.5M rows/req (-94%), CH 784 -> 193 ms. Residual 1.5M is real snapshot work, not the `ledgers` hash. Lever exhausted.                                                                                            |
+| `lpchart`                                                        | 197 ms       | —          | **DONE #349 + ops index** | 77.9M -> 26.3M (`closed_at_mm` minmax) -> **571k** (#349 bounds the upper seek both ways). CH 411 -> 106 -> 68 ms; p95 @50M 1407 -> 221. **Meets <200 ms.** Index was prod-only -> now in `init.sql`; recurrence -> 0399. |
+| acclist / asttxs / lptxs / search / astlist / astdetail / txlist | all < 300 ms | —          | **DONE**                  | 0353 / 0364 / 0365 / 0370 / 0385 / 0386 landed. CH time now 19-52 ms each. Off the list.                                                                                                                                  |
 
 **The floor (new, applies to everything):** ~60-90 ms per request before any query
 runs — Lambda + mTLS-per-query + network. `netstats` does `<=32 ms` of CH work and
@@ -204,6 +233,58 @@ explode). No safe query-only win. Isolated ~150–330 ms, but that read-volume �
 miss. The pool_id-keyed MV (arrayJoin `pool_ids` → `ORDER BY (pool_id, ledger,
 tx)` → prefix-seek, ~tens of k) is a stronger post-launch candidate than first
 thought, not YAGNI.
+
+## `prices_writer` — the CH box is shared, and it costs us 2x p95 (2026-07-17)
+
+Found by accident: series 3's tier B came out 2x worse than series 1 and 2, at a
+rate we had twice proven we cannot saturate. Cause was not ours.
+
+**`stellar-prices-api` (separate repo, CH user `prices_writer`) shares the box.**
+Its OHLCV aggregation (`INSERT INTO prices.price_ohlcv_1h … SELECT
+toStartOfInterval(…)`) read **14.2bn rows in 10 minutes** — 3x our entire load
+test — and doubled our p95.
+
+Proven by a controlled re-run 33 minutes later, not inferred:
+
+| tier B, 3.858 rps, same code | `prices_writer` reads | OUR read_rows | our CH p50 | our p95     |
+| ---------------------------- | --------------------- | ------------- | ---------- | ----------- |
+| contaminated (11:14)         | **14.2bn**            | 4.03bn        | **104 ms** | **1194 ms** |
+| clean re-run (11:47)         | 0.02bn                | **4.17bn**    | **39 ms**  | **568 ms**  |
+
+The clean run read **more** of our rows and ClickHouse still took **2.7x less**
+time. Our queries did not change; the box was busy with someone else's work.
+
+Per-window audit (all of today) — series 1 and 2 were clean, so every conclusion
+drawn from them stands:
+
+| window     | `prices_writer` | verdict                        |
+| ---------- | --------------- | ------------------------------ |
+| B series 1 | 0.02bn          | clean                          |
+| C series 1 | 0.02bn          | clean                          |
+| B series 2 | 0.02bn          | clean                          |
+| C series 2 | 2.19bn          | 5.4% of ours — negligible      |
+| B series 3 | **14.2bn**      | **discarded, re-run**          |
+| C series 3 | 1.11bn          | cleaner than C series 2 — kept |
+
+It is **bursty**, not constant: 0 for minutes, then 1.64bn/min for ~4 minutes.
+The query count is flat (537-636 per window) — the same jobs, occasionally doing
+enormous reads.
+
+**Why this matters beyond a spoiled run.** AC4 asks for a p95 the explorer cannot
+unilaterally deliver: another team's batch schedule can double it at any moment,
+on traffic 5x below our own saturation point. Options are isolation (CH workload
+scheduling / a `prices_writer` quota or memory cap) or naming it in the AC4 report
+as a known risk. Un-owned — no task spawned yet, pending a decision.
+
+**Harness implication:** every future run needs a pre-flight check that the box is
+quiet, or its numbers are a lottery:
+
+```sql
+SELECT toStartOfMinute(event_time) AS m, round(sum(read_rows)/1e9,2) AS prices_bn
+FROM system.query_log
+WHERE type='QueryFinish' AND user='prices_writer' AND event_time > now() - INTERVAL 5 MINUTE
+GROUP BY m ORDER BY m DESC;   -- all zeros → safe to measure
+```
 
 ## D3 AC4 position (2026-07-17) — MEASURED, supersedes the 07-06 position below
 
