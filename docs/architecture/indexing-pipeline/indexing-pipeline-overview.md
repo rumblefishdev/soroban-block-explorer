@@ -315,6 +315,13 @@ backfill** (`persist::stage::token_events_net_settled`, shared), so the live and
 backfill writers emit an identical row for a key and the duplicate collapses
 cleanly; the read dedups with `max(net_settled)`.
 
+Historical coverage is asymmetric. The 0383 backfill reads `soroban_events`, so
+it recovers only the **Soroban** value CH-local. The classic value is reduced
+from `TransactionMeta` ledger changes, which are **not stored in ClickHouse** —
+so classic historical values are `NULL` (hidden by the read's `HAVING net_settled
+IS NOT NULL`) until the **full S3 re-ingest** re-runs staging over every ledger.
+Live-forward is CH-local for both sources.
+
 The column is `Nullable`: `Some(0)` = genuinely nothing settled net; `NULL` = not
 computable (the reducer could not represent the result, or a recognised event's
 amount was unreadable). Keeping the two apart stops an uncomputable value from

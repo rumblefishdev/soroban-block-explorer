@@ -231,12 +231,25 @@ scoped to `has_soroban`); the same split prevents double counting here.
 > `has_soroban` (protocol forbids mixing the op kinds in one tx, so no
 > double-count). **Diagnostic-source events are filtered** on the Soroban path
 > (they carry byte-identical copies that would double the amount).
+>
+> **Historical coverage is asymmetric.** Only `soroban_events` (`topics_xdr` /
+> `data_xdr`) is stored in ClickHouse, so ONLY the Soroban token-event value can
+> be backfilled CH-local. The classic path reads `TransactionMeta` ledger
+> changes, which are **not in CH — they live only in S3**; classic history
+> therefore CANNOT be recovered by a CH-local pass. It is filled by the **planned
+> full re-ingest from S3** (which re-runs `stage.rs` over every ledger and so
+> recomputes both classic and Soroban values). Live-forward is CH-local for both.
 
-### 4. Backfill — fold into the pending 0383 backfill
+### 4. Backfill — two mechanisms, not one
 
-The Soroban token-flow historical backfill has not run yet. Run the amount
-derivation in the **same CH-local pass**, not a second scan of billions of
-events. Full history, not forward-only.
+- **Soroban token-event value → CH-local**, folded into the pending 0383
+  backfill (`data_xdr` is stored; `token_events_net_settled` reduces it, same fn
+  as live). One pass, no second scan of billions of events.
+- **Classic value → full re-ingest from S3.** `TransactionMeta` is not in CH, so
+  there is no CH-local route; classic history is `NULL` until the re-ingest runs
+  (the read's `HAVING net_settled IS NOT NULL` hides it meanwhile). That
+  re-ingest also recomputes the Soroban value, making the 0383 amount backfill
+  redundant for the column — the 0383 backfill retains its own presence-row job.
 
 ### 5. Frontend — "X ASSET + N others"
 
@@ -257,14 +270,19 @@ a large credit shows the dust as primary — see Open Decisions #1.)
       asset rows per tx, not a stored column (see Implementation Notes).
 - [x] Native XLM canonicalised to one `asset_id`; fee excluded (it is not in
       `TransactionMeta`); `max(Σ+, Σ−)` used (burns/redeems non-zero).
-- [x] Value derived CH-local (live ingest): classic from ledger-entry balance
-      deltas, Soroban from the token-event `data`; no S3 re-parse.
-- [x] **Historical backfill folds the value in (G1, done).** The 0383 backfill
-      reads `data_xdr` and reduces with the SAME `token_events_net_settled` the
-      live indexer runs, so it emits identical rows. This is required, not
-      optional: the table is a `ReplacingMergeTree`, so a placeholder-`NULL`
-      backfill row could win over a live-computed value on merge and blank the
-      column. (Running it on prod is the OPS step below.)
+- [x] Value derived CH-local at **live ingest**: classic from ledger-entry
+      balance deltas, Soroban from the token-event `data`; no S3 re-parse.
+      (Live-forward only — see history caveat below.)
+- [x] **Soroban history folds in CH-local (G1, done).** The 0383 backfill reads
+      `data_xdr` and reduces with the SAME `token_events_net_settled` the live
+      indexer runs, so it emits identical rows. This is required, not optional:
+      the table is a `ReplacingMergeTree`, so a placeholder-`NULL` backfill row
+      could win over a live-computed value on merge and blank the column.
+      (Running it on prod is the OPS step below.)
+- [ ] **Classic history is NOT CH-local — needs the full S3 re-ingest.**
+      `TransactionMeta` is not stored in CH, so classic historical values stay
+      `NULL` until the planned re-ingest re-runs `stage.rs` over every ledger.
+      Not a gap in this task's code; a deployment step (see Operations, step 3).
 - [ ] ~~Projection makes the read a prefix seek~~ — **RULED OUT** (CH refuses
       projections on RMT; a `(ledger, tx)` copy re-stores ~85 GiB). The read is a
       partition-pruned scan; the access-path optimisation is deferred to a load
@@ -341,8 +359,13 @@ column` and ingestion halts.
    read's `HAVING IS NOT NULL` hides them, so no wrong value shows pre-backfill.
 2. **Deploy the new indexer** (now that the column exists) so live ingest starts
    writing values forward.
-3. **Run the 0383 token-flow backfill** to fold values into history. It reduces
-   the same value live does, so its rows agree with live's — safe to overlap.
+3. **Fold values into history — two mechanisms:**
+   - **Soroban:** run the 0383 token-flow backfill (CH-local; reduces the same
+     value live does, so its rows agree with live's — safe to overlap).
+   - **Classic:** covered ONLY by the **full S3 re-ingest** (`TransactionMeta` is
+     not in CH). Until that runs, classic historical values stay `NULL` (hidden by
+     `HAVING IS NOT NULL`). The re-ingest also recomputes the Soroban value, so if
+     it runs first the 0383 amount backfill is redundant for this column.
 4. **`assets.id` must be backfilled** (its own pending prod step, per the `assets`
    note in `init.sql`): the value read does `INNER JOIN assets ON a.id = asset_id`,
    and un-backfilled `assets` rows have `id = 0` and join nothing → those values
