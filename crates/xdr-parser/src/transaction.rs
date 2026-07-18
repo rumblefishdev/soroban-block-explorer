@@ -164,6 +164,7 @@ fn extract_single_transaction(
         created_at: closed_at,
         operation_tree: None,
         parse_error,
+        classic_deltas: crate::classic_balance_deltas(info.meta),
     }
 }
 

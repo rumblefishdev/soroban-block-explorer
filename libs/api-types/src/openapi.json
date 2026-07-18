@@ -2051,6 +2051,7 @@
           "operation_count",
           "has_soroban",
           "operation_types",
+          "values",
           "created_at"
         ],
         "properties": {
@@ -2094,6 +2095,13 @@
           },
           "successful": {
             "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionValue"
+            },
+            "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
           }
         }
       },
@@ -3300,6 +3308,7 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
+                "values",
                 "created_at"
               ],
               "properties": {
@@ -3343,6 +3352,13 @@
                 },
                 "successful": {
                   "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionValue"
+                  },
+                  "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
                 }
               }
             }
@@ -4011,6 +4027,7 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
+                "values",
                 "created_at"
               ],
               "properties": {
@@ -4061,6 +4078,13 @@
                 },
                 "successful": {
                   "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionValue"
+                  },
+                  "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393):\n`max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the\nfrontend scales. Ordered native-first (`asset_type`, then `asset_id`) so\n`values[0]` is XLM when the tx moved it; empty when nothing net-settled\n(a wash / pure cycle is zero by the flow decomposition theorem) or when\nhistory has not been backfilled yet."
                 }
               }
             }
@@ -4461,6 +4485,7 @@
           "operation_count",
           "has_soroban",
           "operation_types",
+          "values",
           "created_at"
         ],
         "properties": {
@@ -4511,6 +4536,38 @@
           },
           "successful": {
             "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionValue"
+            },
+            "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393):\n`max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the\nfrontend scales. Ordered native-first (`asset_type`, then `asset_id`) so\n`values[0]` is XLM when the tx moved it; empty when nothing net-settled\n(a wash / pure cycle is zero by the flow decomposition theorem) or when\nhistory has not been backfilled yet."
+          }
+        }
+      },
+      "TransactionValue": {
+        "type": "object",
+        "description": "One asset's net-settled \"value moved\" in a transaction (task 0393).",
+        "required": ["asset", "net_settled", "decimals"],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "Asset identity for the asset detail link — `\"native\"` or `\"CODE-ISSUER\"`\n(the form accepted by `GET /assets/{id}`)."
+          },
+          "asset_code": {
+            "type": ["string", "null"],
+            "description": "Asset code for display (e.g. `\"USDC\"`); `null` for native XLM."
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals (`7` for classic / SAC assets).",
+            "minimum": 0
+          },
+          "net_settled": {
+            "type": "string",
+            "description": "Raw net-settled value as a stringified `Int128`; scale by `decimals`."
           }
         }
       },

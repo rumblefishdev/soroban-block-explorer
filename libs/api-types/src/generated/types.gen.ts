@@ -111,6 +111,11 @@ export type AccountTransactionItem = {
   operation_types: Array<string>;
   source_account: string;
   successful: boolean;
+  /**
+   * Net-settled "value moved" per asset the transaction touched (task 0393);
+   * see `TransactionValue`. Raw amounts + `decimals` — the frontend scales.
+   */
+  values: Array<TransactionValue>;
 };
 
 /**
@@ -1044,6 +1049,11 @@ export type PaginatedAccountTransactionItem = {
     operation_types: Array<string>;
     source_account: string;
     successful: boolean;
+    /**
+     * Net-settled "value moved" per asset the transaction touched (task 0393);
+     * see `TransactionValue`. Raw amounts + `decimals` — the frontend scales.
+     */
+    values: Array<TransactionValue>;
   }>;
   page: PageInfo;
 };
@@ -1508,6 +1518,15 @@ export type PaginatedTransactionListItem = {
      */
     source_account?: string | null;
     successful: boolean;
+    /**
+     * Net-settled "value moved" per asset the transaction touched (task 0393):
+     * `max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the
+     * frontend scales. Ordered native-first (`asset_type`, then `asset_id`) so
+     * `values[0]` is XLM when the tx moved it; empty when nothing net-settled
+     * (a wash / pure cycle is zero by the flow decomposition theorem) or when
+     * history has not been backfilled yet.
+     */
+    values: Array<TransactionValue>;
   }>;
   page: PageInfo;
 };
@@ -1852,6 +1871,38 @@ export type TransactionListItem = {
    */
   source_account?: string | null;
   successful: boolean;
+  /**
+   * Net-settled "value moved" per asset the transaction touched (task 0393):
+   * `max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the
+   * frontend scales. Ordered native-first (`asset_type`, then `asset_id`) so
+   * `values[0]` is XLM when the tx moved it; empty when nothing net-settled
+   * (a wash / pure cycle is zero by the flow decomposition theorem) or when
+   * history has not been backfilled yet.
+   */
+  values: Array<TransactionValue>;
+};
+
+/**
+ * One asset's net-settled "value moved" in a transaction (task 0393).
+ */
+export type TransactionValue = {
+  /**
+   * Asset identity for the asset detail link — `"native"` or `"CODE-ISSUER"`
+   * (the form accepted by `GET /assets/{id}`).
+   */
+  asset: string;
+  /**
+   * Asset code for display (e.g. `"USDC"`); `null` for native XLM.
+   */
+  asset_code?: string | null;
+  /**
+   * Display decimals (`7` for classic / SAC assets).
+   */
+  decimals: number;
+  /**
+   * Raw net-settled value as a stringified `Int128`; scale by `decimals`.
+   */
+  net_settled: string;
 };
 
 /**

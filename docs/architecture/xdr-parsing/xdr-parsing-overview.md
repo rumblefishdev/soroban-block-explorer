@@ -371,6 +371,52 @@ step 14, called out here so the parser/indexer boundary stays explicit):
   task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
   `current_owner_id`) tuple — see §5.1 NFT pattern.
 
+### 4.7 Transaction Value — "net settled" (task 0393)
+
+The tx-list "Net settled" column needs a single figure per (transaction, asset).
+The protocol has no per-transaction amount — value lives on operations and Soroban
+token events — so the parser derives the **net-settled value**:
+`max(Σ positive account deltas, Σ negative account deltas)` per (tx, asset),
+which nets out routing hops (a pass-through account ends at delta 0) instead of
+double-counting them. The reducer is `xdr_parser::net_settled`
+(`net_settled.rs`); its three rules — `max` of both sides (so burns / payments
+-to-issuer stay non-zero), native canonicalised to one surrogate, fee excluded —
+are covered in task 0393.
+
+This figure is the network-flow **flow value**, not a heuristic: the flow
+decomposition theorem splits any flow into source→sink **paths** plus **cycles**,
+where a path contributes its flow and a **cycle contributes exactly zero**. Hence
+`gross = Σ path + Σ cycle`, `net = Σ path`. A wash / round-trip is a pure cycle
+and therefore nets to zero **by definition** (the same zero-balance-cycle
+signature the wash-trading literature uses to detect washes), and two offsetting
+but intent-wise unrelated payments decompose into a single path — the arithmetic
+cannot see intent and does not try to. Net is preferred to gross because
+`net ≤ gross` always: net never overstates, while gross inflates every routed
+payment (3 hops of 100 read as 300), and routing is the common case. If a gross
+figure is ever needed, `cycle volume = gross − net` falls out of the theorem.
+
+Two disjoint sources feed it (the protocol forbids mixing classic + Soroban ops
+in one transaction, so they never double-count):
+
+- **Classic** (`has_soroban = 0`) — `xdr_parser::classic_balance_deltas`
+  (`classic_value.rs`) reads the before→after `AccountEntry` / `TrustLineEntry`
+  balance changes from `TransactionMeta` (via the version-safe `meta.rs` change
+  accessor). Every classic op type — payment, path payment, offer/DEX fill, LP
+  deposit/withdraw, claimable-balance create/claim, clawback — settles as an
+  account/trustline balance change, so this one reader covers them all and
+  auto-nets. The fee is charged in the ledger's separate `feeProcessing` phase,
+  not in `TransactionMeta`, so it is excluded by construction.
+- **Soroban** (`has_soroban = 1`) — `xdr_parser::token_event_amount`
+  (`event_filters.rs`) reads the `i128` amount out of each transfer / mint /
+  burn / clawback event's `data` (bare scalar or the CAP-67 `map{amount,…}`),
+  paired with the event's from/to/asset.
+
+Surrogate resolution and the net reduction run at ingest
+(`db_clickhouse::persist::stage`), which writes the result to
+`operation_asset_appearances.net_settled` (`Nullable(Int128)`; §4.3 / schema
+doc). Values are stored RAW; the read scales by the asset's decimals (classic /
+SAC = 7).
+
 ## 5. Soroban-Specific Handling
 
 ### 5.1 CAP-67 Events

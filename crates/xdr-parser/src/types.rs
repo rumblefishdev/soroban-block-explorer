@@ -98,6 +98,13 @@ pub struct ExtractedTransaction {
     pub created_at: i64,
     /// True if XDR parsing failed for this transaction.
     pub parse_error: bool,
+    /// Per-(account, asset) classic balance deltas (task 0393), from the tx's
+    /// `TransactionMeta`. Computed for EVERY transaction (the parser has the meta
+    /// here), but the staging layer consumes it only for the classic
+    /// (`has_soroban = 0`) path — Soroban txs are routed through the token-event
+    /// path instead, so their deltas are computed-but-unused (a Soroban tx that
+    /// moves a SAC-wrapped classic asset can still produce non-empty deltas here).
+    pub classic_deltas: Vec<crate::classic_value::ClassicDelta>,
 }
 
 /// Container an `ExtractedEvent` was sourced from in the on-chain meta.

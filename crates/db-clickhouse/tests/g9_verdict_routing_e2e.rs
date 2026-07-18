@@ -81,6 +81,7 @@ fn fixture_tx() -> ExtractedTransaction {
         memo: None,
         created_at: 1_700_000_000,
         parse_error: false,
+        classic_deltas: vec![],
     }
 }
 

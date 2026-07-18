@@ -300,9 +300,26 @@ events. Per lore task
 the staging event loop decodes SEP-41 / CAP-67 `transfer` / `mint` / `burn` /
 `clawback` events (`derive_token_event`, see xdr-parsing overview §5.6) and
 registers their `from` / `to` as account participants plus — for SAC-wrapped
-classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`). This is
-pure presence: no amount is stored, so the account and asset activity pages read
-the same indexes unchanged.
+classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
+`transaction_participants` stays pure presence.
+
+`operation_asset_appearances` additionally carries `net_settled` per (tx, asset)
+— the tx-list "value moved" figure (task
+[0393](../../../lore/1-tasks/active/0393_FEATURE_transaction-value-amount-column/README.md)).
+At staging the value is reduced once per transaction and joined onto the
+presence rows: classic txs (`has_soroban = 0`) from ledger-entry balance deltas,
+Soroban txs from token-event amounts (see xdr-parsing overview §4.7). It is a
+non-key column on a version-less `ReplacingMergeTree`, so staging writes the
+**final** net (never an incremental fold). The **same reduction runs in the 0383
+backfill** (`persist::stage::token_events_net_settled`, shared), so the live and
+backfill writers emit an identical row for a key and the duplicate collapses
+cleanly; the read dedups with `max(net_settled)`.
+
+The column is `Nullable`: `Some(0)` = genuinely nothing settled net; `NULL` = not
+computable (the reducer could not represent the result, or a recognised event's
+amount was unreadable). Keeping the two apart stops an uncomputable value from
+masquerading as a real zero; both are filtered at read (`max` ignores NULL, so a
+computed value wins over a not-computed one for the same key).
 
 Per-ledger replay safety: every state table is `ReplacingMergeTree(version)`
 keyed on a column whose value monotonically reflects the latest observation

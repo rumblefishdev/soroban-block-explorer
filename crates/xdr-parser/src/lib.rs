@@ -7,6 +7,7 @@
 
 pub mod asset_appearances;
 pub mod asset_code;
+pub mod classic_value;
 pub mod classification;
 pub mod contract;
 pub mod error;
@@ -32,6 +33,7 @@ pub mod types;
 pub mod envelope;
 mod xdr_limits;
 
+pub use classic_value::{ClassicDelta, classic_balance_deltas};
 pub use classification::{ContractClassification, classify_contract_from_wasm_spec};
 pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;

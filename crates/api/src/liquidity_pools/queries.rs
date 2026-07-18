@@ -674,7 +674,7 @@ pub async fn fetch_pool_transactions(
     // operation_types via the shared non-correlated aggregate (ops-only, PK
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
+    let aggregates = fetch_tx_list_aggregates(client, &keys, false).await?;
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
     // preserved via filter_map (a tx always has its source account).

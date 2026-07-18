@@ -636,10 +636,47 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- source != issuer, or a trustline predating the ingest window). Harmless -- the
 -- read path reaches a fact row only via an existing `assets` row, so such orphans
 -- are unreachable dead weight, never wrong output.
+-- `net_settled` (task 0393): net-settled "value moved" per (transaction, asset)
+-- for the tx-list "Net settled" column. RAW `Nullable(Int128)` (scale by the
+-- asset's `decimals` at read, like balances/total_supply) — the figure
+-- `max(Σ positive account deltas, Σ negative account deltas)` over the tx's
+-- transfers, computed one-shot per (tx, asset) in Rust
+-- (`persist::stage::tx_token_net_settled` + `xdr_parser::net_settled`). It is the
+-- network-flow FLOW VALUE: by the flow decomposition theorem a flow splits into
+-- source→sink paths plus cycles, and a cycle contributes exactly zero — so a
+-- wash / round-trip nets to `0` BY DEFINITION, not by accident (that zero-balance
+-- cycle is also how the wash-trading literature identifies a wash). Gross would be
+-- `Σ path + Σ cycle`; if ever wanted, `cycle volume = gross − net`.
+-- NULLABLE ON PURPOSE: `NULL` = not computable (the reducer could not represent
+-- the result, or a recognised event's amount was unreadable), `0` = genuinely
+-- nothing settled net. Without the distinction a value that could not be computed
+-- would masquerade as a real zero. The read filters `IS NOT NULL AND != 0`.
+-- NON-KEY data column, version-less RMT: the live indexer and the 0383 backfill
+-- reduce the SAME value from the SAME events, so both writers emit an identical
+-- row and the duplicate collapses cleanly. The read dedups with `max(net_settled)`
+-- (`max` ignores NULL, so a computed value wins over a not-computed one for the
+-- same key). There is deliberately no version column: a downward "correction" of
+-- a deterministic figure only happens when OUR reducer changes, which is a deploy
+-- event handled by re-running the backfill + `OPTIMIZE FINAL` over the range —
+-- not a runtime concern worth a per-row version + a full-table engine rebuild.
+-- The tx-list "+ N other assets" affordance is a read-time COUNT of asset rows
+-- per tx, not a stored column.
+-- tx-list "value" read note (task 0393): the PK is `asset_id`-leading (for the
+-- per-asset activity page), so the tx-list read filtering
+-- `(ledger_sequence, transaction_id) IN (page keys)` is NOT a prefix seek — it
+-- SCANS the pruned partition. Measured ~26M rows/page against a full partition
+-- vs ~16k for the seek-based op-types query beside it. This endpoint family is
+-- polled and previously exhausted the read quota in exactly this shape (tasks
+-- 0243/0386), so a `(ledger, tx)`-ordered companion (the `accounts_recent`
+-- pattern: plain MergeTree + refreshable MV + atomic EXCHANGE — a projection is
+-- refused on an RMT, CH Code 344) is REQUIRED before this ships at scale. Tracked
+-- as the read-path work in task 0393's Operations / follow-up section; the head
+-- partition being young hides the cost today.
 CREATE TABLE IF NOT EXISTS operation_asset_appearances (
     asset_id        Int64,
     ledger_sequence Int64,
-    transaction_id  Int64
+    transaction_id  Int64,
+    net_settled     Nullable(Int128)
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

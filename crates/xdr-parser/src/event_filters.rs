@@ -119,36 +119,19 @@ pub fn parse_token_event(topics: &Value) -> Option<TokenEvent> {
 /// `None` rather than a wrong value.
 pub fn token_event_amount(data: &Value) -> Option<i128> {
     // Muxed map: the amount is the "amount" entry's scalar. Otherwise `data` is
-    // the amount scalar itself.
-    if data.get("type").and_then(Value::as_str) == Some("map") {
-        return amount_scalar(map_get(data, "amount")?);
-    }
-    amount_scalar(data)
-}
-
-/// Read an `i128`/`u128` scalar's decimal-string value as `i128`. A `u128`
-/// above `i128::MAX` fails to parse → `None` (unstorable, never a wrong value).
-fn amount_scalar(v: &Value) -> Option<i128> {
-    match v.get("type").and_then(Value::as_str)? {
-        "i128" | "u128" => v.get("value").and_then(Value::as_str)?.parse::<i128>().ok(),
-        _ => None,
-    }
-}
-
-/// Look up `key` in a `{"type":"map","value":[{"key":sym,"value":…}]}` payload.
-// ponytail: mirrors nft.rs::map_get; kept local to avoid coupling event decode
-// to NFT internals — swap to a shared helper only if a third caller appears.
-fn map_get<'a>(data: &'a Value, key: &str) -> Option<&'a Value> {
-    data.get("value")?.as_array()?.iter().find_map(|entry| {
-        let k = entry.get("key")?;
-        if k.get("type").and_then(Value::as_str) == Some("sym")
-            && k.get("value").and_then(Value::as_str) == Some(key)
-        {
-            entry.get("value")
-        } else {
-            None
-        }
-    })
+    // the amount scalar itself. Both shape readers live in `scval`, next to the
+    // encoder that writes them.
+    let raw = match crate::scval::map_get(data, "amount") {
+        Some(amount) => crate::scval::as_i128(amount),
+        None => crate::scval::as_i128(data),
+    }?;
+    // This is a trust boundary: `data` is contract-emitted, so the amount is
+    // whatever the contract chose to write. A negative token amount is not a
+    // SEP-41 transfer — and it is not inert: the reducer signs movements itself,
+    // so a `transfer` of -100 would flip into a +100 credit for the sender and
+    // render as a real 100 moved. Reject it here rather than let it become a
+    // figure downstream.
+    (raw >= 0).then_some(raw)
 }
 
 /// Resolve the asset from a trailing SEP-11 string topic. Absent, empty, or
@@ -274,6 +257,22 @@ mod tests {
     fn amount_unparseable_value_is_none() {
         assert_eq!(token_event_amount(&i128val("not-a-number")), None);
         assert_eq!(token_event_amount(&json!({ "type": "i128" })), None);
+    }
+
+    #[test]
+    fn amount_negative_is_rejected() {
+        // `data` is contract-emitted. A negative amount is not a SEP-41 transfer,
+        // and it is not inert: the reducer signs movements itself, so -100 would
+        // become a +100 credit for the sender and render as 100 moved.
+        assert_eq!(token_event_amount(&i128val("-100")), None);
+        let muxed = mapval(&[("amount", i128val("-100"))]);
+        assert_eq!(token_event_amount(&muxed), None);
+    }
+
+    #[test]
+    fn amount_zero_is_accepted() {
+        // Zero is a legitimate amount — only negatives are rejected.
+        assert_eq!(token_event_amount(&i128val("0")), Some(0));
     }
 
     #[test]

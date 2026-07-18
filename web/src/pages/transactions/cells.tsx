@@ -1,13 +1,18 @@
-import { Box, Typography } from '@mui/material';
+import { Box, Link, Typography } from '@mui/material';
+import type { TransactionValue } from '@rumblefish/api-types';
 import {
   Chip,
   Dash,
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
+  scaleByDecimals,
   StatusChip,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
+import { Link as RouterLink } from 'react-router-dom';
 
+import { routes } from '../../router/routes.js';
 import { formatOperationType } from './operationTypes.js';
 
 /**
@@ -20,6 +25,43 @@ export function OperationCell({ types }: { types: readonly string[] }) {
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
       <Chip size="sm" color="neutral" label={formatOperationType(first)} />
+      {rest.length > 0 && (
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
+          +{rest.length}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * "Value moved" cell (task 0393): the net-settled amount of the primary asset
+ * (scaled by its decimals) with its code linking to the asset detail page, plus
+ * a `+N` count when the transaction moved more than one asset. A single narrow
+ * column cannot list every asset, so the rest collapse into the count — the full
+ * list is on the transaction detail page. `Dash` when nothing net-settled.
+ */
+export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
+  if (values.length === 0) return <Dash />;
+  const [first, ...rest] = values;
+  const code = first.asset_code ?? 'XLM';
+  return (
+    <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5 }}>
+      <Typography component="span" variant="bodySmRegular">
+        {formatAmount(scaleByDecimals(first.net_settled, first.decimals), 2)}
+      </Typography>
+      <Link
+        component={RouterLink}
+        to={routes.asset(first.asset)}
+        underline="hover"
+        variant="bodySmRegular"
+        sx={(theme) => ({ color: theme.palette.text.secondary })}
+      >
+        {code}
+      </Link>
       {rest.length > 0 && (
         <Typography
           variant="bodyXsRegular"

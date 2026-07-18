@@ -167,6 +167,7 @@ pub async fn list_transactions(
             operation_count: row.operation_count,
             has_soroban: row.has_soroban,
             operation_types: row.operation_types,
+            values: row.values,
             created_at: row.created_at,
         })
         .collect();

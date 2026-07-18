@@ -112,7 +112,10 @@ Backbone timeline:
 - `operation_asset_appearances` — per-(asset, transaction) presence index powering
   `/assets/:id/transactions` (task 0359; the asset-dimension twin of
   `transaction_participants`, keyed asset-first; native XLM is a first-class
-  surrogate, not absence)
+  surrogate, not absence). Also carries `net_settled` ("value moved", nullable:
+  NULL = not computed yet) per (tx, asset) for the tx-list column (task 0393; the `(ledger, tx)`
+  value read is a partition-pruned scan — read-path optimisation is an open
+  follow-up pending measurement, see the table note)
 - `operation_pools` — per-(pool, transaction) presence index powering
   `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
   `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
@@ -470,12 +473,63 @@ presence index so a per-asset activity page is a PK-prefix seek.
 CREATE TABLE operation_asset_appearances (
     asset_id        Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
     ledger_sequence Int64,
-    transaction_id  Int64
+    transaction_id  Int64,
+    net_settled     Nullable(Int128)  -- task 0393: net-settled "value moved" per
+                             -- (tx, asset), RAW (scale by decimals at read;
+                             -- classic/SAC = 7). NULL = not computable,
+                             -- 0 = genuinely nothing settled net
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (asset_id, ledger_sequence, transaction_id);
 ```
+
+> **Read-path optimisation is open.** The tx-list value read filters `(ledger,
+tx)` on this `asset_id`-leading table — a partition-pruned scan, not a prefix
+> seek. A projection is not a candidate (CH 26.3 refuses projections on a
+> ReplacingMergeTree, and a `(ledger, tx)`-ordered copy would re-store the
+> incompressible `transaction_id` ~85 GiB anyway). No optimisation is applied
+> yet: the right mechanism must be chosen from a concrete load measurement of the
+> endpoint — an explicit task 0393 follow-up, not a guess.
+
+**`net_settled` (task 0393)** is the transaction "value moved" figure surfaced by
+the tx-list endpoints (UI column "Net settled"). It is the **net-settled value**
+per (transaction, asset): `max(Σ positive account deltas, Σ negative account
+deltas)` over the transaction's transfers, computed one-shot in Rust and written
+as a non-key column.
+
+This is the network-flow **flow value**: by the flow decomposition theorem every
+flow splits into source→sink **paths** plus **cycles**, a path contributes its
+flow and a **cycle contributes exactly zero**. So `gross = Σ path + Σ cycle` while
+`net = Σ path`. Two consequences are definitional, not defects: a **wash /
+round-trip nets to 0** (that zero-balance cycle is also how the wash-trading
+literature identifies a wash), and two intent-wise unrelated but offsetting
+payments decompose into one path. Per-account netting is the same algorithm
+clearing houses use for multilateral netting. If a gross figure is ever wanted,
+the theorem yields `cycle volume = gross − net` for free. Net is preferred over
+gross because `net ≤ gross` always: net never overstates, whereas gross inflates
+routed payments (a 3-hop path payment of 100 reads as 300) — and routing is the
+common case, washes the rare one.
+
+**Nullable on purpose:** `NULL` = not computable (the reducer could not represent
+the result in i128, or a recognised event's amount was unreadable), `0` = genuinely
+nothing settled net. Without the distinction a value that could not be computed
+would masquerade as a real zero. The read filters `IS NOT NULL AND != 0` and uses
+`assumeNotNull` — an aggregate over a Nullable column is `Nullable(T)` and decoding
+that into a non-nullable field 500s (the task 0324 trap).
+
+**Version-less dedup.** The table is a plain `ReplacingMergeTree` (no version
+column). The live indexer and the 0383 backfill reduce the same value from the
+same events (`persist::stage::token_events_net_settled`, shared), so both writers
+emit an identical row and the duplicate collapses cleanly; the read dedups with
+`max(net_settled)` (`max` ignores NULL, so a computed value wins over a
+not-computed one for the same key). There is deliberately no "newest insert wins"
+version: a downward correction of a deterministic figure only happens when the
+reducer itself changes — a deploy event, handled by re-running the backfill +
+`OPTIMIZE FINAL`, not worth a per-row version and the full-table engine rebuild it
+would force on prod. Classic txs derive the value from ledger-entry balance deltas;
+Soroban txs from token events (see the indexing-pipeline and XDR-parsing docs). The
+fee is excluded by construction (it is not in `TransactionMeta`).
 
 Purpose / design notes:
 
