@@ -188,7 +188,7 @@ Unit-test `is_dns_failure` against representative reqwest error strings
       `GDVIQFRC…ATMI`, home_domain **`atmindividual.org`**. That domain
       **resolves fine** (`69.57.162.184`, NOERROR, live NS + MX) — it is not a
       dead domain. It fails on **TLS**: `no alternative certificate subject name
-    matches target host name`.
+matches target host name`.
       So the DNS branch is doing its job; what floods the DLQ is the **TLS
       cert-verification class**, which this task's AC2 **deliberately kept
       transient** and which **0347** owns by name. Evidence recorded there.
