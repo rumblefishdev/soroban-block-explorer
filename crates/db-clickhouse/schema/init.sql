@@ -651,13 +651,14 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- the result, or a recognised event's amount was unreadable), `0` = genuinely
 -- nothing settled net. Without the distinction a value that could not be computed
 -- would masquerade as a real zero. The read filters `IS NOT NULL AND != 0`.
--- NON-KEY data column, version-less RMT: the live indexer and the 0383 backfill
--- reduce the SAME value from the SAME events, so both writers emit an identical
--- row and the duplicate collapses cleanly. The read dedups with `max(net_settled)`
--- (`max` ignores NULL, so a computed value wins over a not-computed one for the
--- same key). There is deliberately no version column: a downward "correction" of
--- a deterministic figure only happens when OUR reducer changes, which is a deploy
--- event handled by re-running the backfill + `OPTIMIZE FINAL` over the range —
+-- NON-KEY data column, version-less RMT: `net_settled` has a SINGLE writer —
+-- `stage.rs`, run by both live ingest and the full S3 re-ingest — so live and
+-- historical rows for a key are computed identically and the duplicate collapses
+-- cleanly. The read dedups with `max(net_settled)` (`max` ignores NULL, so a
+-- computed value wins over a not-computed one for the same key). There is
+-- deliberately no version column: a downward "correction" of a deterministic
+-- figure only happens when OUR reducer changes, which is a deploy event handled
+-- by re-running the re-ingest + `OPTIMIZE FINAL` over the range —
 -- not a runtime concern worth a per-row version + a full-table engine rebuild.
 -- The tx-list "+ N other assets" affordance is a read-time COUNT of asset rows
 -- per tx, not a stored column.

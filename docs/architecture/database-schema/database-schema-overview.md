@@ -519,15 +519,17 @@ would masquerade as a real zero. The read filters `IS NOT NULL AND != 0` and use
 that into a non-nullable field 500s (the task 0324 trap).
 
 **Version-less dedup.** The table is a plain `ReplacingMergeTree` (no version
-column). The live indexer and the 0383 backfill reduce the same value from the
-same events (`persist::stage::token_events_net_settled`, shared), so both writers
-emit an identical row and the duplicate collapses cleanly; the read dedups with
+column). `net_settled` has a single writer — `persist::stage`, run by both live
+ingest and the full S3 re-ingest — so live and historical rows for a key are
+computed identically and the duplicate collapses cleanly; the read dedups with
 `max(net_settled)` (`max` ignores NULL, so a computed value wins over a
 not-computed one for the same key). There is deliberately no "newest insert wins"
 version: a downward correction of a deterministic figure only happens when the
-reducer itself changes — a deploy event, handled by re-running the backfill +
+reducer itself changes — a deploy event, handled by re-running the re-ingest +
 `OPTIMIZE FINAL`, not worth a per-row version and the full-table engine rebuild it
-would force on prod. Classic txs derive the value from ledger-entry balance deltas;
+would force on prod. (The 0383 token-flow backfill is presence-only — it writes
+`net_settled: NULL` and must not run once the column is populated, or its NULL row
+could win the merge and blank a live value.) Classic txs derive the value from ledger-entry balance deltas;
 Soroban txs from token events (see the indexing-pipeline and XDR-parsing docs). The
 fee is excluded by construction (it is not in `TransactionMeta`).
 

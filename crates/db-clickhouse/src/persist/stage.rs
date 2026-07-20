@@ -2244,11 +2244,12 @@ pub fn tx_token_net_settled(events: &[ExtractedEvent]) -> Vec<NetSettled> {
 /// The Soroban token-event reduction, over `(topics, data, emitting contract
 /// surrogate)` for the events of ONE transaction.
 ///
-/// Shared by the live indexer ([`tx_token_net_settled`]) and the historical
-/// backfill so the two cannot drift. That is not tidiness: the two writers emit
-/// into the same version-less `ReplacingMergeTree` key, so a disagreeing row
-/// would collapse to whichever the merge happened to keep — a silent coin-flip.
-/// Identical rows collapse cleanly.
+/// The single `net_settled` writer for the Soroban path: called via
+/// [`tx_token_net_settled`] by both live ingest and the full S3 re-ingest (same
+/// `stage.rs`), so live and historical rows for a key are computed identically
+/// and the version-less `ReplacingMergeTree` collapses them cleanly. The 0383
+/// token-flow backfill is presence-only and deliberately does NOT call this — it
+/// writes `net_settled: None`, so it must not run once the column is populated.
 pub fn token_events_net_settled<'a>(
     events: impl Iterator<Item = (&'a Value, &'a Value, Option<i64>)>,
 ) -> Vec<NetSettled> {

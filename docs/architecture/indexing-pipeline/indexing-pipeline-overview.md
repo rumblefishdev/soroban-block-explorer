@@ -310,17 +310,18 @@ At staging the value is reduced once per transaction and joined onto the
 presence rows: classic txs (`has_soroban = 0`) from ledger-entry balance deltas,
 Soroban txs from token-event amounts (see xdr-parsing overview §4.7). It is a
 non-key column on a version-less `ReplacingMergeTree`, so staging writes the
-**final** net (never an incremental fold). The **same reduction runs in the 0383
-backfill** (`persist::stage::token_events_net_settled`, shared), so the live and
-backfill writers emit an identical row for a key and the duplicate collapses
+**final** net (never an incremental fold). `net_settled` has a **single writer** —
+`persist::stage` — run by both live ingest and the full S3 re-ingest, so live and
+historical rows for a key are computed identically and the duplicate collapses
 cleanly; the read dedups with `max(net_settled)`.
 
-Historical coverage is asymmetric. The 0383 backfill reads `soroban_events`, so
-it recovers only the **Soroban** value CH-local. The classic value is reduced
-from `TransactionMeta` ledger changes, which are **not stored in ClickHouse** —
-so classic historical values are `NULL` (hidden by the read's `HAVING net_settled
-IS NOT NULL`) until the **full S3 re-ingest** re-runs staging over every ledger.
-Live-forward is CH-local for both sources.
+There is **no CH-local value backfill.** Classic value is reduced from
+`TransactionMeta` ledger changes, which are **not stored in ClickHouse**, and the
+Soroban value rides the same re-ingest rather than a separate script — so all
+historical `net_settled` (classic + Soroban) is `NULL` (hidden by the read's
+`HAVING net_settled IS NOT NULL`) until the **full S3 re-ingest** re-runs staging
+over every ledger. The 0383 token-flow backfill stays presence-only (writes
+`net_settled: NULL`) and must not run once the column is populated.
 
 The column is `Nullable`: `Some(0)` = genuinely nothing settled net; `NULL` = not
 computable (the reducer could not represent the result, or a recognised event's

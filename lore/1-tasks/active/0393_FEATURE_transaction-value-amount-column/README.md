@@ -187,9 +187,9 @@ for `operation_types` — the value read is a second aggregate there
 > An earlier iteration made the table `ReplacingMergeTree(inserted_at)` so a
 > re-ingest with a _corrected, even smaller_ value would win. Removed: (1) the
 > engine change is un-`ALTER`-able and would force a full 9.5 B-row prod rebuild;
-> (2) the live indexer and the 0383 backfill now reduce the SAME value from the
-> SAME events (shared `token_events_net_settled`), so both writers emit an
-> identical row and there is nothing to correct between them; (3) a downward
+> (2) `net_settled` has a **single writer** — `stage.rs`, run by both live ingest
+> and the full S3 re-ingest — so historical and live rows for a key are computed
+> identically and there is never a second writer to disagree; (3) a downward
 > correction of a deterministic figure only follows a change to our own reducer —
 > a deploy event, handled by re-running the backfill + `OPTIMIZE FINAL`, not a
 > runtime need worth a per-row version. The read dedups with `max(net_settled)`
@@ -216,9 +216,10 @@ should be revived. Bespoke Soroban token balances live in contract storage
 
 - classic operation/result amounts (0359 path) — covers classic across all
   history, terminal amounts (no hop inflation), and pre-CAP-67 history.
-- Soroban token-event amounts (0383 path) — read the amount out of `data_xdr`
-  (already stored; a **CH-local transform, no S3 re-parse** — the same pattern
-  as the existing `nft_reparse` and the 0383 backfill).
+- Soroban token-event amounts — read the amount out of `data_xdr` at live ingest.
+  (Original plan folded the history in CH-local via the 0383 backfill; **superseded**
+  — the Soroban value history now rides the full S3 re-ingest instead, and the 0383
+  backfill stays presence-only. See §4.)
 
 The op-path/event-path split already de-duplicates classic vs Soroban (0383 is
 scoped to `has_soroban`); the same split prevents double counting here.
@@ -240,16 +241,18 @@ scoped to `has_soroban`); the same split prevents double counting here.
 > full re-ingest from S3** (which re-runs `stage.rs` over every ledger and so
 > recomputes both classic and Soroban values). Live-forward is CH-local for both.
 
-### 4. Backfill — two mechanisms, not one
+### 4. Backfill — value history comes from the full re-ingest
 
-- **Soroban token-event value → CH-local**, folded into the pending 0383
-  backfill (`data_xdr` is stored; `token_events_net_settled` reduces it, same fn
-  as live). One pass, no second scan of billions of events.
-- **Classic value → full re-ingest from S3.** `TransactionMeta` is not in CH, so
-  there is no CH-local route; classic history is `NULL` until the re-ingest runs
-  (the read's `HAVING net_settled IS NOT NULL` hides it meanwhile). That
-  re-ingest also recomputes the Soroban value, making the 0383 amount backfill
-  redundant for the column — the 0383 backfill retains its own presence-row job.
+The value (classic AND Soroban) is computed only by `stage.rs`, run at live
+ingest and by the **full S3 re-ingest**. There is **no CH-local value backfill**:
+classic needs `TransactionMeta` (S3-only), and the Soroban value was folded into
+the re-ingest too rather than duplicated in a separate script. Until the
+re-ingest runs, historical `net_settled` is `NULL` (hidden by the read's
+`HAVING net_settled IS NOT NULL`).
+
+The 0383 token-flow backfill stays **presence-only** — it writes `net_settled:
+NULL` and must **NOT** run after the column lands: its NULL row could win the
+version-less RMT merge and blank a live-computed value for the same key.
 
 ### 5. Frontend — "X ASSET + N others"
 
@@ -273,12 +276,11 @@ a large credit shows the dust as primary — see Open Decisions #1.)
 - [x] Value derived CH-local at **live ingest**: classic from ledger-entry
       balance deltas, Soroban from the token-event `data`; no S3 re-parse.
       (Live-forward only — see history caveat below.)
-- [x] **Soroban history folds in CH-local (G1, done).** The 0383 backfill reads
-      `data_xdr` and reduces with the SAME `token_events_net_settled` the live
-      indexer runs, so it emits identical rows. This is required, not optional:
-      the table is a `ReplacingMergeTree`, so a placeholder-`NULL` backfill row
-      could win over a live-computed value on merge and blank the column.
-      (Running it on prod is the OPS step below.)
+- [ ] **Value history via the full re-ingest** (classic + Soroban), not a
+      CH-local script. The 0383 token-flow backfill is **presence-only** — it does
+      not compute `net_settled`. Historical values stay `NULL` until the re-ingest
+      re-runs `stage.rs`. The backfill's `NULL` rows must not run after the column
+      lands (they could win the version-less RMT merge and blank live values).
 - [ ] **Classic history is NOT CH-local — needs the full S3 re-ingest.**
       `TransactionMeta` is not stored in CH, so classic historical values stay
       `NULL` until the planned re-ingest re-runs `stage.rs` over every ledger.
@@ -359,13 +361,13 @@ column` and ingestion halts.
    read's `HAVING IS NOT NULL` hides them, so no wrong value shows pre-backfill.
 2. **Deploy the new indexer** (now that the column exists) so live ingest starts
    writing values forward.
-3. **Fold values into history — two mechanisms:**
-   - **Soroban:** run the 0383 token-flow backfill (CH-local; reduces the same
-     value live does, so its rows agree with live's — safe to overlap).
-   - **Classic:** covered ONLY by the **full S3 re-ingest** (`TransactionMeta` is
-     not in CH). Until that runs, classic historical values stay `NULL` (hidden by
-     `HAVING IS NOT NULL`). The re-ingest also recomputes the Soroban value, so if
-     it runs first the 0383 amount backfill is redundant for this column.
+3. **Fold values into history — the full S3 re-ingest.** Value (classic AND
+   Soroban) is recomputed only by re-running `stage.rs` over every ledger; there
+   is no CH-local value backfill (`TransactionMeta` is S3-only). Until it runs,
+   historical `net_settled` stays `NULL` (hidden by `HAVING IS NOT NULL`).
+   **Do NOT run the 0383 token-flow backfill after this column exists** — it is
+   presence-only and writes `net_settled: NULL`, which could win the version-less
+   RMT merge and blank a live-computed value.
 4. **`assets.id` must be backfilled** (its own pending prod step, per the `assets`
    note in `init.sql`): the value read does `INNER JOIN assets ON a.id = asset_id`,
    and un-backfilled `assets` rows have `id = 0` and join nothing → those values

@@ -41,8 +41,9 @@ export function OperationCell({ types }: { types: readonly string[] }) {
  * "Value moved" cell (task 0393): the net-settled amount of the primary asset
  * (scaled by its decimals) with its code linking to the asset detail page, plus
  * a `+N` count when the transaction moved more than one asset. A single narrow
- * column cannot list every asset, so the rest collapse into the count — the full
- * list is on the transaction detail page. `Dash` when nothing net-settled.
+ * column cannot list every asset, so the rest collapse into the count. `Dash`
+ * when nothing net-settled. (Per-asset breakdown on the transaction detail page
+ * is a planned follow-up — not built here.)
  */
 export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
   if (values.length === 0) return <Dash />;
