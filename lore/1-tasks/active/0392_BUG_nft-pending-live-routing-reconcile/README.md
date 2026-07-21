@@ -12,6 +12,44 @@ history:
     status: active
     who: karolkow
     note: >
+      **Settled by code, not by the single measurement — the defect is dormant, not
+      gone.** The re-measurement above shows an empty quarantine, which on its own
+      cannot distinguish "problem fixed" from "problem currently idle". The code
+      distinguishes it: `persist/rows.rs:226-230` states that pending rows are
+      promoted "via the post-backfill drain runbook — **CH has no per-row UPDATE /
+      `WHERE NOT EXISTS` equivalent to PG's in-tx `promote_pending_nfts_to_hot`
+      step**". Grepped it: `promote_pending_nfts_to_hot` **exists nowhere in the
+      codebase** — it was a Postgres function, and Postgres was retired in 0244.
+      So the live path has **zero** post-hoc promotion, and the only mechanism that
+      moves a resolved contract out of quarantine is a human running
+      `nft-reclassify`.
+      That makes the gap arithmetic rather than speculation. `route_for` deliberately
+      defers a contract whose WASM has not been observed yet — this task's own §4f
+      measured that as 61% of pending, "correct defer", not a leak. Nothing
+      un-defers them. Every contract whose WASM is observed after its first NFT
+      event strands its rows permanently until someone drains by hand. Today's
+      "0 resolved-but-stranded" means 0306's drain cleared the backlog 11 days ago
+      and none of the 66 residents has resolved since — not that resolution now
+      promotes.
+      **Step 1 stands.** What is stale is the urgency framing (hot frozen 33 days,
+      6,575 rows/day), not the defect.
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      Scope pinned: **`nft-reclassify` is deleted either way**, but only after the
+      replacement is verified working — not before. Two acceptable end states, and
+      leaving the subcommand standing is neither: (1) Step 1's continuous reconcile
+      lands and is observed promoting a real contract, then the subcommand goes; or
+      (2) a cheaper monitor lands — alert when a pending contract has carried a
+      resolved verdict for more than N ledgers — and the subcommand goes with the
+      alert as the safety net. Deleting it before either exists would remove the
+      only working drain. Keeping it after either exists re-creates the ownerless
+      mop this task was spawned to end (lore 0425 clause 4).
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
       **Re-measured — the premise no longer holds.** Six days after PR #341 landed,
       the numbers this task was built on have inverted. Then (2026-07-15): hot `nfts`
       frozen at ledger 62,989,407 since 2026-06-12 (33 days), ~6,575 pending rows/day
@@ -163,11 +201,15 @@ _only_ genuinely-unresolved contracts, and reconciles them once resolved.
       instead of freezing (re-run R §4a).
 - [ ] (Step 1) Genuinely-unresolved contracts (WASM never observed) still
       quarantine correctly — pending is not forced to zero.
-- [ ] **`nft-reclassify` is deleted in the same PR that lands the continuous
-      reconcile**, together with its row in `docs/backfills.md` and its entry in
-      `crates/backfill-runner/README.md`. Leaving it as a manual fallback is how
-      hot `nfts` froze for 33 days in the first place: a drain nobody owns is a
-      drain nobody runs. Per lore 0425 clause 4.
+- [ ] **`nft-reclassify` is deleted — either way, but only after the replacement
+      is verified working.** Together with its row in `docs/backfills.md` and its
+      entry in `crates/backfill-runner/README.md`. "Either way" means: whether the
+      replacement is Step 1's continuous reconcile or the cheaper
+      resolved-verdict-stuck-in-pending alert, the subcommand goes once that
+      replacement has been _observed_ doing its job on a real contract — not on the
+      strength of an empty quarantine. Deleting it earlier removes the only working
+      drain; keeping it later re-creates the ownerless mop this task exists to end.
+      Per lore 0425 clause 4.
 - [x] (Step 2 gate) 0283 prefetch miss-rate measured directly — 100% mechanical
       failure (wire-type bug), fix shipped in PR #341
       (notes/R-g9-prefetch-miss-rate-measured.md).
