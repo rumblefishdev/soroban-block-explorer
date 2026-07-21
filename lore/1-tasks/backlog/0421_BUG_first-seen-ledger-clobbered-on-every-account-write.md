@@ -85,22 +85,73 @@ This is inherent to holding a per-activity field (`last_seen_ledger`,
 a cost rather than an outage — but it is also the mechanism that destroys
 `first_seen_ledger`, so a fix should consider both together.
 
-## Implementation options (pick during design)
+## Why a sentinel / NULL cannot work
 
-1. **Split the table** — immutable facts (`account_id`, `first_seen_ledger`)
-   written once on creation; volatile fields (`last_seen_ledger`,
-   `sequence_number`, `home_domain`) in their own table. Fixes the corruption by
-   construction AND narrows the 62× rewrite to a small row.
-2. **AggregatingMergeTree** — `min` for `first_seen_ledger`, `max` for
-   `last_seen_ledger`, so the engine itself enforces the semantics. Single
-   table, but a schema + read-path change everywhere `accounts` is read.
-3. **Carry-forward on write** — writer reads the stored `first_seen_ledger`
-   before emitting. Rejected on cost: a lookup per account per ledger on the hot
-   ingest path.
+The obvious idea — "write NULL (or 0) for `first_seen_ledger` when we are not
+creating the account, so we don't clobber it" — **does not work on a
+ReplacingMergeTree**. RMT does not merge columns; it picks one **whole winning
+row** per key (highest version) and discards the rest. A NULL in the winning row
+therefore *erases* the value rather than preserving it. There is no partial
+update to reach for.
+
+## Recommended fix: per-column merge semantics (AggregatingMergeTree)
+
+Change the engine so the invariant is enforced by the **table**, not by writer
+discipline:
+
+```sql
+ENGINE = AggregatingMergeTree ORDER BY account_id
+
+first_seen_ledger  SimpleAggregateFunction(min, Int64)   -- can never move forward
+last_seen_ledger   SimpleAggregateFunction(max, Int64)   -- can never move back
+sequence_number    SimpleAggregateFunction(max, Int64)
+```
+
+Why this is the right shape here:
+
+- **Nothing is ever overwritten.** AggregatingMergeTree merges column by column
+  with the named function, so every insert contributes and `min` wins. The NULL
+  problem disappears because no row has to "carry" the whole truth.
+- **The writer stays plain.** `SimpleAggregateFunction` (unlike
+  `AggregateFunction`) accepts ordinary values — the indexer keeps inserting a
+  bare `Int64`, no state encoding. The insert shape in `stage.rs` is unchanged.
+- **The current bug becomes harmless.** `min(50457424, 63000000) = 50457424`, so
+  even the existing `unwrap_or(last_seen_ledger)` fallback can no longer damage
+  the value. Correctness stops depending on remembering not to break it. (The
+  line should still be simplified for clarity — it is just no longer load-bearing.)
+- **In-house precedent:** `asset_sac` already uses exactly this
+  (`SimpleAggregateFunction(max, Int64)` on `AggregatingMergeTree`).
+
+### Open design points (do not skip these)
+
+1. **`home_domain` does not fit.** It needs "latest wins" = `argMax`, which
+   `SimpleAggregateFunction` does **not** support (only `min`/`max`/`sum`/`any`/
+   `anyLast`/…). Options: `anyLast` (non-deterministic across merges — a stale
+   domain can win), `AggregateFunction(argMax, …)` (forces state-encoded inserts,
+   invasive), or move the field to its own small table. Decide explicitly.
+2. **`sequence_number` via `max`** is correct only because Stellar account
+   sequence numbers are monotonically increasing. Confirm before relying on it.
+3. **Reads.** `FINAL` behaves the same, and `accounts_recent`
+   (`SELECT … FROM accounts FINAL`) keeps working unchanged. A read without
+   `FINAL` must `GROUP BY account_id` with `min()`/`max()` — the same dedup
+   discipline 0420 established, so no new class of risk.
+
+### Alternative kept on the table
+
+**Split the table** — immutable facts (`account_id`, `first_seen_ledger`)
+written once on creation; volatile fields in their own table. Also fixes it by
+construction and additionally narrows the 62× rewrite to a small row, at the
+cost of a join on every account read and a fallback for accounts whose creation
+event was never captured.
+
+**Rejected: carry-forward on write** — the writer reads the stored
+`first_seen_ledger` before emitting. A lookup per account per ledger on the hot
+ingest path; too expensive.
 
 Whichever is chosen, a **historical backfill** is required to recompute the true
-`first_seen_ledger` for all ~14.35M accounts from source data — the current
-column cannot be repaired from itself.
+`first_seen_ledger` for all ~14.35M accounts from source data — the engine change
+does not resurrect values already destroyed, and the column cannot be repaired
+from itself. Migration is a new table + `INSERT SELECT` + `EXCHANGE TABLES`.
 
 ## Acceptance Criteria
 
