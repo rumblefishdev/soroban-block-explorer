@@ -103,8 +103,7 @@ under running taps, and each one marks a hole in live ingest.
       audit table. Authoring guide — operations stay in `docs/backfills.md`,
       which it links rather than duplicates.
 - [ ] Keep `run`, `status`, `bootstrap`, `balance-seed`, `repair-tier1`,
-      `nft-reclassify`, `contract-type-rebuild`. Annotate the last three in
-      `--help` with the live-gap task that will retire them.
+      `nft-reclassify`, `contract-type-rebuild`.
 - [ ] Prune whatever the deletions orphan (helpers, imports, `ch_staging` users).
 
 ## Acceptance Criteria

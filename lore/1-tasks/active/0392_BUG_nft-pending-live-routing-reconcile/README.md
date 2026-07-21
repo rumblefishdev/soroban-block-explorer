@@ -8,6 +8,31 @@ related_tasks: ['0391', '0283', '0217', '0306', '0296']
 tags: [priority-high, effort-medium, layer-indexer, layer-db, nft, clickhouse]
 links: []
 history:
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      **Re-measured — the premise no longer holds.** Six days after PR #341 landed,
+      the numbers this task was built on have inverted. Then (2026-07-15): hot `nfts`
+      frozen at ledger 62,989,407 since 2026-06-12 (33 days), ~6,575 pending rows/day
+      at 91% fungible false-positive, 401 fungible-verdict and 21 Nft-verdict
+      contracts stranded in quarantine. Now (2026-07-21, chain tip 63,583,789):
+      hot `nfts` at **63,569,710** — it moved 580,303 ledgers and tracks the tip to
+      within ~19h; `nfts_pending` holds **274 rows across 66 contracts**, last
+      written 63,386,630.
+      The decisive number is the verdict split of those 66 pending contracts:
+      **0 with an `Nft` verdict, 0 with `Fungible`, 66 `Other`/NULL.** Not one
+      resolved-but-stranded row — which is precisely what Step 1's continuous
+      reconcile exists to drain. There is currently nothing to reconcile: the
+      quarantine holds only genuinely-unclassifiable contracts, which is the design
+      working as intended.
+      What changed: PR #341 fixed the G9 prefetch (it was a 100% mechanical no-op),
+      so verdicts now resolve at write time and contracts route straight to hot;
+      0306's drain cleared the accumulated backlog. Step 2 is done, Step 3 is done.
+      **Step 1 needs re-justification before anyone starts it** — either the drain
+      gap reopens under some condition worth naming, or this task closes and the
+      residual 66 unclassifiable contracts belong to 0317 (launchpad-NFT
+      discriminator + monitored-UNKNOWN), not here.
   - date: 2026-07-15
     status: backlog
     who: karolkow
