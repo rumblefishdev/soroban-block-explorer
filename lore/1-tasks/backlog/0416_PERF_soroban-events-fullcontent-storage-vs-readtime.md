@@ -69,7 +69,7 @@ the meta is not in CH.)
 ## Acceptance Criteria
 
 - [ ] Per-column + per-partition storage breakdown, and events-tab (`/contracts/
-    {id}/events`) real QPS / latency budget — the missing half of ADR 0044 Q6.
+{id}/events`) real QPS / latency budget — the missing half of ADR 0044 Q6.
 - [ ] A decision (new ADR or amend 0044): keep full-content, tune codec/TTL, or
       revert to appearances — with the storage-vs-latency numbers behind it.
 - [ ] If any content is dropped, the events-tab read path is confirmed to degrade
