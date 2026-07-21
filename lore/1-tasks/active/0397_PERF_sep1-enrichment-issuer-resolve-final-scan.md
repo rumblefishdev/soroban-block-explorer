@@ -2,7 +2,7 @@
 id: '0397'
 title: 'PERF: sep1 enrichment issuer resolve does `accounts FINAL WHERE id=?` — 24M rows/call, 4.5B/6h (one-line fix to bloom seek)'
 type: PERF
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0387']
 tags: [perf, clickhouse, enrichment, effort-small, priority-medium]
@@ -16,6 +16,11 @@ history:
       Found during 0387 read-path priority profiling of prod query_log. NOT an
       API endpoint — a background enrichment worker. Same account-resolve
       antipattern (FINAL scan) as 0387's txlist, different code path.
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      Activated. Picked up for implementation.
 ---
 
 # PERF: sep1 enrichment issuer resolve — `accounts FINAL WHERE id=?`
