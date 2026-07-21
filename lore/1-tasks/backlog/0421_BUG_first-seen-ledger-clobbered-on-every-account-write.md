@@ -4,7 +4,7 @@ title: 'BUG: accounts row is rewritten with defaults on every touch — first_se
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0420']
+related_tasks: ['0420', '0232', '0425']
 tags:
   [
     'area-indexer',

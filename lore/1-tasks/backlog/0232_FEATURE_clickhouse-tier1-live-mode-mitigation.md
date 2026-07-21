@@ -4,7 +4,7 @@ title: 'FEATURE: ClickHouse live-mode drift mitigation for all 6 Stage 1 Tier-1 
 type: FEATURE
 status: backlog
 related_adr: ['0044']
-related_tasks: ['0118', '0194', '0228']
+related_tasks: ['0118', '0194', '0228', '0421', '0425']
 blocked_by: []
 tags:
   [
@@ -343,7 +343,7 @@ TO assets ...` lands in `init.sql`; applies cleanly to
       removing it. Verified 2026-07-21: no such cron or systemd timer
       exists anywhere in `infra/` or `infra-hetzner/`, so nothing is
       being un-done. The old criterion also used `--target
-    clickhouse`, a flag that no longer exists.)_
+  clickhouse`, a flag that no longer exists.)_
 - [ ] Drift-probe queries committed for each Class A column;
       operator-runnable; results within agreed thresholds.
 - [ ] Separate AMT proposal task spawned and linked from this
