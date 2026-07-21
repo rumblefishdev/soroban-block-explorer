@@ -12,6 +12,37 @@ history:
     status: active
     who: karolkow
     note: >
+      **Taken over. Steps 2 and 3 re-verified as genuinely done; Step 1 confirmed
+      necessary and is now the whole remaining task.**
+      **Step 2 — done and live.** The `Option<i16>` fix (PR #341, `9cb3834e`) is on
+      `origin/develop`, not on `origin/master` — but `master` last moved 2026-07-03
+      and `develop` is **448 commits ahead**, so `master` is not the deploy source.
+      Effectiveness proven from data instead of from branches: the last pending
+      drain ran **2026-07-16 15:58:58** (`system.mutations`, `DELETE WHERE
+      contract_id IN (… contract_type IN (0,2,3))`), and in the five days since,
+      `nfts_pending` has received **nothing** — 274 rows total, newest at ledger
+      63,386,630. With G9 still broken it would have taken ~6,575 rows/day, i.e.
+      ~33,000 rows. So verdicts do resolve at write time now.
+      **Step 3 — done and clean.** Of the distinct contracts in hot `nfts`, **all 66
+      carry verdict `Nft` (2)** — zero `Fungible`/`Token` contamination survived the
+      drain. The quarantine holds 66 contracts, all `Other`/NULL, which is a
+      correctly-behaving quarantine.
+      **Step 1 — still absent, and now proven so by code rather than inferred.**
+      `persist/rows.rs:226-230` says promotion happens "via the post-backfill drain
+      runbook — CH has no per-row UPDATE / `WHERE NOT EXISTS` equivalent to PG's
+      in-tx `promote_pending_nfts_to_hot` step", and that function exists nowhere in
+      the codebase (Postgres, retired in 0244). Nothing moves a contract out of
+      quarantine once its verdict resolves except a human.
+      Unrelated finding worth carrying out of this check: the API code reading
+      `operation_asset_appearances.net_settled` is on `develop` but the column does
+      not exist on prod. It is **not currently erroring** — 72h of `system.query_log`
+      shows zero occurrences beyond my own probe — because the API has not been
+      redeployed since that code landed. 0419 owns the `ALTER`; deploying the API
+      before it runs gives `Code 47` on that endpoint.
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
       **Settled by code, not by the single measurement — the defect is dormant, not
       gone.** The re-measurement above shows an empty quarantine, which on its own
       cannot distinguish "problem fixed" from "problem currently idle". The code
