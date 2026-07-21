@@ -56,8 +56,9 @@ partition at a time. Parallelism is external: run K processes with disjoint
 
 - **Safe:** concurrent inserts on the same table need no coordination — RMT
   dedups merge-side keyed by `ORDER BY`. Overlapping ranges are _tolerated_
-  (re-running an overlap is a no-op) — **but only because identical code
-  produces byte-identical rows**. See rule 4.
+  (re-running an overlap is a no-op); with identical code the rows are
+  byte-identical anyway, and where they are not, the later insert wins. See
+  rule 4.
 - **K ≥ 8:** raise CH `max_concurrent_queries` from 100 to ~200 (each writer
   holds ~14 long-lived inserts). Performance, not correctness.
 - **Empirically (2026-07, 24 cores):** more than **6 workers was no faster**, and
@@ -89,20 +90,39 @@ Two nuances worth knowing:
   ~8 writers land in one CH partition. This mismatch is why partition-swap
   atomicity was rejected.
 
-### 4. Re-parsing with a _different_ parser build is unsafe on version-less RMT
+### 4. Version-less RMT keeps the LAST ROW INSERTED — so emit one row per key
 
-RMT with **no version column** picks an **arbitrary** row among equal-version
-duplicates. That is harmless when the rows are byte-identical (same code), and
-**wrong data** when they are not.
+15 of the RMT tables carry no version column. The rule that matters there is
+about **one insert**, not about re-parsing.
 
-- **Same build → safe.** Re-running produces identical rows; the arbitrary winner
-  is irrelevant.
-- **Different build → unsafe** on version-less tables: `liquidity_pool_snapshots`,
-  `assets`, `transactions`, and the 9 event-log tables. At equal version with a
-  changed value, RMT may keep the **stale** row from the earlier attempt.
+**Re-parsing is safe.** A re-parse lands after the data it replaces, and
+version-less RMT keeps the last row inserted, so the newer parse wins. Measured
+on a ClickHouse 26.3 server (lore 0426), in the shapes that actually occur:
 
-→ Re-parsing history that was ingested by an older parser build is a real hazard
-on those tables. Plan for it (or accept a full re-write of the affected range).
+| Shape                                                                     | Result                                               |
+| ------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 40 unmerged old parts, then a 4-way concurrent re-parse, read via `FINAL` | new value wins, no survivors                         |
+| background merges only, never `OPTIMIZE`                                  | new value wins                                       |
+| old data already `OPTIMIZE FINAL`-collapsed, then re-parsed               | new value wins                                       |
+| partial re-parse (half the keys)                                          | re-parsed keys update, the rest keep their old value |
+
+This also holds structurally: every version-less table is either **keyed by
+ledger** — so a re-parse of ledger N only ever competes with its own earlier
+parse of ledger N — or a **pure function of an immutable input**
+(`wasm_interface_metadata` by `wasm_hash`; `assets`, whose mutable columns are
+DEAD and now live in `balance_aggregates` / `asset_enrichment`).
+
+**The real hazard is two rows for one key inside a single insert.** Then "last"
+means whatever order the code emitted, which carries no meaning. That is
+task 0356: the parser emitted the before- and after-image of a pool per op, so
+one `(pool, ledger)` key got two rows with different reserves and ClickHouse kept
+one at random — wrong data, not duplicates.
+
+→ **A parse must emit at most one row per key per insert.** Get that right and
+`run --reindex` needs no further ceremony. (Tables that DO carry a version — 11
+of them, all keyed by an entity rather than a ledger — need it for a different
+reason: a re-parse of old ledgers inserts old state last, and only the version
+stops it from rolling current state backwards.)
 
 ### 5. A version-less RMT row replaces the WHOLE row — emit complete rows
 
