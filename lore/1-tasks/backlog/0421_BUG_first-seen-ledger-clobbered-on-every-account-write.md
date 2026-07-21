@@ -196,6 +196,13 @@ from itself. Migration is a new table + `INSERT SELECT` + `EXCHANGE TABLES`.
 - [ ] Regression test: an account written across several ledgers keeps its
       original `first_seen_ledger`
 - [ ] Accounts list + account summary show a correct account age
+- [ ] **`backfill-runner bootstrap` is deleted too.** It exists to top up accounts
+      left at `sequence_number = 0`, i.e. to mop up exactly what this bug creates —
+      61.7% of recent transaction senders. Once the writer stops emitting defaults,
+      nothing produces skeletons and the subcommand has no reason to run. Delete it
+      with its `docs/backfills.md` row and its `crates/backfill-runner/README.md`
+      entry, in the same PR. Note it is also invoked as a step of `run`; that call
+      site goes with it. Per lore 0425 clause 4.
 - [ ] **`repair-tier1`'s `accounts` rebuild is deleted, not left as a safety net.**
       That subcommand exists only because the engine cannot express "minimum"; once
       the engine does, keeping it around re-creates the mop this task removes. If

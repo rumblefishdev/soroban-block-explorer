@@ -14,6 +14,17 @@ tags:
     'migration',
   ]
 history:
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      Scope corrected: **`assets.icon_url` is the third dead column** and was missing
+      from this task. 0293 moved supply/holders to `balance_aggregates`; `icon_url`
+      moved to `asset_enrichment` on the same principle, and `AssetRow::staged`
+      writes `None` into all three on every build. Found while auditing state-table
+      writers for 0425 — the three NULLs looked like a clobber until the DEAD
+      annotations in `init.sql` explained them. Drop all three together; splitting
+      them means a second prod ALTER for no reason.
   - date: 2026-06-22
     status: backlog
     who: karolkow
@@ -58,7 +69,7 @@ stays reversible (option A backward-compat). Two independent migrations, both
 **after** the additive 0293 rollout is live and verified in prod (rollout
 runbook: `0293/README.md` → "Deploy / Migration Runbook"):
 
-1. Drop the now-dead `assets.total_supply` / `assets.holder_count` (served from
+1. Drop the now-dead `assets.total_supply` / `assets.holder_count` / `icon_url` (served from
    the `balance_aggregates` table — renamed from `asset_aggregates` by 0331/0339,
    ADR 0051; written `None` by the indexer, read by nothing).
 2. Rebuild `ledgers` and `wasm_interface_metadata` as `ReplacingMergeTree`.
