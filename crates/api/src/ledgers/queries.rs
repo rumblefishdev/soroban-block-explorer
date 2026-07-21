@@ -260,9 +260,26 @@ pub async fn fetch_list(
 const LEDGER_OVERFETCH: i64 = 3;
 
 /// Collapse consecutive same-`sequence` rows from the over-fetched page and
-/// truncate to `limit`. Contiguity is guaranteed by `ORDER BY sequence` being
-/// the primary key; "keep first" is deterministic because a duplicate pair is
-/// byte-identical in the projected columns.
+/// truncate to `limit`.
+///
+/// **Requires `raw` to be ordered by `sequence`** — it only compares against the
+/// previous row, so non-adjacent duplicates pass through (see
+/// `unsorted_input_is_not_deduplicated`, which pins that contract).
+///
+/// Two separate guarantees back this, easy to conflate:
+/// - duplicates are ADJACENT because the query says `ORDER BY sequence`;
+/// - the read is CHEAP because `sequence` is the primary key, so ClickHouse
+///   serves it read-in-order.
+///
+/// The primary key buys the cost, not the adjacency. The ordering itself cannot
+/// quietly disappear: this page is keyset-paginated, so the next cursor is taken
+/// from the LAST row — drop the `ORDER BY` and pagination breaks loudly (wrong
+/// cursor, skipped pages) long before deduplication does. That is why a
+/// `HashSet` would be the wrong trade here: it would keep collapsing duplicates
+/// on unordered input and mask a page that is already broken.
+///
+/// "Keep first" is deterministic because a duplicate pair is byte-identical in
+/// the projected columns.
 fn dedup_consecutive(raw: Vec<LedgerListRow>, limit: usize) -> Vec<LedgerListRow> {
     let mut out: Vec<LedgerListRow> = Vec::with_capacity(limit.min(raw.len()));
     for r in raw {
@@ -323,6 +340,29 @@ mod dedup_tests {
         assert_eq!(
             out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
             vec![50, 49]
+        );
+    }
+
+    /// Pins the precondition rather than hiding it: this collapses ADJACENT
+    /// duplicates only, so unordered input passes duplicates straight through.
+    ///
+    /// That is deliberate. Ordering is not an incidental detail of this page —
+    /// the keyset cursor is read off the last row, so losing `ORDER BY sequence`
+    /// corrupts pagination itself. A set-based dedup would keep this test green
+    /// while the page silently returned rows in the wrong order under a wrong
+    /// cursor; failing here is the cheaper outcome.
+    #[test]
+    fn unsorted_input_is_not_deduplicated() {
+        // Same three sequences as the sorted case, interleaved.
+        let raw = [100, 99, 100, 99, 98, 98].into_iter().map(row).collect();
+
+        let out = dedup_consecutive(raw, 6);
+
+        assert_eq!(
+            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
+            vec![100, 99, 100, 99, 98],
+            "only the adjacent 98/98 pair collapses — the interleaved duplicates \
+             survive, because ordering is the caller's contract"
         );
     }
 }
