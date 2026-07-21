@@ -131,6 +131,45 @@ key`, or FINAL. It changes the per-column semantics; it does not change whose
    the idiom surfaced independently in two other reviewers' notes, once as a
    "widely used production idiom". Treat as a lead to test, not a plan.
 
+### Taking state out of MergeTree — both exits are closed
+
+7. **`EmbeddedRocksDB` gives a true upsert and is still disqualified** (high).
+   Real last-write-wins, so zero read-side dedup. But: single-column primary key
+   only, no replication (open issue #86102), not supported in ClickHouse Cloud,
+   **degrades to a full scan for anything but point lookups** — which rules out
+   our lists and pagination over 14M entities — and a blind upsert **destroys the
+   per-column min semantics** we need for `first_seen_ledger`.
+
+8. **The `Join` engine is a Cloud-only story** (high). "Suitable for frequent
+   updates" applies to ClickHouse Cloud, where Join tables are transparently
+   backed by MergeTree. In open-source there is **no background compaction** —
+   `StorageSet.cpp` writes a new `.bin` per INSERT and `restore()` replays every
+   one at startup. Millions of daily rewrites would accumulate files forever.
+
+### Read-side enforcement
+
+9. **Our pain is documented behaviour, not misconfiguration** (high). The vendor
+   states RMT _"does not guarantee the absence of duplicates"_, that merging
+   happens _"at an unknown time, so you can't plan for it"_, and that `count(*)`
+   may return different results across runs. A statement against their own
+   product, so not marketing. We relied on a promise that was never made.
+
+10. **There is a fifth enforcement pattern we did not know about** (high). The
+    documented set is: plain views (hide FINAL, store nothing), row policies
+    (hide a filter), refreshable materialized views (compute the deduplicated
+    result once per cycle) — **and the `final` setting, applicable per query OR
+    per session, therefore pinnable in a user profile server-side**. Only the
+    last is actual enforcement; 1–3 hide syntax without preventing anyone from
+    querying the base table directly.
+
+11. **The `readonly=1` blocker is not absolute** — this corrects an earlier
+    conclusion in 0420 (high). A `changeable_in_readonly` constraint declared in
+    the user profile lets that user change **one named setting** despite
+    `readonly=1`, granting no broader write or settings permission. Verified in
+    `SettingsConstraints.cpp`, not just docs. So
+    `do_not_merge_across_partitions_select_final` **can** be enabled for the read
+    user after all.
+
 ### C — measured 2026-07-21, from the 0425 backfill audit
 
 Three findings arrived from the other direction — auditing the **write** path
@@ -173,45 +212,6 @@ rather than the engine — and they land squarely on this task's split.
     transaction _source_ in ledgers 63,400,000–63,500,000 carry
     `sequence_number = 0`, which cannot happen on chain. `first_seen_ledger`,
     `sequence_number` and `home_domain` all ride that one write — see 0421.
-
-### Taking state out of MergeTree — both exits are closed
-
-7. **`EmbeddedRocksDB` gives a true upsert and is still disqualified** (high).
-   Real last-write-wins, so zero read-side dedup. But: single-column primary key
-   only, no replication (open issue #86102), not supported in ClickHouse Cloud,
-   **degrades to a full scan for anything but point lookups** — which rules out
-   our lists and pagination over 14M entities — and a blind upsert **destroys the
-   per-column min semantics** we need for `first_seen_ledger`.
-
-8. **The `Join` engine is a Cloud-only story** (high). "Suitable for frequent
-   updates" applies to ClickHouse Cloud, where Join tables are transparently
-   backed by MergeTree. In open-source there is **no background compaction** —
-   `StorageSet.cpp` writes a new `.bin` per INSERT and `restore()` replays every
-   one at startup. Millions of daily rewrites would accumulate files forever.
-
-### Read-side enforcement
-
-9. **Our pain is documented behaviour, not misconfiguration** (high). The vendor
-   states RMT _"does not guarantee the absence of duplicates"_, that merging
-   happens _"at an unknown time, so you can't plan for it"_, and that `count(*)`
-   may return different results across runs. A statement against their own
-   product, so not marketing. We relied on a promise that was never made.
-
-10. **There is a fifth enforcement pattern we did not know about** (high). The
-    documented set is: plain views (hide FINAL, store nothing), row policies
-    (hide a filter), refreshable materialized views (compute the deduplicated
-    result once per cycle) — **and the `final` setting, applicable per query OR
-    per session, therefore pinnable in a user profile server-side**. Only the
-    last is actual enforcement; 1–3 hide syntax without preventing anyone from
-    querying the base table directly.
-
-11. **The `readonly=1` blocker is not absolute** — this corrects an earlier
-    conclusion in 0420 (high). A `changeable_in_readonly` constraint declared in
-    the user profile lets that user change **one named setting** despite
-    `readonly=1`, granting no broader write or settings permission. Verified in
-    `SettingsConstraints.cpp`, not just docs. So
-    `do_not_merge_across_partitions_select_final` **can** be enabled for the read
-    user after all.
 
 ## Open questions — measure, do not read
 
