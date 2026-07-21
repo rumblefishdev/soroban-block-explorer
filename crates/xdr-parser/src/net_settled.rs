@@ -1,9 +1,10 @@
 //! Net-settled value per (transaction, asset) — task 0393.
 //!
-//! A Stellar transaction has no protocol-level "amount"; value lives on its
-//! operations and its Soroban token events. To surface a single "value moved"
-//! figure per (transaction, asset) for the tx-list views, we reduce every value
-//! movement of one transaction to the **net settled value**:
+//! A Stellar transaction has no protocol-level "amount"; value moves as ledger
+//! balance changes across its operations and Soroban invocations. To surface a
+//! single "value moved" figure per (transaction, asset) for the tx-list views,
+//! we reduce every value movement of one transaction to the **net settled
+//! value**:
 //!
 //! ```text
 //! delta[account] += amount   for the `to` of each movement
@@ -78,13 +79,14 @@ pub struct NetSettled {
     pub asset_id: i64,
     /// `max(Σ positive deltas, Σ negative deltas)`, raw (unscaled).
     ///
-    /// `None` when the reduction did not fit in `i128`. Amounts come from
-    /// contract-emitted event data, so they are attacker-controlled: two
-    /// `transfer` events of `i128::MAX` in one transaction are one transaction's
-    /// worth of effort. Release builds have `overflow-checks = false`, so
-    /// unchecked arithmetic would not panic — it would wrap and store a wrong
-    /// figure as money. `None` means "not representable, not computed", which is
-    /// what the nullable storage column exists to carry.
+    /// `None` when the reduction did not fit in `i128`. Amounts come from ledger
+    /// balance deltas; for a **bespoke** token the stored balance is
+    /// contract-authored, so it is still attacker-controlled — two movements of
+    /// `i128::MAX` in one transaction are one transaction's worth of effort.
+    /// Release builds have `overflow-checks = false`, so unchecked arithmetic
+    /// would not panic — it would wrap and store a wrong figure as money. `None`
+    /// means "not representable, not computed", which is what the nullable storage
+    /// column exists to carry.
     pub amount: Option<i128>,
 }
 

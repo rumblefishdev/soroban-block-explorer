@@ -52,6 +52,24 @@ pub fn network_id(passphrase: &str) -> [u8; 32] {
     Sha256::digest(passphrase.as_bytes()).into()
 }
 
+/// Process-global network id, derived once from `STELLAR_NETWORK_PASSPHRASE`.
+/// The single cache the indexer's cold-start primes and reads: `init_network_id`
+/// validates the env and triggers this; the indexer's `network_id()` reads it.
+/// `None` when the env is unset (legacy / dev tools / unit tests). Callers that
+/// must pin a specific id pass it explicitly — e.g. `network_id(MAINNET_PASSPHRASE)`
+/// — rather than relying on this env-derived accessor. (Audit A4 consolidated a
+/// duplicate `OnceLock` that had lived in the indexer into this one.)
+pub fn net_id() -> Option<&'static [u8; 32]> {
+    static NET_ID: std::sync::OnceLock<Option<[u8; 32]>> = std::sync::OnceLock::new();
+    NET_ID
+        .get_or_init(|| {
+            let raw = std::env::var("STELLAR_NETWORK_PASSPHRASE").ok()?;
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then(|| network_id(trimmed))
+        })
+        .as_ref()
+}
+
 /// Derive the SAC `contract_id` StrKey from a `ContractIdPreimage` and the
 /// network identifier, matching stellar-core's derivation.
 ///

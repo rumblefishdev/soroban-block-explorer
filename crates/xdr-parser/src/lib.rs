@@ -33,15 +33,13 @@ pub mod types;
 pub mod envelope;
 mod xdr_limits;
 
-pub use classic_value::{ClassicDelta, classic_balance_deltas};
+pub use classic_value::{ClassicDelta, LedgerAsset, classic_balance_deltas};
 pub use classification::{ContractClassification, classify_contract_from_wasm_spec};
 pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
 pub use event::extract_events;
-pub use event_filters::{
-    EventAsset, TokenEvent, TokenEventKind, parse_token_event, token_event_amount,
-};
+pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_event};
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
@@ -51,7 +49,7 @@ pub use op_source::extract_op_source_per_contract;
 pub use operation::{extract_operations, tx_op_results};
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id, derive_sac_strkey,
-    extract_sac_identities, network_id, passphrase_for, sac_override_from_event_topics,
+    extract_sac_identities, net_id, network_id, passphrase_for, sac_override_from_event_topics,
 };
 pub use scval::scval_to_typed_json;
 pub use state::{

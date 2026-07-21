@@ -8,6 +8,26 @@
 
 use serde_json::Value;
 
+/// The asset a SEP-41 / CAP-67 token event names — the EVENT domain's asset
+/// vocabulary (cf. `AssetRef` for op-declared assets, `LedgerAsset` for
+/// ledger-read balances; each domain owns its own small asset enum, resolved to a
+/// DB surrogate by the persistence layer).
+///
+/// CAP-67 "unified" SAC events carry the classic asset as a trailing SEP-11 string
+/// topic (`"native"` or `"CODE:ISSUER"`); bespoke non-SAC tokens omit it, so their
+/// identity IS the emitting contract (`Bespoke` — the caller supplies the emitter
+/// surrogate it already holds; the id is not in the topics).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventAsset {
+    /// Native XLM (`"native"` asset string).
+    Native,
+    /// A classic issued asset (`"CODE:ISSUER"` asset string).
+    Credit { code: String, issuer: String },
+    /// A bespoke non-SAC token: no asset string in the event, so the asset is the
+    /// emitting contract; resolved from the emitting contract id by the caller.
+    Bespoke,
+}
+
 /// The SEP-41 / CAP-67 token-event verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenEventKind {
@@ -15,19 +35,6 @@ pub enum TokenEventKind {
     Mint,
     Burn,
     Clawback,
-}
-
-/// The asset a token event moved, as identified by the event itself.
-///
-/// CAP-67 "unified" SAC events carry the classic asset as a trailing SEP-11
-/// string topic (`"native"` or `"CODE:ISSUER"`). Bespoke non-SAC tokens omit
-/// it — their asset identity is the emitting contract, surfaced here as
-/// `Contract` so the caller (which holds `contract_id`) resolves the surrogate.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EventAsset {
-    Native,
-    Credit { code: String, issuer: String },
-    Contract,
 }
 
 /// A decoded SEP-41 / CAP-67 token event (transfer / mint / burn / clawback).
@@ -53,7 +60,7 @@ pub struct TokenEvent {
 /// - clawback `[sym, addr(from), string(asset)?]`
 ///
 /// The trailing SEP-11 asset string is present on SAC events and absent on
-/// bespoke tokens (→ `EventAsset::Contract`).
+/// bespoke tokens (→ `EventAsset::Bespoke`).
 pub fn parse_token_event(topics: &Value) -> Option<TokenEvent> {
     let arr = topics.as_array()?;
     let verb = arr.first()?;
@@ -104,41 +111,11 @@ pub fn parse_token_event(topics: &Value) -> Option<TokenEvent> {
     })
 }
 
-/// Decode the moved **amount** (raw, unscaled `i128`) from a token event's
-/// `data` payload (task 0393). Returns `None` when `data` is not an
-/// amount-bearing shape.
-///
-/// Two shapes occur on mainnet (both proven in `nft.rs` / `nft_reparse.rs`):
-/// - **bare scalar** `{"type":"i128"|"u128","value":"<decimal>"}` — the classic
-///   SEP-41 transfer/mint/burn amount rides directly in `data`.
-/// - **muxed map** `{"type":"map","value":[…]}` carrying an `amount` key
-///   (CAP-67 `map{amount, to_muxed_id}`) — the amount is that entry's scalar.
-///
-/// The value is a decimal string (`i128::to_string()` from `scval_to_typed_json`);
-/// a `u128` amount above `i128::MAX` cannot be stored as `Int128` and yields
-/// `None` rather than a wrong value.
-pub fn token_event_amount(data: &Value) -> Option<i128> {
-    // Muxed map: the amount is the "amount" entry's scalar. Otherwise `data` is
-    // the amount scalar itself. Both shape readers live in `scval`, next to the
-    // encoder that writes them.
-    let raw = match crate::scval::map_get(data, "amount") {
-        Some(amount) => crate::scval::as_i128(amount),
-        None => crate::scval::as_i128(data),
-    }?;
-    // This is a trust boundary: `data` is contract-emitted, so the amount is
-    // whatever the contract chose to write. A negative token amount is not a
-    // SEP-41 transfer — and it is not inert: the reducer signs movements itself,
-    // so a `transfer` of -100 would flip into a +100 credit for the sender and
-    // render as a real 100 moved. Reject it here rather than let it become a
-    // figure downstream.
-    (raw >= 0).then_some(raw)
-}
-
 /// Resolve the asset from a trailing SEP-11 string topic. Absent, empty, or
-/// malformed → `Contract` (bespoke token; identity is the emitting contract).
+/// malformed → `Bespoke` (bespoke token; identity is the emitting contract).
 fn event_asset(topic: Option<&Value>) -> EventAsset {
     let Some(s) = topic.and_then(string_topic) else {
-        return EventAsset::Contract;
+        return EventAsset::Bespoke;
     };
     if s == "native" {
         return EventAsset::Native;
@@ -148,7 +125,7 @@ fn event_asset(topic: Option<&Value>) -> EventAsset {
             code: code.to_string(),
             issuer: issuer.to_string(),
         },
-        _ => EventAsset::Contract,
+        _ => EventAsset::Bespoke,
     }
 }
 
@@ -195,95 +172,6 @@ mod tests {
 
     const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
 
-    // ---- token_event_amount (0393) ---------------------------------------
-
-    fn i128val(v: &str) -> Value {
-        json!({ "type": "i128", "value": v })
-    }
-    fn u128val(v: &str) -> Value {
-        json!({ "type": "u128", "value": v })
-    }
-    /// A `{"type":"map"}` payload from `(sym key, value)` entries.
-    fn mapval(entries: &[(&str, Value)]) -> Value {
-        json!({
-            "type": "map",
-            "value": entries.iter().map(|(k, v)| json!({
-                "key": { "type": "sym", "value": k },
-                "value": v,
-            })).collect::<Vec<_>>()
-        })
-    }
-
-    #[test]
-    fn amount_bare_i128() {
-        assert_eq!(token_event_amount(&i128val("150")), Some(150));
-    }
-
-    #[test]
-    fn amount_bare_u128() {
-        assert_eq!(token_event_amount(&u128val("150")), Some(150));
-    }
-
-    #[test]
-    fn amount_muxed_map_reads_amount_key() {
-        // CAP-67 muxed transfer: map{ amount, to_muxed_id }.
-        let data = mapval(&[
-            ("amount", i128val("4200")),
-            ("to_muxed_id", json!({ "type": "u64", "value": "7" })),
-        ]);
-        assert_eq!(token_event_amount(&data), Some(4200));
-    }
-
-    #[test]
-    fn amount_map_without_amount_key_is_none() {
-        let data = mapval(&[("token_id", i128val("93"))]);
-        assert_eq!(token_event_amount(&data), None);
-    }
-
-    #[test]
-    fn amount_non_amount_scalar_shapes_are_none() {
-        assert_eq!(token_event_amount(&json!({ "type": "void" })), None);
-        assert_eq!(
-            token_event_amount(&json!({ "type": "vec", "value": [] })),
-            None
-        );
-        assert_eq!(
-            token_event_amount(&json!({ "type": "address", "value": "GBFOO" })),
-            None
-        );
-    }
-
-    #[test]
-    fn amount_unparseable_value_is_none() {
-        assert_eq!(token_event_amount(&i128val("not-a-number")), None);
-        assert_eq!(token_event_amount(&json!({ "type": "i128" })), None);
-    }
-
-    #[test]
-    fn amount_negative_is_rejected() {
-        // `data` is contract-emitted. A negative amount is not a SEP-41 transfer,
-        // and it is not inert: the reducer signs movements itself, so -100 would
-        // become a +100 credit for the sender and render as 100 moved.
-        assert_eq!(token_event_amount(&i128val("-100")), None);
-        let muxed = mapval(&[("amount", i128val("-100"))]);
-        assert_eq!(token_event_amount(&muxed), None);
-    }
-
-    #[test]
-    fn amount_zero_is_accepted() {
-        // Zero is a legitimate amount — only negatives are rejected.
-        assert_eq!(token_event_amount(&i128val("0")), Some(0));
-    }
-
-    #[test]
-    fn amount_u128_above_i128_max_is_none() {
-        // 2^127 — a valid u128, unrepresentable as i128 → None, not a wrong value.
-        assert_eq!(
-            token_event_amount(&u128val("170141183460469231731687303715884105728")),
-            None
-        );
-    }
-
     #[test]
     fn token_event_transfer_sac_credit() {
         let ev = parse_token_event(&json!([
@@ -324,7 +212,7 @@ mod tests {
         assert_eq!(ev.kind, TokenEventKind::Transfer);
         assert_eq!(ev.from.as_deref(), Some("GBFROM"));
         assert_eq!(ev.to.as_deref(), Some("GBTO"));
-        assert_eq!(ev.asset, EventAsset::Contract);
+        assert_eq!(ev.asset, EventAsset::Bespoke);
     }
 
     #[test]
@@ -371,7 +259,7 @@ mod tests {
         let ev = parse_token_event(&json!([sym("mint"), addr("GBTO")])).unwrap();
         assert_eq!(ev.kind, TokenEventKind::Mint);
         assert_eq!(ev.to.as_deref(), Some("GBTO"));
-        assert_eq!(ev.asset, EventAsset::Contract);
+        assert_eq!(ev.asset, EventAsset::Bespoke);
     }
 
     #[test]

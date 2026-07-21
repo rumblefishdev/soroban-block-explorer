@@ -118,51 +118,10 @@ pub fn map_get<'a>(data: &'a Value, key: &str) -> Option<&'a Value> {
     })
 }
 
-/// Read an `i128`/`u128` typed scalar back out as `i128`. Inverse of the
-/// `ScVal::I128` / `ScVal::U128` arms, which encode the value as a decimal
-/// string. `None` for any other shape, and for a `u128` above `i128::MAX` —
-/// unrepresentable, so never a wrong value.
-pub fn as_i128(v: &Value) -> Option<i128> {
-    match v.get("type").and_then(Value::as_str)? {
-        "i128" | "u128" => v.get("value").and_then(Value::as_str)?.parse::<i128>().ok(),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use stellar_xdr::*;
-
-    /// The point of keeping the readers next to the writer: they must invert it.
-    /// If an encoder arm above changes, this fails instead of silently
-    /// desyncing a reader that lives in another module.
-    #[test]
-    fn as_i128_inverts_the_i128_and_u128_encoder_arms() {
-        let i = ScVal::I128(Int128Parts { hi: 0, lo: 150 });
-        assert_eq!(as_i128(&scval_to_typed_json(&i)), Some(150));
-
-        let u = ScVal::U128(UInt128Parts { hi: 0, lo: 150 });
-        assert_eq!(as_i128(&scval_to_typed_json(&u)), Some(150));
-
-        // Negative round-trips (hi = -1, lo = !0 is -1 in two's complement).
-        let neg = ScVal::I128(Int128Parts {
-            hi: -1,
-            lo: u64::MAX,
-        });
-        assert_eq!(as_i128(&scval_to_typed_json(&neg)), Some(-1));
-
-        // A u128 above i128::MAX has no i128 representation -> None, not a lie.
-        let too_big = ScVal::U128(UInt128Parts {
-            hi: u64::MAX,
-            lo: u64::MAX,
-        });
-        assert_eq!(as_i128(&scval_to_typed_json(&too_big)), None);
-
-        // Non-scalar shapes are not amounts.
-        assert_eq!(as_i128(&scval_to_typed_json(&ScVal::Void)), None);
-        assert_eq!(as_i128(&scval_to_typed_json(&ScVal::U32(7))), None);
-    }
 
     #[test]
     fn bool_value() {

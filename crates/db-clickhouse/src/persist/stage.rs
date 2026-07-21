@@ -39,11 +39,10 @@
 //! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
-use xdr_parser::EventAsset;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
@@ -55,6 +54,7 @@ use xdr_parser::types::{
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
 use xdr_parser::{ClassicDelta, Movement, NetSettled};
+use xdr_parser::{EventAsset, LedgerAsset};
 
 use xdr_parser::event::extract_executable_update_new_wasm_hash;
 
@@ -458,29 +458,59 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut event_assets_per_tx: HashMap<String, HashSet<i64>> = HashMap::new();
     let has_soroban: HashMap<String, bool> = tx_has_soroban_map(operations);
 
-    // Task 0393: net-settled "value moved" per (tx, asset), looked up when the
-    // `operation_asset_appearances` presence rows are emitted below. Classic txs
-    // (`has_soroban = 0`) reduce their ledger-entry balance deltas; Soroban txs
-    // reduce their token events. The two paths are disjoint (protocol forbids
-    // mixing classic + Soroban ops in one tx), so a value is never double-counted.
-    // The value is `Option`: `None` means the reduction was not representable in
-    // i128 (contract-emitted amounts are attacker-chosen), and must reach the
-    // nullable column as NULL — "not computed" — rather than a wrapped figure.
+    // Net-settled "value moved" per (tx, asset), looked up when the
+    // `operation_asset_appearances` presence rows are emitted below.
+    //
+    // Value comes from the AUTHORITATIVE LEDGER — the account / trustline /
+    // ContractData balance changes consensus actually applied — for EVERY tx,
+    // classic or Soroban. Token EVENTS are contract-emitted LOGS (any contract can
+    // emit any `"transfer"` it likes), so they are NEVER trusted for value; a
+    // ledger balance cannot be forged. `classic_deltas` carries the per-(holder,
+    // asset) balance deltas: native (`AccountEntry`), classic credit
+    // (`TrustLineEntry`), SAC contract-held (`ContractData` `Balance` struct), and
+    // bespoke token balances (`ContractData` `Balance` bare i128). `sac_classic`
+    // re-maps a contract-held SAC balance onto the wrapped classic asset (a SAC
+    // address is a one-way hash of its asset, so the reverse needs the registry).
+    // `None` = the reduction was not representable in i128 → NULL ("not computed"),
+    // never a wrapped figure.
+    //
+    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
+    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet. Seed those
+    // current-ledger carriers so a same-ledger contract-held SAC balance re-keys
+    // onto the wrapped classic/native id instead of orphaning on its surrogate.
+    // This seeded `sac_map` feeds BOTH the value reduction here AND
+    // `build_balance_rows` below, so a C→C transfer of a just-registered SAC nets
+    // correctly on both paths (its legs are both `SacWrapped`). Guarded: the
+    // common ledger (no new SAC) skips the clone; the DB map wins (`or_insert`).
+    let effective_sac_classic;
+    let sac_map: &HashMap<i64, i64> = if assets.iter().any(|t| t.sac_contract_id.is_some()) {
+        let mut m = sac_classic.clone();
+        for t in assets {
+            if let Some(sac) = t.sac_contract_id.as_deref() {
+                let issuer_id = t
+                    .issuer_address
+                    .as_deref()
+                    .map(ids::account_id)
+                    .unwrap_or(0);
+                let classic = ids::asset_id(
+                    t.asset_type as i16,
+                    t.asset_code.as_deref().unwrap_or(""),
+                    issuer_id,
+                    0,
+                );
+                m.entry(ids::contract_id(sac)).or_insert(classic);
+            }
+        }
+        effective_sac_classic = m;
+        &effective_sac_classic
+    } else {
+        sac_classic
+    };
+
     let mut amount_by_tx_asset: HashMap<(String, i64), Option<i128>> = HashMap::new();
     for tx in transactions {
-        if has_soroban.get(&tx.hash).copied().unwrap_or(false) {
-            continue;
-        }
-        for ns in classic_deltas_net_settled(&tx.classic_deltas) {
+        for ns in classic_deltas_net_settled(&tx.classic_deltas, sac_map) {
             amount_by_tx_asset.insert((tx.hash.clone(), ns.asset_id), ns.amount);
-        }
-    }
-    for (tx_hash, evs) in events {
-        if !has_soroban.get(tx_hash).copied().unwrap_or(false) {
-            continue;
-        }
-        for ns in tx_token_net_settled(evs) {
-            amount_by_tx_asset.insert((tx_hash.clone(), ns.asset_id), ns.amount);
         }
     }
 
@@ -773,38 +803,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // `soroban_contracts.name` write path was removed with Postgres in task
     // 0244; the dead-column DROP is task 0304 / 0310.)
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
-    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
-    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet — it's written to
-    // `asset_sac` during this same staging. Seed those current-ledger carriers so a
-    // same-ledger contract-held balance re-keys onto the wrapped classic/native id
-    // instead of orphaning on its surrogate. Guarded: the common ledger (no new SAC,
-    // or no balances) skips the clone; the DB map wins on conflict (`or_insert`).
-    let effective_sac_classic;
-    let sac_map: &HashMap<i64, i64> = if !soroban_token_balances.is_empty()
-        && assets.iter().any(|t| t.sac_contract_id.is_some())
-    {
-        let mut m = sac_classic.clone();
-        for t in assets {
-            if let Some(sac) = t.sac_contract_id.as_deref() {
-                let issuer_id = t
-                    .issuer_address
-                    .as_deref()
-                    .map(ids::account_id)
-                    .unwrap_or(0);
-                let classic = ids::asset_id(
-                    t.asset_type as i16,
-                    t.asset_code.as_deref().unwrap_or(""),
-                    issuer_id,
-                    0,
-                );
-                m.entry(ids::contract_id(sac)).or_insert(classic);
-            }
-        }
-        effective_sac_classic = m;
-        &effective_sac_classic
-    } else {
-        sac_classic
-    };
+    // `sac_map` (seeded above with this-ledger SAC carriers, before the value
+    // reduction) re-keys a contract-held SAC balance onto its wrapped
+    // classic/native asset.
     out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
@@ -1151,15 +1152,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_id,
                 ledger_sequence: ledger_sequence_i64,
                 transaction_id: tx_id,
-                // These asset ids come from the SAME recognised token events the
-                // reducer consumed, and it now emits a row for every one of them
-                // — `Some(v)` reduced, or `None` when it could not be read. So
-                // the fallback is unreachable here; it is kept only because the
-                // map lookup is fallible by type.
+                // These asset ids come from token EVENTS, but value is reduced from
+                // the LEDGER (a different source), so an event-declared asset may
+                // have no ledger-reduced entry — e.g. a contract-held SAC whose
+                // registry lookup missed, or an asset the ledger did not actually
+                // move. A miss means "value not computed for this (tx, asset)" →
+                // `None` (NULL), NOT a fabricated `Some(0)`.
                 net_settled: amount_by_tx_asset
                     .get(&(tx_hash.clone(), asset_id))
                     .copied()
-                    .unwrap_or(Some(0)),
+                    .unwrap_or(None),
             });
         }
     }
@@ -2150,19 +2152,22 @@ fn merge_account_state_overrides(
 pub struct DerivedTokenEvent {
     /// `from`/`to` operands that are G-accounts (contract `C…` addresses dropped).
     pub participant_strkeys: Vec<String>,
-    /// SAC-wrapped classic/native asset surrogate; `None` for bespoke/NFT
-    /// (`EventAsset::Contract`) — see the `derive_token_event` body for why
-    /// bespoke is intentionally covered by arm B (invocations), not written here.
-    /// The Native/Credit formula matches the op-derived `operation_asset_appearances`
-    /// keys exactly (`NATIVE_ASSET_ID` / `asset_id(1, code, account_id(issuer), 0)`),
-    /// so event rows dedup against op rows.
+    /// Asset surrogate resolved by [`event_asset_surrogate`] (task 0393): Native →
+    /// `NATIVE_ASSET_ID`, Credit → `credit_asset_id(code, issuer)` (both match the
+    /// op-derived `operation_asset_appearances` keys exactly, so event rows dedup
+    /// against op rows), and bespoke `EventAsset::Bespoke` → the **emitting
+    /// contract's own surrogate** (a type-3 token's asset_id == its contract id).
+    /// `None` only when a bespoke event carries no emitting contract id. (Before
+    /// task 0393 bespoke returned `None` and relied on arm B / invocation
+    /// appearances; 0393 needs the amount, which arm B has no concept of, so
+    /// bespoke now writes arm A here.)
     pub asset_id: Option<i64>,
 }
 
 /// The `operation_asset_appearances` surrogate for a decoded token event's asset
 /// — the one place the event paths (presence + value-moved) resolve it, so their
 /// keys always match. Native → `NATIVE_ASSET_ID`, Credit → `ids::credit_asset_id`,
-/// bespoke (`Contract`, no SEP-11 asset string) → the **emitting contract's own
+/// bespoke (`Bespoke`, no SEP-11 asset string) → the **emitting contract's own
 /// surrogate** (a type-3 token's asset_id == its contract id, verified 4172/4172;
 /// task 0393). `None` only when a bespoke event carries no emitting contract id.
 ///
@@ -2179,7 +2184,7 @@ fn event_asset_surrogate(asset: &EventAsset, emitting_contract_id: Option<i64>) 
         // A bespoke token's asset_id IS its emitting contract's surrogate; the
         // caller passes it already-resolved (live hashes the C-StrKey; the
         // backfill reads the surrogate straight from `soroban_events.contract_id`).
-        EventAsset::Contract => emitting_contract_id,
+        EventAsset::Bespoke => emitting_contract_id,
     }
 }
 
@@ -2204,181 +2209,58 @@ pub fn derive_token_event(
     })
 }
 
-/// Net-settled value per asset for one transaction, from its Soroban token
-/// events (task 0393). Each recognised transfer/mint/burn/clawback becomes a
-/// signed [`Movement`]; [`xdr_parser::net_settled`] reduces them to
-/// `max(Σ+, Σ−)` per asset.
-///
-/// Native/Credit (SAC) and bespoke tokens are all emitted, on the SAME surrogate
-/// key `operation_asset_appearances` uses, so amount rows line up with presence
-/// rows. Bespoke (`EventAsset::Contract`) resolves to the emitting contract's
-/// surrogate (task 0393); a bespoke NFT resolves too but its row is dropped at
-/// read by the value query's `INNER JOIN assets` (NFTs have no `assets` row), so
-/// only fungible bespoke tokens surface a value. Fee charges carry a `fee` verb
-/// `parse_token_event` does not recognise, so they never form a movement (formula
-/// rule 3, auto-satisfied).
-///
-/// Diagnostic-source events are dropped: the `diagnostic_events` container holds
-/// byte-identical copies of the per-op consensus events (plus events of FAILED
-/// inner calls), so counting them would double the amount and add phantom
-/// movements. Every other `events` consumer filters `is_diagnostic` — this must
-/// too.
-pub fn tx_token_net_settled(events: &[ExtractedEvent]) -> Vec<NetSettled> {
-    // The live path must drop diagnostics itself. The backfill does not: the
-    // `soroban_events` writer already filters them (see `diagnostic_dropped`),
-    // so the stored history contains none.
-    token_events_net_settled(
-        events
-            .iter()
-            .filter(|ev| !is_diagnostic(ev.source))
-            .map(|ev| {
-                (
-                    &ev.topics,
-                    &ev.data,
-                    ev.contract_id.as_deref().map(ids::contract_id),
-                )
-            }),
-    )
-}
-
-/// The Soroban token-event reduction, over `(topics, data, emitting contract
-/// surrogate)` for the events of ONE transaction.
-///
-/// The single `net_settled` writer for the Soroban path: called via
-/// [`tx_token_net_settled`] by both live ingest and the full S3 re-ingest (same
-/// `stage.rs`), so live and historical rows for a key are computed identically
-/// and the version-less `ReplacingMergeTree` collapses them cleanly. The 0383
-/// token-flow backfill is presence-only and deliberately does NOT call this — it
-/// writes `net_settled: None`, so it must not run once the column is populated.
-pub fn token_events_net_settled<'a>(
-    events: impl Iterator<Item = (&'a Value, &'a Value, Option<i64>)>,
-) -> Vec<NetSettled> {
-    let mut movements: Vec<Movement> = Vec::new();
-    // Assets forced to "not computed" (`None`), for TWO different reasons kept
-    // apart so only the anomalous one is counted:
-    //   - `policy_null`: a classic-asset claim (Native/Credit) from an unverified
-    //     emitter (H2 trust gate below). EXPECTED — every genuine SAC transfer
-    //     inside a Soroban tx lands here in the interim, so it is NOT anomalous.
-    //   - `uncomputable`: a bespoke event whose amount could not be read. A
-    //     FAILURE (unreadable/negative data, or — after the reduction — overflow),
-    //     which should be near-zero; a spike means an attack or a decode
-    //     regression, so it is counted and logged.
-    // Parties keep contract (`C…`) addresses — a C→C transfer must net correctly.
-    let mut policy_null: BTreeSet<i64> = BTreeSet::new();
-    let mut uncomputable: BTreeSet<i64> = BTreeSet::new();
-
-    for (topics, data, emitting_contract_id) in events {
-        // Not a token event at all — nothing to attribute, nothing to poison.
-        let Some(token) = xdr_parser::parse_token_event(topics) else {
-            continue;
-        };
-        // A bespoke event with no emitting contract has no asset identity, so
-        // there is no asset to attribute the value OR the failure to.
-        let Some(asset_id) = event_asset_surrogate(&token.asset, emitting_contract_id) else {
-            continue;
-        };
-        // TRUST BOUNDARY (task 0393 H2, interim for 0410). A `Native`/`Credit`
-        // asset identity comes from the event's trailing SEP-11 string topic,
-        // which is NOT cryptographically bound to the emitter: any contract can
-        // emit `["transfer", …, "USDC:GISSUER…"]` and forge a real-asset amount.
-        // Only a bespoke `Contract` identity IS the emitter (event_asset_surrogate
-        // resolves it to the emitting contract's own surrogate), so it is
-        // unspoofable. Until the SAC crypto-guard (`sac_override_from_event_topics`,
-        // task 0410) verifies emitter == the asset's SAC, we do NOT attribute a
-        // value to a classic-asset claim from events — mark it "not computed" so
-        // it shows a dash, never a fabricated figure. Genuine SAC transfers inside
-        // Soroban txs lose their event-derived value in the interim (the classic
-        // balance-delta path is unaffected; classic payments are has_soroban=0).
-        if !matches!(token.asset, xdr_parser::EventAsset::Contract) {
-            policy_null.insert(asset_id);
-            continue;
-        }
-        match xdr_parser::token_event_amount(data) {
-            Some(amount) => movements.push(Movement {
-                asset_id,
-                from: token.from,
-                to: token.to,
-                amount,
-            }),
-            None => {
-                uncomputable.insert(asset_id);
-            }
-        }
-    }
-
-    let mut out = xdr_parser::net_settled(&movements);
-    for ns in &mut out {
-        if policy_null.contains(&ns.asset_id) || uncomputable.contains(&ns.asset_id) {
-            ns.amount = None;
-        }
-    }
-    // An asset forced to None whose every event was policy/uncomputable produced
-    // no movement, so the reduction has no row for it — but it WAS touched and its
-    // presence row will exist. Emit it explicitly, otherwise the write site falls
-    // back to claiming `Some(0)` ("computed, nothing settled") for it.
-    for asset_id in policy_null.iter().chain(uncomputable.iter()) {
-        if !out.iter().any(|ns| ns.asset_id == *asset_id) {
-            out.push(NetSettled {
-                asset_id: *asset_id,
-                amount: None,
-            });
-        }
-    }
-    out.sort_by_key(|ns| ns.asset_id);
-
-    // Observability (task 0393): a bespoke value we TRIED to compute and could
-    // not — an unreadable/negative amount, or (from net_settled) an i128
-    // overflow — is anomalous. Normal traffic is ~0; a spike means an attack or a
-    // decode regression. Counted here (excluding the expected H2 policy nulls) and
-    // logged once per call when non-zero, so it is visible rather than a silent
-    // dash. Mirrors the `diagnostic_dropped` batch-log idiom.
-    let uncomputable_count = out
-        .iter()
-        .filter(|ns| ns.amount.is_none() && !policy_null.contains(&ns.asset_id))
-        .count();
-    if uncomputable_count > 0 {
-        tracing::warn!(
-            uncomputable = uncomputable_count,
-            "net-settled: bespoke token values could not be computed (unreadable/negative amount or i128 overflow)"
-        );
-    }
-
-    out
-}
-
-/// Net-settled value per asset for one CLASSIC transaction, from its per-
-/// (account, asset) ledger-entry balance deltas (task 0393). Each delta becomes
-/// a one-sided [`Movement`] and `net_settled` reduces to `max(Σ+, Σ−)` per asset.
+/// Net-settled value per asset for ONE transaction (classic OR Soroban), from its
+/// per-(holder, asset) ledger balance deltas. Each delta becomes a one-sided
+/// [`Movement`] and `net_settled` reduces to `max(Σ+, Σ−)` per asset.
 ///
 /// The deltas come from `xdr_parser::classic_balance_deltas` over the tx's
-/// `TransactionMeta` and cover EVERY classic op type uniformly — payment, path
-/// payment, offer/DEX fill, LP deposit/withdraw, claimable-balance create/claim,
-/// clawback — because all of them settle as account/trustline balance changes.
-/// The fee is charged in a separate ledger phase (not `TransactionMeta`), so it
-/// is absent by construction (formula rule 3). This is the `has_soroban = 0`
-/// path; `has_soroban = 1` txs go through [`tx_token_net_settled`], so a
-/// post-CAP-67 unified event and its classic op are never double-counted.
-pub fn classic_deltas_net_settled(deltas: &[ClassicDelta]) -> Vec<NetSettled> {
+/// `TransactionMeta` and cover EVERY value flow uniformly from the ledger —
+/// native, classic credit, SAC contract-held balances, and bespoke token balances
+/// — because all settle as `AccountEntry` / `TrustLineEntry` / `ContractData`
+/// balance changes. This is the authoritative, unspoofable source; token events
+/// (logs) are never used for value. The fee is charged in a separate ledger phase
+/// (not `TransactionMeta`), so it is absent by construction (formula rule 3).
+///
+/// `sac_classic` re-maps a contract-held SAC balance (keyed by the SAC contract
+/// surrogate) onto the wrapped classic/native `asset_id` — the same surrogate the
+/// account-side trustline leg resolves to, so a mixed account↔contract transfer
+/// nets as ONE asset, not two.
+pub fn classic_deltas_net_settled(
+    deltas: &[ClassicDelta],
+    sac_classic: &HashMap<i64, i64>,
+) -> Vec<NetSettled> {
     let movements: Vec<Movement> = deltas
         .iter()
         .filter_map(|d| {
-            // Same resolver as the Soroban path — classic never yields Contract
-            // (no emitting contract), so this is always Some for a Native/Credit
-            // delta.
-            let asset_id = event_asset_surrogate(&d.asset, None)?;
+            let asset_id = match &d.asset {
+                LedgerAsset::Native => ids::NATIVE_ASSET_ID,
+                LedgerAsset::Credit { code, issuer } => ids::credit_asset_id(code, issuer),
+                // SAC-wrapped classic → the wrapped classic asset via the forward-
+                // derived registry; an unknown SAC (not yet mapped) drops the delta
+                // (`?`) — no value rather than the wrong asset.
+                LedgerAsset::SacWrapped(sac) => *sac_classic.get(&ids::contract_id(sac))?,
+                // Bespoke token → its own contract surrogate (the token IS the asset).
+                LedgerAsset::Bespoke(contract) => ids::contract_id(contract),
+            };
+            // `Movement.amount` is the non-negative magnitude. `checked_abs`
+            // because `-i128::MIN` is itself unrepresentable — a bespoke token's
+            // delta is attacker-authored i128, and release builds don't panic on
+            // overflow, so `?` drops that one movement rather than wrapping it into
+            // a fabricated figure.
+            let amount = d.delta.checked_abs()?;
             Some(if d.delta >= 0 {
                 Movement {
                     asset_id,
                     from: None,
                     to: Some(d.account.clone()),
-                    amount: d.delta,
+                    amount,
                 }
             } else {
                 Movement {
                     asset_id,
                     from: Some(d.account.clone()),
                     to: None,
-                    amount: -d.delta,
+                    amount,
                 }
             })
         })
@@ -2390,6 +2272,12 @@ pub fn classic_deltas_net_settled(deltas: &[ClassicDelta]) -> Vec<NetSettled> {
 mod classic_deltas_net_settled_tests {
     use super::*;
 
+    /// Reduce with an empty SAC registry — these tests use native/credit deltas
+    /// only, which don't need it. The SAC-registry path is covered separately.
+    fn reduce(deltas: &[ClassicDelta]) -> Vec<NetSettled> {
+        classic_deltas_net_settled(deltas, &HashMap::new())
+    }
+
     const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
     const G_A: &str = "GBLVLKGRDU66WLWY4XRORJXCC4LDZ347AQTUYBEPBABIZTVITW2OAGIP";
     const G_B: &str = "GADKLS7RS3OC2MXGEZXQA46JNF3FBVSTHTWLDPRF7TWI6GXVP4OUE3ZR";
@@ -2397,14 +2285,14 @@ mod classic_deltas_net_settled_tests {
     fn native(account: &str, delta: i128) -> ClassicDelta {
         ClassicDelta {
             account: account.to_string(),
-            asset: EventAsset::Native,
+            asset: LedgerAsset::Native,
             delta,
         }
     }
     fn credit(account: &str, delta: i128) -> ClassicDelta {
         ClassicDelta {
             account: account.to_string(),
-            asset: EventAsset::Credit {
+            asset: LedgerAsset::Credit {
                 code: "USDC".to_string(),
                 issuer: ISSUER.to_string(),
             },
@@ -2415,7 +2303,7 @@ mod classic_deltas_net_settled_tests {
     #[test]
     fn native_payment_nets_to_amount() {
         // A -100, B +100: net native 100.
-        let r = classic_deltas_net_settled(&[native(G_A, -100), native(G_B, 100)]);
+        let r = reduce(&[native(G_A, -100), native(G_B, 100)]);
         assert_eq!(r.len(), 1);
         assert_eq!(
             (r[0].asset_id, r[0].amount),
@@ -2426,7 +2314,7 @@ mod classic_deltas_net_settled_tests {
     #[test]
     fn credit_delta_resolves_to_its_surrogate() {
         let want = ids::credit_asset_id("USDC", ISSUER);
-        let r = classic_deltas_net_settled(&[credit(G_A, -150)]);
+        let r = reduce(&[credit(G_A, -150)]);
         assert_eq!((r[0].asset_id, r[0].amount), (want, Some(150)));
     }
 
@@ -2434,7 +2322,7 @@ mod classic_deltas_net_settled_tests {
     fn one_sided_burn_delta_is_counted() {
         // A single negative delta (e.g. clawback / payment-to-issuer): max(Σ+,Σ−)
         // keeps it non-zero.
-        let r = classic_deltas_net_settled(&[native(G_A, -250)]);
+        let r = reduce(&[native(G_A, -250)]);
         assert_eq!(r[0].amount, Some(250));
     }
 
@@ -2442,7 +2330,7 @@ mod classic_deltas_net_settled_tests {
     fn swap_splits_into_two_asset_rows() {
         // A sends 300 native, receives 250 USDC; B is the counterparty.
         let usdc = ids::credit_asset_id("USDC", ISSUER);
-        let r = classic_deltas_net_settled(&[
+        let r = reduce(&[
             native(G_A, -300),
             native(G_B, 300),
             credit(G_A, 250),
@@ -2463,227 +2351,41 @@ mod classic_deltas_net_settled_tests {
     }
 
     #[test]
-    fn contract_asset_delta_is_skipped() {
-        // classic never yields Contract, but the resolver skips it defensively.
-        let d = ClassicDelta {
-            account: G_A.to_string(),
-            asset: EventAsset::Contract,
+    fn contract_and_account_legs_of_a_sac_transfer_net_as_one_asset() {
+        // A contract sends 100 USDC to a G-account. The contract leg is a
+        // ContractData SAC balance (SacWrapped), the account leg is a trustline
+        // (Credit). Both MUST resolve to the SAME asset_id via the registry, or the
+        // single transfer double-counts as two assets. (Verified in code that
+        // sac_classic maps to exactly `credit_asset_id`; this pins it.)
+        let usdc = ids::credit_asset_id("USDC", ISSUER);
+        let sac_strkey = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+        let sac_classic: HashMap<i64, i64> =
+            [(ids::contract_id(sac_strkey), usdc)].into_iter().collect();
+
+        let contract_leg = ClassicDelta {
+            account: "CONTRACT_HOLDER".to_string(),
+            asset: LedgerAsset::SacWrapped(sac_strkey.to_string()),
             delta: -100,
         };
-        assert!(classic_deltas_net_settled(&[d]).is_empty());
-    }
-}
-
-#[cfg(test)]
-mod tx_token_net_settled_tests {
-    use super::*;
-    use serde_json::json;
-
-    const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
-    const G_FROM: &str = "GBLVLKGRDU66WLWY4XRORJXCC4LDZ347AQTUYBEPBABIZTVITW2OAGIP";
-    const G_TO: &str = "GADKLS7RS3OC2MXGEZXQA46JNF3FBVSTHTWLDPRF7TWI6GXVP4OUE3ZR";
-
-    fn sym(v: &str) -> Value {
-        json!({ "type": "sym", "value": v })
-    }
-    fn addr(v: &str) -> Value {
-        json!({ "type": "address", "value": v })
-    }
-    fn string_topic(v: &str) -> Value {
-        json!({ "type": "string", "value": v })
-    }
-    fn i128data(v: &str) -> Value {
-        json!({ "type": "i128", "value": v })
-    }
-
-    /// Build an `ExtractedEvent` carrying only the fields the reducer reads
-    /// (topics + data); the rest are defaulted.
-    fn event(topics: Vec<Value>, data: Value) -> ExtractedEvent {
-        ExtractedEvent {
-            transaction_hash: String::new(),
-            event_type: ContractEventType::Contract,
-            source: EventSource::TxLevel,
-            contract_id: None,
-            topics: Value::Array(topics),
-            data,
-            event_index: 0,
-            ledger_sequence: 0,
-            created_at: 0,
-        }
-    }
-
-    fn credit_transfer(from: &str, to: &str, amount: &str) -> ExtractedEvent {
-        event(
-            vec![
-                sym("transfer"),
-                addr(from),
-                addr(to),
-                string_topic(&format!("USDC:{ISSUER}")),
-            ],
-            i128data(amount),
-        )
-    }
-
-    /// A bespoke-token transfer: NO SEP-11 asset string, so the asset identity IS
-    /// the emitting contract (unspoofable). This is the shape that carries a value
-    /// through the H2 trust gate — the reducer-behaviour tests use it so they
-    /// exercise the reduction, not the classic-claim rejection.
-    const CTOKEN: &str = "CBQFOPGGSP4VCDFXJ4YEPCQNLN6EFRC4M7OOLQOEEY7H4VPF6N4WEE2N";
-    fn bespoke_transfer(from: &str, to: &str, amount: &str) -> ExtractedEvent {
-        let mut ev = event(
-            vec![sym("transfer"), addr(from), addr(to)],
-            i128data(amount),
-        );
-        ev.contract_id = Some(CTOKEN.to_string());
-        ev
+        let r = classic_deltas_net_settled(&[contract_leg, credit(G_B, 100)], &sac_classic);
+        assert_eq!(r.len(), 1, "must net as ONE asset, not double-count: {r:?}");
+        assert_eq!((r[0].asset_id, r[0].amount), (usdc, Some(100)));
     }
 
     #[test]
-    fn credit_claim_from_an_unverified_emitter_is_not_attributed_a_value() {
-        // H2 (interim for task 0410): a `"USDC:ISSUER"` string topic is NOT bound
-        // to the emitter, so any contract can forge a classic-asset amount. Until
-        // the SAC crypto-guard lands, a classic-asset claim from events must NOT
-        // get a value — it surfaces on its real surrogate (presence is honest) but
-        // as `None` ("not computed"), never a fabricated figure.
-        let want_asset = ids::asset_id(1, "USDC", ids::account_id(ISSUER), 0);
-        let r = tx_token_net_settled(&[credit_transfer(G_FROM, G_TO, "150")]);
-        assert_eq!(r.len(), 1);
-        assert_eq!((r[0].asset_id, r[0].amount), (want_asset, None));
-    }
-
-    #[test]
-    fn native_claim_from_events_is_also_untrusted() {
-        // Same H2 gate for a `"native"` string topic.
-        let r = tx_token_net_settled(&[event(
-            vec![
-                sym("transfer"),
-                addr(G_FROM),
-                addr(G_TO),
-                string_topic("native"),
-            ],
-            i128data("150"),
-        )]);
-        assert_eq!(r.len(), 1);
-        assert_eq!((r[0].asset_id, r[0].amount), (ids::NATIVE_ASSET_ID, None));
-    }
-
-    #[test]
-    fn bespoke_transfer_nets_to_amount_on_its_contract_surrogate() {
-        // The trusted path: identity == emitter, so it carries a real value.
-        let r = tx_token_net_settled(&[bespoke_transfer(G_FROM, G_TO, "150")]);
+    fn bespoke_contract_token_resolves_to_its_own_surrogate() {
+        let token = "CBQFOPGGSP4VCDFXJ4YEPCQNLN6EFRC4M7OOLQOEEY7H4VPF6N4WEE2N";
+        let d = ClassicDelta {
+            account: "HOLDER".to_string(),
+            asset: LedgerAsset::Bespoke(token.to_string()),
+            delta: -50,
+        };
+        let r = classic_deltas_net_settled(&[d], &HashMap::new());
         assert_eq!(r.len(), 1);
         assert_eq!(
             (r[0].asset_id, r[0].amount),
-            (ids::contract_id(CTOKEN), Some(150))
+            (ids::contract_id(token), Some(50))
         );
-    }
-
-    #[test]
-    fn an_unreadable_amount_poisons_its_asset_rather_than_reducing_a_subset() {
-        // Two transfers of the same asset; the second carries a data shape the
-        // decoder cannot read. Reducing only the first yields 100 — computed
-        // from a SUBSET of the transaction's movements and reported with full
-        // confidence. The second leg may have been a routing hop that changes
-        // the answer entirely; we do not know. The only honest output is "not
-        // computed".
-        let readable = bespoke_transfer(G_FROM, G_TO, "100");
-        let mut undecodable = bespoke_transfer(G_TO, G_FROM, "100");
-        undecodable.data = json!({ "type": "vec", "value": [] });
-        let r = tx_token_net_settled(&[readable, undecodable]);
-        assert_eq!(r.len(), 1, "the asset is still touched, got {r:?}");
-        assert_eq!(
-            r[0].amount, None,
-            "a partially-decodable asset must not report a subset as fact"
-        );
-    }
-
-    #[test]
-    fn attacker_sized_event_amounts_yield_not_computed_not_a_wrapped_figure() {
-        // A contract can emit any i128 it likes. Two transfers of i128::MAX to
-        // the same holder overflow the reduction; release builds do not panic
-        // (overflow-checks = false), so unchecked this would store a wrapped
-        // figure and render it as money. It must reach the row as NULL.
-        let big = i128::MAX.to_string();
-        let r = tx_token_net_settled(&[
-            bespoke_transfer(G_FROM, G_TO, &big),
-            bespoke_transfer(G_FROM, G_TO, &big),
-        ]);
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].amount, None, "must not wrap into a fabricated value");
-    }
-
-    #[test]
-    fn negative_event_amount_is_not_flipped_into_a_positive_figure() {
-        // `transfer` with amount -100: the reducer signs movements itself, so an
-        // unrejected negative becomes a +100 credit for the SENDER and displays
-        // as 100 moved. token_event_amount rejects it at the trust boundary.
-        //
-        // It surfaces as "not computed" rather than vanishing: a recognised
-        // transfer DID touch this asset, and a hostile contract must not be able
-        // to make us assert "nothing settled" by emitting a malformed amount.
-        let r = tx_token_net_settled(&[bespoke_transfer(G_FROM, G_TO, "-100")]);
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].amount, None, "must not become a +100 movement");
-    }
-
-    #[test]
-    fn diagnostic_copy_is_dropped_not_double_counted() {
-        // `diagnostic_events` carries a byte-identical copy of the real event;
-        // counting it would report 300 instead of 150.
-        let real = bespoke_transfer(G_FROM, G_TO, "150");
-        let mut diag = bespoke_transfer(G_FROM, G_TO, "150");
-        diag.source = EventSource::Diagnostic;
-        let r = tx_token_net_settled(&[real, diag]);
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].amount, Some(150));
-    }
-
-    #[test]
-    fn bespoke_contract_event_values_on_its_contract_surrogate() {
-        // No SEP-11 asset string → bespoke; asset_id = the emitting contract's
-        // surrogate (task 0393). NFTs resolve too but are dropped at read by the
-        // value query's INNER JOIN assets (they have no assets row).
-        let r = tx_token_net_settled(&[bespoke_transfer(G_FROM, G_TO, "100")]);
-        assert_eq!(r.len(), 1);
-        assert_eq!(
-            (r[0].asset_id, r[0].amount),
-            (ids::contract_id(CTOKEN), Some(100))
-        );
-    }
-
-    #[test]
-    fn bespoke_without_emitting_contract_is_skipped() {
-        let r = tx_token_net_settled(&[event(
-            vec![sym("transfer"), addr(G_FROM), addr(G_TO)],
-            i128data("100"),
-        )]);
-        assert!(r.is_empty());
-    }
-
-    /// CHANGED by task 0393 (was `event_without_amount_is_skipped`, asserting
-    /// `r.is_empty()`). Under 0383 this event carried no value, so skipping it
-    /// was free. Now it does: skipping leaves the write site's `unwrap_or(Some(0))`
-    /// to record "computed, nothing settled" for an asset a recognised transfer
-    /// touched and we simply could not read. That is the exact lie the nullable
-    /// column exists to prevent, so the event must surface as "not computed".
-    #[test]
-    fn recognised_event_without_a_readable_amount_is_not_computed_not_zero() {
-        let mut ev = bespoke_transfer(G_FROM, G_TO, "0");
-        ev.data = json!({ "type": "void" });
-        let r = tx_token_net_settled(&[ev]);
-        assert_eq!(r.len(), 1, "the asset was touched, got {r:?}");
-        assert_eq!(r[0].amount, None);
-    }
-
-    #[test]
-    fn routing_chain_nets_not_gross() {
-        // FROM -> TO -> THIRD, 100 each, same bespoke asset: net 100, not 200.
-        let r = tx_token_net_settled(&[
-            bespoke_transfer(G_FROM, G_TO, "100"),
-            bespoke_transfer(G_TO, ISSUER, "100"),
-        ]);
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].amount, Some(100));
     }
 }
 

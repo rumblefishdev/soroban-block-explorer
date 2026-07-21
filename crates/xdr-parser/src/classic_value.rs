@@ -1,14 +1,20 @@
-//! Classic (non-Soroban) value movement per (transaction, asset), derived from
-//! ledger-entry balance changes (task 0393).
+//! Value movement per (transaction, asset), derived from LEDGER balance-entry
+//! changes — the authoritative, consensus-verified source (a contract cannot forge
+//! a ledger balance). Token EVENTS are logs and are NEVER used for value (task
+//! 0393 redesign; see 0415). Covers EVERY tx, classic or Soroban.
 //!
-//! `AccountEntry` (native XLM) and `TrustLineEntry` (issued assets) are the only
-//! balance carriers in classic Stellar. **Every** classic value flow — payment,
-//! path payment, offer/DEX fill, liquidity-pool deposit/withdraw, claimable-
-//! balance create/claim, clawback — settles as a change to one or both, so a
-//! single before→after delta reader over `TransactionMeta` covers all classic
-//! operation types uniformly and auto-nets routing hops (a pass-through account
-//! ends at delta 0). This is the "cleanest source" of the task design and why
-//! `meta.rs` (the version-safe change accessor) was revived.
+//! The balance carriers:
+//! - `AccountEntry.balance` (native XLM),
+//! - `TrustLineEntry.balance` (classic issued assets),
+//! - `ContractData` `Balance(Address)` — a Soroban token balance held by an
+//!   account or contract: a SAC `BalanceValue` **struct** (a classic/native asset
+//!   held by a contract) or a **bare `i128`** (a bespoke token, which IS the asset).
+//!
+//! **Every** value flow — payment, path payment, offer/DEX fill, LP deposit/
+//! withdraw, claimable-balance create/claim, clawback, and Soroban SAC/bespoke
+//! transfers — settles as a change to one or more of these, so a single
+//! before→after delta reader over `TransactionMeta` covers all of them uniformly
+//! and auto-nets routing hops (a pass-through holder ends at delta 0).
 //!
 //! ## Fee
 //!
@@ -25,21 +31,49 @@
 use std::collections::BTreeMap;
 
 use stellar_xdr::{
-    LedgerEntry, LedgerEntryChange, LedgerEntryData, LedgerKey, TransactionMeta, TrustLineAsset,
+    ContractDataEntry, LedgerEntry, LedgerEntryChange, LedgerEntryData, LedgerKey, ScVal,
+    TransactionMeta, TrustLineAsset,
 };
 
-use crate::event_filters::EventAsset;
 use crate::meta::ledger_changes;
+
+/// The asset a LEDGER balance change moved — the LEDGER domain's asset vocabulary
+/// (cf. `AssetRef` for op-declared assets, `EventAsset` for event-named; each domain
+/// owns its own small asset enum). Resolved to a DB surrogate by the persistence
+/// layer (`ids` / `sac_classic`). `Ord` so it can key the telescoping `BTreeMap`.
+///
+/// The two `ContractData` cases are **different DB asset types** — a SAC-wrapped
+/// classic (type 1) vs a bespoke token (type 3) — so they are two variants, not one
+/// variant with a boolean: each resolves a different way.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LedgerAsset {
+    /// Native XLM — from `AccountEntry`.
+    Native,
+    /// A classic issued asset (code + issuer `G…` StrKey) — from `TrustLineEntry`.
+    Credit { code: String, issuer: String },
+    /// A classic/native asset held via its Stellar-Asset-Contract **wrapper** — from
+    /// a `ContractData` `Balance` whose value is a SAC `BalanceValue` struct. The
+    /// `C…` is the SAC contract; the caller reverses it to the wrapped classic
+    /// `asset_id` via the registry (`sac_classic`), or drops if unknown. A **classic**
+    /// asset (DB type 1), NOT a contract asset.
+    SacWrapped(String),
+    /// A **bespoke** Soroban token — from a `ContractData` `Balance` whose value is a
+    /// bare `i128`. The `C…` token contract IS the asset (DB type 3); resolved to its
+    /// own surrogate (`ids::contract_id`).
+    Bespoke(String),
+}
 
 /// A net balance change for one account on one asset within a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicDelta {
     /// Account G-StrKey.
     pub account: String,
-    /// The moved asset — `Native` or `Credit { code, issuer }` (classic never
-    /// yields `Contract`). This is the same `EventAsset` the Soroban token path
-    /// decodes, so the caller resolves both to a surrogate through one helper.
-    pub asset: EventAsset,
+    /// The moved asset. `classic_balance_deltas` yields `Native` / `Credit` (from
+    /// `AccountEntry` / `TrustLineEntry` changes) and `SacWrapped` / `Bespoke` (from
+    /// `ContractData` balance changes); the caller resolves each to a surrogate.
+    /// Never `Contract` — that identity comes only from an event, and the ledger
+    /// reader does not read events.
+    pub asset: LedgerAsset,
     /// Signed raw stroops the account's balance moved across the transaction.
     pub delta: i128,
 }
@@ -47,23 +81,34 @@ pub struct ClassicDelta {
 /// Per-(account, asset) net classic balance delta for a transaction. Only
 /// non-zero deltas are returned, ordered by (account, asset) for determinism.
 pub fn classic_balance_deltas(meta: &TransactionMeta) -> Vec<ClassicDelta> {
+    // Runs for EVERY tx (classic AND Soroban): the ledger is the authoritative,
+    // unspoofable source of value for native/classic/SAC, whether moved by a
+    // classic op (Account/Trustline changes) or a Soroban invocation (which also
+    // produces contract-held SAC balance changes in `ContractData`). Only bespoke
+    // tokens — with no ledger-readable balance — are valued from their events.
     // (account, asset) -> before/after balance, telescoped across the tx.
-    let mut acc: BTreeMap<(String, EventAsset), Balances> = BTreeMap::new();
+    let mut acc: BTreeMap<(String, LedgerAsset), Balances> = BTreeMap::new();
     for change in ledger_changes(meta) {
         match change {
             // `State` / `Restored` are before-images (Restored re-appears from
             // state archival, protocol 23 — the restore itself moves no value).
             LedgerEntryChange::State(e) | LedgerEntryChange::Restored(e) => {
-                record(&mut acc, e, false);
+                record(&mut acc, e, false, false);
             }
-            LedgerEntryChange::Created(e) => record(&mut acc, e, true),
-            LedgerEntryChange::Updated(e) => record(&mut acc, e, false),
+            LedgerEntryChange::Created(e) => record(&mut acc, e, true, false),
+            LedgerEntryChange::Updated(e) => record(&mut acc, e, false, true),
             LedgerEntryChange::Removed(k) => record_removed(&mut acc, k),
         }
     }
     acc.into_iter()
         .filter_map(|((account, asset), b)| {
-            let delta = b.last - b.initial.unwrap_or(0);
+            // A bespoke token's `ContractData` balance is attacker-authored i128,
+            // so this subtraction can overflow; release builds run with
+            // `overflow-checks = false`, so an unchecked `-` would wrap into a
+            // fabricated figure instead of panicking. `checked_sub` → `?` drops
+            // the delta (no value) on overflow rather than lying. (Native/classic
+            // balances are i64-wide and cannot overflow here.)
+            let delta = b.last.checked_sub(b.initial.unwrap_or(0))?;
             (delta != 0).then_some(ClassicDelta {
                 account,
                 asset,
@@ -83,7 +128,12 @@ struct Balances {
 /// `Created` change (the entry did not exist before → initial balance 0);
 /// otherwise the first change seen (a `State` before-image, or an `Updated`
 /// with no preceding state) sets the initial balance.
-fn record(acc: &mut BTreeMap<(String, EventAsset), Balances>, entry: &LedgerEntry, created: bool) {
+fn record(
+    acc: &mut BTreeMap<(String, LedgerAsset), Balances>,
+    entry: &LedgerEntry,
+    created: bool,
+    is_update: bool,
+) {
     let Some((account, asset, balance)) = entry_balance(entry) else {
         return;
     };
@@ -92,13 +142,24 @@ fn record(acc: &mut BTreeMap<(String, EventAsset), Balances>, entry: &LedgerEntr
         last: 0,
     });
     if e.initial.is_none() {
+        // Telescoping invariant (#11): the FIRST change for a key must be a
+        // before-image (`State`/`Restored`) or a `Created` — never an `Updated`.
+        // If an `Updated` were first, `balance` is the AFTER value and using it as
+        // `initial` silently zeroes that step's delta. Stellar always emits a
+        // `State` before an `Updated`, so this is debug-only (zero release cost);
+        // it fails a test/dev build fast if a malformed or future-protocol meta
+        // ever violates it, instead of understating in silence.
+        debug_assert!(
+            !is_update,
+            "classic telescoping: Updated with no preceding State/Created — pre-image lost, delta understated"
+        );
         e.initial = Some(if created { 0 } else { balance });
     }
     e.last = balance;
 }
 
 /// A removed entry drops to balance 0 (its initial came from a preceding State).
-fn record_removed(acc: &mut BTreeMap<(String, EventAsset), Balances>, key: &LedgerKey) {
+fn record_removed(acc: &mut BTreeMap<(String, LedgerAsset), Balances>, key: &LedgerKey) {
     let Some((account, asset)) = removed_balance_key(key) else {
         return;
     };
@@ -110,14 +171,17 @@ fn record_removed(acc: &mut BTreeMap<(String, EventAsset), Balances>, key: &Ledg
         .last = 0;
 }
 
-/// `(account, asset, balance)` for the two balance-bearing entry types; `None`
-/// for every other entry (offers, LP, claimable balances, contract data, …) —
-/// their value effects surface as account/trustline balance changes anyway.
-fn entry_balance(entry: &LedgerEntry) -> Option<(String, EventAsset, i128)> {
+/// `(account, asset, balance)` for the balance-bearing entry types:
+/// `AccountEntry` (native), `TrustLineEntry` (classic credit), and a SAC
+/// contract-held balance (`ContractData` `Balance(Address)` with a SAC
+/// `BalanceValue` struct value). `None` for everything else (offers, LP,
+/// claimable balances, bespoke ContractData) — their effects either surface as
+/// account/trustline changes or belong to the bespoke event path.
+fn entry_balance(entry: &LedgerEntry) -> Option<(String, LedgerAsset, i128)> {
     match &entry.data {
         LedgerEntryData::Account(a) => Some((
             a.account_id.to_string(),
-            EventAsset::Native,
+            LedgerAsset::Native,
             i128::from(a.balance),
         )),
         LedgerEntryData::Trustline(t) => Some((
@@ -125,32 +189,103 @@ fn entry_balance(entry: &LedgerEntry) -> Option<(String, EventAsset, i128)> {
             trustline_event_asset(&t.asset)?,
             i128::from(t.balance),
         )),
+        LedgerEntryData::ContractData(cd) => contract_data_balance(cd),
         _ => None,
     }
 }
 
-/// `(account, asset)` for a removed account/trustline key; `None` otherwise.
-fn removed_balance_key(key: &LedgerKey) -> Option<(String, EventAsset)> {
+/// `(account, asset)` for a removed balance key; `None` otherwise. Covers a
+/// removed account/trustline and a removed SAC contract-balance entry
+/// (`ContractData` `Balance(Address)` dropping to 0).
+fn removed_balance_key(key: &LedgerKey) -> Option<(String, LedgerAsset)> {
     match key {
-        LedgerKey::Account(k) => Some((k.account_id.to_string(), EventAsset::Native)),
+        LedgerKey::Account(k) => Some((k.account_id.to_string(), LedgerAsset::Native)),
         LedgerKey::Trustline(k) => {
             Some((k.account_id.to_string(), trustline_event_asset(&k.asset)?))
         }
+        // Removed carries no value, so it cannot tell a SAC balance (struct) from a
+        // bespoke one (bare i128) — the distinction lives in the value it dropped.
+        // A balance normally hits 0 via `Updated`, not `Removed`, so this rare edge
+        // is left unhandled rather than risk keying the wrong asset variant.
         _ => None,
     }
 }
 
-/// The `EventAsset` identity of a trustline asset; `None` for pool shares (not a
+/// A Soroban token balance change: a `ContractData` entry with key
+/// `Balance(Address)`. Two value shapes, both authoritative (the actual stored
+/// balance, unspoofable):
+/// - a SAC `BalanceValue` **struct** (`Map{ amount, authorized, clawback }`) — a
+///   contract holding a classic/native asset → `SacWrapped(sac StrKey)` (the caller
+///   re-maps it to the wrapped classic asset).
+/// - a **bare `i128`** — a bespoke Soroban token's own balance →
+///   `Bespoke(token StrKey)` (the token IS the asset).
+///
+/// `None` for any other `ContractData` (TTL bumps, non-`Balance` keys, unknown
+/// value shapes). Verified against a real mainnet Soroban SAC transfer
+/// (contract↔contract): `key` = `Vec[Symbol("Balance"), Address(holder)]`, `val` =
+/// the struct, emitted `State`(before) + `Updated`(after) so it telescopes.
+fn contract_data_balance(cd: &ContractDataEntry) -> Option<(String, LedgerAsset, i128)> {
+    let holder = balance_key_holder(&cd.key)?;
+    let contract = cd.contract.to_string();
+    if let Some(amount) = sac_balance_struct_amount(&cd.val) {
+        // Struct value → a classic/native asset held via its SAC wrapper.
+        return Some((holder, LedgerAsset::SacWrapped(contract), amount));
+    }
+    if let ScVal::I128(p) = &cd.val {
+        // Bare i128 → a bespoke token; the contract IS the asset.
+        let amount = (i128::from(p.hi) << 64) | i128::from(p.lo);
+        return Some((holder, LedgerAsset::Bespoke(contract), amount));
+    }
+    None
+}
+
+/// The holder StrKey from a `Balance(Address)` `ContractData` key
+/// (`Vec[Symbol("Balance"), Address(holder)]`); `None` for any other key shape.
+fn balance_key_holder(key: &ScVal) -> Option<String> {
+    let ScVal::Vec(Some(v)) = key else {
+        return None;
+    };
+    let [tag, holder] = v.as_slice() else {
+        return None;
+    };
+    match tag {
+        ScVal::Symbol(s) if s.to_string() == "Balance" => {}
+        _ => return None,
+    }
+    match holder {
+        ScVal::Address(addr) => Some(addr.to_string()),
+        _ => None,
+    }
+}
+
+/// The `amount` field of a SAC `BalanceValue` struct (`ScVal::Map`); `None` for a
+/// bare i128 (bespoke) or any other value shape.
+fn sac_balance_struct_amount(val: &ScVal) -> Option<i128> {
+    let ScVal::Map(Some(m)) = val else {
+        return None;
+    };
+    for entry in m.iter() {
+        if let ScVal::Symbol(k) = &entry.key
+            && k.to_string() == "amount"
+            && let ScVal::I128(p) = &entry.val
+        {
+            return Some((i128::from(p.hi) << 64) | i128::from(p.lo));
+        }
+    }
+    None
+}
+
+/// The `LedgerAsset` identity of a trustline asset; `None` for pool shares (not a
 /// single-asset balance). `Native` is included for completeness though native
 /// balances live on `AccountEntry`, not a trustline.
-fn trustline_event_asset(asset: &TrustLineAsset) -> Option<EventAsset> {
+fn trustline_event_asset(asset: &TrustLineAsset) -> Option<LedgerAsset> {
     match asset {
-        TrustLineAsset::Native => Some(EventAsset::Native),
-        TrustLineAsset::CreditAlphanum4(a) => Some(EventAsset::Credit {
+        TrustLineAsset::Native => Some(LedgerAsset::Native),
+        TrustLineAsset::CreditAlphanum4(a) => Some(LedgerAsset::Credit {
             code: crate::asset_code::asset_code_str(a.asset_code.as_slice()),
             issuer: a.issuer.to_string(),
         }),
-        TrustLineAsset::CreditAlphanum12(a) => Some(EventAsset::Credit {
+        TrustLineAsset::CreditAlphanum12(a) => Some(LedgerAsset::Credit {
             code: crate::asset_code::asset_code_str(a.asset_code.as_slice()),
             issuer: a.issuer.to_string(),
         }),
@@ -234,13 +369,13 @@ mod tests {
     fn find<'a>(
         d: &'a [ClassicDelta],
         account: &str,
-        asset: &EventAsset,
+        asset: &LedgerAsset,
     ) -> Option<&'a ClassicDelta> {
         d.iter().find(|x| x.account == account && &x.asset == asset)
     }
 
-    fn usdc_credit() -> EventAsset {
-        EventAsset::Credit {
+    fn usdc_credit() -> LedgerAsset {
+        LedgerAsset::Credit {
             code: "USDC".to_string(),
             issuer: strkey(0x11),
         }
@@ -257,11 +392,11 @@ mod tests {
         ]);
         let d = classic_balance_deltas(&meta);
         assert_eq!(
-            find(&d, &strkey(0xAA), &EventAsset::Native).unwrap().delta,
+            find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -100
         );
         assert_eq!(
-            find(&d, &strkey(0xBB), &EventAsset::Native).unwrap().delta,
+            find(&d, &strkey(0xBB), &LedgerAsset::Native).unwrap().delta,
             100
         );
     }
@@ -276,11 +411,11 @@ mod tests {
         ]);
         let d = classic_balance_deltas(&meta);
         assert_eq!(
-            find(&d, &strkey(0xAA), &EventAsset::Native).unwrap().delta,
+            find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -300
         );
         assert_eq!(
-            find(&d, &strkey(0xCC), &EventAsset::Native).unwrap().delta,
+            find(&d, &strkey(0xCC), &LedgerAsset::Native).unwrap().delta,
             300
         );
     }
@@ -340,7 +475,7 @@ mod tests {
         let d = classic_balance_deltas(&meta);
         assert_eq!(d.len(), 1, "one row per (account, asset), got {d:?}");
         assert_eq!(
-            find(&d, &strkey(0xAA), &EventAsset::Native).unwrap().delta,
+            find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -150
         );
     }
@@ -363,7 +498,7 @@ mod tests {
         ]);
         let d = classic_balance_deltas(&then_spent);
         assert_eq!(
-            find(&d, &strkey(0xAA), &EventAsset::Native).unwrap().delta,
+            find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -100
         );
     }
@@ -377,6 +512,122 @@ mod tests {
             LedgerEntryChange::State(trustline_entry(0xAA, pool_share.clone(), 100)),
             LedgerEntryChange::Updated(trustline_entry(0xAA, pool_share, 250)),
         ]);
+        assert!(classic_balance_deltas(&meta).is_empty());
+    }
+
+    // ---- ContractData Soroban balances (task 0393 ledger redesign) --------
+    // Synthetic coverage of `contract_data_balance` / `sac_balance_struct_amount`
+    // / `balance_key_holder`. (A real-mainnet decode also lives in
+    // `tests/net_settled_ledger_contractdata.rs`, gated on a captured fixture.)
+
+    fn contract_addr(b: u8) -> stellar_xdr::ScAddress {
+        stellar_xdr::ScAddress::Contract(stellar_xdr::ContractId(Hash([b; 32])))
+    }
+
+    fn i128_scval(v: i128) -> ScVal {
+        ScVal::I128(stellar_xdr::Int128Parts {
+            hi: (v >> 64) as i64,
+            lo: v as u64,
+        })
+    }
+
+    /// A SAC `BalanceValue` struct value: `Map{ amount, authorized, clawback }`.
+    fn sac_balance_struct(amount: i128) -> ScVal {
+        use stellar_xdr::{ScMap, ScMapEntry, ScSymbol};
+        let entry = |k: &[u8], val: ScVal| ScMapEntry {
+            key: ScVal::Symbol(ScSymbol::try_from(k.to_vec()).unwrap()),
+            val,
+        };
+        ScVal::Map(Some(
+            ScMap::try_from(vec![
+                entry(b"amount", i128_scval(amount)),
+                entry(b"authorized", ScVal::Bool(true)),
+                entry(b"clawback", ScVal::Bool(false)),
+            ])
+            .unwrap(),
+        ))
+    }
+
+    /// A `ContractData` `Balance(Address)` entry for `holder` under token/SAC
+    /// contract `token`, carrying `val`.
+    fn contract_data_balance_entry(token: u8, holder: u8, val: ScVal) -> LedgerEntry {
+        use stellar_xdr::{ContractDataDurability, ContractDataEntry, ScSymbol, ScVec};
+        let key = ScVal::Vec(Some(
+            ScVec::try_from(vec![
+                ScVal::Symbol(ScSymbol::try_from(b"Balance".to_vec()).unwrap()),
+                ScVal::Address(contract_addr(holder)),
+            ])
+            .unwrap(),
+        ));
+        LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::ContractData(ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: contract_addr(token),
+                key,
+                durability: ContractDataDurability::Persistent,
+                val,
+            }),
+            ext: LedgerEntryExt::V0,
+        }
+    }
+
+    #[test]
+    fn sac_contract_held_balance_telescopes_to_signed_delta() {
+        // A contract's SAC balance 1000 -> 250: it SENT 750 → SacWrapped delta -750.
+        let meta = meta_with_op_changes(vec![
+            LedgerEntryChange::State(contract_data_balance_entry(
+                0x0A,
+                0x0B,
+                sac_balance_struct(1000),
+            )),
+            LedgerEntryChange::Updated(contract_data_balance_entry(
+                0x0A,
+                0x0B,
+                sac_balance_struct(250),
+            )),
+        ]);
+        let d = classic_balance_deltas(&meta);
+        let sac: Vec<_> = d
+            .iter()
+            .filter(|x| matches!(x.asset, LedgerAsset::SacWrapped(_)))
+            .collect();
+        assert_eq!(sac.len(), 1, "one SAC delta, got {d:?}");
+        assert_eq!(sac[0].delta, -750);
+    }
+
+    #[test]
+    fn bespoke_token_bare_i128_balance_telescopes_to_signed_delta() {
+        // A bespoke token balance 500 -> 800: it RECEIVED 300 → Bespoke delta +300.
+        let meta = meta_with_op_changes(vec![
+            LedgerEntryChange::State(contract_data_balance_entry(0x1A, 0x1B, i128_scval(500))),
+            LedgerEntryChange::Updated(contract_data_balance_entry(0x1A, 0x1B, i128_scval(800))),
+        ]);
+        let d = classic_balance_deltas(&meta);
+        let tok: Vec<_> = d
+            .iter()
+            .filter(|x| matches!(x.asset, LedgerAsset::Bespoke(_)))
+            .collect();
+        assert_eq!(tok.len(), 1, "one bespoke delta, got {d:?}");
+        assert_eq!(tok[0].delta, 300);
+    }
+
+    #[test]
+    fn contract_data_non_balance_key_is_ignored() {
+        // A ContractData entry whose key is not `Balance(Address)` carries no balance.
+        use stellar_xdr::{ContractDataDurability, ContractDataEntry, ScSymbol};
+        let entry = LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::ContractData(ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: contract_addr(0x2A),
+                key: ScVal::Symbol(ScSymbol::try_from(b"Admin".to_vec()).unwrap()),
+                durability: ContractDataDurability::Persistent,
+                val: i128_scval(999),
+            }),
+            ext: LedgerEntryExt::V0,
+        };
+        let meta = meta_with_op_changes(vec![LedgerEntryChange::State(entry)]);
         assert!(classic_balance_deltas(&meta).is_empty());
     }
 }
