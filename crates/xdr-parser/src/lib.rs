@@ -7,7 +7,6 @@
 
 pub mod asset_appearances;
 pub mod asset_code;
-pub mod classic_value;
 pub mod classification;
 pub mod contract;
 pub mod error;
@@ -16,6 +15,7 @@ pub mod event_filters;
 pub mod invocation;
 pub mod ledger;
 pub mod ledger_entry_changes;
+pub mod ledger_value;
 pub mod memo;
 pub mod meta;
 pub mod net_settled;
@@ -33,7 +33,6 @@ pub mod types;
 pub mod envelope;
 mod xdr_limits;
 
-pub use classic_value::{ClassicDelta, LedgerAsset, classic_balance_deltas};
 pub use classification::{ContractClassification, classify_contract_from_wasm_spec};
 pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;
@@ -43,6 +42,7 @@ pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_even
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
+pub use ledger_value::{LedgerAsset, LedgerDelta, ledger_balance_deltas};
 pub use net_settled::{Movement, NetSettled, net_settled};
 pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;

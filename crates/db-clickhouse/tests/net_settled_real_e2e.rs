@@ -1,5 +1,5 @@
 //! E2E on real mainnet data (task 0393): run the PRODUCTION resolver
-//! `classic_deltas_net_settled` with a real `sac_classic` registry over an AMM-swap
+//! `ledger_deltas_net_settled` with a real `sac_classic` registry over an AMM-swap
 //! meta, proving that the contract-held SAC legs (`SacWrapped`) MERGE with the
 //! account-side legs onto ONE `asset_id` each — the net-as-one property Horizon's
 //! protocol-23 contract-effects showed, now proven through our actual production
@@ -13,9 +13,9 @@ use std::collections::HashMap;
 
 use base64::Engine;
 use db_clickhouse::persist::ids;
-use db_clickhouse::persist::stage::classic_deltas_net_settled;
+use db_clickhouse::persist::stage::ledger_deltas_net_settled;
 use stellar_xdr::{Limits, ReadXdr, TransactionMeta};
-use xdr_parser::classic_balance_deltas;
+use xdr_parser::ledger_balance_deltas;
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -35,7 +35,7 @@ fn amm_swap_sac_and_account_legs_merge_to_one_asset_through_prod_resolver() {
         .decode(b64.trim())
         .expect("base64");
     let meta = TransactionMeta::from_xdr(bytes, Limits::none()).expect("decode meta");
-    let deltas = classic_balance_deltas(&meta);
+    let deltas = ledger_balance_deltas(&meta);
     // The reader emits 4 legs: account Native + Credit(USDC), contract SacWrapped(XLM),
     // SacWrapped(USDC). (Cross-checked 1:1 vs Horizon + stellar CLI.)
     assert_eq!(deltas.len(), 4, "expected the 4 swap legs, got {deltas:#?}");
@@ -51,7 +51,7 @@ fn amm_swap_sac_and_account_legs_merge_to_one_asset_through_prod_resolver() {
     .into_iter()
     .collect();
 
-    let ns = classic_deltas_net_settled(&deltas, &sac_classic);
+    let ns = ledger_deltas_net_settled(&deltas, &sac_classic);
     let by: HashMap<i64, Option<i128>> = ns.iter().map(|n| (n.asset_id, n.amount)).collect();
 
     // The 4 legs collapse to EXACTLY 2 assets: SacWrapped(XLM) + account Native → one

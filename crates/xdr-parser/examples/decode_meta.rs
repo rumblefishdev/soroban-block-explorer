@@ -1,13 +1,13 @@
 //! Dev harness (task 0393 cross-validation): decode a base64 `TransactionMeta`
 //! and print OUR ledger-value output — per-(account, asset) signed deltas from
-//! `classic_balance_deltas`, and `net_settled = max(Σ+, Σ−)` per asset. Compared
+//! `ledger_balance_deltas`, and `net_settled = max(Σ+, Σ−)` per asset. Compared
 //! by hand against Horizon `/effects` (independent decode) + stellar.expert.
 //!
 //! Usage: cargo run -q -p xdr-parser --example decode_meta -- <base64-meta>
 use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet};
 use stellar_xdr::{Limits, ReadXdr, TransactionMeta};
-use xdr_parser::classic_balance_deltas;
+use xdr_parser::ledger_balance_deltas;
 
 fn main() {
     let b64 = std::env::args()
@@ -17,7 +17,7 @@ fn main() {
         .decode(b64.trim())
         .expect("base64");
     let meta = TransactionMeta::from_xdr(bytes, Limits::none()).expect("decode meta");
-    let deltas = classic_balance_deltas(&meta);
+    let deltas = ledger_balance_deltas(&meta);
 
     println!("# per (account, asset) signed delta (raw stroops):");
     for d in &deltas {
@@ -25,7 +25,7 @@ fn main() {
     }
 
     // net_settled = max(Σ+, Σ−) per asset over the per-account net deltas
-    // (classic_balance_deltas already telescopes per account, so this is exactly
+    // (ledger_balance_deltas already telescopes per account, so this is exactly
     // the reducer's definition).
     let mut pos: BTreeMap<String, i128> = BTreeMap::new();
     let mut neg: BTreeMap<String, i128> = BTreeMap::new();

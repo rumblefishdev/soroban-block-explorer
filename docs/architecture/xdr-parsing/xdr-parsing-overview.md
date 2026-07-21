@@ -397,7 +397,7 @@ figure is ever needed, `cycle volume = gross − net` falls out of the theorem.
 
 A single **ledger** reader feeds it, for EVERY tx (classic and Soroban):
 
-- `xdr_parser::classic_balance_deltas` (`classic_value.rs`) reads the before→after
+- `xdr_parser::ledger_balance_deltas` (`ledger_value.rs`) reads the before→after
   balance changes on `AccountEntry` / `TrustLineEntry` / `ContractData` from
   `TransactionMeta` (via the version-safe `meta.rs` change accessor). Every value
   flow — payment, path payment, offer/DEX fill, LP deposit/withdraw,

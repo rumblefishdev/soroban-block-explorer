@@ -3,27 +3,27 @@
 //! output was cross-checked **1:1 against Horizon `/effects`** — including the
 //! protocol-23 `contract_debited` / `contract_credited` effects, which Horizon
 //! resolves SAC→native/USDC exactly like our `sac_classic` — on 2026-07-20. This
-//! pins `classic_balance_deltas` against the values an independent implementation
+//! pins `ledger_balance_deltas` against the values an independent implementation
 //! produced, on real data, across Native / Credit / SacWrapped / Bespoke.
 //!
 //! Gated on fixture presence (RPC retention is ~1 week; the fixtures persist).
 
 use base64::Engine;
 use stellar_xdr::{Limits, ReadXdr, TransactionMeta};
-use xdr_parser::{ClassicDelta, LedgerAsset, classic_balance_deltas};
+use xdr_parser::{LedgerAsset, LedgerDelta, ledger_balance_deltas};
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/corpus/");
 const USDC_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 const XLM_SAC: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 const USDC_SAC: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
 
-fn deltas(fixture: &str) -> Option<Vec<ClassicDelta>> {
+fn deltas(fixture: &str) -> Option<Vec<LedgerDelta>> {
     let b64 = std::fs::read_to_string(format!("{DIR}{fixture}.b64")).ok()?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.trim())
         .expect("base64");
     let meta = TransactionMeta::from_xdr(bytes, Limits::none()).expect("decode meta");
-    Some(classic_balance_deltas(&meta))
+    Some(ledger_balance_deltas(&meta))
 }
 
 fn credit(code: &str, issuer: &str) -> LedgerAsset {
@@ -34,7 +34,7 @@ fn credit(code: &str, issuer: &str) -> LedgerAsset {
 }
 
 /// Assert exactly one `(account, asset, delta)` is present.
-fn assert_has(ds: &[ClassicDelta], account: &str, asset: &LedgerAsset, delta: i128) {
+fn assert_has(ds: &[LedgerDelta], account: &str, asset: &LedgerAsset, delta: i128) {
     let n = ds
         .iter()
         .filter(|d| d.account == account && &d.asset == asset && d.delta == delta)

@@ -19,9 +19,9 @@ history:
 
 ## Summary
 
-`classic_balance_deltas` reads value only from `AccountEntry` (native) and
+`ledger_balance_deltas` reads value only from `AccountEntry` (native) and
 `TrustLineEntry` (credit) — every other entry type returns `None`
-(`entry_balance`, `classic_value.rs:116-130`). The net-settled formula rests on
+(`entry_balance`, `ledger_value.rs:116-130`). The net-settled formula rests on
 "at least one leg is an Account/Trustline." That holds for ordinary transfers,
 but breaks when a credit asset's **issuer** is a party (issuers have no trustline
 — they mint/burn implicitly) **and** the counterparty is a non-account entry the

@@ -426,7 +426,7 @@ fn synthetic_tx(hash_seed: u8) -> ExtractedTransaction {
         memo: None,
         created_at: 1_700_000_000,
         parse_error: false,
-        classic_deltas: vec![],
+        ledger_deltas: vec![],
     }
 }
 

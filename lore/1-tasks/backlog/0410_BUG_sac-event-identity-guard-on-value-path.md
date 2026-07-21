@@ -24,7 +24,7 @@ history:
   - date: 2026-07-20
     status: backlog
     who: karolkow
-    note: 'Deep review: the deterministic guard already exists in sac.rs (derive_sac_contract_id + sac_override_from_event_topics, unit-proven, used by the NFT path). Scope is WIRING not build. Added hybrid (classic_balance_deltas for account-side legs) + net_id mismatch alarm.'
+    note: 'Deep review: the deterministic guard already exists in sac.rs (derive_sac_contract_id + sac_override_from_event_topics, unit-proven, used by the NFT path). Scope is WIRING not build. Added hybrid (ledger_balance_deltas for account-side legs) + net_id mismatch alarm.'
 ---
 
 # BUG: SAC event-identity guard on value path — verify emitter == asset SAC (full H2 fix)
@@ -92,7 +92,7 @@ Complementary — **hybrid with classic ledger deltas** (0393 deep review):
 
 - For `has_soroban = 1` txs the account-side legs of a SAC classic transfer are
   already present as authoritative, **unspoofable** `AccountEntry`/`TrustLineEntry`
-  deltas (`classic_balance_deltas`), which `stage.rs` currently **computes then
+  deltas (`ledger_balance_deltas`), which `stage.rs` currently **computes then
   discards**. Prefer these for account-side SAC value (no trust gate needed); the
   SAC-address guard still covers the contract-side (`C…`) legs and bespoke tokens
   that the delta path structurally cannot see (`ContractData` → `entry_balance`
@@ -123,7 +123,7 @@ Safety:
 - [x] Value and presence paths resolve the same SAC identity (no drift) — the
       value attaches on `ids::credit_asset_id(code, issuer)` / `NATIVE_ASSET_ID`,
       the exact keys `event_asset_surrogate` / the op path already use.
-- [ ] ~~Account-side SAC legs cross-checked against `classic_balance_deltas`
+- [ ] ~~Account-side SAC legs cross-checked against `ledger_balance_deltas`
       (hybrid)~~ — **DEFERRED / not needed:** the guard values both account-side and
       contract-side SAC legs from the (crypto-verified) events, so the delta hybrid
       is redundant for correctness. Kept as an optional authoritative cross-check.

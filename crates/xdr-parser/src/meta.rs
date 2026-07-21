@@ -2,7 +2,7 @@
 //!
 //! Projects the ledger entry changes out of a `TransactionMeta`, whatever its
 //! version. Two consumers: [`contract`](crate::contract), which scans them for
-//! deployed WASM, and [`classic_value`](crate::classic_value), which telescopes
+//! deployed WASM, and [`ledger_value`](crate::ledger_value), which telescopes
 //! the before/after balance images into a transaction's net-settled value.
 //!
 //! ## Why a module for one function

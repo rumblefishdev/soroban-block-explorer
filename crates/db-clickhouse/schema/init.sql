@@ -641,8 +641,8 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- asset's `decimals` at read, like balances/total_supply) — the figure
 -- `max(Σ positive account deltas, Σ negative account deltas)` over the tx's
 -- transfers, computed one-shot per (tx, asset) in Rust from the AUTHORITATIVE
--- LEDGER balance changes (`persist::stage::classic_deltas_net_settled` +
--- `xdr_parser::classic_balance_deltas` + `xdr_parser::net_settled`) — account,
+-- LEDGER balance changes (`persist::stage::ledger_deltas_net_settled` +
+-- `xdr_parser::ledger_balance_deltas` + `xdr_parser::net_settled`) — account,
 -- trustline, and ContractData balances; NEVER from token events (logs). It is the
 -- network-flow FLOW VALUE: by the flow decomposition theorem a flow splits into
 -- source→sink paths plus cycles, and a cycle contributes exactly zero — so a

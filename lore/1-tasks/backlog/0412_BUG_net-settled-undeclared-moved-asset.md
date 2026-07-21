@@ -32,7 +32,7 @@ history:
 
 The net-settled value is attached only to the `operation_asset_appearances`
 presence rows an **operation body declared** (`op.asset_appearances`). The value,
-however, is keyed independently by whatever `classic_balance_deltas` actually
+however, is keyed independently by whatever `ledger_balance_deltas` actually
 moved. If an asset has a real net delta but appears in **no** op's declared
 asset set, no presence row is emitted and the computed value is silently dropped.
 

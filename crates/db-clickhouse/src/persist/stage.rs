@@ -53,8 +53,8 @@ use xdr_parser::types::{
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
-use xdr_parser::{ClassicDelta, Movement, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
+use xdr_parser::{LedgerDelta, Movement, NetSettled};
 
 use xdr_parser::event::extract_executable_update_new_wasm_hash;
 
@@ -465,7 +465,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ContractData balance changes consensus actually applied — for EVERY tx,
     // classic or Soroban. Token EVENTS are contract-emitted LOGS (any contract can
     // emit any `"transfer"` it likes), so they are NEVER trusted for value; a
-    // ledger balance cannot be forged. `classic_deltas` carries the per-(holder,
+    // ledger balance cannot be forged. `ledger_deltas` carries the per-(holder,
     // asset) balance deltas: native (`AccountEntry`), classic credit
     // (`TrustLineEntry`), SAC contract-held (`ContractData` `Balance` struct), and
     // bespoke token balances (`ContractData` `Balance` bare i128). `sac_classic`
@@ -509,7 +509,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
 
     let mut amount_by_tx_asset: HashMap<(String, i64), Option<i128>> = HashMap::new();
     for tx in transactions {
-        for ns in classic_deltas_net_settled(&tx.classic_deltas, sac_map) {
+        for ns in ledger_deltas_net_settled(&tx.ledger_deltas, sac_map) {
             amount_by_tx_asset.insert((tx.hash.clone(), ns.asset_id), ns.amount);
         }
     }
@@ -2213,7 +2213,7 @@ pub fn derive_token_event(
 /// per-(holder, asset) ledger balance deltas. Each delta becomes a one-sided
 /// [`Movement`] and `net_settled` reduces to `max(Σ+, Σ−)` per asset.
 ///
-/// The deltas come from `xdr_parser::classic_balance_deltas` over the tx's
+/// The deltas come from `xdr_parser::ledger_balance_deltas` over the tx's
 /// `TransactionMeta` and cover EVERY value flow uniformly from the ledger —
 /// native, classic credit, SAC contract-held balances, and bespoke token balances
 /// — because all settle as `AccountEntry` / `TrustLineEntry` / `ContractData`
@@ -2225,8 +2225,8 @@ pub fn derive_token_event(
 /// surrogate) onto the wrapped classic/native `asset_id` — the same surrogate the
 /// account-side trustline leg resolves to, so a mixed account↔contract transfer
 /// nets as ONE asset, not two.
-pub fn classic_deltas_net_settled(
-    deltas: &[ClassicDelta],
+pub fn ledger_deltas_net_settled(
+    deltas: &[LedgerDelta],
     sac_classic: &HashMap<i64, i64>,
 ) -> Vec<NetSettled> {
     let movements: Vec<Movement> = deltas
@@ -2269,28 +2269,28 @@ pub fn classic_deltas_net_settled(
 }
 
 #[cfg(test)]
-mod classic_deltas_net_settled_tests {
+mod ledger_deltas_net_settled_tests {
     use super::*;
 
     /// Reduce with an empty SAC registry — these tests use native/credit deltas
     /// only, which don't need it. The SAC-registry path is covered separately.
-    fn reduce(deltas: &[ClassicDelta]) -> Vec<NetSettled> {
-        classic_deltas_net_settled(deltas, &HashMap::new())
+    fn reduce(deltas: &[LedgerDelta]) -> Vec<NetSettled> {
+        ledger_deltas_net_settled(deltas, &HashMap::new())
     }
 
     const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
     const G_A: &str = "GBLVLKGRDU66WLWY4XRORJXCC4LDZ347AQTUYBEPBABIZTVITW2OAGIP";
     const G_B: &str = "GADKLS7RS3OC2MXGEZXQA46JNF3FBVSTHTWLDPRF7TWI6GXVP4OUE3ZR";
 
-    fn native(account: &str, delta: i128) -> ClassicDelta {
-        ClassicDelta {
+    fn native(account: &str, delta: i128) -> LedgerDelta {
+        LedgerDelta {
             account: account.to_string(),
             asset: LedgerAsset::Native,
             delta,
         }
     }
-    fn credit(account: &str, delta: i128) -> ClassicDelta {
-        ClassicDelta {
+    fn credit(account: &str, delta: i128) -> LedgerDelta {
+        LedgerDelta {
             account: account.to_string(),
             asset: LedgerAsset::Credit {
                 code: "USDC".to_string(),
@@ -2362,12 +2362,12 @@ mod classic_deltas_net_settled_tests {
         let sac_classic: HashMap<i64, i64> =
             [(ids::contract_id(sac_strkey), usdc)].into_iter().collect();
 
-        let contract_leg = ClassicDelta {
+        let contract_leg = LedgerDelta {
             account: "CONTRACT_HOLDER".to_string(),
             asset: LedgerAsset::SacWrapped(sac_strkey.to_string()),
             delta: -100,
         };
-        let r = classic_deltas_net_settled(&[contract_leg, credit(G_B, 100)], &sac_classic);
+        let r = ledger_deltas_net_settled(&[contract_leg, credit(G_B, 100)], &sac_classic);
         assert_eq!(r.len(), 1, "must net as ONE asset, not double-count: {r:?}");
         assert_eq!((r[0].asset_id, r[0].amount), (usdc, Some(100)));
     }
@@ -2375,12 +2375,12 @@ mod classic_deltas_net_settled_tests {
     #[test]
     fn bespoke_contract_token_resolves_to_its_own_surrogate() {
         let token = "CBQFOPGGSP4VCDFXJ4YEPCQNLN6EFRC4M7OOLQOEEY7H4VPF6N4WEE2N";
-        let d = ClassicDelta {
+        let d = LedgerDelta {
             account: "HOLDER".to_string(),
             asset: LedgerAsset::Bespoke(token.to_string()),
             delta: -50,
         };
-        let r = classic_deltas_net_settled(&[d], &HashMap::new());
+        let r = ledger_deltas_net_settled(&[d], &HashMap::new());
         assert_eq!(r.len(), 1);
         assert_eq!(
             (r[0].asset_id, r[0].amount),

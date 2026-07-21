@@ -65,10 +65,10 @@ pub enum LedgerAsset {
 
 /// A net balance change for one account on one asset within a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClassicDelta {
+pub struct LedgerDelta {
     /// Account G-StrKey.
     pub account: String,
-    /// The moved asset. `classic_balance_deltas` yields `Native` / `Credit` (from
+    /// The moved asset. `ledger_balance_deltas` yields `Native` / `Credit` (from
     /// `AccountEntry` / `TrustLineEntry` changes) and `SacWrapped` / `Bespoke` (from
     /// `ContractData` balance changes); the caller resolves each to a surrogate.
     /// Never `Contract` — that identity comes only from an event, and the ledger
@@ -80,7 +80,7 @@ pub struct ClassicDelta {
 
 /// Per-(account, asset) net classic balance delta for a transaction. Only
 /// non-zero deltas are returned, ordered by (account, asset) for determinism.
-pub fn classic_balance_deltas(meta: &TransactionMeta) -> Vec<ClassicDelta> {
+pub fn ledger_balance_deltas(meta: &TransactionMeta) -> Vec<LedgerDelta> {
     // Runs for EVERY tx (classic AND Soroban): the ledger is the authoritative,
     // unspoofable source of value for native/classic/SAC, whether moved by a
     // classic op (Account/Trustline changes) or a Soroban invocation (which also
@@ -109,7 +109,7 @@ pub fn classic_balance_deltas(meta: &TransactionMeta) -> Vec<ClassicDelta> {
             // the delta (no value) on overflow rather than lying. (Native/classic
             // balances are i64-wide and cannot overflow here.)
             let delta = b.last.checked_sub(b.initial.unwrap_or(0))?;
-            (delta != 0).then_some(ClassicDelta {
+            (delta != 0).then_some(LedgerDelta {
                 account,
                 asset,
                 delta,
@@ -367,10 +367,10 @@ mod tests {
     }
 
     fn find<'a>(
-        d: &'a [ClassicDelta],
+        d: &'a [LedgerDelta],
         account: &str,
         asset: &LedgerAsset,
-    ) -> Option<&'a ClassicDelta> {
+    ) -> Option<&'a LedgerDelta> {
         d.iter().find(|x| x.account == account && &x.asset == asset)
     }
 
@@ -390,7 +390,7 @@ mod tests {
             LedgerEntryChange::State(account_entry(0xBB, 500)),
             LedgerEntryChange::Updated(account_entry(0xBB, 600)),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         assert_eq!(
             find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -100
@@ -409,7 +409,7 @@ mod tests {
             LedgerEntryChange::Updated(account_entry(0xAA, 700)),
             LedgerEntryChange::Created(account_entry(0xCC, 300)),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         assert_eq!(
             find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -300
@@ -426,7 +426,7 @@ mod tests {
             LedgerEntryChange::State(trustline_entry(0xAA, usdc_asset(0x11), 1000)),
             LedgerEntryChange::Updated(trustline_entry(0xAA, usdc_asset(0x11), 850)),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         assert_eq!(find(&d, &strkey(0xAA), &usdc_credit()).unwrap().delta, -150);
     }
 
@@ -440,7 +440,7 @@ mod tests {
                 asset: usdc_asset(0x11),
             })),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         assert_eq!(find(&d, &strkey(0xAA), &usdc_credit()).unwrap().delta, -100);
     }
 
@@ -451,7 +451,7 @@ mod tests {
             LedgerEntryChange::State(account_entry(0xAA, 1000)),
             LedgerEntryChange::Updated(account_entry(0xAA, 1000)),
         ]);
-        assert!(classic_balance_deltas(&meta).is_empty());
+        assert!(ledger_balance_deltas(&meta).is_empty());
     }
 
     #[test]
@@ -472,7 +472,7 @@ mod tests {
             LedgerEntryChange::State(account_entry(0xAA, 900)),
             LedgerEntryChange::Updated(account_entry(0xAA, 850)),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         assert_eq!(d.len(), 1, "one row per (account, asset), got {d:?}");
         assert_eq!(
             find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
@@ -488,7 +488,7 @@ mod tests {
         let alone =
             meta_with_op_changes(vec![LedgerEntryChange::Restored(account_entry(0xAA, 1000))]);
         assert!(
-            classic_balance_deltas(&alone).is_empty(),
+            ledger_balance_deltas(&alone).is_empty(),
             "a bare restore moves nothing"
         );
 
@@ -496,7 +496,7 @@ mod tests {
             LedgerEntryChange::Restored(account_entry(0xAA, 1000)),
             LedgerEntryChange::Updated(account_entry(0xAA, 900)),
         ]);
-        let d = classic_balance_deltas(&then_spent);
+        let d = ledger_balance_deltas(&then_spent);
         assert_eq!(
             find(&d, &strkey(0xAA), &LedgerAsset::Native).unwrap().delta,
             -100
@@ -512,7 +512,7 @@ mod tests {
             LedgerEntryChange::State(trustline_entry(0xAA, pool_share.clone(), 100)),
             LedgerEntryChange::Updated(trustline_entry(0xAA, pool_share, 250)),
         ]);
-        assert!(classic_balance_deltas(&meta).is_empty());
+        assert!(ledger_balance_deltas(&meta).is_empty());
     }
 
     // ---- ContractData Soroban balances (task 0393 ledger redesign) --------
@@ -587,7 +587,7 @@ mod tests {
                 sac_balance_struct(250),
             )),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         let sac: Vec<_> = d
             .iter()
             .filter(|x| matches!(x.asset, LedgerAsset::SacWrapped(_)))
@@ -603,7 +603,7 @@ mod tests {
             LedgerEntryChange::State(contract_data_balance_entry(0x1A, 0x1B, i128_scval(500))),
             LedgerEntryChange::Updated(contract_data_balance_entry(0x1A, 0x1B, i128_scval(800))),
         ]);
-        let d = classic_balance_deltas(&meta);
+        let d = ledger_balance_deltas(&meta);
         let tok: Vec<_> = d
             .iter()
             .filter(|x| matches!(x.asset, LedgerAsset::Bespoke(_)))
@@ -628,6 +628,6 @@ mod tests {
             ext: LedgerEntryExt::V0,
         };
         let meta = meta_with_op_changes(vec![LedgerEntryChange::State(entry)]);
-        assert!(classic_balance_deltas(&meta).is_empty());
+        assert!(ledger_balance_deltas(&meta).is_empty());
     }
 }
