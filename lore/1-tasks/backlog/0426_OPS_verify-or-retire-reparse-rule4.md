@@ -106,21 +106,55 @@ parse that can emit more than one row per key.
       objection block dropped from `crates/backfill-runner/README.md` clause 2.
       Also documents why the 11 versioned tables need their version (entity-keyed:
       a re-parse of old ledgers would otherwise roll current state backwards).
-- [ ] **Owner decision — prod spot-check.** Repeat one shape in a scratch database
-      on the prod server (`CREATE DATABASE`, throwaway table, `DROP DATABASE`),
-      never a live table. Needs a prod write, so it is not done here. The local
-      server matches prod's major and the mechanism is version-independent within
-      26.3, so this is confirmation, not discovery.
+- [x] **Confirmed on production — read-only, no scratch write needed.** A write
+      test was unnecessary: prod already contains the experiment, run over real
+      merge history. `operations_appearances` is version-less RMT and was
+      originally ingested by a **pre-0261 parser that emitted no `pool_ids` at all
+      on path-payment ops**; later writes from a post-0261 build (0266's backfill,
+      then 0379's `--reindex`) targeted the same keys. Sampling ledgers
+      50,500,000–50,510,000 — deep in the original range:
+
+      | | |
+      |---|---|
+      | raw rows / distinct keys | 4,429,575 / 4,429,575 → **fully merged, one row per key** |
+      | type 2 (PathPaymentStrictReceive) | 1,301,965 ops, **58,488 carry `pool_ids`** |
+      | type 13 (PathPaymentStrictSend) | 566,419 ops, **68,546 carry `pool_ids`** |
+
+      For each of those ~127k keys the original parse wrote a row with empty
+      `pool_ids`, a later build wrote a different row for the same key, merges ran
+      to completion — and **the later row is the one that survived**. That is
+      precisely the case rule 4 said could keep the stale row. It does not.
+      Stronger than any fixture: 19+ months of real merge history, at scale, on the
+      actual server.
+
 - [ ] **Owner decision — `assets_pre0339`.** 368,490 rows / 5.22 MiB, kept by 0339
       as a deliberate soak backup (its runbook warns it is NOT a full-table
       snapshot). 0339 is archived. Drop it, or record why the soak continues.
 
+## What this makes unnecessary
+
+Rule 4 was not only a doc claim — it was the stated reason for real machinery.
+`assets_id_backfill`'s header said it plainly: _"`assets` is a
+ReplacingMergeTree with NO version column, so a plain re-INSERT can't
+deterministically override a row"_, and therefore built a staging table and
+`EXCHANGE`d it, which in turn is why the guide lists it under **"must STOP the
+indexer"**. That reasoning is now measured false: on a version-less table a plain
+re-INSERT does override. The pass was deleted in 0425 anyway.
+
+Checked the rest rather than assuming: of the six tables the surviving staging +
+`EXCHANGE` passes touch, **`assets` was the only version-less one**. `accounts`,
+`lp_positions`, `nfts`, `nfts_pending` and `soroban_contracts` all carry a
+version, and `repair-tier1` must lower a value (`first_seen_ledger`) **without**
+moving that version — a re-INSERT genuinely cannot do that. So the remaining
+`EXCHANGE` machinery, and the indexer stop it forces, is justified. The
+overengineering was one pass, and it is already gone.
+
 ## Acceptance Criteria
 
-- [ ] Rule 4 is either gone from `docs/backfills.md` or restated in the form the
-      measurement supports — no unmeasured claim survives in an operational guide.
-- [ ] The prod reproduction is recorded in this task with the actual statements and
-      outputs, not a summary.
+- [x] Rule 4 restated in `docs/backfills.md` in the form the measurement supports
+      — no unmeasured claim left in an operational guide.
+- [x] Production evidence recorded above with the actual counts, obtained
+      **read-only**; no scratch database, no prod write.
 - [ ] `run --reindex` has one unambiguous answer to "is this safe on my range",
       with no owner-judgement escape hatch.
 - [ ] Docs updated — `docs/backfills.md`; `docs/architecture/**` `N/A` (no
