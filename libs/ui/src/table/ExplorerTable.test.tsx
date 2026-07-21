@@ -97,17 +97,17 @@ describe('ExplorerTable', () => {
   });
 
   // lore-0420: a ReplacingMergeTree read without deduplication handed the table
-  // rows whose `rowKey` collided. React could not match old nodes to new ones
-  // and left orphans behind, so re-sorting APPENDED rows without bound. The
-  // backend fix is the real one; this guarantees a data bug can never again
-  // escalate into an unbounded rendering bug.
-  it('renders every row even when rowKey collides across rows', () => {
+  // rows whose `rowKey` collided. React could not match old nodes to new ones and
+  // left orphans behind, so re-sorting APPENDED rows without bound. Rendering one
+  // row per key removes the collision before React ever sees it.
+  it('renders one row per key when rowKey collides across rows', () => {
     const duplicated: Row[] = [
       { id: 'dup', hash: '0xaaa', ledger: 100 },
       { id: 'dup', hash: '0xbbb', ledger: 100 },
       { id: 'dup', hash: '0xccc', ledger: 100 },
     ];
 
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { rerender } = render(
       withTheme(
         <ExplorerTable
@@ -120,10 +120,19 @@ describe('ExplorerTable', () => {
 
     const bodyRows = () =>
       within(screen.getByRole('table')).getAllByRole('row').length - 1;
-    expect(bodyRows()).toBe(3);
 
-    // Re-render with a different colliding page — the previous rows must be
-    // REPLACED, never accumulated (the original bug: 20 → 30 → 40 rows).
+    // First occurrence survives, the rest are dropped.
+    expect(bodyRows()).toBe(1);
+    expect(screen.getByText('0xaaa')).toBeInTheDocument();
+    expect(screen.queryByText('0xbbb')).not.toBeInTheDocument();
+
+    // Dropping rows hides a backend fault, so it must not be silent.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('duplicate rowKey')
+    );
+
+    // Re-render with a different colliding page: rows must be REPLACED, never
+    // accumulated (the original bug went 20 -> 30 -> 40).
     rerender(
       withTheme(
         <ExplorerTable
@@ -136,7 +145,23 @@ describe('ExplorerTable', () => {
         />
       )
     );
-    expect(bodyRows()).toBe(2);
+    expect(bodyRows()).toBe(1);
+    expect(screen.getByText('0xddd')).toBeInTheDocument();
     expect(screen.queryByText('0xaaa')).not.toBeInTheDocument();
+    warn.mockRestore();
+  });
+
+  it('leaves a table with unique keys untouched', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    render(
+      withTheme(
+        <ExplorerTable columns={COLUMNS} rows={ROWS} rowKey={(r) => r.id} />
+      )
+    );
+    expect(
+      within(screen.getByRole('table')).getAllByRole('row').length - 1
+    ).toBe(ROWS.length);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
