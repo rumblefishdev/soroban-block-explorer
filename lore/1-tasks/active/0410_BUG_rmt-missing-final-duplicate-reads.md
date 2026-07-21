@@ -12,6 +12,19 @@ history:
     status: active
     who: karolkow
     note: 'Task created from Ledgers-list sort/pagination bug report; audited every API SQL query for the same RMT-missing-FINAL class (7 parallel auditors, prod-verified via chq). AUDIT ONLY — full fix set (F0,F3-F10) drafted + each prod-verified, then set aside in git stash@{0} per operator request (no implementation now). Nothing applied to the working tree.'
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      All 10 fixes (F0-F10) implemented on
+      claude/ledgers-sorting-pagination-bug-6358ce; cargo check clean, 212 api
+      unit tests pass, API-types gate green. Not committed. F1/F2 decision
+      REVERSED after operator correction: "KPIs self-correct once data is
+      deduped" was wrong — RMT regenerates duplicates continuously, so
+      system.tables.total_rows is structurally inflated (measured drift
+      +3%/+6.6% -> +4.3%/+11.6% within one session). Now counted from
+      already-deduplicated sources (accounts_recent / soroban_contracts FINAL)
+      at ~zero read cost. S1 downgraded from correctness fix to cost/hygiene.
 ---
 
 # RMT reads without dedup: ledgers-list doubling + 9 same-class bugs
@@ -30,21 +43,21 @@ append").
 
 A sweep of **every SQL query in `crates/api`** found the same "RMT read without
 deduplication" class in **9 more places** — 5 more firing in prod today, 4
-latent (confirmed defects currently shielded from the UI). This task tracks the
-already-applied ledgers fix plus the remaining fixes.
+latent (confirmed defects currently shielded from the UI). This task tracks all
+10 fixes (F0–F10, implemented and prod-verified, pending commit) plus the S1
+data-hygiene subtask.
 
-## Status: Active — AUDIT ONLY (no code applied)
+## Status: Active — fixes implemented, not yet committed
 
-**Current state:** This task is the **audit**. No implementation is in the
-working tree. The full fix set (F0 ledgers + F3–F10) was drafted and each fix
-**verified viable against prod ClickHouse**, then set aside per operator request
-to keep this a task-spawn only — the diff lives in `git stash@{0}`
-(message `lore-0410: RMT dedup fixes …`); `git stash show -p stash@{0}` to
-review, `git stash pop` to re-apply. Findings + verified fix patterns are
-recorded below so the work can be re-applied or re-derived later.
+**Current state:** All **10 fixes (F0–F10) are implemented** on branch
+`claude/ledgers-sorting-pagination-bug-6358ce` (7 files under `crates/api`,
+~150 insertions). Each fix is verified against prod ClickHouse; `cargo check`
+clean, **212 api unit tests pass**, and the `API types freshness` gate is green
+(SQL-string-only changes ⇒ no `openapi.json` / generated diff). **Not committed
+yet.**
 
-Decisions already taken: fix scope = all 10 (when implemented); F1/F2 KPIs = no
-code change (resolve via the S1 data dedup, not a polled scan).
+Remaining open item: subtask **S1** (prod data dedup) — operator-gated, not
+started.
 
 ## Context
 
@@ -75,16 +88,23 @@ All confirmed against prod via `chq`. Severity = user impact today.
 ### Originally reported
 
 - **F0 — Ledgers list** — `ledgers/queries.rs` `fetch_list` — `FROM ledgers l`
-  → `FROM ledgers l FINAL`. Doubled rows + infinite-append. Fix drafted +
-  verified, in `git stash@{0}`; **not applied.**
+  → `FROM ledgers l FINAL`. Doubled rows + infinite-append. **Fixed.**
 
 ### Confirmed live (wrong output in prod now)
 
-- **F1 — Total accounts KPI** — `network/queries.rs:~60` — reads
-  `system.tables.total_rows` for `accounts` = raw part rows incl. dupes; shows
-  ~14.77M vs real ~14.34M (~3% high). `total_rows` cannot take FINAL.
-- **F2 — Total contracts KPI** — `network/queries.rs:~63` — same via
-  `soroban_contracts`; ~138k vs ~130k (~6.6% high).
+- **F1 — Total accounts KPI** — `network/queries.rs` — read
+  `system.tables.total_rows` for `accounts` = raw part rows incl. dupes.
+  **Fixed** → `count() FROM accounts_recent` (see Design Decisions #2).
+  Measured 14,975,304 shown vs 14,354,378 real (**+4.3%**).
+- **F2 — Total contracts KPI** — `network/queries.rs` — same via
+  `soroban_contracts`. **Fixed** → `count() FROM soroban_contracts FINAL`
+  (affordable: ~146k rows, not 14M). Measured 145,979 shown vs 130,817 real
+  (**+11.6%**).
+
+  Note the drift: F1/F2 were first measured at +3% / +6.6% and re-measured a few
+  hours later at +4.3% / +11.6%. The inflation **grows continuously** — see
+  Design Decisions #2.
+
 - **F3 — Contract `recent_invocations` (list + detail)** —
   `contracts/queries.rs:~251` and `~528` — `sia FINAL INNER JOIN ledgers l`
   inside `count()`; ledgers side not deduped → count inflated ~1.5×
@@ -144,32 +164,33 @@ sequence)`.
 2. **`FINAL` on the read (preferred for row-level list reads):** e.g. the F0
    ledgers-list fix. Cheap on a key-filtered `LIMIT` page.
 
-- **F1/F2 (KPIs):** decision needed — keep the cheap-but-inflated `total_rows`
-  estimate, or switch to `count() … FINAL` / `countDistinct(key)` (accurate,
-  more expensive on a polled endpoint). See Design Decisions.
+3. **Count from an already-deduplicated source (for the KPIs, F1/F2):** never
+   `system.tables.total_rows` — it is the physical part-row count. Prefer a
+   source that is dedup-by-construction and cheap to count (see Design
+   Decisions #2 for the option matrix).
+
 - **F8:** add `LIMIT 1` to the latest-ledger sub-select (cheap, do regardless);
   dedup the TPS window sum.
 
 ## Acceptance Criteria
 
-Fix approach for each is **drafted + prod-verified** (evidence in parens) but
-**NOT applied** — the diff is in `git stash@{0}`. Checkboxes flip to `[x]` when
-the fix actually lands in the tree.
+All implemented and prod-verified (evidence in parens); **not yet committed**.
 
-- [ ] F0 ledgers-list `FROM ledgers l FINAL` (verified: 20 distinct vs
-      10-doubled without). **The originally-reported bug — still unfixed in tree.**
-- [x] F1/F2 KPI approach decided — **no code change.** `total_rows` estimate
-      stays; a polled `count() FINAL` scan every ~5s is the wrong trade. KPIs
-      self-correct once the RMT data is deduped → subtask S1.
-- [ ] F3/F4 contract invocation + event counts (semi-join; verified 1.42M
-      deduped, SQL runs, stats_sql regression tests pass).
-- [ ] F5 LP chart ledgers join (`LIMIT 1 BY sequence`; verified 1403 vs 2806).
-- [ ] F6 asset-search `soroban_contracts` join (page + `sc` CTE, mirrors
-      `search_nfts`; verified executes).
-- [ ] F7 LP list `l_snap` (`GROUP BY sequence`; verified 5 rows vs 10).
-- [ ] F8 latest-ledger `LIMIT 1` + TPS `LIMIT 1 BY sequence` (verified, tps 62.4).
-- [ ] F9 defensive `ledgers … FINAL` on tx-detail ops + invocations joins.
-- [ ] F10 explicit `soroban_contracts sc FINAL` on account-balances join.
+- [x] F0 ledgers-list `FROM ledgers l FINAL` (20 distinct vs 10-doubled without).
+- [x] F1 total-accounts → `count() FROM accounts_recent` (14,354,378 vs
+      14,975,304 inflated; matches `accounts FINAL` ±1).
+- [x] F2 total-contracts → `count() FROM soroban_contracts FINAL` (130,817 vs
+      145,979 inflated).
+- [x] F3/F4 contract invocation + event counts (semi-join; 1.42M deduped, SQL
+      runs, stats_sql regression tests pass).
+- [x] F5 LP chart ledgers join (`LIMIT 1 BY sequence`; 1403 vs 2806).
+- [x] F6 asset-search `soroban_contracts` join (page + `sc` CTE, mirrors
+      `search_nfts`; executes).
+- [x] F7 LP list `l_snap` (`GROUP BY sequence`; 5 rows vs 10).
+- [x] F8 latest-ledger `LIMIT 1` + TPS `LIMIT 1 BY sequence` (executes).
+- [x] F9 defensive `ledgers … FINAL` on tx-detail ops + invocations joins.
+- [x] F10 explicit `soroban_contracts sc FINAL` on account-balances join.
+- [x] Build + tests: `cargo check -p api` clean, 212 api unit tests pass.
 - [ ] Frontend: consider a defensive unique `rowKey` guard so future RMT dupes
       cannot re-trigger the React key-collision append (defense-in-depth).
 - [ ] **Docs updated** — `N/A` — no change to system shape (schema/endpoints/
@@ -182,21 +203,67 @@ the fix actually lands in the tree.
 
 ### S1 — OPS: dedup the RMT data in prod (blocked on operator go)
 
-The code fixes above make every read correct regardless of merge state. This
-subtask fixes the **underlying data** so the tables stop carrying ~2× physical
-rows (storage + scan cost), and makes the F1/F2 KPI `total_rows` estimate
-accurate again for free.
+The code fixes above make every read correct regardless of merge state, so this
+subtask is **no longer needed for correctness** — it is a cost/hygiene job:
+shrink the ~2× physical rows (disk + every scan pays for them) and find out why
+merges fall so far behind.
+
+Explicitly NOT a fix for F1/F2 — see Design Decisions #2. Duplicates always
+regenerate, so no data pass can make a physical row count correct.
 
 - [ ] `OPTIMIZE TABLE … FINAL` (or targeted dedup) on `ledgers`, `assets`,
       `accounts`, `soroban_contracts` (and audit the other RMT tables).
 - [ ] Investigate WHY merges are ~98% behind on `ledgers` (merge settings /
       part explosion / re-ingest pattern) — a one-off OPTIMIZE without a root
       fix will just re-accumulate.
-- [ ] Re-check F1/F2 KPIs read correct once deduped.
 
 **Consent-gated CH write** — do NOT execute without explicit per-action operator
 go (memory: no prod CH writes without consent). Needs the indexer-stopped /
 `EXCHANGE TABLES` considerations from `docs/backfills.md`.
+
+## Design Decisions
+
+### From Plan
+
+1. **Dedup on read, not on data.** Every fix makes the QUERY correct rather than
+   relying on the table being merged. RMT dedup is a background best-effort
+   merge, so a query that needs merged data to be right is a query that is
+   sometimes wrong.
+
+### Emerged
+
+2. **F1/F2 KPIs: reversed an earlier wrong decision.** Initially recorded as
+   "no code change — the KPIs self-correct once the data is deduped (S1)".
+   **That was wrong**, caught by the operator: the indexer writes continuously,
+   so RMT _always_ carries freshly-unmerged duplicates. `system.tables.total_rows`
+   is the physical part-row count, so it is _structurally_ inflated — a one-off
+   `OPTIMIZE` shrinks the error briefly and it grows straight back. Confirmed
+   empirically within one session: +3%/+6.6% → +4.3%/+11.6%. The counts must
+   dedup at READ time.
+
+   The original objection (an accurate count means scanning 14M rows on a polled
+   endpoint) turned out to be avoidable. Options considered:
+
+   | Option                                            | Read cost         | Accuracy                        | Verdict                                                    |
+   | ------------------------------------------------- | ----------------- | ------------------------------- | ---------------------------------------------------------- |
+   | `total_rows` (was)                                | zero              | structurally inflated, drifting | rejected — the bug                                         |
+   | **`accounts_recent` / `soroban_contracts FINAL`** | ~zero / low       | exact (≤2 min stale)            | **chosen**                                                 |
+   | `count() FROM accounts FINAL` each poll           | high (merges 14M) | exact                           | rejected — quota burn                                      |
+   | exact count on its own long cache                 | medium            | exact                           | viable fallback if the MV dependency ever hurts            |
+   | `uniq(id)` HyperLogLog                            | medium            | approximate                     | rejected — trades known bias for random error, still scans |
+   | own counter table (AggregatingMergeTree)          | zero              | exact                           | rejected — most infra, drift risk                          |
+
+   Chosen: `accounts` counts from `accounts_recent`, the refreshable-MV copy
+   already deduped to one row per account (plain MergeTree ⇒ `count()` is a
+   metadata read). It refreshes every 2 min (~6 s), so staleness is bounded and
+   irrelevant for a headline total, and it is the same source the `/accounts`
+   list pages — so the KPI and the list now agree by construction. `contracts`
+   uses `FINAL` because that table is ~146k rows, not 14M.
+
+   Known ceilings: the accounts KPI now depends on `accounts_recent_mv` staying
+   healthy (shared fate with the accounts list, so not a new single point of
+   failure), and `soroban_contracts FINAL` gets more expensive as that table
+   grows — revisit with the long-cache option if either bites.
 
 ## Notes
 
