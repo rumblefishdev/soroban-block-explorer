@@ -36,7 +36,7 @@ history:
       it and 61.7% of recent transaction senders carry `sequence_number = 0` as a
       result. All eight state-table builders were audited — `accounts` is the only
       broken one.
-      Note for whoever picks this up: an ADR was written on the finding-9 material
+      Note for whoever picks this up: an ADR was written on the finding-12 material
       and then **deleted the same day**, on the owner's call, precisely because this
       task says "no ADR should be written before [the open questions] are
       [measured]". That instinct was right and the ADR was premature. This task
@@ -175,23 +175,23 @@ key`, or FINAL. It changes the per-column semantics; it does not change whose
 Three findings arrived from the other direction — auditing the **write** path
 rather than the engine — and they land squarely on this task's split.
 
-9. **Version-less RMT keeps the last row INSERTED, not an arbitrary one** (high —
-   measured, then confirmed on prod). This is the immutable half, and it retires
-   `docs/backfills.md` rule 4, which claimed a re-parse with a different parser
-   build could keep the stale row and therefore made `run --reindex` look unusable.
-   Measured on a CH 26.3.17.4 **server** with background merges live: 40 unmerged
-   old parts plus a 4-way concurrent re-parse read through `FINAL` → new value
-   wins, zero survivors; background merges with no `OPTIMIZE` → new value wins;
-   already-collapsed data re-parsed → new value wins; partial re-parse → the
-   untouched keys correctly keep their old value. Confirmed **read-only on prod**:
-   `operations_appearances` was first ingested by a pre-0261 parser emitting no
-   `pool_ids`; in ledgers 50,500,000–50,510,000 the range is fully merged
-   (4,429,575 rows = 4,429,575 distinct keys) and 127k path-payment ops carry
-   `pool_ids`, so the later write beat the original one at scale. The real hazard
-   is narrower and belongs to the parser: **two rows for one key inside a single
-   insert**, where "last" is emission order (0356, pool reserves).
+12. **Version-less RMT keeps the last row INSERTED, not an arbitrary one** (high —
+    measured, then confirmed on prod). This is the immutable half, and it retires
+    `docs/backfills.md` rule 4, which claimed a re-parse with a different parser
+    build could keep the stale row and therefore made `run --reindex` look unusable.
+    Measured on a CH 26.3.17.4 **server** with background merges live: 40 unmerged
+    old parts plus a 4-way concurrent re-parse read through `FINAL` → new value
+    wins, zero survivors; background merges with no `OPTIMIZE` → new value wins;
+    already-collapsed data re-parsed → new value wins; partial re-parse → the
+    untouched keys correctly keep their old value. Confirmed **read-only on prod**:
+    `operations_appearances` was first ingested by a pre-0261 parser emitting no
+    `pool_ids`; in ledgers 50,500,000–50,510,000 the range is fully merged
+    (4,429,575 rows = 4,429,575 distinct keys) and 127k path-payment ops carry
+    `pool_ids`, so the later write beat the original one at scale. The real hazard
+    is narrower and belongs to the parser: **two rows for one key inside a single
+    insert**, where "last" is emission order (0356, pool reserves).
 
-10. **A defaulted whole-row write is safe only if it carries the LOWEST version**
+13. **A defaulted whole-row write is safe only if it carries the LOWEST version**
     (high — the writer-side counterpart to finding 5). `SimpleAggregateFunction`
     fixes per-column merge semantics, but nothing protects a table whose writer
     emits placeholder values on a path that also bumps the version.
@@ -200,10 +200,10 @@ rather than the engine — and they land squarely on this task's split.
     of which column happens to be the version**, not by design. `accounts` breaks
     the rule: its version is `last_seen_ledger`, bumped by the very write that
     empties the row, so the emptied row wins. Version-less tables are exposed by
-    construction, since there the last write always wins (finding 9).
+    construction, since there the last write always wins (finding 12).
 
-11. **The blast radius is one builder** (high — audited, not assumed). All eight
-    state-table row builders were checked against finding 10: `AccountRow` is the
+14. **The blast radius is one builder** (high — audited, not assumed). All eight
+    state-table row builders were checked against finding 13: `AccountRow` is the
     only broken one. `BalanceRow` (2 sites) carries a real amount on both paths;
     `AssetRow` writes NULL only into columns that are DEAD by design (0293/0310);
     `NftRow`, `LpPositionRow`, `LiquidityPoolRow` and `WasmInterfaceMetadataRow`
