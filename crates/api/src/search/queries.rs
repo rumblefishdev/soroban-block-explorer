@@ -626,6 +626,20 @@ async fn search_assets(
     // Step 1: page matching assets. `assets` is small (state table); `FINAL`
     // collapses re-ingested versions. `q` is bound (3×: the substring needle and
     // the two case-folded native-token comparisons).
+    //
+    // The `soroban_contracts` side of the join is collapsed to one row per `id`
+    // (`GROUP BY id` + `any(contract_id)`) — NOT joined bare. It is a
+    // ReplacingMergeTree with unmerged duplicate ids (some ×6), so a bare join
+    // fans each matching asset out 2–6× into identical hits and burns the
+    // `per_group_limit` budget. `contract_id` (C-StrKey) is immutable across
+    // versions, so `any()` is exact.
+    //
+    // Grouping the WHOLE (small, ~146k-row) table beats scoping it to the page:
+    // a page-scoped `IN (SELECT … FROM page)` needs the `page` CTE, and CH does
+    // not materialise CTEs — it would evaluate the asset scan twice. Measured
+    // (lore-0420): page-scoped CTE 1,896,766 rows / 37.8 MiB, this form
+    // 1,118,154 rows / 28.5 MiB — cheaper even than the un-deduped original
+    // (1,151,738 / 32.0 MiB).
     let sql = format!(
         "SELECT \
             a.asset_type AS asset_type, \
@@ -633,7 +647,10 @@ async fn search_assets(
             nullIf(sc.contract_id, '') AS contract_strkey, \
             a.issuer_id AS issuer_id \
          FROM assets a FINAL \
-         LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+         LEFT JOIN ( \
+             SELECT id, any(contract_id) AS contract_id \
+             FROM soroban_contracts GROUP BY id \
+         ) sc ON sc.id = a.contract_id \
          WHERE (length(a.asset_code) > 0 \
                 AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
             OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
