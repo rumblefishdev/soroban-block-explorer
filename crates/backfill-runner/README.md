@@ -50,6 +50,94 @@ cargo run -p backfill-runner -- status --start 50457424 --end 50460000
 | `--keep-partitions` | off                      | Don't delete each partition's local folder after a successful index. Iteration / debug flag — see [Iteration](#iteration). |
 | `--verbose`/`-v`    | off                      | Enable per-ledger + per-partition info logs. Without it only warnings print during the run. |
 
+## Subcommands — the rule for one-off passes
+
+Beyond `run` / `status`, this crate hosts maintenance subcommands that operate on
+an already-ingested dataset. **Operating** them — which to run, in what order,
+indexer stopped or not — is [`docs/backfills.md`](../../docs/backfills.md). This
+section is the authoring rule: when a new one is allowed to exist, and when it
+must be deleted. Established by lore task 0425.
+
+A one-off pass fixes history that the live indexer already handles going forward.
+Five clauses, in order:
+
+1. **The signal must already be in ClickHouse.** If everything needed is in CH
+   (`soroban_events`, `operations_appearances`, an existing column), an in-DB
+   pass is legitimate — often just an `INSERT … SELECT`, no subcommand at all.
+
+2. **If the signal is only in XDR, there is no script — re-parse.** Do not write
+   a bespoke binary that re-reads S3 and cherry-picks rows to write. Re-parse the
+   range with `run --reindex`. A targeted-write re-parse is a third copy of the
+   ingest path, on top of the parser and the live writer: the removed
+   `metadata-backfill` (0304) and `pool-ids-backfill` (0266) each parsed **every
+   ledger in the range in full** and then discarded all but one table's rows,
+   carrying their own partition loop, watermark file and resume logic to do it.
+
+   > **Known blocker, not an exception.** Those two wrote to one table partly to
+   > dodge a real hazard: 12 tables carry no RMT version column
+   > (`liquidity_pool_snapshots`, `assets`, `transactions`, the 9 event-log
+   > tables), so re-parsing history with a *different parser build* lets ClickHouse
+   > keep either row arbitrarily — wrong data, not duplicates
+   > (`docs/backfills.md` rule 4). That makes `run --reindex` unsafe over ranges
+   > ingested by an older build. The answer is to fix the tables, not to license
+   > the workaround — lore 0426. Until it lands, a re-parse of older-build history
+   > is an owner decision, and the reason must be written into the task.
+
+3. **Reuse the live code path — never reimplement it.** Call the same function
+   the indexer calls. The removed passes that did (`nft-reparse` → the parser's
+   own `detect_nft_events`; `assets-id-backfill` → `ids::asset_id`, the same fn
+   as `AssetRow::staged`; `metadata-backfill` → the same `PartitionWriter`) never
+   drifted — that discipline is what made them safe to delete. The two that reimplemented their logic in SQL — `repair-tier1` and
+   `contract-type-rebuild` — are the ones the 0388 → 0392 → 0394 → 0404 bug
+   family circles. A hand-written column list or an inlined verdict rule is a
+   second copy of something the codebase already owns, and second copies drift
+   silently.
+
+4. **If it cannot be expressed as "replay live logic over old data", live has a
+   hole.** That is a finding, not an inconvenience: open a task on the write path
+   first, and the one-off becomes catch-up rather than recurring maintenance.
+   This clause is a detector — it is what sorted the table below.
+
+5. **Delete it once it has run.** Git keeps it. A spent one-shot left in `--help`
+   reads as an available tool. Move it to `.trash/` (`rm` is forbidden
+   repo-wide) and record the removal in the task.
+
+### What survives, and why
+
+| Command | Why it stays |
+|---|---|
+| `run`, `status` | the backfill itself |
+| `bootstrap` | RPC top-up for accounts the ingest window never observes — a step of `run`, not a one-off |
+| `balance-seed` | RPC snapshot of holders who have not transacted since the parser shipped. Live writes a balance only when it **observes** a `ContractData Balance(Address)` change, so this is not a hole in live logic — it is a state read live cannot express |
+| `repair-tier1` | ⚠ **recurring mop.** `ReplacingMergeTree` cannot express MIN, so the 6 Tier-1 columns re-drift under live ingest. Retire via lore 0232 / 0421 (`AggregatingMergeTree` + `SimpleAggregateFunction(min)`) |
+| `nft-reclassify` | ⚠ **recurring mop.** No continuous `pending → hot` promotion in live. Retire via lore 0392 |
+| `contract-type-rebuild` | ⚠ **partly covered.** Live has the G1 / G9 cross-ledger verdicts (`persist/stage.rs`); contracts the classifier cannot name still default to `Other`. Lore 0309 |
+
+The three marked ⚠ each fail clause 4 — which is exactly why they are still here.
+
+### Removed (lore 0425)
+
+Spent one-shots whose logic the live indexer now performs itself, each verified
+against the live write path before removal:
+
+| Removed | Live equivalent |
+|---|---|
+| `wasm-upgrade-backfill` (0320) | `build_wasm_upgrade_rows`, off the `executable_update` event |
+| `upgradeable-backfill` (0327) | parser writes `metadata.upgradeable` on every new WASM |
+| `nft-reparse` (0296) | fixed `detect_nft_events` in the parser |
+| `soroban-token-flow-backfill` (0383) | `stage.rs` registers token-event participants + SAC asset presence |
+| `pool-ids-backfill` (0266) | `pool_ids` + `gross_volume_a` computed live |
+| `assets-id-backfill` (0331) | `AssetRow::staged` computes `id` with the same Rust fn |
+| `metadata-backfill` (0304) | parser writes `soroban_contract_metadata` since 0297 |
+
+Live coverage was verified on prod before each removal, not assumed — e.g. at
+deletion time `soroban_contract_metadata` carried a write from 4 ledgers behind
+the chain tip, and `operations_appearances.pool_ids` from the tip itself. The
+shell wrappers that drove `pool-ids-backfill` (`scripts/0266/`) went with it.
+
+Recoverable from git history if a comparable pass is ever needed — but read
+clauses 1–4 first, because the answer is usually `run --reindex` or a live fix.
+
 ## Writes
 
 The runner writes to ClickHouse (ADR 0044); Postgres was retired (task

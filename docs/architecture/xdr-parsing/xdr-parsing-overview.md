@@ -621,9 +621,10 @@ task [0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flo
   tx-detail page decodes amounts from archive XDR at read time (E3, ADR 0029), so
   the flow parser only needs operands + asset (see indexing-pipeline overview §5.3).
 
-The decode is shared by live ingest and the `soroban-token-flow-backfill` one-shot
-pass via `db_clickhouse::persist::stage::derive_token_event`, so both emit
-byte-identical surrogate rows. NFT-shaped events (no SEP-11 asset string) still
+The decode lives in `db_clickhouse::persist::stage::derive_token_event`. The
+`soroban-token-flow-backfill` one-shot pass called that same fn so both emitted
+byte-identical surrogate rows; the pass was removed in lore 0425 once its history
+was closed, leaving live ingest as the only caller. NFT-shaped events (no SEP-11 asset string) still
 register their account operands as participants but are excluded from the fungible
 asset index — that identity is ambiguous and tracked separately by the NFT path
 above.

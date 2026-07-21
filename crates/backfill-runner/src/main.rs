@@ -4,7 +4,6 @@
 //! Sink:   ClickHouse (ADR 0044), via the `db_clickhouse::persist`
 //!         partition-writer lifecycle.
 
-mod assets_id_backfill;
 mod balance_seed;
 mod bootstrap;
 mod ch_staging;
@@ -13,18 +12,14 @@ mod dashboard;
 mod error;
 mod ingest;
 mod nft_reclassify;
-mod nft_reparse;
 mod partition;
 mod repair_tier1;
 mod rpc_snapshot;
 mod run;
 mod sink;
-mod soroban_token_flow_backfill;
 mod status;
 mod sync;
-mod upgradeable_backfill;
 mod util;
-mod wasm_upgrade_backfill;
 
 use std::path::{Path, PathBuf};
 
@@ -189,31 +184,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// One-shot backfill of `soroban_contracts.wasm_hash` for contracts that
-    /// upgraded their WASM (task 0320). Reads the latest `executable_update`
-    /// SYSTEM event per contract from `soroban_events` (already ingested — no
-    /// S3 re-parse), parses the new wasm hash, and overrides
-    /// `wasm_hash` + `wasm_uploaded_at_ledger` via staging + `EXCHANGE TABLES`.
-    /// `contract_type` is left as-is (class never net-changes on upgrade; the
-    /// rare flip is task 0325). Run with the indexer STOPPED. Idempotent.
-    /// `--dry-run` reports the would-be corrections without writing. CH-only.
-    WasmUpgradeBackfill {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Task 0327 — backfill the `upgradeable` mutability bit into
-    /// `wasm_interface_metadata.metadata` for WASMs ingested before 0327.
-    /// Fetches each WASM's current bytecode from Soroban RPC by `wasm_hash`,
-    /// runs the import-scan parser, and re-INSERTs the merged metadata row
-    /// (ReplacingMergeTree dedups). Requires `--soroban-rpc-url`. Idempotent
-    /// (only touches rows still missing the key). `--dry-run` reports without
-    /// writing. CH-only.
-    UpgradeableBackfill {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
     /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
     /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
     /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
@@ -225,18 +195,6 @@ enum Command {
     /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
     /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Task 0331 — one-shot backfill of `assets.id` (the `ids::asset_id` surrogate)
-    /// for rows written before the column existed (all `id = 0` after
-    /// `ALTER TABLE assets ADD COLUMN id`). Computes the id in Rust (CH `cityHash64`
-    /// differs, so it can't be done in SQL), builds a staging table, and
-    /// `EXCHANGE TABLES`-swaps it. Must run BEFORE the classic→`balances` migration
-    /// and the balance-seed (both join on `assets.id`), with the indexer STOPPED
-    /// (whole-table swap). Idempotent. `--dry-run` reports without swapping. CH-only.
-    AssetsIdBackfill {
         #[arg(long)]
         dry_run: bool,
     },
@@ -253,40 +211,6 @@ enum Command {
     /// Uses `ALTER TABLE … DELETE` with `mutations_sync = 1` followed
     /// by `OPTIMIZE FINAL` to collapse tombstones. CH-only.
     NftReclassify {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Re-parse `soroban_events` through the task-0296 NFT parser and write
-    /// recovered candidates to `nfts_pending` / `nft_ownership_pending`
-    /// (CH-direct — no raw-S3 re-ingest; the dropped events are already stored
-    /// decoded). Scans only the shapes the old parser missed (map / packed-vec
-    /// / consecutive_mint); Shape-A scalars are already in pending. Writes
-    /// PENDING only — run `contract-type-rebuild` + `nft-reclassify` after to
-    /// promote/drop. Idempotent (ReplacingMergeTree). CH-only.
-    NftReparse {
-        /// First ledger sequence (inclusive).
-        #[arg(long)]
-        start: u32,
-
-        /// Last ledger sequence (inclusive).
-        #[arg(long)]
-        end: u32,
-
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Task 0383 — backfill Soroban token-event flow (transfer/mint/burn/
-    /// clawback) into the presence indexes `transaction_participants` +
-    /// `operation_asset_appearances`, re-derived from already-ingested
-    /// `soroban_events` (decoded typed-JSON topics — no S3 re-parse). Registers
-    /// event `from`/`to` as account participants and SAC-wrapped classic/native
-    /// asset presence, using the same decode the live indexer runs so rows dedup
-    /// against live data. Runs the whole ingested history (range auto-detected).
-    /// Both targets are ReplacingMergeTree → idempotent, safe to re-run.
-    /// `--dry-run` counts without writing. CH-only.
-    SorobanTokenFlowBackfill {
         #[arg(long)]
         dry_run: bool,
     },
@@ -392,63 +316,6 @@ async fn main() {
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
-        Command::AssetsIdBackfill { dry_run } => {
-            let stats = assets_id_backfill::execute(&sink, dry_run).await.expect(
-                "assets_id_backfill failed — the pass is idempotent (staging + \
-                     EXCHANGE, deterministic id), safe to re-run",
-            );
-            println!(
-                "assets_id_backfill completed (dry_run={}): total_rows={} id_zero_before={} id_zero_after={}",
-                stats.dry_run, stats.total_rows, stats.id_zero_before, stats.id_zero_after,
-            );
-            if !stats.dry_run && stats.id_zero_after > 0 {
-                eprintln!(
-                    "assets_id_backfill: {} rows still have id=0 (a row escaped the map — likely a \
-                     concurrent indexer write) — STOP the indexer and re-run",
-                    stats.id_zero_after,
-                );
-                std::process::exit(1);
-            }
-        }
-        Command::WasmUpgradeBackfill { dry_run } => {
-            let stats = wasm_upgrade_backfill::execute(&sink, dry_run).await.expect(
-                "wasm_upgrade_backfill failed — the pass is idempotent, safe to re-run \
-                     (staging + EXCHANGE; re-run corrects nothing already-correct)",
-            );
-            println!(
-                "wasm_upgrade_backfill completed (dry_run={}): upgraded_contracts={} corrected={} unparseable={}",
-                stats.dry_run, stats.upgraded_contracts, stats.corrected, stats.unparseable,
-            );
-        }
-        Command::UpgradeableBackfill { dry_run } => {
-            // rpc_url is required by `execute`; pass it through.
-            let stats =
-                upgradeable_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
-                    .await
-                    .expect("upgradeable_backfill failed — idempotent, safe to re-run");
-            println!(
-                "upgradeable_backfill completed (dry_run={}): scanned={} resolved={} upgradeable={} frozen={} missing_on_rpc={} malformed_metadata={}",
-                stats.dry_run,
-                stats.scanned,
-                stats.resolved,
-                stats.upgradeable,
-                stats.frozen,
-                stats.missing_on_rpc,
-                stats.malformed_metadata,
-            );
-            // Unresolved in-use WASMs / skipped malformed rows are no longer a
-            // panic (task 0326 op decision): the resolved rows are already written
-            // and the summary above is the useful output. But they ARE a real
-            // anomaly the operator must chase, so a for-real run still exits
-            // non-zero (dry-run only previews, never signals failure).
-            if !stats.dry_run && (stats.missing_on_rpc > 0 || stats.malformed_metadata > 0) {
-                eprintln!(
-                    "upgradeable_backfill: {} unresolved + {} malformed left Unknown — re-run after fixing (idempotent)",
-                    stats.missing_on_rpc, stats.malformed_metadata,
-                );
-                std::process::exit(1);
-            }
-        }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse
             // target, then enforces `--soroban-rpc-url`, so just pass it through.
@@ -479,41 +346,6 @@ async fn main() {
                 stats.dropped_pending_ownership,
                 stats.dropped_legacy_nfts,
                 stats.dropped_legacy_ownership,
-            );
-        }
-        Command::NftReparse {
-            start,
-            end,
-            dry_run,
-        } => {
-            let stats = nft_reparse::execute(&sink, start, end, dry_run)
-                .await
-                .expect("nft_reparse failed — idempotent, safe to re-run by range");
-            let verb = if stats.dry_run {
-                "would recover"
-            } else {
-                "recovered"
-            };
-            println!(
-                "nft_reparse completed (dry_run={}): events_scanned={} {verb} nft_pending_rows={} ownership_pending_rows={}",
-                stats.dry_run,
-                stats.events_scanned,
-                stats.nft_pending_rows,
-                stats.ownership_pending_rows,
-            );
-        }
-        Command::SorobanTokenFlowBackfill { dry_run } => {
-            let stats = soroban_token_flow_backfill::execute(&sink, dry_run)
-                .await
-                .expect("soroban_token_flow_backfill failed — idempotent, safe to re-run");
-            let verb = if stats.dry_run {
-                "would write"
-            } else {
-                "wrote"
-            };
-            println!(
-                "soroban_token_flow_backfill completed (dry_run={}): events_scanned={} {verb} participant_rows={} asset_rows={}",
-                stats.dry_run, stats.events_scanned, stats.participant_rows, stats.asset_rows,
             );
         }
     }

@@ -127,13 +127,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`)                                    | No stop needed (RMT, idempotent)                                                                              |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `contract-type-rebuild`, `wasm-upgrade-backfill`, `assets-id-backfill`, **`repair-tier1`** | `run` (disjoint ranges), `balance-seed`, `soroban-token-flow-backfill`, `nft-reparse`, `upgradeable-backfill` |
-
-`assets-id-backfill` ships a **race detector**: if `id_zero_after > 0` it exits 1
-with "a row escaped the map — likely a concurrent indexer write — STOP the
-indexer and re-run".
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                          |
+| ------------------------------------------------------- | --------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify` |
 
 **Grey zone:**
 
@@ -266,10 +262,18 @@ Gotchas, all recorded:
 ## `backfill-runner` reference
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
-`contract-type-rebuild`, `wasm-upgrade-backfill`, `upgradeable-backfill`,
-`balance-seed`, `assets-id-backfill`, `nft-reclassify`, `nft-reparse`,
-`soroban-token-flow-backfill`. Most one-shot ops subcommands take `--dry-run`.
-Separate bins: `pool-ids-backfill` (0266), `metadata-backfill` (0304).
+`contract-type-rebuild`, `balance-seed`, `nft-reclassify`. Most one-shot ops
+subcommands take `--dry-run`. No separate bins remain.
+
+Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
+`upgradeable-backfill` (0327), `nft-reparse` (0296), `soroban-token-flow-backfill`
+(0383), `pool-ids-backfill` (0266) with its `scripts/0266/` wrappers,
+`assets-id-backfill` (0331), and `metadata-backfill` (0304) — because the live
+indexer now does each of them itself, verified on prod per command. Before writing a new one-shot, read the
+authoring rule in
+[`crates/backfill-runner/README.md`](../crates/backfill-runner/README.md#subcommands--the-rule-for-one-off-passes):
+if the signal is not already in ClickHouse, the answer is `run --reindex`, not a
+new binary.
 
 **Flags — with the traps:**
 

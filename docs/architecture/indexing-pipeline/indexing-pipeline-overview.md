@@ -421,18 +421,15 @@ regardless of indexer lag; live ingest supersedes it on catch-up
 (`ReplacingMergeTree` by `last_updated_ledger`). CH-only, idempotent, `--dry-run`
 supported.
 
-The **`soroban-token-flow-backfill`** one-shot pass (task
-[0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md))
-closes the historical gap for the event-driven presence rows described in §5.3:
-the live hook only writes them for new ledgers, and event-derived asset presence
-never existed for any verb. It scans `soroban_events` (the decoded typed-JSON
-`topics_xdr` — no S3 re-parse) in ledger windows, re-derives participant + asset
-rows with the SAME `derive_token_event` the live path uses (the surrogate hashing
-is `cityhash_102_128`, not CH SQL's `cityHash64()`, so the decode must run in
-Rust to stay bit-identical), and appends to `transaction_participants` +
-`operation_asset_appearances`. Because it only appends into `ReplacingMergeTree`
-(no `EXCHANGE`), it is safe to run **with the indexer live** — any overlap dedups
-on merge. `--start` / `--end` scope the range; `--dry-run` counts without writing.
+The historical gap for these event-driven presence rows — the live hook only
+writes them for new ledgers, and event-derived asset presence never existed for
+any verb — was closed by the **`soroban-token-flow-backfill`** one-shot pass (task
+[0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)),
+run on prod 2026-07-16 and **removed in lore 0425**. It re-derived participant +
+asset rows from `soroban_events` with the SAME `derive_token_event` the live path
+uses (the surrogate hashing is `cityhash_102_128`, not CH SQL's `cityHash64()`, so
+the decode must run in Rust to stay bit-identical). History is closed; live ingest
+is now the only writer of these rows.
 
 ### 6.3 Backfill Scope and Execution Model
 
