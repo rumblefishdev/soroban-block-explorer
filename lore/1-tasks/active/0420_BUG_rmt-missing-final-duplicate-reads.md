@@ -92,8 +92,9 @@ After a `/devils-advocate` pass the F0 and F6 fixes were **reworked** — both
 were correct but more expensive than the code they replaced (see Measured cost).
 Post-rework **no fix costs more than the code it replaces; two cost less.**
 
-Open items: four carried concerns (see Open concerns). S1 is closed — it was an
-investigation, and it split into 0421 / 0422 / 0423.
+**All code for this task is complete.** Remaining open item is a single carried
+concern (MV refresh monitoring); the other three either landed here or became
+0421 / 0422 / 0423. S1 is closed — it was an investigation.
 
 ## Measured cost (rows read per call, prod)
 
@@ -277,16 +278,22 @@ All implemented and prod-verified (evidence in parens); **not yet committed**.
 - [x] Regression tests for the F0 dedup (`dedup_tests`): a full page collapses
       2–3× duplicates and stays full; an under-filled page never emits a
       duplicate.
-- [ ] Regression tests for F1–F10 — only F0 is covered. The rest were verified
-      by hand against prod, which is not repeatable (the duplicate band already
-      shifted mid-session and F3 stopped differing).
-- [ ] Frontend: defensive unique `rowKey` so future RMT dupes cannot re-trigger
-      the React key-collision append (defense-in-depth) — see Open concerns.
-- [ ] **Docs updated** — `N/A` — no change to system shape (schema/endpoints/
+- [x] Frontend: collision-proof `rowKey`, applied centrally in `ExplorerTable`
+      (only a duplicate gets a suffix, so the normal case keeps its stable key
+      and normal reconciliation) + component test reproducing the original
+      symptom — rows must be REPLACED, never accumulated. Covers every table at
+      once, not just ledgers.
+- [x] Regression tests — **delegated to 0423.** The F0 Rust dedup and the
+      `ExplorerTable` key guard are unit/component tested here because they are
+      real logic. The remaining fixes are declarative SQL: a useful test must
+      seed duplicate rows and assert behaviour, which needs the `db-clickhouse`
+      e2e harness rather than assertions on SQL strings (an assertion that
+      "`FINAL` is present" would have passed the 19×-too-expensive F0 attempt).
+- [x] **Docs updated** — `N/A` — no change to system shape (schema/endpoints/
       pipeline unchanged; SQL-internal dedup only).
-- [ ] **API types regenerated** — `N/A` expected — fixes are SQL-internal, no
-      DTO/route/openapi change; confirm `check-generated` stays green before
-      commit since paths under `crates/api/**` are touched.
+- [x] **API types regenerated** — `N/A` confirmed — fixes are SQL-internal, no
+      DTO/route/openapi change; `check-generated` verified green on the current
+      base with `crates/api/**` touched.
 
 ## Open concerns (from the `/devils-advocate` pass)
 
@@ -306,14 +313,14 @@ unmeasured rewrites → measured, which is what caught F6). The rest are carried
    list reads **1,349,927 rows to return 20** because of part fragmentation.
    For `ledgers` this is genuinely fixable once (0422); for `accounts` it is
    not, and must not be attempted.
-3. **Frontend row key is still `sequence`** (Medium). Backend correctness is the
-   only thing standing between us and the original runaway-append symptom. A
-   collision-proof key is a few characters.
-4. **`first_seen_ledger` does not mean what it says** (Medium). Found by
-   accident: 7,875 accounts claim a `first_seen_ledger` inside the last 21
-   ledgers while the deduped total grows by tens per minute — the column is
-   evidently rewritten on activity. Anything computing account age / cohorts /
-   "new accounts" off it is wrong. **Separate task, not this one.**
+3. ~~**Frontend row key is still `sequence`**~~ — **DONE.** Fixed centrally in
+   `ExplorerTable`: a duplicate key gets a suffix, everything else keeps its
+   stable key. Component-tested against the original symptom.
+4. ~~**`first_seen_ledger` does not mean what it says**~~ — **spawned as 0421**,
+   with the root cause located to `persist/stage.rs:636` and a recommended
+   AggregatingMergeTree design. Not fixable here: 97.7% of accounts have already
+   lost the true value, so a read-time `min()` would repair 2.3% and silently
+   leave the rest wrong.
 
 ## Subtasks
 
