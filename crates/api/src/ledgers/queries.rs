@@ -201,6 +201,28 @@ pub async fn fetch_list(
     // identical page in primary-key read-in-order — a handful of rows per page.
     // `sequence` is unique, so it needs no tie-break. The cursor still carries
     // `closed_at` for the wire `ts`, but the keyset no longer reads it.
+    //
+    // Dedup: `ledgers` is a ReplacingMergeTree and ~12.8M sequences carry 2
+    // content-identical rows (22 carry 3) in unmerged parts. Un-deduped, the
+    // keyset page returns each sequence twice — doubled rows, and (because the
+    // frontend keys table rows by `sequence`) duplicate React keys that break
+    // reconciliation and pile up orphaned rows on every re-sort.
+    //
+    // Deduped by OVER-FETCH + consecutive collapse in Rust, NOT `FINAL` and NOT
+    // `LIMIT 1 BY` — both defeat `optimize_read_in_order` on this seek. Measured
+    // on the polled first page (lore-0420):
+    //
+    //   over-fetch (this)   1,349,927 rows    82 MiB    45 ms
+    //   LIMIT 1 BY          4,463,222 rows   272 MiB   105 ms
+    //   FINAL              25,964,595 rows  1.55 GiB   370 ms   ← whole table
+    //
+    // Over-fetching costs NOTHING here: the read is granule-bound, so `LIMIT 60`
+    // and `LIMIT 20` read the identical 1,349,927 rows. Same approach-B pattern
+    // as `assets::dedup_consecutive` (task 0364).
+    //
+    // Correct because `ORDER BY sequence` IS the primary key, so a sequence's
+    // physical versions are contiguous, and the projected columns are identical
+    // across them — "keep first" is deterministic.
     let sql = format!(
         "SELECT \
             l.sequence, \
@@ -219,11 +241,56 @@ pub async fn fetch_list(
         .query(&sql)
         .bind(cursor_sequence)
         .bind(cursor_sequence)
-        .bind(limit)
+        .bind(limit * LEDGER_OVERFETCH)
         .fetch_all::<LedgerListRow>()
         .await?;
 
-    Ok(rows.into_iter().map(Into::into).collect())
+    Ok(dedup_consecutive(rows, limit as usize)
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+/// Over-fetch factor for [`fetch_list`]. Prod carries at most 3 physical rows
+/// per `sequence` (12.8M carry 2, 22 carry 3), so ×3 fills a full page even in
+/// the worst observed case. Free: the read is granule-bound, so a wider `LIMIT`
+/// reads the same rows (see the note in `fetch_list`). If duplication ever
+/// exceeds ×3 the page merely comes back short — the keyset cursor still
+/// advances off the last row, so pagination stays correct, never looping.
+const LEDGER_OVERFETCH: i64 = 3;
+
+/// Collapse consecutive same-`sequence` rows from the over-fetched page and
+/// truncate to `limit`.
+///
+/// **Requires `raw` to be ordered by `sequence`** — it only compares against the
+/// previous row, so non-adjacent duplicates pass through (see
+/// `unsorted_input_is_not_deduplicated`, which pins that contract).
+///
+/// Two separate guarantees back this, easy to conflate:
+/// - duplicates are ADJACENT because the query says `ORDER BY sequence`;
+/// - the read is CHEAP because `sequence` is the primary key, so ClickHouse
+///   serves it read-in-order.
+///
+/// The primary key buys the cost, not the adjacency. The ordering itself cannot
+/// quietly disappear: this page is keyset-paginated, so the next cursor is taken
+/// from the LAST row — drop the `ORDER BY` and pagination breaks loudly (wrong
+/// cursor, skipped pages) long before deduplication does. That is why a
+/// `HashSet` would be the wrong trade here: it would keep collapsing duplicates
+/// on unordered input and mask a page that is already broken.
+///
+/// "Keep first" is deterministic because a duplicate pair is byte-identical in
+/// the projected columns.
+fn dedup_consecutive(raw: Vec<LedgerListRow>, limit: usize) -> Vec<LedgerListRow> {
+    let mut out: Vec<LedgerListRow> = Vec::with_capacity(limit.min(raw.len()));
+    for r in raw {
+        if out.last().is_none_or(|p| p.sequence != r.sequence) {
+            out.push(r);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    out
 }
 
 pub async fn fetch_by_sequence(
@@ -323,4 +390,78 @@ pub async fn fetch_transactions(
             r.into_ledger_tx_row(agg, source_account)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::{LedgerListRow, dedup_consecutive};
+
+    fn row(sequence: i64) -> LedgerListRow {
+        LedgerListRow {
+            sequence,
+            hash: format!("h{sequence}"),
+            closed_at: sequence * 1000,
+            protocol_version: 27,
+            transaction_count: 1,
+            base_fee: 100,
+        }
+    }
+
+    /// The lore-0420 bug: the RMT hands back each sequence 2–3× and the page
+    /// rendered them all, which also collided the frontend's `sequence` row key.
+    /// A full page must come back as DISTINCT sequences in the original order.
+    #[test]
+    fn collapses_duplicate_sequences_and_fills_the_page() {
+        // Desc page as the RMT physically returns it: every sequence doubled,
+        // one tripled — over-fetched at ×3 (limit 4 → 12 raw rows).
+        let raw = [100, 100, 99, 99, 98, 98, 98, 97, 97, 96, 96, 95]
+            .into_iter()
+            .map(row)
+            .collect();
+
+        let out = dedup_consecutive(raw, 4);
+
+        assert_eq!(
+            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
+            vec![100, 99, 98, 97],
+            "duplicates must collapse and the page must still be full"
+        );
+    }
+
+    /// Under-fill is survivable: a short page is fine, but it must never emit a
+    /// duplicate (that is what broke React reconciliation).
+    #[test]
+    fn never_emits_duplicates_even_when_underfilled() {
+        let raw = [50, 50, 50, 49, 49, 49].into_iter().map(row).collect();
+
+        let out = dedup_consecutive(raw, 4);
+
+        assert_eq!(
+            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
+            vec![50, 49]
+        );
+    }
+
+    /// Pins the precondition rather than hiding it: this collapses ADJACENT
+    /// duplicates only, so unordered input passes duplicates straight through.
+    ///
+    /// That is deliberate. Ordering is not an incidental detail of this page —
+    /// the keyset cursor is read off the last row, so losing `ORDER BY sequence`
+    /// corrupts pagination itself. A set-based dedup would keep this test green
+    /// while the page silently returned rows in the wrong order under a wrong
+    /// cursor; failing here is the cheaper outcome.
+    #[test]
+    fn unsorted_input_is_not_deduplicated() {
+        // Same three sequences as the sorted case, interleaved.
+        let raw = [100, 99, 100, 99, 98, 98].into_iter().map(row).collect();
+
+        let out = dedup_consecutive(raw, 6);
+
+        assert_eq!(
+            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
+            vec![100, 99, 100, 99, 98],
+            "only the adjacent 98/98 pair collapses — the interleaved duplicates \
+             survive, because ordering is the caller's contract"
+        );
+    }
 }

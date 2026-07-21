@@ -404,7 +404,11 @@ pub async fn fetch_balances(
                 b.last_updated_ledger         AS last_updated_ledger \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
-             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+             /* sc FINAL: soroban_contracts is a ReplacingMergeTree with unmerged \
+                duplicate ids; without FINAL this join could double balance legs. \
+                It was previously dedup'd only incidentally by the adjacent \
+                `assets a FINAL` — made explicit here. lore-0420 */ \
+             LEFT JOIN soroban_contracts sc FINAL ON sc.id = a.contract_id \
              LEFT JOIN ( \
                  SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
              ) m ON m.contract_id = sc.contract_id \

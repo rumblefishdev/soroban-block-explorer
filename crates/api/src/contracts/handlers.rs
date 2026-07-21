@@ -24,7 +24,7 @@ use super::dto::{
 };
 use super::queries::{
     self, ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
-    ResolvedContractsListParams, STATS_WINDOW,
+    ResolvedContractsListParams,
 };
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ pub async fn get_contract(
         }
     };
 
-    let stats = match fetch_stats_for_source(&state, contract.id, STATS_WINDOW).await {
+    let stats = match fetch_stats_for_source(&state, contract.id).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!("DB error fetching stats for {contract_id}: {e}");
@@ -452,9 +452,8 @@ async fn fetch_contract_for_source(
 async fn fetch_stats_for_source(
     state: &AppState,
     contract_surrogate_id: i64,
-    window: &str,
 ) -> Result<ContractStats, clickhouse::error::Error> {
-    queries::fetch_contract_stats(&state.ch(), contract_surrogate_id, window).await
+    queries::fetch_contract_stats(&state.ch(), contract_surrogate_id).await
 }
 
 async fn fetch_interface_for_source(

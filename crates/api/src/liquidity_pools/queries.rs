@@ -767,6 +767,17 @@ pub async fn fetch_pool_chart(
     // identical across a duplicate pair, so which row survives is irrelevant. The
     // outer bucket aggregation is then byte-identical to the old `FINAL` form.
     //
+    // The outer `ledgers` read is ALSO deduped — via a `LIMIT 1 BY sequence`
+    // subquery, not a bare `JOIN ledgers` (lore-0420). `ledgers` is itself a
+    // ReplacingMergeTree with unmerged duplicate rows, so a bare join doubled
+    // every snapshot (measured 2806 samples vs 1403 distinct) → doubled
+    // `sum(volume)`/`sum(fee_revenue)`/`samples_in_bucket`. The join needs
+    // `l.closed_at` for the bucket key, so a pure `IN` semi-join won't do;
+    // `LIMIT 1 BY sequence` keeps one row per ledger (closed_at is identical
+    // across a dup pair, so which survives is irrelevant) — same idiom as the
+    // snapshot dedup above, and it keeps `closed_at` a plain column so the
+    // window filter can stay in the subquery WHERE and drive minmax pruning.
+    //
     // The inner read is bounded to the window's ledger range, resolved from
     // `[from, to]` against `ledgers.closed_at` (minmax skip index).
     //
@@ -795,9 +806,13 @@ pub async fn fetch_pool_chart(
              ORDER BY ledger_sequence DESC \
              LIMIT 1 BY ledger_sequence \
          ) lps \
-         JOIN ledgers l ON l.sequence = lps.ledger_sequence \
-         WHERE l.closed_at >= fromUnixTimestamp64Milli(?) \
-           AND l.closed_at <  fromUnixTimestamp64Milli(?) \
+         JOIN ( \
+             SELECT sequence, closed_at \
+             FROM ledgers \
+             WHERE closed_at >= fromUnixTimestamp64Milli(?) \
+               AND closed_at <  fromUnixTimestamp64Milli(?) \
+             LIMIT 1 BY sequence \
+         ) l ON l.sequence = lps.ledger_sequence \
          GROUP BY bucket_ms \
          ORDER BY bucket_ms ASC",
         bucket_fn = bucket_fn,
@@ -809,8 +824,8 @@ pub async fn fetch_pool_chart(
         .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
         .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
         .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
-        .bind(from.timestamp_millis()) // outer window filter
-        .bind(to.timestamp_millis())
+        .bind(from.timestamp_millis()) // ledgers dedup subquery: closed_at >= from
+        .bind(to.timestamp_millis()) // ledgers dedup subquery: closed_at <  to
         .fetch_all::<ChartChRow>()
         .await?;
 
@@ -1089,9 +1104,23 @@ pub async fn fetch_pool_list(
          LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                             AND sac_b.issuer_id = lp.asset_b_issuer_id \
                             AND lp.asset_b_code != '' \
+         /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
+            duplicate rows): without it this LEFT JOIN doubled every page row \
+            whose latest snapshot ledger falls in the duplicated range, doubling \
+            UI rows and breaking keyset pagination. `any(closed_at)` is exact \
+            (measured: closed_at identical across every dup pair). lore-0420 \
+            \
+            The filter is `page.last_updated_ledger` while the join key is \
+            `s.latest_ledger_sequence` — these look mismatched but are the same \
+            set, because a pool's last update always writes a snapshot at that \
+            ledger: measured 52,284 of 52,284 pools with \
+            `last_updated_ledger = max(ledger_sequence)`. If that invariant ever \
+            breaks the join simply misses and `latest_snapshot_at_ms` is null — \
+            degraded, never wrong. */ \
          LEFT JOIN ( \
-             SELECT sequence, closed_at FROM ledgers \
+             SELECT sequence, any(closed_at) AS closed_at FROM ledgers \
              WHERE sequence IN (SELECT last_updated_ledger FROM page) \
+             GROUP BY sequence \
          ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
          ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
         tvl_cte = tvl_cte,

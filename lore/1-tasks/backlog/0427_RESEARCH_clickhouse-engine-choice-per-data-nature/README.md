@@ -5,7 +5,14 @@ type: RESEARCH
 status: backlog
 related_adr: []
 related_tasks: ['0420', '0421', '0422', '0423']
-tags: ['area-clickhouse', 'architecture', 'adr-candidate', 'effort-medium', 'priority-medium']
+tags:
+  [
+    'area-clickhouse',
+    'architecture',
+    'adr-candidate',
+    'effort-medium',
+    'priority-medium',
+  ]
 links:
   - https://clickhouse.com/docs/engines/table-engines/mergetree-family/replacingmergetree
   - https://clickhouse.com/docs/guides/developer/deduplication
@@ -39,12 +46,12 @@ anyone has to remember?**
 Our tables are all `ReplacingMergeTree`, but they hold two different kinds of
 data, and the answer differs completely between them:
 
-| | **A — immutable** | **B — mutable state** |
-| --- | --- | --- |
-| tables | ledgers, transactions, events, operations | accounts, assets, contracts, pools |
-| does a row ever change? | **never** | constantly (~8.46M rewrites/day for ~136k active accounts) |
-| what RMT buys | **nothing** | "latest wins", but lazily |
-| a duplicate means | **a write bug** | normal operation |
+|                         | **A — immutable**                         | **B — mutable state**                                      |
+| ----------------------- | ----------------------------------------- | ---------------------------------------------------------- |
+| tables                  | ledgers, transactions, events, operations | accounts, assets, contracts, pools                         |
+| does a row ever change? | **never**                                 | constantly (~8.46M rewrites/day for ~136k active accounts) |
+| what RMT buys           | **nothing**                               | "latest wins", but lazily                                  |
+| a duplicate means       | **a write bug**                           | normal operation                                           |
 
 ## Verified findings
 
@@ -62,10 +69,10 @@ Confidence as returned by the verification pass.
 
 2. **But the window is a CORRECTNESS parameter, not a tuning knob** (high).
    Dedup is per INSERT block, keyed by a `block_id` hash of the block contents,
-   held in a **finite** log. Docs, verbatim: *"If more than
-   `*_deduplication_window` other insert operations occur during the retry
+   held in a **finite** log. Docs, verbatim: _"If more than
+   `_\_deduplication_window` other insert operations occur during the retry
    sequence, deduplication may not work as intended. In this case, the same data
-   can be inserted multiple times."* No error, no warning. For non-replicated
+   can be inserted multiple times."\* No error, no warning. For non-replicated
    tables there is **no time-based variant** of the window at all.
 
 3. **26.3 turned insert dedup on by default — but only for `Replicated*`**
@@ -89,7 +96,7 @@ Confidence as returned by the verification pass.
    important finding for expectation-setting. `SimpleAggregateFunction` columns
    read like normal columns (no `-Merge`/`-State`), but the engine **merges just
    as lazily as RMT**. A correct read is still `min(col), max(col) … GROUP BY
-   key`, or FINAL. It changes the per-column semantics; it does not change whose
+key`, or FINAL. It changes the per-column semantics; it does not change whose
    job dedup is.
 
 6. **`SimpleAggregateFunction(max, Tuple(version, value))` as a last-value
@@ -118,8 +125,8 @@ Confidence as returned by the verification pass.
 ### Read-side enforcement
 
 9. **Our pain is documented behaviour, not misconfiguration** (high). The vendor
-   states RMT *"does not guarantee the absence of duplicates"*, that merging
-   happens *"at an unknown time, so you can't plan for it"*, and that `count(*)`
+   states RMT _"does not guarantee the absence of duplicates"_, that merging
+   happens _"at an unknown time, so you can't plan for it"_, and that `count(*)`
    may return different results across runs. A statement against their own
    product, so not marketing. We relied on a promise that was never made.
 

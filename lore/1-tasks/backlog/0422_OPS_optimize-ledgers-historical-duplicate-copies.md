@@ -42,20 +42,39 @@ carries exactly two copies.
 Merges are **healthy and active** — 40,524 `MergeParts` in 7 days, none stuck.
 They are not behind. But ClickHouse **never promises to merge a partition down to
 a single part**, and dedup only happens inside a merge, so a partition that
-settles at 4–5 parts keeps its duplicate copies indefinitely.
+settles at 4–5 parts can keep its duplicate copies until an explicit
+`OPTIMIZE … FINAL` forces the merge. The vendor documentation is explicit that
+`ReplacingMergeTree` "does not guarantee the absence of duplicates" — so the
+claim here is not that the copies are permanent by design, only that **nothing
+observed so far removes them**.
 
 Measured, and it cuts both ways:
 
 ```
 partitions already deduplicated (×~1.0):   2 of 28
-partitions still ×2:                      24 of 28
-total rows, start of session → later:  25,965,607 → 25,965,956  (not shrinking)
+partitions still ×2:                      26 of 28
+total rows, over one session:  25,965,607 → 25,968,470  (not shrinking)
+whole table:  25,968,470 rows / 13,123,520 distinct sequences  = ×1.98
+history spans sequence 50,457,424 → 63,580,943 (28 partitions, 104 active parts)
 ```
 
-The two that *are* clean are the small ones — e.g. partition 100 holds only
+The two that _are_ clean are the small ones — e.g. partition 100 holds only
 42,576 sequences (history starts mid-partition), so a full merge was cheap
 enough to happen. Full 500k-sequence partitions (~1M rows) stop short. So
 waiting works only for the partitions that do not matter.
+
+**The duplicate copies are byte-identical.** Measured over 308,930 duplicated
+sequences (ranges 60.0–60.2M and 63.3–63.5M): `closed_at`, `transaction_count`
+and `hash` are the same in every pair, zero exceptions. Two consequences worth
+carrying into the cleanup:
+
+- It corroborates the second-pass hypothesis — a re-walk of history writing the
+  same rows again, not two writers disagreeing.
+- **`FINAL` is not a correctness tool on this table.** `ledgers` is
+  `ReplacingMergeTree` **without a version column**, so among duplicates of one
+  `sequence` `FINAL` has no tie-break to apply. Any "pick one row per sequence"
+  idiom is equally correct here, which is why 0420's reads use the cheap ones
+  (`LIMIT 1 BY`, `GROUP BY`, over-fetch + collapse) rather than `FINAL`.
 
 ## Why this is cheap
 
@@ -76,19 +95,19 @@ surplus returns within hours. `accounts` must stay deduplicated **at read time**
 RMT tables, and **the ratios split into two clearly different signatures** which
 need opposite treatment:
 
-| table | rows | excess | share | signature |
-| --- | --- | --- | --- | --- |
-| `asset_enrichment` | 608,313 | 276,585 | ~45% | to classify |
-| `liquidity_pools` | 73,242 | 20,959 | ~29% | to classify |
-| `assets` | 769k | ~435k | >2× | second pass? |
-| `ledgers` | 25.9M | ~12.9M | 2× | **second pass** (history ×2, live ×1.0) |
-| `soroban_invocations_appearances` | — | — | 2× on older ranges | **second pass** (clean from ~63.50M) |
-| `soroban_contracts` | 138k | ~8.5k | 6.6% | to classify |
-| `accounts` | 14.97M | ~620k | 4.3% | **engine working as designed** — do not touch |
-| `lp_positions` | 108,553 | 712 | 0.7% | to classify |
-| `transaction_participants` | — | — | 0.36% | to classify |
-| `soroban_contract_metadata` | 3,831 | 3 | 0.1% | to classify |
-| `transactions`, `soroban_events`, `operations_appearances`, `liquidity_pool_snapshots`, `nfts` | — | 0 | clean | nothing to do |
+| table                                                                                          | rows    | excess  | share              | signature                                     |
+| ---------------------------------------------------------------------------------------------- | ------- | ------- | ------------------ | --------------------------------------------- |
+| `asset_enrichment`                                                                             | 608,313 | 276,585 | ~45%               | to classify                                   |
+| `liquidity_pools`                                                                              | 73,242  | 20,959  | ~29%               | to classify                                   |
+| `assets`                                                                                       | 769k    | ~435k   | >2×                | second pass?                                  |
+| `ledgers`                                                                                      | 25.9M   | ~12.9M  | 2×                 | **second pass** (history ×2, live ×1.0)       |
+| `soroban_invocations_appearances`                                                              | —       | —       | 2× on older ranges | **second pass** (clean from ~63.50M)          |
+| `soroban_contracts`                                                                            | 138k    | ~8.5k   | 6.6%               | to classify                                   |
+| `accounts`                                                                                     | 14.97M  | ~620k   | 4.3%               | **engine working as designed** — do not touch |
+| `lp_positions`                                                                                 | 108,553 | 712     | 0.7%               | to classify                                   |
+| `transaction_participants`                                                                     | —       | —       | 0.36%              | to classify                                   |
+| `soroban_contract_metadata`                                                                    | 3,831   | 3       | 0.1%               | to classify                                   |
+| `transactions`, `soroban_events`, `operations_appearances`, `liquidity_pool_snapshots`, `nfts` | —       | 0       | clean              | nothing to do                                 |
 
 Two signatures, two conclusions:
 
