@@ -112,13 +112,23 @@ Four clauses, in order:
 | Command | Why it stays |
 |---|---|
 | `run`, `status` | the backfill itself |
-| `bootstrap` | RPC top-up for accounts the ingest window never observes — a step of `run`, not a one-off |
-| `balance-seed` | RPC snapshot of holders who have not transacted since the parser shipped. Live writes a balance only when it **observes** a `ContractData Balance(Address)` change, so this is not a hole in live logic — it is a state read live cannot express |
+| `bootstrap` | ⚠ **recurring mop — reclassified 2026-07-21 by measurement.** It reads as a one-off ("top up accounts the ingest window never observed"), but live re-creates the gap: the account writer stamps `sequence_number = 0` whenever it has no account-state override (`persist/stage.rs:699`), and the RMT version (`last_seen_ledger`) is bumped by that same write, so the zeroed row wins. Measured: **61.7% of accounts that sent a transaction** in a recent window carry `sequence_number = 0`, and skeletons are twice as common among *active* accounts (14.7%) as among dormant ones (6.75%). The live indexer has no bootstrap of any kind. Retire via lore 0421 |
+| `balance-seed` | RPC snapshot of holders who have not transacted since the parser shipped. Live writes a balance only when it **observes** a `ContractData Balance(Address)` change, so this is not a hole in live logic — it is a state read live cannot express. **Not yet measured the way `bootstrap` was**; treat the classification as provisional |
 | `repair-tier1` | ⚠ **recurring mop.** `ReplacingMergeTree` cannot express MIN, so the 6 Tier-1 columns re-drift under live ingest. Retire via lore 0232 / 0421 (`AggregatingMergeTree` + `SimpleAggregateFunction(min)`) |
 | `nft-reclassify` | ⚠ **recurring mop.** No continuous `pending → hot` promotion in live. Retire via lore 0392 |
 | `contract-type-rebuild` | ⚠ **partly covered.** Live has the G1 / G9 cross-ledger verdicts (`persist/stage.rs`); contracts the classifier cannot name still default to `Other`. Lore 0309 |
 
-The three marked ⚠ each fail clause 3 — which is exactly why they are still here.
+The four marked ⚠ each fail clause 3 — which is exactly why they are still here.
+
+**The invariant that decides whether a defaulted write corrupts.** A whole-row
+write that fills missing fields with defaults is safe **only if it also carries
+the lowest version**. `soroban_contracts`' stub writer (`stage.rs:1761`) emits an
+all-NULL row but stamps `wasm_uploaded_at_ledger = 0` — the lowest possible
+version — so it always loses to the real deploy row. `accounts` breaks the rule:
+its version is `last_seen_ledger`, which the defaulting write *bumps to the
+current ledger*, so the emptied row wins. Tables with **no** version column
+(`assets`, `wasm_interface_metadata`) are exposed by default, because there the
+last write always wins. Check any new state-table writer against this.
 
 ### Removed (lore 0425)
 
