@@ -38,6 +38,35 @@ success criterion (storage ratio, Q6) was **explicitly deferred** at the time. N
 that we have the real number, re-evaluate whether full-content storage is still the
 right tradeoff, or whether some of that ~165 GiB can be reclaimed.
 
+## The biggest single lever, found 2026-07-21: ~59% of rows are `fee` events
+
+Measured directly on prod (ledgers 63,578,050–63,578,074, `signature` column):
+
+| signature       |       rows |     share |
+| --------------- | ---------: | --------: |
+| **`fee`**       | **17,802** | **58.7%** |
+| `transfer`      |      7,800 |     25.7% |
+| `mint`          |      3,606 |     11.9% |
+| `burn`          |        962 |      3.2% |
+| everything else |       ~120 |     <0.5% |
+
+`fee` events are the CAP-67 protocol-generated fee charge/refund, emitted for
+**every** transaction on the network and attributed to the native asset's SAC
+address — they are not contract-authored content anyone browses. So the majority
+of the #1 table is protocol bookkeeping, and evaluating the levers below without
+splitting `fee` out first will mis-price every one of them.
+
+Evaluate explicitly: do `fee` events need `topics_xdr`/`data_xdr` stored at all,
+or only an aggregate/derived form? Re-run the share over a wider window before
+committing — one 25-ledger window is a sample, not a distribution.
+
+**Related read-path consequence (worth fixing regardless of the storage decision):**
+because every fee event is attributed to the native SAC contract, that contract's
+detail page unions a `soroban_events` arm keyed on `contract_id` — so its
+transaction list is effectively _every transaction on Stellar_, and its
+`recent_events` stat is a network-wide counter. Reported by the audit agent;
+**not independently re-verified** — confirm before acting.
+
 ## Critical constraint (measured 2026-07-20)
 
 **The CH `transactions` table does NOT store `result_meta_xdr`** (columns: hash,
