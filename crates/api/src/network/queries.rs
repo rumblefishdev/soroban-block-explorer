@@ -44,6 +44,23 @@ pub async fn fetch_stats(
     // injection surface) — matching the i64-inlining convention in
     // `crates/api/src/common/ch.rs`. This also drops the previous inner
     // `(SELECT max(sequence) FROM ledgers)` subquery — one fewer read.
+    //
+    // `total_accounts` / `total_contracts` do NOT read `system.tables.total_rows`
+    // (lore-0420). That column is the PHYSICAL part-row count, so on a
+    // ReplacingMergeTree it counts unmerged duplicates and reports too high —
+    // measured +4.3% (accounts) / +11.6% (contracts), and drifting upward. This
+    // is structural, not a one-off: RMT dedup is a best-effort background merge
+    // and the indexer writes continuously (~8.46M account rows/day for ~136k
+    // genuinely-active accounts), so fresh duplicates always exist there. A
+    // one-time OPTIMIZE cannot fix it — the counts must dedup at READ time.
+    // Both do so without an expensive scan:
+    //   * accounts → `accounts_recent`, the refreshable-MV copy already deduped
+    //     to one row per account (same source the /accounts list pages, so the
+    //     KPI and the list agree). Plain MergeTree ⇒ `count()` is a metadata
+    //     read, not a scan. Exact to ±1 vs `accounts FINAL`, modulo the 2-minute
+    //     MV refresh — acceptable staleness for a headline total.
+    //   * soroban_contracts → `FINAL`, affordable here because the table is
+    //     ~146k rows (not 14M like accounts).
     let sql = format!(
         "SELECT \
             latest.sequence AS latest_ledger_sequence, \
@@ -57,11 +74,9 @@ pub async fn fetch_stats(
                    AND closed_at >= now64() - INTERVAL 60 SECOND), \
                 0 \
             )) AS tps_60s, \
-            ifNull((SELECT total_rows FROM system.tables \
-                WHERE database = currentDatabase() AND name = 'accounts'), 0) \
+            ifNull((SELECT count() FROM accounts_recent), 0) \
                 AS total_accounts, \
-            ifNull((SELECT total_rows FROM system.tables \
-                WHERE database = currentDatabase() AND name = 'soroban_contracts'), 0) \
+            ifNull((SELECT count() FROM soroban_contracts FINAL), 0) \
                 AS total_contracts \
          FROM ( \
              SELECT sequence, closed_at \
@@ -84,9 +99,9 @@ pub async fn fetch_stats(
 
     Ok(NetworkStats {
         tps_60s: row.tps_60s,
-        // CH `system.tables.total_rows` is UInt64 but real chain-scale
-        // totals (~1e8) fit Int64 with eight orders of magnitude to spare,
-        // and the wire shape is `i64` (matches the PG path).
+        // CH `count()` is UInt64 but real chain-scale totals (~1e8) fit Int64
+        // with eight orders of magnitude to spare, and the wire shape is `i64`
+        // (matches the PG path).
         total_accounts: row.total_accounts as i64,
         total_contracts: row.total_contracts as i64,
         latest_ledger_sequence: row.latest_ledger_sequence,
