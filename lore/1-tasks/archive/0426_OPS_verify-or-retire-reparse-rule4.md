@@ -2,7 +2,7 @@
 id: '0426'
 title: 'OPS: verify or retire backfills.md rule 4 — measurement says `--reindex` is safe and the rule is blocking it'
 type: OPS
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0425', '0356', '0266', '0304']
 tags: [priority-medium, effort-small, clickhouse, backfill, docs]
@@ -56,6 +56,22 @@ history:
       remains needs prod writes and therefore an owner decision: a spot-check in a
       scratch database on the prod server, and whether `assets_pre0339` gets
       dropped.
+  - date: 2026-07-21
+    status: completed
+    who: karolkow
+    note: >
+      Closed the same day — the task was written to schedule work that turned out
+      to be doable immediately, so it never needed a queue slot. The prod
+      confirmation needed **no scratch write**: production already contained the
+      experiment (127k path-payment ops in a fully-merged old range carrying
+      `pool_ids` the original parser could not emit), so it was settled read-only.
+      Rule 4 is rewritten in `docs/backfills.md`, the README clause-2 objection is
+      gone, and the one piece of machinery it was propping up (`assets_id_backfill`'s
+      staging + `EXCHANGE`, justified in its own header by "no version column, so a
+      plain re-INSERT can't override") was already deleted by 0425.
+      Not closed here, handed to **0400** instead of held open: `assets_pre0339`
+      and the rest of the prod-vs-`init.sql` drift found while enumerating. That is
+      0400's subject, not this task's.
 ---
 
 # OPS: verify or retire `docs/backfills.md` rule 4

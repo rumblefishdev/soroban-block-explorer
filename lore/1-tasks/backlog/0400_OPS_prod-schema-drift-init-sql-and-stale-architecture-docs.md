@@ -22,6 +22,35 @@ history:
       silently lost it. Fixed in-band for this one index (0357's PR adds it to
       `init.sql` with the `idx_acc_id` comment convention); this task owns the
       recurring class + the docs gate that should have caught it.
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      Full prod-vs-`init.sql` cross-validation run (read-only) while closing 0426.
+      **The whole drift is four items, and the column layer is nearly clean** — 28
+      table definitions compared column-by-column against `system.columns`, and only
+      one table differed. Concrete inventory, so this task no longer has to start by
+      discovering its own scope.
+      **(1)** `assets_pre0339` — prod-only table, 368,490 rows / 5.22 MiB. Not an
+      accident: 0339 (stkrolikiewicz) kept it as a soak backup and its runbook warns
+      it is NOT a full-table snapshot. Archived 2026-07-02; the deferral had no owner
+      and no trigger, and it is still there 19 days later.
+      **(2)** `transaction_hash_dict` — prod-only **Dictionary**, absent from
+      `init.sql`, `status = LOADED` but `element_count = 1`, which looks wrong and
+      should be explained before it is either documented or dropped.
+      **(3)** `idx_oaa_transaction_id` — declared in `init.sql`, **missing on prod**.
+      Drift in the direction that matters for reads: the code claims an index the
+      server does not have.
+      **(4)** `operation_asset_appearances.net_settled` — in `init.sql`, absent on
+      prod. **Already owned by 0419** (its rollout carries the `ALTER TABLE … ADD
+      COLUMN`), and the API code reading it is on develop, not master — so this is
+      planned undeployed work, not drift. It is also a **release-ordering hazard**:
+      deploying the API ahead of 0419's ALTER yields `Code 47` on that endpoint, the
+      same failure shape as the 0304 → 0388 → 0392 family.
+      One correction to this task's own opening table: the `oa_pool_seek` projection
+      it lists as prod-only is **not on prod** — `system.projections` is empty, and
+      CH 26.3 refuses projections on `ReplacingMergeTree` outright (`Code 344`, cf.
+      0353). That row is stale.
 ---
 
 # OPS: prod-only CH schema objects missing from init.sql + stale architecture docs
