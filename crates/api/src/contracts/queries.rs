@@ -236,10 +236,18 @@ pub async fn fetch_contract_list(
     }
 
     // Step 2: invocation counts in the STATS_WINDOW for the page's ids. Window
-    // applied via a `ledgers.closed_at` JOIN, floored first by a
-    // `ledger_sequence` lower bound so the seek stays on the appearance PK
-    // prefix (same shape as `fetch_contract_stats`). `FINAL` matches the detail
-    // stat so re-ingest duplicates collapse identically.
+    // applied via `ledgers.closed_at`, floored first by a `ledger_sequence`
+    // lower bound so the seek stays on the appearance PK prefix (same shape as
+    // `fetch_contract_stats`). `FINAL` matches the detail stat so re-ingest
+    // duplicates collapse identically.
+    //
+    // The ledger window is a semi-join (`ledger_sequence IN (…)`), NOT
+    // `INNER JOIN ledgers`: `ledgers` is a ReplacingMergeTree with unmerged
+    // duplicate rows (~2× across most of history), and a JOIN fans each
+    // appearance row out per duplicate ledger row → inflated `count()`
+    // (measured up to ~1.6× when the dup band overlaps the window). Set
+    // membership matches once per sequence regardless of physical dupes.
+    // (lore-0420)
     let ids = list_rows
         .iter()
         .map(|r| r.id.to_string())
@@ -253,10 +261,13 @@ pub async fn fetch_contract_list(
             sia.contract_id                  AS contract_id, \
             toUInt64(count())                AS recent_invocations \
          FROM soroban_invocations_appearances sia FINAL \
-         INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
          WHERE sia.contract_id IN ({ids}) \
            AND sia.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-           AND l.closed_at >= now64() - INTERVAL {days} DAY \
+           AND sia.ledger_sequence IN ( \
+               SELECT sequence FROM ledgers \
+               WHERE sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
+                 AND closed_at >= now64() - INTERVAL {days} DAY \
+           ) \
          GROUP BY sia.contract_id"
     );
     let count_rows = client
@@ -512,6 +523,13 @@ pub async fn fetch_contract_stats(
 /// mismatches the non-nullable `u64` in `StatsChRow` and fails RowBinary decode
 /// → `db_error` 500 on every contract detail. `count()` never actually yields
 /// NULL, so the `0` branch is unreachable; it only fixes the static type.
+///
+/// Both windows filter `ledgers` by a `ledger_sequence IN (…)` semi-join, NOT
+/// `INNER JOIN ledgers`: `ledgers` is a ReplacingMergeTree with unmerged
+/// duplicate rows, and a JOIN fans each appearance/event row out per duplicate
+/// ledger row → inflated `count()`. Set membership matches once per sequence.
+/// `uniqExact(caller_id)` was already fan-out-safe (distinct set); the raw
+/// `count()`s were not. (lore-0420)
 fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
     format!(
         "SELECT \
@@ -520,16 +538,22 @@ fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
             ifNull(( \
                 SELECT toUInt64(count()) \
                 FROM soroban_events se \
-                INNER JOIN ledgers le ON le.sequence = se.ledger_sequence \
                 WHERE se.contract_id = ? \
                   AND se.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-                  AND le.closed_at >= now64() - INTERVAL {days} DAY \
+                  AND se.ledger_sequence IN ( \
+                      SELECT sequence FROM ledgers \
+                      WHERE sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
+                        AND closed_at >= now64() - INTERVAL {days} DAY \
+                  ) \
             ), 0)                                   AS recent_events \
          FROM soroban_invocations_appearances sia FINAL \
-         INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
          WHERE sia.contract_id = ? \
            AND sia.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-           AND l.closed_at >= now64() - INTERVAL {days} DAY"
+           AND sia.ledger_sequence IN ( \
+               SELECT sequence FROM ledgers \
+               WHERE sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
+                 AND closed_at >= now64() - INTERVAL {days} DAY \
+           )"
     )
 }
 
@@ -587,6 +611,31 @@ mod stats_sql_tests {
         assert!(
             normalized.contains("ifNull(( SELECT toUInt64(count())"),
             "recent_events subquery must be ifNull-wrapped: {sql}"
+        );
+    }
+
+    /// Regression guard for lore-0420. `ledgers` is a ReplacingMergeTree with
+    /// unmerged duplicate rows, so joining it into a `count()` multiplies the
+    /// count by the number of physical copies (measured up to ~1.6x). Both
+    /// windows must therefore filter via a `ledger_sequence IN (…)` semi-join,
+    /// which matches once per sequence, and must NOT reintroduce a bare join.
+    #[test]
+    fn stats_sql_windows_ledgers_by_semi_join_never_a_bare_join() {
+        let sql = contract_stats_sql(7, 7 * 17_280);
+        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(
+            !normalized.contains("JOIN ledgers"),
+            "a JOIN onto ledgers fans each row out per duplicate copy and \
+             inflates the count — use a `ledger_sequence IN (…)` semi-join: {sql}"
+        );
+        // One per window: the invocations seek and the events subquery.
+        assert_eq!(
+            normalized
+                .matches("ledger_sequence IN ( SELECT sequence FROM ledgers")
+                .count(),
+            2,
+            "both the invocations and events windows must use the semi-join: {sql}"
         );
     }
 }
