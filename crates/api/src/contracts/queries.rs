@@ -50,7 +50,16 @@ use super::dto::{ContractStats, EventCursor, EventItem};
 /// Recent-activity window shared by the detail stats (`fetch_contract_stats`)
 /// and the list's `recent_invocations` column, so both compute the count over
 /// the SAME period. Single source — they cannot drift.
-pub(crate) const STATS_WINDOW: &str = "7 days";
+pub(crate) const STATS_WINDOW_DAYS: i64 = 7;
+
+/// Wire label for [`STATS_WINDOW_DAYS`], surfaced as `stats_window` on the
+/// contract-stats DTO. Derived FROM the number rather than parsed back INTO it:
+/// the window is a compile-time constant with no user input, so a string
+/// source-of-truth only created a parse that cannot fail and a fallback that
+/// cannot run (lore-0420).
+pub(crate) fn stats_window_label() -> String {
+    format!("{STATS_WINDOW_DAYS} days")
+}
 
 #[derive(Debug)]
 pub struct ContractRow {
@@ -257,7 +266,7 @@ pub async fn fetch_contract_list(
         .join(",");
     // List recent_invocations only; recent_events is detail-only (the list DTO
     // has no events field), so this path keeps the single windowed count.
-    let days = stats_window_days(STATS_WINDOW);
+    let days = STATS_WINDOW_DAYS;
     let count_sql = format!(
         "SELECT \
             sia.contract_id                  AS contract_id, \
@@ -431,27 +440,6 @@ fn map_upgradeable(has_wasm: bool, code: i8) -> Option<bool> {
 // Bounded-window stats — canonical 11 Statement B
 // ---------------------------------------------------------------------------
 
-/// Parse a stats-window label (e.g. `"7 days"`) into a day count — the leading
-/// integer, defaulting to 7 for a malformed label. Shared by the list and detail
-/// stat paths so their windows can never drift apart.
-///
-/// There is deliberately no companion `ledger_floor` constant (lore-0420). The
-/// seek bound used to be `days * 17_280`, a hardcoded "~ledgers per day" derived
-/// from an assumed 5 s cadence. Mainnet actually closes every ~5.6 s (measured
-/// 15,324 ledgers/day), so the constant ran 13% wide. Being wide is harmless —
-/// but the error is a one-way bet on the protocol: if Stellar ever closes faster
-/// than 5 s the constant would start running SHORT, and a "7 days" stat would
-/// silently cover five. The bound is now resolved from the data instead
-/// (`min(sequence) WHERE closed_at >= now - N DAY`), which is exact by
-/// construction and cannot drift with the cadence.
-fn stats_window_days(window: &str) -> i64 {
-    window
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7)
-}
-
 #[derive(Debug, Row, Deserialize)]
 struct StatsChRow {
     recent_invocations: u64,
@@ -494,9 +482,8 @@ struct StatsChRow {
 pub async fn fetch_contract_stats(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
-    window: &str,
 ) -> Result<ContractStats, clickhouse::error::Error> {
-    let sql = contract_stats_sql(stats_window_days(window));
+    let sql = contract_stats_sql(STATS_WINDOW_DAYS);
     let row = client
         .query(&sql)
         .bind(contract_surrogate_id)
@@ -508,7 +495,7 @@ pub async fn fetch_contract_stats(
         recent_invocations: row.recent_invocations as i64,
         recent_unique_callers: row.recent_unique_callers as i64,
         recent_events: row.recent_events as i64,
-        stats_window: window.to_string(),
+        stats_window: stats_window_label(),
     })
 }
 
@@ -556,15 +543,14 @@ fn contract_stats_sql(days: i64) -> String {
 
 #[cfg(test)]
 mod stats_sql_tests {
-    use super::{contract_stats_sql, stats_window_days};
+    use super::{STATS_WINDOW_DAYS, contract_stats_sql, stats_window_label};
 
+    /// The wire label must stay derived from the constant, so the number the
+    /// SQL windows on and the string the client is told can never disagree.
     #[test]
-    fn stats_window_days_parses_label_and_falls_back() {
-        assert_eq!(stats_window_days("7 days"), 7);
-        assert_eq!(stats_window_days("30 days"), 30);
-        // Malformed / empty label → default 7-day window, never a panic.
-        assert_eq!(stats_window_days("garbage"), 7);
-        assert_eq!(stats_window_days(""), 7);
+    fn wire_label_is_derived_from_the_window_constant() {
+        assert_eq!(stats_window_label(), format!("{STATS_WINDOW_DAYS} days"));
+        assert!(stats_window_label().starts_with(&STATS_WINDOW_DAYS.to_string()));
     }
 
     // Regression guard for task 0300: CH `recent_events` was hardcoded `0`.
