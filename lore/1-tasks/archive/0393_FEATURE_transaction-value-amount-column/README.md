@@ -2,7 +2,7 @@
 id: '0393'
 title: 'FEATURE: transaction value ("amount moved") column — net-settled per-asset value for tx-list views'
 type: FEATURE
-status: active
+status: done
 related_adr: []
 related_tasks: ['0359', '0383', '0261', '0247']
 tags:
@@ -18,7 +18,7 @@ tags:
 milestone: 1
 links:
   - crates/db-clickhouse/schema/init.sql
-  - crates/xdr-parser/src/classic_value.rs
+  - crates/xdr-parser/src/ledger_value.rs
   - crates/xdr-parser/src/net_settled.rs
   - crates/db-clickhouse/src/persist/stage.rs
   - crates/xdr-parser/tests/net_settled_real_corpus.rs
@@ -48,6 +48,22 @@ history:
       value reader). Cross-validated 1:1 on real mainnet data vs Horizon /effects
       (incl. protocol-23 contract-effects) + stellar CLI — 7-fixture gated corpus +
       prod-resolver E2E test. Spawned tasks 0410-0418. All green; uncommitted.
+  - date: '2026-07-21'
+    status: done
+    who: karolkow
+    note: >
+      Done — implementation complete, verified, committed + pushed. Committed in 4
+      commits (refactor: ledger-not-events read + EventAsset/LedgerAsset split;
+      feat: bespoke type-3 surface + bloom skip index + api-types regen; test:
+      8-fixture real-mainnet corpus + prod-resolver E2E + decode_meta harness;
+      docs: arch docs + README + spawns) — 40 files. Verification closed the tail:
+      claimable-balance added as 8th fixture (revealed pass-through netting correct
+      + documents the 0413 issuer-side gap); every case cross-validated 1:1 vs
+      Horizon /effects + stellar CLI. All code acceptance criteria [x]. DEFERRED to
+      deployment/ops (not code gaps): S3 re-ingest for history, and the read-path
+      RELEASE GATE (owned by 0417 companion table). Naming nit — `classic_*_deltas`
+      now covers Soroban ContractData too; rename to `ledger_*` folds into 0418.
+      Spawned follow-ups 0412-0418.
 ---
 
 # FEATURE: transaction value ("amount moved") column
@@ -230,7 +246,7 @@ should be revived. Bespoke Soroban token balances live in contract storage
 (`ContractData`) — decode those keys too. Combine:
 
 The shipped reader is the **ledger-entry balance-delta** reader
-(`classic_value.rs`): before→after balances on `AccountEntry` / `TrustLineEntry` /
+(`ledger_value.rs`): before→after balances on `AccountEntry` / `TrustLineEntry` /
 `ContractData`. It covers **every** flow uniformly — classic ops AND Soroban SAC /
 bespoke-token transfers (contract-held balances live in `ContractData`) — and
 auto-nets hops. Token events are **not** used for value (see the redesign note
@@ -363,8 +379,8 @@ balance-bearing ledger-entry type:
 | contract, SAC (classic-wrapped) | `ContractData` `Balance`, SAC `BalanceValue` **struct** | `SacWrapped(C…)` → reversed to the wrapped classic `asset_id` via `sac_classic` (DB type 1) |
 | any, bespoke token              | `ContractData` `Balance`, **bare `i128`**               | `Bespoke(C…)` → the token IS the asset (DB type 3)                                          |
 
-`classic_balance_deltas` telescopes `State`(before) → `Updated`(after) into signed
-per-(holder, asset) deltas; `classic_deltas_net_settled` (persist) resolves each
+`ledger_balance_deltas` telescopes `State`(before) → `Updated`(after) into signed
+per-(holder, asset) deltas; `ledger_deltas_net_settled` (persist) resolves each
 variant to its `asset_id` surrogate and reduces to `max(Σ+, Σ−)`. A SAC transfer's
 contract leg (`SacWrapped`) and account leg (`Credit`/`Native`) resolve to the SAME
 `asset_id`, so a mixed transfer **nets as one asset** — no double-count. All of this
@@ -408,7 +424,7 @@ the production resolver). Dev harness: `crates/xdr-parser/examples/decode_meta.r
 | failed-tx (moves nothing)                                                      | ✅ 1:1                                                        | Horizon                                    |
 | Soroban mint (7 classic assets, issuer-side correctly absent)                  | ✅ 1:1                                                        | Horizon                                    |
 | claimable-balance (pass-through **nets to 0** + 0413 issuer/CB gap, fail-safe) | ✅ 1:1                                                        | Horizon + stellar CLI                      |
-| **prod net-merge** through `classic_deltas_net_settled` + registry             | ✅                                                            | E2E test (4 legs → 2 assets)               |
+| **prod net-merge** through `ledger_deltas_net_settled` + registry              | ✅                                                            | E2E test (4 legs → 2 assets)               |
 | clawback · Restored · C→C Soroban                                              | ⚠️ unit only — rare on recent mainnet, needs S3/older ledgers | —                                          |
 | adversarial (overflow / registry-miss / spoof)                                 | ⚠️ unit-tested only                                           | —                                          |
 
@@ -434,7 +450,9 @@ code-blocking left in 0393 itself.
 2. Commit + open/update PR (base develop). Move task 0410 → `archive/` and 0393 →
    `archive/` on merge; the 0411–0418 backlog tasks land on develop.
 
-**B. Deployment / Operations (prod DB, ordered — see Operations section):** 3. `ALTER … ADD COLUMN net_settled Nullable(Int128)` (before the new indexer deploys). 4. Deploy the new indexer (live-forward values start). 5. Full **S3 re-ingest** to fold value into history (classic + Soroban; no CH-local backfill). 6. Confirm `assets.id` backfilled (else the value read's `INNER JOIN assets` drops rows). 7. Add + `MATERIALIZE` the `idx_oaa_transaction_id` bloom skip index. 8. **RELEASE GATE** — do NOT expose the value read on prod polling until task **0417**
+**B. Deployment / Operations → MOVED to [[0419]]** (OPS: prod rollout +
+post-reingest verification). The ordered prod steps now LIVE there — work from
+0419, not this archived copy. Summary for the record: 3. `ALTER … ADD COLUMN net_settled Nullable(Int128)` (before the new indexer deploys). 4. Deploy the new indexer (live-forward values start). 5. Full **S3 re-ingest** to fold value into history (classic + Soroban; no CH-local backfill). 6. Confirm `assets.id` backfilled (else the value read's `INNER JOIN assets` drops rows). 7. Add + `MATERIALIZE` the `idx_oaa_transaction_id` bloom skip index. 8. **RELEASE GATE** — do NOT expose the value read on prod polling until task **0417**
 (the `(ledger,tx)` companion) lands OR a mature-partition load test clears the scan.
 
 **C. Verification tail (optional — raise coverage from "main paths" to "full"):** 9. claimable-balance is now in the corpus (✅). Still pending: **clawback** and
@@ -446,6 +464,10 @@ ledgers or a targeted clawback-asset search. Restored + adversarial stay unit-on
 0414 · 0415 (NFT-ownership first) · 0416 · 0417 (release gate) · 0418 · 0408.
 
 ## Operations — do AFTER the code lands, before/at deploy
+
+> **Owner: [[0419]]** — these steps were lifted into that OPS task (with a required
+> post-S3-reingest cross-validation step). Kept here as the source-of-record; run
+> the rollout from 0419.
 
 These are prod-database steps, not code. `init.sql` reflects the desired schema;
 prod is migrated by hand. **Ordering matters** — the indexer INSERTs the new
@@ -539,7 +561,7 @@ Tracked with task **0408** (find-by-amount needs the same access path).
   the display (raw value is stored correctly; self-corrects when metadata lands).
   Consistent with the existing `total_supply` / `balances` read pattern.
 - **Live vs history input-set equality — now a non-issue.** Value has a SINGLE
-  source: `classic_balance_deltas` over the tx's `TransactionMeta`, run by `stage.rs`
+  source: `ledger_balance_deltas` over the tx's `TransactionMeta`, run by `stage.rs`
   at both live ingest and the full S3 re-ingest. Both consume the same authoritative
   meta with the same reducer, so live and historical rows for a key are computed
   identically — there is no live-events-vs-stored-events divergence (that concern
@@ -580,10 +602,10 @@ Tracked with task **0408** (find-by-amount needs the same access path).
   follow-up backlog task at that point.
 - **Hygiene (low priority, from the 0393 reuse audit)** — not blockers, noted so
   they are not lost:
-  - `classic_value.rs` and `ledger_entry_changes.rs` both decode the two balance
+  - `ledger_value.rs` and `ledger_entry_changes.rs` both decode the two balance
     carriers (`AccountEntry.balance`, `TrustLineEntry.balance` + trustline asset).
     ~15 lines of match arms overlap. Output types legitimately differ (typed
-    deltas vs detail-page JSON) and `classic_value` adds the before→after
+    deltas vs detail-page JSON) and `ledger_value` adds the before→after
     telescoping/netting on top, so consolidation is low-value — but a shared
     `(account, asset_sep11, balance)` extractor could back both.
   - `ledger_entry_changes.rs` still has its own `TransactionMeta::V3/V4` match
