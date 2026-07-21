@@ -2,9 +2,9 @@
 id: '0420'
 title: 'RMT reads without dedup: ledgers-list doubling + 9 same-class duplicate-row/count bugs (missing FINAL)'
 type: BUG
-status: active
+status: completed
 related_adr: []
-related_tasks: []
+related_tasks: ['0421', '0422', '0423', '0427', '0428']
 tags: ['area-api', 'area-clickhouse', 'bug-class-dedup', 'priority-high']
 links: []
 history:
@@ -54,6 +54,22 @@ history:
       every account write - root cause at stage.rs:636, ~62x write
       amplification), 0422 (one-time OPTIMIZE for ledgers only) and 0423
       (behavioural dedup regression harness).
+  - date: 2026-07-21
+    status: completed
+    who: karolkow
+    note: >
+      Shipped as PR #356 against develop - 17 atomic commits, 7 files under
+      crates/api, BACKEND ONLY. 216 api unit tests (+2 dedup regression tests),
+      117 web + 75 UI tests, API-types gate green; every rewrite measured on
+      prod CH, none costs more than the code it replaces and two cost less (F3
+      -15% rows / -60% memory, F6 cheaper than the un-deduped original). Two
+      frontend ExplorerTable guards were built and then deliberately reverted:
+      a duplicate row key is never legitimate here, so swallowing it centrally
+      would hide the next read-path defect instead of surfacing it. All four
+      /devils-advocate concerns now have homes: MV refresh monitoring -> 0428
+      (last one, spawned at close), data cleanup -> 0422, first_seen_ledger ->
+      0421, frontend key -> resolved as won't-fix with reasoning. Engine choice
+      under research in 0427.
 ---
 
 # RMT reads without dedup: ledgers-list doubling + 9 same-class bugs
@@ -75,18 +91,26 @@ deduplication" class in **9 more places** — 5 more firing in prod today, 4
 latent (confirmed defects currently shielded from the UI). This task tracks all
 11 fixes (F0–F10, implemented, measured and prod-verified, pending commit).
 
-## Status: Active — fixes implemented, not yet committed
+## Status: Completed — shipped as PR #356 (17 commits, backend only)
 
 > **Renumbered 0410 → 0420.** `0410` collided with
 > `0410_BUG_sac-event-identity-guard-on-value-path` (spawned from 0393, merged
 > via PR #355 and referenced from the archived 0393 README, 0391 notes, 0414 and
 > 0415). This task was the one with no inbound references, so it moved.
 
-**Current state:** All **11 fixes (F0–F10) are implemented** on branch
-`claude/ledgers-sorting-pagination-bug-6358ce` (7 files under `crates/api`).
-Each fix is verified against prod ClickHouse, **and each is now measured
-before/after** — `cargo check` clean, **214 api unit tests pass** (+2 new dedup
-regression tests), `API types freshness` gate green. **Not committed yet.**
+**Final state:** All **11 fixes (F0–F10) shipped** on branch
+`fix/0420_rmt-missing-final-duplicate-reads` as **17 atomic commits**, opened as
+[PR #356](https://github.com/rumblefishdev/soroban-block-explorer/pull/356)
+against `develop` (7 files under `crates/api`). Each fix is verified against prod
+ClickHouse **and measured before/after** — `cargo check` clean, **216 api unit
+tests pass** (+2 new dedup regression tests), 117 web + 75 UI tests green,
+`API types freshness` gate green.
+
+**The change set is backend-only by decision.** A frontend duplicate-row guard
+was written (two variants: key-suffixing, then drop-duplicates) and then
+deliberately **reverted** — a table that silently swallows duplicate keys hides
+the next read bug instead of surfacing it, and every read path is now deduped at
+the source. See Emerged decisions.
 
 After a `/devils-advocate` pass the F0 and F6 fixes were **reworked** — both
 were correct but more expensive than the code they replaced (see Measured cost).
@@ -300,22 +324,23 @@ All implemented and prod-verified (evidence in parens); **not yet committed**.
 Two of the seven were resolved inside this task (F0 regression → fixed;
 unmeasured rewrites → measured, which is what caught F6). The rest are carried:
 
-1. **The MV fails silently and nothing watches it** (High). `accounts_recent` is
-   a plain MergeTree with no dedup safety net, and `count()` is a metadata read —
-   so a partial or failed refresh is reported as truth. `system.view_refreshes`
-   exposes `status` / `exception` / `last_success_time`; nothing alerts on them.
-   Both the accounts KPI and the accounts list degrade quietly. **Do:** alert on
-   status ≠ Scheduled/Running, non-empty `exception`, or `last_success_time`
-   older than 3× the interval.
+1. ~~**The MV fails silently and nothing watches it**~~ (High) — **spawned as 0428.** `accounts_recent` is a plain MergeTree with no dedup safety net, and
+   `count()` is a metadata read — so a partial or failed refresh is reported as
+   truth. `system.view_refreshes` exposes `status` / `exception` /
+   `last_success_time`; nothing alerts on them. Both the accounts KPI and the
+   accounts list degrade quietly. F1 made this endpoint depend on the MV, which
+   is why it needed an owner rather than a paragraph.
 2. **Fixing the reads removed the pressure to fix the data** (High) —
    **now owned by 0422.** Reads are correct regardless of merge state, so
    nothing hurts visibly, but the duplicates still tax every query: the ledgers
    list reads **1,349,927 rows to return 20** because of part fragmentation.
    For `ledgers` this is genuinely fixable once (0422); for `accounts` it is
    not, and must not be attempted.
-3. ~~**Frontend row key is still `sequence`**~~ — **DONE.** Fixed centrally in
-   `ExplorerTable`: a duplicate key gets a suffix, everything else keeps its
-   stable key. Component-tested against the original symptom.
+3. **Frontend row key is still `sequence`** — **deliberately left alone.** Two
+   central `ExplorerTable` guards were built and both were reverted (see Emerged
+   decisions): a duplicate key is now a _loud_ symptom of a read-path defect, and
+   the read paths are the thing this task fixed. Revisit only if a duplicate key
+   is ever legitimate — today it never is.
 4. ~~**`first_seen_ledger` does not mean what it says**~~ — **spawned as 0421**,
    with the root cause located to `persist/stage.rs:636` and a recommended
    AggregatingMergeTree design. Not fixable here: 97.7% of accounts have already
@@ -390,6 +415,35 @@ No OPS action remains in this task: the cleanup that IS worth doing lives in
    healthy (shared fate with the accounts list, so not a new single point of
    failure), and `soroban_contracts FINAL` gets more expensive as that table
    grows — revisit with the long-cache option if either bites.
+
+3. **The frontend guard was built twice and reverted.** The React duplicate-key
+   collision is what made the bug _visible_, so guarding `ExplorerTable` was the
+   obvious move. Two variants shipped as commits and were then reverted as a
+   third: suffixing a colliding key (`55975874`), then dropping duplicate rows
+   outright (`83698c5b`), reverted in `3efec94a`.
+
+   Reasoning for the revert: **a duplicate row key is never legitimate in this
+   app.** Every table keys on a primary key from ClickHouse; two rows with the
+   same key means a read path forgot to dedup. A central guard converts that
+   loud, immediately-visible failure into silent wrong data — the list would
+   look right while a page quietly returns 19 rows instead of 20. The class of
+   bug this task exists to kill would have become undetectable from the UI.
+   Both variants are recoverable from git if the premise ever changes.
+
+   Cost of the choice: the next such regression reaches users as a broken table
+   rather than a slightly-short page. Accepted — it is also how this one got
+   reported within a day.
+
+4. **F3's window is bounded from data, not from a constant.** The first version
+   converted "7 days" to ledgers with `LEDGERS_PER_DAY = 17_280` (5 s/ledger).
+   The operator rejected it: real close times drift, so the constant silently
+   means a different window every day, and the query checked `ledger_sequence`
+   twice. Replaced with a subquery deriving the cutoff sequence from
+   `closed_at`, and the constant deleted. `stats_window_bounds(&str) -> (i64,
+i64)` — which parsed `"7 days"` by splitting on whitespace — was likewise
+   replaced by a plain `STATS_WINDOW_DAYS: i64` with the wire label _derived_
+   from it. Measured **cheaper** than the constant version (−15% rows, −60%
+   memory), because the derived bound prunes on the primary key.
 
 ## Notes
 
