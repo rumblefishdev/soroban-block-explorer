@@ -68,7 +68,7 @@ SELECT
 FROM soroban_contracts sc FINAL
 LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id
 -- `wim FINAL`: wasm_interface_metadata is ReplacingMergeTree with no version
--- column, so the upgradeable-backfill re-INSERT leaves two parts per wasm_hash
+-- column, so a metadata re-INSERT leaves two parts per wasm_hash
 -- until a background merge. FINAL collapses them so the read can't transiently
 -- pick the old (keyless) part and flash Unknown. The table is tiny (~3.7k rows).
 LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash

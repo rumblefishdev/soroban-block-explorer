@@ -50,6 +50,109 @@ cargo run -p backfill-runner -- status --start 50457424 --end 50460000
 | `--keep-partitions` | off                      | Don't delete each partition's local folder after a successful index. Iteration / debug flag — see [Iteration](#iteration). |
 | `--verbose`/`-v`    | off                      | Enable per-ledger + per-partition info logs. Without it only warnings print during the run. |
 
+## Subcommands — the rule for one-off passes
+
+Beyond `run` / `status`, this crate hosts maintenance subcommands that operate on
+an already-ingested dataset. **Operating** them — which to run, in what order,
+indexer stopped or not — is [`docs/backfills.md`](../../docs/backfills.md). This
+section is the authoring rule: when a new one is allowed to exist, and when it
+must be deleted. Established by lore task 0425.
+
+A one-off pass fixes history that the live indexer already handles going forward.
+Four clauses, in order:
+
+1. **Never re-implement the ingest path — that is the only forbidden shape.** A
+   subcommand is the *right* home for a one-off: `--dry-run`, counters, tests, and
+   a diff a reviewer can read all beat SQL pasted into a prod client at 2am. What
+   is forbidden is narrower: a binary that re-walks S3, re-parses ledgers, and
+   cherry-picks which rows to keep. That is a third copy of the ingest path, on top
+   of the parser and the live writer. The removed `metadata-backfill` (0304) and
+   `pool-ids-backfill` (0266) were exactly that — each parsed **every ledger in the
+   range in full**, discarded all but one table's rows, and carried its own
+   partition loop, watermark file and resume logic to do it.
+
+   So: data already in ClickHouse → a subcommand driving SQL is fine and good.
+   Data only in XDR → `run --reindex`, which re-parses the range through the one
+   shared path. Never your own re-parser.
+
+   > **The usual objection, and why it does not hold.** `docs/backfills.md` rule 4
+   > warns that re-parsing with a *different parser build* is unsafe on the 15 RMT
+   > tables that carry no version column, because ClickHouse could keep the stale
+   > row. Measured on CH 26.3 (lore 0425): it keeps the **last row inserted**, so a
+   > re-parse — which by construction lands after the data it replaces — wins in
+   > every shape tried, including after `OPTIMIZE`, across parallel inserts, and
+   > when read through `FINAL`. Every version-less table is also either keyed by
+   > ledger (a re-parse only competes with its own earlier parse) or holds a pure
+   > function of an immutable input. The real hazard is narrower and lives in the
+   > parser, not the engine: **two rows for one key inside a single insert**, where
+   > "last" is whatever order the code emitted (lore 0356, pool reserves). Emit one
+   > row per key and `--reindex` is safe.
+
+2. **Reuse the live code path — never reimplement it.** Call the same function
+   the indexer calls. The removed passes that did (`nft-reparse` → the parser's
+   own `detect_nft_events`; `assets-id-backfill` → `ids::asset_id`, the same fn
+   as `AssetRow::staged`; `metadata-backfill` → the same `PartitionWriter`) never
+   drifted — that discipline is what made them safe to delete. The two that reimplemented their logic in SQL — `repair-tier1` and
+   `contract-type-rebuild` — are the ones the 0388 → 0392 → 0394 → 0404 bug
+   family circles. A hand-written column list or an inlined verdict rule is a
+   second copy of something the codebase already owns, and second copies drift
+   silently.
+
+3. **If it cannot be expressed as "replay live logic over old data", live has a
+   hole.** That is a finding, not an inconvenience: open a task on the write path
+   first, and the one-off becomes catch-up rather than recurring maintenance.
+   This clause is a detector — it is what sorted the table below.
+
+4. **Delete it once it has run.** Git keeps it. A spent one-shot left in `--help`
+   reads as an available tool. Move it to `.trash/` (`rm` is forbidden
+   repo-wide) and record the removal in the task.
+
+### What survives, and why
+
+| Command | Why it stays |
+|---|---|
+| `run`, `status` | the backfill itself |
+| `bootstrap` | ⚠ **recurring mop — reclassified 2026-07-21 by measurement.** It reads as a one-off ("top up accounts the ingest window never observed"), but live re-creates the gap: the account writer stamps `sequence_number = 0` whenever it has no account-state override (`persist/stage.rs:699`), and the RMT version (`last_seen_ledger`) is bumped by that same write, so the zeroed row wins. Measured: **61.7% of accounts that sent a transaction** in a recent window carry `sequence_number = 0`, and skeletons are twice as common among *active* accounts (14.7%) as among dormant ones (6.75%). The live indexer has no bootstrap of any kind. Retire via lore 0421 |
+| `balance-seed` | RPC snapshot of holders who have not transacted since the parser shipped. Live writes a balance only when it **observes** a `ContractData Balance(Address)` change, so this is not a hole in live logic — it is a state read live cannot express. **Not yet measured the way `bootstrap` was**; treat the classification as provisional |
+| `repair-tier1` | ⚠ **recurring mop.** `ReplacingMergeTree` cannot express MIN, so the 6 Tier-1 columns re-drift under live ingest. Retire via lore 0232 / 0421 (`AggregatingMergeTree` + `SimpleAggregateFunction(min)`) |
+| `nft-reclassify` | ⚠ **recurring mop.** No continuous `pending → hot` promotion in live. Retire via lore 0392 |
+| `contract-type-rebuild` | ⚠ **partly covered.** Live has the G1 / G9 cross-ledger verdicts (`persist/stage.rs`); contracts the classifier cannot name still default to `Other`. Lore 0309 |
+
+The four marked ⚠ each fail clause 3 — which is exactly why they are still here.
+
+**The invariant that decides whether a defaulted write corrupts.** A whole-row
+write that fills missing fields with defaults is safe **only if it also carries
+the lowest version**. `soroban_contracts`' stub writer (`stage.rs:1761`) emits an
+all-NULL row but stamps `wasm_uploaded_at_ledger = 0` — the lowest possible
+version — so it always loses to the real deploy row. `accounts` breaks the rule:
+its version is `last_seen_ledger`, which the defaulting write *bumps to the
+current ledger*, so the emptied row wins. Tables with **no** version column
+(`assets`, `wasm_interface_metadata`) are exposed by default, because there the
+last write always wins. Check any new state-table writer against this.
+
+### Removed (lore 0425)
+
+Spent one-shots whose logic the live indexer now performs itself, each verified
+against the live write path before removal:
+
+| Removed | Live equivalent |
+|---|---|
+| `wasm-upgrade-backfill` (0320) | `build_wasm_upgrade_rows`, off the `executable_update` event |
+| `upgradeable-backfill` (0327) | parser writes `metadata.upgradeable` on every new WASM |
+| `nft-reparse` (0296) | fixed `detect_nft_events` in the parser |
+| `soroban-token-flow-backfill` (0383) | `stage.rs` registers token-event participants + SAC asset presence |
+| `pool-ids-backfill` (0266) | `pool_ids` + `gross_volume_a` computed live |
+| `assets-id-backfill` (0331) | `AssetRow::staged` computes `id` with the same Rust fn |
+| `metadata-backfill` (0304) | parser writes `soroban_contract_metadata` since 0297 |
+
+Live coverage was verified on prod before each removal, not assumed — e.g. at
+deletion time `soroban_contract_metadata` carried a write from 4 ledgers behind
+the chain tip, and `operations_appearances.pool_ids` from the tip itself. The
+shell wrappers that drove `pool-ids-backfill` (`scripts/0266/`) went with it.
+
+Recoverable from git history if a comparable pass is ever needed — but read
+clauses 1–4 first, because the answer is usually `run --reindex` or a live fix.
+
 ## Writes
 
 The runner writes to ClickHouse (ADR 0044); Postgres was retired (task
