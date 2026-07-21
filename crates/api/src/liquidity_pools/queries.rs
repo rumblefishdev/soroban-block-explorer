@@ -1104,9 +1104,15 @@ pub async fn fetch_pool_list(
          LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                             AND sac_b.issuer_id = lp.asset_b_issuer_id \
                             AND lp.asset_b_code != '' \
+         /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
+            duplicate rows): without it this LEFT JOIN doubled every page row \
+            whose latest snapshot ledger falls in the duplicated range, doubling \
+            UI rows and breaking keyset pagination. `any(closed_at)` is exact \
+            (closed_at identical across a dup pair). lore-0420 */ \
          LEFT JOIN ( \
-             SELECT sequence, closed_at FROM ledgers \
+             SELECT sequence, any(closed_at) AS closed_at FROM ledgers \
              WHERE sequence IN (SELECT last_updated_ledger FROM page) \
+             GROUP BY sequence \
          ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
          ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
         tvl_cte = tvl_cte,
