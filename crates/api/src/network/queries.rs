@@ -39,7 +39,15 @@ pub async fn fetch_stats(
     //     cache key (no TOCTOU, no re-derivation of "latest" here);
     //   * the 60s TPS window via a `sequence > head - 200` prune that bounds
     //     the scan to the most recent ~200 ledgers (~20 min of headroom for a
-    //     60s window) before the `closed_at` predicate refines it.
+    //     60s window) before the `closed_at` predicate refines it. That window
+    //     is collapsed with `LIMIT 1 BY sequence` before `sum(transaction_count)`
+    //     (lore-0420): `ledgers` is a ReplacingMergeTree, so a ledger that gets
+    //     re-ingested before its parts merge appears twice and would be counted
+    //     twice, inflating TPS. The tip is dup-free today, which is exactly why
+    //     this must be structural rather than left to luck.
+    // Both `ledgers` reads also carry an explicit row cap: the `latest` subquery
+    // takes `LIMIT 1` because a duplicated head row would return two rows and
+    // break `fetch_optional` with a 500 on the whole stats endpoint.
     // `head` is a trusted i64 from our own head probe, so it is inlined (no
     // injection surface) — matching the i64-inlining convention in
     // `crates/api/src/common/ch.rs`. This also drops the previous inner
@@ -69,9 +77,13 @@ pub async fn fetch_stats(
             toFloat64(ifNull( \
                 (SELECT sum(transaction_count) \
                         / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0) \
-                 FROM ledgers \
-                 WHERE sequence > {head} - 200 \
-                   AND closed_at >= now64() - INTERVAL 60 SECOND), \
+                 FROM ( \
+                     SELECT sequence, transaction_count, closed_at \
+                     FROM ledgers \
+                     WHERE sequence > {head} - 200 \
+                       AND closed_at >= now64() - INTERVAL 60 SECOND \
+                     LIMIT 1 BY sequence \
+                 )), \
                 0 \
             )) AS tps_60s, \
             ifNull((SELECT count() FROM accounts_recent), 0) \
@@ -82,6 +94,7 @@ pub async fn fetch_stats(
              SELECT sequence, closed_at \
              FROM ledgers \
              WHERE sequence = {head} \
+             LIMIT 1 \
          ) AS latest"
     );
     let row_opt = client.query(&sql).fetch_optional::<StatsRow>().await?;
