@@ -10,8 +10,12 @@ links: []
 history:
   - date: 2026-07-18
     status: backlog
-    who: claude
+    who: karolkow
     note: 'Spawned from 0393 future work — detail-page breakdown + column-coverage consistency.'
+  - date: 2026-07-20
+    status: backlog
+    who: karolkow
+    note: 'Folded in 0393 code-review finding F: this task owns the per-endpoint `values` gating (which endpoints render the column), so the `wants_values` flag cleanup + moving the tx-value query out of the shared `common/ch.rs` belong here.'
 ---
 
 # FEATURE: net-settled on tx detail page + remaining tx-list tables
@@ -31,6 +35,13 @@ consistent to do so.
 - The tx-list tables are **not** a uniform set — column coverage differs, and the
   API only returns `values` for the accounts / transactions / **ledgers**
   endpoints (assets + liquidity_pools pass `values=false`).
+- The per-endpoint gating is `common::ch::fetch_tx_list_aggregates`'s
+  **`wants_values: bool`** flag. The 0393 architecture review (finding **F**) flagged
+  it: one flag toggles two structurally different queries (~1600× read-cost gap —
+  op-types seek vs the value partition scan), and the transaction-only value query
+  (a 4-table join) lives in the **shared** `common/ch.rs` that 5 domains link. Since
+  deciding column coverage IS deciding `wants_values` per endpoint, the cleanup lands
+  here.
 
 ## Implementation
 
@@ -46,6 +57,12 @@ consistent to do so.
   api-types regen. Decide whether net-settled belongs on an asset's tx list.
 - **Out of scope:** `PoolTransactions`, `ContractInvocations` — event / invocation
   lists, not transaction rows.
+- **F cleanup (from 0393 review):** split `fetch_tx_list_aggregates(keys, wants_values)`
+  into `fetch_tx_op_types` (shared) + `fetch_tx_values` (transactions domain); drop
+  the flag; callers compose. Removes the control-coupling flag AND lifts the tx-only
+  value query out of `common/ch.rs`. (If task 0417 restructures the value read for the
+  `(ledger,tx)` companion first, do the relocation there — whichever lands first; the
+  flag removal is cheap and independent.)
 
 ## Acceptance Criteria
 
@@ -54,3 +71,6 @@ consistent to do so.
 - [ ] AssetTransactions decision recorded (added with API toggle, or explicitly
       declined with reason).
 - [ ] Naming stays `values` / `TransactionValue` (decided coherent in 0393).
+- [ ] **F:** `wants_values` flag removed — `fetch_tx_op_types` (shared) +
+      `fetch_tx_values` (tx domain); the tx-value query no longer lives in
+      `common/ch.rs`.

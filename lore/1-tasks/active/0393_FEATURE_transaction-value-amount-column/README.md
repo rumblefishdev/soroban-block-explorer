@@ -18,8 +18,10 @@ tags:
 milestone: 1
 links:
   - crates/db-clickhouse/schema/init.sql
-  - crates/xdr-parser/src/event_filters.rs
-  - crates/backfill-runner/src/soroban_token_flow_backfill.rs
+  - crates/xdr-parser/src/classic_value.rs
+  - crates/xdr-parser/src/net_settled.rs
+  - crates/db-clickhouse/src/persist/stage.rs
+  - crates/xdr-parser/tests/net_settled_real_corpus.rs
 history:
   - date: '2026-07-15'
     status: backlog
@@ -34,6 +36,18 @@ history:
     who: karolkow
     note: >
       Promoted to active to begin implementation.
+  - date: '2026-07-20'
+    status: active
+    who: karolkow
+    note: >
+      Fundamental redesign shipped + verified. Value now reads the authoritative
+      LEDGER (Account / Trustline / ContractData balance deltas) for EVERY tx — the
+      event-value path is deleted (events are spoofable logs). Asset vocabulary split
+      into two per-domain enums: EventAsset {Native, Credit, Bespoke} (event decoder,
+      presence-only) and LedgerAsset {Native, Credit, SacWrapped, Bespoke} (ledger
+      value reader). Cross-validated 1:1 on real mainnet data vs Horizon /effects
+      (incl. protocol-23 contract-effects) + stellar CLI — 7-fixture gated corpus +
+      prod-resolver E2E test. Spawned tasks 0410-0418. All green; uncommitted.
 ---
 
 # FEATURE: transaction value ("amount moved") column
@@ -175,11 +189,12 @@ for `operation_types` — the value read is a second aggregate there
 
 > **Implemented — `net_settled` is NULLABLE (fundamental fix).** `Nullable(Int128)`:
 > `Some(0)` = genuinely nothing settled net; `NULL` = NOT COMPUTABLE (the reducer
-> could not represent the result in i128 — amounts are contract-emitted, i.e.
-> attacker-chosen — or a recognised event's amount was unreadable). Keeping the
-> two apart stops an uncomputable value from masquerading as a real zero. Both the
-> live path and the backfill honour it: any un-representable / unreadable reduction
-> writes `NULL`, never a placeholder `0`. The read filters `IS NOT NULL AND != 0`
+> could not represent the result in i128 — a **bespoke** token's `ContractData`
+> balance is contract-authored, i.e. attacker-chosen, so a multi-movement sum can
+> overflow, and a SAC whose registry entry is missing is dropped). Keeping the two
+> apart stops an uncomputable value from masquerading as a real zero. The value path
+> honours it (`checked_sub`/`checked_abs`/`checked_add` → `None`), never a
+> placeholder `0`. The read filters `IS NOT NULL AND != 0`
 > and uses `assumeNotNull`: an aggregate over a Nullable column is `Nullable(T)`,
 > and decoding that into a non-nullable Rust field 500s (the 0324 trap).
 
@@ -214,32 +229,27 @@ which auto-net hops; the deferred version-safe `TransactionMeta` reader
 should be revived. Bespoke Soroban token balances live in contract storage
 (`ContractData`) — decode those keys too. Combine:
 
-- classic operation/result amounts (0359 path) — covers classic across all
-  history, terminal amounts (no hop inflation), and pre-CAP-67 history.
-- Soroban token-event amounts — read the amount out of `data_xdr` at live ingest.
-  (Original plan folded the history in CH-local via the 0383 backfill; **superseded**
-  — the Soroban value history now rides the full S3 re-ingest instead, and the 0383
-  backfill stays presence-only. See §4.)
+The shipped reader is the **ledger-entry balance-delta** reader
+(`classic_value.rs`): before→after balances on `AccountEntry` / `TrustLineEntry` /
+`ContractData`. It covers **every** flow uniformly — classic ops AND Soroban SAC /
+bespoke-token transfers (contract-held balances live in `ContractData`) — and
+auto-nets hops. Token events are **not** used for value (see the redesign note
+below); there is no separate op-amount or event-amount path, and so nothing to
+de-duplicate.
 
-The op-path/event-path split already de-duplicates classic vs Soroban (0383 is
-scoped to `has_soroban`); the same split prevents double counting here.
-
-> **Implemented:** the classic path shipped as the **ledger-entry balance-delta**
-> reader (`classic_value.rs`), NOT op/result amounts — it covers every classic op
-> type uniformly (payment, path payment, offer, LP, claimable balance, clawback)
-> and auto-nets, where op-amounts could not cover LP/CB-claim without the ledger
-> changes. Soroban stays on the token-event path. The two are routed by
-> `has_soroban` (protocol forbids mixing the op kinds in one tx, so no
-> double-count). **Diagnostic-source events are filtered** on the Soroban path
-> (they carry byte-identical copies that would double the amount).
+> **Redesign — value from the LEDGER, not events.** An earlier cut took the
+> Soroban value from token-event `data`. Events are contract-emitted **logs** (any
+> contract can emit any `"transfer"` it likes), so that value was spoofable. It was
+> replaced by the ledger reader above: value for EVERY tx (classic and Soroban)
+> comes from the authoritative `AccountEntry` / `TrustLineEntry` / `ContractData`
+> balance changes, which a contract cannot forge. There is no `has_soroban` value
+> split. The project-wide follow-up on this log-trust class is task 0415; the
+> superseded event-guard is 0410.
 >
-> **Historical coverage is asymmetric.** Only `soroban_events` (`topics_xdr` /
-> `data_xdr`) is stored in ClickHouse, so ONLY the Soroban token-event value can
-> be backfilled CH-local. The classic path reads `TransactionMeta` ledger
-> changes, which are **not in CH — they live only in S3**; classic history
-> therefore CANNOT be recovered by a CH-local pass. It is filled by the **planned
-> full re-ingest from S3** (which re-runs `stage.rs` over every ledger and so
-> recomputes both classic and Soroban values). Live-forward is CH-local for both.
+> **History is uniform, not asymmetric.** Because value now reads `TransactionMeta`
+> ledger changes for ALL txs, and those live only in S3 (not CH), ALL historical
+> value — classic and Soroban alike — is recovered by the full S3 re-ingest (§4),
+> never a CH-local pass. Live-forward is computed inline for both.
 
 ### 4. Backfill — value history comes from the full re-ingest
 
@@ -273,9 +283,10 @@ a large credit shows the dust as primary — see Open Decisions #1.)
       asset rows per tx, not a stored column (see Implementation Notes).
 - [x] Native XLM canonicalised to one `asset_id`; fee excluded (it is not in
       `TransactionMeta`); `max(Σ+, Σ−)` used (burns/redeems non-zero).
-- [x] Value derived CH-local at **live ingest**: classic from ledger-entry
-      balance deltas, Soroban from the token-event `data`; no S3 re-parse.
-      (Live-forward only — see history caveat below.)
+- [x] Value derived inline at **live ingest** from the **ledger** for ALL txs
+      (classic + Soroban): `AccountEntry` / `TrustLineEntry` / `ContractData`
+      balance deltas — never token events. (Live-forward only — history via the
+      S3 re-ingest, below.)
 - [ ] **Value history via the full re-ingest** (classic + Soroban), not a
       CH-local script. The 0383 token-flow backfill is **presence-only** — it does
       not compute `net_settled`. Historical values stay `NULL` until the re-ingest
@@ -289,6 +300,16 @@ a large credit shows the dust as primary — see Open Decisions #1.)
       projections on RMT; a `(ledger, tx)` copy re-stores ~85 GiB). The read is a
       partition-pruned scan; the access-path optimisation is deferred to a load
       measurement (Future Work).
+- [ ] **RELEASE GATE — do not expose the value read on production polling until
+      the scan cost is proven safe on a mature partition.** The value read scans
+      the `asset_id`-leading `operation_asset_appearances` (~26M rows/page today,
+      pruned only by the young head partition + the new `idx_oaa_transaction_id`
+      bloom); it is the **global tx list**, the most-polled page, and this exact
+      endpoint family has exhausted the read quota before (0243/0386). Gate: either
+      the `(ledger, tx)`-leading companion table lands (accounts_recent pattern) OR
+      a mature-partition load test confirms the scan + two `FINAL` joins stay within
+      budget. `wants_values` already scopes the cost to the single global tx list —
+      keep it there until this gate passes.
 - [x] Read scales raw `Int128` by `decimals` at read time (no baked decimals;
       classic/SAC = 7, via the `soroban_contracts`→`soroban_contract_metadata`
       coalesce).
@@ -322,26 +343,107 @@ a large credit shows the dust as primary — see Open Decisions #1.)
    accounts (see measurements); accepted as tx-level intrinsic. Revisit only if
    account-own-delta is wanted.
 
-## Event-value trust gate (H2) — spoof closed here, full guard in 0410
+## Value source: the LEDGER, not events (redesign — supersedes the H2/0410 gate)
 
-A token event's trailing SEP-11 asset string (`"USDC:GISSUER…"`) is NOT
-cryptographically bound to the emitter, so a hostile contract could emit one and
-forge a classic-asset amount. **Closed in this task (interim):** on the Soroban
-value path, only a bespoke `Contract` identity — which IS the emitter, hence
-unspoofable — is attributed a value; a `Native`/`Credit` claim from events is
-written as `NULL` ("not computed"), so a spoof renders a dash, never a fabricated
-figure (`token_events_net_settled`, gate + tests
-`credit_claim_from_an_unverified_emitter_is_not_attributed_a_value` /
-`native_claim_from_events_is_also_untrusted`).
+**A token event is a LOG** — any contract can emit any `"transfer"` topic it likes,
+so an event's asset + amount are contract self-reports, not authoritative. Reading
+value from events was the wrong source, and the SAC crypto-guard (former H2 / task 0410) was a patch around trusting logs.
 
-**Cost of the interim:** a _genuine_ SAC transfer of a classic asset inside a
-Soroban tx also loses its event-derived value (dash) until the full guard lands.
-The classic path (`has_soroban = 0`) is unaffected — it reads ledger balance
-deltas, unspoofable. **[0410](../backlog/0410_BUG_sac-event-identity-guard-on-value-path.md)**
-recovers that coverage by verifying `emitter == derive_sac(asset)` with the
-existing crypto-match `sac_override_from_event_topics` (task 0294) — a
-cross-cutting change (`net_id` into `StageInputs` + fixture rework), hence its own
-task.
+**Value now comes exclusively from the authoritative LEDGER** — the balance-entry
+changes consensus actually applied, which a contract cannot forge — for EVERY tx,
+classic or Soroban:
+
+The ledger reader emits the per-domain **`LedgerAsset`** enum — one variant per
+balance-bearing ledger-entry type:
+
+| holder / asset                  | ledger entry                                            | `LedgerAsset` variant                                                                       |
+| ------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| account, native                 | `AccountEntry.balance`                                  | `Native`                                                                                    |
+| account, classic credit         | `TrustLineEntry.balance`                                | `Credit { code, issuer }`                                                                   |
+| contract, SAC (classic-wrapped) | `ContractData` `Balance`, SAC `BalanceValue` **struct** | `SacWrapped(C…)` → reversed to the wrapped classic `asset_id` via `sac_classic` (DB type 1) |
+| any, bespoke token              | `ContractData` `Balance`, **bare `i128`**               | `Bespoke(C…)` → the token IS the asset (DB type 3)                                          |
+
+`classic_balance_deltas` telescopes `State`(before) → `Updated`(after) into signed
+per-(holder, asset) deltas; `classic_deltas_net_settled` (persist) resolves each
+variant to its `asset_id` surrogate and reduces to `max(Σ+, Σ−)`. A SAC transfer's
+contract leg (`SacWrapped`) and account leg (`Credit`/`Native`) resolve to the SAME
+`asset_id`, so a mixed transfer **nets as one asset** — no double-count. All of this
+is **cross-validated 1:1 on real mainnet data** (see [Verification](#verification--cross-validated-on-real-mainnet-data)).
+
+**Two per-domain enums, not one shared type.** `LedgerAsset` (ledger reader) is
+separate from **`EventAsset`** `{ Native, Credit, Bespoke }` (the event decoder,
+presence-only). Each is total over its own producer's cases — no impossible `=>None`
+arms, no boolean flag (the earlier shared `AssetIdentity`/`ContractHeld{bool}` was
+split to match the project's one-enum-per-domain convention, cf. `AssetRef`,
+`SacAssetIdentity`). Consolidating the ~3 parallel asset enums project-wide is task
+[0418](../backlog/0418_REFACTOR_asset-vocabulary-consolidation-and-module-conventions.md).
+
+**Deleted with this redesign:** the whole event-value path —
+`token_events_net_settled`, `tx_token_net_settled`, the H2 gate, `policy_null`,
+`sac_rejected`, `net_id` in the value path, and the 0410 SAC-crypto-guard-on-events.
+`derive_token_event` stays — events remain a legitimate PRESENCE signal (who
+participated), just never a value/amount source. This generalises: **[0415](../backlog/0415_AUDIT_authoritative-facts-ledger-not-logs.md)**
+audits the whole indexer for other authoritative facts wrongly taken from logs.
+
+## Verification — cross-validated on real mainnet data
+
+The value pipeline was cross-checked **1:1 on real mainnet transactions** (2026-07-20)
+against **3 independent derivations of the same authoritative meta**: our reader
+(Rust), **Horizon `/effects`** (Go — incl. protocol-23 `contract_debited/credited`,
+which resolve SAC→native/USDC exactly like our `sac_classic`), and the **`stellar`
+CLI** XDR decode (hand-derived). Meta for any (incl. historical/edge) tx comes from
+Soroban RPC `getTransaction` and **stellar.expert `/tx` `meta`** (unlimited retention).
+
+Frozen as a gated regression corpus: `crates/xdr-parser/tests/net_settled_real_corpus.rs`
+(8 fixtures) + `crates/db-clickhouse/tests/net_settled_real_e2e.rs` (end-to-end through
+the production resolver). Dev harness: `crates/xdr-parser/examples/decode_meta.rs`.
+
+| branch                                                                         | real-data                                                     | source                                     |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------- | ------------------------------------------ |
+| Native / Credit / multi-asset                                                  | ✅ 1:1                                                        | Horizon                                    |
+| telescoping / netting (path-payment, net<gross)                                | ✅ 1:1                                                        | Horizon                                    |
+| **SacWrapped** (contract-held SAC)                                             | ✅ 1:1                                                        | Horizon contract-effects **+** stellar CLI |
+| **Bespoke** (bare-i128 amount)                                                 | ✅ 1:1                                                        | stellar CLI decode                         |
+| Created (create_account) · Removed (account_merge)                             | ✅ 1:1                                                        | Horizon                                    |
+| failed-tx (moves nothing)                                                      | ✅ 1:1                                                        | Horizon                                    |
+| Soroban mint (7 classic assets, issuer-side correctly absent)                  | ✅ 1:1                                                        | Horizon                                    |
+| claimable-balance (pass-through **nets to 0** + 0413 issuer/CB gap, fail-safe) | ✅ 1:1                                                        | Horizon + stellar CLI                      |
+| **prod net-merge** through `classic_deltas_net_settled` + registry             | ✅                                                            | E2E test (4 legs → 2 assets)               |
+| clawback · Restored · C→C Soroban                                              | ⚠️ unit only — rare on recent mainnet, needs S3/older ledgers | —                                          |
+| adversarial (overflow / registry-miss / spoof)                                 | ⚠️ unit-tested only                                           | —                                          |
+
+**Honest scope:** everything that carries real value on mainnet is cross-validated live;
+the tail (clawback / Restored / C→C — rare in recent data, findable via S3/older ledgers)
+and the failure modes (overflow, registry-miss→drop, spoofed-event→ignore — physically
+hard to produce on mainnet) remain unit-tested. Not literally 100% of branches on real
+data. (Verification also caught a false-alarm "discrepancy" on the CB tx that turned out
+to be pass-through **netting working correctly** — confirmed by the independent CLI decode.) Note: Horizon
+and stellar CLI both decode with the same `stellar-xdr` spec, so they are independent
+**derivations** over one authoritative meta, not independent oracles of the raw fact.
+
+## Remaining steps
+
+**Code — DONE** (ledger redesign + `EventAsset`/`LedgerAsset` split + cross-validation);
+all green (clippy `-D warnings`, unit + real-data corpus + prod E2E). Nothing
+code-blocking left in 0393 itself.
+
+**A. Commit / merge (needs explicit go — currently uncommitted):**
+
+1. Regen api-types (`nx run @rumblefish/api-types:generate`) — `crates/api/**` +
+   `dto.rs` changed → the freshness gate needs `openapi.json` + `generated/*` staged.
+2. Commit + open/update PR (base develop). Move task 0410 → `archive/` and 0393 →
+   `archive/` on merge; the 0411–0418 backlog tasks land on develop.
+
+**B. Deployment / Operations (prod DB, ordered — see Operations section):** 3. `ALTER … ADD COLUMN net_settled Nullable(Int128)` (before the new indexer deploys). 4. Deploy the new indexer (live-forward values start). 5. Full **S3 re-ingest** to fold value into history (classic + Soroban; no CH-local backfill). 6. Confirm `assets.id` backfilled (else the value read's `INNER JOIN assets` drops rows). 7. Add + `MATERIALIZE` the `idx_oaa_transaction_id` bloom skip index. 8. **RELEASE GATE** — do NOT expose the value read on prod polling until task **0417**
+(the `(ledger,tx)` companion) lands OR a mature-partition load test clears the scan.
+
+**C. Verification tail (optional — raise coverage from "main paths" to "full"):** 9. claimable-balance is now in the corpus (✅). Still pending: **clawback** and
+**C→C Soroban** — rare on recent mainnet (0 found in 800 events); need S3/older
+ledgers or a targeted clawback-asset search. Restored + adversarial stay unit-only
+(inherent — can't produce on mainnet).
+
+**D. Follow-up tasks (backlog, NOT blocking 0393):** 0411 (detail page + F) · 0412 · 0413 ·
+0414 · 0415 (NFT-ownership first) · 0416 · 0417 (release gate) · 0418 · 0408.
 
 ## Operations — do AFTER the code lands, before/at deploy
 
@@ -373,6 +475,17 @@ column` and ingestion halts.
    and un-backfilled `assets` rows have `id = 0` and join nothing → those values
    silently vanish. Confirm `assets.id` is populated for the range before relying
    on the column.
+5. **Add + materialize the bloom skip index (value-read mitigation).** `init.sql`
+   now declares `idx_oaa_transaction_id` on `operation_asset_appearances`; prod
+   needs it added and built over existing parts:
+   ```sql
+   ALTER TABLE operation_asset_appearances
+     ADD INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1;
+   ALTER TABLE operation_asset_appearances MATERIALIZE INDEX idx_oaa_transaction_id;
+   ```
+   `MATERIALIZE` is a background mutation over existing parts; until it finishes,
+   only new parts are granule-pruned. Turns the `(ledger, tx)` filter's ~26M-row
+   partition scan into a ~10x-smaller pruned read. RMT-safe.
 
 > **`max()` is a one-way ratchet (re-review).** The read dedups with
 > `max(net_settled)`, so if a future reducer fix produces a _smaller_ correct
@@ -382,34 +495,39 @@ column` and ingestion halts.
 > over the affected partitions, and know that until it completes the correction
 > is invisible.
 
-## Read-path performance — REQUIRED before this ships at scale (deferred)
+## Read-path performance — mitigated (bloom skip index + D1 de-scoping)
 
-Measured, not hypothetical: the value read SCANS the pruned partition (~26 M
-rows/page against a full partition, vs ~16 k for the seek-based op-types query
-beside it), because the table is `asset_id`-leading and we filter `(ledger, tx)`.
-Plus three **un-pruned** dimension joins (`assets.id` is not in its ORDER BY). This
-endpoint family is polled and previously exhausted the CH read quota in exactly
-this shape (tasks 0243/0386) — the cost is hidden today only because the head
-partition is young (~4% full); it grows ~43,000× as the partition fills over ~4
-weeks, and the **account** transactions list pages into full partitions already.
+Measured: the value read is NOT a primary-key seek — the table is `asset_id`-leading
+and we filter `(ledger, tx)`, so unaided it SCANS the pruned partition (~26 M
+rows/page on a full partition, vs ~16 k for the seek-based op-types query beside it),
+plus three **un-pruned** dimension joins (`assets.id` is not in its ORDER BY). This
+endpoint family is polled and previously exhausted the CH read quota in exactly this
+shape (tasks 0243/0386). The **account** list was the worst case: its page spreads
+across many ledger-partitions, so the scan is **unbounded** (partition-count × 26 M),
+not capped like the single-partition ledger/global page.
 
-**Done in-branch (re-review):** the "cheap now" caller split — `fetch_tx_list_
-aggregates` gained a `wants_values` flag; the LP + asset transaction lists (which
-render only `operation_types`) pass `false` and skip the value scan + joins
-entirely. Only the 3 endpoints that render the column pay.
+**Mitigations applied in-branch:**
 
-Remaining fixes, increasing effort:
+- **`wants_values` gate + D1 de-scoping.** `fetch_tx_list_aggregates` takes a
+  `wants_values` flag; the LP + asset lists (op-types only) always passed `false`.
+  Per **decision D1**, the **account** list (unbounded worst case) and the **ledger
+  detail** list (never rendered the column) now also pass `false`. Only the **global
+  tx list** pays the value read today.
+- **Bloom skip index.** `init.sql` declares `idx_oaa_transaction_id` (bloom on
+  `transaction_id`, same pattern as `idx_oa_contract_id` / `idx_acc_id`); it prunes
+  granules holding none of a page's tx_ids (~10×), turning the partition scan into a
+  granule-pruned read. RMT-safe (only projections are refused, CH Code 344). Prod
+  migration = Operations step 5 above.
 
-- **Cheap now (pure code):** `fetch_tx_list_aggregates` has 5 callers but only 3
-  render `values` (`transactions`, `accounts`, `ledgers`); `liquidity_pools` and
-  `assets` pay the scan + joins and discard it. Split `fetch_tx_list_value_moved`
-  out and call it only where the column is rendered.
-- **The real fix:** a `(ledger, tx)`-ordered companion (the `accounts_recent`
-  pattern — plain MergeTree + refreshable MV + atomic `EXCHANGE`; a projection is
-  refused on an RMT, CH Code 344) so the read is a seek. This is its own prod
-  migration — do it in the same window as the Operations steps above.
-- Reduce the un-pruned joins: `decimals = 7` for classic/SAC, so the metadata
-  joins are only needed for bespoke type-3.
+**Fallback — only if the bloom proves insufficient at scale:**
+
+- A `(ledger, tx)`-ordered companion (the `accounts_recent` pattern — plain
+  MergeTree + refreshable MV + atomic `EXCHANGE`; a projection is refused on an RMT,
+  CH Code 344) so the read is a true seek. Its own prod migration; defer until a load
+  measurement shows the bloom is not enough.
+- Reduce the un-pruned joins: `decimals = 7` for classic/SAC, so the metadata joins
+  are only needed for bespoke type-3.
+- Re-enabling the account/ledger columns (task **0411**) is gated on this being cheap.
 
 Tracked with task **0408** (find-by-amount needs the same access path).
 
@@ -420,22 +538,39 @@ Tracked with task **0408** (find-by-amount needs the same access path).
   during the enrichment window, the read's `coalesce(m.decimals, 7)` mis-scales
   the display (raw value is stored correctly; self-corrects when metadata lands).
   Consistent with the existing `total_supply` / `balances` read pattern.
-- **Live vs backfill input-set equality is near-total, not proven.** Live reduces
-  over parser events (filtered only by `is_diagnostic`); the backfill reduces over
-  stored `soroban_events`, which the writer already dropped orphan (contract-id-less)
-  events from. A token event with no emitting contract id would differ — but such
-  an event resolves to no asset identity on both paths anyway (bespoke) or is
-  untrusted→NULL (classic, H2 gate), so no real divergence has been constructed.
+- **Live vs history input-set equality — now a non-issue.** Value has a SINGLE
+  source: `classic_balance_deltas` over the tx's `TransactionMeta`, run by `stage.rs`
+  at both live ingest and the full S3 re-ingest. Both consume the same authoritative
+  meta with the same reducer, so live and historical rows for a key are computed
+  identically — there is no live-events-vs-stored-events divergence (that concern
+  belonged to the deleted event-value path).
 
 ## Future Work
 
-> **Spawned backlog tasks (on develop):**
+> **Spawned backlog tasks (from this scope):**
 >
-> - **[0409](../backlog/0409_REFACTOR_arm-a-nft-pollution-separation.md)** —
->   arm-A NFT pollution: root cause (done) + pick a permanent fungible/NFT
->   separation strategy. The ingest-time NFT gate is one candidate there.
+> - **[0410](../backlog/0410_BUG_sac-event-identity-guard-on-value-path.md)** —
+>   SUPERSEDED (the event-value guard; value now reads the ledger). Archive on merge.
+> - **[0411](../backlog/0411_FEATURE_net-settled-detail-page-and-remaining-tx-tables.md)** —
+>   tx-detail per-asset breakdown + remaining tx-list tables; **owns finding F**
+>   (`fetch_tx_op_types` / `fetch_tx_values` split, drop `wants_values`).
+> - **[0412](../backlog/0412_BUG_net-settled-undeclared-moved-asset.md)** — value
+>   dropped for an asset the ledger moved but no op/event declared (Soroban-no-event).
+> - **[0413](../backlog/0413_BUG_net-settled-issuer-side-cb-lp-own-asset.md)** —
+>   issuer-side claimable-balance / LP of the issuer's own asset understates.
+> - **[0414](../backlog/0414_REFACTOR_split-stage-god-module.md)** — split
+>   `stage.rs` god module. **[0418]** adds `state.rs` (3290 LOC) as its twin.
+> - **[0415](../backlog/0415_AUDIT_authoritative-facts-ledger-not-logs.md)** —
+>   project-wide audit: every authoritative fact from the ledger, not logs
+>   (NFT ownership is the first still-live target).
+> - **[0416](../backlog/0416_PERF_soroban-events-fullcontent-storage-vs-readtime.md)** —
+>   `soroban_events` storage (#1 table, 223 GiB) vs read-time decode (ADR 0044 Q6).
+> - **[0417](../backlog/0417_PERF_net-settled-value-read-ledger-tx-companion.md)** —
+>   `(ledger,tx)`-leading companion so the value read is a seek (the RELEASE GATE below).
+> - **[0418](../backlog/0418_REFACTOR_asset-vocabulary-consolidation-and-module-conventions.md)** —
+>   consolidate the parallel asset enums in `domain` + module-conventions ADR + `state.rs` split.
 > - **[0408](../backlog/0408_FEATURE_find-by-amount.md)** — find-by-amount:
->   sort/filter transactions by value moved (the origin request's other half).
+>   sort/filter by value moved (the origin request's other half).
 
 - Read-path performance — see the dedicated section above (measured; the
   `(ledger, tx)` companion is required before scale).
@@ -456,10 +591,10 @@ Tracked with task **0408** (find-by-amount needs the same access path).
     exact wildcards the 0359 `meta.rs` "adoption" was meant to strangle (0359
     README). Migrating it closes that gap and would let both modules share the
     meta walk.
-  - Ingest parses each Soroban event through `parse_token_event` twice — once for
-    presence (`derive_token_event`), once for the amount (`token_event_movement`).
-    Negligible on live per-ledger volume; a single decode pass yielding both would
-    matter only at backfill scale.
+  - ~~Ingest parses each Soroban event twice (presence + amount)~~ — **RESOLVED by
+    the redesign.** The event-amount decode (`token_event_amount`) is deleted, so
+    events are parsed once (presence only, `derive_token_event`); value comes from
+    the ledger, not a second event pass.
   - The surrogate credit formula was consolidated into `ids::credit_asset_id`
     (task 0393) — all six production call sites now share it; the golden test
     `credit_asset_id_matches_raw_formula` pins the equivalence.

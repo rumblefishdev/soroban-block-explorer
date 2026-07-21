@@ -395,21 +395,19 @@ cannot see intent and does not try to. Net is preferred to gross because
 payment (3 hops of 100 read as 300), and routing is the common case. If a gross
 figure is ever needed, `cycle volume = gross − net` falls out of the theorem.
 
-Two disjoint sources feed it (the protocol forbids mixing classic + Soroban ops
-in one transaction, so they never double-count):
+A single **ledger** reader feeds it, for EVERY tx (classic and Soroban):
 
-- **Classic** (`has_soroban = 0`) — `xdr_parser::classic_balance_deltas`
-  (`classic_value.rs`) reads the before→after `AccountEntry` / `TrustLineEntry`
-  balance changes from `TransactionMeta` (via the version-safe `meta.rs` change
-  accessor). Every classic op type — payment, path payment, offer/DEX fill, LP
-  deposit/withdraw, claimable-balance create/claim, clawback — settles as an
-  account/trustline balance change, so this one reader covers them all and
-  auto-nets. The fee is charged in the ledger's separate `feeProcessing` phase,
-  not in `TransactionMeta`, so it is excluded by construction.
-- **Soroban** (`has_soroban = 1`) — `xdr_parser::token_event_amount`
-  (`event_filters.rs`) reads the `i128` amount out of each transfer / mint /
-  burn / clawback event's `data` (bare scalar or the CAP-67 `map{amount,…}`),
-  paired with the event's from/to/asset.
+- `xdr_parser::classic_balance_deltas` (`classic_value.rs`) reads the before→after
+  balance changes on `AccountEntry` / `TrustLineEntry` / `ContractData` from
+  `TransactionMeta` (via the version-safe `meta.rs` change accessor). Every value
+  flow — payment, path payment, offer/DEX fill, LP deposit/withdraw,
+  claimable-balance create/claim, clawback, **and** Soroban SAC / bespoke-token
+  transfers (which settle as `ContractData` `Balance` changes) — is an
+  account / trustline / contract balance change, so this one reader covers them
+  all and auto-nets. Token EVENTS are contract-emitted logs and are **never** used
+  for value (any contract can emit any `"transfer"` it likes); a ledger balance
+  cannot be forged. The fee is charged in the ledger's separate `feeProcessing`
+  phase, not in `TransactionMeta`, so it is excluded by construction.
 
 Surrogate resolution and the net reduction run at ingest
 (`db_clickhouse::persist::stage`), which writes the result to

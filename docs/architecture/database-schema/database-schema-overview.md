@@ -474,23 +474,26 @@ CREATE TABLE operation_asset_appearances (
     asset_id        Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
     ledger_sequence Int64,
     transaction_id  Int64,
-    net_settled     Nullable(Int128)  -- task 0393: net-settled "value moved" per
+    net_settled     Nullable(Int128),  -- task 0393: net-settled "value moved" per
                              -- (tx, asset), RAW (scale by decimals at read;
                              -- classic/SAC = 7). NULL = not computable,
                              -- 0 = genuinely nothing settled net
+    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (asset_id, ledger_sequence, transaction_id);
 ```
 
-> **Read-path optimisation is open.** The tx-list value read filters `(ledger,
-tx)` on this `asset_id`-leading table — a partition-pruned scan, not a prefix
-> seek. A projection is not a candidate (CH 26.3 refuses projections on a
-> ReplacingMergeTree, and a `(ledger, tx)`-ordered copy would re-store the
-> incompressible `transaction_id` ~85 GiB anyway). No optimisation is applied
-> yet: the right mechanism must be chosen from a concrete load measurement of the
-> endpoint — an explicit task 0393 follow-up, not a guess.
+> **Read-path.** The tx-list value read filters `(ledger, tx)` on this
+> `asset_id`-leading table — not a prefix seek, so unaided it is a partition scan
+> (~26 M rows/page on a full partition). Mitigated by the `idx_oaa_transaction_id` > **bloom skip index** (task 0393), which prunes granules holding none of a page's
+> tx_ids (~10×); same pattern as `idx_oa_contract_id`. A projection is not a
+> candidate (CH 26.3 refuses projections on a ReplacingMergeTree, and a `(ledger,
+tx)`-ordered companion would re-store the incompressible `transaction_id` ~85 GiB)
+> — the companion is the heavier fallback only if the bloom proves insufficient at
+> scale. The read is also `wants_values`-gated: only the global tx list requests
+> values today (account + ledger lists pass `false`, task 0393 decision D1).
 
 **`net_settled` (task 0393)** is the transaction "value moved" figure surfaced by
 the tx-list endpoints (UI column "Net settled"). It is the **net-settled value**
