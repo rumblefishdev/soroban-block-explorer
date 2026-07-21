@@ -8,6 +8,26 @@
 
 use serde_json::Value;
 
+/// The asset a SEP-41 / CAP-67 token event names — the EVENT domain's asset
+/// vocabulary (cf. `AssetRef` for op-declared assets, `LedgerAsset` for
+/// ledger-read balances; each domain owns its own small asset enum, resolved to a
+/// DB surrogate by the persistence layer).
+///
+/// CAP-67 "unified" SAC events carry the classic asset as a trailing SEP-11 string
+/// topic (`"native"` or `"CODE:ISSUER"`); bespoke non-SAC tokens omit it, so their
+/// identity IS the emitting contract (`Bespoke` — the caller supplies the emitter
+/// surrogate it already holds; the id is not in the topics).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventAsset {
+    /// Native XLM (`"native"` asset string).
+    Native,
+    /// A classic issued asset (`"CODE:ISSUER"` asset string).
+    Credit { code: String, issuer: String },
+    /// A bespoke non-SAC token: no asset string in the event, so the asset is the
+    /// emitting contract; resolved from the emitting contract id by the caller.
+    Bespoke,
+}
+
 /// The SEP-41 / CAP-67 token-event verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenEventKind {
@@ -15,19 +35,6 @@ pub enum TokenEventKind {
     Mint,
     Burn,
     Clawback,
-}
-
-/// The asset a token event moved, as identified by the event itself.
-///
-/// CAP-67 "unified" SAC events carry the classic asset as a trailing SEP-11
-/// string topic (`"native"` or `"CODE:ISSUER"`). Bespoke non-SAC tokens omit
-/// it — their asset identity is the emitting contract, surfaced here as
-/// `Contract` so the caller (which holds `contract_id`) resolves the surrogate.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EventAsset {
-    Native,
-    Credit { code: String, issuer: String },
-    Contract,
 }
 
 /// A decoded SEP-41 / CAP-67 token event (transfer / mint / burn / clawback).
@@ -53,7 +60,7 @@ pub struct TokenEvent {
 /// - clawback `[sym, addr(from), string(asset)?]`
 ///
 /// The trailing SEP-11 asset string is present on SAC events and absent on
-/// bespoke tokens (→ `EventAsset::Contract`).
+/// bespoke tokens (→ `EventAsset::Bespoke`).
 pub fn parse_token_event(topics: &Value) -> Option<TokenEvent> {
     let arr = topics.as_array()?;
     let verb = arr.first()?;
@@ -105,10 +112,10 @@ pub fn parse_token_event(topics: &Value) -> Option<TokenEvent> {
 }
 
 /// Resolve the asset from a trailing SEP-11 string topic. Absent, empty, or
-/// malformed → `Contract` (bespoke token; identity is the emitting contract).
+/// malformed → `Bespoke` (bespoke token; identity is the emitting contract).
 fn event_asset(topic: Option<&Value>) -> EventAsset {
     let Some(s) = topic.and_then(string_topic) else {
-        return EventAsset::Contract;
+        return EventAsset::Bespoke;
     };
     if s == "native" {
         return EventAsset::Native;
@@ -118,7 +125,7 @@ fn event_asset(topic: Option<&Value>) -> EventAsset {
             code: code.to_string(),
             issuer: issuer.to_string(),
         },
-        _ => EventAsset::Contract,
+        _ => EventAsset::Bespoke,
     }
 }
 
@@ -205,7 +212,7 @@ mod tests {
         assert_eq!(ev.kind, TokenEventKind::Transfer);
         assert_eq!(ev.from.as_deref(), Some("GBFROM"));
         assert_eq!(ev.to.as_deref(), Some("GBTO"));
-        assert_eq!(ev.asset, EventAsset::Contract);
+        assert_eq!(ev.asset, EventAsset::Bespoke);
     }
 
     #[test]
@@ -252,7 +259,7 @@ mod tests {
         let ev = parse_token_event(&json!([sym("mint"), addr("GBTO")])).unwrap();
         assert_eq!(ev.kind, TokenEventKind::Mint);
         assert_eq!(ev.to.as_deref(), Some("GBTO"));
-        assert_eq!(ev.asset, EventAsset::Contract);
+        assert_eq!(ev.asset, EventAsset::Bespoke);
     }
 
     #[test]

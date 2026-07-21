@@ -10,7 +10,6 @@
 //! ledger).
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
@@ -73,8 +72,6 @@ pub struct ParseOutput {
     pub sac_overrides: Vec<xdr_parser::SacOverride>,
 }
 
-static NETWORK_ID: OnceLock<[u8; 32]> = OnceLock::new();
-
 /// Error returned by [`init_network_id`] when the
 /// `STELLAR_NETWORK_PASSPHRASE` env var is missing or empty. Mirrors
 /// the `MtlsError::MissingEnv` shape so the Lambda cold-start path
@@ -101,17 +98,15 @@ pub struct NetworkIdError;
 /// newline / leading space) the operator should fix even though we
 /// recover transparently.
 ///
-/// Tests: `NETWORK_ID` is a process-global static. Inside `cargo
-/// test -p indexer` every test that lands in `parse_ledger` shares
-/// it; the first call wins and pins the passphrase for the rest of
-/// the process. Tests that need a specific passphrase must either
-/// (a) set `STELLAR_NETWORK_PASSPHRASE` before any `parse_ledger`
-/// runs or (b) call `xdr_parser::network_id(...)` directly with
-/// their fixture value.
+/// The value itself is cached ONCE in [`xdr_parser::net_id`] — the single
+/// process-global source of truth (audit A4 removed a duplicate `OnceLock` that
+/// lived here). Its `OnceLock` pins the passphrase on the first call; tests that
+/// need a specific passphrase set `STELLAR_NETWORK_PASSPHRASE` before any
+/// `parse_ledger` (or call `xdr_parser::network_id(...)` directly with their
+/// fixture value).
 pub fn init_network_id() -> Result<&'static [u8; 32], NetworkIdError> {
-    if let Some(existing) = NETWORK_ID.get() {
-        return Ok(existing);
-    }
+    // Validation + drift warning stay here (indexer cold-start policy); only the
+    // cache moved to `xdr_parser::net_id()`.
     let raw = std::env::var("STELLAR_NETWORK_PASSPHRASE").map_err(|_| NetworkIdError)?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -125,29 +120,24 @@ pub fn init_network_id() -> Result<&'static [u8; 32], NetworkIdError> {
              trimmed before hashing — fix the env injection to avoid drift"
         );
     }
-    let id = xdr_parser::network_id(trimmed);
-    // `set` may race with another thread that beat us; either way the
-    // value is identical (same env), so we discard the race-loser
-    // result and return the actually-installed one.
-    let _ = NETWORK_ID.set(id);
-    Ok(NETWORK_ID.get().expect("just set"))
+    // Triggers + caches the shared accessor (which trims identically). `None` only
+    // if the env vanished between our read and the accessor's — not possible in
+    // practice, mapped to the same error for safety.
+    xdr_parser::net_id().ok_or(NetworkIdError)
 }
 
-/// Network identifier hash. Falls back to lazy init from
-/// `STELLAR_NETWORK_PASSPHRASE` for callers that did not run
-/// [`init_network_id`] in their cold-start path (legacy tests, dev
-/// tools). Production Lambda always pre-inits, so this lazy branch
-/// is dead code in the hot path.
+/// Network identifier hash. Delegates to the shared [`xdr_parser::net_id`] cache.
+/// Falls back to lazy init from `STELLAR_NETWORK_PASSPHRASE` for callers that did
+/// not run [`init_network_id`] in their cold-start path (legacy tests, dev tools).
+/// Production Lambda always pre-inits, so this lazy branch is dead code in the hot
+/// path.
 fn network_id() -> &'static [u8; 32] {
-    NETWORK_ID.get_or_init(|| {
-        let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
-            panic!(
-                "STELLAR_NETWORK_PASSPHRASE env not set; call \
-                 `init_network_id()` from the binary's cold-start path \
-                 before any `parse_ledger` invocation."
-            )
-        });
-        xdr_parser::network_id(&passphrase)
+    xdr_parser::net_id().unwrap_or_else(|| {
+        panic!(
+            "STELLAR_NETWORK_PASSPHRASE env not set; call \
+             `init_network_id()` from the binary's cold-start path \
+             before any `parse_ledger` invocation."
+        )
     })
 }
 

@@ -80,3 +80,5 @@ reqwest = { workspace = true, optional = true }
 # Build raw `ScVal` METADATA fixtures in the live-CH metadata e2e so the test
 # exercises the full chain (parse → build_rows → write → read), not just write.
 stellar-xdr = { workspace = true }
+# Decode captured real-mainnet `resultMetaXdr` fixtures in the net-settled e2e.
+base64 = { workspace = true }

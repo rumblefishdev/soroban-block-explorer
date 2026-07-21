@@ -371,6 +371,50 @@ step 14, called out here so the parser/indexer boundary stays explicit):
   task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
   `current_owner_id`) tuple — see §5.1 NFT pattern.
 
+### 4.7 Transaction Value — "net settled" (task 0393)
+
+The tx-list "Net settled" column needs a single figure per (transaction, asset).
+The protocol has no per-transaction amount — value lives on operations and Soroban
+token events — so the parser derives the **net-settled value**:
+`max(Σ positive account deltas, Σ negative account deltas)` per (tx, asset),
+which nets out routing hops (a pass-through account ends at delta 0) instead of
+double-counting them. The reducer is `xdr_parser::net_settled`
+(`net_settled.rs`); its three rules — `max` of both sides (so burns / payments
+-to-issuer stay non-zero), native canonicalised to one surrogate, fee excluded —
+are covered in task 0393.
+
+This figure is the network-flow **flow value**, not a heuristic: the flow
+decomposition theorem splits any flow into source→sink **paths** plus **cycles**,
+where a path contributes its flow and a **cycle contributes exactly zero**. Hence
+`gross = Σ path + Σ cycle`, `net = Σ path`. A wash / round-trip is a pure cycle
+and therefore nets to zero **by definition** (the same zero-balance-cycle
+signature the wash-trading literature uses to detect washes), and two offsetting
+but intent-wise unrelated payments decompose into a single path — the arithmetic
+cannot see intent and does not try to. Net is preferred to gross because
+`net ≤ gross` always: net never overstates, while gross inflates every routed
+payment (3 hops of 100 read as 300), and routing is the common case. If a gross
+figure is ever needed, `cycle volume = gross − net` falls out of the theorem.
+
+A single **ledger** reader feeds it, for EVERY tx (classic and Soroban):
+
+- `xdr_parser::ledger_balance_deltas` (`ledger_value.rs`) reads the before→after
+  balance changes on `AccountEntry` / `TrustLineEntry` / `ContractData` from
+  `TransactionMeta` (via the version-safe `meta.rs` change accessor). Every value
+  flow — payment, path payment, offer/DEX fill, LP deposit/withdraw,
+  claimable-balance create/claim, clawback, **and** Soroban SAC / bespoke-token
+  transfers (which settle as `ContractData` `Balance` changes) — is an
+  account / trustline / contract balance change, so this one reader covers them
+  all and auto-nets. Token EVENTS are contract-emitted logs and are **never** used
+  for value (any contract can emit any `"transfer"` it likes); a ledger balance
+  cannot be forged. The fee is charged in the ledger's separate `feeProcessing`
+  phase, not in `TransactionMeta`, so it is excluded by construction.
+
+Surrogate resolution and the net reduction run at ingest
+(`db_clickhouse::persist::stage`), which writes the result to
+`operation_asset_appearances.net_settled` (`Nullable(Int128)`; §4.3 / schema
+doc). Values are stored RAW; the read scales by the asset's decimals (classic /
+SAC = 7).
+
 ## 5. Soroban-Specific Handling
 
 ### 5.1 CAP-67 Events

@@ -204,7 +204,10 @@ fn build_rows(
         let Ok(topics) = serde_json::from_str::<Value>(&r.topics_xdr) else {
             continue;
         };
-        let Some(derived) = derive_token_event(&topics) else {
+        // `None` emitting id: this presence backfill does not resolve bespoke
+        // token identity (task 0393 live path does) — a bespoke `Contract` event
+        // resolves to `asset_id = None` and is dropped, as under the original 0383.
+        let Some(derived) = derive_token_event(&topics, None) else {
             continue;
         };
         for strkey in derived.participant_strkeys {
@@ -219,6 +222,12 @@ fn build_rows(
                 asset_id,
                 ledger_sequence: r.ledger_sequence,
                 transaction_id: r.transaction_id,
+                // Presence-only backfill: value is computed by live ingest / the
+                // full S3 re-ingest, not here. WARNING: on the version-less RMT a
+                // NULL row can win the merge over a live-computed value and blank
+                // the column — do NOT run this after `net_settled` lands on prod
+                // (re-ingest is the history mechanism). See task 0393.
+                net_settled: None,
             });
         }
     }

@@ -61,7 +61,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use chrono::{DateTime, Utc};
 
-use super::dto::TxListCursor;
+use super::dto::{TransactionValue, TxListCursor};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -83,6 +83,7 @@ pub struct TxListRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
+    pub values: Vec<TransactionValue>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -187,6 +188,7 @@ impl TxPageChRow {
             operation_count: self.operation_count,
             has_soroban: self.has_soroban,
             operation_types: agg.operation_types,
+            values: agg.values.into_iter().map(TransactionValue::from).collect(),
             created_at: millis_to_utc(self.created_at),
         }
     }
@@ -677,7 +679,7 @@ pub async fn fetch_list(
     // derived-table aggregation; CH 26.3 rejects correlated subqueries in
     // SELECT), then merge onto the page rows by tx id.
     let keys: Vec<(i64, i64)> = rows.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
+    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys, true).await?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -1058,6 +1060,7 @@ mod tests {
         };
         let agg = ch::TxListAggregates {
             operation_types: vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
+            values: vec![],
         };
         let mapped = row.into_list_row(agg);
         assert_eq!(mapped.source_account, None);

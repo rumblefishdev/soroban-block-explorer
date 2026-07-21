@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
-use crate::transactions::dto::TransactionListItem;
+use crate::transactions::dto::{TransactionListItem, TransactionValue};
 
 use super::dto::LedgerListItem;
 
@@ -59,6 +59,7 @@ pub struct LedgerTxRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
+    pub values: Vec<TransactionValue>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -75,6 +76,7 @@ impl From<LedgerTxRow> for TransactionListItem {
             operation_count: row.operation_count,
             has_soroban: row.has_soroban,
             operation_types: row.operation_types,
+            values: row.values,
             created_at: row.created_at,
         }
     }
@@ -175,6 +177,7 @@ impl LedgerTxPageChRow {
             operation_count: self.operation_count,
             has_soroban: self.has_soroban,
             operation_types: agg.operation_types,
+            values: agg.values.into_iter().map(TransactionValue::from).collect(),
             created_at: millis_to_utc(self.created_at),
         }
     }
@@ -308,7 +311,7 @@ pub async fn fetch_transactions(
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … FINAL ON src.id = t.source_id` (task 0354).
     let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
-    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
+    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys, true).await?;
     Ok(page
         .into_iter()
         .map(|r| {

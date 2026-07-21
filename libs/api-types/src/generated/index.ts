@@ -216,6 +216,7 @@ export type {
   SignatureDto,
   TransactionDetailLight,
   TransactionListItem,
+  TransactionValue,
   XdrEventDto,
   XdrOperationDto,
 } from './types.gen.js';

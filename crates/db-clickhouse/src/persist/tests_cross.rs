@@ -283,7 +283,12 @@ fn column_order_transaction_participants() {
 fn column_order_operation_asset_appearances() {
     assert_columns::<OperationAssetAppearanceRow>(
         "operation_asset_appearances",
-        &["asset_id", "ledger_sequence", "transaction_id"],
+        &[
+            "asset_id",
+            "ledger_sequence",
+            "transaction_id",
+            "net_settled",
+        ],
     );
 }
 
@@ -421,6 +426,7 @@ fn synthetic_tx(hash_seed: u8) -> ExtractedTransaction {
         memo: None,
         created_at: 1_700_000_000,
         parse_error: false,
+        ledger_deltas: vec![],
     }
 }
 

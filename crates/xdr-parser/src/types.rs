@@ -98,6 +98,14 @@ pub struct ExtractedTransaction {
     pub created_at: i64,
     /// True if XDR parsing failed for this transaction.
     pub parse_error: bool,
+    /// Per-(account, asset) ledger balance deltas (task 0393), from the tx's
+    /// `TransactionMeta`. Populated for EVERY tx, classic AND Soroban:
+    /// `ledger_balance_deltas` reads the authoritative before→after balance
+    /// changes on `AccountEntry` / `TrustLineEntry` / `ContractData` — the ledger
+    /// is the unspoofable source of value, never the token events. There is no
+    /// `soroban_meta` short-circuit; a Soroban invocation's value moves as
+    /// `ContractData` balance changes the reader also covers.
+    pub ledger_deltas: Vec<crate::ledger_value::LedgerDelta>,
 }
 
 /// Container an `ExtractedEvent` was sourced from in the on-chain meta.

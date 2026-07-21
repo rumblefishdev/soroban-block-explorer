@@ -12,6 +12,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::sac::{SacOverride, sac_override_from_event_topics, topic_symbol_value};
+use crate::scval::map_get;
 use crate::types::{EventSource, ExtractedEvent, NftEvent};
 use domain::ContractEventType;
 
@@ -341,25 +342,6 @@ fn data_vec_elements(data: &Value) -> Option<&[Value]> {
     data.get("value")
         .and_then(|v| v.as_array())
         .map(|a| a.as_slice())
-}
-
-/// Look up `key` in a `{"type":"map","value":[{"key":…,"value":…}]}` ScVal JSON,
-/// returning the entry value iff the key is a Symbol equal to `key`. Used for the
-/// canonical OZ/SEP-50 shape where `token_id` rides in the data map.
-fn map_get<'a>(data: &'a Value, key: &str) -> Option<&'a Value> {
-    if data.get("type").and_then(|v| v.as_str()) != Some("map") {
-        return None;
-    }
-    data.get("value")?.as_array()?.iter().find_map(|entry| {
-        let k = entry.get("key")?;
-        if k.get("type").and_then(|v| v.as_str()) == Some("sym")
-            && k.get("value").and_then(|v| v.as_str()) == Some(key)
-        {
-            entry.get("value")
-        } else {
-            None
-        }
-    })
 }
 
 /// Collect every element as an address string, or `None` if any element is
