@@ -767,6 +767,17 @@ pub async fn fetch_pool_chart(
     // identical across a duplicate pair, so which row survives is irrelevant. The
     // outer bucket aggregation is then byte-identical to the old `FINAL` form.
     //
+    // The outer `ledgers` read is ALSO deduped — via a `LIMIT 1 BY sequence`
+    // subquery, not a bare `JOIN ledgers` (lore-0420). `ledgers` is itself a
+    // ReplacingMergeTree with unmerged duplicate rows, so a bare join doubled
+    // every snapshot (measured 2806 samples vs 1403 distinct) → doubled
+    // `sum(volume)`/`sum(fee_revenue)`/`samples_in_bucket`. The join needs
+    // `l.closed_at` for the bucket key, so a pure `IN` semi-join won't do;
+    // `LIMIT 1 BY sequence` keeps one row per ledger (closed_at is identical
+    // across a dup pair, so which survives is irrelevant) — same idiom as the
+    // snapshot dedup above, and it keeps `closed_at` a plain column so the
+    // window filter can stay in the subquery WHERE and drive minmax pruning.
+    //
     // The inner read is bounded to the window's ledger range, resolved from
     // `[from, to]` against `ledgers.closed_at` (minmax skip index).
     //
@@ -795,9 +806,13 @@ pub async fn fetch_pool_chart(
              ORDER BY ledger_sequence DESC \
              LIMIT 1 BY ledger_sequence \
          ) lps \
-         JOIN ledgers l ON l.sequence = lps.ledger_sequence \
-         WHERE l.closed_at >= fromUnixTimestamp64Milli(?) \
-           AND l.closed_at <  fromUnixTimestamp64Milli(?) \
+         JOIN ( \
+             SELECT sequence, closed_at \
+             FROM ledgers \
+             WHERE closed_at >= fromUnixTimestamp64Milli(?) \
+               AND closed_at <  fromUnixTimestamp64Milli(?) \
+             LIMIT 1 BY sequence \
+         ) l ON l.sequence = lps.ledger_sequence \
          GROUP BY bucket_ms \
          ORDER BY bucket_ms ASC",
         bucket_fn = bucket_fn,
@@ -809,8 +824,8 @@ pub async fn fetch_pool_chart(
         .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
         .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
         .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
-        .bind(from.timestamp_millis()) // outer window filter
-        .bind(to.timestamp_millis())
+        .bind(from.timestamp_millis()) // ledgers dedup subquery: closed_at >= from
+        .bind(to.timestamp_millis()) // ledgers dedup subquery: closed_at <  to
         .fetch_all::<ChartChRow>()
         .await?;
 
