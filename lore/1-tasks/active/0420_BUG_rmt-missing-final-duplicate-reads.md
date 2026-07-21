@@ -1,5 +1,5 @@
 ---
-id: '0410'
+id: '0420'
 title: 'RMT reads without dedup: ledgers-list doubling + 9 same-class duplicate-row/count bugs (missing FINAL)'
 type: BUG
 status: active
@@ -25,6 +25,21 @@ history:
       +3%/+6.6% -> +4.3%/+11.6% within one session). Now counted from
       already-deduplicated sources (accounts_recent / soroban_contracts FINAL)
       at ~zero read cost. S1 downgraded from correctness fix to cost/hygiene.
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      Renumbered 0410 -> 0420 (0410 collided with the 0393-spawned
+      sac-event-identity-guard task, which has inbound references from 0393,
+      0391, 0414, 0415; this task had none). /devils-advocate pass: F0's FINAL
+      fix was a measured 19x read regression (25.9M rows / 1.55 GiB vs 1.35M /
+      82 MiB) on a polled endpoint - reworked to over-fetch x3 + Rust
+      dedup_consecutive, cost now identical to baseline. Measuring the rest
+      caught F6 too (CTE re-evaluated the asset scan, +65%) - reworked to a
+      GROUP BY'd join side, now cheaper than the original. All rewrites
+      measured; 214 tests (+2 dedup regression tests). Four concerns carried:
+      MV has no monitoring, S1 needs an owner, frontend row key, and
+      first_seen_ledger is rewritten on activity (separate task).
 ---
 
 # RMT reads without dedup: ledgers-list doubling + 9 same-class bugs
@@ -49,15 +64,43 @@ data-hygiene subtask.
 
 ## Status: Active — fixes implemented, not yet committed
 
-**Current state:** All **10 fixes (F0–F10) are implemented** on branch
-`claude/ledgers-sorting-pagination-bug-6358ce` (7 files under `crates/api`,
-~150 insertions). Each fix is verified against prod ClickHouse; `cargo check`
-clean, **212 api unit tests pass**, and the `API types freshness` gate is green
-(SQL-string-only changes ⇒ no `openapi.json` / generated diff). **Not committed
-yet.**
+> **Renumbered 0410 → 0420.** `0410` collided with
+> `0410_BUG_sac-event-identity-guard-on-value-path` (spawned from 0393, merged
+> via PR #355 and referenced from the archived 0393 README, 0391 notes, 0414 and
+> 0415). This task was the one with no inbound references, so it moved.
 
-Remaining open item: subtask **S1** (prod data dedup) — operator-gated, not
-started.
+**Current state:** All **11 fixes (F0–F10) are implemented** on branch
+`claude/ledgers-sorting-pagination-bug-6358ce` (7 files under `crates/api`).
+Each fix is verified against prod ClickHouse, **and each is now measured
+before/after** — `cargo check` clean, **214 api unit tests pass** (+2 new dedup
+regression tests), `API types freshness` gate green. **Not committed yet.**
+
+After a `/devils-advocate` pass the F0 and F6 fixes were **reworked** — both
+were correct but more expensive than the code they replaced (see Measured cost).
+Post-rework **no fix costs more than the code it replaces; two cost less.**
+
+Open items: subtask **S1** (operator-gated) plus four carried concerns — see
+Open concerns.
+
+## Measured cost (rows read per call, prod)
+
+Correctness was never the hard part; cost was. Every rewrite is measured, because
+the first attempt at F0 was correct and would have taken the site down.
+
+| Fix                | before             | after                    | note                                                                              |
+| ------------------ | ------------------ | ------------------------ | --------------------------------------------------------------------------------- |
+| F0 ledgers list    | 1,349,927 / 82 MiB | **1,349,927 / 82 MiB**   | first attempt (`FINAL`) was 25,964,595 / 1.55 GiB — **19×**, on a polled endpoint |
+| F3 contract counts | 2,710,818 / 61 MiB | **2,307,459 / 52 MiB**   | cheaper, −60% memory                                                              |
+| F5 LP chart        | 26,046,613         | 26,038,421               | unchanged                                                                         |
+| F6 asset search    | 1,151,738 / 32 MiB | **1,118,154 / 28.5 MiB** | cheaper than the un-deduped original                                              |
+| F7 LP list         | 100,668            | 100,668                  | unchanged                                                                         |
+| F1 total accounts  | 1 row (wrong)      | 1 row                    | `accounts_recent`, metadata read                                                  |
+| F2 total contracts | 1 row (wrong)      | 176,854 / 11 MiB         | 13 ms on a ~146k-row table                                                        |
+
+Two rejected-by-measurement alternatives worth remembering: `FINAL` on the
+ledgers list (19×) and `LIMIT 1 BY` on the same query (3.3×) — both defeat
+`optimize_read_in_order`. Over-fetching is free here because the read is
+granule-bound: `LIMIT 60` and `LIMIT 20` read the identical 1,349,927 rows.
 
 ## Context
 
@@ -87,8 +130,16 @@ All confirmed against prod via `chq`. Severity = user impact today.
 
 ### Originally reported
 
-- **F0 — Ledgers list** — `ledgers/queries.rs` `fetch_list` — `FROM ledgers l`
-  → `FROM ledgers l FINAL`. Doubled rows + infinite-append. **Fixed.**
+- **F0 — Ledgers list** — `ledgers/queries.rs` `fetch_list`. Doubled rows +
+  infinite-append. **Fixed by over-fetch (×3) + `dedup_consecutive` in Rust**,
+  NOT `FINAL` and NOT `LIMIT 1 BY` — both defeat `optimize_read_in_order` on
+  this seek (measured 19× and 3.3×; this endpoint is polled and the original
+  code comment explicitly warned about exactly that). Same approach-B pattern as
+  `assets::dedup_consecutive` (task 0364). Correct because `ORDER BY sequence`
+  IS the primary key, so a sequence's physical copies are contiguous and
+  byte-identical. Over-fetch ×3 covers the worst observed duplication (12.8M
+  sequences carry 2 copies, 22 carry 3); beyond that the page merely comes back
+  short — the keyset cursor still advances, so pagination never loops.
 
 ### Confirmed live (wrong output in prod now)
 
@@ -176,7 +227,8 @@ sequence)`.
 
 All implemented and prod-verified (evidence in parens); **not yet committed**.
 
-- [x] F0 ledgers-list `FROM ledgers l FINAL` (20 distinct vs 10-doubled without).
+- [x] F0 ledgers-list over-fetch ×3 + `dedup_consecutive` (20 distinct vs
+      10-doubled; cost identical to the code it replaces — see Measured cost).
 - [x] F1 total-accounts → `count() FROM accounts_recent` (14,354,378 vs
       14,975,304 inflated; matches `accounts FINAL` ±1).
 - [x] F2 total-contracts → `count() FROM soroban_contracts FINAL` (130,817 vs
@@ -190,14 +242,48 @@ All implemented and prod-verified (evidence in parens); **not yet committed**.
 - [x] F8 latest-ledger `LIMIT 1` + TPS `LIMIT 1 BY sequence` (executes).
 - [x] F9 defensive `ledgers … FINAL` on tx-detail ops + invocations joins.
 - [x] F10 explicit `soroban_contracts sc FINAL` on account-balances join.
-- [x] Build + tests: `cargo check -p api` clean, 212 api unit tests pass.
-- [ ] Frontend: consider a defensive unique `rowKey` guard so future RMT dupes
-      cannot re-trigger the React key-collision append (defense-in-depth).
+- [x] Build + tests: `cargo check -p api` clean, 214 api unit tests pass.
+- [x] Every rewrite measured before/after (F0, F3, F5, F6, F7) — see Measured
+      cost. F0 and F6 reworked as a direct result.
+- [x] Regression tests for the F0 dedup (`dedup_tests`): a full page collapses
+      2–3× duplicates and stays full; an under-filled page never emits a
+      duplicate.
+- [ ] Regression tests for F1–F10 — only F0 is covered. The rest were verified
+      by hand against prod, which is not repeatable (the duplicate band already
+      shifted mid-session and F3 stopped differing).
+- [ ] Frontend: defensive unique `rowKey` so future RMT dupes cannot re-trigger
+      the React key-collision append (defense-in-depth) — see Open concerns.
 - [ ] **Docs updated** — `N/A` — no change to system shape (schema/endpoints/
       pipeline unchanged; SQL-internal dedup only).
 - [ ] **API types regenerated** — `N/A` expected — fixes are SQL-internal, no
       DTO/route/openapi change; confirm `check-generated` stays green before
       commit since paths under `crates/api/**` are touched.
+
+## Open concerns (from the `/devils-advocate` pass)
+
+Two of the seven were resolved inside this task (F0 regression → fixed;
+unmeasured rewrites → measured, which is what caught F6). The rest are carried:
+
+1. **The MV fails silently and nothing watches it** (High). `accounts_recent` is
+   a plain MergeTree with no dedup safety net, and `count()` is a metadata read —
+   so a partial or failed refresh is reported as truth. `system.view_refreshes`
+   exposes `status` / `exception` / `last_success_time`; nothing alerts on them.
+   Both the accounts KPI and the accounts list degrade quietly. **Do:** alert on
+   status ≠ Scheduled/Running, non-empty `exception`, or `last_success_time`
+   older than 3× the interval.
+2. **Fixing the reads removed the pressure to fix the data** (High). Reads are
+   now correct regardless of merge state, so nothing hurts visibly — but the
+   duplicates still tax every query: the ledgers list reads **1,349,927 rows to
+   return 20**, because the parts are fragmented. S1 needs a real owner and date,
+   or it never happens.
+3. **Frontend row key is still `sequence`** (Medium). Backend correctness is the
+   only thing standing between us and the original runaway-append symptom. A
+   collision-proof key is a few characters.
+4. **`first_seen_ledger` does not mean what it says** (Medium). Found by
+   accident: 7,875 accounts claim a `first_seen_ledger` inside the last 21
+   ledgers while the deduped total grows by tens per minute — the column is
+   evidently rewritten on activity. Anything computing account age / cohorts /
+   "new accounts" off it is wrong. **Separate task, not this one.**
 
 ## Subtasks
 
