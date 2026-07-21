@@ -640,8 +640,10 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- for the tx-list "Net settled" column. RAW `Nullable(Int128)` (scale by the
 -- asset's `decimals` at read, like balances/total_supply) — the figure
 -- `max(Σ positive account deltas, Σ negative account deltas)` over the tx's
--- transfers, computed one-shot per (tx, asset) in Rust
--- (`persist::stage::tx_token_net_settled` + `xdr_parser::net_settled`). It is the
+-- transfers, computed one-shot per (tx, asset) in Rust from the AUTHORITATIVE
+-- LEDGER balance changes (`persist::stage::classic_deltas_net_settled` +
+-- `xdr_parser::classic_balance_deltas` + `xdr_parser::net_settled`) — account,
+-- trustline, and ContractData balances; NEVER from token events (logs). It is the
 -- network-flow FLOW VALUE: by the flow decomposition theorem a flow splits into
 -- source→sink paths plus cycles, and a cycle contributes exactly zero — so a
 -- wash / round-trip nets to `0` BY DEFINITION, not by accident (that zero-balance
@@ -677,7 +679,18 @@ CREATE TABLE IF NOT EXISTS operation_asset_appearances (
     asset_id        Int64,
     ledger_sequence Int64,
     transaction_id  Int64,
-    net_settled     Nullable(Int128)
+    net_settled     Nullable(Int128),
+    -- Bloom skip index on transaction_id (task 0393 read-path). The "Net settled"
+    -- value read filters by (ledger_sequence, transaction_id), but the table is
+    -- asset_id-leading, so that filter is a partition SCAN (~26M rows/mature
+    -- partition), not a primary-key seek. A tx-list page's ~hundreds of tx_ids are
+    -- scattered across the partition's granules; this bloom lets ClickHouse skip
+    -- the granules holding none of them (~10x fewer rows read, measured shape).
+    -- Same pattern as idx_oa_contract_id / idx_acc_id; RMT-safe (skip indexes are
+    -- allowed — only projections are refused on RMT, task 0353). A full
+    -- (ledger, tx)-leading companion table is the heavier fallback if this proves
+    -- insufficient at scale.
+    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

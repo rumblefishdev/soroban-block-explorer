@@ -1887,12 +1887,15 @@ export type TransactionListItem = {
  */
 export type TransactionValue = {
   /**
-   * Asset identity for the asset detail link — `"native"` or `"CODE-ISSUER"`
-   * (the form accepted by `GET /assets/{id}`).
+   * Asset identity for the asset detail link — `"native"`, `"CODE-ISSUER"`, or a
+   * contract `C…` StrKey for a bespoke type-3 Soroban token (all accepted by
+   * `GET /assets/{id}`).
    */
   asset: string;
   /**
-   * Asset code for display (e.g. `"USDC"`); `null` for native XLM.
+   * Asset code for display (e.g. `"USDC"`) — the on-chain token symbol for a
+   * bespoke type-3 token; `null` for native XLM and for a bespoke token whose
+   * metadata symbol is unavailable.
    */
   asset_code?: string | null;
   /**

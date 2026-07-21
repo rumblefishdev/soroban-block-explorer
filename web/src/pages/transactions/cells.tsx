@@ -48,7 +48,10 @@ export function OperationCell({ types }: { types: readonly string[] }) {
 export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
   if (values.length === 0) return <Dash />;
   const [first, ...rest] = values;
-  const code = first.asset_code ?? 'XLM';
+  // `XLM` only for native; a bespoke token with no on-chain symbol has a null
+  // `asset_code` and must NOT be mislabeled as XLM (its `asset` C-StrKey still
+  // links correctly).
+  const code = first.asset === 'native' ? 'XLM' : first.asset_code ?? '';
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5 }}>
       <Typography component="span" variant="bodySmRegular">

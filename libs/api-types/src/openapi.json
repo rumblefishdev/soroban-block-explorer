@@ -4553,11 +4553,11 @@
         "properties": {
           "asset": {
             "type": "string",
-            "description": "Asset identity for the asset detail link — `\"native\"` or `\"CODE-ISSUER\"`\n(the form accepted by `GET /assets/{id}`)."
+            "description": "Asset identity for the asset detail link — `\"native\"`, `\"CODE-ISSUER\"`, or a\ncontract `C…` StrKey for a bespoke type-3 Soroban token (all accepted by\n`GET /assets/{id}`)."
           },
           "asset_code": {
             "type": ["string", "null"],
-            "description": "Asset code for display (e.g. `\"USDC\"`); `null` for native XLM."
+            "description": "Asset code for display (e.g. `\"USDC\"`) — the on-chain token symbol for a\nbespoke type-3 token; `null` for native XLM and for a bespoke token whose\nmetadata symbol is unavailable."
           },
           "decimals": {
             "type": "integer",

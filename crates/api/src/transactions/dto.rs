@@ -87,10 +87,13 @@ pub struct TransactionListItem {
 /// One asset's net-settled "value moved" in a transaction (task 0393).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TransactionValue {
-    /// Asset identity for the asset detail link — `"native"` or `"CODE-ISSUER"`
-    /// (the form accepted by `GET /assets/{id}`).
+    /// Asset identity for the asset detail link — `"native"`, `"CODE-ISSUER"`, or a
+    /// contract `C…` StrKey for a bespoke type-3 Soroban token (all accepted by
+    /// `GET /assets/{id}`).
     pub asset: String,
-    /// Asset code for display (e.g. `"USDC"`); `null` for native XLM.
+    /// Asset code for display (e.g. `"USDC"`) — the on-chain token symbol for a
+    /// bespoke type-3 token; `null` for native XLM and for a bespoke token whose
+    /// metadata symbol is unavailable.
     pub asset_code: Option<String>,
     /// Raw net-settled value as a stringified `Int128`; scale by `decimals`.
     pub net_settled: String,
