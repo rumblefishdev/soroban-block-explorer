@@ -37,13 +37,25 @@ live ingest:                    15,373 rows/day = 15,373 ledgers/day → 1 row p
 The live writer is correct. Every partition below the boundary (~ledger 63.5M)
 carries exactly two copies.
 
-## Why merges will never clean it up on their own
+## Why merges will not finish the job on their own
 
-Merges are **healthy and active** — 40,524 `MergeParts` in 7 days. They are not
-behind. The point is that ClickHouse **never promises to merge a partition down
-to a single part**: old partitions sit at 4–5 parts, the merge selector sees no
-benefit, and the two copies live in different parts forever. Waiting does not
-fix it.
+Merges are **healthy and active** — 40,524 `MergeParts` in 7 days, none stuck.
+They are not behind. But ClickHouse **never promises to merge a partition down to
+a single part**, and dedup only happens inside a merge, so a partition that
+settles at 4–5 parts keeps its duplicate copies indefinitely.
+
+Measured, and it cuts both ways:
+
+```
+partitions already deduplicated (×~1.0):   2 of 28
+partitions still ×2:                      24 of 28
+total rows, start of session → later:  25,965,607 → 25,965,956  (not shrinking)
+```
+
+The two that *are* clean are the small ones — e.g. partition 100 holds only
+42,576 sequences (history starts mid-partition), so a full merge was cheap
+enough to happen. Full 500k-sequence partitions (~1M rows) stop short. So
+waiting works only for the partitions that do not matter.
 
 ## Why this is cheap
 
@@ -57,6 +69,41 @@ for ~136k genuinely-active accounts (every activity rewrites the row), so merges
 hold a **steady ~4.3% un-merged surplus**. An `OPTIMIZE` there is pointless — the
 surplus returns within hours. `accounts` must stay deduplicated **at read time**
 (see 0420). Only append-only tables qualify for this cleanup.
+
+## FIRST: find out what wrote the second copy
+
+**Do not clean up before answering this.** An `OPTIMIZE` removes the effect; if
+the process that produced it can run again, we simply pay for the same cleanup
+twice and learn nothing.
+
+What is established:
+
+- There were **two distinct ingest generations**. A merged part is named
+  `100_6_422655_4_476814` — block number **6** and block number **422655** in one
+  part, i.e. rows inserted in two widely separated write sessions.
+- **The live writer is not the culprit**: 15,373 rows/day for 15,373 ledgers/day,
+  and the current partition measures ×1.0.
+
+What is NOT established:
+
+- **Which process performed the second pass, and when.** Part
+  `modification_time` cannot date it — merges rewrite parts, so those timestamps
+  reflect the last merge, not the original insert.
+
+Leads to check:
+
+- Operator's recollection is that a **re-ingest was run recently** — plausible
+  and consistent with the two-generation evidence, but unconfirmed.
+- `system.part_log` shows `MutatePart` activity on 2026-07-17, and the oldest
+  active part dates from the same day; something touched the whole table then.
+  Note `part_log` retention is short, so this window may be all that survives —
+  check it early.
+- Cross-check backfill / re-ingest runbooks and any Fargate backfill task runs
+  around that date.
+
+- [ ] Identify the writer and confirm whether it can run again
+- [ ] If it can: make it idempotent (or document the required cleanup) **before**
+      the OPTIMIZE, otherwise this task will recur
 
 ## Implementation Plan
 
