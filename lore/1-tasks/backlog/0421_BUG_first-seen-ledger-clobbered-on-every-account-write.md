@@ -1,6 +1,6 @@
 ---
 id: '0421'
-title: 'BUG: first_seen_ledger overwritten on every account write — account age is wrong for ~100% of accounts'
+title: 'BUG: accounts row is rewritten with defaults on every touch — first_seen_ledger, sequence_number and home_domain all clobbered'
 type: BUG
 status: backlog
 related_adr: []
@@ -16,6 +16,33 @@ tags:
 links:
   - crates/db-clickhouse/src/persist/stage.rs
 history:
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      Widened from one column to three — the same defect, found while auditing the
+      backfill subcommands (0425). `stage.rs:699`, three lines below the
+      `first_seen_ledger` line this task was opened for, does the same thing to
+      `sequence_number`: no account-state override → write `0`. `home_domain` has the
+      identical shape (`ov.and_then(...)` → NULL). All three ride the same whole-row
+      write, and the RMT version (`last_seen_ledger`) is bumped by exactly the writes
+      that lack the data, so the emptied row wins.
+      Measured on prod: of 137,655 accounts that were a transaction **source** in
+      ledgers 63,400,000–63,500,000, **84,944 (61.71%) carry `sequence_number = 0`**.
+      An account that sends a transaction always bumps its sequence on chain, so the
+      zero is entirely ours. Skeletons are also twice as common among recently-active
+      accounts (14.7%) as among dormant ones (6.75%) — the gap is being produced now,
+      not inherited.
+      Consequence for tooling: `backfill-runner bootstrap` is not the one-off its
+      docstring claims, it is a mop under this tap, and the live indexer has no
+      bootstrap of any kind (zero references to RPC snapshotting in
+      `crates/indexer/`). 0425's README table has been corrected accordingly.
+      The invariant this exposes, worth stating in the fix: **a whole-row write that
+      defaults missing fields is safe only if it also carries the lowest version.**
+      `soroban_contracts`' stub writer (`stage.rs:1761`) emits an all-NULL row but
+      stamps `wasm_uploaded_at_ledger = 0`, so it always loses — safe by accident of
+      which column is the version. `accounts` bumps its version on the same write
+      that empties the row, so it always wins.
   - date: 2026-07-21
     status: backlog
     who: karolkow
