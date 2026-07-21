@@ -35,8 +35,27 @@ history:
       whose only mutable columns `total_supply` / `holder_count` / `icon_url` are
       marked DEAD in `init.sql` and moved to `balance_aggregates` /
       `asset_enrichment`, leaving identity plus a deterministic `id`).
-      Also spotted while enumerating: `assets_pre0339` is a leftover backup table
-      still sitting in prod.
+      Also spotted while enumerating: `assets_pre0339` (368,490 rows, 5.22 MiB) is
+      still on prod. Not a leftover — 0339 kept it deliberately as a soak backup
+      and its runbook warns it is NOT a full-table snapshot. 0339 is archived, so
+      the soak is presumably over; that is a decision, not a cleanup.
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      Re-measured on a real **ClickHouse 26.3.17.4 server** (not `clickhouse local`)
+      to close the "single-node binary proves nothing about background merges" gap.
+      Rule 4 does not reproduce in any shape: 40 unmerged old parts + a 4-way
+      concurrent re-parse read through `FINAL` → new value wins, zero survivors;
+      background merges only, never `OPTIMIZE` → new value wins (the merge dropped
+      the old rows on its own); already-collapsed old data then re-parsed → new
+      value wins; partial re-parse of half the keys → re-parsed keys update and the
+      untouched half keeps its old value, no collateral damage.
+      Rule 4 rewritten in `docs/backfills.md` and the clause-2 objection dropped
+      from `crates/backfill-runner/README.md` (both on the 0425 branch). What
+      remains needs prod writes and therefore an owner decision: a spot-check in a
+      scratch database on the prod server, and whether `assets_pre0339` gets
+      dropped.
 ---
 
 # OPS: verify or retire `docs/backfills.md` rule 4
@@ -59,14 +78,15 @@ each carried their own partition loop, watermark file and resume logic in order 
 write a single table and avoid a full re-parse. Both were deleted in 0425. If rule
 4 is wrong, that entire shape was avoidable.
 
-## Evidence so far (local CH 26.3 — needs prod confirmation)
+## Evidence (ClickHouse 26.3.17.4 **server**, background merges live)
 
-| Scenario                                                                | Result                                              |
-| ----------------------------------------------------------------------- | --------------------------------------------------- |
-| old rows inserted + `OPTIMIZE FINAL`, then re-parsed with a newer build | **new value survives**                              |
-| re-parse split across 4 concurrent inserts                              | **new value survives** (the last insert)            |
-| read via `FINAL`, no `OPTIMIZE` (how the API reads)                     | **new value survives**                              |
-| two rows for one key **inside a single insert**                         | **arbitrary** — "last" is the code's emission order |
+| Scenario                                                                  | Result                                                      |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 40 unmerged old parts, then a 4-way concurrent re-parse, read via `FINAL` | **new value wins, zero survivors**                          |
+| background merges only, never `OPTIMIZE`                                  | **new value wins** — the merge dropped the old rows unasked |
+| old data already `OPTIMIZE FINAL`-collapsed, then re-parsed               | **new value wins**                                          |
+| partial re-parse (half the keys)                                          | **re-parsed keys update; untouched half keeps its value**   |
+| two rows for one key **inside a single insert**                           | **arbitrary** — "last" is the code's emission order         |
 
 The last row is the real hazard, and it belongs to the **parser**, not the engine:
 it is exactly what 0356 hit — the parser emitted the before- and after-image of a
@@ -76,21 +96,24 @@ parse that can emit more than one row per key.
 
 ## Implementation
 
-- [ ] Reproduce the four scenarios **against prod's ClickHouse** (a scratch
-      database on the prod server, never a live table). A single-node local binary
-      is not proof for a server running concurrent background merges.
-- [ ] Enumerate the version-less RMT tables from `system.tables` (15 today, not
-      the 12 the doc claims) and classify each: ledger-keyed, or pure function of
-      an immutable input. A table in neither bucket is a genuine finding.
-- [ ] If it holds: **delete rule 4**, replacing it with the narrow true rule — _a
-      parse must emit at most one row per key per insert; version-less RMT keeps
-      the last row inserted_. Update the `--reindex` guidance that leans on it, and
-      drop the objection block from `crates/backfill-runner/README.md` clause 2.
-- [ ] If it does not hold: capture the counter-example, and only then discuss
-      remedies (version column, or delete-then-insert per partition — the latter is
-      the simpler shape and matches how the team already thinks about it).
-- [ ] Separately: `assets_pre0339` is a leftover backup table in prod. Confirm it
-      is unreferenced and drop it, or record why it stays.
+- [x] Reproduce on a real **server** (CH 26.3.17.4 in Docker, background merges
+      live) rather than `clickhouse local`. Four shapes, all pointing the same way
+      — see the evidence table above.
+- [x] Enumerate the version-less RMT tables from `system.tables` — **15**, not the
+      12 the doc claimed — and classify each. Every one is ledger-keyed or a pure
+      function of an immutable input; **no table fell outside those two buckets**.
+- [x] Rule 4 rewritten in `docs/backfills.md` around what was measured, and the
+      objection block dropped from `crates/backfill-runner/README.md` clause 2.
+      Also documents why the 11 versioned tables need their version (entity-keyed:
+      a re-parse of old ledgers would otherwise roll current state backwards).
+- [ ] **Owner decision — prod spot-check.** Repeat one shape in a scratch database
+      on the prod server (`CREATE DATABASE`, throwaway table, `DROP DATABASE`),
+      never a live table. Needs a prod write, so it is not done here. The local
+      server matches prod's major and the mechanism is version-independent within
+      26.3, so this is confirmation, not discovery.
+- [ ] **Owner decision — `assets_pre0339`.** 368,490 rows / 5.22 MiB, kept by 0339
+      as a deliberate soak backup (its runbook warns it is NOT a full-table
+      snapshot). 0339 is archived. Drop it, or record why the soak continues.
 
 ## Acceptance Criteria
 
