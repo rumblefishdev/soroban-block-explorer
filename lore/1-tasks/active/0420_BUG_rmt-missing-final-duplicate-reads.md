@@ -40,6 +40,20 @@ history:
       measured; 214 tests (+2 dedup regression tests). Four concerns carried:
       MV has no monitoring, S1 needs an owner, frontend row key, and
       first_seen_ledger is rewritten on activity (separate task).
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      S1 closed by measurement and split into follow-ups. Corrected an
+      over-generalisation this task had recorded twice ("RMT always regenerates
+      duplicates"): true for update-heavy accounts (8.46M inserts/day for 136k
+      active accounts, ~4.3% permanent surplus), false for append-only ledgers
+      (live partition is x1.0; history is a one-time backfill artifact). Merges
+      are NOT behind - 40,524 in 7 days, none stuck; CH just never merges a
+      partition down to one part. Spawned 0421 (first_seen_ledger overwritten on
+      every account write - root cause at stage.rs:636, ~62x write
+      amplification), 0422 (one-time OPTIMIZE for ledgers only) and 0423
+      (behavioural dedup regression harness).
 ---
 
 # RMT reads without dedup: ledgers-list doubling + 9 same-class bugs
@@ -59,8 +73,7 @@ append").
 A sweep of **every SQL query in `crates/api`** found the same "RMT read without
 deduplication" class in **9 more places** — 5 more firing in prod today, 4
 latent (confirmed defects currently shielded from the UI). This task tracks all
-10 fixes (F0–F10, implemented and prod-verified, pending commit) plus the S1
-data-hygiene subtask.
+11 fixes (F0–F10, implemented, measured and prod-verified, pending commit).
 
 ## Status: Active — fixes implemented, not yet committed
 
@@ -79,8 +92,8 @@ After a `/devils-advocate` pass the F0 and F6 fixes were **reworked** — both
 were correct but more expensive than the code they replaced (see Measured cost).
 Post-rework **no fix costs more than the code it replaces; two cost less.**
 
-Open items: subtask **S1** (operator-gated) plus four carried concerns — see
-Open concerns.
+Open items: four carried concerns (see Open concerns). S1 is closed — it was an
+investigation, and it split into 0421 / 0422 / 0423.
 
 ## Measured cost (rows read per call, prod)
 
@@ -108,8 +121,10 @@ granule-bound: `LIMIT 60` and `LIMIT 20` read the identical 1,349,927 rows.
 domain tables are ReplacingMergeTree (RMT) / AggregatingMergeTree. RMT dedup is
 best-effort background merge — a read is only correct if it deduplicates itself
 (`FINAL`, or `GROUP BY key + argMax/any`, or `LIMIT 1 BY key`, or a downstream
-Rust HashMap/`dedup` collapse). Prod merges are badly behind, so any un-deduped
-read/JOIN of these tables returns inflated counts or doubled rows **now**.
+Rust HashMap/`dedup` collapse). Duplicate physical rows are present right now in
+every one of these tables, so any un-deduped read/JOIN returns inflated counts or
+doubled rows **today** — regardless of how healthy merging is (it is healthy; see
+below).
 
 Prod duplication (physical rows vs deduped), measured via `chq`:
 
@@ -120,9 +135,23 @@ Prod duplication (physical rows vs deduped), measured via `chq`:
 | `accounts`          | 14.77M   | 14.34M  | ~432k (~3%)                                      |
 | `soroban_contracts` | 138k     | 130k    | ~8.5k (some ids ×6)                              |
 
-The underlying data wants an `OPTIMIZE FINAL` / dedup pass, but that is an OPS
-CH-write (separate, consent-gated) — **code must dedup on read regardless**, so
-these query fixes are the durable ones.
+**Code must dedup on read regardless** — RMT never guarantees a merged read, so
+these query fixes are the durable ones no matter what the data looks like.
+
+Whether the DATA can also be cleaned up depends on the table, and the two cases
+are opposites (measured after the fact — an earlier revision of this task
+wrongly claimed duplicates always regenerate everywhere):
+
+- **Append-only (`ledgers`)** — duplication is a **one-time historical
+  artifact**: the live partition is clean (×1.0, 1 row per ledger per day) while
+  history sits at ×2.0. Merges are healthy (40,524 in 7 days), they simply never
+  merge an old partition down to one part. A single `OPTIMIZE` fixes it
+  durably → task **0422**.
+- **Update-heavy (`accounts`)** — duplication is a **steady state**: ~8.46M rows
+  are inserted per day for ~136k genuinely-active accounts, because every
+  activity rewrites the row. Merges absorb it and hold ~4.3% surplus. `OPTIMIZE`
+  is pointless here; read-time dedup is mandatory. This is what makes the F1/F2
+  KPI decision correct.
 
 ## Findings
 
@@ -271,11 +300,12 @@ unmeasured rewrites → measured, which is what caught F6). The rest are carried
    Both the accounts KPI and the accounts list degrade quietly. **Do:** alert on
    status ≠ Scheduled/Running, non-empty `exception`, or `last_success_time`
    older than 3× the interval.
-2. **Fixing the reads removed the pressure to fix the data** (High). Reads are
-   now correct regardless of merge state, so nothing hurts visibly — but the
-   duplicates still tax every query: the ledgers list reads **1,349,927 rows to
-   return 20**, because the parts are fragmented. S1 needs a real owner and date,
-   or it never happens.
+2. **Fixing the reads removed the pressure to fix the data** (High) —
+   **now owned by 0422.** Reads are correct regardless of merge state, so
+   nothing hurts visibly, but the duplicates still tax every query: the ledgers
+   list reads **1,349,927 rows to return 20** because of part fragmentation.
+   For `ledgers` this is genuinely fixable once (0422); for `accounts` it is
+   not, and must not be attempted.
 3. **Frontend row key is still `sequence`** (Medium). Backend correctness is the
    only thing standing between us and the original runaway-append symptom. A
    collision-proof key is a few characters.
@@ -287,25 +317,28 @@ unmeasured rewrites → measured, which is what caught F6). The rest are carried
 
 ## Subtasks
 
-### S1 — OPS: dedup the RMT data in prod (blocked on operator go)
+### S1 — investigate the merge/duplication state — **DONE, spawned 0422 + 0421**
 
-The code fixes above make every read correct regardless of merge state, so this
-subtask is **no longer needed for correctness** — it is a cost/hygiene job:
-shrink the ~2× physical rows (disk + every scan pays for them) and find out why
-merges fall so far behind.
+Closed by measurement. The framing this subtask started with ("merges are ~98%
+behind, needs an OPTIMIZE plus a root-cause hunt") turned out to be wrong on
+both counts:
 
-Explicitly NOT a fix for F1/F2 — see Design Decisions #2. Duplicates always
-regenerate, so no data pass can make a physical row count correct.
+- **Merges are not behind.** 40,524 `MergeParts` in 7 days, most recent minutes
+  before the check, 0 stuck. On `accounts` they absorb ~8.46M inserted rows per
+  day and hold the surplus at ~4.3%. ClickHouse simply never promises to merge a
+  partition down to one part, so old `ledgers` partitions sit at 4–5 parts and
+  their duplicate copy survives indefinitely. That is by design, not a fault.
+- **The duplication has two different causes**, so one remedy cannot cover both:
+  append-only `ledgers` carries a one-time backfill artifact (cleanable →
+  **0422**), while update-heavy `accounts` regenerates duplicates continuously
+  by design (not cleanable, read-time dedup mandatory).
 
-- [ ] `OPTIMIZE TABLE … FINAL` (or targeted dedup) on `ledgers`, `assets`,
-      `accounts`, `soroban_contracts` (and audit the other RMT tables).
-- [ ] Investigate WHY merges are ~98% behind on `ledgers` (merge settings /
-      part explosion / re-ingest pattern) — a one-off OPTIMIZE without a root
-      fix will just re-accumulate.
+The same investigation surfaced the root cause of a separate data-integrity bug
+in that write path — `first_seen_ledger` reset to the current ledger on every
+account write — spawned as **0421**.
 
-**Consent-gated CH write** — do NOT execute without explicit per-action operator
-go (memory: no prod CH writes without consent). Needs the indexer-stopped /
-`EXCHANGE TABLES` considerations from `docs/backfills.md`.
+No OPS action remains in this task: the cleanup that IS worth doing lives in
+0422 (consent-gated), and nothing here is blocked on it.
 
 ## Design Decisions
 
