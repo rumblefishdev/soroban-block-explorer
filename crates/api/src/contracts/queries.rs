@@ -235,19 +235,21 @@ pub async fn fetch_contract_list(
         return Ok(Vec::new());
     }
 
-    // Step 2: invocation counts in the STATS_WINDOW for the page's ids. Window
-    // applied via `ledgers.closed_at`, floored first by a `ledger_sequence`
-    // lower bound so the seek stays on the appearance PK prefix (same shape as
-    // `fetch_contract_stats`). `FINAL` matches the detail stat so re-ingest
-    // duplicates collapse identically.
+    // Step 2: invocation counts in the STATS_WINDOW for the page's ids.
     //
-    // The ledger window is a semi-join (`ledger_sequence IN (…)`), NOT
-    // `INNER JOIN ledgers`: `ledgers` is a ReplacingMergeTree with unmerged
-    // duplicate rows (~2× across most of history), and a JOIN fans each
-    // appearance row out per duplicate ledger row → inflated `count()`
-    // (measured up to ~1.6× when the dup band overlaps the window). Set
-    // membership matches once per sequence regardless of physical dupes.
-    // (lore-0420)
+    // The window is ONE `ledger_sequence >= (first sequence in the window)`
+    // bound, resolved from the data (lore-0420). That single expression does
+    // three jobs the earlier shapes needed three constructs for:
+    //   * it is exact — no constant guessing how many ledgers fit in a day;
+    //   * it keeps the seek on the `(contract_id, ledger_sequence)` PK prefix;
+    //   * it cannot fan out. `ledgers` is a ReplacingMergeTree with unmerged
+    //     duplicate rows, and JOINing it multiplied every appearance row per
+    //     duplicate copy (measured ~1.6× inflation). `min()` is immune to
+    //     duplicates, so the dedup problem does not arise rather than being
+    //     worked around.
+    // `closed_at` carries a minmax index, so resolving the bound is cheap; the
+    // LP chart resolves its window the same way. `FINAL` on the appearances
+    // matches the detail stat so re-ingest duplicates collapse identically.
     let ids = list_rows
         .iter()
         .map(|r| r.id.to_string())
@@ -255,18 +257,16 @@ pub async fn fetch_contract_list(
         .join(",");
     // List recent_invocations only; recent_events is detail-only (the list DTO
     // has no events field), so this path keeps the single windowed count.
-    let (days, ledger_floor) = stats_window_bounds(STATS_WINDOW);
+    let days = stats_window_days(STATS_WINDOW);
     let count_sql = format!(
         "SELECT \
             sia.contract_id                  AS contract_id, \
             toUInt64(count())                AS recent_invocations \
          FROM soroban_invocations_appearances sia FINAL \
          WHERE sia.contract_id IN ({ids}) \
-           AND sia.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-           AND sia.ledger_sequence IN ( \
-               SELECT sequence FROM ledgers \
-               WHERE sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-                 AND closed_at >= now64() - INTERVAL {days} DAY \
+           AND sia.ledger_sequence >= ( \
+               SELECT min(sequence) FROM ledgers \
+               WHERE closed_at >= now64() - INTERVAL {days} DAY \
            ) \
          GROUP BY sia.contract_id"
     );
@@ -431,25 +431,25 @@ fn map_upgradeable(has_wasm: bool, code: i8) -> Option<bool> {
 // Bounded-window stats — canonical 11 Statement B
 // ---------------------------------------------------------------------------
 
-/// ~Ledgers per day at the ~5 s mainnet cadence — used to bound the
-/// `(contract_id, ledger_sequence)` seek to the recent window before the exact
-/// `closed_at` predicate refines it, so a hot contract's full invocation
-/// history is never scanned for the 7-day stat.
-const LEDGERS_PER_DAY: i64 = 17_280;
-
-/// Parse a stats-window label (e.g. `"7 days"`) into `(days, ledger_floor)`. The
-/// leading integer is the day count (default 7 for a malformed label);
-/// `ledger_floor = days * LEDGERS_PER_DAY` widens the `(contract_id,
-/// ledger_sequence)` seek to ~that many days of ledgers before the exact
-/// `closed_at` predicate refines it. Shared by the list and detail stat paths so
-/// their windows can never drift apart.
-fn stats_window_bounds(window: &str) -> (i64, i64) {
-    let days: i64 = window
+/// Parse a stats-window label (e.g. `"7 days"`) into a day count — the leading
+/// integer, defaulting to 7 for a malformed label. Shared by the list and detail
+/// stat paths so their windows can never drift apart.
+///
+/// There is deliberately no companion `ledger_floor` constant (lore-0420). The
+/// seek bound used to be `days * 17_280`, a hardcoded "~ledgers per day" derived
+/// from an assumed 5 s cadence. Mainnet actually closes every ~5.6 s (measured
+/// 15,324 ledgers/day), so the constant ran 13% wide. Being wide is harmless —
+/// but the error is a one-way bet on the protocol: if Stellar ever closes faster
+/// than 5 s the constant would start running SHORT, and a "7 days" stat would
+/// silently cover five. The bound is now resolved from the data instead
+/// (`min(sequence) WHERE closed_at >= now - N DAY`), which is exact by
+/// construction and cannot drift with the cadence.
+fn stats_window_days(window: &str) -> i64 {
+    window
         .split_whitespace()
         .next()
         .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    (days, days.saturating_mul(LEDGERS_PER_DAY))
+        .unwrap_or(7)
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -496,8 +496,7 @@ pub async fn fetch_contract_stats(
     contract_surrogate_id: i64,
     window: &str,
 ) -> Result<ContractStats, clickhouse::error::Error> {
-    let (days, ledger_floor) = stats_window_bounds(window);
-    let sql = contract_stats_sql(days, ledger_floor);
+    let sql = contract_stats_sql(stats_window_days(window));
     let row = client
         .query(&sql)
         .bind(contract_surrogate_id)
@@ -513,7 +512,7 @@ pub async fn fetch_contract_stats(
     })
 }
 
-/// SQL for [`fetch_contract_stats`]. `days` / `ledger_floor` derive from the
+/// SQL for [`fetch_contract_stats`]. `days` derives from the
 /// operator-controlled window label (not user input) — safe to interpolate.
 /// Two `?` placeholders bind `contract_surrogate_id` (events subquery, then the
 /// outer invocations seek), in source order.
@@ -524,13 +523,15 @@ pub async fn fetch_contract_stats(
 /// → `db_error` 500 on every contract detail. `count()` never actually yields
 /// NULL, so the `0` branch is unreachable; it only fixes the static type.
 ///
-/// Both windows filter `ledgers` by a `ledger_sequence IN (…)` semi-join, NOT
-/// `INNER JOIN ledgers`: `ledgers` is a ReplacingMergeTree with unmerged
-/// duplicate rows, and a JOIN fans each appearance/event row out per duplicate
-/// ledger row → inflated `count()`. Set membership matches once per sequence.
-/// `uniqExact(caller_id)` was already fan-out-safe (distinct set); the raw
-/// `count()`s were not. (lore-0420)
-fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
+/// Both windows are ONE `ledger_sequence >= (first sequence in the window)`
+/// bound, resolved from the data (lore-0420). `ledgers` is a ReplacingMergeTree
+/// with unmerged duplicate rows, so JOINing it multiplied every appearance/event
+/// row per duplicate copy and inflated `count()`. `min()` is immune to
+/// duplicates, so this shape removes the fan-out instead of compensating for it —
+/// and drops the hardcoded ledgers-per-day floor at the same time.
+/// `uniqExact(caller_id)` was already fan-out-safe (a distinct set); only the raw
+/// `count()`s were affected.
+fn contract_stats_sql(days: i64) -> String {
     format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
@@ -539,35 +540,31 @@ fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
                 SELECT toUInt64(count()) \
                 FROM soroban_events se \
                 WHERE se.contract_id = ? \
-                  AND se.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-                  AND se.ledger_sequence IN ( \
-                      SELECT sequence FROM ledgers \
-                      WHERE sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-                        AND closed_at >= now64() - INTERVAL {days} DAY \
+                  AND se.ledger_sequence >= ( \
+                      SELECT min(sequence) FROM ledgers \
+                      WHERE closed_at >= now64() - INTERVAL {days} DAY \
                   ) \
             ), 0)                                   AS recent_events \
          FROM soroban_invocations_appearances sia FINAL \
          WHERE sia.contract_id = ? \
-           AND sia.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-           AND sia.ledger_sequence IN ( \
-               SELECT sequence FROM ledgers \
-               WHERE sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
-                 AND closed_at >= now64() - INTERVAL {days} DAY \
+           AND sia.ledger_sequence >= ( \
+               SELECT min(sequence) FROM ledgers \
+               WHERE closed_at >= now64() - INTERVAL {days} DAY \
            )"
     )
 }
 
 #[cfg(test)]
 mod stats_sql_tests {
-    use super::{LEDGERS_PER_DAY, contract_stats_sql, stats_window_bounds};
+    use super::{contract_stats_sql, stats_window_days};
 
     #[test]
-    fn stats_window_bounds_parses_label_and_falls_back() {
-        assert_eq!(stats_window_bounds("7 days"), (7, 7 * LEDGERS_PER_DAY));
-        assert_eq!(stats_window_bounds("30 days"), (30, 30 * LEDGERS_PER_DAY));
+    fn stats_window_days_parses_label_and_falls_back() {
+        assert_eq!(stats_window_days("7 days"), 7);
+        assert_eq!(stats_window_days("30 days"), 30);
         // Malformed / empty label → default 7-day window, never a panic.
-        assert_eq!(stats_window_bounds("garbage"), (7, 7 * LEDGERS_PER_DAY));
-        assert_eq!(stats_window_bounds(""), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_days("garbage"), 7);
+        assert_eq!(stats_window_days(""), 7);
     }
 
     // Regression guard for task 0300: CH `recent_events` was hardcoded `0`.
@@ -575,7 +572,7 @@ mod stats_sql_tests {
     // (parity with PG's appearance-fold SUM), not a literal.
     #[test]
     fn stats_sql_computes_recent_events_from_events_table() {
-        let sql = contract_stats_sql(7, 7 * 17_280);
+        let sql = contract_stats_sql(7);
 
         assert!(
             sql.contains("AS recent_events"),
@@ -614,28 +611,41 @@ mod stats_sql_tests {
         );
     }
 
-    /// Regression guard for lore-0420. `ledgers` is a ReplacingMergeTree with
-    /// unmerged duplicate rows, so joining it into a `count()` multiplies the
-    /// count by the number of physical copies (measured up to ~1.6x). Both
-    /// windows must therefore filter via a `ledger_sequence IN (…)` semi-join,
-    /// which matches once per sequence, and must NOT reintroduce a bare join.
+    /// Regression guard for lore-0420. Two failure modes, one shape.
+    ///
+    /// `ledgers` is a ReplacingMergeTree with unmerged duplicate rows, so
+    /// JOINing it into a `count()` multiplies the count by the number of
+    /// physical copies (measured ~1.6x). And the seek bound must be resolved
+    /// from the data, not from a hardcoded ledgers-per-day constant: the old
+    /// `days * 17_280` assumed a 5 s cadence, ran 13% wide against the real
+    /// ~5.6 s, and would silently run SHORT — under-reporting the window — if
+    /// the chain ever sped up.
+    ///
+    /// One `min(sequence)` bound satisfies both: immune to duplicates, exact by
+    /// construction.
     #[test]
-    fn stats_sql_windows_ledgers_by_semi_join_never_a_bare_join() {
-        let sql = contract_stats_sql(7, 7 * 17_280);
+    fn stats_sql_bounds_window_from_data_never_a_join_or_a_constant() {
+        let sql = contract_stats_sql(7);
         let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
 
         assert!(
             !normalized.contains("JOIN ledgers"),
             "a JOIN onto ledgers fans each row out per duplicate copy and \
-             inflates the count — use a `ledger_sequence IN (…)` semi-join: {sql}"
+             inflates the count: {sql}"
+        );
+        assert!(
+            !normalized.contains("17280") && !normalized.contains("17_280"),
+            "the window bound must come from the data, not a ledgers-per-day \
+             constant that drifts with the chain cadence: {sql}"
         );
         // One per window: the invocations seek and the events subquery.
         assert_eq!(
             normalized
-                .matches("ledger_sequence IN ( SELECT sequence FROM ledgers")
+                .matches("SELECT min(sequence) FROM ledgers WHERE closed_at >=")
                 .count(),
             2,
-            "both the invocations and events windows must use the semi-join: {sql}"
+            "both the invocations and events windows must derive their bound \
+             from the data: {sql}"
         );
     }
 }
