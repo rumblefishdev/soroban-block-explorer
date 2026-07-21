@@ -59,19 +59,21 @@ section is the authoring rule: when a new one is allowed to exist, and when it
 must be deleted. Established by lore task 0425.
 
 A one-off pass fixes history that the live indexer already handles going forward.
-Five clauses, in order:
+Four clauses, in order:
 
-1. **The signal must already be in ClickHouse.** If everything needed is in CH
-   (`soroban_events`, `operations_appearances`, an existing column), an in-DB
-   pass is legitimate — often just an `INSERT … SELECT`, no subcommand at all.
+1. **Never re-implement the ingest path — that is the only forbidden shape.** A
+   subcommand is the *right* home for a one-off: `--dry-run`, counters, tests, and
+   a diff a reviewer can read all beat SQL pasted into a prod client at 2am. What
+   is forbidden is narrower: a binary that re-walks S3, re-parses ledgers, and
+   cherry-picks which rows to keep. That is a third copy of the ingest path, on top
+   of the parser and the live writer. The removed `metadata-backfill` (0304) and
+   `pool-ids-backfill` (0266) were exactly that — each parsed **every ledger in the
+   range in full**, discarded all but one table's rows, and carried its own
+   partition loop, watermark file and resume logic to do it.
 
-2. **If the signal is only in XDR, there is no script — re-parse.** Do not write
-   a bespoke binary that re-reads S3 and cherry-picks rows to write. Re-parse the
-   range with `run --reindex`. A targeted-write re-parse is a third copy of the
-   ingest path, on top of the parser and the live writer: the removed
-   `metadata-backfill` (0304) and `pool-ids-backfill` (0266) each parsed **every
-   ledger in the range in full** and then discarded all but one table's rows,
-   carrying their own partition loop, watermark file and resume logic to do it.
+   So: data already in ClickHouse → a subcommand driving SQL is fine and good.
+   Data only in XDR → `run --reindex`, which re-parses the range through the one
+   shared path. Never your own re-parser.
 
    > **The usual objection, and why it does not hold.** `docs/backfills.md` rule 4
    > warns that re-parsing with a *different parser build* is unsafe on the 15 RMT
@@ -86,7 +88,7 @@ Five clauses, in order:
    > "last" is whatever order the code emitted (lore 0356, pool reserves). Emit one
    > row per key and `--reindex` is safe.
 
-3. **Reuse the live code path — never reimplement it.** Call the same function
+2. **Reuse the live code path — never reimplement it.** Call the same function
    the indexer calls. The removed passes that did (`nft-reparse` → the parser's
    own `detect_nft_events`; `assets-id-backfill` → `ids::asset_id`, the same fn
    as `AssetRow::staged`; `metadata-backfill` → the same `PartitionWriter`) never
@@ -96,12 +98,12 @@ Five clauses, in order:
    second copy of something the codebase already owns, and second copies drift
    silently.
 
-4. **If it cannot be expressed as "replay live logic over old data", live has a
+3. **If it cannot be expressed as "replay live logic over old data", live has a
    hole.** That is a finding, not an inconvenience: open a task on the write path
    first, and the one-off becomes catch-up rather than recurring maintenance.
    This clause is a detector — it is what sorted the table below.
 
-5. **Delete it once it has run.** Git keeps it. A spent one-shot left in `--help`
+4. **Delete it once it has run.** Git keeps it. A spent one-shot left in `--help`
    reads as an available tool. Move it to `.trash/` (`rm` is forbidden
    repo-wide) and record the removal in the task.
 
@@ -116,7 +118,7 @@ Five clauses, in order:
 | `nft-reclassify` | ⚠ **recurring mop.** No continuous `pending → hot` promotion in live. Retire via lore 0392 |
 | `contract-type-rebuild` | ⚠ **partly covered.** Live has the G1 / G9 cross-ledger verdicts (`persist/stage.rs`); contracts the classifier cannot name still default to `Other`. Lore 0309 |
 
-The three marked ⚠ each fail clause 4 — which is exactly why they are still here.
+The three marked ⚠ each fail clause 3 — which is exactly why they are still here.
 
 ### Removed (lore 0425)
 
