@@ -25,20 +25,48 @@ history:
     status: backlog
     who: karolkow
     note: 'Deep review: the deterministic guard already exists in sac.rs (derive_sac_contract_id + sac_override_from_event_topics, unit-proven, used by the NFT path). Scope is WIRING not build. Added hybrid (ledger_balance_deltas for account-side legs) + net_id mismatch alarm.'
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      RE-OPENED. The 2026-07-20 supersede was half right: value no longer reads
+      events, but PRESENCE still maps an event-supplied SEP-11 asset string onto
+      the real classic surrogate with no emitter binding, so forged rows can be
+      injected into a real asset's transaction list. Re-scoped from the value path
+      to the presence path; same gate, different call site. Also adds a fix for a
+      topic-index mismatch that would let a 5-topic event bypass the gate.
+      Priority raised — this is exploitable today (not currently exploited).
 ---
 
 # BUG: SAC event-identity guard on value path — verify emitter == asset SAC (full H2 fix)
 
-> **⚠️ SUPERSEDED (2026-07-20) — do NOT implement this.** This task tried to make
-> the spoofable EVENT path trustworthy by crypto-gating it. The net-settled
-> redesign removed the event path from value entirely: **value is now read from the
-> authoritative LEDGER** (account / trustline / ContractData balance changes), which
-> a contract cannot forge — so there is nothing to gate. The whole event-value path
-> (incl. the guard, `policy_null`, `sac_rejected`, `net_id` in value) was DELETED.
-> The concern (spoofable classic-asset value) is RESOLVED, better, by not trusting
-> logs at all. See task 0393 "Value source: the LEDGER, not events" and the
-> project-wide audit [0415](0415_AUDIT_authoritative-facts-ledger-not-logs.md).
-> Close/archive this on merge — kept only for the trail.
+> **⚠️ RE-OPENED + RE-SCOPED (2026-07-21). The 2026-07-20 "superseded" call was
+> half right and closed this too early.**
+>
+> What that call got right: the **VALUE** path no longer reads events at all
+> (task 0393 moved it to ledger balance deltas), so there is nothing left to gate
+> there. That part is genuinely resolved.
+>
+> What it missed: **PRESENCE still derives classic-asset identity from an event
+> string, with no emitter binding.** `event_asset` takes only the topic — it does
+> not receive the emitter at all (`xdr-parser/src/event_filters.rs:116-130`) — and
+> `event_asset_surrogate` maps the result straight onto the REAL classic surrogate:
+>
+> ```rust
+> EventAsset::Credit { code, issuer } => Some(ids::credit_asset_id(code, issuer)),
+> ```
+>
+> (`db-clickhouse/src/persist/stage.rs`; the `emitting_contract_id` argument is
+> consulted only for `Bespoke`.) Those rows land in `operation_asset_appearances`,
+> which is what the asset detail page's transaction list reads. **So any contract
+> can inject transactions into the transaction list of a real classic asset**
+> (USDC, EURC, …) by emitting one event carrying that asset's SEP-11 string.
+>
+> Scope is therefore unchanged in mechanism (wire the existing
+> `sac_override_from_event_topics` gate) but **moved from the value path to the
+> presence path**. Everything below about the guard still applies; ignore the
+> references to `token_events_net_settled` and `policy_null`, which were deleted
+> with the event-value path.
 
 ## Summary
 
@@ -74,7 +102,22 @@ ContractIdPreimage::Asset(asset) }))` → the canonical SAC C-StrKey (CAP-46-3).
 
 ## Implementation
 
-Primary — **wire the existing guard into the value path**:
+### MUST FIX ALONGSIDE — the gate and the decoder read different topics
+
+Wiring the gate is not sufficient on its own. The two sides disagree on where the
+asset string lives:
+
+- gate: `sac.rs` reads `topics.last()`
+- decoder: `event_filters.rs` reads `arr.get(3)` (index 3)
+
+For a 4-topic `transfer` these are the same element, so the gate appears to work.
+For a **5-topic** event they are different elements: the decoder still yields
+`Credit{USDC,…}` while the gate inspects some other topic, fails to derive a
+matching SAC, and returns `None` — i.e. the forged identity slips through the very
+check meant to stop it. Align both on one index (and add a test with a 5-topic
+event asserting the gate rejects it).
+
+### Primary — wire the existing guard into the PRESENCE path:
 
 - Thread the emitter **C-StrKey** (already in hand at the caller as
   `ev.contract_id`, currently only hashed to a surrogate) and `net_id` into

@@ -8,7 +8,7 @@ import { useColorMode } from '../theme/ThemeProvider.js';
 /**
  * Light/dark theme switch — an icon button wired to the existing
  * {@link useColorMode} context (`toggleMode`). The whole colour-mode
- * mechanism (persistence + `prefers-color-scheme` default) already lives
+ * mechanism (persistence + dark default) already lives
  * in `ExplorerThemeProvider`; this is only the visible control (task 0351
  * F19). Shows the icon of the mode it will switch TO — a sun in dark mode,
  * a moon in light mode — the near-universal convention.

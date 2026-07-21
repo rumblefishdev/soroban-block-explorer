@@ -79,6 +79,30 @@ backfill — `TransactionMeta` is S3-only). This task tracks the rollout to done
    scan + two `FINAL` joins. `wants_values` scopes the cost to the single global tx
    list — keep it gated there until this passes.
 
+## Decide BEFORE the rollout: a touched-but-unmeasured asset must not vanish
+
+Free to change now, expensive later — the column is not yet on prod, so no data
+depends on the current semantics.
+
+The read filters `HAVING max(net_settled) IS NOT NULL AND != 0`. That is right for
+"nothing settled", but it also **deletes the asset from the transaction entirely**
+when the value could not be computed — and the bespoke-token case is exactly where
+that happens: a token that stores balances under any key other than
+`Balance(Address)` produces no ledger delta, so we silently show _nothing_ rather
+than "this asset moved, amount unknown".
+
+Silence is worse than an honest `unknown`: it makes the transaction look like it
+never touched the asset. Decide the contract now:
+
+- `NULL` = not computed → render as **unknown**, keep the asset row visible;
+- `0` = genuinely nothing settled net → may stay hidden.
+
+Related: the module doc in `crates/xdr-parser/src/ledger_value.rs` asserts that
+**every** value flow settles as an Account / Trustline / ContractData balance
+change. That is false — `ContractData` keys are contract-chosen (CAP-0046-05,
+**Final**), so a token may keep balances anywhere. Correct that claim in the same
+change; leaving it invites the next reader to trust the number.
+
 ## Post-S3-reingest verification (REQUIRED — do not just trust the re-run)
 
 The re-ingest recomputes history; verify it the same adversarial way 0393 verified
