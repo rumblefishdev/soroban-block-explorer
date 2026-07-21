@@ -78,7 +78,7 @@ Four clauses, in order:
    > **The usual objection, and why it does not hold.** `docs/backfills.md` rule 4
    > warns that re-parsing with a *different parser build* is unsafe on the 15 RMT
    > tables that carry no version column, because ClickHouse could keep the stale
-   > row. Measured on CH 26.3 (ADR 0053): it keeps the **last row inserted**, so a
+   > row. Measured on CH 26.3 (lore 0425): it keeps the **last row inserted**, so a
    > re-parse — which by construction lands after the data it replaces — wins in
    > every shape tried, including after `OPTIMIZE`, across parallel inserts, and
    > when read through `FINAL`. Every version-less table is also either keyed by

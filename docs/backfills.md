@@ -97,7 +97,7 @@ about **one insert**, not about re-parsing.
 
 **Re-parsing is safe.** A re-parse lands after the data it replaces, and
 version-less RMT keeps the last row inserted, so the newer parse wins. Measured
-on a ClickHouse 26.3 server (ADR 0053), in the shapes that actually occur:
+on a ClickHouse 26.3 server (lore 0425), in the shapes that actually occur:
 
 | Shape                                                                     | Result                                               |
 | ------------------------------------------------------------------------- | ---------------------------------------------------- |
