@@ -48,6 +48,18 @@ pub async fn fetch_stats(
     // Both `ledgers` reads also carry an explicit row cap: the `latest` subquery
     // takes `LIMIT 1` because a duplicated head row would return two rows and
     // break `fetch_optional` with a 500 on the whole stats endpoint.
+    //
+    // Neither read uses `FINAL`, and that is deliberate rather than an omission.
+    // `ledgers` is `ReplacingMergeTree` with **no version column**, so `FINAL`
+    // has no tie-break rule to apply — among duplicates of one `sequence` it is
+    // no more defined than `LIMIT 1 BY`. It would only be a correctness tool if
+    // the copies differed, and they do not: measured over 308,930 duplicated
+    // sequences (ranges 60.0-60.2M and 63.3-63.5M), `closed_at`,
+    // `transaction_count` and `hash` are identical across every duplicate pair —
+    // consistent with the copies coming from a backfill re-walking history
+    // (0422). `FINAL` here would buy nothing and cost the 19x read amplification
+    // measured on the ledgers list. Picking one row per `sequence` is the whole
+    // requirement, and that is what the caps do.
     // `head` is a trusted i64 from our own head probe, so it is inlined (no
     // injection surface) — matching the i64-inlining convention in
     // `crates/api/src/common/ch.rs`. This also drops the previous inner
