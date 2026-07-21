@@ -53,8 +53,8 @@ use xdr_parser::types::{
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
+use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
-use xdr_parser::{LedgerDelta, Movement, NetSettled};
 
 use xdr_parser::event::extract_executable_update_new_wasm_hash;
 
@@ -2210,8 +2210,8 @@ pub fn derive_token_event(
 }
 
 /// Net-settled value per asset for ONE transaction (classic OR Soroban), from its
-/// per-(holder, asset) ledger balance deltas. Each delta becomes a one-sided
-/// [`Movement`] and `net_settled` reduces to `max(Σ+, Σ−)` per asset.
+/// per-(holder, asset) ledger balance deltas. Each delta is resolved to its
+/// `asset_id` and handed to `net_settled`, which reduces to `max(Σ+, Σ−)` per asset.
 ///
 /// The deltas come from `xdr_parser::ledger_balance_deltas` over the tx's
 /// `TransactionMeta` and cover EVERY value flow uniformly from the ledger —
@@ -2229,7 +2229,7 @@ pub fn ledger_deltas_net_settled(
     deltas: &[LedgerDelta],
     sac_classic: &HashMap<i64, i64>,
 ) -> Vec<NetSettled> {
-    let movements: Vec<Movement> = deltas
+    let resolved: Vec<AccountDelta> = deltas
         .iter()
         .filter_map(|d| {
             let asset_id = match &d.asset {
@@ -2242,30 +2242,19 @@ pub fn ledger_deltas_net_settled(
                 // Bespoke token → its own contract surrogate (the token IS the asset).
                 LedgerAsset::Bespoke(contract) => ids::contract_id(contract),
             };
-            // `Movement.amount` is the non-negative magnitude. `checked_abs`
-            // because `-i128::MIN` is itself unrepresentable — a bespoke token's
-            // delta is attacker-authored i128, and release builds don't panic on
-            // overflow, so `?` drops that one movement rather than wrapping it into
-            // a fabricated figure.
-            let amount = d.delta.checked_abs()?;
-            Some(if d.delta >= 0 {
-                Movement {
-                    asset_id,
-                    from: None,
-                    to: Some(d.account.clone()),
-                    amount,
-                }
-            } else {
-                Movement {
-                    asset_id,
-                    from: Some(d.account.clone()),
-                    to: None,
-                    amount,
-                }
+            // The signed delta passes straight through. `net_settled` buckets by
+            // sign and is overflow-checked, so an attacker-authored i128 (a bespoke
+            // token's contract-written balance) surfaces as "not computed", never a
+            // wrapped figure. No `abs` here: the magnitude is not pre-taken, so
+            // i128::MIN stays representable instead of dropping the whole delta.
+            Some(AccountDelta {
+                asset_id,
+                account: d.account.clone(),
+                delta: d.delta,
             })
         })
         .collect();
-    xdr_parser::net_settled(&movements)
+    xdr_parser::net_settled(&resolved)
 }
 
 #[cfg(test)]

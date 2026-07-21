@@ -3,15 +3,15 @@
 //! A Stellar transaction has no protocol-level "amount"; value moves as ledger
 //! balance changes across its operations and Soroban invocations. To surface a
 //! single "value moved" figure per (transaction, asset) for the tx-list views,
-//! we reduce every value movement of one transaction to the **net settled
-//! value**:
+//! we reduce a transaction's **signed per-account balance deltas** to the **net
+//! settled value**:
 //!
 //! ```text
-//! delta[account] += amount   for the `to` of each movement
-//! delta[account] -= amount   for the `from` of each movement
-//! amount = max( Σ positive deltas , Σ negative deltas )
+//! amount = max( Σ positive account deltas , Σ negative account deltas )
 //! ```
 //!
+//! The input is already one signed delta per (account, asset): a transfer is two
+//! deltas (`−amount` at the source, `+amount` at the sink), a mint/burn is one.
 //! `max` of *both* sides (not just the gained side) keeps burns and
 //! payments-to-issuer — where nobody gains — non-zero. Netting per account
 //! drops routing hops automatically (a pass-through account has delta 0), so it
@@ -57,20 +57,20 @@
 
 use std::collections::BTreeMap;
 
-/// One signed value movement within a single transaction.
+/// One account's signed net change in one asset within a single transaction.
 ///
-/// `from`/`to` are account identities: a `G…` account StrKey, or a `C…`
-/// contract address (a C→C transfer must net correctly, so contracts are not
-/// dropped here). `None` marks a one-sided event: `from == None` is a **mint**
-/// (value created), `to == None` is a **burn/clawback** (value destroyed).
-/// `amount` is the raw, unscaled token quantity (non-negative; decimals are
-/// applied at read time).
+/// A transfer decomposes into two of these (`−amount` at the source, `+amount`
+/// at the sink); a mint is one positive delta (value created for the holder),
+/// a burn/clawback one negative (value destroyed). `account` is a `G…` account
+/// or `C…` contract StrKey — a C→C move must net, so contracts are not dropped.
+/// `delta` is raw/unscaled (decimals applied at read time) and **signed**: the
+/// magnitude is not pre-taken, so `i128::MIN` is representable here and surfaces
+/// as "not computed" in the reduction rather than being silently dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Movement {
+pub struct AccountDelta {
     pub asset_id: i64,
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub amount: i128,
+    pub account: String,
+    pub delta: i128,
 }
 
 /// Net-settled value for one (transaction, asset).
@@ -81,7 +81,7 @@ pub struct NetSettled {
     ///
     /// `None` when the reduction did not fit in `i128`. Amounts come from ledger
     /// balance deltas; for a **bespoke** token the stored balance is
-    /// contract-authored, so it is still attacker-controlled — two movements of
+    /// contract-authored, so it is still attacker-controlled — two deltas of
     /// `i128::MAX` in one transaction are one transaction's worth of effort.
     /// Release builds have `overflow-checks = false`, so unchecked arithmetic
     /// would not panic — it would wrap and store a wrong figure as money. `None`
@@ -90,32 +90,29 @@ pub struct NetSettled {
     pub amount: Option<i128>,
 }
 
-/// Reduce a transaction's value movements to the net-settled value per asset.
+/// Reduce a transaction's signed per-account deltas to the net-settled value per
+/// asset.
 ///
 /// Returns one [`NetSettled`] per distinct `asset_id`, ordered by `asset_id`
-/// for deterministic output. An empty input yields an empty vec.
-pub fn net_settled(movements: &[Movement]) -> Vec<NetSettled> {
+/// for deterministic output. An empty input yields an empty vec. Multiple deltas
+/// for the same `(asset_id, account)` accumulate (checked), so a pass-through
+/// account nets to 0.
+pub fn net_settled(deltas: &[AccountDelta]) -> Vec<NetSettled> {
     // asset_id -> (account -> signed delta). A `None` delta marks an account
     // whose running balance left i128; it poisons its asset's whole result,
     // because the reduction below can no longer be computed honestly.
     let mut per_asset: BTreeMap<i64, BTreeMap<&str, Option<i128>>> = BTreeMap::new();
-    for m in movements {
-        let deltas = per_asset.entry(m.asset_id).or_default();
-        if let Some(to) = &m.to {
-            let d = deltas.entry(to.as_str()).or_insert(Some(0));
-            *d = d.and_then(|v| v.checked_add(m.amount));
-        }
-        if let Some(from) = &m.from {
-            let d = deltas.entry(from.as_str()).or_insert(Some(0));
-            *d = d.and_then(|v| v.checked_sub(m.amount));
-        }
+    for d in deltas {
+        let accounts = per_asset.entry(d.asset_id).or_default();
+        let acc = accounts.entry(d.account.as_str()).or_insert(Some(0));
+        *acc = acc.and_then(|v| v.checked_add(d.delta));
     }
 
     per_asset
         .into_iter()
-        .map(|(asset_id, deltas)| NetSettled {
+        .map(|(asset_id, accounts)| NetSettled {
             asset_id,
-            amount: reduce(&deltas),
+            amount: reduce(&accounts),
         })
         .collect()
 }
@@ -151,29 +148,28 @@ mod tests {
     const E: &str = "E";
     const ISSUER: &str = "ISSUER";
 
-    fn transfer(asset: i64, from: &str, to: &str, amount: i128) -> Movement {
-        Movement {
+    fn d(asset: i64, account: &str, delta: i128) -> AccountDelta {
+        AccountDelta {
             asset_id: asset,
-            from: Some(from.to_owned()),
-            to: Some(to.to_owned()),
-            amount,
+            account: account.to_owned(),
+            delta,
         }
     }
-    fn mint(asset: i64, to: &str, amount: i128) -> Movement {
-        Movement {
-            asset_id: asset,
-            from: None,
-            to: Some(to.to_owned()),
-            amount,
-        }
+    // A transfer is two signed deltas; a mint/burn is one. These mirror how the
+    // ledger reader decomposes value (source loses, sink gains).
+    fn transfer(asset: i64, from: &str, to: &str, amount: i128) -> Vec<AccountDelta> {
+        vec![d(asset, from, -amount), d(asset, to, amount)]
     }
-    fn burn(asset: i64, from: &str, amount: i128) -> Movement {
-        Movement {
-            asset_id: asset,
-            from: Some(from.to_owned()),
-            to: None,
-            amount,
-        }
+    fn mint(asset: i64, to: &str, amount: i128) -> Vec<AccountDelta> {
+        vec![d(asset, to, amount)]
+    }
+    fn burn(asset: i64, from: &str, amount: i128) -> Vec<AccountDelta> {
+        vec![d(asset, from, -amount)]
+    }
+    // Flatten a transaction's movements into the flat signed-delta slice the
+    // reducer takes.
+    fn ns(parts: impl IntoIterator<Item = Vec<AccountDelta>>) -> Vec<NetSettled> {
+        net_settled(&parts.into_iter().flatten().collect::<Vec<_>>())
     }
     fn one(r: &[NetSettled]) -> &NetSettled {
         assert_eq!(r.len(), 1, "expected one asset row, got {r:?}");
@@ -187,7 +183,7 @@ mod tests {
 
     #[test]
     fn plain_transfer_is_its_amount() {
-        let r = net_settled(&[transfer(X, A, B, 100)]);
+        let r = ns([transfer(X, A, B, 100)]);
         let n = one(&r);
         assert_eq!((n.asset_id, n.amount), (X, Some(100)));
     }
@@ -195,55 +191,55 @@ mod tests {
     #[test]
     fn routing_chain_nets_to_moved_value_not_gross() {
         // A -> B -> C, 100. Gross would be 200; net is 100 (B passes through).
-        let r = net_settled(&[transfer(X, A, B, 100), transfer(X, B, C, 100)]);
+        let r = ns([transfer(X, A, B, 100), transfer(X, B, C, 100)]);
         assert_eq!(one(&r).amount, Some(100));
     }
 
     #[test]
     fn pure_mint_counts_the_created_value() {
-        let n = &net_settled(&[mint(X, A, 100)])[0];
-        assert_eq!(n.amount, Some(100));
+        let r = ns([mint(X, A, 100)]);
+        assert_eq!(one(&r).amount, Some(100));
     }
 
     #[test]
     fn pure_burn_counts_the_destroyed_value() {
         // Σ+ alone would give 0 here; max(Σ+, Σ−) keeps it at 100.
-        let n = &net_settled(&[burn(X, A, 100)])[0];
-        assert_eq!(n.amount, Some(100));
+        let r = ns([burn(X, A, 100)]);
+        assert_eq!(one(&r).amount, Some(100));
     }
 
     #[test]
     fn transfer_plus_burn_takes_the_larger_side() {
         // transfer 100 (A->B) + burn 40 (B). Σ+ = 60, Σ− = 100 -> 100.
-        let r = net_settled(&[transfer(X, A, B, 100), burn(X, B, 40)]);
+        let r = ns([transfer(X, A, B, 100), burn(X, B, 40)]);
         assert_eq!(one(&r).amount, Some(100));
     }
 
     #[test]
     fn redeem_to_issuer_as_two_sided_transfer() {
         // redeem 250 recorded as a transfer to the issuer.
-        let n = &net_settled(&[transfer(X, A, ISSUER, 250)])[0];
-        assert_eq!(n.amount, Some(250));
+        let r = ns([transfer(X, A, ISSUER, 250)]);
+        assert_eq!(one(&r).amount, Some(250));
     }
 
     #[test]
     fn redeem_one_sided_is_representation_robust() {
         // Same redeem recorded one-sided (burn-shaped) still nets to 250.
-        let n = &net_settled(&[burn(X, A, 250)])[0];
-        assert_eq!(n.amount, Some(250));
+        let r = ns([burn(X, A, 250)]);
+        assert_eq!(one(&r).amount, Some(250));
     }
 
     #[test]
     fn self_cancelling_mint_transfer_burn_nets_to_zero() {
         // mint 100 -> A, A -> B 100, burn 100 from B. Every account nets to 0.
-        let r = net_settled(&[mint(X, A, 100), transfer(X, A, B, 100), burn(X, B, 100)]);
+        let r = ns([mint(X, A, 100), transfer(X, A, B, 100), burn(X, B, 100)]);
         assert_eq!(one(&r).amount, Some(0));
     }
 
     #[test]
     fn two_assets_split_into_two_rows_ordered_by_asset_id() {
         // asset X transfer 100, asset Y transfer 50, in one transaction.
-        let r = net_settled(&[transfer(Y, B, A, 50), transfer(X, A, B, 100)]);
+        let r = ns([transfer(Y, B, A, 50), transfer(X, A, B, 100)]);
         assert_eq!(r.len(), 2);
         assert_eq!((r[0].asset_id, r[0].amount), (X, Some(100))); // ordered by asset_id
         assert_eq!((r[1].asset_id, r[1].amount), (Y, Some(50)));
@@ -252,7 +248,7 @@ mod tests {
     #[test]
     fn independent_transfers_of_same_asset_sum() {
         // A->B 100 and C->D 30 share no account: net is 130, not 100.
-        let r = net_settled(&[transfer(X, A, B, 100), transfer(X, C, D, 30)]);
+        let r = ns([transfer(X, A, B, 100), transfer(X, C, D, 30)]);
         assert_eq!(one(&r).amount, Some(130));
     }
 
@@ -266,7 +262,7 @@ mod tests {
         //                         lost   = 100+80    = 180  -> 180
         // Gross (sum of legs) would be 290. A DAG, no cycles, so the flow value
         // is the full 180 — the hub is not erased, only its pass-through part.
-        let r = net_settled(&[
+        let r = ns([
             transfer(X, A, B, 100),
             transfer(X, B, C, 60),
             transfer(X, B, D, 20),
@@ -283,7 +279,7 @@ mod tests {
         // Two mints of i128::MAX to the same account. Unchecked, the running
         // delta wraps (release has overflow-checks = false) and we would store
         // a negative-looking figure as money. Cost of this input: one tx.
-        let r = net_settled(&[mint(X, A, i128::MAX), mint(X, A, i128::MAX)]);
+        let r = ns([mint(X, A, i128::MAX), mint(X, A, i128::MAX)]);
         assert_eq!(
             one(&r).amount,
             None,
@@ -294,27 +290,24 @@ mod tests {
     #[test]
     fn sum_overflow_across_accounts_is_reported_as_not_computed() {
         // Each account's delta fits; the Σ+ across them does not.
-        let r = net_settled(&[mint(X, A, i128::MAX), mint(X, B, i128::MAX)]);
+        let r = ns([mint(X, A, i128::MAX), mint(X, B, i128::MAX)]);
         assert_eq!(one(&r).amount, None);
     }
 
     #[test]
     fn negation_of_i128_min_does_not_overflow() {
-        // Σ− negates each negative delta; -i128::MIN is itself unrepresentable,
-        // so a burn of i128::MIN must yield None rather than panic/wrap.
-        let r = net_settled(&[Movement {
-            asset_id: X,
-            from: Some(A.to_owned()),
-            to: None,
-            amount: i128::MIN,
-        }]);
+        // An account whose net delta is i128::MIN. Σ− negates each negative
+        // delta; -i128::MIN is itself unrepresentable, so it must yield None
+        // rather than panic/wrap. (Carried as a signed delta, not a pre-taken
+        // magnitude, so it is representable at construction.)
+        let r = net_settled(&[d(X, A, i128::MIN)]);
         assert_eq!(one(&r).amount, None);
     }
 
     #[test]
     fn one_overflowing_asset_does_not_poison_the_others() {
         // Asset X overflows; asset Y in the same transaction stays computable.
-        let r = net_settled(&[
+        let r = ns([
             mint(X, A, i128::MAX),
             mint(X, A, i128::MAX),
             transfer(Y, A, B, 50),
@@ -330,7 +323,7 @@ mod tests {
         // gives a cycle zero contribution to the flow value, so net is 0 even
         // though 200 moved gross. This is also the wash-trading signature
         // (cycle whose members end at zero balance) — definitional, not a bug.
-        let r = net_settled(&[transfer(X, A, B, 100), transfer(X, B, A, 100)]);
+        let r = ns([transfer(X, A, B, 100), transfer(X, B, A, 100)]);
         assert_eq!(one(&r).amount, Some(0));
     }
 }
