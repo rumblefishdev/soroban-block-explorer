@@ -73,15 +73,18 @@ Five clauses, in order:
    ledger in the range in full** and then discarded all but one table's rows,
    carrying their own partition loop, watermark file and resume logic to do it.
 
-   > **Known blocker, not an exception.** Those two wrote to one table partly to
-   > dodge a real hazard: 12 tables carry no RMT version column
-   > (`liquidity_pool_snapshots`, `assets`, `transactions`, the 9 event-log
-   > tables), so re-parsing history with a *different parser build* lets ClickHouse
-   > keep either row arbitrarily — wrong data, not duplicates
-   > (`docs/backfills.md` rule 4). That makes `run --reindex` unsafe over ranges
-   > ingested by an older build. The answer is to fix the tables, not to license
-   > the workaround — lore 0426. Until it lands, a re-parse of older-build history
-   > is an owner decision, and the reason must be written into the task.
+   > **The usual objection, and why it does not hold.** `docs/backfills.md` rule 4
+   > warns that re-parsing with a *different parser build* is unsafe on the 15 RMT
+   > tables that carry no version column, because ClickHouse could keep the stale
+   > row. Measured on CH 26.3 (lore 0426): it keeps the **last row inserted**, so a
+   > re-parse — which by construction lands after the data it replaces — wins in
+   > every shape tried, including after `OPTIMIZE`, across parallel inserts, and
+   > when read through `FINAL`. Every version-less table is also either keyed by
+   > ledger (a re-parse only competes with its own earlier parse) or holds a pure
+   > function of an immutable input. The real hazard is narrower and lives in the
+   > parser, not the engine: **two rows for one key inside a single insert**, where
+   > "last" is whatever order the code emitted (lore 0356, pool reserves). Emit one
+   > row per key and `--reindex` is safe.
 
 3. **Reuse the live code path — never reimplement it.** Call the same function
    the indexer calls. The removed passes that did (`nft-reparse` → the parser's
