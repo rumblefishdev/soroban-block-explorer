@@ -165,6 +165,24 @@ export function ExplorerTable<T>({
       0
     ) || 720;
 
+  // Collision-proof row keys. Callers key rows by a domain id they believe is
+  // unique (`sequence`, `id`, a hash). When the backend hands back a duplicate —
+  // which a ReplacingMergeTree read without deduplication does (lore-0420) —
+  // React sees two siblings with the same key, cannot match old nodes to new
+  // ones, and leaves orphaned rows behind: the table appeared to APPEND rows
+  // without bound on every re-sort. Backend correctness is the real fix; this is
+  // the guard that stops a data bug from becoming an unbounded rendering bug.
+  //
+  // Only duplicates get a suffix, so the common case keeps its stable key and
+  // normal reconciliation.
+  const seenKeys = new Map<string, number>();
+  const rowKeys = rows.map((row, idx) => {
+    const base = rowKey(row, idx);
+    const seen = seenKeys.get(base) ?? 0;
+    seenKeys.set(base, seen + 1);
+    return seen === 0 ? base : `${base}#${seen}`;
+  });
+
   return (
     <TableContainer
       sx={{
@@ -280,7 +298,7 @@ export function ExplorerTable<T>({
               )
             : rows.map((row, idx) => (
                 <TableRow
-                  key={rowKey(row, idx)}
+                  key={rowKeys[idx]}
                   sx={(theme) => ({
                     backgroundColor:
                       idx % 2 === 1

@@ -95,4 +95,48 @@ describe('ExplorerTable', () => {
     );
     expect(screen.getByTestId('empty')).toHaveTextContent('nothing here');
   });
+
+  // lore-0420: a ReplacingMergeTree read without deduplication handed the table
+  // rows whose `rowKey` collided. React could not match old nodes to new ones
+  // and left orphans behind, so re-sorting APPENDED rows without bound. The
+  // backend fix is the real one; this guarantees a data bug can never again
+  // escalate into an unbounded rendering bug.
+  it('renders every row even when rowKey collides across rows', () => {
+    const duplicated: Row[] = [
+      { id: 'dup', hash: '0xaaa', ledger: 100 },
+      { id: 'dup', hash: '0xbbb', ledger: 100 },
+      { id: 'dup', hash: '0xccc', ledger: 100 },
+    ];
+
+    const { rerender } = render(
+      withTheme(
+        <ExplorerTable
+          columns={COLUMNS}
+          rows={duplicated}
+          rowKey={(r) => r.id}
+        />
+      )
+    );
+
+    const bodyRows = () =>
+      within(screen.getByRole('table')).getAllByRole('row').length - 1;
+    expect(bodyRows()).toBe(3);
+
+    // Re-render with a different colliding page — the previous rows must be
+    // REPLACED, never accumulated (the original bug: 20 → 30 → 40 rows).
+    rerender(
+      withTheme(
+        <ExplorerTable
+          columns={COLUMNS}
+          rows={[
+            { id: 'dup', hash: '0xddd', ledger: 99 },
+            { id: 'dup', hash: '0xeee', ledger: 99 },
+          ]}
+          rowKey={(r) => r.id}
+        />
+      )
+    );
+    expect(bodyRows()).toBe(2);
+    expect(screen.queryByText('0xaaa')).not.toBeInTheDocument();
+  });
 });
