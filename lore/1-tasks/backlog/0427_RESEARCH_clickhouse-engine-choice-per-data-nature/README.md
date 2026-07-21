@@ -21,6 +21,30 @@ history:
     status: backlog
     who: karolkow
     note: >
+      Three findings folded in from the 0425 backfill audit — section C. They came
+      from auditing the **write** path rather than engine capabilities, and they
+      land on this task's immutable/mutable split from the other side.
+      The immutable half gets a retirement: `docs/backfills.md` rule 4 claimed a
+      re-parse with a different parser build could keep the stale row on
+      version-less RMT. Measured on a 26.3 server and then confirmed read-only on
+      prod — it keeps the **last row inserted**, so a re-parse always wins. Rule 4
+      is rewritten and `run --reindex` is now the sanctioned repair mechanism
+      (0425). The residual hazard moved to the parser: one row per key per insert.
+      The mutable half gets a writer-side rule this task did not have: a whole-row
+      write that defaults missing fields is safe **only if it carries the lowest
+      version**. `soroban_contracts` satisfies it by accident; `accounts` violates
+      it and 61.7% of recent transaction senders carry `sequence_number = 0` as a
+      result. All eight state-table builders were audited — `accounts` is the only
+      broken one.
+      Note for whoever picks this up: an ADR was written on the finding-9 material
+      and then **deleted the same day**, on the owner's call, precisely because this
+      task says "no ADR should be written before [the open questions] are
+      [measured]". That instinct was right and the ADR was premature. This task
+      remains the ADR's home once its four open questions are answered.
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
       Spawned from 0420. Deep-research pass run against official ClickHouse docs,
       engine source and production write-ups: 103 agents, 21 sources, 105 claims,
       top 25 put through 3-reviewer adversarial verification (2 of 3 refutes
@@ -106,6 +130,49 @@ key`, or FINAL. It changes the per-column semantics; it does not change whose
    refuted 0-3 (it is **not** equivalent to argMax on version ties or NULLs), but
    the idiom surfaced independently in two other reviewers' notes, once as a
    "widely used production idiom". Treat as a lead to test, not a plan.
+
+### C — measured 2026-07-21, from the 0425 backfill audit
+
+Three findings arrived from the other direction — auditing the **write** path
+rather than the engine — and they land squarely on this task's split.
+
+9. **Version-less RMT keeps the last row INSERTED, not an arbitrary one** (high —
+   measured, then confirmed on prod). This is the immutable half, and it retires
+   `docs/backfills.md` rule 4, which claimed a re-parse with a different parser
+   build could keep the stale row and therefore made `run --reindex` look unusable.
+   Measured on a CH 26.3.17.4 **server** with background merges live: 40 unmerged
+   old parts plus a 4-way concurrent re-parse read through `FINAL` → new value
+   wins, zero survivors; background merges with no `OPTIMIZE` → new value wins;
+   already-collapsed data re-parsed → new value wins; partial re-parse → the
+   untouched keys correctly keep their old value. Confirmed **read-only on prod**:
+   `operations_appearances` was first ingested by a pre-0261 parser emitting no
+   `pool_ids`; in ledgers 50,500,000–50,510,000 the range is fully merged
+   (4,429,575 rows = 4,429,575 distinct keys) and 127k path-payment ops carry
+   `pool_ids`, so the later write beat the original one at scale. The real hazard
+   is narrower and belongs to the parser: **two rows for one key inside a single
+   insert**, where "last" is emission order (0356, pool reserves).
+
+10. **A defaulted whole-row write is safe only if it carries the LOWEST version**
+    (high — the writer-side counterpart to finding 5). `SimpleAggregateFunction`
+    fixes per-column merge semantics, but nothing protects a table whose writer
+    emits placeholder values on a path that also bumps the version.
+    `soroban_contracts`' stub writer (`stage.rs:1761`) emits an all-NULL row and
+    stamps `wasm_uploaded_at_ledger = 0`, so it always loses — safe **by accident
+    of which column happens to be the version**, not by design. `accounts` breaks
+    the rule: its version is `last_seen_ledger`, bumped by the very write that
+    empties the row, so the emptied row wins. Version-less tables are exposed by
+    construction, since there the last write always wins (finding 9).
+
+11. **The blast radius is one builder** (high — audited, not assumed). All eight
+    state-table row builders were checked against finding 10: `AccountRow` is the
+    only broken one. `BalanceRow` (2 sites) carries a real amount on both paths;
+    `AssetRow` writes NULL only into columns that are DEAD by design (0293/0310);
+    `NftRow`, `LpPositionRow`, `LiquidityPoolRow` and `WasmInterfaceMetadataRow`
+    have a single construction site each, so no partial-write variant exists.
+    The `accounts` damage is measured: **61.7%** of accounts that were a
+    transaction _source_ in ledgers 63,400,000–63,500,000 carry
+    `sequence_number = 0`, which cannot happen on chain. `first_seen_ledger`,
+    `sequence_number` and `home_domain` all ride that one write — see 0421.
 
 ### Taking state out of MergeTree — both exits are closed
 
