@@ -165,39 +165,6 @@ export function ExplorerTable<T>({
       0
     ) || 720;
 
-  // Drop rows whose `rowKey` was already seen, keeping the first.
-  //
-  // Callers key rows by a domain id they believe is unique (`sequence`, `id`, a
-  // hash). When the backend hands back a duplicate — which a ReplacingMergeTree
-  // read without deduplication does (lore-0420) — React sees two siblings with
-  // the same key, cannot match old nodes to new ones, and leaves orphans behind:
-  // the table APPENDED rows without bound on every re-sort. Rendering one row per
-  // key removes that failure mode at the source, since the collision never
-  // reaches React.
-  //
-  // Backend correctness is the real fix (the rest of lore-0420); this only keeps
-  // a data fault from escalating into an unbounded rendering fault. A duplicate
-  // is still a backend bug, so it is reported to the console rather than passed
-  // over in silence — the list would otherwise look perfectly healthy while the
-  // query behind it was wrong.
-  const seenKeys = new Set<string>();
-  const visibleRows: { row: T; key: string }[] = [];
-  rows.forEach((row, idx) => {
-    const key = rowKey(row, idx);
-    if (seenKeys.has(key)) return;
-    seenKeys.add(key);
-    visibleRows.push({ row, key });
-  });
-  if (visibleRows.length !== rows.length) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `ExplorerTable: dropped ${
-        rows.length - visibleRows.length
-      } row(s) with a duplicate rowKey. ` +
-        `The query feeding this table is returning duplicates — see lore-0420.`
-    );
-  }
-
   return (
     <TableContainer
       sx={{
@@ -311,9 +278,9 @@ export function ExplorerTable<T>({
                   </TableCell>
                 </TableRow>
               )
-            : visibleRows.map(({ row, key }, idx) => (
+            : rows.map((row, idx) => (
                 <TableRow
-                  key={key}
+                  key={rowKey(row, idx)}
                   sx={(theme) => ({
                     backgroundColor:
                       idx % 2 === 1
