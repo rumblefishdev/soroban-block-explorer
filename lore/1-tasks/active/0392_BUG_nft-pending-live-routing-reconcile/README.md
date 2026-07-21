@@ -138,6 +138,11 @@ _only_ genuinely-unresolved contracts, and reconciles them once resolved.
       instead of freezing (re-run R §4a).
 - [ ] (Step 1) Genuinely-unresolved contracts (WASM never observed) still
       quarantine correctly — pending is not forced to zero.
+- [ ] **`nft-reclassify` is deleted in the same PR that lands the continuous
+      reconcile**, together with its row in `docs/backfills.md` and its entry in
+      `crates/backfill-runner/README.md`. Leaving it as a manual fallback is how
+      hot `nfts` froze for 33 days in the first place: a drain nobody owns is a
+      drain nobody runs. Per lore 0425 clause 4.
 - [x] (Step 2 gate) 0283 prefetch miss-rate measured directly — 100% mechanical
       failure (wire-type bug), fix shipped in PR #341
       (notes/R-g9-prefetch-miss-rate-measured.md).

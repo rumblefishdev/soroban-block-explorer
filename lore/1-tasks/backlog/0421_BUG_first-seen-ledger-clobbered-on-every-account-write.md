@@ -5,7 +5,14 @@ type: BUG
 status: backlog
 related_adr: []
 related_tasks: ['0420']
-tags: ['area-indexer', 'area-clickhouse', 'data-integrity', 'effort-large', 'priority-high']
+tags:
+  [
+    'area-indexer',
+    'area-clickhouse',
+    'data-integrity',
+    'effort-large',
+    'priority-high',
+  ]
 links:
   - crates/db-clickhouse/src/persist/stage.rs
 history:
@@ -47,7 +54,7 @@ let first_seen_ledger = ov
 
 `ov.first_seen_ledger` is only populated when the account is **created** in that
 ledger (it comes from the XDR account-state extraction). For an account that
-merely *transacts*, the override is `None`, so the fallback stamps the **current
+merely _transacts_, the override is `None`, so the fallback stamps the **current
 ledger** as `first_seen_ledger`.
 
 `merge_account_state_overrides` (same file, ~line 2060) does take `min()` — but
@@ -61,10 +68,10 @@ incorrect `first_seen_ledger`.
 
 ## Why the data is mostly unrecoverable in-place
 
-| | |
-| --- | --- |
-| accounts with several physical copies (min() could recover) | **329,381 (2.3%)** |
-| accounts already merged to one row (true value destroyed) | **14,025,268 (97.7%)** |
+|                                                             |                        |
+| ----------------------------------------------------------- | ---------------------- |
+| accounts with several physical copies (min() could recover) | **329,381 (2.3%)**     |
+| accounts already merged to one row (true value destroyed)   | **14,025,268 (97.7%)** |
 
 A read-time `min(first_seen_ledger)` would therefore "fix" 2.3% of accounts and
 leave 97.7% wrong — while making the two groups inconsistent with each other.
@@ -91,7 +98,7 @@ The obvious idea — "write NULL (or 0) for `first_seen_ledger` when we are not
 creating the account, so we don't clobber it" — **does not work on a
 ReplacingMergeTree**. RMT does not merge columns; it picks one **whole winning
 row** per key (highest version) and discards the rest. A NULL in the winning row
-therefore *erases* the value rather than preserving it. There is no partial
+therefore _erases_ the value rather than preserving it. There is no partial
 update to reach for.
 
 ## Recommended fix: per-column merge semantics (AggregatingMergeTree)
@@ -162,6 +169,13 @@ from itself. Migration is a new table + `INSERT SELECT` + `EXCHANGE TABLES`.
 - [ ] Regression test: an account written across several ledgers keeps its
       original `first_seen_ledger`
 - [ ] Accounts list + account summary show a correct account age
+- [ ] **`repair-tier1`'s `accounts` rebuild is deleted, not left as a safety net.**
+      That subcommand exists only because the engine cannot express "minimum"; once
+      the engine does, keeping it around re-creates the mop this task removes. If
+      the other four Tier-1 tables still need it, delete only `rebuild_accounts` and
+      say so in `docs/backfills.md`; if 0232 lands first and covers all six columns,
+      the whole subcommand goes. Per lore 0425 clause 4 — a pass whose live hole is
+      closed must be removed in the same PR that closes it.
 - [ ] **Docs updated** — schema change ⇒ update `docs/architecture/**`
 - [ ] **API types regenerated** — only if the wire shape changes; `N/A` if the
       column merely becomes correct

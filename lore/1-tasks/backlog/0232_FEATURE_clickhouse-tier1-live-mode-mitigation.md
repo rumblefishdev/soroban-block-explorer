@@ -5,7 +5,7 @@ type: FEATURE
 status: backlog
 related_adr: ['0044']
 related_tasks: ['0118', '0194', '0228']
-blocked_by: ['0228']
+blocked_by: []
 tags:
   [
     priority-medium,
@@ -21,6 +21,24 @@ tags:
 milestone: 2
 links: []
 history:
+  - date: '2026-07-21'
+    status: backlog
+    who: karolkow
+    note: >
+      Unblocked and corrected. `blocked_by: ['0228']` was stale — 0228 has been in
+      `archive/` since it completed, so this task has been startable for a while
+      while reading as blocked.
+      More serious: its Acceptance Criteria asked for a **daily `repair-tier1` cron
+      on Hetzner**, which contradicts this task's own body ("eliminates the need for
+      `repair-tier1` long-term") and would have made the mop permanent. Replaced with
+      the deletion criterion. Verified the same day that no such cron or systemd
+      timer exists in `infra/` or `infra-hetzner/`, so nothing operational is being
+      un-done — the criterion was aspirational, never implemented. It also used
+      `--target clickhouse`, a flag `docs/backfills.md` records as non-existent.
+      Overlaps heavily with **0421**, which proposes the same
+      `AggregatingMergeTree` + `SimpleAggregateFunction(min)` engine change for
+      `accounts` alone, two months later and without referencing this task. Decide
+      which is the parent before starting either.
   - date: '2026-05-18'
     status: backlog
     who: stkrolikiewicz
@@ -314,9 +332,18 @@ TO assets ...` lands in `init.sql`; applies cleanly to
       runbook.
 - [ ] PG ↔ CH parity probe on top-100 assets shows < 0.1% drift in
       steady state.
-- [ ] Daily `backfill-runner repair-tier1 --target clickhouse`
-      cron configured on Hetzner (Ansible playbook or systemd
-      timer); runbook documents recovery if the cron fails.
+- [ ] **`repair-tier1` is deleted** — subcommand, its row in
+      `docs/backfills.md`, and its entry in
+      `crates/backfill-runner/README.md` — in the same PR that makes
+      the engine hold the invariant. Per lore 0425 clause 4.
+      _(This criterion replaces the original one, which asked for a
+      **daily `repair-tier1` cron on Hetzner**. That contradicted this
+      task's own body — "eliminates the need for `repair-tier1`
+      long-term" — and would have made the mop permanent instead of
+      removing it. Verified 2026-07-21: no such cron or systemd timer
+      exists anywhere in `infra/` or `infra-hetzner/`, so nothing is
+      being un-done. The old criterion also used `--target
+    clickhouse`, a flag that no longer exists.)_
 - [ ] Drift-probe queries committed for each Class A column;
       operator-runnable; results within agreed thresholds.
 - [ ] Separate AMT proposal task spawned and linked from this
