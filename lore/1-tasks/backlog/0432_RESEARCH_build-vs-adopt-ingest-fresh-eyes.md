@@ -53,6 +53,57 @@ Two findings in one day, same root:
 Neither is a coding mistake. Both are the same architectural reflex: _write it
 ourselves_. Nothing in the ADR record shows that reflex was ever examined.
 
+## Tooling landscape — verified 2026-07-22, including maintenance status
+
+**Two corrections to what this project has assumed:**
+
+1. **`stellar/go` was ARCHIVED on 2025-12-16.** Horizon and Galexie moved to
+   their own repos (`stellar/stellar-horizon`, `stellar/stellar-galexie`).
+2. **Horizon has an announced EOL** — feature-frozen, and its `result_meta_xdr`
+   field is marked "to be deprecated in Q3". The self-decode escape hatch we
+   rely on is closing.
+
+| tool               | what it is                                                                        | maintained                             | Soroban era                                                                                                      | interface                      | cost                                                      | oracle?                                                       |
+| ------------------ | --------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------- |
+| **Galexie**        | exports raw `LedgerCloseMeta` XDR to object storage — **what we already consume** | active, `galexie-v27.0.0` (2026-06-10) | yes, by construction                                                                                             | CLI/daemon + public data lakes | free (AWS Public Blockchain lake is free)                 | **strongest — the only truly independent ground truth**       |
+| **Hubble**         | SDF-hosted BigQuery dataset, full history, bronze/silver/gold                     | active (dbt v1.15.52, 2026-07-21)      | **yes, extensively** — 6 bronze + 7 silver Soroban tables incl. `evicted_keys`, `ttl`, `history_contract_events` | hosted SQL                     | SDF pays storage, **we pay query**                        | **best practical** — carries raw XDR _next to_ decoded values |
+| **stellar-etl**    | Go CLI extracting history; **powers Hubble's extraction layer**                   | active, v2.8.23                        | yes (`export_diagnostic_events`, contract code/data)                                                             | CLI                            | free (own compute)                                        | **NOT independent of Hubble — same codebase**                 |
+| **Stellar RPC**    | JSON-RPC to live state + recent history                                           | active                                 | yes, native                                                                                                      | JSON-RPC                       | **no free SDF mainnet endpoint** (testnet/futurenet only) | authoritative but **~7-day retention**                        |
+| **Horizon**        | REST + classic ingestion                                                          | **EOL announced**                      | **essentially no**                                                                                               | REST                           | free                                                      | **no — cannot validate a Soroban indexer**                    |
+| **stellar.expert** | explorer + analytics                                                              | active but **third-party**             | yes                                                                                                              | REST, 5 req/s                  | free                                                      | **no — see below**                                            |
+
+### stellar.expert is not a valid oracle — this is the 0256 trap explained
+
+- **Third-party**, org `stellar-expert`, not `stellar`. Not listed on the docs'
+  Indexers page.
+- **Derivation is closed-source** — the public repo only reads `contract.creator`
+  out of their database; nothing that computes it is published.
+- **Their own two API specs contradict each other**: one types `creator` as
+  `^G[A-Z2-7]{55}$` (accounts only), the other as `oneOf[Account, Contract]`.
+- **`ContractInfo.creator` has no description field at all**, while
+  `AccountInfo.creator` does.
+
+So when 0256 saw stellar.expert disagree with us, neither side had a written
+definition. That is why the disagreement was dismissed instead of investigated.
+
+### What the documentation actually says
+
+Exactly one "source of truth" statement exists in the entire docs corpus:
+
+> "The source of truth should always be the XDR defined in the protocol."
+> — getLedgerEntries API reference
+
+**No official document recommends validating an indexer against any hosted
+service.** The docs point at raw protocol XDR — i.e. Galexie output, with
+Hubble's `*_xdr` columns as the queryable proxy.
+
+### Deprecated — avoid
+
+`stellar/go` (archived), `stellar-deprecated/horizon`, `soroban-rpc` packages
+(use `stellar-rpc`), `js-soroban-client` (use `js-stellar-sdk`), Horizon
+overall, Horizon `result_meta_xdr` (Q3), Hubble `token_transfers_raw.amount`
+(**numerically wrong for non-7-decimal tokens**), Hubble `history_assets.id`.
+
 ## What actually exists upstream (verified 2026-07-22)
 
 | tool                        | what it is                                                                                                                                                                                                                               | fit for us                                                                                                                                              |
