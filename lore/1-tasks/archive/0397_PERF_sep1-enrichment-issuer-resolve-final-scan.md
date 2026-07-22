@@ -26,8 +26,11 @@ history:
     who: karolkow
     note: >
       One SQL statement, 3 files, PR #359. Dropped FINAL so the existing
-      idx_acc_id bloom index seeks: 24.9M -> 24 576 read_rows/call (3 granules,
-      15 ms), 100.22 bn -> ~0.1 bn per 7 days. 87 tests pass, none changed.
+      idx_acc_id bloom index seeks. NOT DEPLOYED as of archival — deploys here
+      are manual: the 24.9M -> 24 576 read_rows/call (3 granules, 15 ms) and
+      100.22 bn -> ~0.1 bn per 7 days are measured on the QUERY SHAPE against
+      prod data, not observed from the running worker. 87 tests pass, none
+      changed.
       AC1/AC3 closed; AC2 closed for the query shape (api_reader already runs it
       in prod, 16k calls/7d at ~21k read_rows) but the deployed worker's own
       number is deferred to 0403 — deploys are manual. Scope cut 4x mid-task: a
