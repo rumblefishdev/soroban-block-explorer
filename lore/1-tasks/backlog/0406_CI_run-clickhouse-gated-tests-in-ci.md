@@ -4,7 +4,7 @@ title: 'CI: actually run the ClickHouse-gated tests — 25 files of e2e that no 
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0394', '0388', '0392', '0304', '0404']
+related_tasks: ['0394', '0388', '0392', '0304']
 tags: [priority-high, effort-small, area-ci, clickhouse, robustness]
 links:
   - .github/workflows/ci.yml
