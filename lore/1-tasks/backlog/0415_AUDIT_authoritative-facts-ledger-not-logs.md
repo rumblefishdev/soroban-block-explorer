@@ -17,6 +17,19 @@ tags:
   ]
 links: []
 history:
+  - date: 2026-07-22
+    status: backlog
+    who: karolkow
+    note: >
+      Measurements carried in from task 0392 (see "Measured evidence from 0392").
+      Four independent confirmations of this task's thesis, plus one correction
+      to the priority order: NFT ownership is measurably WRONG today (4/4 sampled
+      tokens of one collection disagree with the chain), which is a live
+      data-quality bug, not only a spoofability concern. The ledger-state
+      migration stays rejected for the reasons recorded here — re-verified
+      against CAP-0046-05, CAP-0046-12 and SEP-0050 on 2026-07-22 — and mainnet
+      probing added the practical proof: contract storage keys are as
+      author-defined as event names.
   - date: 2026-07-20
     status: backlog
     who: karolkow
@@ -366,6 +379,119 @@ Independently confirmed in code + prod during this audit:
    pipeline. → spawned as its own task.
 5. **`fee` events are ~59% of `soroban_events`** (measured) — recorded in 0416.
 6. Ordering ambiguity in event folds → task 0424.
+
+## Measured evidence from 0392 (2026-07-22)
+
+Gathered while removing the NFT quarantine. Recorded here because all of it
+belongs to this audit's scope, not to 0392's.
+
+### 1. Protocol claims re-verified against the sources
+
+Fetched from `stellar/stellar-protocol` directly (this repo's prose barred as
+evidence, per the method rule above):
+
+| Claim                                                  | Source      | Status    | Result                                                                                                                                                              |
+| ------------------------------------------------------ | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contract keyspace cannot be iterated                   | CAP-0046-05 | **Final** | CONFIRMED verbatim: _"no support for 'range queries', upper or lower bounds, or any sort of iteration over the keyspace"_                                           |
+| SEP-50 specifies no storage layout                     | SEP-0050    | **Draft** | CONFIRMED — interface only; `transfer` topics = symbol + 2 addresses, same shape as SEP-41                                                                          |
+| Persistent entries archive and become inaccessible     | CAP-0046-12 | **Final** | CONFIRMED: _"A PERSISTENT entry is ARCHIVED immediately following its liveUntilLedgerSeq"_, ARCHIVED = not accessible; TEMPORARY _dies_ and cannot be restored      |
+| Soroban contract events ARE covered by a protocol hash | CAP-0046-08 | **Final** | CONFIRMED: `InvokeHostFunctionSuccessPreImage` carries the event vector — _"This makes the events part of the protocol"_; no per-event limit, only a total size cap |
+
+The corrected thesis holds exactly. Events are not an unauthenticated log; they
+are committed. What they are not is _trustworthy about content_ — the
+authorship axis, not the commitment axis.
+
+### 2. NFT ownership is wrong today, not just spoofable
+
+Sampled 14 tokens and compared our `nfts.current_owner_id` against the
+contract's own storage read live over mainnet RPC:
+
+```
+zgodne = 9    ROZBIEŻNE = 4    brak w łańcuchu = 1
+```
+
+All four disagreements are one collection, `CAVK536DH2G3PQG65AJU6TOTRFB6QWTXBV5ADLJ42RTK3JGWHC7H54K3`:
+
+| token | our DB                 | chain                            |
+| ----- | ---------------------- | -------------------------------- |
+| 0     | `GAAGGREYKXZE…`        | `CCXBWSQDFQHB…` (a **contract**) |
+| 1     | id resolves to nothing | `CAWRLN5P5PSC…` (a contract)     |
+| 2     | id resolves to nothing | `GDH5LSCPFOCK…`                  |
+| 67    | id resolves to nothing | `GDH5LSCPFOCK…`                  |
+
+The pattern is contract-held NFTs (marketplace / escrow): the event fold either
+misses the transfer shape or stores an id that resolves to no known account.
+Task 0376's "22% NULL owners" figure is stale (now 9 rows / 0.1%), but the
+underlying defect is real and this is the first direct chain comparison of it.
+
+**Implication for this audit:** ledger state cannot be the _source_ (see §3), but
+it is an excellent _cross-check_, and it found a live bug on the first sample.
+A periodic sampled reconciliation is the cheap version of AC #1.
+
+### 3. Contract storage is as author-defined as events — measured
+
+Probed the OpenZeppelin `Owner(u32)` key over mainnet RPC:
+
+- **Standard collections:** 6 of 7 sampled tokens resolved (the miss was a burn
+  or an archived entry). Key shape `vec[Symbol("Owner"), u32(token_id)]` → owner
+  address + last-modified ledger.
+- **The 19 collections our parser never produced rows for: 0 of 19 resolved.**
+  Their instance storage uses bespoke keys (`Admin`, `Registrar`, `RoyaltyBps`,
+  `TotalSupply`).
+
+So moving NFT ownership to ledger state would work for the contracts that
+already work and fail for exactly the ones that are broken — on top of the
+enumerability and archival blockers in §1. Confirms the matrix verdict
+"events are the ONLY source" and adds the empirical half of the argument.
+
+### 4. Classifier — the candidate rule, already measured
+
+Recorded as _candidate work, not spawned_ (matching this task's rule). A
+signature-based rule reading `transfer`'s last parameter — `token_id` → NFT,
+`amount…` → Fungible, bare `id` → NFT (weakest, consulted last) — was
+implemented and run over the whole population:
+
+| Stored verdict | New verdict | Contracts             |
+| -------------- | ----------- | --------------------- |
+| `Nft`          | `Nft`       | 122 — all preserved   |
+| `Fungible`     | `Fungible`  | 4,224 — all preserved |
+| `Other`        | `Nft`       | 48                    |
+| `Other`        | `Fungible`  | 82                    |
+| `Other`        | `Other`     | 122,754               |
+
+**Zero existing decisive verdicts flip.** `token_id` never appears on a
+fungible-verdict contract; `amount` never on an NFT one. Cross-tab of
+`transfer`'s last parameter vs stored verdict, over every contract with WASM:
+`amount`→Fungible 4,022 · `token_id`→Nft 75 · `token_id`→**Other 21** ·
+`id`→**Other 46**.
+
+This does **not** repair the head-of-distribution refutation in §Verified
+findings 1 (an oracle exporting `decimals` is still `Fungible`) — that needs the
+SEP-0048 typed signature sets. Treat the rule as a floor, not the fix. It was
+deliberately kept out of 0392 so it would not bury this finding.
+
+### 5. `nfts` is a hand-maintained materialisation of `nft_ownership`
+
+13,051 tokens compared against an `argMax` fold of the event log:
+`minted_at_ledger` reproduces at **100%**, owner at 13,042/13,051 — and all 9
+differences are burns (one rule: last event is a burn → owner NULL). So the
+whole table is derivable from the log it is written beside, and `repair-tier1`
+exists partly to repair a column (`nfts.minted_at_ledger`) that is 100%
+reproducible. Candidate for deletion of a table plus a slice of that shovel.
+
+### 6. Live classification liveness (G1, task 0283)
+
+Contracts stamped `Other` despite a decisive WASM, by deploy era:
+
+| Deploy ledger | Contracts with decisive WASM | Mis-stamped | %                                       |
+| ------------- | ---------------------------- | ----------- | --------------------------------------- |
+| 50–55M        | 534                          | 38          | 7.1% (pre-fix)                          |
+| 55–60M        | 2,891                        | 7           | 0.2%                                    |
+| 60M+          | 995                          | 28          | 2.8% (the PR #341 dead-prefetch window) |
+
+~73 stale stamps total — one `contract-type-rebuild` pass clears them. Confirms
+G1 works for new deploys and that the rebuild is now a tool-on-occasion rather
+than a mandatory step.
 
 ## Acceptance Criteria
 
