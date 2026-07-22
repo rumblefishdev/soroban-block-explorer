@@ -4,7 +4,7 @@ title: 'BUG/RESEARCH: we do not model Soroban state archival — 54 contracts wi
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0421', '0256', '0432', '0316']
+related_tasks: ['0421', '0256', '0432', '0316', '0436']
 tags:
   [
     priority-medium,
@@ -114,10 +114,9 @@ reads present state, not history.
       still open is the _mechanism_ (TTL expiry vs explicit eviction) and
       whether any of them were later restored. Hubble's `evicted_keys` /
       `restored_key` would answer that; RPC cannot, because it only shows now.
-- [ ] If confirmed: decide what we surface. Options range from a `state:
-  archived` flag on the contract page to full TTL tracking. Note the
-      `LedgerEntry::to_key()` helper in `stellar-xdr` (0431) is what maps an
-      entry to the key Hubble indexes by.
+- [x] ~~If confirmed: decide what we surface~~ — **moved to 0436**, which
+      owns modelling archival (schema, API, UI). This task stays scoped to
+      explaining the 54 rows and fixing `is_sac`.
 - [ ] Independently: fix `is_sac` on stub rows. A `Bool` column cannot express
       "unknown", so a stub asserting `false` contradicts `asset_sac` for 4
       contracts today. Same defect class as 0421 — belongs with that fix, not
