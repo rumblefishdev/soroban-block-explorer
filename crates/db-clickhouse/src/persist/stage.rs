@@ -1490,18 +1490,23 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // 2-way routing helper (task 0392 — was 3-way with a quarantine bucket).
-    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
-    // (G9, cross-ledger) is the fallback for contracts not deployed here.
+    // Routing decides membership, not location (task 0392): a row reaches
+    // `nfts` only if its contract is classified `Nft` from the WASM it runs.
+    // There is no third bucket and no undecided row in the table — if it is
+    // there, it is an NFT.
     //
-    // Only a PROVEN-fungible verdict drops a row. `Other` and uncached keep
-    // theirs — a `transfer` event is byte-identical for an NFT and a fungible
-    // token (`from,to,i128` vs `from,to,token_id`), so an unresolved contract
-    // may still turn out to be a real collection, and dropping its rows would
-    // lose data no later pass can reconstruct.
+    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
+    // classifies the rest from `wasm_interface_metadata` (persist.rs). Both
+    // sides run the same classifier, so they cannot disagree.
+    //
+    // The `Unclassified` arm is NOT silent. Dropping a row we could not judge is
+    // the one outcome that can lose a real collection, so it is counted and
+    // logged per contract — the "never silently miss" half of the design. A
+    // verdict-lookup failure cannot reach here: it aborts the ledger upstream.
     enum NftRoute {
         Keep,
         Drop,
+        Unclassified,
     }
     let route_for = |strkey: &str| -> NftRoute {
         let verdict = verdict_by_contract
@@ -1509,10 +1514,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             .copied()
             .or_else(|| prior_contract_verdicts.get(strkey).copied());
         match verdict {
-            Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
-            _ => NftRoute::Keep,
+            Some(ContractType::Nft) => NftRoute::Keep,
+            Some(_) => NftRoute::Drop,
+            None => NftRoute::Unclassified,
         }
     };
+    // Contracts whose NFT-shaped rows were dropped for want of a verdict. One
+    // log line per contract per ledger, not per row.
+    let mut unclassified: HashSet<&str> = HashSet::new();
 
     // ---- nfts (dedup by (contract_id, token_id), latest watermark) ----
     //
@@ -1522,8 +1531,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // filter until it resolves.
     let mut nft_indices: HashMap<(i64, String), usize> = HashMap::new();
     for nft in nfts {
-        if matches!(route_for(nft.contract_id.as_str()), NftRoute::Drop) {
-            continue;
+        match route_for(nft.contract_id.as_str()) {
+            NftRoute::Keep => {}
+            NftRoute::Drop => continue,
+            NftRoute::Unclassified => {
+                unclassified.insert(nft.contract_id.as_str());
+                continue;
+            }
         }
         let contract_id_int = ids::contract_id(&nft.contract_id);
         let watermark = i64::from(nft.last_seen_ledger);
@@ -1568,8 +1582,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
 
     // ---- nft_ownership ----
     for ev in nft_events {
-        if matches!(route_for(ev.contract_id.as_str()), NftRoute::Drop) {
-            continue;
+        match route_for(ev.contract_id.as_str()) {
+            NftRoute::Keep => {}
+            NftRoute::Drop => continue,
+            NftRoute::Unclassified => {
+                unclassified.insert(ev.contract_id.as_str());
+                continue;
+            }
         }
         let Some(&tx_id) = tx_id_by_hash.get(&ev.transaction_hash) else {
             continue;
@@ -1590,6 +1609,23 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             owner_id,
             event_type,
         });
+    }
+
+    // Monitored UNKNOWN (task 0392). These contracts emitted something
+    // NFT-shaped and we could not say what they are — either we have never
+    // ingested their WASM, or the classifier does not recognise the interface.
+    // Their rows were dropped, which is the only decision that can lose a real
+    // collection, so it is never silent: one line per contract per ledger,
+    // greppable, and the signal that the classifier needs another rule.
+    if !unclassified.is_empty() {
+        let mut contracts: Vec<&str> = unclassified.into_iter().collect();
+        contracts.sort_unstable();
+        tracing::warn!(
+            ledger = ledger.sequence,
+            contracts = ?contracts,
+            count = contracts.len(),
+            "0392 unclassified NFT-shaped emitter — rows dropped, contract needs a classifier rule"
+        );
     }
 
     // ---- unified `balances` — classic + native per-account balances (lore-0331

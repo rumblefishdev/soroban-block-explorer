@@ -94,13 +94,17 @@ pub async fn persist_ledger_clickhouse(
     // Task 0283 live cross-ledger verdict resolution. Two independent lookups
     // (different tables, different keys, neither consumes the other), so one
     // `tokio::join!` pays a single round-trip latency on a ledger carrying both
-    // a deploy and a cross-ledger NFT event. Both fail open (empty map on error
-    // = exact pre-0283 behaviour):
+    // a deploy and a cross-ledger NFT event.
     // * G1 — verdict by `wasm_hash` from `wasm_interface_metadata` (the deploy
-    //   override; upload + deploy are separate Soroban txs / ledgers).
-    // * G9 — verdict by `contract_id` from `soroban_contracts` (event routing
-    //   for contracts deployed earlier), memoised by `classification_cache`.
-    // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
+    //   override; upload + deploy are separate Soroban txs / ledgers). Fails
+    //   open: a miss persists the deploy as `Other`, which the next sighting of
+    //   the contract re-resolves.
+    // * G9 — verdict by `contract_id`, classified from that contract's current
+    //   WASM (task 0392), memoised by `classification_cache`. **Fails closed**:
+    //   routing now DROPS what it cannot classify, so an unavailable verdict
+    //   must abort the ledger rather than quietly discard NFT rows. The caller's
+    //   retry envelope + S3 redelivery re-attempt it.
+    // Plus the task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
     let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows, sac_classic) = tokio::join!(
         fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
@@ -119,6 +123,7 @@ pub async fn persist_ledger_clickhouse(
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
     let sac_classic = sac_classic?;
+    let prior_contract_verdicts = prior_contract_verdicts?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
@@ -352,12 +357,15 @@ async fn query_wasm_verdicts(
     Ok(out)
 }
 
-/// One `(contract_id, contract_type)` row for the live G9 verdict lookup.
-/// `contract_type` MUST stay `Option<i16>`: the column is `Nullable(Int16)`
-/// and clickhouse 0.15 RBWNAT validation rejects a bare `i16` against
-/// `Nullable(_)` — with the fail-open contract that made G9 a 100% no-op in
-/// prod (lore-0392). The `WHERE contract_type IN (…)` filter already excludes
-/// NULLs; the Option only satisfies the wire-type check.
+/// One row of the live verdict lookup: a contract, whether it is a SAC, and the
+/// WASM interface it currently runs.
+///
+/// One `(contract_id, contract_type)` row for the live verdict lookup.
+/// `contract_type` MUST stay `Option<i16>`: the column is `Nullable(Int16)` and
+/// clickhouse 0.15 RBWNAT validation rejects a bare `i16` against `Nullable(_)`
+/// — that exact mismatch made this lookup a 100% no-op on prod for two weeks
+/// (PR #341). The `WHERE contract_type IN (…)` filter already excludes NULLs;
+/// the Option only satisfies the wire-type check.
 #[derive(clickhouse::Row, serde::Deserialize)]
 struct ContractVerdictRow {
     contract_id: String,
@@ -368,41 +376,34 @@ struct ContractVerdictRow {
 /// NFT rows/events in this ledger but were deployed earlier.
 ///
 /// `route_for` (stage) builds its verdict map only from THIS ledger's
-/// `contract_rows`, so a transfer from a contract deployed in a prior ledger
-/// has no verdict and routes to the quarantine. This reads the already-known
-/// verdict straight from `soroban_contracts` (populated at deploy time by G1)
-/// and hands it to `route_for` as a fallback, so the event routes correctly
-/// (Nft → hot, SAC/Fungible → drop) immediately.
+/// `contract_rows`, so a transfer from a contract deployed in a prior ledger has
+/// no verdict of its own. This reads the verdict stamped on `soroban_contracts`
+/// at deploy time (by G1) and hands it to `route_for`.
 ///
-/// Gated + fail-open:
-/// * No NFT row/event from a not-deployed-here contract → empty, **no** round
-///   trip. Contracts deployed THIS ledger are excluded — `contract_rows`
-///   already covers them.
-/// * Any query failure → empty map + `warn!`; routing falls back to
-///   quarantine exactly as pre-G9 and the one-shot `nft-reclassify` drain (or
-///   a re-run) recovers it. Can only improve routing, never block a write.
+/// **Fails closed (task 0392).** Routing now DROPS what it cannot classify, so an
+/// unavailable verdict must abort the ledger — the caller's retry envelope plus
+/// S3 redelivery re-attempt it. The old fail-open behaviour (empty map, rows fall
+/// through) was safe only while there was a quarantine to fall through into.
 ///
-/// Option (c): a lazy per-(warm-container) [`ClassificationCache`] (the PG
-/// `ClassificationCache` pattern) memoizes definitive verdicts, so the batched
-/// DB lookup fires only on the FIRST sighting of a contract (~9/day steady
-/// state) rather than once per event-bearing ledger (~80% of ledgers).
+/// The stamped column is written once at deploy and not recomputed, so it lags in
+/// two known ways, both accepted deliberately:
+/// * a WASM upgrade carries the old verdict forward (task 0325 — no mainnet
+///   occurrence to date);
+/// * a classifier improvement needs a one-shot `contract-type-rebuild` to take
+///   effect (measured 2026-07-22: ~73 contracts carry a stale `Other` despite a
+///   decisive WASM).
 ///
-/// Known limitation (WASM upgrade): the cache keys on `contract_id` and never
-/// re-resolves a definitive verdict for the warm-container lifetime, so a
-/// contract upgraded from one decisive interface to another (e.g. Fungible →
-/// Nft) keeps its first verdict until the container recycles. This is benign
-/// today because the parser does not yet surface contract-instance `updated`
-/// entries (so an upgrade can't even be detected at write time) — closing it is
-/// gated on that parser work (task 0295). When `updated` lands, invalidate the
-/// affected `contract_id`s here before the snapshot. Classification is
-/// function-name based, so most upgrades preserve the interface and never flip.
+/// A lazy per-(warm-container) [`ClassificationCache`] memoizes definitive
+/// verdicts, so the batched DB lookup fires on the FIRST sighting of a contract
+/// rather than once per event-bearing ledger. `Other` is never cached, so a
+/// contract stays re-resolvable after a rebuild without recycling the container.
 async fn fetch_prior_contract_verdicts(
     client: &Client,
     nfts: &[ExtractedNft],
     nft_events: &[ExtractedNftEvent],
     contract_deployments: &[ExtractedContractDeployment],
     cache: &ClassificationCache,
-) -> HashMap<String, ContractType> {
+) -> Result<HashMap<String, ContractType>, clickhouse::error::Error> {
     let deployed_here: HashSet<&str> = contract_deployments
         .iter()
         .map(|d| d.contract_id.as_str())
@@ -419,36 +420,28 @@ async fn fetch_prior_contract_verdicts(
     want.sort_unstable();
     want.dedup();
     if want.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
 
     // Only the contracts not yet memoized hit the DB; `Other`/unknown are never
     // cached, so they re-resolve until they earn a definitive verdict.
     let missing = cache.missing(want.iter().copied());
     if !missing.is_empty() {
-        match query_contract_verdicts(client, &missing).await {
-            Ok(fetched) => cache.extend_definitive(fetched),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "0283 live G9: contract verdict prefetch failed — events route to quarantine, drain recovers"
-                );
-                // Fail-open: don't populate; uncached contracts route to pending.
-            }
-        }
+        cache.extend_definitive(query_contract_verdicts(client, &missing).await?);
     }
     // `snapshot_for` borrows from `want`; copy to owned for the stage map.
-    cache
+    Ok(cache
         .snapshot_for(want.iter().copied())
         .into_iter()
         .map(|(id, ty)| (id.to_string(), ty))
-        .collect()
+        .collect())
 }
 
-/// Read decisive verdicts (`Token` / `Nft` / `Fungible`; `Other`/NULL skipped
-/// — they route to quarantine anyway) for `contract_ids` from
-/// `soroban_contracts`. Including `Token` lets SAC-emitted events DROP at
-/// routing instead of leaking into pending (closes the 0221 write-time leak).
+/// Read decisive verdicts (`Token` / `Nft` / `Fungible`) for `contract_ids` from
+/// `soroban_contracts`. `Other`/NULL are skipped: they are not a classification,
+/// and `route_for` treats their absence as "unclassified" — dropped and logged.
+/// Including `Token` lets SAC-emitted events drop at routing (closes the 0221
+/// write-time leak).
 async fn query_contract_verdicts(
     client: &Client,
     contract_ids: &[&str],

@@ -1720,11 +1720,12 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
     assert_eq!(staged.nft_rows.len(), 0, "SAC event dropped, not written");
 }
 
-/// Baseline: no prior verdict and no deploy here → the row is still written
-/// (G9 fail-open preserved — an empty verdict map must never lose data; the
-/// read-time filter, not the writer, decides visibility).
+/// Baseline: no prior verdict and no deploy here → nothing is written. The
+/// verdict lookup itself fails CLOSED upstream (a ClickHouse error aborts the
+/// ledger and is retried), so reaching this arm means the contract really is
+/// unclassifiable, not that the lookup was unavailable.
 #[test]
-fn prepare_keeps_event_without_prior_verdict() {
+fn prepare_drops_event_without_prior_verdict() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0xA7);
     let contract = "C".to_string() + &"M".repeat(55);
@@ -1756,12 +1757,11 @@ fn prepare_keeps_event_without_prior_verdict() {
     })
     .expect("prepare_with_sac_overrides");
 
-    assert_eq!(
-        staged.nft_rows.len(),
-        1,
-        "kept without a verdict — invisible, not discarded"
+    assert!(
+        staged.nft_rows.is_empty(),
+        "no verdict means no membership claim — the row is dropped and logged"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 1);
+    assert!(staged.nft_ownership_rows.is_empty());
 }
 
 /// A SAC deploy is never reclassified from WASM — `is_sac` short-circuits the
@@ -1920,15 +1920,15 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
     assert!(staged.nft_ownership_rows.is_empty());
 }
 
-/// Task 0392 — an NFT row whose contract has NO verdict at stage time (not
-/// deployed this ledger, nothing from the G9 prefetch) is still WRITTEN. It is
-/// not an NFT claim: the read path hides it until the contract's verdict
-/// resolves to `Nft`. Dropping it instead would lose a real collection's
-/// history, because a `transfer` event is byte-identical for NFTs and fungible
-/// tokens — only the contract's WASM can tell them apart, and it may not be
-/// observable yet.
+/// Task 0392 — an NFT row whose contract has NO verdict at stage time is
+/// DROPPED, not stored. `nfts` means "these are NFTs"; a row we cannot judge
+/// has no membership claim to make, and parking it somewhere "just in case" is
+/// what the removed quarantine did for two years without anyone draining it.
+///
+/// The drop is deliberately loud — `prepare` logs the contract so an
+/// unrecognised interface shows up as a classifier gap instead of vanishing.
 #[test]
-fn prepare_keeps_nft_row_of_unclassified_contract() {
+fn prepare_drops_nft_row_of_unclassified_contract() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x92);
     let contract = "C".to_string() + &"C".repeat(55);
@@ -1953,12 +1953,11 @@ fn prepare_keeps_nft_row_of_unclassified_contract() {
     )
     .expect("prepare");
 
-    assert_eq!(
-        staged.nft_rows.len(),
-        1,
-        "Unclassified contract: row kept, visibility decided at read time"
+    assert!(
+        staged.nft_rows.is_empty(),
+        "unclassified contract: nothing may enter `nfts`"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 1);
+    assert!(staged.nft_ownership_rows.is_empty());
 }
 
 // ---------------------------------------------------------------------------

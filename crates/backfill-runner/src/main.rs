@@ -152,13 +152,13 @@ enum Command {
     },
 
     /// Tier-1 post-merge column rebuild for the Hetzner CH
-    /// (task 0228 Phase 5). Reconstructs 6 of the 12 Tier-1 columns
-    /// across 5 state tables (`accounts.first_seen_ledger`,
-    /// `lp_positions.first_deposit_ledger`,
+    /// (task 0228 Phase 5). Reconstructs the 5 Tier-1 columns that derive
+    /// from on-chain facts, across 4 state tables
+    /// (`accounts.first_seen_ledger`, `lp_positions.first_deposit_ledger`,
     /// `nfts.minted_at_ledger`, `soroban_contracts.deployer_id` +
     /// `deployed_at_ledger`). These silently corrupt under cross-machine
-    /// `ReplacingMergeTree` collapse. The remaining NFT metadata columns
-    /// (`collection_name`, `name`, `media_url`) are filled by Stage 2
+    /// `ReplacingMergeTree` collapse. The remaining 3 (NFT metadata:
+    /// `collection_name`, `name`, `media_url`) are filled by Stage 2
     /// enrichment (task 0231).
     /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
@@ -174,9 +174,10 @@ enum Command {
     /// Classifies every WASM in Rust (parity with the parser), rebuilds
     /// `soroban_contracts` into staging and `EXCHANGE TABLES`-swaps it, then
     /// inserts the missing Soroban-fungible `assets` rows. Run with the indexer
-    /// STOPPED (whole-table swap). A verdict this flips to `Nft` makes that
-    /// contract's already-written NFT rows visible on the next read — no
-    /// promotion pass (task 0392). Idempotent; `--dry-run` reports verdict
+    /// STOPPED (whole-table swap). Since task 0392 this is also what makes a
+    /// classifier improvement take effect: routing reads the stamped verdict, so
+    /// a contract only starts producing NFT rows after a rebuild names it.
+    /// Idempotent; `--dry-run` reports verdict
     /// transitions + would-be asset inserts without writing. CH-only.
     ContractTypeRebuild {
         #[arg(long)]

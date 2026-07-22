@@ -64,7 +64,6 @@ use serde::Deserialize;
 
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::pool_id_hex_to_strkey;
-use crate::nfts::queries::NFT_VISIBLE;
 
 use super::classifier::Classified;
 use super::dto::{EntityType, SearchHit};
@@ -775,7 +774,6 @@ async fn search_nfts(
              FROM nfts n FINAL \
              LEFT JOIN enr e ON e.contract_id = n.contract_id AND e.token_id = n.token_id \
              WHERE positionCaseInsensitive(ifNull(e.name, ''), ?) > 0 \
-               AND n.contract_id IN {NFT_VISIBLE} \
              LIMIT {per_group_limit} \
          ), \
          sc AS ( \

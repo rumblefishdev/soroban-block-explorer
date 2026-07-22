@@ -8,10 +8,11 @@
 //! WASM was uploaded in the SAME ledger (the live G1 fix now also resolves the
 //! common cross-ledger case going forward). Historical contracts deployed
 //! before the fix sit at the parser default `Other`, so the whole NFT promotion
-//! machinery is a no-op — their NFT rows stay invisible to the read path,
-//! which filters on `contract_type = 2`. This pass reconstructs the verdict
-//! for the entire history in one shot; every row it flips to `Nft` surfaces on
-//! the next read, with no promotion pass (task 0392).
+//! machinery is a no-op — the writer drops their NFT-shaped rows because it
+//! cannot confirm they are NFTs (task 0392). This pass reconstructs the verdict
+//! for the entire history in one shot, which is what lets those contracts start
+//! producing rows. Measured 2026-07-22: ~73 contracts carry a stale `Other`
+//! despite a decisive WASM.
 //!
 //! ## Mechanism (mirrors `repair_tier1` / `asset_aggregates`)
 //!

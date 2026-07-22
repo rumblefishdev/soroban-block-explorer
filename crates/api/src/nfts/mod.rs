@@ -6,9 +6,7 @@
 
 pub mod dto;
 mod handlers;
-/// `pub(crate)` for [`queries::NFT_VISIBLE`] — `search` reads `nfts` too and
-/// must carry the same visibility predicate (task 0392).
-pub(crate) mod queries;
+mod queries;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;

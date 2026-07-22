@@ -135,11 +135,11 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // Current: 26 CREATE TABLE + 2 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY
-        // = 29 (matches the assertion below). Historical derivation:
+        // Current: 28 CREATE TABLE + 2 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY
+        // = 31 (matches the assertion below). Historical derivation:
         // 17-table base; task 0217 added `nfts_pending` + `nft_ownership_pending`
-        // as schema-only landing zones (both removed again in task 0392, see the
-        // last line); task 0231 (ADR 0050) added the
+        // as schema-only landing zones (deprecated in task 0392, see the last
+        // line); task 0231 (ADR 0050) added the
         // `asset_enrichment` + `nft_enrichment` side tables; lore-0293 added the
         // `asset_aggregates` table + its refreshable `asset_aggregates_mv` for
         // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
@@ -168,13 +168,15 @@ mod tests {
         // (pool-leading key; the pool-dimension twin of the above). 28 → 29.
         // task 0385: added `accounts_recent` (last_seen_ledger-ordered read-model for
         // the acclist browse) + its refreshable `accounts_recent_mv`. 29 → 31.
-        // task 0392: DROPPED `nfts_pending` + `nft_ownership_pending` — visibility
-        // is a read-time filter on the contract verdict, so there is nothing to
-        // quarantine and nothing to promote. 31 → 29.
+        // task 0392: `nfts_pending` + `nft_ownership_pending` still EXIST but are
+        // no longer written — the writer decides NFT membership before the write.
+        // They hold already-parked rows until the classifier can name their
+        // contracts; the `DROP` (and the count going 31 → 29) belongs to that
+        // follow-up. See ADR 0053.
         assert_eq!(
             stmts.len(),
-            29,
-            "expected 26 tables + 2 materialized views + 1 dictionary, got {}",
+            31,
+            "expected 28 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

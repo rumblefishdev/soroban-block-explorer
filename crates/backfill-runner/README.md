@@ -120,10 +120,17 @@ Four clauses, in order:
 The three marked ⚠ each fail clause 3 — which is exactly why they are still here.
 
 `nft-reclassify` used to head that list. It is gone (lore 0392): the
-`pending → hot` promotion it existed to perform no longer exists as an
-operation, because NFT visibility is derived from the contract's verdict at
-read time instead of from which table the row sits in
-([ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)).
+`pending → hot` promotion it existed to perform no longer exists as an operation,
+because the writer consults the contract's verdict before storing anything — a
+row is either an NFT or it was never written
+([ADR 0053](../../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md)).
+Its two tables survive it, deprecated and no longer written, until the classifier
+can name the ~28 contracts whose rows are still parked there (lore 0309).
+
+`contract-type-rebuild` gains weight in exchange: it is what refreshes that
+verdict after a classifier change. One pass currently clears ~73 contracts
+stamped `Other` despite a decisive WASM (measured 2026-07-22) — the residue of
+the two weeks when the live prefetch was a no-op (PR #341).
 
 **The invariant that decides whether a defaulted write corrupts.** A whole-row
 write that fills missing fields with defaults is safe **only if it also carries

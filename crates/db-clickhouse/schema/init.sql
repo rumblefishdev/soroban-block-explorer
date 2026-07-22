@@ -452,12 +452,31 @@ CREATE TABLE IF NOT EXISTS nfts (
 ENGINE = ReplacingMergeTree(current_owner_ledger)
 ORDER BY (contract_id, token_id);
 
--- Task 0392 — the `nfts_pending` quarantine was REMOVED here. An
--- unclassified contract's NFT rows go straight to `nfts`; the read path
--- filters on the contract's current `soroban_contracts.contract_type`, so a
--- row surfaces the moment its verdict resolves, with nothing to promote.
--- (0217 split the rows physically, which needed a manual `backfill-runner
--- nft-reclassify` run to ever un-split them.)
+-- DEPRECATED (task 0392) — NOTHING WRITES HERE ANY MORE.
+--
+-- The 0217 quarantine: NFT-shaped rows whose contract was still `Other`, parked
+-- to be promoted later. On ClickHouse that promotion was never implemented (it
+-- was specified against Postgres, retired in 0244), so the only drain was a
+-- human running `backfill-runner nft-reclassify` — which is now deleted. The
+-- writer decides membership before the write instead: only a contract
+-- classified `Nft` produces rows, anything unclassifiable is dropped and logged.
+--
+-- The table is kept ONLY to hold the 274 already-parked rows until the
+-- classifier can name their contracts (~28 of the 66 are real NFT collections
+-- by their own interfaces). `DROP TABLE` belongs to that follow-up, not here —
+-- dropping it now would delete recoverable NFT data. See ADR 0053, task 0309.
+CREATE TABLE IF NOT EXISTS nfts_pending (
+    contract_id           Int64,
+    token_id              String,
+    collection_name       Nullable(String),
+    name                  Nullable(String),
+    media_url             Nullable(String),
+    minted_at_ledger      Nullable(Int64),
+    current_owner_id      Nullable(Int64),
+    current_owner_ledger  Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
 
 -- Off-chain `token_uri` enrichment for `nfts` (task 0231). Written by the
 -- enrichment-worker Lambda (NOT the indexer), keyed like `nfts`, joined at
@@ -754,9 +773,20 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, token_id, ledger_sequence, event_order);
 
--- Task 0392 — `nft_ownership_pending` was REMOVED alongside `nfts_pending`
--- (see the note there). Ownership events of an unclassified contract are
--- written to `nft_ownership` and hidden by the same read-time verdict filter.
+-- DEPRECATED (task 0392) — NOTHING WRITES HERE ANY MORE. Companion to
+-- `nfts_pending`; kept for the same reason and dropped in the same follow-up.
+CREATE TABLE IF NOT EXISTS nft_ownership_pending (
+    contract_id      Int64,
+    token_id         String,
+    ledger_sequence  Int64,
+    event_order      Int16,
+    transaction_id   Int64,
+    owner_id         Nullable(Int64),
+    event_type       Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, event_order);
 
 CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     pool_id         FixedString(32),

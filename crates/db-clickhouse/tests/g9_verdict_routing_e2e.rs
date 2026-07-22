@@ -14,10 +14,10 @@
 //!   * `Fungible`-verdict contract → events/rows DROPPED (never written),
 //!   * `Nft`-verdict contract → events/rows written to `nfts` /
 //!     `nft_ownership` and visible,
-//!   * unclassified contract (no verdict row) → events/rows written too, but
-//!     filtered out by the read-time verdict predicate. The fail-open path
-//!     must keep the data; only visibility waits on the verdict (task 0392,
-//!     which removed the quarantine tables).
+//!   * unclassified contract (no verdict row) → events/rows DROPPED and logged
+//!     (task 0392). Membership in `nfts` is a claim that the contract is an
+//!     NFT; without a verdict there is no claim to make, and the removed
+//!     quarantine proved that "park it for later" means "park it forever".
 //!
 //! Gated on `CLICKHOUSE_URL` (skips cleanly when unset — same pattern as
 //! `persist_e2e.rs`). Run locally:
@@ -196,7 +196,8 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
     cleanup(&cl, &[&fungible, &nft, &unknown, &upgraded]).await;
 
     // Seed prior-ledger verdicts the way deploy-time G1 writes them
-    // (Fungible = 3, Nft = 2). `unknown` gets NO row — must quarantine.
+    // (Fungible = 3, Nft = 2). `unknown` gets NO row — the state task 0392
+    // turns into a drop-with-a-log instead of a quarantine row.
     // `upgraded` (also Fungible) is the 0320 subject: its prior row must be
     // read back and carried forward when an `executable_update` fires here.
     for (c, ty) in [(&fungible, 3i16), (&nft, 2i16), (&upgraded, 3i16)] {
@@ -251,8 +252,8 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
     .await
     .expect("persist must succeed");
 
-    // Fungible verdict → DROP: nothing written. This is the one verdict that
-    // still discards data at write time, and the only one that may.
+    // Fungible verdict → DROP: nothing written. Unchanged from before 0392 —
+    // this is the one verdict that always discarded data at write time.
     for table in ["nfts", "nft_ownership"] {
         assert_eq!(
             count(&cl, table, &fungible).await,
@@ -261,7 +262,8 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         );
     }
 
-    // Nft verdict → written, and visible (its contract passes the read filter).
+    // Nft verdict → written. The whole point of the cross-ledger lookup: the
+    // contract deployed in an earlier ledger still routes correctly here.
     assert_eq!(count(&cl, "nfts", &nft).await, 1, "nft row written");
     assert_eq!(
         count(&cl, "nft_ownership", &nft).await,
@@ -269,31 +271,16 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         "ownership event written"
     );
 
-    // No verdict → written too (task 0392 — was the `*_pending` quarantine).
-    // The row exists; it is the read-time verdict filter that hides it, so a
-    // later classification surfaces it with nothing to promote.
+    // No verdict → nothing written (task 0392). `nfts` carries a membership
+    // claim, and an unclassifiable contract has none to make. The drop is
+    // logged per contract by `prepare`, so it is a visible classifier gap
+    // rather than a silent loss.
     assert_eq!(
         count(&cl, "nfts", &unknown).await,
-        1,
-        "unclassified contract's row is kept, not quarantined"
+        0,
+        "unclassified contract must not enter `nfts`"
     );
-    assert_eq!(count(&cl, "nft_ownership", &unknown).await, 1);
-
-    // ...and it is invisible: the API's visibility predicate
-    // (`api::nfts::queries::NFT_VISIBLE`) admits only `contract_type = 2`.
-    let visible: u64 = cl
-        .query(
-            "SELECT count() FROM nfts WHERE contract_id = ? AND contract_id IN \
-             (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)",
-        )
-        .bind(ids::contract_id(&unknown))
-        .fetch_one()
-        .await
-        .expect("visibility probe");
-    assert_eq!(
-        visible, 0,
-        "unclassified contract's row must not pass the read-time filter"
-    );
+    assert_eq!(count(&cl, "nft_ownership", &unknown).await, 0);
 
     // Task 0320: the prior-row prefetch must succeed (pre-fix it SELECTed the
     // dropped `name` column → Code 47 → no upgrade row ever written) and the

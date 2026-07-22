@@ -13,13 +13,13 @@
 //! worker observed, not the actual earliest observation across the
 //! union.
 //!
-//! Nine Tier-1 columns silently corrupt this way; this pass repairs
+//! Eight Tier-1 columns silently corrupt this way; this pass repairs
 //! the **5** that derive from on-chain facts (across **4** tables). The
 //! remaining 3 (NFT metadata: `collection_name`, `name`, `media_url` on
 //! `nfts`) require external HTTP/IPFS fetches and are delivered by
 //! task 0231 (Stage 2 SEP-1 + NFT `token_uri` enrichment).
-//! (Was 12 columns × 5 tables — task 0392 removed the `*_pending`
-//! quarantine twins.)
+//! (Was 12 columns × 5 tables — task 0392 stopped writing the `*_pending`
+//! quarantine twins, so their frozen rows no longer need repairing.)
 //!
 //! ### Stage 1 scope (this module) — 5 columns × 4 tables
 //!
