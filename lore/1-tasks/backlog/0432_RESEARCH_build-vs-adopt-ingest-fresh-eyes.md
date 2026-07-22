@@ -76,11 +76,20 @@ Rust equivalent without a written comparison.
    modules. The same audit is owed to the extraction layer: how much of
    `xdr-parser` is protocol decoding (upstream's job) versus product semantics
    (genuinely ours)?
-3. **Could Hubble serve as a correctness oracle?** We currently validate against
-   Horizon and stellar.expert, and 0256 showed both can mislead — Horizon reports
-   the inner tx source for fee-bump envelopes, stellar.expert's `creator` is the
-   factory operator. A dataset built by the protocol's own maintainers is a third
-   opinion with different failure modes.
+3. **Hubble as a correctness oracle — ANSWERED 2026-07-22: yes, and it holds
+   Soroban data we do not.** Its Bronze tier lists `Contract Code`,
+   `Contract Data`, `History Contract Events`, `TTL`, **`Evicted Keys`** and
+   `Restored Key`, alongside the classic history tables. This matters twice over:
+   - It is a genuine third opinion. 0256 showed Horizon and stellar.expert can
+     both mislead on the same field — Horizon reports the inner tx source for
+     fee-bump envelopes (identical to our stored value, so the check was a
+     tautology), and stellar.expert's `creator` is the factory operator.
+   - **`Evicted Keys` / `TTL` are entities we do not track at all.** Soroban
+     archives contract instances when their TTL expires; we have no notion of
+     it. This is a candidate explanation for the 54 contracts carrying no
+     deployer and no wasm_hash while emitting live token events (408 transfers)
+     — worth checking against Hubble before assuming a parser defect.
+     Remaining question is cost and latency, not capability.
 4. **Is the Lambda-per-ledger shape a constraint we chose or inherited?**
    `stellar-etl` is batch/CLI. Our shape is serverless. Which of our operational
    pains (cold starts, 62× write amplification in `accounts`, repair mops) follow
