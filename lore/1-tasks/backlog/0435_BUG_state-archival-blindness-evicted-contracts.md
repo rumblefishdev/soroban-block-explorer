@@ -121,9 +121,12 @@ reads present state, not history.
       "unknown", so a stub asserting `false` contradicts `asset_sac` for 4
       contracts today. Same defect class as 0421 — belongs with that fix, not
       with archival.
-- [ ] Check whether `ledger_entry_changes` already carries eviction/restoration
-      change types we discard. `stellar-xdr` exposes them; we may be dropping
-      the signal rather than never receiving it.
+- [x] ~~Check whether `ledger_entry_changes` already carries eviction/restoration
+      change types we discard~~ — **audited 2026-07-22, recorded in 0436.** Both:
+      restoration reaches us and is handled everywhere EXCEPT contracts, where
+      `extract_contract_deployments` (`state.rs:60`) filters to
+      `change_type == "created"` and drops it; `evicted_keys` sits on
+      `LedgerCloseMetaV1`/`V2` and is never read (zero occurrences in `crates/`).
 
 ## Acceptance Criteria
 

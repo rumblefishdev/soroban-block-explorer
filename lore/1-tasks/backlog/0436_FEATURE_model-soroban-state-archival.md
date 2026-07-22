@@ -74,11 +74,9 @@ That SDF treats this as core state is visible in Hubble's schema: `ttl`,
 
 ## Open questions — decide before building
 
-1. **Do we ingest it, or query it on demand?** The signal is in ledger-entry
-   changes we already receive; `stellar-xdr` exposes eviction/restoration change
-   types. Check whether we are **discarding** it rather than never receiving it
-   (0435 lists this as an unresolved item). Ingesting is cheap if the data is
-   already flowing past us.
+1. ~~**Do we ingest it, or query it on demand?**~~ — **ANSWERED 2026-07-22.
+   Ingest. Every byte already reaches us; nothing needs fetching.** Details in
+   the section below — this is the finding that resizes the task.
 2. **What is the minimum useful representation?** Ranges from one nullable
    `archived_at_ledger` on `soroban_contracts` to full TTL tracking per entry.
    Start from the question a user asks — "is this contract alive?" — not from
@@ -89,10 +87,64 @@ That SDF treats this as core state is visible in Hubble's schema: `ttl`,
    contract reappears in state. The version column must make the restore win —
    the same trap as 0421, where a defaulting write outversioned the truth.
 
+## Signal audit — where archival data already flows (2026-07-22)
+
+Traced through the parser. The protocol gives us everything; we use part of it.
+
+**`LedgerEntryChangeType` includes `Restored = 4`**, and
+`LedgerCloseMetaV1`/`V2` both carry **`evicted_keys: VecM<LedgerKey>`** — in the
+very structure we already deserialize.
+
+| signal                                              | status                                         | what it costs                |
+| --------------------------------------------------- | ---------------------------------------------- | ---------------------------- |
+| restoration — accounts, balances, asset appearances | **already handled**                            | nothing                      |
+| restoration — **contracts**                         | **arrives, then discarded by a filter**        | ~2 lines                     |
+| eviction (`evicted_keys`)                           | **never read — zero occurrences in `crates/`** | new read path, no new source |
+
+**Restoration is handled almost everywhere.** `ledger_entry_changes.rs:159` maps
+the variant to `"restored"`, and `state.rs` consumes it in four places —
+including `is_creation = matches!(change.change_type.as_str(), "created" |
+"restored")` at `:478`.
+
+**Contracts are the exception, and it is an inconsistency inside one file.**
+`extract_contract_deployments` (`state.rs:60`) drops everything that is not
+`created`:
+
+```rust
+if change.entry_type != "contract_data" || change.change_type != "created" {
+    continue;
+}
+```
+
+So a restored contract produces no row, while `state.rs:478` — same file —
+treats `restored` as a creation for other entities. `contract.rs:23` has the
+same shape for contract _code_: `Created | Updated` matched, `_ => continue`, so
+a restored WASM is never parsed for its interface.
+
+**Eviction is the only genuinely missing piece**, and even that is a missing
+_read_, not a missing _source_: `evicted_keys` sits on the meta we already hold.
+
+### What this changes about the task
+
+The expensive-sounding part — getting the data — does not exist. Remaining work
+is:
+
+- two filter relaxations (contracts + contract code) to stop discarding
+  restorations
+- one new read of `evicted_keys` off `LedgerCloseMeta`
+- **the real work:** deciding representation (question 2), settling the RMT
+  versioning question (4) so a restore outranks the row that preceded it, and
+  backfilling history
+
+`effort-large` was set before this audit. On the ingest side it is small; the
+size now lives in backfill and in the surfacing decision.
+
 ## Implementation sketch (not a decision)
 
-- [ ] Determine whether eviction/restoration change types reach our parser today
-      and are dropped. This gates everything else and is a read-only check.
+- [x] ~~Determine whether eviction/restoration change types reach our parser~~ —
+      **done 2026-07-22, see the signal audit above.** Restoration arrives and is
+      discarded for contracts only; eviction arrives on the meta and is never
+      read.
 - [ ] Decide the representation (question 2) and record it.
 - [ ] Ingest, with the RMT versioning question (4) answered explicitly.
 - [ ] Backfill the historically archived population — the 54 contracts are the
@@ -116,5 +168,6 @@ That SDF treats this as core state is visible in Hubble's schema: `ttl`,
 
 ## Note on sequencing
 
-Question 1 is a half-hour read-only check and could change the size of this task
-by an order of magnitude. Do it before estimating anything else.
+~~Question 1 is a half-hour read-only check…~~ — done, and it did change the
+size. Ingest is cheap; the cost moved to backfill and to the RMT versioning
+question. Re-estimate before scheduling.
