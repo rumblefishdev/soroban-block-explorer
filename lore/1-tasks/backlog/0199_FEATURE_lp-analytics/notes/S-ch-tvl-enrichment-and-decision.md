@@ -23,7 +23,7 @@ history:
       per grain and read via prices.* named views directly in-cluster (no sync
       job, no local prices table). Added "Contract finalized — 2026-06-12"
       section + recorded the two prices-side implementation deps (native-key
-      alignment, SAC->classic resolver = their 0061). ADR 0048 Decision §2
+      alignment, SAC->classic resolver = their 0061). ADR 0053 Decision §2
       refined in lockstep.
   - date: '2026-06-16'
     status: developing
@@ -96,7 +96,7 @@ locally against snapshots — never 273M per-snapshot API calls.
 
 > Supersedes the Variant B "price-sync job → local `prices` table" framing
 > above. We read the prices service's `prices.*` **named views directly in the
-> same CH cluster** (no HTTP, no sync job, no local copy). ADR 0048 Decision §2
+> same CH cluster** (no HTTP, no sync job, no local copy). ADR 0053 Decision §2
 > refined in lockstep; the compute-at-read core is unchanged.
 
 **USD is materialized write-time.** Prices stores `close_usd` per aggregated
@@ -203,7 +203,7 @@ Phoenix/Soroswap/Aquarius).
 
 **Open on our side (waiting on no one).** The **live ingestion lambda's write-back**
 at the tip vs the no-version `ReplacingMergeTree` race — version column /
-side-table / stay compute-at-read. Partially revisits ADR 0048's "no write-back"
+side-table / stay compute-at-read. Partially revisits ADR 0053's "no write-back"
 for the live band only.
 
 **Operational pending (theirs, not code).** 0039 Current Price Updater (live-spot

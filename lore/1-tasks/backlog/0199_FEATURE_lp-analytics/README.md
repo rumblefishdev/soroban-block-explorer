@@ -2,8 +2,8 @@
 id: '0199'
 title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
-status: blocked
-related_adr: ['0027', '0031', '0043', '0048']
+status: backlog
+related_adr: ['0027', '0031', '0043', '0053']
 related_tasks: ['0125', '0194', '0195', '0247', '0261', '0266']
 tags:
   [
@@ -11,7 +11,7 @@ tags:
     effort-large,
     layer-indexer,
     layer-enrichment,
-    blocked-on-oracle,
+    prices-api-live-2026-07-22,
   ]
 milestone: 2
 links: []
@@ -61,11 +61,11 @@ history:
     status: blocked
     who: stkrolikiewicz
     note: >
-      Created ADR 0048 (proposed) — "fast-change off-chain values on ClickHouse:
+      Created ADR 0053 (proposed) — "fast-change off-chain values on ClickHouse:
       compute-at-read via local price join" — codifying the architectural part of
       this decision (amends ADR 0043's off-chain=rare-change assumption; fourth
       path in the taxonomy). Updated docs/architecture/technical-design-general-overview.md
-      (§6.11 + §2.3) per ADR 0032 evergreen rule. ADR 0048 is proposed, pending a
+      (§6.11 + §2.3) per ADR 0032 evergreen rule. ADR 0053 is proposed, pending a
       read-cost measurement of the read-time join + karolkow review. The TVL-only
       scope cut stays a task-level decision (here), not in the ADR.
   - date: '2026-06-09'
@@ -76,7 +76,7 @@ history:
       to volume/fee) shares one claim-atom extractor + one historical re-parse with
       the pool_id fix (0261/0266). Decision: capture gross_volume_a NOW on that
       shared re-parse — do not re-parse twice — while USD volume/fee display stays
-      deferred until the Prices API is live (read-time join, ADR 0048). The
+      deferred until the Prices API is live (read-time join, ADR 0053). The
       TVL-only launch cut is unchanged; this only ensures the volume input is not
       thrown away. Linked 0247/0261/0266.
   - date: '2026-06-12'
@@ -84,7 +84,7 @@ history:
     who: stkrolikiewicz
     note: >
       Prices-API contract finalized with Oskar (recorded in
-      notes/S-ch-tvl-enrichment-and-decision.md + ADR 0048 history). Refined vs
+      notes/S-ch-tvl-enrichment-and-decision.md + ADR 0053 history). Refined vs
       2026-06-09: USD materialized write-time as retention-proof close_usd per
       grain, read via prices.* named views directly in-cluster (no sync job / no
       local prices table); single-asset price_usd_at(id,ts) keyed by natural
@@ -122,6 +122,63 @@ history:
       `balances WHERE holder_id = <pool contract surrogate>`. 0199 stays `blocked-on-oracle`
       for the USD price API (Oskar); that gate is separate + unaffected. Custom-storage pools
       (Soroswap/Phoenix/Comet) still need a per-protocol reserve decoder (parked in 0210 Faza-3).
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Unblocked: blocked → backlog. The oracle gate is gone, proved from prod,
+      not from a promise.** The lifecycle status said "move back to active once
+      Oskar's API contract is finalized"; the 2026-06-09 note already recorded it
+      as confirmed, and the data is now on the cluster: the `prices` database
+      holds **37 tables / 593.6M rows / 32.41 GiB, 122,706 assets, history from
+      2024-02-20 17:00** — exactly the contract shape. `price_ohlcv_1m` is live
+      (777,735 inserts in 24h, newest candle minutes old).
+      **Two caveats, both measured, neither a full blocker.**
+      (1) THE OHLCV TABLES ARE NOT ONE ROLLUP CASCADE, despite looking like one.
+      Seven MVs do chain `1m → 15m → 1h → 4h → 1d → 1w → 1M` (OHLCV aggregates
+      losslessly — first/max/min/last/sum — so a cascade is exact). But a CH
+      materialized view is an INSERT trigger and **never backfills history**, so
+      the historical import was written *straight into the wide tables*, bypassing
+      the chain. The three start dates give it away: `1m` reaches back to
+      2018-12-13 (17,233 assets), `1h`/`4h`/`1d` start 2024-02-20 (122,706
+      assets), `15m` starts 2026-06-01 — the day the cascade was switched on.
+      Consequence: **an asset present in `1h` need not exist in `1m`, and vice
+      versa** — never treat one as an aggregate of the other.
+      Freshness: only `1m` is current. The contract view `price_usd_series` last
+      advanced to bucket `2026-07-21 00:00`, so a TVL computed today is priced
+      ~1.5 days stale. Inserts into the higher tables are still arriving (96/day
+      into `1h`), but carrying past-dated candles — consistent with an import
+      still catching up rather than a stalled stream. Confirm with the prices
+      owner before shipping; it is their service, not ours.
+      (2) NATIVE-KEY ALIGNMENT IS DONE — but only through the contract view, and
+      the raw tables actively mislead. Both prices-side deps shipped in their
+      PR #39 (ADR 0053 update 2026-06-16). `prices.price_usd_series` carries a
+      structured `asset_kind` column, and native resolves under
+      `asset_kind='native'`. **Measured through the view: 39,370 of 52,288 pools
+      (75.3%) have both legs priceable**, native legs included.
+      RECORDED AS A TRAP, because I fell in it: joining the raw `prices.assets`
+      table on `(asset_code, issuer_address)` is wrong and *fails silently*.
+      `liquidity_pools` writes native as `type=0, code='', issuer_id=0` while
+      `prices.assets` writes `code='XLM'`, so they never match — but the join
+      still "succeeds" against one of the **153 empty-code rows** in
+      `prices.assets`, silently pricing every native leg as an arbitrary asset.
+      That produced a bogus 96.4% coverage figure in my first pass. Also, **249
+      distinct asset_ids share the code 'XLM'** (996 rows), so `asset_code` alone
+      is never a key. Use `price_usd_series` / `current_price_usd` and key on
+      `asset_kind`; never touch `prices.assets` directly.
+      **What this unblocks concretely:** Phase 1/2 (classic + native) over the
+      39,370 priceable pools (75.3%). Phase 3 (Soroban-DEX) also has its
+      SAC->classic resolver shipped, so its remaining gate is our side:
+      custom-storage pools (Soroswap/Phoenix/Comet) need a per-protocol reserve
+      decoder. Scope decision from 2026-06-09 stands: TVL only —
+      volume/fee_revenue need `gross_volume_a`, and 0247 archived without ever
+      running its Path-A latency benchmark, having found the real cost is a
+      result-meta parse `xdr-parser` does not expose yet.
+      **0213 and 0215 deliberately stay blocked** — both gate on 0199 *shipping*,
+      not on it being unblocked ("running 0213 before 0199 ships would surface LP
+      rows as drift = 100%, useless noise").
+      Also repointed: ADR 0048 (compute-at-read) was renumbered to **0053** — it
+      had collided with the accepted Cloudflare ADR on the same id.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
