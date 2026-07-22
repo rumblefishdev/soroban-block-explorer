@@ -9,7 +9,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 
 import { grid } from '../theme/grid.js';
 
-import { NavButton } from './NavButton.js';
+import { NavButton, type NavButtonSize } from './NavButton.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
 /** Below this width the inline nav collapses behind a hamburger drawer. */
@@ -19,8 +19,11 @@ const REPORT_BUG_URL =
   'https://github.com/rumblefishdev/soroban-block-explorer/issues/new';
 
 /** Feedback affordance — deliberately outside `navItems` so it reads as an
- *  action, not a section (task 0407). */
-function ReportBugLink() {
+ *  action, not a section (task 0407). Sizing mirrors {@link NavButton} so it
+ *  sits flush with the nav links inline and with the drawer items at `lg`. */
+function ReportBugLink({ size = 'md' }: { size?: NavButtonSize }) {
+  const isLg = size === 'lg';
+
   return (
     <Box
       component="a"
@@ -32,7 +35,7 @@ function ReportBugLink() {
         alignItems: 'center',
         gap: 0.5,
         px: 1,
-        py: 0.5,
+        py: isLg ? 1 : 0.5,
         textDecoration: 'none',
         color: theme.palette.text.tertiary,
         transition: 'background-color 0.15s, border-radius 0.15s, color 0.15s',
@@ -43,10 +46,14 @@ function ReportBugLink() {
         },
       })}
     >
-      <Typography variant="bodySmMedium" color="inherit" noWrap>
+      <Typography
+        variant={isLg ? 'bodyMedium' : 'bodySmMedium'}
+        color="inherit"
+        noWrap
+      >
         Report a bug
       </Typography>
-      <ArrowOutwardIcon sx={{ fontSize: 14 }} />
+      <ArrowOutwardIcon sx={{ fontSize: isLg ? 16 : 14 }} />
     </Box>
   );
 }
@@ -238,7 +245,7 @@ export function SecondaryNav({
               borderTop: `1px solid ${theme.palette.stroke.default}`,
             })}
           >
-            <ReportBugLink />
+            <ReportBugLink size="lg" />
           </Box>
         </Box>
       </Drawer>
