@@ -61,15 +61,50 @@ source.
 Independent cross-check: **stellar.expert returns `GCNP4JVZ…` as `creator` for
 6 of 6** freshly-deployed contracts sampled. They read `op.source_account`.
 
-## Why it was missed
+## Root cause — located, and it is NOT the fee-bump nesting
 
-The envelope nests one level deeper than the non-fee-bump case:
+Traced through the code after the XDR evidence. The extraction function itself
+is **correct**:
 
+```rust
+// crates/xdr-parser/src/op_source.rs
+let effective_source = op.source_account.as_ref()
+    .map(muxed_to_g_strkey)
+    .unwrap_or_else(|| tx_source.to_string());
 ```
-tx_fee_bump.tx.fee_source                                   ← pays the fee
-tx_fee_bump.tx.inner_tx.tx.tx.source_account                ← we stop here
-tx_fee_bump.tx.inner_tx.tx.tx.operations[0].source_account  ← should read this
+
+That is exactly the spec rule. The defect is _which contracts ever reach it_.
+
+`extract_op_source_per_contract` only records a contract when it finds an
+explicit creation:
+
+- a top-level `CreateContract` / `CreateContractV2` operation, or
+- a `CreateContractHostFn` / `CreateContractV2HostFn` node in the auth tree.
+
+Everything else falls through — literally:
+
+```rust
+SorobanAuthorizedFunction::ContractFn(_) => {}   // op_source.rs:168
 ```
+
+**In the observed transactions the factory creates the contract inside its own
+code.** The auth tree contains only `ContractFn { create_collateral }`; there is
+no `CreateContractHostFn` node anywhere. So the contract is never added to
+`deployer_by_contract`, and `extract_contract_deployments` falls back to the
+plain `tx_source` it was handed — which for a fee-bump envelope is the inner
+transaction source.
+
+Fee-bump is therefore a **red herring**: it makes the wrong value more visibly
+wrong (three candidate accounts instead of two), but the bug would fire on a
+plain envelope too, whenever a contract is born inside a contract call rather
+than through a declared `CreateContract`.
+
+Consequence for the fix: **`tx_auths::auths()` alone will not solve this.** The
+contract leaves no trace in the auth tree to walk. The deployment is only
+visible in the ledger-entry changes — which `extract_contract_deployments`
+already consumes. The fix is to hand _that_ function the effective operation
+source instead of the bare `tx_source`. Soroban permits one operation per
+transaction, so "the operation" is unambiguous.
 
 ## Scope — and the timeline says the live parser never fixed this
 
@@ -100,11 +135,13 @@ window).
 
 ## Implementation
 
-- [ ] Establish which of the two readings above holds — plain envelopes still
-      correct, or the path dead entirely. A single post-2026-05-22 deployment
-      with a NON-fee-bump envelope and an op-source override settles it.
-- [ ] Fix the extraction so the effective operation source is read from the
-      operation regardless of envelope nesting (plain v0/v1 vs fee-bump).
+- [ ] Confirm the root cause above on a NON-fee-bump envelope where a contract
+      is created inside a `ContractFn` call — the bug should reproduce there
+      too, which would prove fee-bump is incidental.
+- [ ] Pass the effective operation source (`op.source_account ?? tx_source`)
+      into `extract_contract_deployments`, rather than the bare `tx_source`.
+      That covers contracts born inside a contract call, which no auth-tree walk
+      can see.
 - [ ] Count affected rows in prod; decide backfill vs fix-forward (0255's own
       Phase 2 corrected 2,825 rows from CH-internal data — check whether the
       same is possible here or whether it needs an XDR re-parse).
