@@ -12,6 +12,24 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0359 tracker (Stage D + §11 render nits). Frontend rendering of decoded ops.'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Concrete defect found during the 0431 library sweep — one key name.**
+      `web/src/pages/transaction-detail/normal/humanizeOp.ts:66` reads
+      `details.function_name` (snake_case). The parser emits **camelCase**:
+      `crates/xdr-parser/src/operation.rs:507` writes `"functionName"`.
+      Consequence: the `INVOKE_HOST_FUNCTION` branch never fires, so every
+      contract invocation on the transaction detail page degrades to
+      "Invoked contract <id>" instead of "Called transfer() on CABC…".
+      This exact mismatch was already found and fixed once in a sibling file —
+      `OperationJsonDetail.tsx:128-131` documents it ("never matched → the
+      decoded call was silently dropped from the UI"). `humanizeOp` was missed
+      in that pass. Worth checking whether any third reader has the same bug.
+      Also relevant to this task's u256/i256 scope: `stellar-xdr` already ships
+      `num256::{u256,i256}_str_from_pieces` and `num128` equivalents. See 0431 —
+      do not hand-roll the conversion.
 ---
 
 # FE: humanize-op render + value-decode fidelity
