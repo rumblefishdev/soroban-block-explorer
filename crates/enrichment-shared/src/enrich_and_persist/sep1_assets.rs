@@ -66,11 +66,25 @@ pub async fn enrich_asset_from_sep1(
     fetcher: &Sep1Fetcher,
 ) -> Result<EnrichOutcome, EnrichError> {
     // Issuer home_domain + StrKey drive the SEP-1 fetch + currency match.
+    //
+    // NO `FINAL` (task 0397): `id` is not the `accounts` sort key (that is
+    // `account_id`), so `FINAL WHERE id = ?` has no key range to bound and
+    // read-merges the whole table for ONE id — measured on prod 24.9M rows per
+    // call, 100 BILLION over 7 days. The `idx_acc_id` bloom index turns the same
+    // predicate into a seek: 24.6k rows, 15 ms, identical result. Bound the key,
+    // THEN dedup — the house shape, see `api::common::ch` and
+    // `assets::hydrate_sql` (task 0364).
+    //
+    // `ORDER BY last_seen_ledger DESC LIMIT 1` is the dedup: it picks the
+    // RMT-latest version, needed because `home_domain` IS mutable (SET_OPTIONS —
+    // 4 of 1.01M prod accounts carry more than one value). A bare `LIMIT 1 BY id`
+    // would be wrong here for exactly that reason.
     let issuer = client
         .query(
             "SELECT nullIf(account_id, '')  AS issuer_strkey, \
                     nullIf(home_domain, '') AS home_domain \
-             FROM accounts FINAL WHERE id = ? LIMIT 1",
+             FROM accounts WHERE id = ? \
+             ORDER BY last_seen_ledger DESC LIMIT 1",
         )
         .bind(key.issuer_id)
         .fetch_optional::<IssuerLookup>()
