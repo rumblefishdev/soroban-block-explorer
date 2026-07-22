@@ -4,7 +4,7 @@ title: 'REFACTOR: resolve transaction_hash_dict redundancy — finish (Rust→di
 type: REFACTOR
 status: backlog
 related_adr: []
-related_tasks: ['0387']
+related_tasks: ['0395', '0397']
 tags: [clickhouse, tech-debt, effort-small, priority-low]
 milestone: 3
 links: []

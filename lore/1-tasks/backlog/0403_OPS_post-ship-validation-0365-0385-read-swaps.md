@@ -4,7 +4,7 @@ title: 'OPS: post-ship validation of the 0365 (lptxs) + 0385 (acclist) read swap
 type: OPS
 status: backlog
 related_adr: []
-related_tasks: ['0365', '0385', '0357']
+related_tasks: ['0365', '0385', '0357', '0397']
 tags: [priority-high, effort-medium, layer-clickhouse, validation]
 links:
   - crates/api/src/liquidity_pools/queries.rs

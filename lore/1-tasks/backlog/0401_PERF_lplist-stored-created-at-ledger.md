@@ -4,7 +4,7 @@ title: 'PERF: lplist — stored `created_at_ledger` (re-litigate 0208 Path 1 wit
 type: PERF
 status: backlog
 related_adr: []
-related_tasks: ['0357', '0208', '0356']
+related_tasks: ['0357', '0208', '0356', '0397']
 tags: [priority-high, effort-medium, layer-clickhouse, phase-post-launch]
 links:
   - crates/api/src/queries.rs

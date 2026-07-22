@@ -166,6 +166,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- (1-(1-p)^N): at default 0.025 / 11 keys ~6M rows survived; at 0.001 ~1M.
     -- Index is ~tens of MB. Applied to the live prod table via
     -- ALTER ... ADD INDEX + MATERIALIZE INDEX (online, 2026-06-16).
+    -- CONSUMERS (check before ever dropping this as "unused"): the tx-list /
+    -- search / assets id->StrKey seeks in `crates/api`, AND the SEP-1
+    -- enrichment worker's issuer resolve (`enrich_and_persist::sep1_assets`,
+    -- task 0397) — that one is a single-key seek and reads 3 granules with the
+    -- index vs the whole table without it, silently, with no error to notice.
     INDEX idx_acc_id id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree(last_seen_ledger)

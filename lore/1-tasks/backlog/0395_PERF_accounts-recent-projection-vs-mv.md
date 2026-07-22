@@ -4,7 +4,7 @@ title: 'PERF: re-evaluate accounts_recent — native projection vs refreshable-M
 type: PERF
 status: backlog
 related_adr: []
-related_tasks: ['0385', '0387', '0353']
+related_tasks: ['0385', '0353', '0397']
 tags: [perf, clickhouse, read-path, tech-debt, effort-small, priority-low]
 milestone: 3
 links: []
