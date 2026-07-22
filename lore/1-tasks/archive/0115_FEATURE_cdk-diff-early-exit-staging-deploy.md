@@ -16,6 +16,7 @@ history:
   - date: '2026-07-22'
     status: canceled
     who: karolkow
+    reason: obsolete
     note: >
       **Canceled via the task's own option 4 / AC3 — the environment it
       optimizes no longer exists.** Found during a sweep of the 100 open tasks;
