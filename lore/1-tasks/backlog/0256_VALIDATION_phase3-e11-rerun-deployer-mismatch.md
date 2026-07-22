@@ -98,6 +98,51 @@ history:
       while their own row says `is_sac = false`. A stub row's defaults
       contradicting another table is the 0421 whole-row-default class, not a
       deployer issue.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **VERDICT REVERSED — the fix has a hole, and my own "30/30 pass" was a
+      tautology.** Decoded raw transaction XDR from Soroban RPC with the official
+      `stellar` CLI 26.0.0 (not our parser), and the result contradicts the
+      earlier Horizon check.
+      THE TAUTOLOGY: Horizon's `source_account` for a fee-bump transaction is the
+      INNER transaction source — which is exactly the value we store. Comparing
+      our field against it can only ever match. It verified nothing.
+      WHAT THE XDR SHOWS. Two contracts decoded end-to-end, both
+      `tx_fee_bump` envelopes with three distinct accounts:
+      `CDNEY3YNWS57…` — outer/fee `GA74RB6L…`, inner tx source `GB7CY43V…`,
+      **`op.source_account` `GCNP4JVZ…`**; auth entry credentials =
+      `source_account`.
+      `CC3Y5UFEJS3L…` — outer/fee `GA74RB6L…`, inner tx source `GAHQZMZJ…`,
+      **`op.source_account` `GCNP4JVZ…`**.
+      In both we stored the INNER TX SOURCE. Per the definition above — and per
+      the docs' "if the source account parameter is omitted, the transaction
+      source is considered the operation source" — the override is NOT omitted
+      here, so the effective operation source, and therefore the deployer, is
+      `GCNP4JVZ…`. **We store the wrong account.**
+      CROSS-CHECK: stellar.expert returns `GCNP4JVZ…` as `creator` for **6 of 6**
+      freshly-deployed contracts sampled, always the same account. I previously
+      dismissed that agreement as "a different definition of creator". It was not
+      — they are reading `op.source_account` and they are right.
+      SCOPE: this is the fee-bump + per-op-override path. Not universal — 1,565
+      contracts DO carry `GCNP4JVZ…` as deployer, so the parser catches the
+      override sometimes. Why it catches some and not others is the open
+      question; the fee-bump envelope nesting
+      (`tx_fee_bump.tx.inner_tx.tx.tx.operations[0].source_account`) is the prime
+      suspect. Context for scale: **22.8% of invocations run through a contract
+      caller** (2.75M of 12.1M in a 50k-ledger window), i.e. the factory /
+      launchpad pattern is common, not exotic.
+      CONSEQUENCE FOR THIS TASK: it cannot close as a pass. Phase 3 of the 0255
+      arc set out to confirm the deployer field holds up post-fix; measured
+      properly, it does not, on this path. Spawn a BUG for the parser rather than
+      re-scoping this validation task again — the validation did its job by
+      finding it.
+      METHOD NOTE for whoever picks it up: verify with `getTransaction` on
+      Soroban RPC + `stellar xdr decode --type TransactionEnvelope`. RPC
+      retention is ~7 days (oldest ledger 63,476,197 at time of writing), so
+      sample recent deployments. Horizon is NOT sufficient — it does not expose
+      the operation-level source for fee-bump envelopes.
 ---
 
 # VALIDATION: Phase 3 — re-run compare_e11.py to confirm deployer mismatch < 0.1 %
@@ -145,9 +190,11 @@ deployer field mismatch rate has dropped from the pre-fix ~93 %
 - [x] ~~`compare_e11.py` re-run~~ — **impossible, replaced.** Verified against
       Horizon instead: 30 contracts, deterministic sample, **30/30 match** on
       `source_account`. Covers the direct-deployment case only.
-- [x] Deployer mismatch rate < 0.1% — **met for the direct case**: 0/30
-      mismatches, and 54/131,314 (0.04%) carry no deployer, which the definition
-      predicts for contract-authorized deployments.
+- [ ] ~~Deployer mismatch rate < 0.1%~~ — **FAILS on the fee-bump path.** The
+      0/30 Horizon result was a tautology (Horizon reports the inner tx source,
+      which is the value we store). Raw XDR shows we store the inner tx source
+      where the operation carries its own `source_account` — 2/2 decoded, 6/6
+      cross-checked against stellar.expert. See the history entry.
 - [ ] **NEW, blocking:** verify the factory case against raw transaction XDR from
       RPC — does the stored deployer equal the `SorobanAuthorizationEntry`
       signer? Neither of the two attempts could test this
