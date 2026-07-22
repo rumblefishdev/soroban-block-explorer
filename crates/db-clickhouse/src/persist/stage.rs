@@ -127,17 +127,16 @@ pub struct StagedLedger {
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
+    /// NFT rows for every contract not *proven* fungible at staging time —
+    /// including contracts with no verdict yet (task 0392). Visibility is a
+    /// read-time predicate on the contract's current verdict
+    /// (`api::nfts::queries::NFT_VISIBLE`), not the row's location, so a row
+    /// written before its contract was classified surfaces the moment the
+    /// verdict resolves — with nothing to promote. Replaces the 0217 / 0220
+    /// `nfts_pending` quarantine, whose only drain was a human running
+    /// `backfill-runner nft-reclassify`.
     pub nft_rows: Vec<NftRow>,
     pub nft_ownership_rows: Vec<NftOwnershipRow>,
-    /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
-    /// contract is still `Other` / NULL-classified at staging time.
-    /// Routed alongside `nft_rows` via the per-contract verdict
-    /// computed from observed WASM interfaces in this ledger plus the
-    /// parser-emitted `contract_type` on each deployment. CH has no
-    /// per-row UPDATE, so promotion happens only via the post-backfill
-    /// drain runbook.
-    pub nft_pending_rows: Vec<NftPendingRow>,
-    pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
     /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
     /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
     /// from `StageInputs.soroban_token_balances`; classic + native per-account
@@ -718,9 +717,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     //   * `contract_rows.contract_type` override for non-SAC deploys
     //     whose WASM is uploaded in the same ledger (matches PG
     //     `Staged::prepare` behaviour at staging.rs:578-585).
-    //   * NFT-candidate routing (`nft_rows` / `nft_pending_rows`,
-    //     task 0217 / 0220) — `Other`/NULL verdict routes to
-    //     quarantine; `Fungible` / `Token` drops the row entirely.
+    //   * NFT-candidate routing (`nft_rows`, task 0392) — a `Fungible` /
+    //     `Token` verdict drops the row entirely; `Other` / NULL keeps it
+    //     (invisible until the verdict resolves, see `route_for`).
     let mut wasm_seen: HashSet<[u8; 32]> = HashSet::new();
     let mut wasm_classification: HashMap<[u8; 32], ContractType> =
         HashMap::with_capacity(contract_interfaces.len());
@@ -1473,13 +1472,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     //        - WASM-classified deploy (the override applied above).
     //   2. SAC overrides (also Token) — these were skipped from Pass-2
     //      stubs, so they're in `out.contract_rows` already.
-    // Contracts with NO entry in EITHER source → treat as `Other`/uncached →
-    // route to pending. The stage itself has no DB access; cross-ledger
-    // verdicts arrive via `prior_contract_verdicts` (task 0283 live G9), the
-    // writer's lookup of `soroban_contracts` for contracts emitting NFT
-    // rows/events here but deployed earlier. This restores the PG
-    // `ClassificationCache` semantic the CH cutover dropped — without it a
-    // later transfer from an already-classified NFT would quarantine.
+    // Contracts with NO entry in EITHER source → `Other`/uncached → the row is
+    // still WRITTEN (task 0392); it just stays invisible until the contract's
+    // verdict resolves, because the read path filters on the verdict rather
+    // than on which table the row landed in. The stage itself has no DB access;
+    // cross-ledger verdicts arrive via `prior_contract_verdicts` (task 0283
+    // live G9), the writer's lookup of `soroban_contracts` for contracts
+    // emitting NFT rows/events here but deployed earlier. It still earns its
+    // keep: a resolved `Fungible`/`Token` verdict DROPS the row at write time
+    // instead of storing a row that can never become visible.
     let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
     for row in &out.contract_rows {
         if let Some(ty_i16) = row.contract_type
@@ -1489,12 +1490,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
+    // 2-way routing helper (task 0392 — was 3-way with a quarantine bucket).
     // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
     // (G9, cross-ledger) is the fallback for contracts not deployed here.
+    //
+    // Only a PROVEN-fungible verdict drops a row. `Other` and uncached keep
+    // theirs — a `transfer` event is byte-identical for an NFT and a fungible
+    // token (`from,to,i128` vs `from,to,token_id`), so an unresolved contract
+    // may still turn out to be a real collection, and dropping its rows would
+    // lose data no later pass can reconstruct.
     enum NftRoute {
-        Hot,
-        Pending,
+        Keep,
         Drop,
     }
     let route_for = |strkey: &str| -> NftRoute {
@@ -1504,26 +1510,19 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             .or_else(|| prior_contract_verdicts.get(strkey).copied());
         match verdict {
             Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
-            Some(ContractType::Nft) => NftRoute::Hot,
-            // `Other` and uncached (no entry in either source) both go to
-            // quarantine — same semantic as PG-side `resolve_nft_filter`.
-            _ => NftRoute::Pending,
+            _ => NftRoute::Keep,
         }
     };
 
-    // ---- nfts / nfts_pending (dedup by (contract_id, token_id),
-    //                            latest watermark) ----
+    // ---- nfts (dedup by (contract_id, token_id), latest watermark) ----
     //
-    // Each `(contract_id, token_id)` row lives in exactly one bucket
-    // (hot OR pending) per partition — picked by the per-contract
-    // verdict above. Dedup keys are per-bucket so a contract that
-    // somehow appeared with mixed verdicts within the same ledger
-    // (impossible today, defensive) would have separate slots.
-    let mut nft_hot_indices: HashMap<(i64, String), usize> = HashMap::new();
-    let mut nft_pending_indices: HashMap<(i64, String), usize> = HashMap::new();
+    // One bucket (task 0392 — was hot + quarantine, split by the verdict known
+    // at write time). A row whose contract is not yet classified is written
+    // here like any other and simply does not pass the read-time verdict
+    // filter until it resolves.
+    let mut nft_indices: HashMap<(i64, String), usize> = HashMap::new();
     for nft in nfts {
-        let route = route_for(nft.contract_id.as_str());
-        if matches!(route, NftRoute::Drop) {
+        if matches!(route_for(nft.contract_id.as_str()), NftRoute::Drop) {
             continue;
         }
         let contract_id_int = ids::contract_id(&nft.contract_id);
@@ -1532,83 +1531,44 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let owner_id = nft.owner_account.as_deref().map(ids::account_id);
         let minted = nft.minted_at_ledger.map(i64::from);
 
-        match route {
-            NftRoute::Hot => match nft_hot_indices.get(&key).copied() {
-                Some(idx) => {
-                    let existing = &mut out.nft_rows[idx];
-                    if watermark >= existing.current_owner_ledger {
-                        existing.current_owner_id = owner_id;
-                        existing.current_owner_ledger = watermark;
-                    }
-                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (None, b) => b,
-                    };
-                    existing.collection_name = existing
-                        .collection_name
-                        .clone()
-                        .or_else(|| nft.collection_name.clone());
-                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
-                    existing.media_url =
-                        existing.media_url.clone().or_else(|| nft.media_url.clone());
+        match nft_indices.get(&key).copied() {
+            Some(idx) => {
+                let existing = &mut out.nft_rows[idx];
+                if watermark >= existing.current_owner_ledger {
+                    existing.current_owner_id = owner_id;
+                    existing.current_owner_ledger = watermark;
                 }
-                None => {
-                    nft_hot_indices.insert(key, out.nft_rows.len());
-                    out.nft_rows.push(NftRow {
-                        contract_id: contract_id_int,
-                        token_id: nft.token_id.clone(),
-                        collection_name: nft.collection_name.clone(),
-                        name: nft.name.clone(),
-                        media_url: nft.media_url.clone(),
-                        minted_at_ledger: minted,
-                        current_owner_id: owner_id,
-                        current_owner_ledger: watermark,
-                    });
-                }
-            },
-            NftRoute::Pending => match nft_pending_indices.get(&key).copied() {
-                Some(idx) => {
-                    let existing = &mut out.nft_pending_rows[idx];
-                    if watermark >= existing.current_owner_ledger {
-                        existing.current_owner_id = owner_id;
-                        existing.current_owner_ledger = watermark;
-                    }
-                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (None, b) => b,
-                    };
-                    existing.collection_name = existing
-                        .collection_name
-                        .clone()
-                        .or_else(|| nft.collection_name.clone());
-                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
-                    existing.media_url =
-                        existing.media_url.clone().or_else(|| nft.media_url.clone());
-                }
-                None => {
-                    nft_pending_indices.insert(key, out.nft_pending_rows.len());
-                    out.nft_pending_rows.push(NftPendingRow {
-                        contract_id: contract_id_int,
-                        token_id: nft.token_id.clone(),
-                        collection_name: nft.collection_name.clone(),
-                        name: nft.name.clone(),
-                        media_url: nft.media_url.clone(),
-                        minted_at_ledger: minted,
-                        current_owner_id: owner_id,
-                        current_owner_ledger: watermark,
-                    });
-                }
-            },
-            NftRoute::Drop => unreachable!("filtered above"),
+                existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) => Some(a),
+                    (None, b) => b,
+                };
+                existing.collection_name = existing
+                    .collection_name
+                    .clone()
+                    .or_else(|| nft.collection_name.clone());
+                existing.name = existing.name.clone().or_else(|| nft.name.clone());
+                existing.media_url = existing.media_url.clone().or_else(|| nft.media_url.clone());
+            }
+            None => {
+                nft_indices.insert(key, out.nft_rows.len());
+                out.nft_rows.push(NftRow {
+                    contract_id: contract_id_int,
+                    token_id: nft.token_id.clone(),
+                    collection_name: nft.collection_name.clone(),
+                    name: nft.name.clone(),
+                    media_url: nft.media_url.clone(),
+                    minted_at_ledger: minted,
+                    current_owner_id: owner_id,
+                    current_owner_ledger: watermark,
+                });
+            }
         }
     }
 
-    // ---- nft_ownership / nft_ownership_pending ----
+    // ---- nft_ownership ----
     for ev in nft_events {
-        let route = route_for(ev.contract_id.as_str());
-        if matches!(route, NftRoute::Drop) {
+        if matches!(route_for(ev.contract_id.as_str()), NftRoute::Drop) {
             continue;
         }
         let Some(&tx_id) = tx_id_by_hash.get(&ev.transaction_hash) else {
@@ -1621,27 +1581,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let owner_id = ev.owner_account.as_deref().map(ids::account_id);
         let event_type = ev.event_type as i16;
 
-        match route {
-            NftRoute::Hot => out.nft_ownership_rows.push(NftOwnershipRow {
-                contract_id,
-                token_id: ev.token_id.clone(),
-                ledger_sequence,
-                event_order,
-                transaction_id: tx_id,
-                owner_id,
-                event_type,
-            }),
-            NftRoute::Pending => out.nft_ownership_pending_rows.push(NftOwnershipPendingRow {
-                contract_id,
-                token_id: ev.token_id.clone(),
-                ledger_sequence,
-                event_order,
-                transaction_id: tx_id,
-                owner_id,
-                event_type,
-            }),
-            NftRoute::Drop => unreachable!("filtered above"),
-        }
+        out.nft_ownership_rows.push(NftOwnershipRow {
+            contract_id,
+            token_id: ev.token_id.clone(),
+            ledger_sequence,
+            event_order,
+            transaction_id: tx_id,
+            owner_id,
+            event_type,
+        });
     }
 
     // ---- unified `balances` — classic + native per-account balances (lore-0331

@@ -93,7 +93,6 @@ PARTITIONED_TABLES=(
   soroban_invocations_appearances
   liquidity_pool_snapshots
   nft_ownership
-  nft_ownership_pending
 )
 
 # Non-partitioned state tables. FREEZE without PARTITION clause.
@@ -104,7 +103,6 @@ STATE_TABLES=(
   assets
   account_balances_current
   nfts
-  nfts_pending
   liquidity_pools
   lp_positions
   wasm_interface_metadata

@@ -190,9 +190,10 @@ impl PartitionWriterHandle {
                     sac_overrides: &parsed.sac_overrides,
                     // Task 0283 live G1/G9 are for the live indexer path only.
                     // Backfill stays as-is (empty maps = pre-0283 behaviour):
-                    // historical cross-ledger verdicts are reconstructed by
-                    // the batch `ch-maint contract-type-rebuild` + one-shot
-                    // `nft-reclassify`, not inline.
+                    // historical cross-ledger verdicts are reconstructed by the
+                    // batch `contract-type-rebuild`, not inline. A row written
+                    // without a verdict is kept and simply stays invisible
+                    // until that pass resolves its contract (task 0392).
                     prior_wasm_verdicts: &std::collections::HashMap::new(),
                     prior_contract_verdicts: &std::collections::HashMap::new(),
                     // Task 0320 live WASM-upgrade rewrite is live-indexer-only;

@@ -5,18 +5,19 @@
 //! EVERY row-returning call for 2+ weeks: `ContractVerdictRow.contract_type`
 //! was a bare `i16` against the `Nullable(Int16)` column, and clickhouse 0.15
 //! RBWNAT validation rejects that — the fail-open contract then routed every
-//! event to the `*_pending` quarantine (~6.5k rows/day, 91% fungible
-//! false-positives). A unit test cannot catch this class: the mismatch only
-//! exists on the wire against a real server. Hence e2e.
+//! event to the then-existing `*_pending` quarantine (~6.5k rows/day, 91%
+//! fungible false-positives). A unit test cannot catch this class: the mismatch
+//! only exists on the wire against a real server. Hence e2e.
 //!
 //! Asserts the full routing contract of `route_for` via the production persist
 //! wrapper:
-//!   * `Fungible`-verdict contract → events/rows DROPPED (neither hot nor
-//!     pending),
-//!   * `Nft`-verdict contract → events/rows land HOT (`nfts` /
-//!     `nft_ownership`),
-//!   * unclassified contract (no verdict row) → quarantine (`nfts_pending` /
-//!     `nft_ownership_pending`) — the fail-open path must stay intact.
+//!   * `Fungible`-verdict contract → events/rows DROPPED (never written),
+//!   * `Nft`-verdict contract → events/rows written to `nfts` /
+//!     `nft_ownership` and visible,
+//!   * unclassified contract (no verdict row) → events/rows written too, but
+//!     filtered out by the read-time verdict predicate. The fail-open path
+//!     must keep the data; only visibility waits on the verdict (task 0392,
+//!     which removed the quarantine tables).
 //!
 //! Gated on `CLICKHOUSE_URL` (skips cleanly when unset — same pattern as
 //! `persist_e2e.rs`). Run locally:
@@ -144,9 +145,7 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
         for stmt in [
             format!("ALTER TABLE soroban_contracts DELETE WHERE contract_id = '{c}'"),
             format!("ALTER TABLE nfts DELETE WHERE contract_id = {id}"),
-            format!("ALTER TABLE nfts_pending DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nft_ownership DELETE WHERE contract_id = {id}"),
-            format!("ALTER TABLE nft_ownership_pending DELETE WHERE contract_id = {id}"),
         ] {
             let _ = cl.query(&stmt).execute().await;
         }
@@ -252,13 +251,9 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
     .await
     .expect("persist must succeed");
 
-    // Fungible verdict → DROP: nothing anywhere.
-    for table in [
-        "nfts",
-        "nfts_pending",
-        "nft_ownership",
-        "nft_ownership_pending",
-    ] {
+    // Fungible verdict → DROP: nothing written. This is the one verdict that
+    // still discards data at write time, and the only one that may.
+    for table in ["nfts", "nft_ownership"] {
         assert_eq!(
             count(&cl, table, &fungible).await,
             0,
@@ -266,25 +261,39 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         );
     }
 
-    // Nft verdict → HOT: rows in `nfts` + `nft_ownership`, nothing pending.
-    assert_eq!(count(&cl, "nfts", &nft).await, 1, "nft row lands hot");
+    // Nft verdict → written, and visible (its contract passes the read filter).
+    assert_eq!(count(&cl, "nfts", &nft).await, 1, "nft row written");
     assert_eq!(
         count(&cl, "nft_ownership", &nft).await,
         1,
-        "ownership event lands hot"
+        "ownership event written"
     );
-    assert_eq!(count(&cl, "nfts_pending", &nft).await, 0);
-    assert_eq!(count(&cl, "nft_ownership_pending", &nft).await, 0);
 
-    // No verdict → PENDING: quarantine intact for the genuinely-unknown.
+    // No verdict → written too (task 0392 — was the `*_pending` quarantine).
+    // The row exists; it is the read-time verdict filter that hides it, so a
+    // later classification surfaces it with nothing to promote.
     assert_eq!(
-        count(&cl, "nfts_pending", &unknown).await,
+        count(&cl, "nfts", &unknown).await,
         1,
-        "unclassified contract quarantines"
+        "unclassified contract's row is kept, not quarantined"
     );
-    assert_eq!(count(&cl, "nft_ownership_pending", &unknown).await, 1);
-    assert_eq!(count(&cl, "nfts", &unknown).await, 0);
-    assert_eq!(count(&cl, "nft_ownership", &unknown).await, 0);
+    assert_eq!(count(&cl, "nft_ownership", &unknown).await, 1);
+
+    // ...and it is invisible: the API's visibility predicate
+    // (`api::nfts::queries::NFT_VISIBLE`) admits only `contract_type = 2`.
+    let visible: u64 = cl
+        .query(
+            "SELECT count() FROM nfts WHERE contract_id = ? AND contract_id IN \
+             (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)",
+        )
+        .bind(ids::contract_id(&unknown))
+        .fetch_one()
+        .await
+        .expect("visibility probe");
+    assert_eq!(
+        visible, 0,
+        "unclassified contract's row must not pass the read-time filter"
+    );
 
     // Task 0320: the prior-row prefetch must succeed (pre-fix it SELECTed the
     // dropped `name` column → Code 47 → no upgrade row ever written) and the

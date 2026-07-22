@@ -308,12 +308,12 @@ fn maybe_tripwire(contract_id: &str, event_kind: &str, event: &ExtractedEvent, t
 /// Authoritative NFT-vs-fungible discrimination lives downstream, at
 /// persist time, via the WASM-spec-based classifier
 /// (`xdr_parser::classify_contract_from_wasm_spec` + the persist routing
-/// in `crates/indexer/src/handler/persist/write.rs::resolve_nft_filter`):
+/// in `crates/db-clickhouse/src/persist/stage.rs::route_for`):
 ///
 /// - `Fungible` / `Token` (SAC) verdict → row dropped before INSERT.
-/// - `Nft` verdict → row to hot `nfts` table.
-/// - `Other` / NULL verdict → row to `nfts_pending` quarantine
-///   (task 0217), promoted on later WASM observation.
+/// - `Nft` verdict → row written to `nfts`, visible.
+/// - `Other` / NULL verdict → row written too, but hidden by the read-time
+///   verdict filter until the contract is classified (task 0392).
 ///
 /// This function therefore only rejects clearly non-token shapes (void,
 /// maps, vecs, errors). Everything else is forwarded for the classifier
@@ -594,14 +594,14 @@ mod tests {
         //
         // The authoritative NFT-vs-fungible decision lives in the
         // persist-time filter
-        // (`crates/indexer/src/handler/persist/write.rs::resolve_nft_filter`),
+        // (`crates/db-clickhouse/src/persist/stage.rs::route_for`),
         // which reads `soroban_contracts.contract_type` populated by
         // `xdr_parser::classify_contract_from_wasm_spec` when the WASM
         // upload is observed. A `Fungible` / `Token`-classified contract's
-        // rows are dropped before reaching `nfts`; an `Nft`-classified
-        // contract's rows go to the hot `nfts` table; `Other` / NULL go
-        // to the `nfts_pending` quarantine (task 0217), to be promoted
-        // when a later WASM upload flips the verdict.
+        // rows are dropped before reaching `nfts`; everything else is
+        // written to `nfts`, and only a `contract_type = 2` verdict makes
+        // it visible to the API (task 0392) — so an unclassified contract's
+        // rows surface as soon as a later WASM upload flips the verdict.
         //
         // This test guards the parser contract: `i128` data must
         // produce an `NftEvent` so the filter has something to inspect.

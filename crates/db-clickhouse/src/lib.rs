@@ -135,11 +135,11 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // Current: 25 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY
-        // = 27 (matches the assertion below). Historical derivation:
+        // Current: 26 CREATE TABLE + 2 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY
+        // = 29 (matches the assertion below). Historical derivation:
         // 17-table base; task 0217 added `nfts_pending` + `nft_ownership_pending`
-        // as schema-only landing zones (the CH writer does NOT yet stage/INSERT
-        // into either — follow-up to PR #180); task 0231 (ADR 0050) added the
+        // as schema-only landing zones (both removed again in task 0392, see the
+        // last line); task 0231 (ADR 0050) added the
         // `asset_enrichment` + `nft_enrichment` side tables; lore-0293 added the
         // `asset_aggregates` table + its refreshable `asset_aggregates_mv` for
         // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
@@ -168,10 +168,13 @@ mod tests {
         // (pool-leading key; the pool-dimension twin of the above). 28 → 29.
         // task 0385: added `accounts_recent` (last_seen_ledger-ordered read-model for
         // the acclist browse) + its refreshable `accounts_recent_mv`. 29 → 31.
+        // task 0392: DROPPED `nfts_pending` + `nft_ownership_pending` — visibility
+        // is a read-time filter on the contract verdict, so there is nothing to
+        // quarantine and nothing to promote. 31 → 29.
         assert_eq!(
             stmts.len(),
-            31,
-            "expected 28 tables + 2 materialized views + 1 dictionary, got {}",
+            29,
+            "expected 26 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

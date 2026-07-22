@@ -25,14 +25,13 @@
 //! throughput.
 //!
 //! Partition-aligned streaming inserts hold the request open across the
-//! whole 64 k-ledger partition: ~172 partitions × 18 streaming tables
-//! ≈ 3 100 `INSERT` statements over the entire 11 M-ledger backfill
+//! whole 64 k-ledger partition: ~172 partitions × 16 streaming tables
+//! ≈ 2 800 `INSERT` statements over the entire 11 M-ledger backfill
 //! (plus one `ledgers` INSERT per partition as the commit marker).
-//! Well within the merger's comfort zone. The two new pending tables
-//! (`nfts_pending`, `nft_ownership_pending`, task 0217 / 0220) only
-//! open when the partition contains at least one `Other`-classified
-//! NFT-candidate contract, so partitions with full classifier coverage
-//! still see exactly the 16 prior inserts.
+//! Well within the merger's comfort zone. (The 0217 / 0220 quarantine
+//! tables that made this 18 were removed in task 0392 — an unclassified
+//! contract's rows now go to `nfts` / `nft_ownership` like any other and
+//! are filtered out at read time until its verdict resolves.)
 //!
 //! Loopback transport is irrelevant here — server-side part economics
 //! are the load-bearing constraint, not HTTP round-trips.
@@ -99,13 +98,6 @@ struct TableInserts {
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
     nft_ownership: Option<Insert<NftOwnershipRow>>,
-    /// Task 0217 / 0220 — quarantine inserts. Lazy-opened only when the
-    /// `stage::prepare` routing actually produces pending rows for the
-    /// partition (any contract still classified `Other` / NULL at the
-    /// time of staging). Empty `Other`-free partitions never open the
-    /// HTTP request, keeping the part economy unchanged from PR #180.
-    nfts_pending: Option<Insert<NftPendingRow>>,
-    nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
     /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
     /// legacy `account_balances_current` insert was removed (single-write).
     unified_balances: Option<Insert<BalanceRow>>,
@@ -279,23 +271,6 @@ impl PartitionWriter {
             &staged.nft_ownership_rows,
         )
         .await?;
-        // Task 0217 / 0220 — quarantine inserts. Slot stays `None` (and
-        // the HTTP request never opens) on partitions where every
-        // NFT-candidate contract has a definitive `Nft` verdict.
-        write_rows(
-            &self.client,
-            &mut self.inserts.nfts_pending,
-            "nfts_pending",
-            &staged.nft_pending_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.nft_ownership_pending,
-            "nft_ownership_pending",
-            &staged.nft_ownership_pending_rows,
-        )
-        .await?;
         write_rows(
             &self.client,
             &mut self.inserts.unified_balances,
@@ -347,8 +322,6 @@ impl PartitionWriter {
         // final `ledgers` write produces no `ledgers` row for the
         // partition, so the resume path re-does it cleanly. RMT
         // dedupes the orphan rows on the next merge.
-        end(self.inserts.nfts_pending).await?;
-        end(self.inserts.nft_ownership_pending).await?;
         end(self.inserts.unified_balances).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every

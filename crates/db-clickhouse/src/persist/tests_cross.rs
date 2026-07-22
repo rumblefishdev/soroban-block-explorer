@@ -154,26 +154,6 @@ fn column_order_nfts() {
     );
 }
 
-/// Task 0217 / 0220 — quarantine companion to [`NftRow`]. Same shape;
-/// `clickhouse::Row::COLUMN_NAMES` ordering must stay byte-for-byte in
-/// sync with `init.sql` `nfts_pending` because RowBinary is positional.
-#[test]
-fn column_order_nfts_pending() {
-    assert_columns::<NftPendingRow>(
-        "nfts_pending",
-        &[
-            "contract_id",
-            "token_id",
-            "collection_name",
-            "name",
-            "media_url",
-            "minted_at_ledger",
-            "current_owner_id",
-            "current_owner_ledger",
-        ],
-    );
-}
-
 /// Task 0231 — off-chain enrichment side table for NFTs. Keyed like `nfts`
 /// + metadata + `version`; positional RowBinary must match `init.sql`.
 #[test]
@@ -336,25 +316,6 @@ fn column_order_soroban_invocations_appearances() {
 fn column_order_nft_ownership() {
     assert_columns::<NftOwnershipRow>(
         "nft_ownership",
-        &[
-            "contract_id",
-            "token_id",
-            "ledger_sequence",
-            "event_order",
-            "transaction_id",
-            "owner_id",
-            "event_type",
-        ],
-    );
-}
-
-/// Task 0217 / 0220 — quarantine companion to [`NftOwnershipRow`].
-/// Column order must stay byte-for-byte in sync with `init.sql`
-/// `nft_ownership_pending` because RowBinary is positional.
-#[test]
-fn column_order_nft_ownership_pending() {
-    assert_columns::<NftOwnershipPendingRow>(
-        "nft_ownership_pending",
         &[
             "contract_id",
             "token_id",
@@ -1445,8 +1406,8 @@ fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterf
 }
 
 /// NFT row whose contract was deployed in the same ledger with a
-/// definitive `Nft` wasm-classifier verdict routes into the hot
-/// `nft_rows` bucket and produces zero `nft_pending_rows`.
+/// definitive `Nft` wasm-classifier verdict is written and, unlike an
+/// unclassified one, is immediately visible to the read path.
 #[test]
 fn prepare_routes_nft_classified_contract_to_hot_bucket() {
     let ledger = synthetic_ledger();
@@ -1488,15 +1449,9 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
     assert_eq!(
         staged.nft_rows.len(),
         1,
-        "Nft-classified contract: row in hot bucket"
-    );
-    assert_eq!(
-        staged.nft_pending_rows.len(),
-        0,
-        "Nft-classified contract: nothing in pending"
+        "Nft-classified contract: row written"
     );
     assert_eq!(staged.nft_ownership_rows.len(), 1);
-    assert_eq!(staged.nft_ownership_pending_rows.len(), 0);
 
     // Classifier override visible on the contract row.
     let contract_row = &staged.contract_rows[0];
@@ -1569,9 +1524,8 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
     assert_eq!(contract_row.contract_type, Some(ContractType::Nft as i16));
 
     // G9-for-free: the corrected verdict feeds NFT routing in the same pass,
-    // so the NFT lands in the hot bucket, not quarantine.
-    assert_eq!(staged.nft_rows.len(), 1, "routed to hot, not pending");
-    assert_eq!(staged.nft_pending_rows.len(), 0);
+    // so the row is written AND immediately visible.
+    assert_eq!(staged.nft_rows.len(), 1, "kept with an Nft verdict");
 }
 
 // ---------------------------------------------------------------------------
@@ -1723,8 +1677,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
     })
     .expect("prepare_with_sac_overrides");
 
-    assert_eq!(staged.nft_rows.len(), 1, "routed to hot via prior verdict");
-    assert_eq!(staged.nft_pending_rows.len(), 0);
+    assert_eq!(staged.nft_rows.len(), 1, "kept via prior Nft verdict");
 }
 
 /// Same shape, but the prior verdict is `Token` (a SAC). The event must DROP,
@@ -1764,18 +1717,14 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
     })
     .expect("prepare_with_sac_overrides");
 
-    assert_eq!(staged.nft_rows.len(), 0, "SAC event dropped, not hot");
-    assert_eq!(
-        staged.nft_pending_rows.len(),
-        0,
-        "SAC event dropped, not pending"
-    );
+    assert_eq!(staged.nft_rows.len(), 0, "SAC event dropped, not written");
 }
 
-/// Baseline: no prior verdict and no deploy here → the event still routes to
-/// quarantine (pre-G9 behaviour preserved when the map is empty / fail-open).
+/// Baseline: no prior verdict and no deploy here → the row is still written
+/// (G9 fail-open preserved — an empty verdict map must never lose data; the
+/// read-time filter, not the writer, decides visibility).
 #[test]
-fn prepare_routes_event_to_pending_without_prior_verdict() {
+fn prepare_keeps_event_without_prior_verdict() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0xA7);
     let contract = "C".to_string() + &"M".repeat(55);
@@ -1807,12 +1756,12 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
     })
     .expect("prepare_with_sac_overrides");
 
-    assert_eq!(staged.nft_rows.len(), 0);
     assert_eq!(
-        staged.nft_pending_rows.len(),
+        staged.nft_rows.len(),
         1,
-        "quarantined without a verdict"
+        "kept without a verdict — invisible, not discarded"
     );
+    assert_eq!(staged.nft_ownership_rows.len(), 1);
 }
 
 /// A SAC deploy is never reclassified from WASM — `is_sac` short-circuits the
@@ -1966,23 +1915,20 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
 
     assert!(
         staged.nft_rows.is_empty(),
-        "Fungible verdict: NFT row must drop, not route to hot"
-    );
-    assert!(
-        staged.nft_pending_rows.is_empty(),
-        "Fungible verdict: NFT row must drop, not route to pending"
+        "Fungible verdict: NFT row must drop, not be written"
     );
     assert!(staged.nft_ownership_rows.is_empty());
-    assert!(staged.nft_ownership_pending_rows.is_empty());
 }
 
-/// NFT row whose contract is NOT deployed in the same ledger (no
-/// classifier verdict accessible at stage time) routes to the
-/// quarantine `nft_pending_rows` bucket. Mirrors PG `Other`/uncached
-/// semantics — CH has no DB access in stage, so prior-ledger
-/// classifications are unreachable here.
+/// Task 0392 — an NFT row whose contract has NO verdict at stage time (not
+/// deployed this ledger, nothing from the G9 prefetch) is still WRITTEN. It is
+/// not an NFT claim: the read path hides it until the contract's verdict
+/// resolves to `Nft`. Dropping it instead would lose a real collection's
+/// history, because a `transfer` event is byte-identical for NFTs and fungible
+/// tokens — only the contract's WASM can tell them apart, and it may not be
+/// observable yet.
 #[test]
-fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
+fn prepare_keeps_nft_row_of_unclassified_contract() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x92);
     let contract = "C".to_string() + &"C".repeat(55);
@@ -2007,17 +1953,12 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
     )
     .expect("prepare");
 
-    assert!(
-        staged.nft_rows.is_empty(),
-        "Unclassified contract: nothing in hot"
-    );
     assert_eq!(
-        staged.nft_pending_rows.len(),
+        staged.nft_rows.len(),
         1,
-        "Unclassified contract: row in pending bucket"
+        "Unclassified contract: row kept, visibility decided at read time"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 0);
-    assert_eq!(staged.nft_ownership_pending_rows.len(), 1);
+    assert_eq!(staged.nft_ownership_rows.len(), 1);
 }
 
 // ---------------------------------------------------------------------------

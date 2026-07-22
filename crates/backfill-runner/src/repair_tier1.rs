@@ -13,27 +13,27 @@
 //! worker observed, not the actual earliest observation across the
 //! union.
 //!
-//! Twelve Tier-1 columns silently corrupt this way; this pass repairs
-//! the **6** that derive from on-chain facts (across **5** tables). The
-//! remaining 6 (NFT metadata: `collection_name`, `name`, `media_url` ×
-//! `nfts` + `nfts_pending`) require external HTTP/IPFS fetches and are
-//! delivered by task 0231 (Stage 2 SEP-1 + NFT `token_uri` enrichment).
+//! Nine Tier-1 columns silently corrupt this way; this pass repairs
+//! the **5** that derive from on-chain facts (across **4** tables). The
+//! remaining 3 (NFT metadata: `collection_name`, `name`, `media_url` on
+//! `nfts`) require external HTTP/IPFS fetches and are delivered by
+//! task 0231 (Stage 2 SEP-1 + NFT `token_uri` enrichment).
+//! (Was 12 columns × 5 tables — task 0392 removed the `*_pending`
+//! quarantine twins.)
 //!
-//! ### Stage 1 scope (this module) — 6 columns × 5 tables
+//! ### Stage 1 scope (this module) — 5 columns × 4 tables
 //!
 //! | Table | Column | Correct rebuild |
 //! |-------|--------|-----------------|
 //! | `accounts` | `first_seen_ledger` | `MIN(ledger_sequence) FROM transaction_participants` |
 //! | `lp_positions` | `first_deposit_ledger` | `MIN(ledger_sequence) FROM operations_appearances WHERE type = 22 (LiquidityPoolDeposit)` |
 //! | `nfts` | `minted_at_ledger` | `MIN(ledger_sequence) FROM nft_ownership WHERE event_type = 0 (Mint)` |
-//! | `nfts_pending` | `minted_at_ledger` | `MIN(ledger_sequence) FROM nft_ownership_pending WHERE event_type = 0` |
 //! | `soroban_contracts` | `deployer_id` + `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
 //!
-//! ### Stage 2 scope (task 0231, deferred) — 6 columns × 2 tables
+//! ### Stage 2 scope (task 0231, deferred) — 3 columns × 1 table
 //!
-//! `nfts.{collection_name, name, media_url}` and
-//! `nfts_pending.{collection_name, name, media_url}` — populated by
-//! per-row SEP-1 / NFT `token_uri` enrichment loop. Not repaired here.
+//! `nfts.{collection_name, name, media_url}` — populated by the per-row
+//! SEP-1 / NFT `token_uri` enrichment loop. Not repaired here.
 //!
 //! **Source selection rule**: state-shaped tables under
 //! `ReplacingMergeTree` collapse history on `OPTIMIZE FINAL`, so the
@@ -49,9 +49,8 @@
 //! Step 2 lists only `wasm_interface_metadata` + `ledgers` for the
 //! pre-repair OPTIMIZE, so this is fine in the documented sequence).
 //!
-//! The remaining `nfts.{collection_name, name, media_url}` (and
-//! `nfts_pending.{collection_name, name, media_url}`) columns are filled
-//! by Stage 2 of the CH-enrichment plan (SEP-1 + NFT `token_uri` port,
+//! The remaining `nfts.{collection_name, name, media_url}` columns are
+//! filled by Stage 2 of the CH-enrichment plan (SEP-1 + NFT `token_uri` port,
 //! tracked separately). They remain NULL after Tier-1 — that is
 //! correct.
 //!
@@ -89,7 +88,6 @@ pub struct RepairTier1Stats {
     pub accounts_rows: u64,
     pub lp_positions_rows: u64,
     pub nfts_rows: u64,
-    pub nfts_pending_rows: u64,
     pub soroban_contracts_rows: u64,
     pub dry_run: bool,
 }
@@ -111,15 +109,12 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<RepairTier1Stats, Bac
     stats.accounts_rows = rebuild_accounts(client, dry_run).await?;
     stats.lp_positions_rows = rebuild_lp_positions(client, dry_run).await?;
     stats.nfts_rows = rebuild_nfts(client, "nfts", "nft_ownership", dry_run).await?;
-    stats.nfts_pending_rows =
-        rebuild_nfts(client, "nfts_pending", "nft_ownership_pending", dry_run).await?;
     stats.soroban_contracts_rows = rebuild_soroban_contracts(client, dry_run).await?;
 
     info!(
         accounts = stats.accounts_rows,
         lp_positions = stats.lp_positions_rows,
         nfts = stats.nfts_rows,
-        nfts_pending = stats.nfts_pending_rows,
         soroban_contracts = stats.soroban_contracts_rows,
         dry_run,
         "repair_tier1: completed"
@@ -231,7 +226,7 @@ async fn rebuild_lp_positions(
     Ok(rows)
 }
 
-/// `nfts.minted_at_ledger` (and `nfts_pending.minted_at_ledger`) ←
+/// `nfts.minted_at_ledger` ←
 /// `MIN(ledger_sequence)` over rows in the matching `nft_ownership*`
 /// fact table filtered to `event_type = 0 (Mint)`. The plain "earliest
 /// ownership ledger" would be wrong: a Transfer/Burn at an earlier

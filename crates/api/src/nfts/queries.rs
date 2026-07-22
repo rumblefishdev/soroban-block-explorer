@@ -85,6 +85,35 @@ pub struct NftRow {
     pub contract_surrogate: i64,
 }
 
+/// Contract-id set whose **current** verdict is `Nft` (`ContractType::Nft = 2`,
+/// asserted in `tests/nft_visibility_guard.rs`).
+///
+/// Task 0392 — visibility is a read-time predicate, not a physical table split.
+/// A `transfer` event is byte-identical for an NFT and a fungible token, so the
+/// class is undecidable at ingest and can resolve *after* the row is written.
+/// The indexer therefore writes every NFT-shaped row it cannot rule out, and a
+/// row becomes visible the moment its contract's verdict resolves to `Nft` —
+/// with nothing to promote, move, or drain. (This replaces the `nfts_pending`
+/// quarantine, whose only drain was a human running `backfill-runner
+/// nft-reclassify`.)
+///
+/// `FINAL` is load-bearing: `soroban_contracts` is a
+/// `ReplacingMergeTree(wasm_uploaded_at_ledger)`, so a non-FINAL read can serve
+/// a pre-upgrade verdict.
+///
+/// ponytail: measured on prod 2026-07-21 (131k contracts, 122 of them `Nft`).
+/// The `/v1/nfts` list page goes 24 ms / 49k read rows → **42 ms / 239k** with
+/// this predicate; the predicate alone is 23 ms / 211k with `FINAL` vs 9 ms /
+/// 168k without. Kept `FINAL`: dropping it makes visibility mean "some version
+/// said `Nft`", which is right only while nothing ever downgrades a verdict
+/// (true today — `build_wasm_upgrade_rows` carries `contract_type` forward).
+/// Trade that for the 14 ms only if these endpoints ever get hot.
+///
+/// **Every** read of `nfts` / `nft_ownership` must carry it;
+/// `tests/nft_visibility_guard.rs` fails the build if one does not.
+pub(crate) const NFT_VISIBLE: &str =
+    "(SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)";
+
 /// `nft_ownership.event_type` SMALLINT → canonical label, matching the PG
 /// `nft_event_type_name` function. Discriminants confirmed from
 /// `domain::NftEventType` (Mint=0, Transfer=1, Burn=2) and the PG SQL `CASE`
@@ -205,7 +234,7 @@ pub async fn fetch_list(
                     e.collection_name      AS e_collection_name \
              FROM nfts n FINAL \
              LEFT JOIN enr e ON e.contract_id = n.contract_id AND e.token_id = n.token_id \
-             WHERE 1 = 1{contract_clause}{collection_pred}{name_pred}{keyset} \
+             WHERE n.contract_id IN {NFT_VISIBLE}{contract_clause}{collection_pred}{name_pred}{keyset} \
              ORDER BY ifNull(n.minted_at_ledger, 0) {order}, n.contract_id {order}, n.token_id {order} \
              LIMIT ? \
          ), \
@@ -301,7 +330,8 @@ pub async fn fetch_by_composite(
     contract_id: &str,
     token_id: &str,
 ) -> Result<Option<NftItem>, clickhouse::error::Error> {
-    let sql = "WITH cid AS ( \
+    let sql = format!(
+        "WITH cid AS ( \
                    SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1 \
                ) \
                SELECT \
@@ -326,10 +356,12 @@ pub async fn fetch_by_composite(
                    GROUP BY contract_id, token_id \
                ) ne ON ne.contract_id = n.contract_id AND ne.token_id = n.token_id \
                WHERE n.contract_id IN (SELECT id FROM cid) \
+                 AND n.contract_id IN {NFT_VISIBLE} \
                  AND n.token_id = ? \
-               LIMIT 1";
+               LIMIT 1"
+    );
     let Some(r) = client
-        .query(sql)
+        .query(&sql)
         .bind(contract_id)
         .bind(contract_id)
         .bind(token_id)
@@ -362,20 +394,26 @@ pub async fn fetch_by_composite(
 }
 
 /// Existence probe for the transfers endpoint's 404-vs-empty disambiguation.
-/// Returns `true` iff `(contract_id, token_id)` exists in `nfts`. No `FINAL`
-/// (existence doesn't care which version), no enrichment / owner resolution.
+/// Returns `true` iff `(contract_id, token_id)` exists in `nfts` **and its
+/// contract currently reads as `Nft`** ([`NFT_VISIBLE`]) — an unclassified
+/// contract's row must 404 like it did when it sat in the quarantine table. No
+/// `FINAL` on `nfts` (existence doesn't care which version), no enrichment /
+/// owner resolution.
 pub async fn nft_exists(
     client: &clickhouse::Client,
     contract_id: &str,
     token_id: &str,
 ) -> Result<bool, clickhouse::error::Error> {
-    let sql = "SELECT 1 \
+    let sql = format!(
+        "SELECT 1 \
                FROM nfts \
                WHERE contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
+                 AND contract_id IN {NFT_VISIBLE} \
                  AND token_id = ? \
-               LIMIT 1";
+               LIMIT 1"
+    );
     let hit = client
-        .query(sql)
+        .query(&sql)
         .bind(contract_id)
         .bind(token_id)
         .fetch_optional::<u8>()
@@ -466,6 +504,7 @@ pub async fn fetch_transfers(
                     no.transaction_id  AS transaction_id \
              FROM nft_ownership no \
              WHERE no.contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
+               AND no.contract_id IN {NFT_VISIBLE} \
                AND no.token_id = ?{cursor_clause} \
              ORDER BY no.ledger_sequence {order}, no.event_order {order} \
              LIMIT 1 BY no.ledger_sequence, no.event_order \
@@ -601,5 +640,164 @@ mod decode_smoke {
         fetch_transfers(&ch, &contract_id, &token_id, None, 5, Direction::Next)
             .await
             .expect("NftTransferChRow must decode");
+    }
+
+    /// Task 0392 — the visibility contract, exercised against real rows.
+    ///
+    /// `nfts` / `nft_ownership` physically hold rows for contracts that are not
+    /// classified `Nft`; every endpoint must behave as if those rows are absent,
+    /// and must start serving them the moment the verdict resolves — with no
+    /// promotion step. Data-driven: both the visible and the hidden contract are
+    /// discovered from whatever the target CH holds, so this runs against a prod
+    /// replica as-is.
+    ///
+    /// The verdict-flip half writes a `soroban_contracts` row, so it runs ONLY
+    /// against a localhost CH; elsewhere the read-only half still runs.
+    #[tokio::test]
+    async fn unclassified_contracts_rows_are_present_but_invisible() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping NFT visibility smoke");
+            return;
+        };
+
+        // A contract whose rows exist in `nfts` but whose verdict is not `Nft`.
+        let hidden: Vec<(String, String)> = ch
+            .query(&format!(
+                "SELECT any(sc.contract_id), any(n.token_id) FROM nfts n \
+                 INNER JOIN (SELECT id, any(contract_id) AS contract_id FROM soroban_contracts \
+                             GROUP BY id) sc ON sc.id = n.contract_id \
+                 WHERE n.contract_id NOT IN {NFT_VISIBLE} \
+                 GROUP BY n.contract_id LIMIT 1"
+            ))
+            .fetch_all::<(String, String)>()
+            .await
+            .expect("hidden probe");
+
+        let Some((hidden_contract, hidden_token)) = hidden.into_iter().next() else {
+            eprintln!("no unclassified NFT rows on this CH — nothing to assert");
+            return;
+        };
+
+        // 1. Every endpoint must treat the row as absent.
+        assert!(
+            !nft_exists(&ch, &hidden_contract, &hidden_token)
+                .await
+                .expect("exists probe"),
+            "unclassified contract must read as non-existent (404), not 200"
+        );
+        assert!(
+            fetch_by_composite(&ch, &hidden_contract, &hidden_token)
+                .await
+                .expect("detail probe")
+                .is_none(),
+            "detail must not serve an unclassified contract's row"
+        );
+        assert!(
+            fetch_transfers(
+                &ch,
+                &hidden_contract,
+                &hidden_token,
+                None,
+                20,
+                Direction::Next
+            )
+            .await
+            .expect("transfers probe")
+            .is_empty(),
+            "transfer history must not leak for an unclassified contract"
+        );
+
+        // 2. The list must not contain it either — checked over a page deep
+        //    enough to cover the whole hot set on a test replica.
+        let params = ResolvedListParams {
+            limit: 5_000,
+            cursor: None,
+            filter_collection: None,
+            filter_contract_id: None,
+            filter_name: None,
+        };
+        let listed = fetch_list(&ch, &params, Direction::Next)
+            .await
+            .expect("list must decode");
+        assert!(
+            !listed.iter().any(|r| r.contract_id == hidden_contract),
+            "list leaked an unclassified contract"
+        );
+
+        // 3. Verdict resolves → the same rows become visible, with nothing moved.
+        let is_local = std::env::var("CH_URL")
+            .map(|u| u.contains("localhost") || u.contains("127.0.0.1"))
+            .unwrap_or(false);
+        if !is_local {
+            eprintln!("CH_URL is not localhost — skipping the verdict-flip half (it writes)");
+            return;
+        }
+
+        let before = ch
+            // nft-visibility-guard: counts PHYSICAL rows on purpose — the whole
+            // assertion is that this number does not change when visibility does.
+            .query(
+                "SELECT count() FROM nfts WHERE contract_id = \
+                 (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1)",
+            )
+            .bind(&hidden_contract)
+            .fetch_one::<u64>()
+            .await
+            .expect("row count before");
+
+        // Classify it: a new `soroban_contracts` row with a higher RMT version.
+        ch.query(
+            "INSERT INTO soroban_contracts \
+             SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger + 1, deployer_id, \
+                    deployed_at_ledger, 2, is_sac \
+             FROM soroban_contracts FINAL WHERE contract_id = ?",
+        )
+        .bind(&hidden_contract)
+        .execute()
+        .await
+        .expect("verdict flip insert");
+
+        assert!(
+            nft_exists(&ch, &hidden_contract, &hidden_token)
+                .await
+                .expect("exists after flip"),
+            "a contract classified Nft must surface its existing rows immediately"
+        );
+        assert!(
+            fetch_by_composite(&ch, &hidden_contract, &hidden_token)
+                .await
+                .expect("detail after flip")
+                .is_some(),
+            "detail must serve the row once the verdict resolves"
+        );
+
+        let after = ch
+            // nft-visibility-guard: counts PHYSICAL rows on purpose — the whole
+            // assertion is that this number does not change when visibility does.
+            .query(
+                "SELECT count() FROM nfts WHERE contract_id = \
+                 (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1)",
+            )
+            .bind(&hidden_contract)
+            .fetch_one::<u64>()
+            .await
+            .expect("row count after");
+        assert_eq!(
+            before, after,
+            "visibility must come from the verdict alone — no row was copied, \
+             promoted, or rewritten"
+        );
+
+        // Restore the original verdict so a re-run starts from the same state.
+        ch.query(
+            "INSERT INTO soroban_contracts \
+             SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger + 1, deployer_id, \
+                    deployed_at_ledger, 1, is_sac \
+             FROM soroban_contracts FINAL WHERE contract_id = ?",
+        )
+        .bind(&hidden_contract)
+        .execute()
+        .await
+        .expect("verdict restore");
     }
 }

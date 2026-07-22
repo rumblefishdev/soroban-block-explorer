@@ -208,28 +208,13 @@ pub struct BalanceRow {
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
 /// = (contract_id, token_id). No surrogate id.
+///
+/// Holds a row for every NFT-shaped candidate whose contract is not *proven*
+/// fungible — including contracts with no verdict yet. Public visibility is a
+/// read-time filter on the contract's current verdict (task 0392), so presence
+/// here is not a claim that the row is an NFT.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct NftRow {
-    pub contract_id: i64,
-    pub token_id: String,
-    pub collection_name: Option<String>,
-    pub name: Option<String>,
-    pub media_url: Option<String>,
-    pub minted_at_ledger: Option<i64>,
-    pub current_owner_id: Option<i64>,
-    pub current_owner_ledger: i64,
-}
-
-/// `nfts_pending` — task 0217 quarantine for NFT-candidate rows whose
-/// contract is still `Other`/NULL-classified. Same shape as
-/// [`NftRow`]; routed via `stage::prepare` based on the per-contract
-/// `wasm_classification` verdict. Promoted to hot `nfts` via the
-/// post-backfill drain runbook
-/// (`docs/runbooks/0217_nfts_pending_migration_and_drain.md`) — CH
-/// has no per-row UPDATE / `WHERE NOT EXISTS` equivalent to PG's
-/// in-tx `promote_pending_nfts_to_hot` step.
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct NftPendingRow {
     pub contract_id: i64,
     pub token_id: String,
     pub collection_name: Option<String>,
@@ -397,22 +382,6 @@ pub struct SorobanInvocationAppearanceRow {
 /// (contract_id, token_id, ledger_sequence, event_order).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct NftOwnershipRow {
-    pub contract_id: i64,
-    pub token_id: String,
-    pub ledger_sequence: i64,
-    pub event_order: i16,
-    pub transaction_id: i64,
-    pub owner_id: Option<i64>,
-    pub event_type: i16,
-}
-
-/// `nft_ownership_pending` — task 0217 quarantine companion to
-/// [`NftOwnershipRow`]. Same row shape + same partitioning as the hot
-/// `nft_ownership` table so promotion (`INSERT … SELECT FROM
-/// nft_ownership_pending`) is a clean part copy. Routed by the same
-/// per-contract classifier verdict as [`NftPendingRow`].
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct NftOwnershipPendingRow {
     pub contract_id: i64,
     pub token_id: String,
     pub ledger_sequence: i64,

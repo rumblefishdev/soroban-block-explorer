@@ -426,14 +426,26 @@ async fn run_nft_metadata(
 }
 
 /// NFT candidate `FROM … WHERE …` per drain mode (see `sep1_base`).
+///
+/// Scoped to VISIBLE NFTs (task 0392): `nfts` holds a row for every NFT-shaped
+/// candidate whose contract is not proven fungible, including contracts with no
+/// verdict yet, and only `contract_type = 2` reaches the API. Enriching the rest
+/// would spend external HTTP/IPFS fetches on tokens nobody can see — and on
+/// contracts that may turn out not to be NFTs at all. A contract classified
+/// later becomes a candidate on the next run, no backfill of its own needed.
+/// Mirrors `api::nfts::queries::NFT_VISIBLE`; keep the two in step.
 fn nft_base(mode: DrainMode) -> &'static str {
     match mode {
         DrainMode::Untried => {
-            "FROM nfts FINAL WHERE 1 = 1 \
+            "FROM nfts FINAL WHERE contract_id IN \
+             (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2) \
              AND (contract_id, token_id) NOT IN \
              (SELECT contract_id, token_id FROM nft_enrichment)"
         }
-        DrainMode::All => "FROM nfts FINAL WHERE 1 = 1",
+        DrainMode::All => {
+            "FROM nfts FINAL WHERE contract_id IN \
+             (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)"
+        }
         DrainMode::Sentinels => {
             "FROM nft_enrichment FINAL \
              WHERE name = '' AND media_url = '' AND collection_name = ''"
@@ -595,7 +607,12 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     let (a_icon_r, a_icon_s) = col(client, "asset_enrichment", "icon_url").await?;
     let (a_name_r, a_name_s) = col(client, "asset_enrichment", "name").await?;
 
-    let n_cand = cnt(client, "SELECT count() FROM nfts FINAL").await?;
+    let n_cand = cnt(
+        client,
+        "SELECT count() FROM nfts FINAL WHERE contract_id IN \
+         (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)",
+    )
+    .await?;
     let n_rows = cnt(client, "SELECT count() FROM nft_enrichment FINAL").await?;
     let (n_name_r, n_name_s) = col(client, "nft_enrichment", "name").await?;
     let (n_media_r, n_media_s) = col(client, "nft_enrichment", "media_url").await?;

@@ -8,8 +8,10 @@
 //! WASM was uploaded in the SAME ledger (the live G1 fix now also resolves the
 //! common cross-ledger case going forward). Historical contracts deployed
 //! before the fix sit at the parser default `Other`, so the whole NFT promotion
-//! machinery (`nft-reclassify`) is a no-op. This pass reconstructs the verdict
-//! for the entire history in one shot.
+//! machinery is a no-op — their NFT rows stay invisible to the read path,
+//! which filters on `contract_type = 2`. This pass reconstructs the verdict
+//! for the entire history in one shot; every row it flips to `Nft` surfaces on
+//! the next read, with no promotion pass (task 0392).
 //!
 //! ## Mechanism (mirrors `repair_tier1` / `asset_aggregates`)
 //!
@@ -31,7 +33,7 @@
 //!
 //! **Operational:** run with the indexer STOPPED — `EXCHANGE` swaps the whole
 //! table, so a concurrent live write between staging-build and swap would be
-//! lost. Must run BEFORE `nft-reclassify` (which reads `contract_type = 2`).
+//! lost.
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
