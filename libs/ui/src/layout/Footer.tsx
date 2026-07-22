@@ -17,10 +17,6 @@ export interface FooterProps {
 
 const RESOURCES: FooterNavItem[] = [
   {
-    label: 'Report an issue',
-    href: 'https://github.com/rumblefishdev/soroban-block-explorer/issues/new',
-  },
-  {
     label: 'GitHub',
     href: 'https://github.com/rumblefishdev/soroban-block-explorer',
   },

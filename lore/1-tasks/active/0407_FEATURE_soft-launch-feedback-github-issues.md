@@ -94,7 +94,19 @@ Prefill safe params only: `template`, and optionally `url` (text field).
 
 ### Emerged
 
-_(fill during implementation)_
+4. **Header, not footer — decision reversed 2026-07-22.** Marketing (Aga)
+   needs one canonical place to point soft-launch users at; footer intake is
+   too easy to miss. New placement copies Voyager: `Report a bug ↗` in the
+   top-right cluster of `SecondaryNav`, separated from the nav tabs by a
+   divider, next to the theme toggle. Footer entry **removed** — one
+   affordance, not two.
+5. **Label `Report a bug`** (Voyager wording), even though the planned issue
+   form also covers wrong-data / suggestions.
+6. **Link is hardcoded in `SecondaryNav`, not a prop** — same convention as
+   `RESOURCES` in `Footer.tsx`; no new prop threading through the app shell.
+7. **Mobile**: the link does not stay inline below `md` (would squeeze the
+   nav row); it renders at the bottom of the hamburger drawer, under a
+   separator.
 
 ## Future Work
 
