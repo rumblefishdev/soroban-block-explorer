@@ -42,16 +42,32 @@ already compile.
 `stellar-xdr` 27.0.0 ships these helper modules. Grep says **zero call sites**
 for all four:
 
-| module                                                                                           | lines | what it gives                                                    | what we do instead                     |
-| ------------------------------------------------------------------------------------------------ | ----- | ---------------------------------------------------------------- | -------------------------------------- |
-| `tx_auths.rs`                                                                                    | 168   | `auths()` over both envelope kinds → `SorobanAuthorizationEntry` | hand-rolled traversal; **caused 0430** |
-| `scval_conversions.rs`                                                                           | 817   | `From`/`TryFrom` between `ScVal` and Rust types                  | our own `scval.rs` (311 lines)         |
-| `str.rs`                                                                                         | 531   | `Display`/`FromStr` for `PublicKey`, `AccountId`, `ContractId`   | scattered manual strkey handling       |
-| `num256.rs`                                                                                      | 54    | `u256_str_from_pieces` / `i256_str_from_pieces`                  | **0380 exists to build exactly this**  |
-| `transaction_conversions.rs`, `account_conversions.rs`, `scmap.rs`, `ledgerkey.rs`, `tx_hash.rs` | —     | not surveyed in detail                                           | unknown                                |
+| module                                                 | lines   | what it gives                                                        | what we do instead                                                                                       |
+| ------------------------------------------------------ | ------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `tx_auths.rs`                                          | 168     | `auths()` over both envelope kinds → `SorobanAuthorizationEntry`     | hand-rolled traversal; **caused 0430**                                                                   |
+| `scval_conversions.rs`                                 | 817     | `From`/`TryFrom` between `ScVal` and Rust types                      | our own `scval.rs` (311 lines)                                                                           |
+| `str.rs`                                               | 531     | `Display`/`FromStr` for `PublicKey`, `AccountId`, `ContractId`       | scattered manual strkey handling                                                                         |
+| `num256.rs`                                            | 54      | `u256_str_from_pieces` / `i256_str_from_pieces`                      | **0380 exists to build exactly this**                                                                    |
+| `tx_hash.rs`                                           | 182     | `TransactionEnvelope::hash(network_id)` for all three envelope kinds | **our own `tx_envelope_hash`** in `envelope.rs` — hand-promotes V0→V1, builds the tagged payload, hashes |
+| `ledgerkey.rs`                                         | 187     | `LedgerEntry::to_key()` / `LedgerEntryData::to_key()`                | hand-built key matching in `ledger_entry_changes.rs`                                                     |
+| `num128.rs`                                            | 26      | `u128`/`i128` ↔ string                                               | `decimal7_string_to_i128` in `stage.rs`, `parse::<i128>` in `api`                                        |
+| `scval_validations.rs`                                 | 180     | `Validate` trait for `ScVal` / `ScMap`                               | none — we do not validate                                                                                |
+| `scmap.rs`                                             | 75      | `ScMap::sorted_from_*` (spec requires sorted maps)                   | unknown                                                                                                  |
+| `transaction_conversions.rs`, `account_conversions.rs` | 96 + 25 | `From` impls between envelope/account types                          | hand-written conversions                                                                                 |
 
-`num256` is the sharpest: task 0380 ("u256/i256 decoded, not raw hex") is queued
-work for a function that already exists upstream.
+Two stand out.
+
+**`tx_hash.rs` is the risky one.** We hand-rolled `tx_envelope_hash`
+(`crates/xdr-parser/src/envelope.rs:111`): it promotes a V0 envelope to V1 field
+by field, constructs `TransactionSignaturePayloadTaggedTransaction`, then
+hashes. The library does exactly this, tested by SDF, for all three envelope
+kinds. This is cryptographically load-bearing code — a transaction hash that
+disagrees with the network is not a cosmetic bug. Note that right next to it
+sits `unmatched_hash()`, a sentinel for "task-0190 unmatched envelope hash",
+i.e. hash-matching failures have already happened in this codebase.
+
+**`num256` is the most wasteful.** Task 0380 ("u256/i256 decoded, not raw hex")
+is queued work for a function that already exists upstream.
 
 ## B. Hand-maintained copies of XDR definitions
 
@@ -96,6 +112,13 @@ envelope shape added.
 
 ## Implementation
 
+- [ ] Put the oracle in its own directory (e.g. `crates/xdr-parser/tests/oracle/`)
+      — separate corpus + harness from the unit tests. Different purpose,
+      different runtime, different reason to fail; mixing them makes both harder
+      to reason about.
+- [ ] Verify `tx_envelope_hash` against `TransactionEnvelope::hash()` on the
+      corpus BEFORE replacing it — if they already disagree anywhere, that is a
+      live bug, not a refactor.
 - [ ] Corpus: N real envelopes pulled via `getTransaction` on Soroban RPC,
       deliberately covering plain v0/v1, fee-bump, per-op source override,
       factory deployment, multi-auth. Store base64 as fixtures (RPC retention is
