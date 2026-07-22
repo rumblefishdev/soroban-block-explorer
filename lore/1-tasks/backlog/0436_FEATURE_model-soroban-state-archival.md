@@ -145,6 +145,18 @@ size now lives in backfill and in the surfacing decision.
       **done 2026-07-22, see the signal audit above.** Restoration arrives and is
       discarded for contracts only; eviction arrives on the meta and is never
       read.
+- [ ] **Filter fix 1 — `state.rs:60`.** `extract_contract_deployments` skips
+      unless `change_type == "created"`. Accept `"restored"` too, matching
+      `state.rs:478` in the same file. Careful: a restored contract must not be
+      attributed a _new_ deployer — the restore carries no deploy authorization,
+      so `deployer_id` should stay whatever it was (or NULL), not be re-derived.
+      Coordinate with 0430, which is rewriting the deployer path.
+- [ ] **Filter fix 2 — `contract.rs:23`.** `Created | Updated` matched, `_ =>
+    continue`. A restored WASM never gets its interface parsed, so the contract
+      stays unclassified. Add `Restored`.
+- [ ] **New read — `evicted_keys`.** Present on `LedgerCloseMetaV1`/`V2`; we
+      never touch it. Decide where it lands before writing the read — this is
+      the only part that needs a new table or column, so question 2 gates it.
 - [ ] Decide the representation (question 2) and record it.
 - [ ] Ingest, with the RMT versioning question (4) answered explicitly.
 - [ ] Backfill the historically archived population — the 54 contracts are the
