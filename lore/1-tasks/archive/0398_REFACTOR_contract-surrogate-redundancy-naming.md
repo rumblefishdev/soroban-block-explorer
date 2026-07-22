@@ -2,7 +2,7 @@
 id: '0398'
 title: 'Data-model hygiene: contract-surrogate redundancy + assets.contract_id/soroban_contracts.contract_id naming collision'
 type: REFACTOR
-status: backlog
+status: completed
 related_adr: ['0032']
 related_tasks: ['0364', '0331', '0359']
 tags:
@@ -40,6 +40,30 @@ history:
       Remaining criterion is the "just document" deliverable: schema comments in
       `init.sql`. Left undone deliberately — it edits a file both queued refactors
       touch, so it should land with them rather than ahead of them.
+  - date: '2026-07-22'
+    status: completed
+    who: karolkow
+    note: >
+      **Closed — investigation-only task, and the investigation is done.** All
+      six criteria now resolved: three by the measurement recorded in the entry
+      above, the fourth by landing the documentation deliverable, and two that
+      were N/A by construction.
+      The deliverable is a NAMING TRAP comment block above
+      `CREATE TABLE soroban_contracts` in `init.sql` — chosen over a doc page
+      because that is the file someone reads while writing the join that the
+      trap breaks. It states the whole finding: `contract_id` is a `String`
+      StrKey in `soroban_contracts` / `soroban_contract_metadata` but an `Int64`
+      surrogate in 11 other tables, so an FK named `contract_id` joins
+      `soroban_contracts.`**`id`**, never `soroban_contracts.contract_id`. Also
+      records that the three-name storage is deliberate (one shared surrogate
+      space) rather than redundancy.
+      No follow-up implementation task spawned, on purpose: the rename is real
+      but costed at 85 call sites in `stage.rs` plus 21 in `crates/api` for zero
+      behaviour change, and 0418 already exists to consolidate exactly this
+      vocabulary while touching the same file. Splitting it into its own task
+      would guarantee a merge conflict with 0414 and 0418.
+      Zero prod impact — the change is a SQL comment; the schema itself is
+      untouched.
 ---
 
 # Data-model hygiene: contract-surrogate redundancy + naming collision
@@ -153,12 +177,17 @@ PR.
       consolidation) — both of which touch the same file and are already queued.
       Better sequencing: fold the rename into 0418, which exists to consolidate
       exactly this kind of vocabulary, rather than doing it standalone here.
-- [ ] If the recommendation is "just document": land the schema comments / doc
-      note in this task. If "rename" or "collapse": spawn a follow-up impl task
-      (this task stays investigation-only).
-- [ ] **Docs updated** — N/A unless a column is renamed → then update
-      `docs/architecture/database-schema/**` per ADR 0032.
-- [ ] **API types regenerated** — N/A (internal surrogate; no API surface).
+- [x] Recommendation was "just document" — schema comment landed in this task:
+      a NAMING TRAP block above `CREATE TABLE soroban_contracts` in
+      `crates/db-clickhouse/schema/init.sql`, stating that `contract_id` is a
+      `String` StrKey there and an `Int64` surrogate everywhere else, that FKs
+      named `contract_id` join `soroban_contracts.id`, and that the rename was
+      costed and deferred to 0418. No follow-up impl task spawned — 0418 already
+      owns that vocabulary work.
+- [x] **Docs updated** — N/A: no column was renamed, so
+      `docs/architecture/database-schema/**` is unaffected. The finding is
+      recorded where it is read — in the schema file itself.
+- [x] **API types regenerated** — N/A (internal surrogate; no API surface).
 
 ## Notes
 

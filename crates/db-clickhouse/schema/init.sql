@@ -210,6 +210,19 @@ FROM accounts FINAL;
 -- `wasm_uploaded_at_ledger` is the version slot; `DEFAULT 0` is the
 -- stub-row sentinel (Pass 2 stub-rowing for referenced-but-not-deployed
 -- contracts in mid-stream backfill ranges).
+-- NAMING TRAP (task 0398) — `contract_id` means two different things:
+--   * HERE (and in `soroban_contract_metadata`) it is a `String`: the real
+--     `C…` StrKey.
+--   * EVERYWHERE ELSE (`assets`, `nfts`, `nft_ownership`, `soroban_events`,
+--     `operations_appearances`, …) it is an `Int64`: the cityhash64 surrogate
+--     OF that StrKey, i.e. the value stored in `soroban_contracts.id`.
+-- So a foreign key named `contract_id` joins `soroban_contracts.id`, NEVER
+-- `soroban_contracts.contract_id`. Same value, three column names, two types
+-- (`sac_contract_id`, `caller_contract_id` are the same surrogate too).
+-- Deliberate one shared surrogate space (`ids::{account,contract,address}_id`
+-- are byte-identical) — not redundancy. Renaming was costed and deferred to
+-- task 0418: the ALTER is metadata-only, but the call sites are 85 in
+-- `stage.rs` + 21 in `crates/api`.
 CREATE TABLE IF NOT EXISTS soroban_contracts (
     id                       Int64,
     contract_id              String,
