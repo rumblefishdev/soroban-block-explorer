@@ -32,6 +32,29 @@ history:
       Both originally deferred at PR time; bundled here because the
       test infrastructure (`#[ignore]` opt-in, real network egress,
       fixture-asset taxonomy) is identical.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Re-scoped after measurement — the tests exist, the gate does not.**
+      Checked during a sweep of the 100 open tasks, where this one first looked
+      closable. It is not: reading the acceptance criteria instead of the
+      summary changed the verdict.
+      DONE: four smoke tests are committed and cover both halves the summary
+      asks for — `smoke_real_sep1_resolves_icon_and_name`,
+      `smoke_ch_sep1_real_and_sentinel` (SEP-1) and
+      `smoke_ch_nft_real_and_sentinel`,
+      `live_mainnet_zero_arg_token_uri_success` (NFT). All carry `#[ignore]`, so
+      the default `cargo test` stays hermetic. They sit inline in `src/` rather
+      than in a `tests/` directory (which does not exist) — accepted as-is.
+      MISSING, and the reason this stays open: **`.github/workflows/live-smoke.yml`
+      does not exist**, so nothing ever triggers them. The task's own framing is
+      "a recurring gate, unlike 0197's one-time snapshot" — without the workflow
+      there is no gate, only tests a human may remember to run. Also absent: the
+      fixture rotation policy (which the Notes call an acceptance gate, not
+      future work) and the cross-reference in
+      `docs/architecture/indexing-pipeline/enrichment.md`.
+      Remaining effort is small and entirely CI + docs; no test-writing left.
 ---
 
 # FEATURE: enrichment live-smoke suite — `#[ignore]` integration tests against real issuers / collections
@@ -206,18 +229,34 @@ failure points immediately at "issuer rotated TOML" vs "code regression".
 
 ## Acceptance Criteria
 
-- [ ] Two `#[ignore]` test files committed under
-      `crates/enrichment-shared/tests/`.
+> **Status 2026-07-22 (measured, not assumed).** The tests themselves exist —
+> someone wrote them and never came back to the task. What is missing is the
+> whole "recurring gate" half: without the workflow, these are tests a human
+> can run, not a gate. See the history entry.
+
+- [x] ~~Two `#[ignore]` test files committed under
+      `crates/enrichment-shared/tests/`~~ — **done differently**: four smoke
+      tests live _inline_ in `src/` (`enrich_and_persist/sep1_assets.rs`,
+      `nft_token_uri.rs`), not in a `tests/` directory, which does not exist.
+      `smoke_real_sep1_resolves_icon_and_name`, `smoke_ch_sep1_real_and_sentinel`,
+      `smoke_ch_nft_real_and_sentinel`, `live_mainnet_zero_arg_token_uri_success`.
+      Accepting the location as-is; splitting them out buys nothing.
 - [ ] Tests pass against the chosen fixture issuer / collection at PR time
-      (run output pasted in PR description).
-- [ ] `cargo test -p enrichment-shared` (without `--ignored`) stays
-      hermetic — no new tests run by default.
-- [ ] `.github/workflows/live-smoke.yml` workflow-dispatch trigger works.
+      (run output pasted in PR description) — **unverified**, they need network
+      and a live ClickHouse, so nobody has evidence they still pass.
+- [x] `cargo test -p enrichment-shared` (without `--ignored`) stays
+      hermetic — no new tests run by default. All four carry `#[ignore]`.
+- [ ] `.github/workflows/live-smoke.yml` workflow-dispatch trigger works —
+      **the file does not exist**. This is the gap that keeps the task open:
+      the point was a recurring gate, and there is nothing to trigger.
 - [ ] Fixture choice + rotation policy documented in each test file
-      header.
+      header — partially: the tests carry `#[ignore = "..."]` reasons and a
+      run command, but no "if this issuer rotates its TOML, fall back to X"
+      policy, which the Notes below call an acceptance gate.
 - [ ] One-line cross-reference added to
       `docs/architecture/indexing-pipeline/enrichment.md` (or current
-      successor doc).
+      successor doc) — **absent**; the file exists but never mentions the smoke
+      tests.
 
 ## Notes
 
