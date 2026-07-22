@@ -2,9 +2,9 @@
 id: '0397'
 title: 'PERF: sep1 enrichment issuer resolve does `accounts FINAL WHERE id=?` — 24M rows/call, 4.5B/6h (one-line fix to bloom seek)'
 type: PERF
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0387']
+related_tasks: ['0395', '0396', '0401', '0403']
 tags: [perf, clickhouse, enrichment, effort-small, priority-medium]
 milestone: 3
 links: []
@@ -21,6 +21,22 @@ history:
     who: karolkow
     note: >
       Activated. Picked up for implementation.
+  - date: 2026-07-22
+    status: completed
+    who: karolkow
+    note: >
+      One SQL statement, 3 files, PR #359. Dropped FINAL so the existing
+      idx_acc_id bloom index seeks: 24.9M -> 24 576 read_rows/call (3 granules,
+      15 ms), 100.22 bn -> ~0.1 bn per 7 days. 87 tests pass, none changed.
+      AC1/AC3 closed; AC2 closed for the query shape (api_reader already runs it
+      in prod, 16k calls/7d at ~21k read_rows) but the deployed worker's own
+      number is deferred to 0403 — deploys are manual. Scope cut 4x mid-task: a
+      devil's-advocate pass found 3 of the 4 "call sites" were #[cfg(test)]
+      readbacks, killing the planned shared resolver + guard test. Five
+      alternatives rejected with numbers. Original figures were stale and the
+      "0387 option C" fallback referenced a deleted task. Four unowned
+      follow-ups recorded, largest being balance_aggregates_mv at 12.5% of
+      cluster reads; notes added to 0395/0401/0403.
 ---
 
 # PERF: sep1 enrichment issuer resolve — `accounts FINAL WHERE id=?`
@@ -109,8 +125,9 @@ account" — contradicted by those 4 accounts.
       already runs it against the same table as `api_reader` — 8 048 + 7 949
       single-key calls over 7 days at **20 711 / 21 097 avg read_rows**, 12–13 ms
       (`system.query_log`). Matches the 24 576 measured for this task's SQL.
-- [ ] The deployed worker's own read_rows/call, post-deploy — needs a drain to
-      appear (bursty: a quiet window shows nothing).
+- [ ] The deployed worker's own read_rows/call, post-deploy **(deferred to 0403)** — deploys here are manual and this needs a drain to appear
+      (bursty: a quiet window shows nothing). 0403 is the established home for
+      "shipped read-swap, correctness/measurement not yet verified in prod".
 - [x] Enrichment output unchanged (issuer StrKey + home_domain identical) — see
       **Why the output cannot differ** below.
 
@@ -145,3 +162,86 @@ demonstrably costs in production for a production user. The size of the win is
 uncertain within that range; that it is a win is not. Worth understanding on its
 own terms, since it means read-cost estimates taken from a readonly account may
 not describe what production executes.
+
+## Implementation Notes
+
+One SQL statement changed, in one file. Three files touched:
+`sep1_assets.rs` (the query + the reasoning comment), `init.sql` (the
+`home_domain` comment), this task file. `cargo check -p enrichment-shared`
+clean, `cargo test -p enrichment-shared` 87 passed / 0 failed / 7 ignored. No
+API-types regen (`crates/api/**` untouched). ADR 0032 docs: **N/A** — the
+architecture docs describe `home_domain`'s cardinality
+(`clickhouse-pilot.md:654`), not its mutability or the query shape. No test
+changed. PR #359.
+
+## Design Decisions
+
+### From Plan
+
+1. **Bloom seek over the alternatives.** The task proposed either the seek or a
+   dictionary. The seek lands at 3 granules — ClickHouse's floor — so nothing
+   below it is reachable; the dictionary would have removed 0.1% of the original
+   cost for ~1 GB resident RAM.
+
+### Emerged
+
+2. **Kept `WHERE id = ?` rather than switching to `IN (?)`.** The task text
+   proposed `IN`. Measured both: identical 24 576 read_rows. Kept `=` for the
+   smaller diff.
+
+3. **Left the three `#[cfg(test)]` sites alone.** They looked like production
+   call sites in a grep. They are ground-truth readbacks where `FINAL` is
+   deliberately correct — repointing them onto shared logic would make them
+   verify that logic against itself.
+
+4. **No shared resolver function, no guard test.** Both were planned and both
+   were dropped once the site count turned out to be one. An abstraction for
+   N=1, and a grep-guard that would have fired on the three legitimate test
+   occurrences on its first run.
+
+5. **AC3 closed by argument + prod data instead of a live-CH run.** The only
+   test covering this path is `#[ignore]`. Rather than leave the AC open, the
+   two ways the shapes could diverge were each checked against prod — see "Why
+   the output cannot differ".
+
+## Issues Encountered
+
+- **The original task's numbers were stale.** 37M physical rows, 187 calls/6h;
+  actual 15.0M / 4 027 calls per 7 days. Merges had run in between. Re-measured
+  rather than trusted.
+
+- **A dangling task reference.** The plan's fallback option pointed at "0387
+  option C". 0387 was deleted and renumbered in `18ba218b` — 0397 is one of its
+  byproducts. The referenced dictionary never existed.
+
+- **Measured with the wrong CH user.** The A/B was run as `dev_read`; the worker
+  runs as `ingestion_writer`, whose reads of the same query differed 8×. Surfaced
+  by a devil's-advocate pass, then closed a different way — by finding the seek
+  shape already running in production under `api_reader` (16k calls / 7d at ~21k
+  read_rows). Recorded above as its own note.
+
+- **Prettier flattens nested bullets under a checkbox** into one run-on
+  paragraph (happened in `fc0b2b9c`, fixed in `d538e7e5` by promoting the
+  evidence to a top-level section).
+
+## Future Work
+
+Surfaced while profiling for this task, **none owned yet** — deliberately not
+spawned as backlog tasks in-session at the operator's request, pending a
+walkthrough of what each one actually is:
+
+1. **`balance_aggregates_mv` amortisation** — 457.5 bn rows / 7d (12.5% of all
+   cluster reads), 4.26 CPU-h/day, 720 full recomputes/day over 90.8M rows to
+   absorb 1.09M changed rows (60 000:1), serving 903 reads/day. Four variants
+   costed; two refuted with data (read-time aggregation: top asset has 30.16M
+   holder rows; aggregate projection: RMT duplication 1.82× inflates the sum).
+2. **The `dev_read` / `ingestion_writer` discrepancy** — read-cost estimates
+   taken from the readonly account may not describe production.
+3. **`ingestion_writer`: `SELECT t.? AS asset_type…`** — 107 317 calls / 7d ×
+   607 839 read_rows ≈ 65 bn.
+4. **`ingestion_writer`: `max(sac_contract_id) … GROUP BY asset_*`** — 65 226 ×
+   411 461 ≈ 27 bn.
+
+Notes added to existing owners rather than new tasks: **0403** (the post-deploy
+measurement for this task), **0395** (`accounts_recent_mv` is 670:1), **0401**
+(45.8 bn / 7d flows through `FINAL` on `lp_positions` / `liquidity_pools`).

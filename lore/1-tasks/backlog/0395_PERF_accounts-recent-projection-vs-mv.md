@@ -48,6 +48,17 @@ not urgent — acclist works today.
   won't help and `accounts_recent` stays. (accounts_recent's whole point was to
   avoid the `accounts FINAL` sort.)
 - Weigh `rebuild`-on-merge cost vs the current 2-min MV recompute + EXCHANGE.
+  **Measured 2026-07-22 (task 0397), the number this task was missing:** the
+  refresh costs **107.2 bn read_rows / 7 days** (5040 runs × 21.3M, 5 781 ms and
+  895 MiB each) to serve **2 163 reads totalling 0.16 bn** — a **670:1**
+  cost-to-use ratio, paid every 2 minutes whether or not anyone reads. The case
+  for the projection is therefore cost, not just "less machinery": a projection
+  is maintained per-part at write time, i.e. O(changed rows). If the projection
+  turns out not to work, **relaxing the interval is the fallback with most of
+  the win** — 2 min → 30 min is −93% for a staleness nobody browsing "recently
+  active accounts" would notice. Note the distinction 0397 drew: an _ordering_
+  projection over an RMT is safe (dedup still resolves at read after the seek),
+  an _aggregate_ projection is not (raw duplicate versions get summed).
 - If projection wins: migrate acclist read off `accounts_recent`, drop the MV +
   table (`mv` to `.trash/`), update docs/architecture per ADR 0032.
 
