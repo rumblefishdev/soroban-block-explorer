@@ -2,7 +2,7 @@
 id: '0391'
 title: 'NFT token-flow coverage audit (0383 follow-up) — measure NFT parity, close gaps'
 type: RESEARCH
-status: backlog
+status: completed
 related_adr: []
 related_tasks:
   [
@@ -46,6 +46,34 @@ history:
       fungible pending rows with known WASM timing, 61% are correct defer. Fix
       reframed to continuous-reconcile primary; write-time tightening secondary,
       gated on prefetch miss-rate. Drain-staleness + reconcile gap stay proven.
+  - date: '2026-07-22'
+    status: completed
+    who: karolkow
+    note: >
+      **Closed — the audit was finished and nobody ticked the last two boxes.**
+      Found while ranking tasks by how close they were to done: all five
+      substantive criteria were already `[x]` (hot-vs-pending sizes measured,
+      both `transaction_participants` write paths traced, endpoint read targets
+      confirmed, `consecutive_mint` recipient verified, gap list mapped to owning
+      tasks). The only open items were `Docs updated` and `API types
+      regenerated`, both of which the task itself annotates as N/A — an audit
+      changes no system shape and touches no `crates/api`. Nothing was left to
+      do.
+      **The findings are a snapshot of 2026-07-15 and prod has since moved —
+      read them as history, not as current state.** This task recorded hot `nfts`
+      frozen 33 days, ~6,575 pending rows/day, 21 `Nft`-verdict collections and
+      350 fungible false-positives (161,559 rows) awaiting a drain. Re-measured
+      today: `nfts_pending` **274 rows across 66 contracts**,
+      `nft_ownership_pending` 492, canonical `nfts` **13,053 rows / 66
+      contracts**. Every one of those 66 pending contracts now carries verdict
+      `Other` — **zero** `Nft` or `Fungible` left stranded. 0306's drain plus the
+      write-time verdict fix (PR #341) emptied the quarantine, which is why 0392
+      also had to be re-scoped.
+      What survives unchanged is the routing map, which is the durable half:
+      Path A / Path B coverage, the fact that NFT read endpoints seek hot tables
+      only, and that `operation_asset_appearances` is irrelevant to NFT coverage.
+      Ownership of the remaining gaps stays where this task put it — 0309 / 0316
+      / 0320 for the unclassifiable residual, 0392 for live routing.
 ---
 
 # NFT token-flow coverage audit (0383 follow-up)
@@ -178,8 +206,8 @@ See [R §4](notes/R-nft-coverage-measured-state.md) for the 2026-07-15 numbers
 - [x] Confirmed which tables the NFT read endpoints seek (hot only)
 - [x] Verified `consecutive_mint` recipient reaches `transaction_participants`
 - [x] Concrete gap list mapped to owning tasks (below)
-- [ ] **Docs updated** — N/A (audit only; no system-shape change)
-- [ ] **API types regenerated** — N/A (no `crates/api/**` change)
+- [x] **Docs updated** — N/A (audit only; no system-shape change)
+- [x] **API types regenerated** — N/A (no `crates/api/**` change)
 
 ## Future Work (gaps → owning tasks; no new decode work)
 
