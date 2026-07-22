@@ -2,9 +2,9 @@
 id: '0115'
 title: 'CI: cdk diff early exit for staging deploy (galexieImageTag blocker)'
 type: FEATURE
-status: backlog
+status: canceled
 related_adr: []
-related_tasks: ['0110']
+related_tasks: ['0110', '0390', '0103']
 tags: [ci, cd, cdk, staging, priority-medium, effort-medium]
 links:
   - .github/workflows/deploy-staging.yml
@@ -13,6 +13,27 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Spawned from lore-0110 PR 2 Phase 0 baseline. CDK deploy is 76% of staging deploy wall-clock (6m 7s avg). cdk diff early exit could save ~5 min on no-op deploys but is blocked by galexieImageTag changing every commit.'
+  - date: '2026-07-22'
+    status: canceled
+    who: karolkow
+    note: >
+      **Canceled via the task's own option 4 / AC3 — the environment it
+      optimizes no longer exists.** Found during a sweep of the 100 open tasks;
+      the oldest ones were written before the ClickHouse pivot and several
+      optimize things that have since been deleted.
+      Evidence, not inference: task 0390 verified **0** `Explorer-staging-*`
+      stacks in us-east-1, and `docs/deployment.md` records production as the
+      only environment with every deploy run manually from a laptop. The very
+      file this task is blocked on — `.github/workflows/deploy-staging.yml` —
+      is being deleted by PR #338 (open since 2026-07-14, MERGEABLE, unreviewed).
+      **Not portable to production, which is why this is a cancel and not a
+      re-scope.** The saving was ~5 min on *no-op* deploys in an
+      automatically-triggered pipeline. Production deploys are manual,
+      infrequent, and by definition never no-ops, so `cdk diff` early-exit has
+      nothing to skip there. The one durable finding — that
+      `-c galexieImageTag=${GITHUB_SHA}` makes `cdk diff` report a change on
+      every commit, including docs-only ones — belongs to whoever builds the
+      production workflow (0103); noted there rather than kept alive here.
 ---
 
 # CI: cdk diff early exit for staging deploy
@@ -40,9 +61,13 @@ is resolved, `cdk diff` can never return "no differences".
 
 ## Acceptance criteria
 
-- [ ] Design decision on galexieImageTag handling documented
+- [x] Design decision on galexieImageTag handling documented — **option 4**:
+      not viable here. The finding itself (SHA-per-commit tag defeats `cdk diff`)
+      is carried over to 0103, which owns the production workflow.
 - [ ] If viable: no-op staging deploy (no code/infra changes) completes in ≤ 2 min
-- [ ] If not viable: task canceled with documented rationale
+      — **N/A**, the staging environment does not exist.
+- [x] If not viable: task canceled with documented rationale — see the
+      2026-07-22 history entry.
 
 ## Context
 
