@@ -2,7 +2,7 @@
 id: '0404'
 title: 'REFACTOR: staging rebuilds stop hand-writing column lists (`SELECT * REPLACE`) — delete the drift surface 0388 was a symptom of; test rebuild_soroban_contracts'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0388', '0394', '0406', '0228', '0379', '0400']
 tags: [priority-medium, effort-small, clickhouse, repair-tier1, robustness]
@@ -79,6 +79,14 @@ history:
       independently by 0232 (all 6 columns) and 0421 (accounts) — and it would retire
       this whole subcommand. This task is worth its (negative) diff regardless, but it
       is **downstream**: do not promote it as the fix for Tier-1 correctness.
+  - date: 2026-07-22
+    status: active
+    who: karolkow
+    note: >
+      Activated for implementation. Scope as re-framed on 2026-07-21: replace the
+      hardcoded column lists in `repair_tier1` with the list-free form the sibling
+      backfills already use, plus the `rebuild_soroban_contracts` test (CH-gated,
+      so effectively verifiable only once 0406 gives CI a ClickHouse service).
 ---
 
 # REFACTOR: staging rebuilds stop hand-writing column lists
