@@ -2,7 +2,7 @@
 id: '0199'
 title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0027', '0031', '0043', '0053']
 related_tasks: ['0125', '0194', '0195', '0247', '0261', '0266']
 tags:
@@ -179,6 +179,31 @@ history:
       rows as drift = 100%, useless noise").
       Also repointed: ADR 0048 (compute-at-read) was renumbered to **0053** — it
       had collided with the accepted Cloudflare ADR on the same id.
+  - date: '2026-07-22'
+    status: active
+    who: karolkow
+    note: >
+      Activated. **Scope pinned before starting, because this task has drifted
+      three times** (June TVL-only cut, then 0247, then 0331): TVL only, read via
+      the `prices.price_usd_series` contract view, compute-at-read with no
+      materialization into `liquidity_pool_snapshots` (ADR 0053 Decision #1).
+      Target surface is the **39,370 of 52,288 pools (75.3%)** measured as having
+      both legs priceable — classic and native. `volume`/`fee_revenue` stay out:
+      they need `gross_volume_a`, and 0247 archived without running its Path-A
+      benchmark after finding the real cost is a result-meta parse `xdr-parser`
+      does not expose. Phase 3 (Soroban-DEX) is out of this pass too — its
+      reserve data landed with 0331, but custom-storage pools
+      (Soroswap/Phoenix/Comet) still need a per-protocol decoder.
+      **Open question to settle with the price owner before writing the read
+      path, not halfway through:** the view last advanced to bucket
+      `2026-07-21 00:00`. If ~1.5-day-stale pricing is the steady state rather
+      than a catch-up artifact, TVL will visibly disagree with other explorers
+      and the staleness has to be surfaced in the API/UI contract rather than
+      hidden. The `no_asset_price`/`no_reference` discriminator already exists
+      for the missing-price case; there is no equivalent for stale-price.
+      Reminder for whoever writes the SQL: key on `asset_kind`, never join raw
+      `prices.assets` on `(asset_code, issuer_address)` — that silently prices
+      native legs off one of its 153 empty-code rows.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
