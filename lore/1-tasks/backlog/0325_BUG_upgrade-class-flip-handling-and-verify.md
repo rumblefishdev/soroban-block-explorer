@@ -4,7 +4,7 @@ title: 'BUG: handle (rare) class flip on WASM upgrade — reclassify + NFT quara
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0320', '0283']
+related_tasks: ['0320', '0283', '0392']
 tags:
   [
     soroban,
@@ -17,6 +17,27 @@ tags:
   ]
 links: []
 history:
+  - date: 2026-07-22
+    status: backlog
+    who: karolkow
+    note: >
+      **Confirmed by code, and the remedy got simpler.** Read while working 0392:
+      `build_wasm_upgrade_rows` (`crates/db-clickhouse/src/persist/stage.rs:253-305`)
+      rewrites `wasm_hash` + the RMT version on upgrade and **carries
+      `contract_type` forward unchanged** — the comment says so outright ("the
+      class never net-changes on upgrade"). So a class flip is not merely
+      unhandled, it is actively overwritten with the pre-upgrade verdict. Also
+      relevant: the live G9 `ClassificationCache` memoizes a decisive verdict for
+      the warm-container lifetime and never re-resolves it
+      (`persist.rs:390-398`), so even a corrected row would not be picked up
+      until the container recycles.
+      **Scope shrinks:** this task's title still says "reclassify + NFT
+      quarantine promote/drop". The quarantine is gone (0392 / ADR 0053) and NFT
+      visibility is derived from the verdict at read time, so there is nothing to
+      promote or drop. What remains is the narrow original bug — make the verdict
+      itself follow the new WASM on upgrade (and invalidate the cache entry) —
+      after verifying the 2-of-4,691 flips are real and not a parse artifact.
+      Everything downstream then corrects itself on the next read.
   - date: 2026-06-24
     status: backlog
     who: karolkow

@@ -4,7 +4,7 @@ title: 'FEATURE: classifier 80/20 — monitored-UNKNOWN + launchpad-NFT discrimi
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0309', '0294', '0308', '0303']
+related_tasks: ['0309', '0294', '0308', '0303', '0392']
 tags:
   [
     parser,
@@ -18,6 +18,27 @@ tags:
   ]
 links: []
 history:
+  - date: 2026-07-22
+    status: backlog
+    who: karolkow
+    note: >
+      **New measured evidence from 0392 — and the framing shifts.** 0392 removed
+      the `nfts_pending` quarantine (ADR 0053), so "drain the pending residual"
+      in this task's title no longer describes a real operation: an unclassified
+      contract's rows now sit in `nfts` and are hidden by a read-time verdict
+      filter. Improving the classifier still has exactly the payoff this task
+      claims — every contract it newly resolves to `Nft` makes its rows visible
+      on the next read, with no migration.
+      The sharper finding, measured on prod 2026-07-21 while checking that:
+      **122 contracts carry an `Nft` verdict but only 66 have any NFT rows at
+      all.** Of the 56 with none, 19 emit real events — 622 in total, including
+      `mint` (46), `uri_upd` (58), `minted` (5), `identity_minted` (5),
+      `transfer` (3) and 470 with no decoded signature. Those rows were never
+      created: the parser does not recognise these shapes, which is the
+      custom-ABI / launchpad gap this task owns. No amount of classifier work
+      surfaces a row that was never written — the parser side is the binding
+      constraint for those 19 collections, and it is invisible to every
+      classification-side metric.
   - date: 2026-06-23
     status: backlog
     who: karolkow

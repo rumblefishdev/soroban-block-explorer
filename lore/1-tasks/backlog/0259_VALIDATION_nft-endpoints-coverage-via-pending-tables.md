@@ -4,7 +4,7 @@ title: 'VALIDATION: NFT endpoints (E15/E16/E17) coverage via `nfts_pending` / `n
 type: VALIDATION
 status: backlog
 related_adr: []
-related_tasks: ['0252', '0228']
+related_tasks: ['0252', '0228', '0392']
 tags: [priority-low, effort-small, layer-validation, nft]
 milestone: 1
 links:
@@ -12,6 +12,26 @@ links:
   - scripts/0252/phase_d_e16.py
   - scripts/0252/phase_d_e17.py
 history:
+  - date: 2026-07-22
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise changed — the blocker named in this task is gone, so the
+      validation is now runnable.** Task 0392 removed `nfts_pending` /
+      `nft_ownership_pending` entirely (ADR 0053): NFT rows are written to the
+      canonical `nfts` / `nft_ownership` and hidden by a read-time filter on the
+      contract's verdict, so there is no promotion step left to wait on. The
+      canonical tables are no longer empty — 13,050 `nfts` rows across 66
+      contracts, 21,597 `nft_ownership` rows (prod, 2026-07-21).
+      What to change when picking this up: the title and body still describe
+      coverage "via pending tables" — rewrite as plain E15/E16/E17 parity against
+      `nfts` / `nft_ownership`. The 49 M / 112 M pending row counts quoted below
+      are from the 2026-05 Hetzner snapshot and no longer exist in any table.
+      One caveat worth asserting while here: the endpoints must return ONLY
+      verdict-`Nft` contracts. That is now a query predicate rather than a table
+      boundary, so a parity run is also the natural place to catch a query that
+      forgot it (the in-repo guard test covers the code path; this would cover
+      the served output).
   - date: '2026-05-25'
     status: backlog
     who: stkrolikiewicz

@@ -3,11 +3,40 @@ id: '0392'
 title: 'NFT pending: continuous live promote/reconcile (drain gap) + optional write-time tightening'
 type: BUG
 status: active
-related_adr: []
+related_adr: ['0053']
 related_tasks: ['0391', '0283', '0217', '0306', '0296']
 tags: [priority-high, effort-medium, layer-indexer, layer-db, nft, clickhouse]
 links: []
 history:
+  - date: 2026-07-22
+    status: active
+    who: karolkow
+    note: >
+      **Design changed, and the change is the fix.** Step 1 was specified as a
+      continuous promote/drop — the live equivalent of `nft-reclassify`. Building
+      it revealed the specification was aimed at the symptom: on the live path a
+      contract's verdict is written only at deploy (`stage.rs:776`) and a WASM
+      upgrade deliberately carries the old verdict forward (`stage.rs:255`), so
+      for the population that is actually stuck (66 contracts, all `Other`) that
+      trigger would fire approximately never.
+      Root cause restated: a **mutable judgement was encoded in immutable
+      physical storage** — which of two tables a row lives in. ClickHouse has no
+      per-row UPDATE, so that guarantees rows must physically move whenever the
+      judgement changes, and something must own the moving. Every variant that
+      keeps the split (event-driven promote, scheduled sweep) keeps that owner.
+      New design: ONE table, visibility as a read-time predicate on the
+      contract's current verdict. Quarantine tables, `nft-reclassify`, and the
+      promote/drop concept are deleted. A verdict resolving to `Nft` — live or
+      via `contract-type-rebuild` — surfaces that contract's rows on the next
+      read, with nothing to promote and nothing to schedule. Recorded as
+      [ADR 0053](../../../2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md),
+      superseding ADR 0046.
+      Shipped this session: read-side filter + build-failing guard test, write-side
+      collapse to two buckets, both tables out of `init.sql`, `nft-reclassify`
+      deleted, docs + runbooks retired. −710 / +257 lines across 15 files. Full
+      workspace green; the routing e2e re-run against a real CH 26.3 in docker.
+      NOT yet done: the prod sequence (deploy API → merge rows → deploy indexer →
+      re-merge → DROP TABLE), which needs per-step approval.
   - date: 2026-07-21
     status: active
     who: karolkow
@@ -137,14 +166,22 @@ history:
 ## Summary
 
 The `nfts_pending` / `nft_ownership_pending` quarantine (built by **0217**) was
-designed as **defer-then-promote**, but only the _defer_ half runs live — the
-_promote/drop_ half exists exclusively as the one-shot backfill
-`backfill-runner nft-reclassify`. As a result pending grows without bound and
-NFT collection/detail pages lag reality. This task makes **reconcile continuous
-on the live path** — promote/drop each contract's pending rows once its verdict
-resolves — **without** mirroring the backfill's brute `ALTER … DELETE` sweep. A
-write-time routing tightening is a _secondary, measurement-gated_ add-on, not the
-primary fix (see Context — most fungible pending is correct defer, not a leak).
+designed as **defer-then-promote**, but only the _defer_ half ever ran live — the
+_promote/drop_ half was specified against Postgres, which was retired in 0244, and
+never reimplemented on ClickHouse. Its only remaining drain was a human running
+`backfill-runner nft-reclassify`, so the NFT surface went 33 days stale.
+
+**Resolution (2026-07-22, [ADR 0053](../../../2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)):
+the split itself is the defect.** Which table a row lives in encoded a _mutable_
+judgement in _immutable_ storage, and ClickHouse has no per-row UPDATE — so
+something always had to move rows, and that something is what kept failing. Both
+tables are gone. All NFT-shaped rows not proven fungible go to `nfts` /
+`nft_ownership`; visibility is a read-time predicate on the contract's current
+verdict. A contract classified later surfaces its rows on the next read, with
+nothing to promote and no job to schedule.
+
+The sections below keep the original framing where it still explains _why_
+unclassified rows must not reach the API; the superseded parts are marked.
 
 Measured on prod (2026-07-15, see [0391 R §4](../0391_RESEARCH_nft-token-flow-coverage-audit/notes/R-nft-coverage-measured-state.md)):
 hot `nfts` frozen at ledger `62,989,407` (**2026-06-12**, last manual drain) for
@@ -181,19 +218,24 @@ _only_ genuinely-unresolved contracts, and reconciles them once resolved.
 
 ## Implementation Plan
 
-### Step 1 (PRIMARY): Continuous reconcile — event-driven, per newly-classified contract
+### Step 1 (PRIMARY): Remove the split — visibility becomes a read-time predicate
 
-- When a contract's verdict first resolves to `Nft`/`Fungible`/`Token` (i.e. its
-  WASM becomes observed / `contract-type-rebuild`-equivalent runs), promote
-  (`Nft` pending→hot) or drop (`Fungible|Token`) **that one contract's** pending
-  rows.
-- Scope to the contract, not a full-table sweep. This is the live equivalent of
-  the `nft-reclassify` promote/drop, triggered by classification, not by cron.
-- Decide the trigger point: at deploy/upgrade when WASM is classified, vs a
-  lightweight scheduled reconcile keyed on `soroban_contracts` verdict changes
-  since last run.
-- This is the reliable fix: it handles the H2 majority (correct-defer rows that
-  no write-time change can catch) as well as the H1 slice.
+**Superseded specification.** This step originally read "continuous reconcile —
+event-driven, per newly-classified contract". That aimed at the symptom; see the
+2026-07-22 history entry and [ADR 0053](../../../2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)
+for why the split itself had to go instead.
+
+- Write every NFT-shaped row whose contract is not _proven_ fungible into
+  `nfts` / `nft_ownership`. Only a decisive `Fungible`/`Token` verdict drops a
+  row at write time — `Other`/unknown keeps it.
+- Decide visibility at read time:
+  `contract_id IN (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)`.
+  One definition (`api::nfts::queries::NFT_VISIBLE`), enforced by
+  `crates/api/tests/nft_visibility_guard.rs` (verified red before green).
+- Drop `nfts_pending` / `nft_ownership_pending`, their row structs, their
+  `INSERT` streams, and the `nft-reclassify` subcommand.
+- Nothing promotes, because nothing moves. A contract classified later — live or
+  by `contract-type-rebuild` — surfaces its existing rows on the next read.
 
 ### Step 2 (SECONDARY, gated): Write-time tightening — gate RESOLVED, fix shipped
 
@@ -226,31 +268,94 @@ _only_ genuinely-unresolved contracts, and reconciles them once resolved.
 
 ## Acceptance Criteria
 
-- [ ] (Step 1, primary) Newly `Nft`-classified contracts' pending rows promote to
-      hot, and `Fungible|Token` pending rows drop, without a manual
-      `nft-reclassify` run — verified: hot `nfts` max ledger tracks the chain tip
-      instead of freezing (re-run R §4a).
-- [ ] (Step 1) Genuinely-unresolved contracts (WASM never observed) still
-      quarantine correctly — pending is not forced to zero.
-- [ ] **`nft-reclassify` is deleted — either way, but only after the replacement
-      is verified working.** Together with its row in `docs/backfills.md` and its
-      entry in `crates/backfill-runner/README.md`. "Either way" means: whether the
-      replacement is Step 1's continuous reconcile or the cheaper
-      resolved-verdict-stuck-in-pending alert, the subcommand goes once that
-      replacement has been _observed_ doing its job on a real contract — not on the
-      strength of an empty quarantine. Deleting it earlier removes the only working
-      drain; keeping it later re-creates the ownerless mop this task exists to end.
+- [x] (Step 1) No resolved verdict can leave rows invisible. Met by construction,
+      not by a job: visibility is derived from the verdict at read time, so the
+      "promotion never ran" failure mode has no step to skip. Asserted in
+      `crates/db-clickhouse/tests/g9_verdict_routing_e2e.rs` against a real CH.
+- [x] (Step 1) Genuinely-unresolved contracts still quarantine — their rows are
+      written but filtered out. The quarantine is the predicate, not a table;
+      pending is not forced to zero, it stops being a place.
+- [x] (Step 1) No live `ALTER … DELETE` mirror of the backfill sweep — there is
+      no live mutation at all.
+- [x] **`nft-reclassify` deleted** together with its `docs/backfills.md` row and
+      its `crates/backfill-runner/README.md` entry. The replacement is not a job
+      that must be observed working: the operation it performed no longer exists.
       Per lore 0425 clause 4.
 - [x] (Step 2 gate) 0283 prefetch miss-rate measured directly — 100% mechanical
       failure (wire-type bug), fix shipped in PR #341
       (notes/R-g9-prefetch-miss-rate-measured.md).
-- [ ] (Step 2, shipped) hot-path latency not regressed (no new query added —
-      satisfied by construction); daily fungible-verdict pending intake drop
-      measured post-deploy (re-run the R §4c split).
-- [ ] **Docs updated** — `docs/architecture/**` ingestion-pipeline + XDR-parsing
-      sections describe the routing + reconcile (per ADR 0032). Update in PR.
-- [ ] **API types regenerated** — N/A unless the fix touches `crates/api/**`
-      (routing/ingest is `crates/db-clickhouse` + `crates/indexer`).
+- [x] (Step 2) Hot-path latency not regressed — no new write-path query. Read
+      path pays the predicate: `/v1/nfts` list 24 ms / 49k read rows → 42 ms /
+      239k, measured on prod 2026-07-21. Recorded in ADR 0053 as the baseline to
+      re-litigate against.
+- [x] **Docs updated** — ADR 0053 (+ 0046 marked superseded), schema overview
+      §4.13.1, `clickhouse-pilot.md` §4c-bis, indexing-pipeline inventory,
+      xdr-parsing classifier note, `docs/backfills.md`, backfill-runner README,
+      and retirement banners on runbooks 0118 / 0217 / 0221 / 0294 (+ partial on
+      0228 and the 2of5 backfill runbook). Per ADR 0032.
+- [x] **API types regenerated** — N/A. `crates/api/**` changed, but only query
+      strings inside existing handlers; no DTO, route, or schema change, so the
+      OpenAPI spec is byte-identical. Verify with
+      `npx nx run @rumblefish/api-types:generate` before the PR and expect no diff.
+- [ ] **Prod sequence executed** (per-step approval, see ADR 0053 § Operational
+      Impact): deploy API → merge 274 + 492 rows → deploy indexer → re-merge →
+      `DROP TABLE`. Step 2 is the point of no return for an API rollback.
+- [ ] (Step 3) Post-deploy: re-run the R §4c intake split and confirm hot `nfts`
+      tracks the chain tip.
+
+## Implementation Notes
+
+Code (−710 / +257 across 15 files):
+
+| Layer                                        | Change                                                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api/src/nfts/queries.rs`                    | `NFT_VISIBLE` + the predicate in 4 queries; `search/queries.rs` in 1                                                                        |
+| `api/tests/nft_visibility_guard.rs`          | new — scans `api/src/**` and fails on a `FROM nfts` / `FROM nft_ownership` without the predicate; second test pins `ContractType::Nft == 2` |
+| `db-clickhouse/persist/stage.rs`             | `NftRoute` 3 buckets → 2 (`Keep`/`Drop`); one dedup map instead of two                                                                      |
+| `db-clickhouse/persist/rows.rs`, `writer.rs` | pending row structs + their two `INSERT` streams removed (18 streaming tables → 16)                                                         |
+| `db-clickhouse/schema/init.sql`              | both tables dropped; object count 31 → 29                                                                                                   |
+| `backfill-runner`                            | `nft_reclassify.rs` → `.trash/`, subcommand unwired, `repair_tier1` down from 12 columns × 5 tables to 9 × 4                                |
+
+Verification: full workspace suite green (38 test binaries, 0 failures); clippy
+and fmt clean; `g9_verdict_routing_e2e` re-run against ClickHouse 26.3 in docker
+with the new `init.sql`, asserting `Fungible` → dropped, `Nft` → written,
+unknown → written **and** filtered out by the API's own predicate.
+
+## Design Decisions
+
+### From Plan
+
+1. **Do not mirror `nft_reclassify`'s `ALTER … DELETE` on the live path.** Held
+   — there is no live mutation at all now.
+2. **A never-seen contract must still be able to quarantine.** Held — its rows
+   are written and invisible, which is the same observable behaviour.
+
+### Emerged
+
+3. **Replaced the split instead of automating the promotion.** Not what the task
+   specified. Justified in ADR 0053; the deciding measurement is that the live
+   verdict-resolution trigger would never fire for the stuck population.
+4. **Guard test in the repo rather than a ClickHouse view.** A view would have to
+   shadow the `nfts` name to protect unchanged code, which renames a live table,
+   hides the predicate from readers, and freezes `FINAL` for every caller (worth
+   up to 19× read amplification, task 0420). Rejected in review by the user.
+5. **Kept `FINAL` in the predicate at +14 ms.** Without it, visibility means
+   "some version read as `Nft`" — correct only while nothing downgrades a
+   verdict. True today, not worth making load-bearing.
+6. **Rewrote three routing tests instead of deleting them.** The contract they
+   assert changed (`..._to_pending_bucket` → `..._keeps_..._row`); they still
+   pin the same property — an unresolved contract's data is not discarded.
+7. **Runbooks retired with a banner, not deleted.** They record operations that
+   actually ran on prod; left as-is they would be a trap, deleted they would lose
+   the history.
+
+## Future Work
+
+- Prod execution sequence (above) — not code, needs per-step approval.
+- 19 contracts carry an `Nft` verdict and emit `mint`/`transfer` yet have no rows
+  in any table — the parser never produced them. Evidence added to **0317**.
+- A WASM upgrade that changes a contract's class is still silently ignored
+  (`stage.rs:255` carries the verdict forward). Evidence added to **0325**.
 
 ## Notes
 
