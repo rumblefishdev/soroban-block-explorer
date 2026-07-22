@@ -105,15 +105,33 @@ account" — contradicted by those 4 accounts.
 ## Acceptance Criteria
 
 - [x] `sep1_assets.rs` issuer resolve no longer uses `accounts FINAL WHERE id=?`.
-- [ ] Measured read_rows/call drops from ~24.9M to ~24.6k, verified via
-      `system.query_log` after a drain (bursty — a quiet window shows nothing).
-- [ ] Enrichment output unchanged (issuer StrKey + home_domain identical).
+- [x] Seek shape verified cheap on prod **independently of my own A/B**: the API
+      already runs it against the same table as `api_reader` — 8 048 + 7 949
+      single-key calls over 7 days at **20 711 / 21 097 avg read_rows**, 12–13 ms
+      (`system.query_log`). Matches the 24 576 measured for this task's SQL.
+- [ ] The deployed worker's own read_rows/call, post-deploy — needs a drain to
+      appear (bursty: a quiet window shows nothing).
+- [x] Enrichment output unchanged (issuer StrKey + home_domain identical).
+      Established from the code plus two prod checks, not from a live-CH run
+      (the only test covering this path is `#[ignore]`): - **Same row selected.** `FINAL` collapses the RMT by its sort key
+      (`account_id`) keeping `max(last_seen_ledger)`; the seek filters by `id`
+      and takes `max(last_seen_ledger)`. Identical iff `id → account_id` is
+      1:1 — verified: `uniqExact(id) = uniqExact(account_id) = 14 361 780`,
+      i.e. **no hash64 collision** anywhere in the table. - **No ambiguous tiebreak.** The only way the two could diverge is two
+      versions sharing the top `last_seen_ledger` with different
+      `home_domain`. All 4 prod accounts carrying >1 `home_domain` have
+      pairwise-distinct `last_seen_ledger` — the max is unique in every case. - **Missing issuer** is unchanged by construction: both shapes return 0
+      rows, `fetch_optional` yields `None`, the sentinel path runs.
 
-## Open before deploy
+## Note on the dev_read / ingestion_writer gap
 
-The same query, same id, same part count measured **1.91M rows / 176 granules as
-`dev_read` but 16.68M / 1838 as `ingestion_writer`** (the worker's user), cause
-unexplained. The seek A/B above was run as `dev_read` only — I have no
-`ingestion_writer` credentials. If the gap comes from that profile, the fix
-could land flat. Re-run the seek as `ingestion_writer`, or accept that a flat
-AC2 means the profile is the problem, not the SQL.
+The OLD query, same id, same part count, measured **1.91M rows / 176 granules as
+`dev_read` but 16.68M / 1838 as `ingestion_writer`** (the worker's user). Cause
+not established, and I have no `ingestion_writer` credentials to isolate it.
+
+It does not threaten this fix. The gap sits _inside_ the `FINAL` case — both
+ends of it (1.91M and 16.68M) are 80–700× worse than the ~21k the seek shape
+demonstrably costs in production for a production user. The size of the win is
+uncertain within that range; that it is a win is not. Worth understanding on its
+own terms, since it means read-cost estimates taken from a readonly account may
+not describe what production executes.
