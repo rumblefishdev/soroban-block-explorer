@@ -1,6 +1,6 @@
 ---
 id: '0407'
-title: 'FEATURE: soft-launch feedback — footer "Report an issue" link → GitHub issue-form template'
+title: 'FEATURE: soft-launch feedback — header "Report a bug" link → GitHub issue-form template'
 type: FEATURE
 status: active
 related_adr: []
@@ -10,6 +10,7 @@ milestone: 3
 links:
   - .github/ISSUE_TEMPLATE/bug_report.yml
   - .github/ISSUE_TEMPLATE/config.yml
+  - libs/ui/src/layout/SecondaryNav.tsx
   - libs/ui/src/layout/Footer.tsx
 history:
   - date: 2026-07-17
@@ -25,16 +26,25 @@ history:
       stellarchain has nothing); dev-tools converge on
       issues/new?template=<form>.yml with a structured .yml issue form and
       blank_issues_enabled:false (Zed, n8n, Vercel, 11/12 surveyed).
+  - date: 2026-07-22
+    status: active
+    who: karolkow
+    note: >
+      Placement reversed footer -> header after marketing (Aga) asked for
+      one canonical destination to point soft-launch users at, citing
+      Voyager's separated top-right "Report a bug". Footer entry removed —
+      one affordance, not two. Shipped as 09acbbd2 + e16fb0a1 (drawer
+      sizing). The issue form + user-facing guide are still open.
 ---
 
-# FEATURE: soft-launch feedback — footer "Report an issue" → GitHub Issues
+# FEATURE: soft-launch feedback — header "Report a bug" → GitHub Issues
 
 ## Summary
 
 Give the first soft-launch users a one-click path to report bugs, routed to
 the project's public GitHub Issues. Add a structured issue-form template so
 reports arrive with the context we need (page URL, what happened, expected),
-and a footer link that opens it prefilled.
+and a header link that opens it.
 
 ## Context
 
@@ -49,9 +59,9 @@ and it lands on a blank free-text issue with no context.
 - **Destination: GitHub Issues** (not Discussions, not own backend/widget).
   Audience is Stellar/Soroban devs who already have GitHub; a public tracker
   also signals building-in-the-open. Zero backend, zero new dependency.
-- **Placement: footer** (user's explicit choice over a header element). Matches
-  every explorer convention; lower discoverability than a header chip is the
-  accepted trade-off.
+- **Placement: header** — originally the footer (user's explicit choice), then
+  reversed on 2026-07-22 at marketing's request; see Emerged decision 4. The
+  footer entry is gone, so there is exactly one affordance.
 
 ## Implementation
 
@@ -65,21 +75,29 @@ and it lands on a blank free-text issue with no context.
      (GitHub docs: permissions required per query param).
 2. **`.github/ISSUE_TEMPLATE/config.yml`** — `blank_issues_enabled: false`;
    `contact_links` → GitHub Discussions for general questions/ideas.
-3. **`libs/ui/src/layout/Footer.tsx`** — add a `Report an issue` entry to
-   `RESOURCES`, href
-   `https://github.com/rumblefishdev/soroban-block-explorer/issues/new?template=bug_report.yml`.
-   Keep the existing `GitHub` (source) link.
+3. **`libs/ui/src/layout/SecondaryNav.tsx`** — `Report a bug ↗` in the
+   top-right cluster, divided from the nav tabs, next to the theme toggle;
+   below `md` it moves into the hamburger drawer. Href
+   `https://github.com/rumblefishdev/soroban-block-explorer/issues/new?template=bug_report.yml`
+   once the form exists (today: bare `issues/new`).
+   **`libs/ui/src/layout/Footer.tsx`** — the `Report an issue` entry is
+   removed; the `GitHub` (source) link stays.
 
 Prefill safe params only: `template`, and optionally `url` (text field).
 `dropdown` prefill is not supported by GitHub — leave type unset.
 
 ## Acceptance Criteria
 
-- [ ] Footer shows a `Report an issue` link opening the bug-report form
+- [x] Header shows a `Report a bug` link, separated from the nav tabs
+      (`09acbbd2`); drawer variant matches its neighbours' sizing (`e16fb0a1`)
 - [ ] `bug_report.yml` renders as a form; auto-applies `soft-launch` label
-- [ ] `config.yml` disables blank issues; general questions routed to Discussions
-- [ ] Existing `GitHub` (source) footer link preserved
-- [ ] FE tests / typecheck green
+- [ ] `config.yml` disables blank issues; general questions routed elsewhere
+      — **not Discussions**: they are disabled on the repo (verified
+      `gh repo view`), so pick another contact link
+- [ ] Header href carries `?template=bug_report.yml` once the form is on the
+      default branch (GitHub reads templates from `master` only)
+- [ ] User-facing guide on how to file an issue (asked for on Slack)
+- [x] FE tests / typecheck / lint green (pre-commit hooks on both commits)
 
 ## Design Decisions
 
@@ -88,7 +106,8 @@ Prefill safe params only: `template`, and optionally `url` (text field).
 1. **Issues over Discussions on intake**: user chose Issues — reports land
    directly in the tracker (accepting some low-value noise) rather than a
    triage buffer.
-2. **Footer over header**: user's explicit choice.
+2. **Footer over header**: user's explicit choice — **superseded**, see
+   Emerged decision 4.
 3. **Labels in yml, not URL query**: `?labels=` 404s for non-collaborators;
    the form template applies labels server-side regardless of who submits.
 
@@ -110,6 +129,6 @@ Prefill safe params only: `template`, and optionally `url` (text field).
 
 ## Future Work
 
-- Per-page "Report an issue" with `&url=<current href>` prefill if footer
-  intake proves too low-signal (would need router context; header/per-page,
-  out of this footer-only scope).
+- Per-page prefill: `&url=<current href>` on the header link so the reporter
+  does not paste the address by hand (needs router context inside
+  `SecondaryNav`, which today takes none).
