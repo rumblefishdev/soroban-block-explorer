@@ -86,13 +86,36 @@ their data) can silently leave current state, then:
 - any completeness audit that assumes present-in-events ⇒ present-in-state is
   measuring the wrong invariant
 
-## Investigation
+## CONFIRMED 2026-07-22 — tested against the chain, not against Hubble
 
-- [ ] Confirm or kill the archival hypothesis: take 5 of the 54, query Hubble's
-      `evicted_keys` / `ttl` for their ledger keys. This is the cheapest
-      decisive test and needs no code.
+Hubble needs a Google Cloud account, so I used a cheaper and more direct
+oracle: **`getLedgerEntries` on Soroban RPC asks the chain for CURRENT state**,
+which is exactly the question. Ledger keys built with the official
+`stellar xdr encode --type LedgerKey`, not by hand.
+
+| subject                                                         | result                   |
+| --------------------------------------------------------------- | ------------------------ |
+| positive control — the active factory `CCG5EWFY…`               | **1 entry — found**      |
+| `CDNBVUNN…`, `CDQLDS2M…`, `CC3OMWLR…`, `CCAYZINB…`, `CANL52BI…` | **0 entries — all five** |
+
+The control proves the method works; five of five subjects are absent.
+
+**The inference is airtight because these contracts emitted events.** A contract
+event can only be emitted by a contract that exists. Ours produced 408
+`transfer`, 18 `burn`, 1 `mint`. So they existed, and they are not in current
+state now. Something removed them — which is what archival does.
+
+Note this is independent of RPC's 7-day history retention: `getLedgerEntries`
+reads present state, not history.
+
+## Remaining investigation
+
+- [x] ~~Confirm or kill the archival hypothesis~~ — **confirmed above.** What is
+      still open is the _mechanism_ (TTL expiry vs explicit eviction) and
+      whether any of them were later restored. Hubble's `evicted_keys` /
+      `restored_key` would answer that; RPC cannot, because it only shows now.
 - [ ] If confirmed: decide what we surface. Options range from a `state:
-    archived` flag on the contract page to full TTL tracking. Note the
+  archived` flag on the contract page to full TTL tracking. Note the
       `LedgerEntry::to_key()` helper in `stellar-xdr` (0431) is what maps an
       entry to the key Hubble indexes by.
 - [ ] Independently: fix `is_sac` on stub rows. A `Bool` column cannot express
@@ -105,8 +128,8 @@ their data) can silently leave current state, then:
 
 ## Acceptance Criteria
 
-- [ ] A verdict on the archival hypothesis with evidence from Hubble or raw XDR
-      — not from our own code's comments.
+- [x] A verdict on the archival hypothesis with external evidence — **done
+      2026-07-22 via `getLedgerEntries` with a positive control.**
 - [ ] The 54 contracts are explained: archived, contract-authored, or a parser
       defect. One answer, evidenced.
 - [ ] `is_sac` no longer asserts `false` on stub rows that `asset_sac`
