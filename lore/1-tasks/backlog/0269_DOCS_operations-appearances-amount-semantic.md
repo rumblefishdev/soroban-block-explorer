@@ -33,6 +33,40 @@ history:
       explicitly; future maintainers (including the next Claude
       session) need the divergence documented before reading
       `amount` as a count again.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise refuted by the code and by prod — this task documents a
+      difference that does not exist.** Went to write the docs, checked the
+      indexer first as the task instructs ("derived from the actual code, not
+      from analogy"), and the code says the opposite of the task.
+      `stage.rs` builds `operations_appearances` by aggregating: the rows come
+      from an `op_agg` HashMap keyed by (op_type, source, destination, contract,
+      asset_code, asset_issuer, pool_ids, tx_hash), and each row is written with
+      `application_order: agg.min_apply_order` and **`amount: agg.count`**. That
+      is one row per identity-tuple per transaction carrying a count — i.e.
+      exactly the ADR 0033 / 0037 Postgres semantic the task claims CH does not
+      use. `application_order` is a MIN over the aggregated ops, not a per-op
+      identifier, so its presence in the sort key does not imply one row per op.
+      `soroban_invocations_appearances` is the same shape (`amount` starts at 1
+      and increments).
+      Measured on prod to be sure: **6,531,839,482 rows, of which 385,329,088
+      (5.9%) carry `amount > 1`, max 100, mean 1.3882.** Per op type the split is
+      decisive — offers aggregate almost always (type 3: mean 1.997 over 785M
+      rows; type 12: 1.983; type 21: 1.985), while path payments do not (type 2:
+      1.000; type 13: 1.035).
+      **Why the task got it wrong:** its evidence query filters `WHERE type IN
+      (2, 13)` — the two op types that happen to sit at ~1.0 — and generalises
+      that to the table. The 0261 debugging conclusion ("do not `sum(amount)` to
+      estimate transferred value") is still correct, but for the opposite reason:
+      not because CH stores one row per op, but because `amount` is an operation
+      COUNT in both stores and never a value.
+      Consequence for scope: there is no CH-vs-PG delta to write up. What is
+      worth documenting is the shared aggregate semantic plus the count-not-value
+      trap. Criteria updated; the investigation criterion is closed since this
+      note is its output. Someone who owns the docs should decide the new
+      framing before writing.
 ---
 
 # DOCS: clarify operations_appearances.amount semantics — CH vs PG schema delta
@@ -137,12 +171,25 @@ analogy to ADR 0033.
 
 ## Acceptance Criteria
 
-- [ ] `database-schema-overview.md` updated with CH-vs-PG delta
-      callout for `operations_appearances`.
-- [ ] ADR 0044 amended with the schema-delta subsection.
-- [ ] Memory note `[[ch-26-sql-gotchas]]` includes the gotcha.
-- [ ] Indexer code investigated; `amount` semantics per op_type
-      captured concretely.
+> ⚠ **The premise below is refuted — see the 2026-07-22 history entry.**
+> There is no CH-vs-PG delta to document: ClickHouse uses the _same_
+> aggregate-with-count semantic as ADR 0033. The first three criteria were
+> written to describe a difference that does not exist and must be rewritten
+> before anyone acts on them.
+
+- [ ] ~~`database-schema-overview.md` updated with CH-vs-PG delta callout~~ —
+      **rewrite needed**: document the shared aggregate semantic and the real
+      trap (`amount` is an op _count_, never a value), not a delta.
+- [ ] ~~ADR 0044 amended with the schema-delta subsection~~ — **rewrite
+      needed**, same reason.
+- [ ] Memory note `[[ch-26-sql-gotchas]]` includes the gotcha — still valid,
+      but the gotcha is "`amount` counts operations" rather than "CH differs
+      from PG".
+- [x] Indexer code investigated; `amount` semantics per op_type captured
+      concretely — **done 2026-07-22**, and it is what refuted the premise.
+      Note the paths in "Implementation" are stale: the code lives in
+      `crates/db-clickhouse/src/persist/stage.rs`, not
+      `crates/indexer/src/handler/persist/staging.rs`.
 - [ ] **Docs updated** — covered (this task is docs).
 - [ ] **API types regenerated** — N/A.
 
