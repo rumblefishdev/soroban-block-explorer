@@ -5,7 +5,7 @@
 > neither does `backfill-runner nft-reclassify`. NFT visibility is now a
 > read-time filter on the contract's verdict, so nothing is promoted or
 > drained; a contract's rows surface as soon as it is classified. See
-> [ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md).
+> [ADR 0053](../../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md).
 > Kept as a record of the operations that were actually run on prod.
 
 **Task:** [0294 — SAC labeling + orphan composition](../../lore/1-tasks/active/0294_BUG_sac-labeling-and-orphan-composition/README.md)

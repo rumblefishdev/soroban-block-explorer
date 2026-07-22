@@ -41,7 +41,7 @@ history:
       makes visibility a read-time predicate on the contract's verdict.
 ---
 
-> **Superseded by [ADR 0053](./0053_nft-visibility-as-read-time-verdict-filter.md).**
+> **Superseded by [ADR 0053](./0053_nft-membership-decided-at-write-time-from-wasm.md).**
 > The quarantine tables no longer exist. What remains accurate here is the
 > Context and Alternatives — in particular _why_ rows from unclassified
 > contracts must not reach the API, and why the discrimination cannot happen

@@ -1103,48 +1103,39 @@ Design notes:
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK to
   `transactions` and a direct FK to `nfts`
 
-### 4.13.1 NFT visibility — a read-time verdict filter (task 0392)
+### 4.13.1 NFT membership — decided at write time (task 0392)
 
-`nfts` / `nft_ownership` hold a row for **every** NFT-shaped candidate whose
-contract is not _proven_ fungible — including contracts with no classifier
-verdict yet. Presence in the table is therefore not a claim that the row is an
-NFT. Visibility is decided at read time:
+`nfts` / `nft_ownership` hold rows for contracts classified `Nft` and for nothing
+else. Membership is a claim, and the claim is checked before the row is written —
+there is no quarantine step and no read-time filter.
 
-```sql
-contract_id IN (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)
-```
+Routing (`crates/db-clickhouse/src/persist/stage.rs`, `route_for`):
 
-Write-side routing (`crates/db-clickhouse/src/persist/stage.rs`, `route_for`):
+| Classifier verdict           | Action                                        |
+| ---------------------------- | --------------------------------------------- |
+| `Nft` (2)                    | written                                       |
+| `Fungible` (3) / `Token` (0) | dropped                                       |
+| no decisive verdict          | dropped **and logged**, one line per contract |
 
-| Classifier verdict           | Action                                            |
-| ---------------------------- | ------------------------------------------------- |
-| `Fungible` (3) / `Token` (0) | dropped — never written                           |
-| `Nft` (2)                    | written; visible immediately                      |
-| `Other` (1) / no verdict     | written; **invisible** until the verdict resolves |
+The verdict is read from `soroban_contracts.contract_type`, stamped at deploy by
+the WASM classifier (G1/G9, task 0283). It is not recomputed per row, so it lags
+in two accepted ways: a WASM upgrade carries the old verdict forward (task 0325)
+and a classifier change needs a one-shot `backfill-runner contract-type-rebuild`
+(measured 2026-07-22: ~73 contracts carry a stale `Other` despite a decisive
+WASM).
 
-Only a proven-fungible verdict discards data. An unresolved contract keeps its
-rows because an NFT `transfer` and a fungible `transfer` are byte-identical on
-the wire (`from,to,token_id` vs `from,to,i128`) — only the contract's WASM can
-tell them apart, and it may not be observable at ingest time.
+The no-verdict case is the only one that can lose a real collection, so it is
+never silent: `0392 unclassified NFT-shaped emitter` in the indexer log lists the
+contracts the classifier cannot name. The lookup itself **fails closed** — a
+ClickHouse error aborts the ledger for retry rather than letting rows fall
+through as unclassifiable.
 
-Because visibility is derived rather than stored, a verdict resolving to `Nft`
-— live, or via `backfill-runner contract-type-rebuild` after a classifier
-improvement — surfaces that contract's existing rows on the next read. Nothing
-is promoted, copied, or migrated.
-
-The predicate is defined once, in `api::nfts::queries::NFT_VISIBLE`;
-`crates/api/tests/nft_visibility_guard.rs` fails the build if any query reads
-either table without it. `FINAL` is required — `soroban_contracts` is a
-`ReplacingMergeTree(wasm_uploaded_at_ledger)`, so a non-FINAL read can serve a
-pre-upgrade verdict.
-
-> **Superseded design.** Until task 0392 the `Other`/NULL bucket was routed to
-> dedicated `nfts_pending` / `nft_ownership_pending` tables. That split encoded a
-> mutable judgement in physical row location, and ClickHouse (no per-row UPDATE)
-> had no live promotion path — the only drain was a human running
-> `backfill-runner nft-reclassify`. Both tables, that subcommand, and the
-> 0217 / 0221 / 0294 drain runbooks are gone. Rationale and measurements:
-> [ADR 0053](../../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md),
+> **`nfts_pending` / `nft_ownership_pending` are deprecated, not dropped.**
+> Nothing writes to them since task 0392; they retain their 274 + 492 already-parked
+> rows because ~28 of those 66 contracts are real NFT collections that a better
+> classifier will recognise. The `DROP` belongs to that follow-up (task 0309), not
+> here. Rationale:
+> [ADR 0053](../../../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md),
 > replacing [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
 
 ### 4.14 Liquidity Pools

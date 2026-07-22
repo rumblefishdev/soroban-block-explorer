@@ -283,10 +283,17 @@ Gotchas, all recorded:
 `contract-type-rebuild`, `balance-seed`. Most one-shot ops subcommands take
 `--dry-run`. No separate bins remain.
 
-`nft-reclassify` was removed in lore 0392 together with the `nfts_pending` /
-`nft_ownership_pending` tables it drained: NFT visibility is now a read-time
-filter on the contract's verdict, so there is nothing to promote
-([ADR 0053](../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)).
+`nft-reclassify` was removed in lore 0392. NFT membership is now decided before
+the write — only a contract whose stored verdict is `Nft` produces rows — so
+there is nothing to promote afterwards. The `nfts_pending` /
+`nft_ownership_pending` tables it drained still exist but are **no longer
+written**; they retain already-parked rows until the classifier can name their
+contracts, and the `DROP` belongs to that follow-up (lore 0309)
+([ADR 0053](../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md)).
+
+`contract-type-rebuild` gains weight in exchange: it is what refreshes the stored
+verdict after a classifier change, and one pass currently clears ~73 contracts
+carrying a stale `Other` despite a decisive WASM (measured 2026-07-22).
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
 `upgradeable-backfill` (0327), `nft-reparse` (0296), `soroban-token-flow-backfill`

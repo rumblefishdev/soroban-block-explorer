@@ -4,7 +4,7 @@
 > `nft_ownership_pending` (and `backfill-runner nft-reclassify`) no longer apply:
 > those tables and that subcommand are gone, and NFT visibility is a read-time
 > filter on the contract's verdict
-> ([ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)).
+> ([ADR 0053](../../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md)).
 > The rest of this runbook stands.
 
 **Goal:** Index 2/5 of the Soroban era (~4.6 M ledgers, ~73 partitions,

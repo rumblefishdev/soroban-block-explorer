@@ -151,42 +151,31 @@ denormalization at full Stellar scale.
 The JSONB metadata blob is not carried in the CH copy of `nfts`. PG keeps
 it unchanged.
 
-### 4c-bis. NFT visibility filter — quarantine tables removed (task 0392)
+### 4c-bis. NFT membership — quarantine deprecated (task 0392)
 
-CH once carried a `_pending` quarantine pair mirroring PG's. Both tables were
-removed: visibility is now derived at read time from the contract's verdict
-rather than from which table a row sits in.
+CH carries the `_pending` quarantine pair that PG once mirrored, but **nothing
+writes to it any more**: `nfts` / `nft_ownership` admit only contracts classified
+`Nft`, and the classification is consulted before the write.
 
-Routing (verdict source: `soroban_contracts.contract_type`, `Nullable(Int16)`,
-tracking the `domain::ContractType` enum):
+| Classifier verdict           | Action                          |
+| ---------------------------- | ------------------------------- |
+| `Nft` (2)                    | written                         |
+| `Fungible` (3) / `Token` (0) | dropped                         |
+| no decisive verdict          | dropped and logged per contract |
 
-| Classifier verdict           | Action                                               |
-| ---------------------------- | ---------------------------------------------------- |
-| `Fungible` (3) / `Token` (0) | dropped — never written                              |
-| `Nft` (2)                    | written to `nfts` / `nft_ownership`, visible         |
-| `Other` (1) / NULL           | written to the same tables, **filtered out at read** |
+Verdict source: `soroban_contracts.contract_type` (`FINAL`), stamped at deploy by
+the WASM classifier. The lookup fails closed — routing discards what it cannot
+classify, so an unavailable verdict must abort the ledger rather than silently
+reshape the data.
 
-Read-side predicate (single definition in `api::nfts::queries::NFT_VISIBLE`,
-enforced by `crates/api/tests/nft_visibility_guard.rs`):
+The two tables remain in `init.sql` marked deprecated: they hold rows whose
+contracts a better classifier will recognise (~28 of 66), so dropping them now
+would delete recoverable NFT data. That `DROP` belongs to task 0309.
 
-```sql
-contract_id IN (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)
-```
-
-`FINAL` is required: `soroban_contracts` is a
-`ReplacingMergeTree(wasm_uploaded_at_ledger)`, and a non-FINAL read can serve a
-stale pre-upgrade verdict. Measured on prod 2026-07-21 — the `/v1/nfts` list
-page goes 24 ms / 49k read rows → 42 ms / 239k with the predicate, against
-131k contracts of which 122 carry an `Nft` verdict.
-
-Why the split went away: ClickHouse has no per-row UPDATE, so a physical
-hot/quarantine split needs something to move rows when a verdict resolves. The
-PG-era promotion hook was never reimplemented after task 0244, leaving
-`backfill-runner nft-reclassify` (a human-run one-shot) as the only drain — and
-the hot NFT surface 33 days stale. Deriving visibility instead removes the
-move entirely. Full rationale, alternatives and measurements:
-[ADR 0053](../../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md),
-which supersedes [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
+Full rationale, the rejected read-time-filter and ledger-state variants, and the
+protocol sources behind them:
+[ADR 0053](../../../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md),
+superseding [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
 
 ### 4d. `_sqlx_migrations` dropped
 

@@ -290,12 +290,12 @@ schema on Hetzner. That write includes both:
   `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions`,
   `account_balances_current`)
 
-NFT-candidate rows are written for every contract not _proven_ fungible,
-including unclassified ones; `/v1/nfts*` filters on the contract's current
-verdict at read time, so an unclassified contract's rows stay invisible until
-it is classified — with no promotion step (task 0392,
-[ADR 0053](../../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md);
-the `nfts_pending` / `nft_ownership_pending` quarantine it replaced is gone).
+NFT-candidate rows are written only for contracts whose stored verdict is `Nft`;
+fungible ones are dropped and contracts with no decisive verdict are dropped with
+a log line naming the contract (task 0392,
+[ADR 0053](../../../lore/2-adrs/0053_nft-membership-decided-at-write-time-from-wasm.md)).
+The `nfts_pending` / `nft_ownership_pending` quarantine this replaced is
+deprecated — retained with its existing rows, no longer written.
 
 The full table inventory is in `crates/db-clickhouse/schema/init.sql`.
 
