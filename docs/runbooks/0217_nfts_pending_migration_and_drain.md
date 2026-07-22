@@ -1,5 +1,13 @@
 # Runbook: 0217 — `nfts_pending` initial migration + post-backfill drain
 
+> **RETIRED — task 0392 (2026-07-22).** The `nfts_pending` /
+> `nft_ownership_pending` tables this runbook operates on no longer exist, and
+> neither does `backfill-runner nft-reclassify`. NFT visibility is now a
+> read-time filter on the contract's verdict, so nothing is promoted or
+> drained; a contract's rows surface as soon as it is classified. See
+> [ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md).
+> Kept as a record of the operations that were actually run on prod.
+
 **Task:** [0217 — PG+CH nfts_pending quarantine](../../lore/1-tasks/active/0217_FEATURE_nfts-quarantine-table.md)
 **Targets:** Postgres (`nfts`, `nft_ownership`, `nfts_pending`, `nft_ownership_pending`) + ClickHouse (same set)
 **Idempotent:**

@@ -151,86 +151,42 @@ denormalization at full Stellar scale.
 The JSONB metadata blob is not carried in the CH copy of `nfts`. PG keeps
 it unchanged.
 
-### 4c-bis. `nfts_pending` + `nft_ownership_pending` quarantine (task 0217 + 0220)
+### 4c-bis. NFT visibility filter — quarantine tables removed (task 0392)
 
-CH carries the same `_pending` quarantine pair as PG so the routing
-semantics defined in
-[`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)
-land symmetrically on both writers.
+CH once carried a `_pending` quarantine pair mirroring PG's. Both tables were
+removed: visibility is now derived at read time from the contract's verdict
+rather than from which table a row sits in.
 
-> **Writer parity status:** Task 0217 (PR #180) shipped the CH schema
->
-> - PG writer routing. Task 0220 ships the **CH writer parity** for the
->   routing — `crates/db-clickhouse/src/persist/stage.rs` now reads the
->   per-contract WASM classifier verdict (built alongside
->   `wasm_interface_metadata` staging) and routes NFT-candidate rows
->   into hot vs. pending vs. drop buckets in lockstep with PG.
->
-> **Atomicity asymmetry that remains:** PG runs a promotion hook
-> (`reclassify_contracts_from_wasm` + `promote_pending_nfts_to_hot`)
-> inside the persist tx when an `Other → Nft` transition is observed.
-> CH `ReplacingMergeTree` has no per-row UPDATE, so the CH promotion
-> path is **re-emission on next observation** plus the post-backfill
-> drain runbook for stragglers
-> ([`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md)).
-> In short: PG promotes inline; CH promotes when the contract is
-> observed again with a definitive verdict, with the runbook as the
-> long-tail catch-all.
+Routing (verdict source: `soroban_contracts.contract_type`, `Nullable(Int16)`,
+tracking the `domain::ContractType` enum):
 
-Verdict-based routing (verdict source: `soroban_contracts.contract_type`,
-which is `Nullable(Int16)` and tracks the `domain::ContractType` enum):
+| Classifier verdict           | Action                                               |
+| ---------------------------- | ---------------------------------------------------- |
+| `Fungible` (3) / `Token` (0) | dropped — never written                              |
+| `Nft` (2)                    | written to `nfts` / `nft_ownership`, visible         |
+| `Other` (1) / NULL           | written to the same tables, **filtered out at read** |
 
-| Classifier verdict   | Target tables                            |
-| -------------------- | ---------------------------------------- |
-| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
-| `Fungible` / `Token` | _none_ (filtered out)                    |
-| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
-
-CH-side schema (see [`init.sql`](../../../crates/db-clickhouse/schema/init.sql)):
+Read-side predicate (single definition in `api::nfts::queries::NFT_VISIBLE`,
+enforced by `crates/api/tests/nft_visibility_guard.rs`):
 
 ```sql
-CREATE TABLE IF NOT EXISTS nfts_pending (
-    contract_id           Int64,
-    token_id              String,
-    collection_name       Nullable(String),
-    name                  Nullable(String),
-    media_url             Nullable(String),
-    minted_at_ledger      Nullable(Int64),
-    current_owner_id      Nullable(Int64),
-    current_owner_ledger  Int64 DEFAULT 0
-)
-ENGINE = ReplacingMergeTree(current_owner_ledger)
-ORDER BY (contract_id, token_id);
-
-CREATE TABLE IF NOT EXISTS nft_ownership_pending (
-    contract_id      Int64,
-    token_id         String,
-    ledger_sequence  Int64,
-    event_order      Int16,
-    transaction_id   Int64,
-    owner_id         Nullable(Int64),
-    event_type       Int16
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, token_id, ledger_sequence, event_order);
+contract_id IN (SELECT id FROM soroban_contracts FINAL WHERE contract_type = 2)
 ```
 
-Notes:
+`FINAL` is required: `soroban_contracts` is a
+`ReplacingMergeTree(wasm_uploaded_at_ledger)`, and a non-FINAL read can serve a
+stale pre-upgrade verdict. Measured on prod 2026-07-21 — the `/v1/nfts` list
+page goes 24 ms / 49k read rows → 42 ms / 239k with the predicate, against
+131k contracts of which 122 carry an `Nft` verdict.
 
-- The shape is identical to `nfts` / `nft_ownership`; promotion is a
-  column-projection `INSERT INTO nfts SELECT … FROM nfts_pending`. The
-  partition layout on `nft_ownership_pending` matches `nft_ownership`
-  so promotion can move whole parts cleanly under a future part-level
-  optimization (not done in the pilot — promotion currently uses a
-  row-level INSERT/DELETE pair).
-- API endpoints never read the `_pending` tables.
-- Operational lifecycle (initial migration + post-backfill drain) is
-  documented in
-  [`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md).
-- The architectural decision record for the quarantine pattern
-  (alternatives considered, design rationale, consequences) lives in
-  [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
+Why the split went away: ClickHouse has no per-row UPDATE, so a physical
+hot/quarantine split needs something to move rows when a verdict resolves. The
+PG-era promotion hook was never reimplemented after task 0244, leaving
+`backfill-runner nft-reclassify` (a human-run one-shot) as the only drain — and
+the hot NFT surface 33 days stale. Deriving visibility instead removes the
+move entirely. Full rationale, alternatives and measurements:
+[ADR 0053](../../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md),
+which supersedes [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
 
 ### 4d. `_sqlx_migrations` dropped
 

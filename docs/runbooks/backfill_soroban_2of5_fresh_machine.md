@@ -1,5 +1,12 @@
 # Runbook: Soroban era backfill (2/5 range) on a fresh machine
 
+> **Partly retired — task 0392 (2026-07-22).** Steps touching `nfts_pending` /
+> `nft_ownership_pending` (and `backfill-runner nft-reclassify`) no longer apply:
+> those tables and that subcommand are gone, and NFT visibility is a read-time
+> filter on the contract's verdict
+> ([ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)).
+> The rest of this runbook stands.
+
 **Goal:** Index 2/5 of the Soroban era (~4.6 M ledgers, ~73 partitions,
 ~80 hours) to a local ClickHouse on a clean machine. Ledgers
 `50,457,424` (protocol-20 activation, Feb 20 2024) through `55,103,999`

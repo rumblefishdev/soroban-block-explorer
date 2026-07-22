@@ -1,5 +1,13 @@
 # Runbook: 0221 — CH `nfts_pending` drain (SAC + Fungible leak)
 
+> **RETIRED — task 0392 (2026-07-22).** The `nfts_pending` /
+> `nft_ownership_pending` tables this runbook operates on no longer exist, and
+> neither does `backfill-runner nft-reclassify`. NFT visibility is now a
+> read-time filter on the contract's verdict, so nothing is promoted or
+> drained; a contract's rows surface as soon as it is classified. See
+> [ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md).
+> Kept as a record of the operations that were actually run on prod.
+
 **Task:** [0221 — CH stage routes NFT candidates of pre-classified SAC contracts to nfts_pending](../../lore/1-tasks/backlog/0221_BUG_ch-sac-leaks-into-nfts-pending-no-db-lookup.md)
 **Target:** ClickHouse (`nfts_pending`)
 **Idempotent:** yes — `ALTER TABLE DELETE WHERE …` with `IN (…)` subquery is naturally idempotent; second run deletes 0 rows. `OPTIMIZE TABLE … FINAL` at the end collapses RMT parts.

@@ -147,9 +147,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                          |
-| ------------------------------------------------------- | --------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)        |
+| ------------------------------------------------------- | --------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed` |
 
 **Grey zone:**
 
@@ -157,8 +157,6 @@ swap.
   A concurrently-running indexer that advances `last_seen_ledger` past that stamp
   out-versions the bootstrap rows, leaving `seq=0` skeletons. Degraded, not
   corrupt; re-runnable.
-- **`nft-reclassify`** — uses `ALTER TABLE … DELETE` (not `EXCHANGE`), so a live
-  indexer re-inserts rows the DELETE just removed.
 
 **How to stop it:** see
 [`docs/deployment.md` § Backend Lambdas](deployment.md#backend-lambdas--compute-stack).
@@ -282,8 +280,13 @@ Gotchas, all recorded:
 ## `backfill-runner` reference
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
-`contract-type-rebuild`, `balance-seed`, `nft-reclassify`. Most one-shot ops
-subcommands take `--dry-run`. No separate bins remain.
+`contract-type-rebuild`, `balance-seed`. Most one-shot ops subcommands take
+`--dry-run`. No separate bins remain.
+
+`nft-reclassify` was removed in lore 0392 together with the `nfts_pending` /
+`nft_ownership_pending` tables it drained: NFT visibility is now a read-time
+filter on the contract's verdict, so there is nothing to promote
+([ADR 0053](../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)).
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
 `upgradeable-backfill` (0327), `nft-reparse` (0296), `soroban-token-flow-backfill`

@@ -595,12 +595,14 @@ and no `token_id` is fungible and skipped.
 dropped with a `tracing::warn!` tripwire (not silently), so unhandled future shapes
 surface instead of vanishing. The parser is deliberately permissive here; the
 authoritative NFT-vs-fungible-vs-other decision is the downstream WASM-spec classifier
-(`soroban_contracts.contract_type`): only `Nft`-classified contracts' rows reach the hot
-`nfts`/`nft_ownership` tables, `Fungible`/`Token` are dropped, and `Other`/`NULL` wait in
-the `nfts_pending` quarantine until a later WASM observation reclassifies them. A
-parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefore
-contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
-prod/RPC evidence behind these shapes.)
+(`soroban_contracts.contract_type`): `Fungible`/`Token`-classified contracts' rows are
+dropped at write time, while `Nft` and the still-undecided `Other`/`NULL` are all written
+to `nfts` / `nft_ownership` — and only `Nft` passes the read-time visibility filter
+(task 0392,
+[ADR 0053](../../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md)).
+A parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefore
+invisible until a WASM observation vindicates it, and never surfaces on `/v1/nfts*`.
+(See lore task 0296 for the prod/RPC evidence behind these shapes.)
 
 ### 5.6 Fungible Token Event Decode (`parse_token_event`)
 

@@ -1,10 +1,10 @@
 ---
 id: '0046'
 title: 'Classifier quarantine tables: nfts_pending / nft_ownership_pending'
-status: accepted
+status: superseded
 deciders: [stkrolikiewicz]
-related_tasks: ['0118', '0217']
-related_adrs: ['0027', '0030', '0044']
+related_tasks: ['0118', '0217', '0392']
+related_adrs: ['0027', '0030', '0044', '0053']
 tags:
   [schema, quarantine, nfts, contract-classification, indexer, persist-routing]
 links: []
@@ -26,7 +26,27 @@ history:
       quarantine pattern + WASM-spec-based classifier remain the
       authoritative discrimination layer. Context and Alternative 4
       rewritten to reflect the empirical evidence.
+  - date: 2026-07-22
+    status: superseded
+    who: karolkow
+    by: '0053'
+    note: >
+      Superseded by ADR 0053 (task 0392). The problem statement holds —
+      unclassified rows must not reach `/v1/nfts*` — but the mechanism
+      does not survive the Postgres retirement (task 0244): promotion was
+      specified as an in-transaction PG step, ClickHouse has no per-row
+      UPDATE, and it was never reimplemented. The quarantine's only drain
+      became a human running `backfill-runner nft-reclassify`, leaving the
+      hot NFT surface 33 days stale. 0053 keeps the rows in one table and
+      makes visibility a read-time predicate on the contract's verdict.
 ---
+
+> **Superseded by [ADR 0053](./0053_nft-visibility-as-read-time-verdict-filter.md).**
+> The quarantine tables no longer exist. What remains accurate here is the
+> Context and Alternatives — in particular _why_ rows from unclassified
+> contracts must not reach the API, and why the discrimination cannot happen
+> in the parser. What did not survive: the promotion mechanism below is
+> Postgres-shaped, and Postgres was retired in task 0244.
 
 # ADR 0046: Classifier quarantine tables for NFT-candidate rows
 

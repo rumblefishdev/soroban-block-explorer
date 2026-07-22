@@ -1,5 +1,13 @@
 # Runbook: 0118 Phase 3 — post-backfill NFT false-positive cleanup
 
+> **RETIRED — task 0392 (2026-07-22).** The `nfts_pending` /
+> `nft_ownership_pending` tables this runbook operates on no longer exist, and
+> neither does `backfill-runner nft-reclassify`. NFT visibility is now a
+> read-time filter on the contract's verdict, so nothing is promoted or
+> drained; a contract's rows surface as soon as it is classified. See
+> [ADR 0053](../../lore/2-adrs/0053_nft-visibility-as-read-time-verdict-filter.md).
+> Kept as a record of the operations that were actually run on prod.
+
 **Task:** [0118 — NFT false positives from fungible token transfers](../../lore/1-tasks/blocked/0118_BUG_nft-false-positives-fungible-transfers.md)
 **Targets:** Postgres (`nfts`, `nft_ownership`) + ClickHouse (`nfts`, `nft_ownership`)
 **Idempotent:** yes, both stores
