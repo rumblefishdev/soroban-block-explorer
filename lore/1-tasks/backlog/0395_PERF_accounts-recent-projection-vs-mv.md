@@ -17,6 +17,20 @@ history:
       showed the 0353 "projection refused on RMT (Code 344)" premise is a
       flippable default (deduplicate_merge_projection_mode), not a hard limit.
       accounts_recent (0385) may be a workaround for a non-limitation.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Do this BEFORE 0428 — they are in conflict, noted 2026-07-22.**
+      Premise re-verified on prod: `deduplicate_merge_projection_mode` exists in
+      `system.merge_tree_settings` (default `throw`) on CH 26.3.10.60, so the
+      "projections are refused on RMT" belief from 0353 is indeed a flippable
+      setting, not a hard limitation — 0387's finding holds.
+      **The scheduling point:** 0428 proposes alerting when the `accounts_recent`
+      refresh fails. If this task succeeds, `accounts_recent` and its refresh
+      disappear entirely and there is nothing left to alert on. Building
+      monitoring for machinery that may be deleted is the wrong order, so 0395
+      gates 0428.
 ---
 
 # PERF: accounts_recent — projection vs refreshable-MV table

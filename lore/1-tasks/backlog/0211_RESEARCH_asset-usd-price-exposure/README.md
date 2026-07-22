@@ -30,6 +30,23 @@ history:
       cannot serve a value that changes per-second, so the design pattern
       itself was wrong. This task answers the design before any task ships
       the consumer. Blocked on Oskar's price API contract.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise overtaken — same gate as 0199, 2026-07-22.**
+      This researches how to expose USD prices assuming the price API is a future
+      thing to design against. It is live: the `prices` database sits in the same
+      ClickHouse cluster with 37 tables / 593.6M rows / 122,706 assets and history
+      back to 2024-02-20, plus contract views `price_usd_series` and
+      `current_price_usd` keyed by a structured `asset_kind` (native / credit /
+      contract).
+      The design question left is much narrower than the task: which asset pages
+      surface a price, and how staleness is shown (the view last advanced to
+      bucket 2026-07-21 00:00). Note the trap recorded in 0199: never join raw
+      `prices.assets` on `(asset_code, issuer_address)` — 249 distinct asset_ids
+      share the code 'XLM' and 153 rows carry an empty code, so native legs get
+      priced as an arbitrary asset, silently.
 ---
 
 # RESEARCH: Asset USD price exposure — design (Oskar price API consumer)

@@ -22,6 +22,20 @@ history:
     status: backlog
     who: fmazur
     note: 'Updated: removed Event Interpreter test references. Enrichment deferred.'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise stale — the tests largely exist, 2026-07-22.**
+      Counted in the tree: **890 Rust tests total, 322 in `xdr-parser`, 244 in
+      `api`** — the two areas this task names. They accreted through a year of
+      feature work rather than through this task, which has never been touched.
+      Consequence: `priority-high` + `effort-large` is now misleading and outranks
+      genuinely open work in every sort. What is actually missing is narrower and
+      already owned elsewhere: CI never *runs* the ClickHouse-gated suite (0406)
+      and the API integration tests still need rebuilding on CH fixtures (0360).
+      Re-scope to "identify the remaining coverage gap" or close in favour of
+      those two; do not start from the assumption that there are no tests.
 ---
 
 # Unit and integration tests: XDR parsing, API endpoints

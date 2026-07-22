@@ -19,6 +19,18 @@ history:
       crossed-pool list for path payments + LP ops — but no UI consumes it.
       Capability exists, frontend is agnostic; this surfaces it. Optional
       polish, not launch-blocking.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Still valid — re-checked 2026-07-22, and it survived a false positive.**
+      A grep for `pool_ids` in `web/src` hits three files, which looks like the
+      feature exists. It does not: `operationEntries.ts:56` is a fallback
+      `pool_ids: []` used when no matching light operation is found, and the other
+      two hits are test fixtures. Nothing renders the field.
+      The task's own sentence — "the frontend currently ignores this field
+      entirely" — is still accurate. Recording this so the next sweep does not
+      close it on the strength of the same grep.
 ---
 
 # FEATURE: surface operation pool_ids in transaction detail UI

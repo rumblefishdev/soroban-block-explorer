@@ -23,6 +23,19 @@ history:
       deployed (post task 0241 cutover) and the new parser has chewed
       through some volume of fresh deploys. Spawned as a standalone
       validation task so 0255 can archive cleanly.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Blocked on a missing artifact — checked 2026-07-22.**
+      The task says to *re-run* `compare_e11.py`. That script **is not in the
+      repository and never has been** — `git log --diff-filter=A` across all refs
+      returns nothing for it. It was presumably a local file on whoever ran Phase
+      3 originally.
+      So this cannot be executed as written. Either the script is recovered from
+      its author, or the deployer-mismatch check is re-derived from scratch (in
+      which case it is a new task, not a re-run). Needs an owner decision before
+      it can be scheduled.
 ---
 
 # VALIDATION: Phase 3 — re-run compare_e11.py to confirm deployer mismatch < 0.1 %

@@ -58,6 +58,19 @@ history:
       holder_count STILL present in prod → the code-strip + ALTER DROP + docs are
       the real remaining work. Monitoring AC may now belong to 0331 (owner of
       balance_aggregates_mv) — flagged below.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Half of this task is already done — verified on prod 2026-07-22.**
+      The engine swap it asks for is in place: `wasm_interface_metadata` is
+      already `ReplacingMergeTree`, so that item can be struck.
+      The other half stands and is stronger than the task claims: `assets` holds
+      **361,015 rows of which exactly 25 carry a non-zero `total_supply` and 25 a
+      non-zero `holder_count`**. The live aggregates moved to `balance_aggregates`
+      (fed by a refreshable MV off `balances`), so these two columns are dead
+      weight on every read of the table. Dropping them is the whole remaining
+      scope. Note this is an `ALTER TABLE` on prod, so it needs an ops window.
 ---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
