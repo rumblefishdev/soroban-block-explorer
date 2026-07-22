@@ -145,10 +145,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     first_seen_ledger Int64,
     last_seen_ledger  Int64,
     sequence_number   Int64,
-    -- home_domain: write-once per account, very low cardinality
-    -- globally (mainnet has a handful of unique SEP-1 issuers'
-    -- domains across tens of millions of accounts; the vast majority
-    -- are NULL). LowCardinality dictionary-encodes the few unique
+    -- home_domain: MUTABLE (SET_OPTIONS rewrites it), but rare — 4 of the
+    -- 1.01M prod accounts that carry one have more than one value (measured
+    -- 2026-07-22, task 0397). Any read projecting it MUST take the latest
+    -- version (`ORDER BY last_seen_ledger DESC LIMIT 1`); the bare
+    -- `LIMIT 1 BY id` used where only `account_id` is projected is NOT safe
+    -- here. Very low cardinality globally (mainnet has a handful of unique
+    -- SEP-1 issuers' domains across tens of millions of accounts; the vast
+    -- majority are NULL). LowCardinality dictionary-encodes the few unique
     -- values per block — strong compression on top of default LZ4.
     home_domain       LowCardinality(Nullable(String)),
     -- The table is ORDER BY account_id (StrKey -> id resolves on the PK), but
