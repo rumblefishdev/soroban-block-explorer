@@ -14,6 +14,32 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0364 future work — investigation surfaced while simplifying fetch_by_contract_id.'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Investigation done 2026-07-22 — verdict: document, do not rename; fold the
+      rename into 0418 if it ever happens.**
+      The three-place storage is deliberate, not redundant: `ids.rs` defines
+      `account_id`, `contract_id` and `address_id` with byte-identical bodies and
+      documents them as one shared surrogate space. Keep them as named aliases —
+      they carry intent at the call site and are `#[inline]`, so the distinction
+      costs nothing.
+      The naming collision is real and sharper than the summary said: `contract_id`
+      is `Int64` (surrogate) in 11 tables but `String` (the `C…` StrKey) in
+      `soroban_contracts` and `soroban_contract_metadata`. The trap that bit 0364
+      is therefore that `assets.contract_id` joins `soroban_contracts.id`, **not**
+      `soroban_contracts.contract_id`.
+      Rename was costed and rejected for now: the `ALTER` is metadata-only and
+      trivial (148,440 + 3,850 rows), but the call sites are not — **85 hits in
+      `stage.rs`, 21 in `crates/api`**, plus `init.sql`. A wide mechanical diff
+      through the hottest ingest file, zero behaviour change, and a direct
+      collision with 0414 (split `stage.rs`) and 0418 (asset-vocabulary
+      consolidation), which are already queued against the same file. 0418 is the
+      right home.
+      Remaining criterion is the "just document" deliverable: schema comments in
+      `init.sql`. Left undone deliberately — it edits a file both queued refactors
+      touch, so it should land with them rather than ahead of them.
 ---
 
 # Data-model hygiene: contract-surrogate redundancy + naming collision
@@ -99,13 +125,34 @@ PR.
 
 ## Acceptance Criteria
 
-- [ ] Findings note written: is the 3-place storage redundant or a deliberate
-      shared surrogate space? (expected: deliberate — document, don't drop).
-- [ ] Recommendation on the `ids::` fn trio: collapse vs keep-as-named-aliases,
-      with confirmation no caller depends on them being distinct.
-- [ ] Recommendation on the `contract_id` naming collision: rename vs
-      document-only, with a cost estimate for the rename path (schema + ingest +
-      queries + migration/backfill).
+- [x] Findings note written — **deliberate, not redundant.** `ids.rs:84-107`
+      defines `account_id`, `contract_id` and `address_id` with byte-identical
+      bodies (`hash64(strkey.as_bytes())`), and the doc comment states the intent:
+      "one shared surrogate space; resolve back to a StrKey via `accounts` (G) /
+      `soroban_contracts` (C)". Confirmed against the live schema: the same
+      `cityhash64` value is stored as `contract_id Int64` in 11 tables, plus
+      `sac_contract_id SimpleAggregateFunction(max, Int64)` (`asset_sac`) and
+      `caller_contract_id Nullable(Int64)`. Nothing to drop.
+- [x] Recommendation on the `ids::` fn trio — **keep as named aliases.**
+      Collapsing to one function would erase intent at the call site
+      (`account_id(x)` and `contract_id(x)` say different things about the
+      argument) and buys nothing at runtime: all three are `#[inline]` and
+      compile to the same call. The distinctness is documentation, not dispatch.
+- [x] Recommendation on the naming collision — **document, do not rename.**
+      The collision is real and worse than the summary states: `contract_id` is
+      `Int64` (the surrogate) in 11 tables but `String` (the actual `C…` StrKey)
+      in `soroban_contracts` and `soroban_contract_metadata`. So
+      `assets.contract_id` joins `soroban_contracts.`**`id`**, never
+      `soroban_contracts.contract_id`, despite the identical name.
+      Cost of the rename path, measured: `RENAME COLUMN` itself is cheap
+      (metadata-only on MergeTree; 148,440 and 3,850 rows) — the cost is in the
+      call sites: **85 occurrences in `stage.rs`, 21 in `crates/api`**, plus
+      `init.sql`. That is a wide, purely-mechanical diff across the hottest
+      ingest file, carrying real review risk for zero behaviour change, and it
+      would collide with 0414 (splitting `stage.rs`) and 0418 (asset-vocabulary
+      consolidation) — both of which touch the same file and are already queued.
+      Better sequencing: fold the rename into 0418, which exists to consolidate
+      exactly this kind of vocabulary, rather than doing it standalone here.
 - [ ] If the recommendation is "just document": land the schema comments / doc
       note in this task. If "rename" or "collapse": spawn a follow-up impl task
       (this task stays investigation-only).
