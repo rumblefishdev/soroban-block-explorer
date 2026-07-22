@@ -16,7 +16,7 @@ related_tasks:
     '0197',
     '0199',
   ]
-related_adrs: ['0007', '0022', '0023', '0029', '0032', '0033', '0034', '0048']
+related_adrs: ['0007', '0022', '0023', '0029', '0032', '0033', '0034', '0053']
 tags: [governance, enrichment, schema, indexer, lambda, milestone-2]
 links:
   - docs/audits/2026-04-10-pipeline-data-audit.md
@@ -33,13 +33,13 @@ history:
     status: accepted
     who: stkrolikiewicz
     note: >
-      Proposed amendment: ADR 0048 adds a fourth path (compute-at-read via a
+      Proposed amendment: ADR 0053 adds a fourth path (compute-at-read via a
       local per-asset price join) for the FAST-CHANGE off-chain category on the
       ClickHouse primary store. Rationale #2 here assumes off-chain = rare-change,
       which does not hold for per-second USD prices; on CH there is also no row
       UPDATE (ReplacingMergeTree), so a write-back column is a racy
       read-modify-write. 0043 is unchanged for rare-change off-chain data; see
-      ADR 0048 (status proposed, pending review).
+      ADR 0053 (status proposed, pending review).
 ---
 
 # ADR 0043: How new fields reach the API — indexer column / enrichment Lambda column / runtime fetch (no column)

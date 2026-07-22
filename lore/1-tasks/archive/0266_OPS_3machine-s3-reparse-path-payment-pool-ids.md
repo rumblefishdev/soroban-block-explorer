@@ -46,7 +46,7 @@ history:
       per (pool, ledger) into `liquidity_pool_snapshots`, not just `pool_id` into
       `operations_appearances`. One parse pass, two write targets. Capturing
       gross_volume_a here (even though USD volume/fee stay off until the Prices
-      API, ADR 0048) avoids a second full re-parse of the range later. Default
+      API, ADR 0053) avoids a second full re-parse of the range later. Default
       Option A (scalar) is superseded toward emitting the full pool list per the
       claim-atom extractor.
   - date: '2026-06-10'

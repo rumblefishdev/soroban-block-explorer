@@ -115,7 +115,7 @@ contracts we care about — another mark against the RPC-getter enrichment route
   `contract_name_writes` is ever non-empty). Still live (and harmless, always
   empty) on the Postgres path via `apply_contract_name_writes`.
 - ADR 0049 (the "Family-A lossy-extraction" the hand-off cites) was **deleted**
-  (commit `9ae270d2`); its framing was inlined into spawned tasks. Cite ADR 0048
+  (commit `9ae270d2`); its framing was inlined into spawned tasks. Cite ADR 0053
   (separate side-table per writer) instead.
 
 ## Recommended direction (two-pronged; supersedes the body's RPC-only plan)

@@ -960,7 +960,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 .transpose()?,
             // Asset-A-side trade volume for this (pool, ledger) from claim atoms
             // (0261). `None` when the pool had no trade this ledger. USD volume/
-            // fee_revenue remain read-time (ADR 0048); those columns stay NULL.
+            // fee_revenue remain read-time (ADR 0053); those columns stay NULL.
             gross_volume_a: gross_volume_by_pool.get(&pool_id).copied(),
         });
     }

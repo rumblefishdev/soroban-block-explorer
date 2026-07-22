@@ -1,5 +1,5 @@
 ---
-id: '0048'
+id: '0053'
 title: 'Fast-change off-chain values on ClickHouse: compute-at-read via local price join (amends 0043)'
 status: proposed
 deciders: [stkrolikiewicz]
@@ -7,7 +7,7 @@ related_tasks: ['0199', '0211', '0231', '0247']
 related_adrs: ['0043', '0047', '0029']
 tags: [enrichment, clickhouse, schema, prices, read-path, milestone-2]
 links:
-  - lore/1-tasks/blocked/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md
+  - lore/1-tasks/backlog/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md
 history:
   - date: '2026-06-09'
     status: proposed
@@ -40,13 +40,26 @@ history:
       shipped. Flags an open item for this ADR: live-band ingestion-lambda
       write-back vs the no-version RMT race partially revisits Decision #1 (no
       write-back) for live only — choice open in 0199. Still proposed.
+  - date: '2026-07-22'
+    who: karolkow
+    note: >
+      **Renumbered 0048 → 0053.** This ADR was created 2026-06-09 on an id that
+      `0048_cloudflare-edge-over-aws-waf.md` had already taken on 2026-06-02, so
+      every bare "ADR 0048" in the repo was ambiguous between an edge-security
+      decision and a read-path one. The older claim wins the number: Cloudflare
+      is `accepted`, shipped, cited from `crates/api` and from the external SCF
+      diagram, and an accepted ADR's id is immutable — this one was still
+      `proposed`. 28 references repointed across 13 files (init.sql, stage.rs,
+      2 architecture docs, tasks 0199/0261/0266/0283/0297, ADR 0043). Cloudflare
+      references verified untouched. Status unchanged: still `proposed`, still
+      pending the read-cost measurement + karolkow review.
 ---
 
-# ADR 0048: Fast-change off-chain values on ClickHouse — compute-at-read via local price join
+# ADR 0053: Fast-change off-chain values on ClickHouse — compute-at-read via local price join
 
 **Related:**
 
-- [Task 0199: LP analytics (TVL + volume + fee_revenue)](../1-tasks/blocked/0199_FEATURE_lp-analytics/README.md)
+- [Task 0199: LP analytics (TVL + volume + fee_revenue)](../1-tasks/backlog/0199_FEATURE_lp-analytics/README.md)
 - [Task 0211: Asset USD price exposure](../1-tasks/backlog/0211_RESEARCH_asset-usd-price-exposure/README.md)
 - [Task 0231: CH port of SEP-1 / NFT enrichment](../1-tasks/backlog/0231_FEATURE_clickhouse-sep1-nft-enrichment.md)
 - [Task 0247: LP per-tx amounts / `gross_volume_a` source](../1-tasks/active/0247_RESEARCH_lp-per-tx-amounts-xdr-fetch-viability/README.md)
@@ -112,7 +125,7 @@ inputs).
 from PathPayment `claimedOffers` (on-chain), whose historical backfill (XDR
 re-parse over 273M snapshots) is tracked in task 0247.
 
-> **Update 2026-06-12 (contract finalized — see [S-note](../1-tasks/blocked/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)).**
+> **Update 2026-06-12 (contract finalized — see [S-note](../1-tasks/backlog/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)).**
 > Decision §2 is refined: there is **no local `prices` table and no sync job**.
 > We read the prices service's `prices.*` **named views directly in the same CH
 > cluster**. The asset→quote→USD pivot is **materialized write-time** by prices
@@ -220,4 +233,4 @@ prices.identity_by_contract → natural identity → price_usd_series` (the seri
 
 - [ADR 0043: field-allocation rule](./0043_field-allocation-rule.md)
 - [ADR 0047: ClickHouse as primary API datastore](./0047_clickhouse-primary-api-datastore.md)
-- [Task 0199 note: TVL-only decision + Prices-API contract](../1-tasks/blocked/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)
+- [Task 0199 note: TVL-only decision + Prices-API contract](../1-tasks/backlog/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)

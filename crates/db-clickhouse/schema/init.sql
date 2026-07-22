@@ -810,7 +810,7 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     -- Gross trade volume in asset-A units per (pool, ledger), computed from
     -- path-payment claim atoms (task 0261 extractor; written by the 0266
     -- backfill / 0247 wiring). USD volume/fee stay NULL until the Prices
-    -- API lands (ADR 0048 read-time join).
+    -- API lands (ADR 0053 read-time join).
     gross_volume_a  Nullable(Decimal128(7))
 )
 ENGINE = ReplacingMergeTree

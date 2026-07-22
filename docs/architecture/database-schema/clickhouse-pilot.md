@@ -359,7 +359,7 @@ Highlights:
 Nullable(Decimal128(7))` — per-(pool, ledger) trade volume in asset-A
   units from path-payment claim atoms (derived at ingest by the live
   indexer and, for history, by the 0266 backfill; USD `volume`/`fee_revenue`
-  stay NULL until the Prices API, ADR 0048)
+  stay NULL until the Prices API, ADR 0053)
 - `NUMERIC(28,7)` → `Decimal128(7)`
 - The only `TIMESTAMPTZ` column that survives is
   `ledgers.closed_at`, which becomes `DateTime64(3, 'UTC')`

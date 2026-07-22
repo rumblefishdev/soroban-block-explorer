@@ -421,7 +421,7 @@ pool.
 
 **`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue.
 Query params: `interval` (1h/1d/1w), `from`, `to`. **Launch scope: TVL only**
-(volume / fee_revenue deferred — see §6.11 and [ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).
+(volume / fee_revenue deferred — see §6.11 and [ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).
 
 #### Search
 
@@ -1209,7 +1209,7 @@ CREATE TABLE liquidity_pool_snapshots (
 ) PARTITION BY RANGE (created_at);
 ```
 
-**ClickHouse — USD denomination at read time ([ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).**
+**ClickHouse — USD denomination at read time ([ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).**
 On the ClickHouse primary store ([ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)),
 `tvl` / `volume` / `fee_revenue` are **not** materialized into these rows by a
 write-back worker. Fast-change off-chain values (USD denominations) are computed

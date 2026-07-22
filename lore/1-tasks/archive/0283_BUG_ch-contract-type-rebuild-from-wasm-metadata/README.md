@@ -136,7 +136,7 @@ history:
       ordering upload-before-deploy → nothing accumulates; closed). G5
       (name-clobber) CONFIRMED a real bug via devil's-advocate (PG used a
       column UPDATE, CH whole-row RMT clobbers) — DEFERRED (patch G5a/b or
-      the fundamental name-side-table per ADR 0048). BATCH:
+      the fundamental name-side-table per ADR 0053). BATCH:
       `contract-type-rebuild` built in backfill-runner (staging+EXCHANGE,
       Rust classifier reuse, dry-run, idempotent) with the
       assets-fungible-backfill bundled as its Phase 5; `nft-reclassify`
@@ -175,7 +175,7 @@ history:
       `extract_contract_interfaces` dropping `Restored` (contract.rs:23)
       also defeats the G1 prior-verdict prefetch for TTL-restored WASM —
       medium-high coupling. SENIOR REFRAME of G5: `soroban_contracts.name`
-      is the lone late+partial writer on the identity row; ADR 0048 already
+      is the lone late+partial writer on the identity row; ADR 0053 already
       established "separate table per independent writer" but its blind spot
       is intra-writer two-cadence clobber. contract_type/wasm_hash do NOT
       need splitting (always written as complete rows). G5 options table:
@@ -429,7 +429,7 @@ independently confirmed/refuted by a deep-dive sub-agent.
    anywhere — Soroban tokens expose the name via a `name()` FUNCTION (read by
    simulateTransaction), not a persisted ledger entry, so
    `extract_contract_data_name_writes` can never match. Consequence: contract
-   NAMES are off-ledger → an ENRICHMENT job (RPC `name()`, ADR 0048/0231 family),
+   NAMES are off-ledger → an ENRICHMENT job (RPC `name()`, ADR 0053/0231 family),
    NOT a parser/Family-A fix. **GUARDRAIL SHIPPED (2026-06-15, local/uncommitted):**
    the name-only row in stage.rs now uses `wasm_uploaded_at_ledger = 0` (was
    current ledger) so a real deploy always outversions it → the partial name row
@@ -646,7 +646,7 @@ already hold a `clickhouse::Client` — `writer.rs:72`, `handler/mod.rs:130`).
   confirmed real bug (PG used a column UPDATE; CH whole-row RMT clobbers).
   Options: G5a suppress the same-ledger name-only row (cheap), G5b cross-ledger
   prefetch+merge, or the fundamental fix — move `name` to its own RMT side
-  table joined at read (ADR 0048 pattern), which eliminates the two-writer
+  table joined at read (ADR 0053 pattern), which eliminates the two-writer
   clobber class entirely.*
 - **G9** verdict at event-routing time: lazy in-memory verdict cache
   (5,707 distinct emitting contracts; **~9 cache-misses/day**; never cache
@@ -746,7 +746,7 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
       upload-before-deploy ordering ⇒ nothing accumulates to promote).
       **G5 (name-clobber) DEFERRED** — confirmed real bug (PG column-UPDATE vs
       CH whole-row RMT clobber); patch G5a/b or fundamental name-side-table
-      (ADR 0048). 3rd-Lambda alternative dropped after CTO review. Live-CH
+      (ADR 0053). 3rd-Lambda alternative dropped after CTO review. Live-CH
       integration + prod verification still pending (next 3 AC items).
 - [→] RTT Lambda→Hetzner measured (one probe via mTLS) — **operational, → 0303**.
 - [→] **Inline step instrumented + verified on prod** (per-ledger timing, cache
