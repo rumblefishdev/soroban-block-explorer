@@ -111,17 +111,27 @@ account" — contradicted by those 4 accounts.
       (`system.query_log`). Matches the 24 576 measured for this task's SQL.
 - [ ] The deployed worker's own read_rows/call, post-deploy — needs a drain to
       appear (bursty: a quiet window shows nothing).
-- [x] Enrichment output unchanged (issuer StrKey + home_domain identical).
-      Established from the code plus two prod checks, not from a live-CH run
-      (the only test covering this path is `#[ignore]`): - **Same row selected.** `FINAL` collapses the RMT by its sort key
-      (`account_id`) keeping `max(last_seen_ledger)`; the seek filters by `id`
-      and takes `max(last_seen_ledger)`. Identical iff `id → account_id` is
-      1:1 — verified: `uniqExact(id) = uniqExact(account_id) = 14 361 780`,
-      i.e. **no hash64 collision** anywhere in the table. - **No ambiguous tiebreak.** The only way the two could diverge is two
-      versions sharing the top `last_seen_ledger` with different
-      `home_domain`. All 4 prod accounts carrying >1 `home_domain` have
-      pairwise-distinct `last_seen_ledger` — the max is unique in every case. - **Missing issuer** is unchanged by construction: both shapes return 0
-      rows, `fetch_optional` yields `None`, the sentinel path runs.
+- [x] Enrichment output unchanged (issuer StrKey + home_domain identical) — see
+      **Why the output cannot differ** below.
+
+## Why the output cannot differ
+
+Established from the code plus two prod checks, not from a live-CH run (the only
+test covering this path is `#[ignore]`).
+
+**Same row selected.** `FINAL` collapses the RMT by its sort key (`account_id`)
+keeping `max(last_seen_ledger)`; the seek filters by `id` and takes
+`max(last_seen_ledger)`. These agree iff `id → account_id` is 1:1 — verified:
+`uniqExact(id) = uniqExact(account_id) = 14 361 780`, i.e. **no hash64
+collision** anywhere in the table.
+
+**No ambiguous tiebreak.** The only way the two shapes could diverge is two
+versions sharing the top `last_seen_ledger` with different `home_domain`. All 4
+prod accounts carrying >1 `home_domain` have pairwise-distinct
+`last_seen_ledger` — the max is unique in every case.
+
+**Missing issuer** is unchanged by construction: both shapes return 0 rows,
+`fetch_optional` yields `None`, the sentinel path runs.
 
 ## Note on the dev_read / ingestion_writer gap
 
