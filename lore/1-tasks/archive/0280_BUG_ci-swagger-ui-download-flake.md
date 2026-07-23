@@ -2,7 +2,7 @@
 id: '0280'
 title: 'CI flake: utoipa-swagger-ui downloads Swagger UI zip at build time'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0243']
 tags: ['priority-low', 'effort-small', 'layer-infra']
@@ -12,6 +12,15 @@ history:
     status: backlog
     who: claude
     note: 'Spawned from 0243 — the Rust CI job for PR #248 flaked on the swagger-ui asset download.'
+  - date: 2026-07-23
+    status: active
+    who: karolkow
+    note: >
+      Activated. Verified premise live: utoipa-swagger-ui still "9" (lock 9.0.2),
+      build.rs still downloads v5.17.14.zip from github per build; CI ci.yml:148-149
+      still runs --features swagger-ui. Fix chosen: enable the crate's `vendored`
+      feature — utoipa-swagger-ui-vendored 0.1.2 ships res/v5.17.14.zip (byte-identical
+      version), build.rs takes the CARGO_FEATURE_VENDORED branch first → no network.
 ---
 
 # CI flake: utoipa-swagger-ui downloads Swagger UI zip at build time
