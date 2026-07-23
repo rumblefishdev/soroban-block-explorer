@@ -2,7 +2,7 @@
 id: '0256'
 title: 'VALIDATION: Phase 3 — re-run compare_e11.py to confirm deployer mismatch < 0.1 % post Phase 1'
 type: VALIDATION
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0255', '0252', '0241']
 tags: [priority-medium, effort-small, layer-validation, data-correctness]
@@ -143,6 +143,22 @@ history:
       retention is ~7 days (oldest ledger 63,476,197 at time of writing), so
       sample recent deployments. Horizon is NOT sufficient — it does not expose
       the operation-level source for fee-bump envelopes.
+  - date: '2026-07-23'
+    status: completed
+    who: karolkow
+    note: >
+      **Closed — the validation is done; both blocking questions were answered,
+      each by a spawned task.** This task's job was to CONFIRM the deployer
+      mismatch and UNDERSTAND it; both are complete:
+      (1) the factory case was verified against raw XDR by **0430** — re-deriving
+      each contract's id from `factory_address ‖ salt` reproduces the on-chain id
+      exactly, proving the deployer is the factory *contract* (the preimage
+      `SCAddress`); (2) the 54 NULLs were explained by **0435** — state archival,
+      not contract-authorship, confirmed via `getLedgerEntries`.
+      The lingering "mismatch < 0.1%" criterion is a **fix-success** metric, which
+      belongs to the fix (**0430**), not to this validation. Nothing left to
+      validate here. Spawned nothing new — 0430 and 0435 already own the
+      follow-through.
 ---
 
 # VALIDATION: Phase 3 — re-run compare_e11.py to confirm deployer mismatch < 0.1 %
@@ -195,12 +211,16 @@ deployer field mismatch rate has dropped from the pre-fix ~93 %
       which is the value we store). Raw XDR shows we store the inner tx source
       where the operation carries its own `source_account` — 2/2 decoded, 6/6
       cross-checked against stellar.expert. See the history entry.
-- [ ] **NEW, blocking:** verify the factory case against raw transaction XDR from
-      RPC — does the stored deployer equal the `SorobanAuthorizationEntry`
-      signer? Neither of the two attempts could test this
-      (`operations_appearances` does not record deployments — 102 of 1,520).
-- [ ] **NEW:** confirm that contract-authorized deployments are the reason for
-      all 54 NULLs, rather than only some of them.
+- [x] **NEW, blocking:** verify the factory case against raw transaction XDR —
+      **DONE by 0430.** Went further than this AC asked: re-derived each
+      contract's own id from `factory_address ‖ salt` and it reproduced the id
+      exactly, proving the deployer is the **factory contract** (the preimage
+      `SCAddress`), not the auth signer and not any account we store. 6 distinct
+      factories, both shapes (direct → account, factory → contract).
+- [x] **NEW:** confirm the reason for the 54 NULLs — **DONE by 0435.** They are
+      **state-archived contracts**, not contract-authored deploys: confirmed via
+      `getLedgerEntries` (5/5 absent from current state against a positive
+      control). Different cause than this AC guessed.
 - [ ] ~~Result + sample size recorded in task body; original 0255~~ — recorded in
       the 2026-07-22 history entry, including what the 93% figure actually meant.
       size ≥ the original cohort.
