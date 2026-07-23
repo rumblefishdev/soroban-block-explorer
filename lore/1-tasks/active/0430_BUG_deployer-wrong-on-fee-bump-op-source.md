@@ -2,7 +2,7 @@
 id: '0430'
 title: 'BUG: deployer_id stores the inner-tx source instead of the op source on fee-bump envelopes'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0255', '0256', '0252']
 tags:
@@ -30,6 +30,18 @@ history:
       transaction source — the same value we store — so any comparison against it
       passes trivially. That is exactly how 0256's first pass produced a
       meaningless "30/30 match".
+  - date: '2026-07-23'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Also answered the question "why is the pre-fix data correct while
+      everything after is wrong" — see the new section "The 0255 backfill was a
+      one-off SQL swap, and the boundary is a landmine". Short version: the correct
+      1,565 rows come from a hand-run `EXCHANGE TABLES` migration, not from the
+      parser; they survive only because **no full reindex has re-parsed their
+      ledger range since**, proven from the data (each has exactly one raw row —
+      a reindex would have inserted a second, wrong one). Fixing the parser is now
+      also a prerequisite for ever running a full historical reindex safely.
 ---
 
 # BUG: `deployer_id` is the inner-tx source on fee-bump envelopes
@@ -148,12 +160,63 @@ window).
 - [ ] Regression test with a real fee-bump envelope fixture — the bug is
       invisible to any test built from a plain (non-fee-bump) transaction.
 
+## The 0255 backfill was a one-off SQL swap, and the boundary is a landmine
+
+The obvious question: if a live-parser bug writes wrong deployers, why is
+**everything before 2026-05-12 correct and everything after wrong**? A live bug
+should corrupt going forward, not leave a clean historical band.
+
+Answer, in two parts.
+
+**1. The "correct" old rows are not the parser's work — they are a hand-run SQL
+migration.** 0255 Phase 2 (operator session, 2026-05-22, `stkrolikiewicz`) did
+**not** re-parse XDR. It built a staging table `soroban_contracts_staging_0255`
+by JOINing the correct op-source out of **CH-internal data**
+(`operations_appearances`, which already had the per-op `source_account` for the
+3,020 contracts that carried an explicit override), verified row-count parity
+(live = staging = 321,364), and did an atomic **`EXCHANGE TABLES`** swap. 2,825
+rows corrected. No `backfill-runner` subcommand, no reusable script, no runbook
+(`docs/runbooks/0255_deployer_id_backfill_migration.md` was never written — the
+0255 archive says so explicitly). It is a manual `EXCHANGE TABLES` migration, run
+once. Its own completion note states it "corrects the EXISTING backfill snapshot
+only — it does not preempt future writes."
+
+**2. It survives only because no full reindex has re-parsed that range since — and
+that is fragile.** `soroban_contracts` is `ReplacingMergeTree(wasm_uploaded_at_ledger)`
+and is **unmerged** (duplicate rows persist until a merge that may never come). If
+a full `run --reindex` re-parsed the 50M–62M deployment range with the current
+(still-buggy) parser, it would **insert a second row** per contract carrying the
+wrong deployer at the same `wasm_uploaded_at_ledger` version — an RMT version tie,
+whose winner is non-deterministic. Measured 2026-07-23 to prove this has not
+happened:
+
+- the 1,565 correct (`GCNP4JVZ…`) contracts each have **exactly one raw row**;
+- **zero** of them carry a second row with a different deployer.
+
+A reindex would have left a second row. There is none. So **no full S3
+reindex/reingest has touched the 50M–62M contract-deployment range since the 0255
+swap** — that, and only that, is why the boundary is still clean.
+
+**Consequence that raises this bug's priority:** the hand-fixed history is a
+landmine. The day anyone runs a full historical reindex (0429-class work, a
+schema migration, a disaster-recovery re-ingest) over that range with the parser
+unfixed, the 1,565 correct rows flip to wrong and the boundary is erased in the
+wrong direction. **Fixing the parser is therefore a prerequisite for ever running
+a safe full reindex**, not just a forward-correctness fix. Do the parser fix
+first; only then is a one-shot reindex of the affected range the clean way to
+correct both the post-boundary wrong rows and (harmlessly) re-derive the
+pre-boundary ones.
+
 ## Acceptance Criteria
 
 - [ ] A fee-bump deployment with an op-source override stores the op source.
 - [ ] Verified on ≥10 contracts against raw RPC XDR (NOT Horizon — see history).
 - [ ] Existing wrong rows counted, and either corrected or explicitly deferred
       with a reason.
+- [ ] The correction of history is done by re-parse **after** the parser fix
+      lands — never a reindex before it (that would clobber the 1,565 correct
+      pre-boundary rows). Record the ordering in `docs/backfills.md` if a reindex
+      is scheduled.
 - [ ] Docs updated — `N/A` unless the deployer semantic lands in
       `docs/architecture/**`; the definition itself is recorded in 0256.
 - [ ] API types regenerated — `N/A` (no API surface change; the column already
