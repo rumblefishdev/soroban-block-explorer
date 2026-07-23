@@ -2,7 +2,7 @@
 id: '0280'
 title: 'CI flake: utoipa-swagger-ui downloads Swagger UI zip at build time'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0243']
 tags: ['priority-low', 'effort-small', 'layer-infra']
@@ -21,6 +21,18 @@ history:
       still runs --features swagger-ui. Fix chosen: enable the crate's `vendored`
       feature — utoipa-swagger-ui-vendored 0.1.2 ships res/v5.17.14.zip (byte-identical
       version), build.rs takes the CARGO_FEATURE_VENDORED branch first → no network.
+  - date: 2026-07-23
+    status: completed
+    who: karolkow
+    note: >
+      Fixed in commit 8cbc163d: added `vendored` to the workspace utoipa-swagger-ui
+      dependency features (Cargo.toml +1, Cargo.lock +7 for utoipa-swagger-ui-vendored
+      0.1.2). Verified: (a) offline build exits 0 and logs "using vendored Swagger UI"
+      after a forced build-script re-run — proves zero network fetch; (b) CI cmd
+      `clippy -p api --all-targets --features swagger-ui -- -D warnings` exits 0;
+      (c) OpenAPI spec byte-identical (api-types gate green). Swept repo: no
+      download-era workaround/reference to remove; no other build.rs downloads at
+      build time; prod Lambda build uses default features (never fetched).
 ---
 
 # CI flake: utoipa-swagger-ui downloads Swagger UI zip at build time
@@ -51,24 +63,62 @@ github.com archive endpoints during compile.
 
 ## Implementation
 
-Pick one (rough order of preference):
+Chose **Vendored assets** (option 1, most preferred — hermetic, no network,
+smallest diff). Rejected the mirror (`SWAGGER_UI_DOWNLOAD_URL` → S3) and
+cache+retry options: both stay non-hermetic and add infra/config surface for
+zero benefit over vendoring.
 
-- **Vendored assets** — switch to the `vendored` feature / `utoipa-swagger-ui-vendored`
-  crate so the Swagger UI bundle ships in the dependency, no build-time download.
-  Hermetic, no network. Verify it covers the version we pin (v5.17.14).
-- **Point `SWAGGER_UI_DOWNLOAD_URL` at our own cached/mirrored asset** (S3 / repo
-  LFS / CI cache) so the build never hits github.com archive endpoints.
-- **CI cache + retry** — cache the resolved `target/.../out/*.zip` across runs and
-  wrap the download step in a retry. Cheapest, but still non-hermetic.
+One-line change — add `vendored` to the workspace `utoipa-swagger-ui` feature set:
 
-Confirm the chosen approach leaves `--features swagger-ui` working (prod API
-serves swagger-ui — see `feat/0243-prod-ch-enable-and-swagger`).
+```toml
+# Cargo.toml
+-utoipa-swagger-ui = { version = "9", features = ["axum"] }
++utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+```
+
+`Cargo.lock` gains `utoipa-swagger-ui-vendored 0.1.2` (a build-dependency that
+embeds `res/v5.17.14.zip` via `include_bytes!`). `utoipa-swagger-ui`'s `build.rs`
+checks `CARGO_FEATURE_VENDORED` **first** and returns the embedded bytes before
+ever reaching the github download branch → no build-time network.
 
 ## Acceptance Criteria
 
-- [ ] `cargo clippy -p api --features swagger-ui` and the lambda build run with
-      **no network fetch** of the Swagger UI archive (or a deterministic,
-      retried, cached fetch).
-- [ ] CI Rust job no longer flakes on `InvalidArchive("Could not find EOCD")`.
-- [ ] Swagger UI still renders at the prod API `/api-docs` endpoint (version
-      unchanged unless deliberately bumped).
+- [x] `cargo clippy -p api --features swagger-ui` and the lambda build run with
+      **no network fetch** — proven by an offline build (`--offline`) that exits 0
+      and logs `using vendored Swagger UI` after a forced build-script re-run.
+      (Lambda build uses default features — it never fetched in the first place.)
+- [x] CI Rust job no longer flakes on `InvalidArchive("Could not find EOCD")` —
+      the download branch of `build.rs` is unreachable with `vendored` on.
+- [x] Swagger UI still renders at `/api-docs` — vendored bundle is the
+      **byte-identical** v5.17.14 (`utoipa-swagger-ui-vendored 0.1.2` ships exactly
+      the tag the download URL pointed at). Version unchanged.
+
+## Implementation Notes
+
+- Change committed in `8cbc163d` (Cargo.toml +1/−1, Cargo.lock +7).
+- `vendored` sits on the **workspace-level** dependency declaration, so it applies
+  everywhere `utoipa-swagger-ui` compiles (the api crate's optional `swagger-ui`
+  feature). No per-crate follow-up needed.
+- OpenAPI spec is unaffected — re-extracted `openapi.json` is semantically
+  identical (the `vendored` feature only changes where the UI _asset_ comes from,
+  not any schema/route), so the `API types freshness` CI gate stays green with no
+  regen artifacts to stage.
+- Repo swept for download-era cruft (`SWAGGER_UI_DOWNLOAD_URL`, mirror, retry,
+  cache hacks, stale comments): **none existed** — nobody had built a workaround,
+  so nothing to remove. Only references to the old download live in this task file.
+
+## Design Decisions
+
+### From Plan
+
+1. **Vendored over mirror/retry**: the task listed vendoring as top preference;
+   confirmed it is byte-identical (v5.17.14) so there is zero behavior change,
+   and it is the only fully hermetic option.
+
+### Emerged
+
+2. **No CI/workflow edit**: the fix is entirely at the dependency layer. The
+   flaky CI steps (`ci.yml:148-149`) are left untouched — they now build against
+   the embedded bundle automatically. Confirmed the lambda job (`rust-lambda`)
+   runs on default features and never enabled `swagger-ui`, so it was never a
+   flake surface despite the original task title mentioning "lambda-build".
