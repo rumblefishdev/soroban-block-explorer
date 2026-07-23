@@ -71,6 +71,28 @@ history:
       (fed by a refreshable MV off `balances`), so these two columns are dead
       weight on every read of the table. Dropping them is the whole remaining
       scope. Note this is an `ALTER TABLE` on prod, so it needs an ops window.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Two more dead objects found while re-verifying this task. Both belong
+      here rather than in new tasks — same operation, same ops window.**
+      **1. `assets.icon_url` is emptier than the other two.** Re-measured
+      2026-07-22: of **361,232** rows, `total_supply` and `holder_count` carry a
+      value on **42**, and `icon_url` on **0**. Not a single row in the table has
+      ever had one. It is the same dead-column class already scoped here, so add
+      it to the same `ALTER`.
+      **2. `account_balances_current` is a dead TABLE, not just dead columns.**
+      **0 rows** in prod; no writer — `persist/stage.rs:1648` and
+      `persist/writer.rs:110` both record the insert being removed for the
+      single-write design; and no live reader, the only surviving mention in
+      `crates/api` being a comment about a join that was deleted. The live
+      equivalent is `balances`, at **89,634,237 rows**.
+      Do not drop it blind, though: task **0214** still lists "`account_balances_current`
+      row count > 0" as an acceptance criterion. That criterion is unsatisfiable
+      as written and is flagged there for rewriting onto `balances` — but the two
+      changes should land in a known order, criterion first, so nobody is left
+      chasing a table this task removed.
 ---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)

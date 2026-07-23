@@ -5,7 +5,6 @@ type: SCHEMA
 status: backlog
 related_adr: []
 related_tasks: ['0365', '0268', '0261', '0281']
-blocked_by: ['0365']
 tags: [priority-low, effort-medium, layer-clickhouse, milestone-4]
 milestone: 4
 links:
@@ -24,6 +23,20 @@ history:
       (verified: `operationEntries.ts:56` stubs `[]`; grep finds no `.pool_ids` read).
       Dropping the column reclaims more disk than `operation_pools` costs (net smaller)
       and removes dead ingestion work. Sequence POST-M3, strictly after 0365 ships.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Unblocked — `blocked_by: ['0365']` removed, because 0365 shipped.**
+      Verified in the code rather than from the task's archive location:
+      `crates/api/src/liquidity_pools/queries.rs:592` now reads "STEP 1 —
+      leading-key seek over `operation_pools` (task 0365)", and the surrounding
+      doc comment records the prefix-seek replacing the old driver. So the
+      condition this task waited on — the pool→op direction moving off
+      `pool_ids` — is satisfied.
+      Nothing else about the task changed: the remaining reader is still the
+      op→pool direction on the transactions response, which the frontend does
+      not consume. Still `milestone-4` / post-launch by choice, not by blocker.
 ---
 
 # SCHEMA: drop pool_ids from operations_appearances (post-0365)

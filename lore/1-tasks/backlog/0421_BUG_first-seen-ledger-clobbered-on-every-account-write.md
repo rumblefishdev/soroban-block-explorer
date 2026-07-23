@@ -53,6 +53,71 @@ history:
       version column then preserves the most-wrong value. Root cause located to
       an exact line; fix needs a write-path change plus a historical backfill,
       so it is deliberately NOT bundled into 0420 (a read-path task).
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Independent confirmation, with a named witness — reached from a
+      different task and without reading this one first, which makes it a real
+      second observation rather than a re-reading.** Surfaced while measuring
+      task 0214's acceptance criteria.
+      Witness: account
+      `GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55`, measured on
+      prod 2026-07-22.
+      - **903,373,913** rows in `transaction_participants` — one of the most
+        active accounts on the network, not an edge case
+      - **7 unmerged rows** in `accounts`; six carry
+        `first_seen_ledger == last_seen_ledger` (a single-ledger observation),
+        one carries the true span `50,457,424 → 63,503,839`
+      - the ReplacingMergeTree winner (version = `last_seen_ledger`) reports
+        **`first_seen_ledger = 63,600,904`** against a true minimum of
+        **`50,457,424`** — off by **13.1 million ledgers**, and the reported
+        value tracks the chain tip, so it is wrong by more every ledger
+      **`first_seen_ledger` is one of the 12 Tier-1 MIN-semantics columns** and
+      `repair_tier1.rs:130` already repairs it from `MIN(tp.ledger_sequence)`.
+      So the mop exists — but this witness shows the corruption present *now*,
+      on a live account, which means the mop is either overdue or the live path
+      re-corrupts faster than it can be run. Deciding which is the first question
+      for whoever takes this: if it is continuous, `repair-tier1` is a treadmill
+      and the write-path fix is the only real remedy.
+      **`sequence_number` is clobbered by the identical mechanism, and this is
+      now proven against raw XDR — it also answers this task's open design
+      point #2.** The skeleton write on a participant appearance carries
+      `sequence_number = 0` stamped with `last_seen_ledger = current`, so any
+      participant appearance _later_ than the account's last source-tx
+      outversions the real sequence with 0.
+      Traced end to end 2026-07-23, decoded with the official `stellar` CLI:
+      - Witness `GBGGLXUIL75PFOPOAW2MB6MXQNERO3Z7G7X36SGG5JUQCW4FV6T6MRZG`
+        **sourced** a successful tx at ledger 63,606,453; its `resultMetaXdr`
+        (fetched from Soroban RPC) carries the sequence bump right where our
+        parser reads it — `tx_changes_before`: state `273187545255247872` →
+        updated `273187545255247873`.
+      - The **same account appears as a participant at 63,606,455**, two ledgers
+        later. Its only surviving `accounts` row is that skeleton — `seq = 0`,
+        `last_seen = 63,606,455` — which wins the RMT version. Current state
+        reads 0.
+      - Control: a different account whose _last_ touch was its own source-tx
+        shows the correct sequence as current state. **The parser is fine; the
+        write path clobbers.** This is not an extraction gap.
+      **Design point #2 (above) is answered: Stellar sequences are monotonic**
+      (the witness bumps by exactly 1;
+      [CAP-0001](https://github.com/stellar/stellar-protocol/blob/master/core/cap-0001.md)
+      seeds the top 32 bits at creation and only increments after), so
+      `SimpleAggregateFunction(max, Int64)` is the correct merge and yields the
+      true current sequence. `home_domain` is clobbered the same way and is
+      design point #1.
+      **Corrected magnitude — read this before quoting a number.** A first pass
+      measured "934k / 8.6%" of sourcing accounts at `seq = 0`. That was wrong:
+      it counted `WHERE sequence_number = 0` over **un-deduped RMT rows**, so it
+      matched the skeleton row of accounts whose _current_ (RMT-winner) state is
+      actually correct — the exact `rmt-unmerged-dedup-on-read` trap this repo
+      already documents. Deduped with `argMax(sequence_number, last_seen_ledger)`:
+      **447,427 distinct successful-tx sources (10% of 4,482,355) currently read
+      `seq = 0`** — every one provably wrong, since sourcing a tx requires a real
+      sequence. Still large, but half the inflated figure.
+      Also same defect class, fix together: `soroban_contracts.is_sac`, a
+      non-nullable `Bool` asserting `false` on stub rows that `asset_sac`
+      contradicts (see 0435).
 ---
 
 # BUG: `first_seen_ledger` overwritten on every account write

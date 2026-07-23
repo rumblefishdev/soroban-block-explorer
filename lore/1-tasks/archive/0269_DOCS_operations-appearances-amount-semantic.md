@@ -2,7 +2,8 @@
 id: '0269'
 title: 'DOCS: clarify operations_appearances.amount semantics — CH per-op rows differ from PG ADR 0033 aggregation'
 type: DOCS
-status: backlog
+status: canceled
+reason: obsolete
 related_adr: ['0033', '0044']
 related_tasks: ['0261', '0266']
 tags: [priority-low, effort-small, docs, clickhouse, milestone-2]
@@ -67,6 +68,31 @@ history:
       trap. Criteria updated; the investigation criterion is closed since this
       note is its output. Someone who owns the docs should decide the new
       framing before writing.
+  - date: '2026-07-22'
+    status: canceled
+    who: karolkow
+    reason: obsolete
+    note: >
+      **Canceled — the delta this task exists to document does not exist.**
+      Re-verified independently before closing, on a different sample and by a
+      different route than the entry above, because the task's *original*
+      evidence was also a measurement that could not have failed.
+      Confirmed again: `stage.rs:1137` writes `amount: agg.count`, and a single
+      transaction in ledgers 63,000,000–63,000,100 carries `amount = 25` at two
+      separate `application_order` positions — collapsing that one row per
+      operation cannot produce.
+      Recording the method failure too, because it happened twice on the same
+      table. The original task inferred "one row per operation" from the sort
+      key `(ledger_sequence, transaction_id, application_order)`. Re-checking, I
+      counted rows against distinct values of that same tuple, got equality, and
+      briefly took it as confirmation — but that tuple is the table's
+      `ORDER BY`, so distinctness holds by construction and the comparison could
+      not have come back negative. Only reading the writer settled it.
+      **Nothing to write up, so nothing is spawned.** The one durable fact —
+      `amount` is an operation COUNT in every store and never a transferred
+      value — belongs wherever `operations_appearances` is described, and
+      `database-schema-overview.md` §4.4 already says exactly that. The doc was
+      right the whole time.
 ---
 
 # DOCS: clarify operations_appearances.amount semantics — CH vs PG schema delta
