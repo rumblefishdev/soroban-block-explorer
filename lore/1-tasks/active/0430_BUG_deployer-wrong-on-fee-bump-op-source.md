@@ -1,5 +1,4 @@
 ---
-
 id: '0430'
 title: 'BUG: deployer_id stores the inner-tx source instead of the op source on fee-bump envelopes'
 type: BUG
@@ -7,58 +6,58 @@ status: active
 related_adr: []
 related_tasks: ['0255', '0256', '0252']
 tags:
-[
-priority-high,
-effort-medium,
-layer-xdr-parsing,
-layer-indexer,
-data-integrity,
-]
+  [
+    priority-high,
+    effort-medium,
+    layer-xdr-parsing,
+    layer-indexer,
+    data-integrity,
+  ]
 links:
-
-- crates/xdr-parser/src/op_source.rs
-  history:
-- date: '2026-07-22'
-  status: backlog
-  who: karolkow
-  note: >
-  Spawned from 0256 (Phase 3 validation of the 0255 fix arc). 0255 corrected
-  deployer attribution from tx-source to op-source in 2026-05 and 0256 was
-  meant to confirm it held. It does not hold on fee-bump envelopes —
-  demonstrated on raw XDR from Soroban RPC, decoded with the official
-  `stellar` CLI 26.0.0 rather than our own parser.
-  Note for whoever validates the fix: Horizon is NOT a sufficient oracle
-  here. Its `source_account` for a fee-bump transaction is the INNER
-  transaction source — the same value we store — so any comparison against it
-  passes trivially. That is exactly how 0256's first pass produced a
-  meaningless "30/30 match".
-- date: '2026-07-23'
-  status: active
-  who: karolkow
-  note: >
-  Activated. Also answered the question "why is the pre-fix data correct while
-  everything after is wrong" — see the new section "The 0255 backfill was a
-  one-off SQL swap, and the boundary is a landmine". Short version: the correct
-  1,565 rows come from a hand-run `EXCHANGE TABLES` migration, not from the
-  parser; they survive only because **no full reindex has re-parsed their
-  ledger range since**, proven from the data (each has exactly one raw row —
-  a reindex would have inserted a second, wrong one). Fixing the parser is now
-  also a prerequisite for ever running a full historical reindex safely.
-- date: '2026-07-23'
-  status: active
-  who: karolkow
-  note: >
-  **The premise of this task's title is now proven WRONG, and the fix
-  direction changed. See the new section "The truth, proven from raw XDR".**
-  Short version: neither the inner-tx source (what we store) NOR the op source
-  (what stellar.expert shows, and what I had started coding) is the deployer.
-  The protocol-true deployer of a factory-minted contract is the **factory
-  contract itself** — proven by re-deriving the contract's own ID from the
-  factory's address + salt, which reproduces the on-chain ID exactly. The
-  op-source code I had written was reverted (it was the wrong target).
-  Consequence: this is no longer a small parser fix. `deployer_id` is an
-  account FK and structurally cannot hold a contract deployer — so it is a
-  data-model change. Downgrading the "just fix the fallback" framing.
+  - crates/xdr-parser/src/op_source.rs
+history:
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      Spawned from 0256 (Phase 3 validation of the 0255 fix arc). 0255 corrected
+      deployer attribution from tx-source to op-source in 2026-05 and 0256 was
+      meant to confirm it held. It does not hold on fee-bump envelopes —
+      demonstrated on raw XDR from Soroban RPC, decoded with the official
+      `stellar` CLI 26.0.0 rather than our own parser.
+      Note for whoever validates the fix: Horizon is NOT a sufficient oracle
+      here. Its `source_account` for a fee-bump transaction is the INNER
+      transaction source — the same value we store — so any comparison against it
+      passes trivially. That is exactly how 0256's first pass produced a
+      meaningless "30/30 match".
+  - date: '2026-07-23'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Also answered the question "why is the pre-fix data correct while
+      everything after is wrong" — see the new section "The 0255 backfill was a
+      one-off SQL swap, and the boundary is a landmine". Short version: the correct
+      1,565 rows come from a hand-run `EXCHANGE TABLES` migration, not from the
+      parser; they survive only because **no full reindex has re-parsed their
+      ledger range since**, proven from the data (each has exactly one raw row —
+      a reindex would have inserted a second, wrong one). Fixing the parser is now
+      also a prerequisite for ever running a full historical reindex safely.
+  - date: '2026-07-23'
+    status: active
+    who: karolkow
+    note: >
+      **The premise of this task's title is now proven WRONG, and the fix
+      direction changed. See the new section "The truth, proven from raw XDR".**
+      Short version: neither the inner-tx source (what we store) NOR the op source
+      (what stellar.expert shows, and what I had started coding) is the deployer.
+      The protocol-true deployer of a factory-minted contract is the **factory
+      contract itself** — proven by re-deriving the contract's own ID from the
+      factory's address + salt, which reproduces the on-chain ID exactly. The
+      op-source code I had written was reverted (it was the wrong target).
+      Consequence: this is no longer a small parser fix. `deployer_id` is an
+      account FK and structurally cannot hold a contract deployer — so it is a
+      data-model change. Downgrading the "just fix the fallback" framing.
+---
 
 # BUG: `deployer_id` is the inner-tx source on fee-bump envelopes
 
