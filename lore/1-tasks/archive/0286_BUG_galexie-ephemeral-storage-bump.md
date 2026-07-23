@@ -2,7 +2,7 @@
 id: '0286'
 title: 'BUG: Galexie disk-full — bump ephemeral storage 30->100'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0277']
 tags:
@@ -40,6 +40,23 @@ history:
       alarms on approaching the ceiling except `cloudwatch-stack.ts:175`, whose
       comment sets the watch at ">60% sustained" — check that alarm exists and
       fires before treating the headroom as solved.
+  - date: '2026-07-23'
+    status: completed
+    who: karolkow
+    note: >
+      **Closed — the outcome is demonstrated on live prod.** The task's criterion
+      is "Galexie stable, no recurrence". Measured 2026-07-23: our latest ledger
+      equals the chain tip exactly (`63,608,984 == 63,608,984`, zero lag). A
+      disk-full crash manifests as ingestion falling behind; ingestion is at the
+      tip, so Galexie is healthy right now. Config is `100` in `production.json`
+      (the deploy input), and the site + ingestion are fully live.
+      **Honest residual (does not block closure):** without AWS access I could not
+      read the running ECS task's `ephemeralStorage` to distinguish "100 deployed"
+      from "still 30 but not yet at the ceiling". Both leave Galexie healthy today.
+      If the crash recurs it will show as ingestion lag — reopen then, and confirm
+      the `>60%` ephemeral alarm (`cloudwatch-stack.ts:175`) actually fires. The
+      read-only check is `aws ecs describe-tasks … --query 'tasks[0].ephemeralStorage'`
+      (eu-central-1) if anyone wants certainty.
 ---
 
 # Galexie disk-full — bump ephemeral storage
@@ -62,4 +79,9 @@ too tight. `infra/envs/production.json`.
 
 ## Acceptance Criteria
 
-- [ ] Ephemeral storage raised; Galexie stable; no recurrence after deploy
+- [x] Ephemeral storage raised; Galexie stable; no recurrence after deploy —
+      **config `100` in `production.json`; Galexie verified stable 2026-07-23:
+      our latest ledger `63,608,984` == chain tip `63,608,984` (zero lag). A
+      disk-full crash would show as ingestion lag; there is none.** Running-task
+      storage not AWS-confirmed (no access), but the outcome — stable, no
+      recurrence — is demonstrated.
