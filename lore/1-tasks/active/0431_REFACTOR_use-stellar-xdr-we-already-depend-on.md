@@ -2,7 +2,7 @@
 id: '0431'
 title: 'REFACTOR/TEST: use the stellar-xdr API we already depend on +differential oracle against the official CLI'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0430', '0380', '0088', '0406']
 tags:
@@ -24,6 +24,10 @@ history:
       exposed as a binary. Our defect is one layer up, in extraction: we reach
       into the envelope by hand and stop one level short on fee-bump nesting.
       Sweep findings below are measured, not guessed.
+  - date: '2026-07-23'
+    status: active
+    who: karolkow
+    note: Promoted to active — starting implementation.
 ---
 
 # Use the `stellar-xdr` API we already pay for, and pin it with a differential oracle
