@@ -26,6 +26,10 @@ const RESOURCES: FooterNavItem[] = [
     href: 'https://developers.stellar.org/docs/build/smart-contracts',
   },
   { label: 'Stellar dashboard', href: 'https://dashboard.stellar.org/' },
+  {
+    label: 'Privacy Policy',
+    href: 'https://www.rumblefish.dev/privacy-policy/',
+  },
 ];
 
 function FooterLink({ label, href, onClick }: FooterNavItem) {
