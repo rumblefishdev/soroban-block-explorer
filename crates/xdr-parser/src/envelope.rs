@@ -20,7 +20,6 @@
 
 use std::collections::HashMap;
 
-use sha2::{Digest, Sha256};
 use stellar_xdr::*;
 use tracing::warn;
 
@@ -105,31 +104,13 @@ fn align_envelopes(
 /// Compute the canonical Stellar transaction hash:
 /// `SHA256(TransactionSignaturePayload(network_id, tagged_transaction))`.
 ///
-/// V0 envelopes are promoted to V1 before hashing (matches stellar-core).
-/// The result equals `TransactionResultPair.transaction_hash` for the same
-/// envelope after apply.
+/// Delegates to `stellar_xdr::TransactionEnvelope::hash`, which promotes V0
+/// envelopes to V1 and tags/serializes/hashes exactly as stellar-core does,
+/// for all three envelope kinds. The result equals
+/// `TransactionResultPair.transaction_hash` for the same envelope after apply.
 pub fn tx_envelope_hash(env: &TransactionEnvelope, network_id: &[u8; 32]) -> [u8; 32] {
-    let tagged = match env {
-        TransactionEnvelope::TxV0(v0) => {
-            let promoted = Transaction {
-                source_account: MuxedAccount::from(&v0.tx.source_account_ed25519),
-                fee: v0.tx.fee,
-                seq_num: v0.tx.seq_num.clone(),
-                cond: v0.tx.time_bounds.clone().into(),
-                memo: v0.tx.memo.clone(),
-                operations: v0.tx.operations.clone(),
-                ext: v0.tx.ext.clone().into(),
-            };
-            TransactionSignaturePayloadTaggedTransaction::Tx(promoted)
-        }
-        TransactionEnvelope::Tx(v1) => {
-            TransactionSignaturePayloadTaggedTransaction::Tx(v1.tx.clone())
-        }
-        TransactionEnvelope::TxFeeBump(fb) => {
-            TransactionSignaturePayloadTaggedTransaction::TxFeeBump(fb.tx.clone())
-        }
-    };
-    hash_tagged_transaction(tagged, network_id)
+    env.hash(*network_id)
+        .expect("TransactionSignaturePayload encode is infallible for well-formed input")
 }
 
 /// Compute the **inner** transaction hash for a fee-bump envelope.
@@ -141,31 +122,18 @@ pub fn tx_envelope_hash(env: &TransactionEnvelope, network_id: &[u8; 32]) -> [u8
 /// signed against.
 ///
 /// Per protocol the inner tx is a `TransactionV1` wrapped in
-/// `FeeBumpTransactionInnerTx::Tx`. We re-tag it as
-/// `TaggedTransaction::Tx(inner)` and hash against the same network_id.
+/// `FeeBumpTransactionInnerTx::Tx`; the library re-tags it as
+/// `TaggedTransaction::Tx(inner)` and hashes against the same network_id.
 pub fn inner_tx_hash(env: &TransactionEnvelope, network_id: &[u8; 32]) -> Option<[u8; 32]> {
     let TransactionEnvelope::TxFeeBump(fb) = env else {
         return None;
     };
-    let FeeBumpTransactionInnerTx::Tx(inner) = &fb.tx.inner_tx;
-    let tagged = TransactionSignaturePayloadTaggedTransaction::Tx(inner.tx.clone());
-    Some(hash_tagged_transaction(tagged, network_id))
-}
-
-fn hash_tagged_transaction(
-    tagged: TransactionSignaturePayloadTaggedTransaction,
-    network_id: &[u8; 32],
-) -> [u8; 32] {
-    let payload = TransactionSignaturePayload {
-        network_id: Hash(*network_id),
-        tagged_transaction: tagged,
-    };
-    let bytes = payload
-        .to_xdr(Limits::none())
-        .expect("TransactionSignaturePayload encode is infallible for well-formed input");
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    hasher.finalize().into()
+    Some(
+        fb.tx
+            .inner_tx
+            .hash(*network_id)
+            .expect("TransactionSignaturePayload encode is infallible for well-formed input"),
+    )
 }
 
 fn tx_set_envelopes(meta: &LedgerCloseMeta) -> Vec<TransactionEnvelope> {

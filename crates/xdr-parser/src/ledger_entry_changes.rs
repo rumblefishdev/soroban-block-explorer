@@ -218,37 +218,30 @@ fn entry_token_metadata(entry: &LedgerEntry) -> Option<TokenMetadata> {
 // ---------------------------------------------------------------------------
 
 /// Extract entry type, key fields, and full data from a `LedgerEntry`.
+///
+/// Entry-type + key are derived uniformly for every variant from the official
+/// `LedgerEntryData::to_key()` fed through the same [`extract_key_info`] used
+/// for the `removed` path, so a created/updated entry and its later removal
+/// always render an identical key. Only the `data` payload is variant-specific.
 fn extract_entry_info(entry: &LedgerEntry) -> (&'static str, Value, Value) {
-    match &entry.data {
-        LedgerEntryData::Account(a) => ("account", account_key(a), account_data(a)),
-        LedgerEntryData::Trustline(t) => ("trustline", trustline_key(t), trustline_data(t)),
-        LedgerEntryData::Offer(o) => ("offer", offer_key(o), offer_data(o)),
-        LedgerEntryData::Data(d) => ("data", data_entry_key(d), data_entry_data(d)),
-        LedgerEntryData::ClaimableBalance(cb) => (
-            "claimable_balance",
-            claimable_balance_key(cb),
-            claimable_balance_data(cb),
-        ),
-        LedgerEntryData::LiquidityPool(lp) => (
-            "liquidity_pool",
-            liquidity_pool_key(lp),
-            liquidity_pool_data(lp),
-        ),
-        LedgerEntryData::ContractData(cd) => (
-            "contract_data",
-            contract_data_key(cd),
-            contract_data_data(cd),
-        ),
-        LedgerEntryData::ContractCode(cc) => (
-            "contract_code",
-            contract_code_key(cc),
-            contract_code_data(cc),
-        ),
+    let data = match &entry.data {
+        LedgerEntryData::Account(a) => account_data(a),
+        LedgerEntryData::Trustline(t) => trustline_data(t),
+        LedgerEntryData::Offer(o) => offer_data(o),
+        LedgerEntryData::Data(d) => data_entry_data(d),
+        LedgerEntryData::ClaimableBalance(cb) => claimable_balance_data(cb),
+        LedgerEntryData::LiquidityPool(lp) => liquidity_pool_data(lp),
+        LedgerEntryData::ContractData(cd) => contract_data_data(cd),
+        LedgerEntryData::ContractCode(cc) => contract_code_data(cc),
         // Config setting payload intentionally excluded — protocol-internal, not exposed by explorer.
         // Each variant has a different inner type; serializing all is high effort, low value.
-        LedgerEntryData::ConfigSetting(cs) => ("config_setting", config_setting_key(cs), json!({})),
-        LedgerEntryData::Ttl(t) => ("ttl", ttl_key(t), ttl_data(t)),
-    }
+        LedgerEntryData::ConfigSetting(_) => json!({}),
+        LedgerEntryData::Ttl(t) => ttl_data(t),
+    };
+
+    let (entry_type, key) = extract_key_info(&entry.data.to_key());
+
+    (entry_type, key, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +256,7 @@ fn extract_key_info(key: &LedgerKey) -> (&'static str, Value) {
             "trustline",
             json!({
                 "account_id": k.account_id.to_string(),
-                "asset": format_trustline_asset_key(&k.asset),
+                "asset": format_trustline_asset(&k.asset),
             }),
         ),
         LedgerKey::Offer(k) => (
@@ -297,6 +290,13 @@ fn extract_key_info(key: &LedgerKey) -> (&'static str, Value) {
             }),
         ),
         LedgerKey::ContractCode(k) => ("contract_code", json!({ "hash": hex::encode(k.hash.0) })),
+        // ponytail: config_setting changes are extracted (total decode) but no
+        // downstream stage consumes them and `data` is dropped to `{}`, so this
+        // key is dead output. `{:?}` (Debug) as a string value is a cosmetic nit,
+        // tolerated only because nothing reads it. If a network-config-history
+        // feature is ever built, do it properly: serialize the actual setting
+        // values (each variant has a distinct payload) and give the id a stable
+        // rendering (serde snake_case) instead of Debug.
         LedgerKey::ConfigSetting(k) => (
             "config_setting",
             json!({ "config_setting_id": format!("{:?}", k.config_setting_id) }),
@@ -308,10 +308,6 @@ fn extract_key_info(key: &LedgerKey) -> (&'static str, Value) {
 // ---------------------------------------------------------------------------
 // Account
 // ---------------------------------------------------------------------------
-
-fn account_key(a: &AccountEntry) -> Value {
-    json!({ "account_id": a.account_id.to_string() })
-}
 
 fn account_data(a: &AccountEntry) -> Value {
     json!({
@@ -328,13 +324,6 @@ fn account_data(a: &AccountEntry) -> Value {
 // ---------------------------------------------------------------------------
 // Trustline
 // ---------------------------------------------------------------------------
-
-fn trustline_key(t: &TrustLineEntry) -> Value {
-    json!({
-        "account_id": t.account_id.to_string(),
-        "asset": format_trustline_asset(&t.asset),
-    })
-}
 
 fn trustline_data(t: &TrustLineEntry) -> Value {
     json!({
@@ -365,20 +354,9 @@ fn format_trustline_asset(asset: &TrustLineAsset) -> Value {
     }
 }
 
-fn format_trustline_asset_key(asset: &TrustLineAsset) -> Value {
-    format_trustline_asset(asset)
-}
-
 // ---------------------------------------------------------------------------
 // Offer
 // ---------------------------------------------------------------------------
-
-fn offer_key(o: &OfferEntry) -> Value {
-    json!({
-        "seller_id": o.seller_id.to_string(),
-        "offer_id": o.offer_id,
-    })
-}
 
 fn offer_data(o: &OfferEntry) -> Value {
     json!({
@@ -412,13 +390,6 @@ fn format_asset(asset: &Asset) -> Value {
 // Data entry
 // ---------------------------------------------------------------------------
 
-fn data_entry_key(d: &DataEntry) -> Value {
-    json!({
-        "account_id": d.account_id.to_string(),
-        "data_name": String::from_utf8_lossy(d.data_name.as_slice()).to_string(),
-    })
-}
-
 fn data_entry_data(d: &DataEntry) -> Value {
     json!({
         "account_id": d.account_id.to_string(),
@@ -430,10 +401,6 @@ fn data_entry_data(d: &DataEntry) -> Value {
 // ---------------------------------------------------------------------------
 // Claimable balance
 // ---------------------------------------------------------------------------
-
-fn claimable_balance_key(cb: &ClaimableBalanceEntry) -> Value {
-    json!({ "balance_id": format_claimable_balance_id(&cb.balance_id) })
-}
 
 fn claimable_balance_data(cb: &ClaimableBalanceEntry) -> Value {
     json!({
@@ -462,10 +429,6 @@ fn format_claimant(c: &Claimant) -> Value {
 // Liquidity pool
 // ---------------------------------------------------------------------------
 
-fn liquidity_pool_key(lp: &LiquidityPoolEntry) -> Value {
-    json!({ "pool_id": hex::encode(lp.liquidity_pool_id.0.clone()) })
-}
-
 fn liquidity_pool_data(lp: &LiquidityPoolEntry) -> Value {
     match &lp.body {
         LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) => json!({
@@ -488,14 +451,6 @@ fn liquidity_pool_data(lp: &LiquidityPoolEntry) -> Value {
 // Contract data
 // ---------------------------------------------------------------------------
 
-fn contract_data_key(cd: &ContractDataEntry) -> Value {
-    json!({
-        "contract": cd.contract.to_string(),
-        "key": scval_to_typed_json(&cd.key),
-        "durability": format_durability(&cd.durability),
-    })
-}
-
 fn contract_data_data(cd: &ContractDataEntry) -> Value {
     json!({
         "contract": cd.contract.to_string(),
@@ -516,10 +471,6 @@ fn format_durability(d: &ContractDataDurability) -> &'static str {
 // Contract code
 // ---------------------------------------------------------------------------
 
-fn contract_code_key(cc: &ContractCodeEntry) -> Value {
-    json!({ "hash": hex::encode(cc.hash.0) })
-}
-
 fn contract_code_data(cc: &ContractCodeEntry) -> Value {
     json!({
         "hash": hex::encode(cc.hash.0),
@@ -528,36 +479,8 @@ fn contract_code_data(cc: &ContractCodeEntry) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Config setting
-// ---------------------------------------------------------------------------
-
-fn config_setting_key(cs: &ConfigSettingEntry) -> Value {
-    let id = match cs {
-        ConfigSettingEntry::ContractMaxSizeBytes(_) => "contract_max_size_bytes",
-        ConfigSettingEntry::ContractComputeV0(_) => "contract_compute_v0",
-        ConfigSettingEntry::ContractLedgerCostV0(_) => "contract_ledger_cost_v0",
-        ConfigSettingEntry::ContractHistoricalDataV0(_) => "contract_historical_data_v0",
-        ConfigSettingEntry::ContractEventsV0(_) => "contract_events_v0",
-        ConfigSettingEntry::ContractBandwidthV0(_) => "contract_bandwidth_v0",
-        ConfigSettingEntry::ContractCostParamsCpuInstructions(_) => "contract_cost_params_cpu",
-        ConfigSettingEntry::ContractCostParamsMemoryBytes(_) => "contract_cost_params_memory",
-        ConfigSettingEntry::ContractDataKeySizeBytes(_) => "contract_data_key_size_bytes",
-        ConfigSettingEntry::ContractDataEntrySizeBytes(_) => "contract_data_entry_size_bytes",
-        ConfigSettingEntry::StateArchival(_) => "state_archival",
-        ConfigSettingEntry::ContractExecutionLanes(_) => "contract_execution_lanes",
-        ConfigSettingEntry::EvictionIterator(_) => "eviction_iterator",
-        _ => "unknown",
-    };
-    json!({ "config_setting_id": id })
-}
-
-// ---------------------------------------------------------------------------
 // TTL
 // ---------------------------------------------------------------------------
-
-fn ttl_key(t: &TtlEntry) -> Value {
-    json!({ "key_hash": hex::encode(t.key_hash.0) })
-}
 
 fn ttl_data(t: &TtlEntry) -> Value {
     json!({
@@ -591,6 +514,125 @@ mod tests {
 
     fn make_account_id(byte: u8) -> AccountId {
         AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([byte; 32])))
+    }
+
+    /// Regression guard for task 0431: a created/updated entry's key must equal
+    /// the key the official `LedgerEntryData::to_key()` produces, fed through the
+    /// same `extract_key_info` used for the `removed` path — for EVERY variant,
+    /// config_setting included. Fails if anyone re-introduces a per-variant
+    /// special-case key builder (the smell this refactor removed). Serialized-string
+    /// equality so a field-order change would also fail.
+    #[test]
+    fn entry_key_matches_library_to_key_for_all_variants() {
+        let acc = make_account_id(0x11);
+        let hash = Hash([0x22; 32]);
+        let entries = [
+            make_account_entry(make_account_id(0x10), 1),
+            entry(LedgerEntryData::Trustline(TrustLineEntry {
+                account_id: acc.clone(),
+                asset: TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    asset_code: AssetCode4(*b"USDC"),
+                    issuer: acc.clone(),
+                }),
+                balance: 5,
+                limit: 9,
+                flags: 1,
+                ext: TrustLineEntryExt::V0,
+            })),
+            entry(LedgerEntryData::Offer(OfferEntry {
+                seller_id: acc.clone(),
+                offer_id: 42,
+                selling: Asset::Native,
+                buying: Asset::Native,
+                amount: 1,
+                price: Price { n: 1, d: 2 },
+                flags: 0,
+                ext: OfferEntryExt::V0,
+            })),
+            entry(LedgerEntryData::Data(DataEntry {
+                account_id: acc.clone(),
+                data_name: String64::try_from(b"name".to_vec()).unwrap(),
+                data_value: DataValue::try_from(vec![1u8, 2, 3]).unwrap(),
+                ext: DataEntryExt::V0,
+            })),
+            entry(LedgerEntryData::ClaimableBalance(ClaimableBalanceEntry {
+                balance_id: ClaimableBalanceId::ClaimableBalanceIdTypeV0(hash.clone()),
+                asset: Asset::Native,
+                amount: 1,
+                claimants: VecM::default(),
+                ext: ClaimableBalanceEntryExt::V0,
+            })),
+            entry(LedgerEntryData::LiquidityPool(LiquidityPoolEntry {
+                liquidity_pool_id: PoolId(hash.clone()),
+                body: LiquidityPoolEntryBody::LiquidityPoolConstantProduct(
+                    LiquidityPoolEntryConstantProduct {
+                        params: LiquidityPoolConstantProductParameters {
+                            asset_a: Asset::Native,
+                            asset_b: Asset::Native,
+                            fee: 30,
+                        },
+                        reserve_a: 1,
+                        reserve_b: 2,
+                        total_pool_shares: 3,
+                        pool_shares_trust_line_count: 4,
+                    },
+                ),
+            })),
+            entry(LedgerEntryData::ContractData(ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(hash.clone())),
+                key: ScVal::Symbol(ScSymbol::try_from(b"k".to_vec()).unwrap()),
+                durability: ContractDataDurability::Persistent,
+                val: ScVal::Void,
+            })),
+            entry(LedgerEntryData::ContractCode(ContractCodeEntry {
+                ext: ContractCodeEntryExt::V0,
+                hash: hash.clone(),
+                code: BytesM::default(),
+            })),
+            entry(LedgerEntryData::Ttl(TtlEntry {
+                key_hash: hash.clone(),
+                live_until_ledger_seq: 7,
+            })),
+            entry(LedgerEntryData::ConfigSetting(
+                ConfigSettingEntry::ContractMaxSizeBytes(1234),
+            )),
+        ];
+
+        for e in &entries {
+            let (et_old, key_old, _) = extract_entry_info(e);
+            let (et_new, key_new) = extract_key_info(&e.data.to_key());
+            assert_eq!(et_old, et_new, "entry_type mismatch for {et_old}");
+            assert_eq!(
+                serde_json::to_string(&key_old).unwrap(),
+                serde_json::to_string(&key_new).unwrap(),
+                "key JSON mismatch for {et_old}",
+            );
+        }
+    }
+
+    /// `config_setting` used to be a hand-rolled exception (snake_case ids with an
+    /// `"unknown"` fallback for the 8 variants the match didn't list). It now routes
+    /// through the library key like every other variant: the id is `Debug`-rendered,
+    /// which is total over the enum — no `"unknown"`, and no hand-maintained list to
+    /// drift. This pins the new behaviour (a real variant name, both paths agree).
+    #[test]
+    fn config_setting_key_routes_through_library_no_unknown() {
+        let e = entry(LedgerEntryData::ConfigSetting(
+            ConfigSettingEntry::ContractMaxSizeBytes(1234),
+        ));
+        let (et, key, _) = extract_entry_info(&e);
+        assert_eq!(et, "config_setting");
+        assert_eq!(key["config_setting_id"], "ContractMaxSizeBytes");
+        assert_eq!(key, extract_key_info(&e.data.to_key()).1);
+    }
+
+    fn entry(data: LedgerEntryData) -> LedgerEntry {
+        LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data,
+            ext: LedgerEntryExt::V0,
+        }
     }
 
     #[test]
