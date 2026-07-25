@@ -265,13 +265,13 @@ Endpoints that were **not modified at all** improved by 3–4× as a direct resu
 earlier latency was contention from a saturated database rather than the
 endpoints themselves.
 
-**Raw measurement data:** [`load-tests/`](./load-tests/) holds the three tiers
+**Raw measurement data:** [`load-tests/`](https://github.com/rumblefishdev/soroban-block-explorer/tree/master/docs/scf/load-tests) holds the three tiers
 quoted above — per tier a `results.csv` (one row per request: client latency
 joined to the ClickHouse query log for that same request via `request_id`, so
 each request carries its own `read_rows` / `ch_queries` / `ch_duration_ms`) and
 a `client_summary.csv` (per-endpoint percentiles). The p50 / p95 figures in this
 section are percentiles of `duration_ms` across a tier's `results.csv`;
-[`load-tests/README.md`](./load-tests/README.md) maps each tier to its run and
+[`load-tests/README.md`](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/load-tests/README.md) maps each tier to its run and
 restates the headline numbers.
 
 #### Honest assessment
@@ -305,7 +305,7 @@ SSE-S3 at rest on the public ledger bucket, and automated weekly off-box
 ClickHouse backups.
 
 The full control list and an OWASP Top 10 (2021) coverage mapping are in
-[`milestone-3-security-checklist.md`](./milestone-3-security-checklist.md).
+[`milestone-3-security-checklist.md`](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-3-security-checklist.md).
 The original KMS-at-rest and point-in-time-recovery items were RDS-specific and
 are met by equivalents after the RDS retirement — see § Scope Refinement.
 
@@ -366,10 +366,10 @@ metrics.
 
 ## 6. Source References
 
-| Resource          | Link                                                                                                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Public repository | [rumblefishdev/soroban-block-explorer](https://github.com/rumblefishdev/soroban-block-explorer)                                                                    |
-| Technical design  | [technical-design-general-overview.md](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/architecture/technical-design-general-overview.md) |
-| Infra / deploy    | [infra/README.md](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/infra/README.md)                                                             |
-| Load-test harness | [crates/load-tests](https://github.com/rumblefishdev/soroban-block-explorer/tree/master/crates/load-tests)                                                         |
-| M1 / M2 evidence  | [milestone-1-evidence.md](./milestone-1-evidence.md) · [milestone-2-evidence.md](./milestone-2-evidence.md)                                                        |
+| Resource          | Link                                                                                                                                                                                                                                                              |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public repository | [rumblefishdev/soroban-block-explorer](https://github.com/rumblefishdev/soroban-block-explorer)                                                                                                                                                                   |
+| Technical design  | [technical-design-general-overview.md](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/architecture/technical-design-general-overview.md)                                                                                                |
+| Infra / deploy    | [infra/README.md](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/infra/README.md)                                                                                                                                                            |
+| Load-test harness | [crates/load-tests](https://github.com/rumblefishdev/soroban-block-explorer/tree/master/crates/load-tests)                                                                                                                                                        |
+| M1 / M2 evidence  | [milestone-1-evidence.md](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-1-evidence.md) · [milestone-2-evidence.md](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-2-evidence.md) |
