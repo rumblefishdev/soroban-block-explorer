@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Build the Milestone 1 evidence PDF from milestone-1-evidence.md.
+# Build a milestone evidence PDF from milestone-N-evidence.md.
+#
+# Usage:
+#   ./build-pdf.sh        # milestone 1 (default, kept for backwards compat)
+#   ./build-pdf.sh 3      # milestone 3
 #
 # Requirements (install via Homebrew on macOS):
 #   brew install pandoc typst
 #   brew install poppler    # optional, for `pdfinfo` page-count check below
 #
 # Output:
-#   docs/scf/milestone-1-evidence.pdf
+#   docs/scf/milestone-<N>-evidence.pdf
 #
 # Why pandoc + typst?
 #   - Typst (the engine) handles Unicode natively — no LaTeX font fiddling
@@ -20,8 +24,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-SRC="milestone-1-evidence.md"
-OUT="milestone-1-evidence.pdf"
+M="${1:-1}"
+SRC="milestone-${M}-evidence.md"
+OUT="milestone-${M}-evidence.pdf"
 
 # ---- Tool checks ---------------------------------------------------------
 command -v pandoc >/dev/null || { echo "❌ pandoc not found — brew install pandoc"; exit 1; }
