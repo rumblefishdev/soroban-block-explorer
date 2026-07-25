@@ -17,8 +17,9 @@ a fixed request rate; the rate is chosen to represent a monthly request volume
 | `40x-49.3M-per-month/` | `2026-07-17T11-33-11Z` | 19.04 /s |   13,701 | 151 ms | 575 ms |      0 |
 
 `ac4-1.2M-per-month` is the tier that corresponds to the acceptance criterion
-(1M requests/month equivalent). The other two are capacity/stress tiers at 8×
-and 40× that volume. All three ran the same 26 endpoints; every request returned
+(1M requests/month equivalent — the proposal's "1M baseline"). The
+`8x-10.2M-per-month` tier is the proposal's "10M stress" run; `40x-49.3M-per-month`
+is an additional 40× capacity check. All three ran the same 26 endpoints; every request returned
 HTTP 200 (`err_class = ok`), hence the 0.000 % error rate.
 
 ## Files per tier

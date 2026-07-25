@@ -9,15 +9,16 @@ Target length: 4-6 minutes.
 
 Prepare these values and keep the tabs / consoles open:
 
-| Item                    | Value                                                                              |
-| ----------------------- | ---------------------------------------------------------------------------------- |
-| Frontend (public)       | `https://sorobanscan.rumblefish.dev`                                               |
-| API                     | `https://api-sorobanscan.rumblefishdev.com/v1`                                     |
-| Swagger UI              | `https://api-sorobanscan.rumblefishdev.com/api-docs`                               |
-| CloudWatch dashboard    | <TODO: dashboard URL>                                                              |
-| Load-test results       | `milestone-3-evidence.md` § AC4 (tier table + decomposition) — measured 2026-07-17 |
-| Security checklist      | <TODO: signed checklist doc>                                                       |
-| Ledger (freshness demo) | <TODO: current tip sequence at record time>                                        |
+| Item                    | Value                                                                                                                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend (public)       | `https://sorobanscan.rumblefish.dev`                                                                                                                                                                                                           |
+| API                     | `https://api-sorobanscan.rumblefishdev.com/v1`                                                                                                                                                                                                 |
+| Swagger UI              | `https://api-sorobanscan.rumblefishdev.com/api-docs`                                                                                                                                                                                           |
+| CloudWatch dashboard    | `production-soroban-explorer` (eu-central-1) — [console link](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#dashboards/dashboard/production-soroban-explorer)                                                |
+| CloudWatch alarms       | [alarms list](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#alarmsV2:) — filter the name column to the `production-` block                                                                                   |
+| Load-test results       | `milestone-3-evidence.md` § AC4 (tier table + decomposition) — measured 2026-07-17                                                                                                                                                             |
+| Security checklist      | `milestone-3-security-checklist.md` (9 controls + OWASP Top 10 mapping, signed)                                                                                                                                                                |
+| Ledger (freshness demo) | Read the latest sequence off the explorer at record time and compare it with a neutral source — `stellar.expert/explorer/public` or `horizon.stellar.org/ledgers?order=desc&limit=1`. They should match within one or two ledgers (~5 s each). |
 
 ## Scene 1 - Intro and scope
 

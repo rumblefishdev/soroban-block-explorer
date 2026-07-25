@@ -28,18 +28,18 @@ that are pre-launch and must not be included.
 
 | Day | Window (UTC)                        | Uptime % | API p95 (ms) | Error rate % | Max ingest lag (s) | Ledger gaps |
 | --- | ----------------------------------- | -------- | ------------ | ------------ | ------------------ | ----------- |
-| 1   | 2026-07-17 13:40 → 2026-07-18 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 2   | 2026-07-18 13:40 → 2026-07-19 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 3   | 2026-07-19 13:40 → 2026-07-20 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 4   | 2026-07-20 13:40 → 2026-07-21 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 5   | 2026-07-21 13:40 → 2026-07-22 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 6   | 2026-07-22 13:40 → 2026-07-23 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
-| 7   | 2026-07-23 13:40 → 2026-07-24 13:40 | <TODO>   | <TODO>       | <TODO>       | <TODO>             | <TODO>      |
+| 1   | 2026-07-17 13:40 → 2026-07-18 13:40 | 100.00   | 330          | 0.000        | 8                  | 0           |
+| 2   | 2026-07-18 13:40 → 2026-07-19 13:40 | 100.00   | 142          | 0.000        | 8                  | 0           |
+| 3   | 2026-07-19 13:40 → 2026-07-20 13:40 | 100.00   | 553          | 0.000        | 8                  | 0           |
+| 4   | 2026-07-20 13:40 → 2026-07-21 13:40 | 100.00   | 496          | 0.000        | 8                  | 0           |
+| 5   | 2026-07-21 13:40 → 2026-07-22 13:40 | 100.00   | 149          | 0.000        | 7                  | 0           |
+| 6   | 2026-07-22 13:40 → 2026-07-23 13:40 | 100.00   | 162          | 0.000        | 9                  | 0           |
+| 7   | 2026-07-23 13:40 → 2026-07-24 13:40 | 100.00   | 165          | 0.000        | 8                  | 0           |
 
 ## Summary
 
-- **Uptime (7-day):** <TODO> — target ≥ 99.9%: <PASS/FAIL>
-- **p95 (worst day):** <TODO> ms — target < 200 ms: <PASS/FAIL>
+- **Uptime (7-day):** 100.00 % derived — target ≥ 99.9%: **PASS**. Derived, not probed: zero 5XX on every day, and `production-api-gateway-5xx-rate` OK throughout. Two unrelated alarms did sit raised across the window — both predate it (see Incidents). No Synthetics canary is deployed, so this shows no _observed_ unavailability rather than a measured percentage (§ Sources).
+- **p95 (worst day):** 553 ms (Day 3) — target < 200 ms: **FAIL** (expected) — 4 of 7 days were under 200 ms (142/149/162/165); days 1/3/4 exceeded (330/553/496). This is API Gateway `Latency` (server-side, excludes the client network leg), lower than the load test's 577 ms client-side figure. The FAIL is expected for the reasons below.
   > **Expect FAIL, and do not present it as a surprise.** The 2026-07-17 load
   > test measured p95 = 577 ms at the required load (p50 = 168 ms, errors
   > 0.000%). Unless the AC4 follow-ups have shipped by the time this window
@@ -50,27 +50,38 @@ that are pre-launch and must not be included.
   > report measures API Gateway `Latency`, which **excludes** the client-side
   > network leg the load test includes — the two numbers are not directly
   > comparable; say which one you are quoting.
-- **Error rate (7-day):** <TODO> % — target < 0.1%: <PASS/FAIL>
-- **Max ingestion lag:** <TODO> s — target < 30 s: <PASS/FAIL>
-- **Ledger gaps:** <TODO> — target 0: <PASS/FAIL>
-- **Incidents / alarms fired:** <TODO: list, or "none">
+- **Error rate (7-day):** 0.000 % — target < 0.1%: **PASS** (zero 5XX responses across all 7 days)
+- **Max ingestion lag:** 9 s (Day 6) — target < 30 s: **PASS** (range 7–9 s across the window)
+- **Ledger gaps:** 0 (all 7 days, verified on production ClickHouse) — target 0: **PASS**
+- **Incidents / alarms fired:** none during the window — no alarm was raised and none cleared inside it. The API 5XX-rate, Galexie ingestion-lag, ledger-processor error-rate and ClickHouse-write alarms were OK throughout. Two dead-letter-queue depth alarms were already raised when the window opened and stayed raised for its duration. Neither indicates a fault in the launched system, and neither affects the metrics above. The ledger-processor queue does not bear on completeness — that is independently verified at 0 gaps on every day. The enrichment queue holds fetches of off-chain metadata that is permanently unreachable at its source; the chain data itself is complete.
+
+  - `production-enrichment-dlq-depth` — raised 2026-07-03, metadata-enrichment fetches that permanently fail against unreachable external sources.
+  - `production-ledger-processor-dlq-depth` — raised 2026-07-09T19:13Z, eight days pre-launch, holding ~7,950 queued S3 notifications. These are wake-up signals rather than data: the indexer ignores the message body and reconciles from ClickHouse's durable `max(sequence)` cursor on every invocation, so a dropped signal cannot drop a ledger (`crates/indexer/src/handler/mod.rs`). The queue emptied on 2026-07-24 when the messages reached their 14-day retention limit, and the alarm returned to OK at 14:50Z, after the window had closed.
+
+  Both alarms fire on queue depth > 0, so a non-empty queue keeps them raised with no ongoing failure. Neither affected the tracked metrics: ledger completeness is independently verified at **0 gaps on every one of the seven days** (§ Sources), API error rate was 0.000 %, and ingestion lag stayed at 7–9 s.
 
 ## Sources — how each column is produced
 
-Fill the table from these. Metric dimension names marked `<TODO>` must be
-confirmed against the deployed CloudWatch resources (dashboard JSON or
-`aws cloudwatch list-metrics`) before the first run.
+Every figure in the table above is reproducible from the sources below. All
+CloudWatch reads use `--region eu-central-1` and a per-day period of 86400 s over
+the seven 24-hour buckets measured from the launch timestamp.
 
 ### CloudWatch (uptime, p95, error rate)
 
 - **API p95:** namespace `AWS/ApiGateway`, metric `Latency`, ExtendedStatistic
-  `p95`, dimension `ApiName=<TODO>` (+ `Stage=<TODO>` if staged). Per-day period.
-- **Error rate:** `AWS/ApiGateway` `5XXError` (Sum) ÷ `Count` (Sum) per day.
-  Cross-check Lambda-side with `AWS/Lambda` `Errors` ÷ `Invocations`,
-  `FunctionName=<TODO: production API fn>`.
-- **Uptime:** 1 − (minutes with error-rate breach or health-check failure) ÷
-  total minutes. <TODO: pick the authoritative source — a CloudWatch Synthetics
-  canary against the frontend/API, or derive from 5XX minutes. Note the choice.>
+  `p95`, dimension `ApiName=production-soroban-explorer-api` (REST API id
+  `6l9k06w4pl`, stage `production`).
+- **Error rate:** `AWS/ApiGateway` `5XXError` (Sum) ÷ `Count` (Sum) per day. The
+  Lambda-side cross-check is `AWS/Lambda` `Errors` ÷ `Invocations` with
+  `FunctionName=production-soroban-explorer-api`.
+- **Uptime:** no CloudWatch Synthetics canary is deployed, so uptime is **derived,
+  not externally probed** — the authoritative signals are (a) `5XXError` Sum per
+  day and (b) the state history of the availability alarm
+  `production-api-gateway-5xx-rate` (`describe-alarm-history`). Both were clean for
+  every day of the window: zero 5XX responses and no alarm transition, so no
+  period of unavailability was observed. This method cannot resolve an outage
+  shorter than the alarm's evaluation period, and it measures the API rather than
+  the frontend.
 
 ### ClickHouse (ledger completeness; lag via CloudWatch)
 
@@ -132,7 +143,7 @@ hand. Only `API_NAME` still needs filling.
 # ponytail: one-shot report helper; fill API_NAME, emits partial md rows.
 # Self-check: dry-run one day and eyeball p95 vs the CloudWatch console.
 set -euo pipefail
-API_NAME="<TODO: deployed API Gateway name — aws apigateway get-rest-apis>"
+API_NAME="production-soroban-explorer-api"   # REST API id 6l9k06w4pl, stage production
 REGION="eu-central-1"; PROFILE="sorobanscan"
 LAUNCH="2026-07-17T13:40:00Z"   # buckets are 24h from launch, NOT midnight
 for d in 0 1 2 3 4 5 6; do
