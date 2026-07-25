@@ -152,7 +152,7 @@ size now lives in backfill and in the surfacing decision.
       so `deployer_id` should stay whatever it was (or NULL), not be re-derived.
       Coordinate with 0430, which is rewriting the deployer path.
 - [ ] **Filter fix 2 — `contract.rs:23`.** `Created | Updated` matched, `_ =>
-    continue`. A restored WASM never gets its interface parsed, so the contract
+continue`. A restored WASM never gets its interface parsed, so the contract
       stays unclassified. Add `Restored`.
 - [ ] **New read — `evicted_keys`.** Present on `LedgerCloseMetaV1`/`V2`; we
       never touch it. Decide where it lands before writing the read — this is
