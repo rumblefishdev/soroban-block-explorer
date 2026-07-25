@@ -1,5 +1,5 @@
 import ListAltIcon from '@mui/icons-material/ListAlt';
-import { Box, Stack, Typography } from '@mui/material';
+import { Stack, Typography } from '@mui/material';
 import type { PoolTransactionItem } from '@rumblefish/api-types';
 import {
   Chip,
@@ -12,14 +12,14 @@ import {
   QueryErrorState,
   RelativeTimestamp,
   useCursorPagination,
-  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-import { usePoolTransactions } from '../../api/index.js';
+import { usePagedRows, usePoolTransactions } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
+import { hashColumn } from '../transactions/cells.js';
 import { formatAbsoluteUtc } from '../transactions/formatters.js';
 
 /**
@@ -76,12 +76,7 @@ const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
       return <Chip size="sm" color={color} label={label} />;
     },
   },
-  {
-    id: 'hash',
-    header: 'Hash',
-    width: 160,
-    cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
-  },
+  hashColumn<PoolTransactionItem>(),
   {
     id: 'account',
     header: 'Account',
@@ -131,9 +126,8 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     usePoolTransactions(poolId, cursor);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );
@@ -173,7 +167,7 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
 
   return (
     <SectionCard title="Recent transactions">
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

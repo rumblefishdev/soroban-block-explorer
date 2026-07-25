@@ -22,8 +22,7 @@ pub const DEFAULT_URL: &str = "http://localhost:8123";
 
 /// Default ClickHouse user when `CLICKHOUSE_USER` is not set.
 ///
-/// Matches the local-dev posture of the Postgres service: no production
-/// secrets in the compose file.
+/// Local-dev posture only: no production secrets in the compose file.
 pub const DEFAULT_USER: &str = "default";
 
 /// Production CH database — `schema/init.sql` creates every table here.
@@ -74,9 +73,7 @@ pub enum SchemaError {
     #[error("clickhouse query failed: {0}")]
     Query(#[from] clickhouse::error::Error),
     /// Pre-write staging failure (decode error, overflow, malformed
-    /// parser output, …). Mirrors the `HandlerError::Staging` variant
-    /// used by the PG path so the operator sees the same vocabulary
-    /// regardless of target.
+    /// parser output, …) — surfaced before any row hits ClickHouse.
     #[error("clickhouse staging failed: {0}")]
     Staging(String),
 }
@@ -165,10 +162,16 @@ mod tests {
         // supply source; one universal method, no seed-only staleness. 27 → 26.
         // ADR 0051 / task 0339 (merged): added the `asset_sac` SAC-facet side table
         // (SAC-ness of a classic/native asset, not a distinct row). 26 → 27.
+        // task 0359: added `operation_asset_appearances` — per-(asset, tx) presence
+        // index (asset-leading key; native first-class). 27 → 28.
+        // task 0365: added `operation_pools` — per-(pool, tx) presence index
+        // (pool-leading key; the pool-dimension twin of the above). 28 → 29.
+        // task 0385: added `accounts_recent` (last_seen_ledger-ordered read-model for
+        // the acclist browse) + its refreshable `accounts_recent_mv`. 29 → 31.
         assert_eq!(
             stmts.len(),
-            27,
-            "expected 25 tables + 1 materialized view + 1 dictionary, got {}",
+            31,
+            "expected 28 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

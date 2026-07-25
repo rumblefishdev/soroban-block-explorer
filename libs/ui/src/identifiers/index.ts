@@ -7,8 +7,16 @@ export {
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
 } from './IdentifierWithCopy.js';
-export { routeForHit } from './routes.js';
-export { getDefaultTruncation, truncateMiddle } from './truncate.js';
+export {
+  LinkComponentProvider,
+  useLinkComponent,
+} from './LinkComponentContext.js';
+export { getIdentifierHref, routeSegments } from './routes.js';
+export {
+  DEFAULT_TRUNCATION,
+  getDefaultTruncation,
+  truncateMiddle,
+} from './truncate.js';
 export type { EntityType, TruncationConfig } from './types.js';
 export {
   isAccountId,

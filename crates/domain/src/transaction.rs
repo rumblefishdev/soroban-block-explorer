@@ -1,5 +1,5 @@
 //! Transaction-family domain types matching the `transactions`,
-//! `transaction_hash_index`, and `transaction_participants` PostgreSQL tables.
+//! `transaction_hash_index`, and `transaction_participants` ClickHouse tables.
 //!
 //! Schema: ADR 0027 Part I §3, §4, §6.
 //! Heavy fields (memo, signatures, XDR, diagnostic events, operation tree)

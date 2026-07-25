@@ -335,6 +335,39 @@ pub struct TransactionParticipantRow {
     pub transaction_id: i64,
 }
 
+/// `operation_asset_appearances` — fact, the per-(asset, transaction) presence
+/// index (task 0359). The EXACT `transaction_participants` shape with `asset_id`
+/// in place of `account_id` → a per-asset activity page is a PK-prefix seek.
+/// Native XLM is a first-class key (`ids::asset_id(0,"",0,0)`), never an empty
+/// sentinel. Pure presence: which assets a transaction touched; duplicate
+/// (asset, tx) rows collapse in the RMT.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct OperationAssetAppearanceRow {
+    pub asset_id: i64,
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+    /// Net-settled "value moved" for this (tx, asset), raw (scale by the asset's
+    /// `decimals` at read). Task 0393. `Some(0)` = genuinely nothing settled net
+    /// (e.g. a wash / pure cycle — zero by the flow decomposition theorem);
+    /// `None` = NOT COMPUTABLE (the reducer could not represent the result, or a
+    /// recognised event's amount was unreadable). The two must stay
+    /// distinguishable: the read drops both, but a `None` is not a real zero.
+    pub net_settled: Option<i128>,
+}
+
+/// `operation_pools` — fact, the per-(pool, transaction) presence index
+/// (task 0365). The EXACT `transaction_participants` shape with `pool_id` in
+/// place of `account_id` → a per-pool tx-list is a PK-prefix seek. `pool_id` is
+/// the raw 32-byte pool hash (already how `operations_appearances.pool_ids`
+/// stores each crossing — no surrogate). Pure presence: which pools a
+/// transaction crossed; duplicate (pool, tx) rows collapse in the RMT.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct OperationPoolRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+}
+
 /// `soroban_events` — fact, full-content per-event row (ADR 0044
 /// §4a unfold). `signature` is the lifted first-topic Symbol.
 #[derive(Debug, Clone, Row, Serialize)]

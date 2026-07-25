@@ -96,15 +96,12 @@ pub struct RepairTier1Stats {
 
 /// Run the full Tier-1 column rebuild pass.
 ///
-/// CH-only — PG target short-circuits with an info log. Each table
+/// CH-only. Each table
 /// rebuilds sequentially so a failure mid-way leaves the live tables
 /// untouched (failures happen on staging-table writes; EXCHANGE only
 /// fires after the INSERT completes).
 pub async fn execute(sink: &Sink, dry_run: bool) -> Result<RepairTier1Stats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("repair_tier1: skipped (PG target — Tier-1 columns are CH-only)");
-        return Ok(RepairTier1Stats::default());
-    };
+    let client = sink.client();
 
     let mut stats = RepairTier1Stats {
         dry_run,
@@ -317,7 +314,7 @@ async fn rebuild_soroban_contracts(
     // column name (the parser resolves the WHERE reference against
     // the projection list and sees an aggregate there).
     let insert_sql = format!(
-        "INSERT INTO {staging} (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name)
+        "INSERT INTO {staging} (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac)
          SELECT
              sc.id,
              sc.contract_id,
@@ -326,8 +323,7 @@ async fn rebuild_soroban_contracts(
              ifNull(d.deployer_id_rebuilt, sc.deployer_id) AS deployer_id,
              ifNull(d.deployed_at_ledger_rebuilt, sc.deployed_at_ledger) AS deployed_at_ledger,
              sc.contract_type,
-             sc.is_sac,
-             sc.name
+             sc.is_sac
            FROM soroban_contracts AS sc FINAL
            LEFT JOIN (
              SELECT
@@ -366,22 +362,6 @@ mod tests {
 
     const TEST_BASE: u32 = 4_000_020_000;
 
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = execute(&sink, false)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.accounts_rows, 0);
-        assert_eq!(stats.lp_positions_rows, 0);
-        assert_eq!(stats.nfts_rows, 0);
-        assert_eq!(stats.soroban_contracts_rows, 0);
-    }
-
     async fn build_ch_sink() -> Option<Sink> {
         let url = std::env::var("CLICKHOUSE_URL").ok()?;
         let cfg = db_clickhouse::Config {
@@ -393,7 +373,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL set but apply_init_sql failed ({err}) — skipping");
             return None;
         }
-        Some(Sink::Clickhouse(client))
+        Some(Sink::new(client))
     }
 
     /// Dry-run smoke for the accounts rebuild: stamp an account with a
@@ -415,9 +395,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL not set — skipping");
             return;
         };
-        let Sink::Clickhouse(ref client) = sink else {
-            unreachable!()
-        };
+        let client = sink.client();
 
         let strkey = "GCQFXHQUTKDRRTPRDB7RH3FNRRJUQB3FA3KZGY42PXTH3FRWXWCATXFE";
         let acct_id = db_clickhouse::persist::ids::account_id(strkey);
@@ -536,9 +514,7 @@ mod tests {
             eprintln!("CLICKHOUSE_URL not set — skipping");
             return;
         };
-        let Sink::Clickhouse(ref client) = sink else {
-            unreachable!()
-        };
+        let client = sink.client();
 
         // Distinct StrKey from the dry-run test so concurrent runs don't
         // share a fixture row.

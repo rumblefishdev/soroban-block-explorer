@@ -1,10 +1,9 @@
-//! backfill-runner — production-grade Stellar pubnet backfill to Postgres.
+//! backfill-runner — production-grade Stellar pubnet backfill to ClickHouse.
 //!
 //! Source: `aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` (unsigned).
-//! Sink:   Postgres, ADR 0027 schema, via
-//!         `indexer::handler::process::process_ledger` (parse-and-persist).
+//! Sink:   ClickHouse (ADR 0044), via the `db_clickhouse::persist`
+//!         partition-writer lifecycle.
 
-mod assets_id_backfill;
 mod balance_seed;
 mod bootstrap;
 mod ch_staging;
@@ -13,38 +12,23 @@ mod dashboard;
 mod error;
 mod ingest;
 mod nft_reclassify;
-mod nft_reparse;
 mod partition;
 mod repair_tier1;
-mod resume;
 mod rpc_snapshot;
 mod run;
 mod sink;
 mod status;
 mod sync;
-mod upgradeable_backfill;
 mod util;
-mod wasm_upgrade_backfill;
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 /// Default local scratch dir. CLI `--temp-dir` or `BACKFILL_TEMP_DIR`
 /// overrides. Single source of truth — `run` and `status` both receive
 /// it via their `execute` args, no duplicated constant.
 const DEFAULT_TEMP_DIR: &str = ".temp/backfill-runner";
-
-/// Which parallel store to write to. Defaults to `postgres` so existing
-/// invocations (CI scripts, runbooks, the aws-public-blockchain workflow)
-/// keep working byte-for-byte without edits. `clickhouse` writes are
-/// currently **stubbed** — the parse pipeline runs end-to-end but no
-/// rows are persisted (task 0205, ADR 0044).
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum Target {
-    Postgres,
-    Clickhouse,
-}
 
 #[derive(Parser)]
 #[command(name = "backfill-runner", version, about)]
@@ -52,19 +36,11 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Which store to write to. Defaults to `postgres`.
-    #[arg(long, value_enum, default_value = "postgres")]
-    target: Target,
-
-    /// PostgreSQL connection string. Required when `--target postgres`.
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
-
     /// ClickHouse HTTP endpoint (e.g. `http://localhost:8123`).
-    /// Overrides `CLICKHOUSE_URL` for the duration of the run when
-    /// `--target clickhouse` is set. Other ClickHouse env vars
-    /// (`CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`)
-    /// are picked up by `db_clickhouse::Config::from_env()` as usual.
+    /// Overrides `CLICKHOUSE_URL` for the duration of the run. Other
+    /// ClickHouse env vars (`CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`,
+    /// `CLICKHOUSE_DATABASE`) are picked up by
+    /// `db_clickhouse::Config::from_env()` as usual.
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
 
@@ -91,7 +67,7 @@ struct Cli {
     /// `AccountEntry` state for accounts referenced in the window
     /// but never updated inside it. Optional — when unset, the
     /// bootstrap step is skipped and accounts persist as the
-    /// participants-driven skeleton rows. PG target ignores this flag.
+    /// participants-driven skeleton rows.
     #[arg(long, env = "SOROBAN_RPC_URL")]
     soroban_rpc_url: Option<String>,
 
@@ -131,6 +107,15 @@ enum Command {
         /// Last ledger sequence (inclusive).
         #[arg(long)]
         end: u32,
+
+        /// Re-index ledgers already present in the `ledgers` table. The resume
+        /// check normally skips ledgers already ingested (Run is a gap-filler),
+        /// so re-parsing an already-ingested range to populate a NEW derived
+        /// table over history (e.g. task 0359 `operation_asset_appearances`)
+        /// would be a no-op. Pass this to bypass the resume skip and re-parse
+        /// the full range. All writes are ReplacingMergeTree-idempotent.
+        #[arg(long)]
+        reindex: bool,
     },
 
     /// Report ingested / missing ledgers for a range.
@@ -151,8 +136,7 @@ enum Command {
     /// earlier `Run` was invoked without `--soroban-rpc-url` and left
     /// the dataset with elevated skeleton counts.
     ///
-    /// CH-only — Postgres target short-circuits with an info log
-    /// (PG's account-state population is independent per task 0119).
+    /// No-op when `--soroban-rpc-url` is unset.
     Bootstrap {
         /// First ledger sequence (inclusive). Used by the discovery
         /// query's `transaction_participants` JOIN.
@@ -178,8 +162,7 @@ enum Command {
     /// `ReplacingMergeTree` collapse. The remaining 6 columns
     /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
     /// tables) are filled by Stage 2 enrichment (task 0231).
-    /// Per-table staging + EXCHANGE TABLES atomic swap. CH-only —
-    /// PG target short-circuits.
+    /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop
         /// them — do not EXCHANGE. Use on laptop 1's local CH as a
@@ -201,31 +184,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// One-shot backfill of `soroban_contracts.wasm_hash` for contracts that
-    /// upgraded their WASM (task 0320). Reads the latest `executable_update`
-    /// SYSTEM event per contract from `soroban_events` (already ingested — no
-    /// S3 re-parse), parses the new wasm hash, and overrides
-    /// `wasm_hash` + `wasm_uploaded_at_ledger` via staging + `EXCHANGE TABLES`.
-    /// `contract_type` is left as-is (class never net-changes on upgrade; the
-    /// rare flip is task 0325). Run with the indexer STOPPED. Idempotent.
-    /// `--dry-run` reports the would-be corrections without writing. CH-only.
-    WasmUpgradeBackfill {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Task 0327 — backfill the `upgradeable` mutability bit into
-    /// `wasm_interface_metadata.metadata` for WASMs ingested before 0327.
-    /// Fetches each WASM's current bytecode from Soroban RPC by `wasm_hash`,
-    /// runs the import-scan parser, and re-INSERTs the merged metadata row
-    /// (ReplacingMergeTree dedups). Requires `--soroban-rpc-url`. Idempotent
-    /// (only touches rows still missing the key). `--dry-run` reports without
-    /// writing. CH-only.
-    UpgradeableBackfill {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
     /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
     /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
     /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
@@ -237,18 +195,6 @@ enum Command {
     /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
     /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Task 0331 — one-shot backfill of `assets.id` (the `ids::asset_id` surrogate)
-    /// for rows written before the column existed (all `id = 0` after
-    /// `ALTER TABLE assets ADD COLUMN id`). Computes the id in Rust (CH `cityHash64`
-    /// differs, so it can't be done in SQL), builds a staging table, and
-    /// `EXCHANGE TABLES`-swaps it. Must run BEFORE the classic→`balances` migration
-    /// and the balance-seed (both join on `assets.id`), with the indexer STOPPED
-    /// (whole-table swap). Idempotent. `--dry-run` reports without swapping. CH-only.
-    AssetsIdBackfill {
         #[arg(long)]
         dry_run: bool,
     },
@@ -265,26 +211,6 @@ enum Command {
     /// Uses `ALTER TABLE … DELETE` with `mutations_sync = 1` followed
     /// by `OPTIMIZE FINAL` to collapse tombstones. CH-only.
     NftReclassify {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Re-parse `soroban_events` through the task-0296 NFT parser and write
-    /// recovered candidates to `nfts_pending` / `nft_ownership_pending`
-    /// (CH-direct — no raw-S3 re-ingest; the dropped events are already stored
-    /// decoded). Scans only the shapes the old parser missed (map / packed-vec
-    /// / consecutive_mint); Shape-A scalars are already in pending. Writes
-    /// PENDING only — run `contract-type-rebuild` + `nft-reclassify` after to
-    /// promote/drop. Idempotent (ReplacingMergeTree). CH-only.
-    NftReparse {
-        /// First ledger sequence (inclusive).
-        #[arg(long)]
-        start: u32,
-
-        /// Last ledger sequence (inclusive).
-        #[arg(long)]
-        end: u32,
-
         #[arg(long)]
         dry_run: bool,
     },
@@ -319,8 +245,6 @@ async fn main() {
     // `.expect` converts any residual Err into an immediate panic with a
     // clear message and no graceful-exit path.
     let sink = build_sink(
-        cli.target,
-        cli.database_url.as_deref(),
         cli.clickhouse_url.as_deref(),
         cli.ch_cert.as_deref(),
         cli.ch_key.as_deref(),
@@ -328,13 +252,18 @@ async fn main() {
     );
 
     match cli.command {
-        Command::Run { start, end } => run::execute(
+        Command::Run {
+            start,
+            end,
+            reindex,
+        } => run::execute(
             &sink,
             &cli.temp_dir,
             start,
             end,
             cli.keep_partitions,
             cli.soroban_rpc_url.as_deref(),
+            reindex,
             &mp,
         )
         .await
@@ -387,64 +316,6 @@ async fn main() {
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
-        Command::AssetsIdBackfill { dry_run } => {
-            let stats = assets_id_backfill::execute(&sink, dry_run).await.expect(
-                "assets_id_backfill failed — the pass is idempotent (staging + \
-                     EXCHANGE, deterministic id), safe to re-run",
-            );
-            println!(
-                "assets_id_backfill completed (dry_run={}): total_rows={} id_zero_before={} id_zero_after={}",
-                stats.dry_run, stats.total_rows, stats.id_zero_before, stats.id_zero_after,
-            );
-            if !stats.dry_run && stats.id_zero_after > 0 {
-                eprintln!(
-                    "assets_id_backfill: {} rows still have id=0 (a row escaped the map — likely a \
-                     concurrent indexer write) — STOP the indexer and re-run",
-                    stats.id_zero_after,
-                );
-                std::process::exit(1);
-            }
-        }
-        Command::WasmUpgradeBackfill { dry_run } => {
-            let stats = wasm_upgrade_backfill::execute(&sink, dry_run).await.expect(
-                "wasm_upgrade_backfill failed — the pass is idempotent, safe to re-run \
-                     (staging + EXCHANGE; re-run corrects nothing already-correct)",
-            );
-            println!(
-                "wasm_upgrade_backfill completed (dry_run={}): upgraded_contracts={} corrected={} unparseable={}",
-                stats.dry_run, stats.upgraded_contracts, stats.corrected, stats.unparseable,
-            );
-        }
-        Command::UpgradeableBackfill { dry_run } => {
-            // rpc_url is required only on the ClickHouse path; `execute` enforces
-            // that after the Postgres no-op short-circuits, so pass it through.
-            let stats =
-                upgradeable_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
-                    .await
-                    .expect("upgradeable_backfill failed — idempotent, safe to re-run");
-            println!(
-                "upgradeable_backfill completed (dry_run={}): scanned={} resolved={} upgradeable={} frozen={} missing_on_rpc={} malformed_metadata={}",
-                stats.dry_run,
-                stats.scanned,
-                stats.resolved,
-                stats.upgradeable,
-                stats.frozen,
-                stats.missing_on_rpc,
-                stats.malformed_metadata,
-            );
-            // Unresolved in-use WASMs / skipped malformed rows are no longer a
-            // panic (task 0326 op decision): the resolved rows are already written
-            // and the summary above is the useful output. But they ARE a real
-            // anomaly the operator must chase, so a for-real run still exits
-            // non-zero (dry-run only previews, never signals failure).
-            if !stats.dry_run && (stats.missing_on_rpc > 0 || stats.malformed_metadata > 0) {
-                eprintln!(
-                    "upgradeable_backfill: {} unresolved + {} malformed left Unknown — re-run after fixing (idempotent)",
-                    stats.missing_on_rpc, stats.malformed_metadata,
-                );
-                std::process::exit(1);
-            }
-        }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse
             // target, then enforces `--soroban-rpc-url`, so just pass it through.
@@ -477,93 +348,58 @@ async fn main() {
                 stats.dropped_legacy_ownership,
             );
         }
-        Command::NftReparse {
-            start,
-            end,
-            dry_run,
-        } => {
-            let stats = nft_reparse::execute(&sink, start, end, dry_run)
-                .await
-                .expect("nft_reparse failed — idempotent, safe to re-run by range");
-            let verb = if stats.dry_run {
-                "would recover"
-            } else {
-                "recovered"
-            };
-            println!(
-                "nft_reparse completed (dry_run={}): events_scanned={} {verb} nft_pending_rows={} ownership_pending_rows={}",
-                stats.dry_run,
-                stats.events_scanned,
-                stats.nft_pending_rows,
-                stats.ownership_pending_rows,
-            );
-        }
     }
 }
 
-/// Build the `Sink` for the chosen target. Panics loudly at startup if
-/// the URL required for the chosen target is missing — same posture as
-/// the existing pre-flight panics.
+/// Build the ClickHouse `Sink`. Panics loudly at startup on a bad config
+/// (mismatched mTLS flags, unreadable PEM) — same posture as the existing
+/// pre-flight panics.
 ///
-/// The CH side reads remaining ClickHouse env vars (user, password,
-/// database) via `db_clickhouse::Config::from_env`; the `--clickhouse-url`
-/// CLI flag already overrides `CLICKHOUSE_URL` for the URL field
-/// because clap is reading the same env var.
+/// Reads ClickHouse env vars (user, password, database) via
+/// `db_clickhouse::Config::from_env`; the `--clickhouse-url` CLI flag already
+/// overrides `CLICKHOUSE_URL` for the URL field because clap reads the same
+/// env var.
 ///
-/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the CH
-/// sink instead connects over mTLS to the Caddy-fronted endpoint: the PEMs are
-/// read into an `MtlsBundle` and `client_with_mtls` presents the client cert
-/// (whose CN Caddy maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url`
-/// must be the https Caddy host; user/password are ignored on that path.
+/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the sink
+/// connects over mTLS to the Caddy-fronted endpoint: the PEMs are read into an
+/// `MtlsBundle` and `client_with_mtls` presents the client cert (whose CN Caddy
+/// maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url` must be the https
+/// Caddy host; user/password are ignored on that path.
 fn build_sink(
-    target: Target,
-    database_url: Option<&str>,
     clickhouse_url: Option<&str>,
     ch_cert: Option<&Path>,
     ch_key: Option<&Path>,
     ch_ca: Option<&Path>,
 ) -> sink::Sink {
-    match target {
-        Target::Postgres => {
-            let url = database_url.unwrap_or_else(|| {
-                panic!("--target postgres requires --database-url or DATABASE_URL env")
-            });
-            let pool = db::pool::create_pool(url).expect("failed to construct Postgres pool");
-            sink::Sink::Postgres(pool)
+    let mut cfg = db_clickhouse::Config::from_env();
+    if let Some(url) = clickhouse_url {
+        cfg.url = url.to_string();
+    }
+    match (ch_cert, ch_key, ch_ca) {
+        (Some(cert), Some(key), Some(ca)) => {
+            let read = |p: &Path| {
+                std::fs::read_to_string(p)
+                    .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
+            };
+            let bundle = db_clickhouse::mtls::MtlsBundle {
+                cert_pem: read(cert),
+                key_pem: read(key),
+                ca_pem: read(ca),
+            };
+            // `client_with_mtls` prepends `https://`, so hand it the
+            // bare host — strip any scheme / trailing slash from cfg.url.
+            let domain = cfg
+                .url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            let client = db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
+                .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
+            sink::Sink::new(client)
         }
-        Target::Clickhouse => {
-            let mut cfg = db_clickhouse::Config::from_env();
-            if let Some(url) = clickhouse_url {
-                cfg.url = url.to_string();
-            }
-            match (ch_cert, ch_key, ch_ca) {
-                (Some(cert), Some(key), Some(ca)) => {
-                    let read = |p: &Path| {
-                        std::fs::read_to_string(p)
-                            .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
-                    };
-                    let bundle = db_clickhouse::mtls::MtlsBundle {
-                        cert_pem: read(cert),
-                        key_pem: read(key),
-                        ca_pem: read(ca),
-                    };
-                    // `client_with_mtls` prepends `https://`, so hand it the
-                    // bare host — strip any scheme / trailing slash from cfg.url.
-                    let domain = cfg
-                        .url
-                        .trim_start_matches("https://")
-                        .trim_start_matches("http://")
-                        .trim_end_matches('/');
-                    let client =
-                        db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
-                            .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
-                    sink::Sink::Clickhouse(client)
-                }
-                (None, None, None) => sink::Sink::Clickhouse(db_clickhouse::client(&cfg)),
-                _ => panic!(
-                    "--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted"
-                ),
-            }
+        (None, None, None) => sink::Sink::new(db_clickhouse::client(&cfg)),
+        _ => {
+            panic!("--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted")
         }
     }
 }

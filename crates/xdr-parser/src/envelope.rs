@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 use tracing::warn;
 
 /// Canonicalize a `MuxedAccount` to the underlying ed25519 G-strkey (56 chars).
@@ -244,6 +244,20 @@ pub fn envelope_source(env: &TransactionEnvelope) -> String {
     inner_transaction(env).source_account()
 }
 
+/// The fee-bump payer's account (`fee_source`) as a G-StrKey, or `None` for a
+/// non-fee-bump envelope.
+///
+/// Distinct from [`envelope_source`] (the inner principal whose sequence is
+/// consumed and whose ops execute): the payer funds the fee but runs no ops, so
+/// it is a separate `transaction_participants` entry (task 0359 K2-4). Muxed
+/// payers collapse to their underlying G, as everywhere else.
+pub fn envelope_fee_source(env: &TransactionEnvelope) -> Option<String> {
+    match env {
+        TransactionEnvelope::TxFeeBump(fb) => Some(muxed_to_g_strkey(&fb.tx.fee_source)),
+        TransactionEnvelope::TxV0(_) | TransactionEnvelope::Tx(_) => None,
+    }
+}
+
 /// Get a reference to the inner transaction for memo extraction.
 /// For fee-bump transactions, returns the inner transaction.
 pub fn inner_transaction(env: &TransactionEnvelope) -> InnerTxRef<'_> {
@@ -408,6 +422,19 @@ mod tests {
         let got = envelope_source(&env);
         assert_eq!(got, ed25519_strkey(&inner_source));
         assert_ne!(got, ed25519_strkey(&fee_source));
+    }
+
+    #[test]
+    fn envelope_fee_source_returns_payer_only_for_fee_bump() {
+        // Fee-bump payer (task 0359 K2-4): the fee-funder, distinct from the
+        // inner source; surfaced so the fee-bump tx lands on the payer's page.
+        let fee_source = [0xCC; 32];
+        let inner_source = [0xDD; 32];
+        let fb = fee_bump_envelope(fee_source, inner_source);
+        assert_eq!(envelope_fee_source(&fb), Some(ed25519_strkey(&fee_source)));
+        // Non-fee-bump envelopes have no separate payer.
+        assert_eq!(envelope_fee_source(&v1_envelope([0xBB; 32])), None);
+        assert_eq!(envelope_fee_source(&v0_envelope([0xAA; 32])), None);
     }
 
     #[test]

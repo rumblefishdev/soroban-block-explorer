@@ -1,6 +1,6 @@
 //! Operation extraction from transaction envelopes.
 //!
-//! Extracts per-operation structured data with type-specific JSONB details.
+//! Extracts per-operation structured data with type-specific JSON details.
 //! INVOKE_HOST_FUNCTION operations get enriched extraction: contractId,
 //! functionName, functionArgs (ScVal decoded), and returnValue.
 
@@ -9,7 +9,7 @@ use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedOperation;
 use domain::OperationType;
 use serde_json::{Value, json};
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 /// Extract all operations from a transaction envelope, with optional return
 /// value from the transaction meta (for INVOKE_HOST_FUNCTION).
@@ -36,6 +36,8 @@ pub fn extract_operations(
     };
 
     let return_value = tx_meta.and_then(soroban_return_value);
+    // Resolved once; the fallback issuer for `allow_trust` ops that inherit it.
+    let tx_source = envelope.source_account();
 
     ops.iter()
         .enumerate()
@@ -46,10 +48,25 @@ pub fn extract_operations(
             // `XdrOperationDto`. See task 0172 / ADR 0028.
             let op_index = i + 1;
             let source_account = op.source_account.as_ref().map(muxed_to_g_strkey);
+            // Task 0359: every asset the op touches — body + same-op meta changes
+            // (no result grain; see `asset_appearances` docs). `op_source` (op
+            // override or tx source) is the AllowTrust issuer; it borrows
+            // `source_account`, released before the move below.
+            let op_source = source_account.as_deref().unwrap_or(&tx_source);
+            let asset_appearances = crate::asset_appearances::emit_asset_appearances(
+                &op.body,
+                op_source,
+                op_meta_changes(tx_meta, i),
+            );
+            // Shared by details (poolIds/claimedAtoms) and counterparties
+            // (crossed-offer sellers); both read the same per-op result.
+            let op_result = op_results.and_then(|rs| rs.get(i));
+            let counterparties =
+                crate::op_participants::extract_counterparties(&op.body, op_result);
             let (op_type, details) = extract_op_details(
                 &op.body,
                 return_value.as_ref(),
-                op_results.and_then(|rs| rs.get(i)),
+                op_result,
                 ledger_sequence,
                 tx_index,
                 op_index,
@@ -61,6 +78,8 @@ pub fn extract_operations(
                 op_type,
                 source_account,
                 details,
+                asset_appearances,
+                counterparties,
             }
         })
         .collect()
@@ -87,19 +106,21 @@ pub fn tx_op_results(result: &TransactionResult) -> Option<&[OperationResult]> {
     }
 }
 
-/// Liquidity-pool claim atoms crossed by a successful op result.
+/// All claim atoms — order-book AND liquidity-pool — crossed by a successful op
+/// result, in XDR vector order.
 ///
 /// Covers every atom-bearing op kind: both path-payment variants (`offers`)
 /// and all three offer ops — `ManageSellOffer` / `ManageBuyOffer` /
 /// `CreatePassiveSellOffer` (`ManageOfferSuccessResult.offers_claimed`), which
 /// can fill against an AMM (CAP-38 unified order-book + pool exchange). Empty
-/// for any non-success branch, order-book-only fills, and non-atom-bearing
-/// ops. This is the "unified claim-atom extractor" of the 0261 decision —
-/// keeping it generic means the 0266 single-pass re-parse captures offer-
-/// crossed pools too, with no second historical pass.
-fn claim_lp_atoms(op_result: &OperationResult) -> impl Iterator<Item = &ClaimLiquidityAtom> {
+/// for any non-success branch and non-atom-bearing ops. This is the "unified
+/// claim-atom extractor" of the 0261 decision — one generic pass captures every
+/// crossing, with no second historical pass. Consumers: [`claim_lp_atoms`]
+/// (pool-only, `poolIds` / `gross_volume_a`) and [`extract_counterparties`]
+/// (crossed-offer sellers, task 0359 F-C).
+pub(crate) fn claim_atoms(op_result: &OperationResult) -> &[ClaimAtom] {
     use OperationResultTr::*;
-    let offers: &[ClaimAtom] = match op_result {
+    match op_result {
         OperationResult::OpInner(PathPaymentStrictSend(PathPaymentStrictSendResult::Success(
             s,
         ))) => s.offers.as_slice(),
@@ -114,8 +135,13 @@ fn claim_lp_atoms(op_result: &OperationResult) -> impl Iterator<Item = &ClaimLiq
             m.offers_claimed.as_slice()
         }
         _ => &[],
-    };
-    offers.iter().filter_map(|a| match a {
+    }
+}
+
+/// Liquidity-pool claim atoms only — the `poolIds` / `gross_volume_a` consumer
+/// (task 0261). Order-book fills are excluded (they carry no pool id).
+fn claim_lp_atoms(op_result: &OperationResult) -> impl Iterator<Item = &ClaimLiquidityAtom> {
+    claim_atoms(op_result).iter().filter_map(|a| match a {
         ClaimAtom::LiquidityPool(lp) => Some(lp),
         _ => None,
     })
@@ -179,6 +205,39 @@ fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
             .as_ref()
             .and_then(|m| m.return_value.clone()),
         _ => None,
+    }
+}
+
+/// The ledger changes of operation `op_idx` (0-based), index-aligned with the
+/// envelope's operations. Task 0359 uses these for the meta grain — the assets
+/// of ops that name a claimable balance / LP only by id. Empty for the out-of-
+/// range index.
+///
+/// The `TransactionMeta` match is EXHAUSTIVE (no `_`) on purpose: a future
+/// variant (e.g. a Protocol-24 `V5`) must break the build HERE, not silently
+/// yield zero meta changes and drop every claim-CB / LP asset on those ledgers
+/// (the meta grain is their ONLY source). The legacy pre-Soroban metas (V0–V2)
+/// map to `&[]` because the 0359 backfill window starts at the Soroban go-live
+/// (ledger 50,457,424 / Protocol 20 / `V3`+), so V0..V2 never occur in the ingest
+/// window. NB this is a WINDOW guarantee, not a protocol one: claimable balances
+/// (Protocol 15) and liquidity pools (Protocol 18) predate `V3`, so their CB/LP
+/// ops on P15..P19 ledgers live in `V2` meta -- a pre-P20 ingest would need `V2`
+/// handling here or it would silently drop those meta-grain assets.
+fn op_meta_changes(tx_meta: Option<&TransactionMeta>, op_idx: usize) -> &[LedgerEntryChange] {
+    match tx_meta {
+        None | Some(TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_)) => {
+            &[]
+        }
+        Some(TransactionMeta::V3(v3)) => v3
+            .operations
+            .get(op_idx)
+            .map(|m| m.changes.as_slice())
+            .unwrap_or(&[]),
+        Some(TransactionMeta::V4(v4)) => v4
+            .operations
+            .get(op_idx)
+            .map(|m| m.changes.as_slice())
+            .unwrap_or(&[]),
     }
 }
 
@@ -478,15 +537,11 @@ fn format_asset(asset: &Asset) -> Value {
     match asset {
         Asset::Native => json!("native"),
         Asset::CreditAlphanum4(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
         Asset::CreditAlphanum12(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
     }
@@ -496,15 +551,11 @@ fn format_change_trust_asset(asset: &ChangeTrustAsset) -> Value {
     match asset {
         ChangeTrustAsset::Native => json!("native"),
         ChangeTrustAsset::CreditAlphanum4(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
         ChangeTrustAsset::CreditAlphanum12(a) => {
-            let code = std::str::from_utf8(a.asset_code.as_slice())
-                .unwrap_or("<invalid>")
-                .trim_end_matches('\0');
+            let code = crate::asset_code::asset_code_str(a.asset_code.as_slice());
             json!(format!("{}:{}", code, a.issuer.0.to_string()))
         }
         ChangeTrustAsset::PoolShare(params) => {
@@ -514,16 +565,7 @@ fn format_change_trust_asset(asset: &ChangeTrustAsset) -> Value {
 }
 
 fn format_asset_code(code: &AssetCode) -> Value {
-    let s = match code {
-        AssetCode::CreditAlphanum4(c) => std::str::from_utf8(c.as_slice())
-            .unwrap_or("<invalid>")
-            .trim_end_matches('\0')
-            .to_string(),
-        AssetCode::CreditAlphanum12(c) => std::str::from_utf8(c.as_slice())
-            .unwrap_or("<invalid>")
-            .trim_end_matches('\0')
-            .to_string(),
-    };
+    let s = crate::asset_code::asset_code_str(crate::asset_code::asset_code_bytes(code));
     json!(s)
 }
 

@@ -17,9 +17,16 @@ const hookMocks = vi.hoisted(() => ({
   useAssetTransactions: vi.fn(),
 }));
 
-vi.mock('../api/index.js', () => ({
+vi.mock('../api/index.js', async () => ({
   useAssetDetail: hookMocks.useAssetDetail,
   useAssetTransactions: hookMocks.useAssetTransactions,
+  // Pure pagination helper — keep the real implementation so the
+  // transactions section renders instead of hitting its error boundary.
+  usePagedRows: (
+    await vi.importActual<typeof import('../api/usePagedRows.js')>(
+      '../api/usePagedRows.js'
+    )
+  ).usePagedRows,
 }));
 
 function makeAsset(

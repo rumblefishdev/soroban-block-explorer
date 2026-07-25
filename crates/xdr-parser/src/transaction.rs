@@ -5,7 +5,7 @@
 //! `parse_error = true` — they are never dropped.
 
 use base64::Engine;
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 use tracing::warn;
 
 use crate::envelope::{self, extract_envelopes, inner_transaction, inner_tx_hash};
@@ -125,23 +125,25 @@ fn extract_single_transaction(
     let result_xdr = encode_xdr(info.result, limits, ledger_sequence, tx_index);
     let result_meta_xdr = encode_xdr_opt(info.meta, limits, ledger_sequence, tx_index);
 
-    let (source_account, envelope_xdr, memo_type, memo_value, inner_tx_hash_hex) = match envelope {
-        Some(env) => {
-            let source = envelope::envelope_source(env);
-            let env_xdr = encode_xdr(env, limits, ledger_sequence, tx_index);
-            let inner = inner_transaction(env);
-            let (mt, mv) = memo::extract_memo(inner.memo());
-            let inner_hash = inner_tx_hash(env, network_id).map(hex::encode);
-            (source, env_xdr, mt, mv, inner_hash)
-        }
-        None => {
-            warn!(
-                ledger_sequence,
-                tx_index, "envelope missing for transaction — parse_error"
-            );
-            (String::new(), String::new(), None, None, None)
-        }
-    };
+    let (source_account, fee_source, envelope_xdr, memo_type, memo_value, inner_tx_hash_hex) =
+        match envelope {
+            Some(env) => {
+                let source = envelope::envelope_source(env);
+                let fee_source = envelope::envelope_fee_source(env);
+                let env_xdr = encode_xdr(env, limits, ledger_sequence, tx_index);
+                let inner = inner_transaction(env);
+                let (mt, mv) = memo::extract_memo(inner.memo());
+                let inner_hash = inner_tx_hash(env, network_id).map(hex::encode);
+                (source, fee_source, env_xdr, mt, mv, inner_hash)
+            }
+            None => {
+                warn!(
+                    ledger_sequence,
+                    tx_index, "envelope missing for transaction — parse_error"
+                );
+                (String::new(), None, String::new(), None, None, None)
+            }
+        };
 
     let parse_error = envelope.is_none() || envelope_xdr.is_empty() || result_xdr.is_empty();
 
@@ -150,6 +152,7 @@ fn extract_single_transaction(
         inner_tx_hash: inner_tx_hash_hex,
         ledger_sequence,
         source_account,
+        fee_source,
         fee_charged,
         successful,
         result_code,
@@ -161,6 +164,7 @@ fn extract_single_transaction(
         created_at: closed_at,
         operation_tree: None,
         parse_error,
+        ledger_deltas: crate::ledger_balance_deltas(info.meta),
     }
 }
 
@@ -241,7 +245,7 @@ mod parse_error_tests {
     use crate::envelope::tx_envelope_hash;
     use crate::{MAINNET_PASSPHRASE, network_id};
     use sha2::{Digest, Sha256};
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ExtensionPoint, Hash, LedgerCloseMetaV0, LedgerEntryChanges, LedgerHeader, LedgerHeaderExt,
         LedgerHeaderHistoryEntry, LedgerHeaderHistoryEntryExt, Memo, MuxedAccount, OperationResult,
         Preconditions, SequenceNumber, StellarValue, StellarValueExt, TimePoint, Transaction,

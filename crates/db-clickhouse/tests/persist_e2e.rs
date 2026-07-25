@@ -61,6 +61,7 @@ fn fixture_tx() -> ExtractedTransaction {
         inner_tx_hash: None,
         ledger_sequence: E2E_LEDGER,
         source_account: source_account(),
+        fee_source: None,
         fee_charged: 100,
         successful: true,
         result_code: "txSuccess".into(),
@@ -72,6 +73,7 @@ fn fixture_tx() -> ExtractedTransaction {
         memo: None,
         created_at: 1_700_000_000,
         parse_error: false,
+        ledger_deltas: vec![],
     }
 }
 

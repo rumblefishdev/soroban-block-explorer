@@ -5,13 +5,17 @@ import {
   ExplorerTable,
   formatFee,
   IdentifierDisplay,
-  IdentifierWithCopy,
-  StatusChip,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Typography } from '@mui/material';
 
-import { OperationCell } from './cells.js';
+import {
+  hashColumn,
+  ledgerColumn,
+  OperationCell,
+  statusColumn,
+  ValueCell,
+} from './cells.js';
 import { TransactionTime } from './TransactionTime.js';
 
 interface TransactionsTableProps {
@@ -21,20 +25,8 @@ interface TransactionsTableProps {
 }
 
 const columns: ExplorerTableColumn<TransactionListItem>[] = [
-  {
-    id: 'hash',
-    header: 'Hash',
-    width: 160,
-    cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
-  },
-  {
-    id: 'ledger',
-    header: 'Ledger',
-    width: 120,
-    cell: (row) => (
-      <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
-    ),
-  },
+  hashColumn<TransactionListItem>(),
+  ledgerColumn<TransactionListItem>(),
   {
     id: 'source',
     header: 'Source account',
@@ -52,11 +44,12 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
     width: 190,
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
+  statusColumn<TransactionListItem>(),
   {
-    id: 'status',
-    header: 'Status',
-    width: 120,
-    cell: (row) => <StatusChip successful={row.successful} />,
+    id: 'net_settled',
+    header: 'Net settled',
+    width: 170,
+    cell: (row) => <ValueCell values={row.values} />,
   },
   {
     id: 'fee',

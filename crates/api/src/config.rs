@@ -4,8 +4,6 @@
 //! that `fn app(&AppConfig) -> Router` stays pure — tests construct
 //! their own `AppConfig` without touching `std::env`.
 
-use crate::common::datasource::DataSource;
-
 /// Application-wide runtime configuration.
 ///
 /// The `version` advertised in the OpenAPI spec is sourced from
@@ -18,12 +16,6 @@ pub struct AppConfig {
     /// domain (e.g. `https://api.staging.sorobanscan.rumblefish.dev`);
     /// locally it falls back to `http://localhost:9000`.
     pub base_url: String,
-    /// True when at least one handler module is configured to read
-    /// from ClickHouse via `API_DATASOURCE_<MODULE>=ch`. Drives the
-    /// cold-start decision in `main.rs` to build (or skip) the mTLS
-    /// CH client; PG-only deploys keep `false` and never touch the
-    /// Secrets Lambda Extension.
-    pub ch_enabled: bool,
     /// Shared secret that Cloudflare injects as the `X-Edge-Secret` header on
     /// every request it forwards to the origin (origin lock, task 0277 / ADR
     /// 0048). When `Some`, the [`crate::common::edge_lock`] middleware rejects
@@ -68,7 +60,6 @@ impl AppConfig {
         Self {
             base_url: std::env::var("API_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:9000".to_string()),
-            ch_enabled: DataSource::any_ch_enabled(),
             // Treat empty OR whitespace-only as unset (no-op) — never arm the
             // lock on a near-empty/low-entropy value. The real value is kept
             // verbatim (the CDK secret is alnum, so nothing to trim away).

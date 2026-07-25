@@ -32,9 +32,7 @@
 //! Reads CURRENT state, so it is **freshness-immune to the indexer lag** — the
 //! seed is correct at run time no matter how far behind live ingest is.
 //! Idempotent: a re-run re-reads + re-upserts. `--dry-run` reports counts without
-//! writing. CH-only — the unified `balances` model lives in ClickHouse, so a
-//! non-ClickHouse (e.g. Postgres) target is REJECTED with `BackfillError::Incomplete`,
-//! not silently no-op'd.
+//! writing. The unified `balances` model lives in ClickHouse.
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
@@ -106,11 +104,7 @@ pub async fn execute(
     dry_run: bool,
 ) -> Result<BalanceSeedStats, BackfillError> {
     // ClickHouse-only — the unified balances model is CH; PG retired.
-    let Sink::Clickhouse(client) = sink else {
-        return Err(BackfillError::Incomplete(
-            "balance-seed is ClickHouse-only (unified balances model; PG retired)".to_string(),
-        ));
-    };
+    let client = sink.client();
 
     let rpc_url = rpc_url.ok_or_else(|| {
         BackfillError::Incomplete(

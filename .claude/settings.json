@@ -96,7 +96,12 @@
       "Bash(docker logs:*)",
       "Bash(docker inspect:*)",
       "Bash(docker compose ps:*)",
-      "Bash(docker compose logs:*)"
+      "Bash(docker compose logs:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo check:*)",
+      "Bash(npx nx run @rumblefish/api-types:check-generated:*)",
+      "Bash(npx nx run @rumblefish/api-types:generate:*)"
     ],
     "deny": [],
     "ask": [

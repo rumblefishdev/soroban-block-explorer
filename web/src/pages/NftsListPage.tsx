@@ -3,11 +3,10 @@ import type { ListNftsData } from '@rumblefish/api-types';
 import {
   isContractId,
   useCursorPagination,
-  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo } from 'react';
 
-import { useNftsList } from '../api/index.js';
+import { PAGE_SIZE, useNftsList, usePagedRows } from '../api/index.js';
 
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
@@ -15,8 +14,6 @@ import { NftFilters } from './nfts/NftFilters.js';
 import { NFT_COLUMN_COUNT, NftsTable } from './nfts/NftsTable.js';
 
 type Filters = NonNullable<ListNftsData['query']>;
-
-const PAGE_SIZE = 20;
 
 export default function NftsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
@@ -41,9 +38,8 @@ export default function NftsListPage() {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useNftsList(cursor, queryFilters);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );

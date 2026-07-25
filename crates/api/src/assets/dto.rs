@@ -36,9 +36,8 @@ pub struct AssetItem {
     /// the reserved `native` token for native XLM, the contract StrKey
     /// (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
     /// `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
-    /// the dropped numeric surrogate (PR #175 / the PG→CH composite move):
-    /// CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
-    /// with no surrogate.
+    /// the dropped numeric surrogate (PR #175): assets are keyed on
+    /// `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
     pub id: String,
     /// `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
     /// only on schema drift.
@@ -105,10 +104,23 @@ pub struct AssetTransactionItem {
     pub ledger_sequence: i64,
     pub source_account: String,
     pub successful: bool,
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     pub created_at: DateTime<Utc>,
     pub operation_count: i16,
     pub has_soroban: bool,
     /// Distinct `op_type_name(...)` labels for every op in the tx, sorted asc.
     pub operation_types: Vec<String>,
+}
+/// Pagination payload for `GET /v1/assets`. The keyset walks the natural
+/// identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)` — the
+/// exact `ORDER BY` of the CH `assets` table. Serialized into the opaque wire
+/// cursor (ADR 0008), so it lives on the DTO boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetKeyCursor {
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub contract_id: i64,
 }

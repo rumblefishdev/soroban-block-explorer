@@ -100,7 +100,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clickhouse",
- "db",
  "db-clickhouse",
  "domain",
  "enrichment-shared",
@@ -112,7 +111,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sqlx",
  "stellar-strkey 0.0.16",
  "stellar-xdr",
  "thiserror",
@@ -391,30 +389,6 @@ dependencies = [
  "sha2",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "aws-sdk-secretsmanager"
-version = "1.103.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae64963d3d16d8070aaa2fb79c11cd3b13f44d2f13bba3fe8f49dcd2c42f2987"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http 0.63.6",
- "aws-smithy-json 0.62.5",
- "aws-smithy-observability",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand",
- "http 0.2.12",
- "http 1.4.0",
- "regex-lite",
- "tracing",
 ]
 
 [[package]]
@@ -894,22 +868,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "backfill-bench"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "db",
- "db-partition-mgmt",
- "indexer",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "xdr-parser",
-]
-
-[[package]]
 name = "backfill-enrichment-runner"
 version = "0.1.0"
 dependencies = [
@@ -934,7 +892,6 @@ dependencies = [
  "chrono",
  "clap",
  "clickhouse",
- "db",
  "db-clickhouse",
  "domain",
  "hex",
@@ -943,7 +900,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sqlx",
  "stellar-strkey 0.0.16",
  "stellar-xdr",
  "tempfile",
@@ -1076,17 +1032,6 @@ name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
-
-[[package]]
-name = "cfg_eval"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45565fc9416b9896014f5732ac776f810ee53a66730c17e4020c3ec064a8f88f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "chrono"
@@ -1445,20 +1390,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
-name = "db"
-version = "0.1.0"
-dependencies = [
- "aws-config",
- "aws-sdk-secretsmanager",
- "percent-encoding",
- "serde_json",
- "sqlx",
-]
-
-[[package]]
 name = "db-clickhouse"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "cityhash-rs",
  "clickhouse",
@@ -1479,51 +1414,6 @@ dependencies = [
  "tracing-subscriber",
  "webpki-roots 1.0.6",
  "xdr-parser",
-]
-
-[[package]]
-name = "db-merge"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "sqlx",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "db-migrate"
-version = "0.1.0"
-dependencies = [
- "db",
- "lambda_runtime",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "db-partition-mgmt"
-version = "0.1.0"
-dependencies = [
- "aws-config",
- "aws-sdk-cloudwatch",
- "chrono",
- "clap",
- "db",
- "lambda_runtime",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1616,7 +1506,6 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "sqlx",
  "thiserror",
  "utoipa",
 ]
@@ -1768,9 +1657,9 @@ dependencies = [
 
 [[package]]
 name = "ethnum"
-version = "1.5.2"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca81e6b4777c89fd810c25a4be2b1bd93ea034fbe58e6a75216a34c6b82c539b"
+checksum = "40404c3f5f511ec4da6fe866ddf6a717c309fdbb69fbbad7b0f3edab8f2e835f"
 
 [[package]]
 name = "event-listener"
@@ -2522,7 +2411,6 @@ dependencies = [
  "aws-sdk-sqs",
  "chrono",
  "clickhouse",
- "db",
  "db-clickhouse",
  "domain",
  "enrichment-shared",
@@ -2531,7 +2419,6 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
- "sqlx",
  "stellar-xdr",
  "thiserror",
  "tokio",
@@ -4339,11 +4226,10 @@ dependencies = [
 
 [[package]]
 name = "stellar-xdr"
-version = "26.0.0"
+version = "27.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fea3195594b044ea3a5b05906f81d945480825f00db4e3ae7d77526bf546ff3a"
+checksum = "05ff843326969bdf1ef673dcdba94c08f4a3c8f1e58d6e6ef39b1bd4f749179a"
 dependencies = [
- "cfg_eval",
  "crate-git-revision",
  "escape-bytes",
  "ethnum",
@@ -4907,8 +4793,15 @@ dependencies = [
  "serde_json",
  "url",
  "utoipa",
+ "utoipa-swagger-ui-vendored",
  "zip",
 ]
+
+[[package]]
+name = "utoipa-swagger-ui-vendored"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2eebbbfe4093922c2b6734d7c679ebfebd704a0d7e56dfcb0d05818ce28977d"
 
 [[package]]
 name = "uuid"

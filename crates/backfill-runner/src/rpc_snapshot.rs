@@ -73,10 +73,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use stellar_xdr::curr::{
+use stellar_xdr::{
     AccountId, ContractDataDurability, ContractId, Hash, LedgerEntryData, LedgerKey,
-    LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, Limits,
-    PublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, ScVec, TrustLineAsset, Uint256, WriteXdr,
+    LedgerKeyAccount, LedgerKeyContractData, LedgerKeyTrustLine, Limits, PublicKey, ReadXdr,
+    ScAddress, ScSymbol, ScVal, ScVec, TrustLineAsset, Uint256, WriteXdr,
 };
 use tracing::warn;
 
@@ -260,15 +260,6 @@ pub fn account_ledger_key(strkey: &str) -> Option<LedgerKey> {
     };
     let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
     Some(LedgerKey::Account(LedgerKeyAccount { account_id }))
-}
-
-/// Build a `LedgerKey::ContractCode` from a 32-byte WASM hash (task 0327).
-/// Used by the `upgradeable-backfill` pass to fetch a contract's current WASM
-/// bytecode from Soroban RPC and re-derive its mutability bit.
-pub fn contract_code_ledger_key(wasm_hash: [u8; 32]) -> LedgerKey {
-    LedgerKey::ContractCode(LedgerKeyContractCode {
-        hash: Hash(wasm_hash),
-    })
 }
 
 /// Build a `LedgerKey::ContractData` for a token's per-holder balance entry —
@@ -491,7 +482,7 @@ pub fn rebuild_trustline_asset(
     code: &str,
     issuer_strkey: &str,
 ) -> Option<TrustLineAsset> {
-    use stellar_xdr::curr::{AlphaNum4, AlphaNum12, AssetCode4, AssetCode12};
+    use stellar_xdr::{AlphaNum4, AlphaNum12, AssetCode4, AssetCode12};
     let issuer_pk = stellar_strkey::ed25519::PublicKey::from_string(issuer_strkey).ok()?;
     let issuer = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(issuer_pk.0)));
     match asset_type {
@@ -640,7 +631,7 @@ pub enum RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         AccountEntry, AccountEntryExt, AlphaNum4, AssetCode4, Int64, SequenceNumber, String32,
         Thresholds, TrustLineEntry, TrustLineEntryExt, VecM,
     };
@@ -743,7 +734,7 @@ mod tests {
         });
         assert!(decode_trustline_snapshot(&native).is_none());
 
-        use stellar_xdr::curr::{Hash, PoolId};
+        use stellar_xdr::{Hash, PoolId};
         let pool_share = LedgerEntryData::Trustline(TrustLineEntry {
             account_id: owner,
             asset: TrustLineAsset::PoolShare(PoolId(Hash([0u8; 32]))),
@@ -800,7 +791,7 @@ mod tests {
 
     // --- task 0331: per-holder token balance key + entry decode (RPC seed) ---
 
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ContractDataDurability, ContractDataEntry, ContractId, ExtensionPoint, Int128Parts,
         ScAddress, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec,
     };

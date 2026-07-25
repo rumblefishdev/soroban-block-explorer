@@ -46,12 +46,15 @@ use serde_json::Value;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
+use xdr_parser::asset_appearances::AssetRef;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
+use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
+use xdr_parser::{EventAsset, LedgerAsset};
 
 use xdr_parser::event::extract_executable_update_new_wasm_hash;
 
@@ -113,6 +116,12 @@ pub struct StagedLedger {
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
     pub op_rows: Vec<OperationAppearanceRow>,
+    /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
+    /// the asset-dimension twin of `participant_rows`.
+    pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
+    /// Per-(pool, tx) presence rows (task 0365) → `operation_pools`, the
+    /// pool-dimension twin of `participant_rows` / `op_asset_rows`.
+    pub op_pool_rows: Vec<OperationPoolRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
@@ -443,7 +452,68 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ---- Accounts universe + per-tx participant union ----
     let mut account_keys: HashSet<String> = HashSet::new();
     let mut participants_per_tx: HashMap<String, HashSet<String>> = HashMap::new();
+    // Task 0383 (K3-4 asset side): (asset_id) touched by a decoded Soroban token
+    // event, per tx. Emitted into `operation_asset_appearances` once tx_ids are
+    // resolved. `HashSet` dedups the common case of many token events per tx.
+    let mut event_assets_per_tx: HashMap<String, HashSet<i64>> = HashMap::new();
     let has_soroban: HashMap<String, bool> = tx_has_soroban_map(operations);
+
+    // Net-settled "value moved" per (tx, asset), looked up when the
+    // `operation_asset_appearances` presence rows are emitted below.
+    //
+    // Value comes from the AUTHORITATIVE LEDGER — the account / trustline /
+    // ContractData balance changes consensus actually applied — for EVERY tx,
+    // classic or Soroban. Token EVENTS are contract-emitted LOGS (any contract can
+    // emit any `"transfer"` it likes), so they are NEVER trusted for value; a
+    // ledger balance cannot be forged. `ledger_deltas` carries the per-(holder,
+    // asset) balance deltas: native (`AccountEntry`), classic credit
+    // (`TrustLineEntry`), SAC contract-held (`ContractData` `Balance` struct), and
+    // bespoke token balances (`ContractData` `Balance` bare i128). `sac_classic`
+    // re-maps a contract-held SAC balance onto the wrapped classic asset (a SAC
+    // address is a one-way hash of its asset, so the reverse needs the registry).
+    // `None` = the reduction was not representable in i128 → NULL ("not computed"),
+    // never a wrapped figure.
+    //
+    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
+    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet. Seed those
+    // current-ledger carriers so a same-ledger contract-held SAC balance re-keys
+    // onto the wrapped classic/native id instead of orphaning on its surrogate.
+    // This seeded `sac_map` feeds BOTH the value reduction here AND
+    // `build_balance_rows` below, so a C→C transfer of a just-registered SAC nets
+    // correctly on both paths (its legs are both `SacWrapped`). Guarded: the
+    // common ledger (no new SAC) skips the clone; the DB map wins (`or_insert`).
+    let effective_sac_classic;
+    let sac_map: &HashMap<i64, i64> = if assets.iter().any(|t| t.sac_contract_id.is_some()) {
+        let mut m = sac_classic.clone();
+        for t in assets {
+            if let Some(sac) = t.sac_contract_id.as_deref() {
+                let issuer_id = t
+                    .issuer_address
+                    .as_deref()
+                    .map(ids::account_id)
+                    .unwrap_or(0);
+                let classic = ids::asset_id(
+                    t.asset_type as i16,
+                    t.asset_code.as_deref().unwrap_or(""),
+                    issuer_id,
+                    0,
+                );
+                m.entry(ids::contract_id(sac)).or_insert(classic);
+            }
+        }
+        effective_sac_classic = m;
+        &effective_sac_classic
+    } else {
+        sac_classic
+    };
+
+    let mut amount_by_tx_asset: HashMap<(String, i64), Option<i128>> = HashMap::new();
+    for tx in transactions {
+        for ns in ledger_deltas_net_settled(&tx.ledger_deltas, sac_map) {
+            amount_by_tx_asset.insert((tx.hash.clone(), ns.asset_id), ns.amount);
+        }
+    }
+
     // O(1) per-tx op count lookup. Built once over `operations` so the
     // transactions loop stays linear in `transactions.len()` rather than
     // the prior O(tx_count × op_groups) `iter().find()` scan.
@@ -453,11 +523,18 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         .collect();
 
     for tx in transactions {
+        let entry = participants_per_tx.entry(tx.hash.clone()).or_default();
         account_keys.insert(tx.source_account.clone());
-        participants_per_tx
-            .entry(tx.hash.clone())
-            .or_default()
-            .insert(tx.source_account.clone());
+        entry.insert(tx.source_account.clone());
+        // Task 0359 K2-4: the fee-bump payer funds the fee but runs no ops and is
+        // not the inner source — register it so the fee-bump tx shows on the
+        // payer's account page. `Some` only for fee-bump envelopes.
+        if let Some(fee_source) = &tx.fee_source
+            && is_strkey_account(fee_source)
+        {
+            account_keys.insert(fee_source.clone());
+            entry.insert(fee_source.clone());
+        }
     }
 
     for (tx_hash, ops) in operations {
@@ -467,23 +544,64 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 account_keys.insert(src.clone());
                 entry.insert(src.clone());
             }
-            for key in op_participant_str_keys(op.op_type, &op.details) {
-                account_keys.insert(key.clone());
-                entry.insert(key);
+            // Task 0359 F-C (K1-5): typed parser-emitted counterparties — every
+            // account the op involves besides its source (destinations, crossed-
+            // offer sellers, CB claimants, inflationDest, revoke targets). The
+            // single op-side participant source, replacing the old string-`details`
+            // participant extraction. `is_strkey_account` guards, the
+            // `starts_with('G')` retain below is the final backstop.
+            for key in &op.counterparties {
+                if is_strkey_account(key) {
+                    account_keys.insert(key.clone());
+                    entry.insert(key.clone());
+                }
             }
+            // Asset issuers are deliberately NOT registered as participants (task
+            // 0359, decision 1c): an asset's activity lives on its ASSET page
+            // (`operation_asset_appearances`), and the issuer is derivable from the
+            // asset_id — registering the issuer on every tx touching its asset
+            // would be redundant with that index and would flood a popular
+            // issuer's account page. Issuers still enter the `accounts` universe
+            // via detected-asset extraction below.
         }
     }
 
+    // Task 0383 (K2-7 + K3-4): decode SEP-41 / CAP-67 token events
+    // (transfer / mint / burn / clawback) into participant + asset presence.
+    //
+    // Scope: only Soroban-context txs (`has_soroban`). Protocol 23 makes every
+    // classic payment emit a SAC transfer event too, but those txs already
+    // register their accounts + assets via the op path (0359) — measured 99.4%
+    // of transfer events, with 670/670 participant coverage (see lore 0383
+    // S-devils-advocate-findings). The net-new value is the contract-internal
+    // flows a classic op never sees, i.e. exactly the `has_soroban` txs.
+    // Presence only — no amount (the tx-detail page decodes it from archive XDR).
     for (tx_hash, evs) in events {
+        if !has_soroban.get(tx_hash).copied().unwrap_or(false) {
+            continue;
+        }
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
+        let asset_entry = event_assets_per_tx.entry(tx_hash.clone()).or_default();
         for ev in evs {
-            if let Some((from, to)) = xdr_parser::transfer_participants(&ev.topics) {
-                for participant in [from, to] {
-                    if is_strkey_account(&participant) {
-                        account_keys.insert(participant.clone());
-                        entry.insert(participant);
-                    }
-                }
+            // Skip diagnostic-source events — they are host trace/simulation
+            // output, not a real state change, and are dropped from the
+            // persisted `soroban_events` (below). Filtering here keeps live
+            // ingest byte-identical to the backfill (which reads `soroban_events`)
+            // and never registers a participant/asset from a failed-call trace.
+            if is_diagnostic(ev.source) {
+                continue;
+            }
+            let Some(derived) =
+                derive_token_event(&ev.topics, ev.contract_id.as_deref().map(ids::contract_id))
+            else {
+                continue;
+            };
+            for key in derived.participant_strkeys {
+                account_keys.insert(key.clone());
+                entry.insert(key);
+            }
+            if let Some(asset_id) = derived.asset_id {
+                asset_entry.insert(asset_id);
             }
         }
     }
@@ -681,43 +799,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // (task 0297) On-chain token name/symbol/decimals → the dedicated
     // `soroban_contract_metadata` side table. A pure 1:1 map of the producer's
     // output (extraction + SAC-skip already done), built here like the other
-    // `out.*` rows rather than post-`prepare`. This coexists with the legacy
-    // `Symbol("name")` path (parser `extract_contract_data_name_writes`, deploy
-    // second pass, `soroban_contracts.name`); full removal of that path is
-    // deferred to task 0304.
+    // `out.*` rows rather than post-`prepare`. (The legacy `Symbol("name")` →
+    // `soroban_contracts.name` write path was removed with Postgres in task
+    // 0244; the dead-column DROP is task 0304 / 0310.)
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
-    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
-    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet — it's written to
-    // `asset_sac` during this same staging. Seed those current-ledger carriers so a
-    // same-ledger contract-held balance re-keys onto the wrapped classic/native id
-    // instead of orphaning on its surrogate. Guarded: the common ledger (no new SAC,
-    // or no balances) skips the clone; the DB map wins on conflict (`or_insert`).
-    let effective_sac_classic;
-    let sac_map: &HashMap<i64, i64> = if !soroban_token_balances.is_empty()
-        && assets.iter().any(|t| t.sac_contract_id.is_some())
-    {
-        let mut m = sac_classic.clone();
-        for t in assets {
-            if let Some(sac) = t.sac_contract_id.as_deref() {
-                let issuer_id = t
-                    .issuer_address
-                    .as_deref()
-                    .map(ids::account_id)
-                    .unwrap_or(0);
-                let classic = ids::asset_id(
-                    t.asset_type as i16,
-                    t.asset_code.as_deref().unwrap_or(""),
-                    issuer_id,
-                    0,
-                );
-                m.entry(ids::contract_id(sac)).or_insert(classic);
-            }
-        }
-        effective_sac_classic = m;
-        &effective_sac_classic
-    } else {
-        sac_classic
-    };
+    // `sac_map` (seeded above with this-ledger SAC carriers, before the value
+    // reduction) re-keys a contract-held SAC balance onto its wrapped
+    // classic/native asset.
     out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
@@ -761,6 +849,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             hash,
             ledger_sequence: ledger_sequence_i64,
         });
+
+        // Fee-bump: also index the inner-tx hash so a lookup by the inner
+        // hash resolves to the wrapping fee-bump (Horizon `inner_transaction`
+        // semantics). `inner_tx_hash → ledger_sequence` is immutable, same as
+        // the outer key (task 0375).
+        if let Some(inner) = inner_tx_hash {
+            out.hash_index_rows.push(TransactionHashIndexRow {
+                hash: inner,
+                ledger_sequence: ledger_sequence_i64,
+            });
+        }
     }
 
     // ---- transaction_participants ----
@@ -861,7 +960,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 .transpose()?,
             // Asset-A-side trade volume for this (pool, ledger) from claim atoms
             // (0261). `None` when the pool had no trade this ledger. USD volume/
-            // fee_revenue remain read-time (ADR 0048); those columns stay NULL.
+            // fee_revenue remain read-time (ADR 0053); those columns stay NULL.
             gross_volume_a: gross_volume_by_pool.get(&pool_id).copied(),
         });
     }
@@ -926,7 +1025,49 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         if !tx_id_by_hash.contains_key(tx_hash) {
             continue;
         }
+        // Per-tx dedup for the asset fan-out (PR #6): N ops touching the same
+        // asset in one tx would otherwise write N identical (asset, tx) rows. The
+        // RMT sort key collapses them eventually, but deduping at write cuts the
+        // backfilled volume up front. Scoped per tx — one entry per tx_hash here.
+        let mut seen_tx_asset_ids: HashSet<i64> = HashSet::new();
+        // Same per-tx dedup for the pool fan-out (task 0365): N ops crossing the
+        // same pool in one tx → one (pool, tx) row.
+        let mut seen_tx_pool_ids: HashSet<[u8; 32]> = HashSet::new();
         for op in ops {
+            // ---- operation_asset_appearances (task 0359, pure presence) ----
+            // Asset-dimension twin of transaction_participants: one row per
+            // (asset the op touches, tx). Native is a FIRST-CLASS surrogate (never
+            // the empty-string sentinel); classic credit hashes
+            // code:issuer_surrogate — both via `ids::asset_id`.
+            if !op.asset_appearances.is_empty() {
+                let tx_id = tx_id_by_hash[tx_hash];
+                for asset in &op.asset_appearances {
+                    let asset_id = match asset {
+                        AssetRef::Native => ids::NATIVE_ASSET_ID,
+                        AssetRef::Credit { code, issuer } => ids::credit_asset_id(code, issuer),
+                    };
+                    if seen_tx_asset_ids.insert(asset_id) {
+                        out.op_asset_rows.push(OperationAssetAppearanceRow {
+                            asset_id,
+                            ledger_sequence: ledger_sequence_i64,
+                            transaction_id: tx_id,
+                            // `Some(v)` = reduced; `None` (-> NULL) = touched but
+                            // not computable (i128-unrepresentable, or a
+                            // recognised token event whose amount we could not
+                            // read). The `Some(0)` fallback is for an asset an
+                            // OPERATION BODY declared that no movement reduced —
+                            // the reducer ran over this tx and found nothing
+                            // settling for it, so "computed, net zero" is the
+                            // honest answer, not an absence of information.
+                            net_settled: amount_by_tx_asset
+                                .get(&(tx_hash.clone(), asset_id))
+                                .copied()
+                                .unwrap_or(Some(0)),
+                        });
+                    }
+                }
+            }
+
             let typed = OpTyped::from_details(op.op_type, &op.details);
             let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
             for h in &typed.pool_ids_hex {
@@ -934,6 +1075,27 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             }
             pool_ids.sort_unstable();
             pool_ids.dedup();
+
+            // ---- operation_pools (task 0365, pure presence) ----
+            // Pool-dimension twin of the asset fan-out above: one row per (pool
+            // the op crossed, tx). `pool_ids` is already the sorted+deduped
+            // crossing list; dedup per-tx so N ops crossing the same pool in one
+            // tx write one (pool, tx) row (the RMT collapses any residual). Sourced
+            // from `oa.pool_ids` — no XDR-only data, so a plain CH re-key can
+            // backfill it (task 0365 Path B).
+            if !pool_ids.is_empty() {
+                let tx_id = tx_id_by_hash[tx_hash];
+                for pool_id in &pool_ids {
+                    if seen_tx_pool_ids.insert(*pool_id) {
+                        out.op_pool_rows.push(OperationPoolRow {
+                            pool_id: *pool_id,
+                            ledger_sequence: ledger_sequence_i64,
+                            transaction_id: tx_id,
+                        });
+                    }
+                }
+            }
+
             let key = OpKey {
                 tx_hash_hex: tx_hash.clone(),
                 op_type: op.op_type as i16,
@@ -975,6 +1137,33 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             amount: agg.count,
             ledger_sequence: ledger_sequence_i64,
         });
+    }
+
+    // ---- operation_asset_appearances: event-derived (task 0383, K3-4) ----
+    // SAC / bespoke token moves (transfer / mint / burn / clawback) make the
+    // moved asset appear in the tx. Same (asset, tx) grain as the op-derived
+    // rows above; the RMT collapses any overlap. Presence only (model A).
+    for (tx_hash, asset_ids) in &event_assets_per_tx {
+        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
+            continue;
+        };
+        for &asset_id in asset_ids {
+            out.op_asset_rows.push(OperationAssetAppearanceRow {
+                asset_id,
+                ledger_sequence: ledger_sequence_i64,
+                transaction_id: tx_id,
+                // These asset ids come from token EVENTS, but value is reduced from
+                // the LEDGER (a different source), so an event-declared asset may
+                // have no ledger-reduced entry — e.g. a contract-held SAC whose
+                // registry lookup missed, or an asset the ledger did not actually
+                // move. A miss means "value not computed for this (tx, asset)" →
+                // `None` (NULL), NOT a fabricated `Some(0)`.
+                net_settled: amount_by_tx_asset
+                    .get(&(tx_hash.clone(), asset_id))
+                    .copied()
+                    .unwrap_or(None),
+            });
+        }
     }
 
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a) ----
@@ -1476,14 +1665,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             let balance_str = b.get("balance").and_then(Value::as_str).unwrap_or("0");
             let amount = decimal7_string_to_i128(balance_str)?;
             let asset_id = if asset_type == AssetType::Native {
-                ids::asset_id(0, "", 0, 0)
+                ids::NATIVE_ASSET_ID
             } else {
                 let code = b.get("asset_code").and_then(Value::as_str).unwrap_or("");
                 let issuer = b.get("issuer").and_then(Value::as_str).unwrap_or("");
                 if code.is_empty() || issuer.is_empty() {
                     continue;
                 }
-                ids::asset_id(1, code, ids::account_id(issuer), 0)
+                ids::credit_asset_id(code, issuer)
             };
             upsert_balance(
                 &mut balance_dedup,
@@ -1500,7 +1689,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             if code.is_empty() || issuer.is_empty() {
                 continue;
             }
-            let asset_id = ids::asset_id(1, code, ids::account_id(issuer), 0);
+            let asset_id = ids::credit_asset_id(code, issuer);
             upsert_balance(&mut balance_dedup, account_id_int, asset_id, 0, watermark);
         }
     }
@@ -1875,44 +2064,6 @@ fn split_pool_asset(asset: &Value) -> Option<(AssetType, Option<String>, Option<
     Some((ty, code, issuer))
 }
 
-fn op_participant_str_keys(op_type: OperationType, details: &Value) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut push = |v: Option<String>| {
-        if let Some(s) = v
-            && is_strkey_account(&s)
-        {
-            out.push(s);
-        }
-    };
-    use OperationType as Op;
-    match op_type {
-        Op::CreateAccount
-        | Op::Payment
-        | Op::PathPaymentStrictReceive
-        | Op::PathPaymentStrictSend
-        | Op::AccountMerge => {
-            push(str_field(details, "destination"));
-        }
-        Op::Clawback => {
-            push(str_field(details, "from"));
-        }
-        Op::AllowTrust | Op::SetTrustLineFlags => {
-            push(str_field(details, "trustor"));
-        }
-        Op::BeginSponsoringFutureReserves => {
-            push(str_field(details, "sponsoredId"));
-        }
-        _ => {}
-    }
-    for field in ["asset", "destAsset", "sendAsset"] {
-        if let Some(asset) = details.get(field) {
-            let (_, issuer) = split_asset_ref(asset);
-            push(issuer);
-        }
-    }
-    out
-}
-
 #[derive(Debug, Default)]
 struct AccountOverride {
     sequence_number: i64,
@@ -1989,6 +2140,350 @@ fn merge_account_state_overrides(
             )
         })
         .collect()
+}
+
+/// The 0383 presence rows derived from one Soroban token event: the G-account
+/// participants and (for SAC-wrapped classic/native only) the touched asset
+/// surrogate. Shared by ingest (below) and the `soroban_token_flow` backfill so
+/// both emit byte-identical rows — the surrogate hashing is `cityhash_102_128`
+/// (see [`ids`]) and cannot be reproduced in CH SQL, so a single Rust source of
+/// truth is the only way to guarantee the backfill dedups against live rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedTokenEvent {
+    /// `from`/`to` operands that are G-accounts (contract `C…` addresses dropped).
+    pub participant_strkeys: Vec<String>,
+    /// Asset surrogate resolved by [`event_asset_surrogate`] (task 0393): Native →
+    /// `NATIVE_ASSET_ID`, Credit → `credit_asset_id(code, issuer)` (both match the
+    /// op-derived `operation_asset_appearances` keys exactly, so event rows dedup
+    /// against op rows), and bespoke `EventAsset::Bespoke` → the **emitting
+    /// contract's own surrogate** (a type-3 token's asset_id == its contract id).
+    /// `None` only when a bespoke event carries no emitting contract id. (Before
+    /// task 0393 bespoke returned `None` and relied on arm B / invocation
+    /// appearances; 0393 needs the amount, which arm B has no concept of, so
+    /// bespoke now writes arm A here.)
+    pub asset_id: Option<i64>,
+}
+
+/// The `operation_asset_appearances` surrogate for a decoded token event's asset
+/// — the one place the event paths (presence + value-moved) resolve it, so their
+/// keys always match. Native → `NATIVE_ASSET_ID`, Credit → `ids::credit_asset_id`,
+/// bespoke (`Bespoke`, no SEP-11 asset string) → the **emitting contract's own
+/// surrogate** (a type-3 token's asset_id == its contract id, verified 4172/4172;
+/// task 0393). `None` only when a bespoke event carries no emitting contract id.
+///
+/// Bespoke NFTs also resolve here, but they have **no `assets` row** (that table
+/// only gets a row for `contract_type == Fungible`, stage.rs), so the value read's
+/// `INNER JOIN assets` drops them — only genuine fungible bespoke tokens surface a
+/// value. (Before task 0393 this returned `None` for bespoke, since arm B —
+/// `soroban_invocations_appearances` — already covered their asset page; 0393
+/// needs the amount, which arm B has no concept of, so bespoke now writes arm A.)
+fn event_asset_surrogate(asset: &EventAsset, emitting_contract_id: Option<i64>) -> Option<i64> {
+    match asset {
+        EventAsset::Native => Some(ids::NATIVE_ASSET_ID),
+        EventAsset::Credit { code, issuer } => Some(ids::credit_asset_id(code, issuer)),
+        // A bespoke token's asset_id IS its emitting contract's surrogate; the
+        // caller passes it already-resolved (live hashes the C-StrKey; the
+        // backfill reads the surrogate straight from `soroban_events.contract_id`).
+        EventAsset::Bespoke => emitting_contract_id,
+    }
+}
+
+/// Decode one Soroban contract event into its 0383 presence rows. `None` when
+/// the event is not a SEP-41 / CAP-67 token event. `emitting_contract_id` is the
+/// event's own contract **surrogate** — the asset identity for a bespoke token
+/// (task 0393). Callers pass it already-resolved: live via `ids::contract_id(
+/// strkey)`, the backfill straight from `soroban_events.contract_id`.
+pub fn derive_token_event(
+    topics: &Value,
+    emitting_contract_id: Option<i64>,
+) -> Option<DerivedTokenEvent> {
+    let token = xdr_parser::parse_token_event(topics)?;
+    let participant_strkeys = [token.from, token.to]
+        .into_iter()
+        .flatten()
+        .filter(|k| is_strkey_account(k))
+        .collect();
+    Some(DerivedTokenEvent {
+        participant_strkeys,
+        asset_id: event_asset_surrogate(&token.asset, emitting_contract_id),
+    })
+}
+
+/// Net-settled value per asset for ONE transaction (classic OR Soroban), from its
+/// per-(holder, asset) ledger balance deltas. Each delta is resolved to its
+/// `asset_id` and handed to `net_settled`, which reduces to `max(Σ+, Σ−)` per asset.
+///
+/// The deltas come from `xdr_parser::ledger_balance_deltas` over the tx's
+/// `TransactionMeta` and cover EVERY value flow uniformly from the ledger —
+/// native, classic credit, SAC contract-held balances, and bespoke token balances
+/// — because all settle as `AccountEntry` / `TrustLineEntry` / `ContractData`
+/// balance changes. This is the authoritative, unspoofable source; token events
+/// (logs) are never used for value. The fee is charged in a separate ledger phase
+/// (not `TransactionMeta`), so it is absent by construction (formula rule 3).
+///
+/// `sac_classic` re-maps a contract-held SAC balance (keyed by the SAC contract
+/// surrogate) onto the wrapped classic/native `asset_id` — the same surrogate the
+/// account-side trustline leg resolves to, so a mixed account↔contract transfer
+/// nets as ONE asset, not two.
+pub fn ledger_deltas_net_settled(
+    deltas: &[LedgerDelta],
+    sac_classic: &HashMap<i64, i64>,
+) -> Vec<NetSettled> {
+    let resolved: Vec<AccountDelta> = deltas
+        .iter()
+        .filter_map(|d| {
+            let asset_id = match &d.asset {
+                LedgerAsset::Native => ids::NATIVE_ASSET_ID,
+                LedgerAsset::Credit { code, issuer } => ids::credit_asset_id(code, issuer),
+                // SAC-wrapped classic → the wrapped classic asset via the forward-
+                // derived registry; an unknown SAC (not yet mapped) drops the delta
+                // (`?`) — no value rather than the wrong asset.
+                LedgerAsset::SacWrapped(sac) => *sac_classic.get(&ids::contract_id(sac))?,
+                // Bespoke token → its own contract surrogate (the token IS the asset).
+                LedgerAsset::Bespoke(contract) => ids::contract_id(contract),
+            };
+            // The signed delta passes straight through. `net_settled` buckets by
+            // sign and is overflow-checked, so an attacker-authored i128 (a bespoke
+            // token's contract-written balance) surfaces as "not computed", never a
+            // wrapped figure. No `abs` here: the magnitude is not pre-taken, so
+            // i128::MIN stays representable instead of dropping the whole delta.
+            Some(AccountDelta {
+                asset_id,
+                account: d.account.clone(),
+                delta: d.delta,
+            })
+        })
+        .collect();
+    xdr_parser::net_settled(&resolved)
+}
+
+#[cfg(test)]
+mod ledger_deltas_net_settled_tests {
+    use super::*;
+
+    /// Reduce with an empty SAC registry — these tests use native/credit deltas
+    /// only, which don't need it. The SAC-registry path is covered separately.
+    fn reduce(deltas: &[LedgerDelta]) -> Vec<NetSettled> {
+        ledger_deltas_net_settled(deltas, &HashMap::new())
+    }
+
+    const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
+    const G_A: &str = "GBLVLKGRDU66WLWY4XRORJXCC4LDZ347AQTUYBEPBABIZTVITW2OAGIP";
+    const G_B: &str = "GADKLS7RS3OC2MXGEZXQA46JNF3FBVSTHTWLDPRF7TWI6GXVP4OUE3ZR";
+
+    fn native(account: &str, delta: i128) -> LedgerDelta {
+        LedgerDelta {
+            account: account.to_string(),
+            asset: LedgerAsset::Native,
+            delta,
+        }
+    }
+    fn credit(account: &str, delta: i128) -> LedgerDelta {
+        LedgerDelta {
+            account: account.to_string(),
+            asset: LedgerAsset::Credit {
+                code: "USDC".to_string(),
+                issuer: ISSUER.to_string(),
+            },
+            delta,
+        }
+    }
+
+    #[test]
+    fn native_payment_nets_to_amount() {
+        // A -100, B +100: net native 100.
+        let r = reduce(&[native(G_A, -100), native(G_B, 100)]);
+        assert_eq!(r.len(), 1);
+        assert_eq!(
+            (r[0].asset_id, r[0].amount),
+            (ids::NATIVE_ASSET_ID, Some(100))
+        );
+    }
+
+    #[test]
+    fn credit_delta_resolves_to_its_surrogate() {
+        let want = ids::credit_asset_id("USDC", ISSUER);
+        let r = reduce(&[credit(G_A, -150)]);
+        assert_eq!((r[0].asset_id, r[0].amount), (want, Some(150)));
+    }
+
+    #[test]
+    fn one_sided_burn_delta_is_counted() {
+        // A single negative delta (e.g. clawback / payment-to-issuer): max(Σ+,Σ−)
+        // keeps it non-zero.
+        let r = reduce(&[native(G_A, -250)]);
+        assert_eq!(r[0].amount, Some(250));
+    }
+
+    #[test]
+    fn swap_splits_into_two_asset_rows() {
+        // A sends 300 native, receives 250 USDC; B is the counterparty.
+        let usdc = ids::credit_asset_id("USDC", ISSUER);
+        let r = reduce(&[
+            native(G_A, -300),
+            native(G_B, 300),
+            credit(G_A, 250),
+            credit(G_B, -250),
+        ]);
+        assert_eq!(r.len(), 2);
+        assert_eq!(
+            r.iter()
+                .find(|n| n.asset_id == ids::NATIVE_ASSET_ID)
+                .unwrap()
+                .amount,
+            Some(300)
+        );
+        assert_eq!(
+            r.iter().find(|n| n.asset_id == usdc).unwrap().amount,
+            Some(250)
+        );
+    }
+
+    #[test]
+    fn contract_and_account_legs_of_a_sac_transfer_net_as_one_asset() {
+        // A contract sends 100 USDC to a G-account. The contract leg is a
+        // ContractData SAC balance (SacWrapped), the account leg is a trustline
+        // (Credit). Both MUST resolve to the SAME asset_id via the registry, or the
+        // single transfer double-counts as two assets. (Verified in code that
+        // sac_classic maps to exactly `credit_asset_id`; this pins it.)
+        let usdc = ids::credit_asset_id("USDC", ISSUER);
+        let sac_strkey = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+        let sac_classic: HashMap<i64, i64> =
+            [(ids::contract_id(sac_strkey), usdc)].into_iter().collect();
+
+        let contract_leg = LedgerDelta {
+            account: "CONTRACT_HOLDER".to_string(),
+            asset: LedgerAsset::SacWrapped(sac_strkey.to_string()),
+            delta: -100,
+        };
+        let r = ledger_deltas_net_settled(&[contract_leg, credit(G_B, 100)], &sac_classic);
+        assert_eq!(r.len(), 1, "must net as ONE asset, not double-count: {r:?}");
+        assert_eq!((r[0].asset_id, r[0].amount), (usdc, Some(100)));
+    }
+
+    #[test]
+    fn bespoke_contract_token_resolves_to_its_own_surrogate() {
+        let token = "CBQFOPGGSP4VCDFXJ4YEPCQNLN6EFRC4M7OOLQOEEY7H4VPF6N4WEE2N";
+        let d = LedgerDelta {
+            account: "HOLDER".to_string(),
+            asset: LedgerAsset::Bespoke(token.to_string()),
+            delta: -50,
+        };
+        let r = ledger_deltas_net_settled(&[d], &HashMap::new());
+        assert_eq!(r.len(), 1);
+        assert_eq!(
+            (r[0].asset_id, r[0].amount),
+            (ids::contract_id(token), Some(50))
+        );
+    }
+}
+
+#[cfg(test)]
+mod derive_token_event_tests {
+    use super::*;
+    use serde_json::json;
+
+    const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
+    const G_FROM: &str = "GBLVLKGRDU66WLWY4XRORJXCC4LDZ347AQTUYBEPBABIZTVITW2OAGIP";
+    const G_TO: &str = "GADKLS7RS3OC2MXGEZXQA46JNF3FBVSTHTWLDPRF7TWI6GXVP4OUE3ZR";
+
+    fn addr(v: &str) -> Value {
+        json!({ "type": "address", "value": v })
+    }
+    fn sym(v: &str) -> Value {
+        json!({ "type": "sym", "value": v })
+    }
+    fn strv(v: &str) -> Value {
+        json!({ "type": "string", "value": v })
+    }
+
+    #[test]
+    fn sac_transfer_yields_participants_and_classic_asset() {
+        let d = derive_token_event(
+            &json!([
+                sym("transfer"),
+                addr(G_FROM),
+                addr(G_TO),
+                strv(&format!("USDC:{ISSUER}"))
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            d.participant_strkeys,
+            vec![G_FROM.to_string(), G_TO.to_string()]
+        );
+        assert_eq!(
+            d.asset_id,
+            Some(ids::asset_id(1, "USDC", ids::account_id(ISSUER), 0))
+        );
+    }
+
+    #[test]
+    fn native_transfer_yields_native_asset() {
+        let d = derive_token_event(
+            &json!([sym("transfer"), addr(G_FROM), addr(G_TO), strv("native")]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(d.asset_id, Some(ids::NATIVE_ASSET_ID));
+    }
+
+    #[test]
+    fn mint_yields_only_to_participant() {
+        let d = derive_token_event(
+            &json!([sym("mint"), addr(G_TO), strv(&format!("USDC:{ISSUER}"))]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(d.participant_strkeys, vec![G_TO.to_string()]);
+        assert!(d.asset_id.is_some());
+    }
+
+    #[test]
+    fn bespoke_contract_event_resolves_asset_to_emitting_contract() {
+        // Bespoke transfer (no SEP-11 asset string): asset_id = the EMITTING
+        // contract's surrogate (task 0393). Accounts still tx participants.
+        const CTOKEN: &str = "CBQFOPGGSP4VCDFXJ4YEPCQNLN6EFRC4M7OOLQOEEY7H4VPF6N4WEE2N";
+        let d = derive_token_event(
+            &json!([sym("transfer"), addr(G_FROM), addr(G_TO)]),
+            Some(ids::contract_id(CTOKEN)),
+        )
+        .unwrap();
+        assert_eq!(
+            d.participant_strkeys,
+            vec![G_FROM.to_string(), G_TO.to_string()]
+        );
+        assert_eq!(d.asset_id, Some(ids::contract_id(CTOKEN)));
+    }
+
+    #[test]
+    fn bespoke_event_without_emitting_contract_has_no_asset() {
+        let d =
+            derive_token_event(&json!([sym("transfer"), addr(G_FROM), addr(G_TO)]), None).unwrap();
+        assert_eq!(d.asset_id, None);
+    }
+
+    #[test]
+    fn contract_address_participant_is_dropped() {
+        // from = a C-contract address → not a G-account, dropped from participants.
+        let d = derive_token_event(
+            &json!([
+                sym("transfer"),
+                addr("CCONTRACTADDR"),
+                addr(G_TO),
+                strv("native")
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(d.participant_strkeys, vec![G_TO.to_string()]);
+    }
+
+    #[test]
+    fn non_token_event_is_none() {
+        assert!(derive_token_event(&json!([sym("swap"), addr(G_FROM)]), None).is_none());
+    }
 }
 
 #[cfg(test)]

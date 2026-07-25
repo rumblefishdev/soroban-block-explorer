@@ -1,7 +1,7 @@
 //! Response DTO for `GET /v1/network/stats`.
 //!
 //! Wire shape per task 0045 + canonical SQL in task 0167
-//! (`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`).
+//! (`docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`).
 //! The frontend consumes this endpoint on every Home dashboard load —
 //! see `docs/architecture/frontend/frontend-overview.md` §6.2.
 
@@ -11,10 +11,8 @@ use utoipa::ToSchema;
 
 /// Top-level chain overview returned by `GET /v1/network/stats`.
 ///
-/// Field naming and semantics match canonical SQL in task 0167
-/// one-for-one. `total_accounts` and `total_contracts` are planner
-/// estimates from `pg_class.reltuples` (refreshed by autovacuum /
-/// ANALYZE), not exact counts. `latest_ledger_closed_at` is `None`
+/// `total_accounts` and `total_contracts` are planner
+/// estimates, not exact counts. `latest_ledger_closed_at` is `None`
 /// only on a cold-bootstrap cluster where no ledger has been indexed
 /// yet.
 ///
@@ -31,11 +29,9 @@ pub struct NetworkStats {
     /// between MIN/MAX `closed_at` in the window. Stable on partial /
     /// single-ledger windows (NULLIF guards zero-span).
     pub tps_60s: f64,
-    /// Estimated indexed account count from `pg_class.reltuples` for
-    /// `public.accounts`.
+    /// Estimated indexed account count (planner estimate, not exact).
     pub total_accounts: i64,
-    /// Estimated indexed Soroban contract count from `pg_class.reltuples`
-    /// for `public.soroban_contracts`.
+    /// Estimated indexed Soroban contract count (planner estimate, not exact).
     pub total_contracts: i64,
     /// Sequence of the newest ledger in the database (ordered by
     /// `closed_at DESC`). `0` sentinel indicates an empty cluster (no

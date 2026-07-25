@@ -18,7 +18,7 @@
 //!
 //! Task 0255 Phase 1.
 
-use stellar_xdr::curr::{
+use stellar_xdr::{
     ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, HostFunction, OperationBody,
     ScAddress, SorobanAuthorizedFunction, SorobanAuthorizedInvocation, SorobanCredentials,
 };
@@ -40,7 +40,8 @@ use crate::sac::derive_sac_contract_id;
 ///    `SorobanAuthorizationEntry`. The signer is derived from the entry's
 ///    credentials:
 ///      - `SourceAccount` → effective op source (op override OR tx source)
-///      - `Address(Account)` → the explicit account StrKey
+///      - `Address(Account)` / `AddressV2(Account)` → the explicit account StrKey
+///      - `AddressWithDelegates` → primary authorizing account (delegates ignored)
 ///      - `Address(Contract)` → contract-signed; skipped (no human deployer)
 ///
 /// `network_id` is required because `contract_id` is derived deterministically
@@ -118,21 +119,30 @@ pub fn extract_op_source_per_contract(
 /// pool) which cannot sign Soroban auth entries in practice but appear in
 /// the `ScAddress` enum.
 fn credentials_signer(creds: &SorobanCredentials, effective_op_source: &str) -> Option<String> {
-    match creds {
-        SorobanCredentials::SourceAccount => Some(effective_op_source.to_string()),
-        SorobanCredentials::Address(addr_creds) => match &addr_creds.address {
-            ScAddress::Account(account_id) => Some(account_id.0.to_string()),
-            // Muxed-account signer: the underlying ed25519 IS the signer
-            // (the 8-byte muxing id is a recipient-side memo, not a key).
-            // Canonicalise to the bare G-strkey to match the
-            // `accounts.account_id` shape per ADR 0026.
-            ScAddress::MuxedAccount(med) => {
-                Some(stellar_xdr::curr::MuxedAccount::Ed25519(med.ed25519.clone()).to_string())
-            }
-            ScAddress::Contract(_)
-            | ScAddress::ClaimableBalance(_)
-            | ScAddress::LiquidityPool(_) => None,
-        },
+    // Proto 27 added `AddressV2` (same `SorobanAddressCredentials` shape as
+    // `Address`) and `AddressWithDelegates` (nests those credentials plus a
+    // delegate-signature list). For deployer attribution the human signer is
+    // the primary authorizing address in every address-based case; delegates
+    // are additional co-signers, not the attributed identity.
+    let address = match creds {
+        SorobanCredentials::SourceAccount => return Some(effective_op_source.to_string()),
+        SorobanCredentials::Address(addr_creds) | SorobanCredentials::AddressV2(addr_creds) => {
+            &addr_creds.address
+        }
+        SorobanCredentials::AddressWithDelegates(dwc) => &dwc.address_credentials.address,
+    };
+    match address {
+        ScAddress::Account(account_id) => Some(account_id.0.to_string()),
+        // Muxed-account signer: the underlying ed25519 IS the signer
+        // (the 8-byte muxing id is a recipient-side memo, not a key).
+        // Canonicalise to the bare G-strkey to match the
+        // `accounts.account_id` shape per ADR 0026.
+        ScAddress::MuxedAccount(med) => {
+            Some(stellar_xdr::MuxedAccount::Ed25519(med.ed25519.clone()).to_string())
+        }
+        ScAddress::Contract(_) | ScAddress::ClaimableBalance(_) | ScAddress::LiquidityPool(_) => {
+            None
+        }
     }
 }
 
@@ -195,15 +205,16 @@ mod tests {
     use super::*;
     use crate::envelope::inner_transaction;
     use crate::sac::{MAINNET_PASSPHRASE, derive_sac_contract_id, network_id};
-    use stellar_xdr::curr::ScVal;
-    use stellar_xdr::curr::{
+    use stellar_xdr::ScVal;
+    use stellar_xdr::{
         AccountId, Asset, ContractExecutable, ContractId, CreateContractArgs, FeeBumpTransaction,
         FeeBumpTransactionEnvelope, FeeBumpTransactionExt, FeeBumpTransactionInnerTx, Hash,
         HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount, Operation,
         OperationBody, Preconditions, PublicKey, ScAddress, ScSymbol, SequenceNumber,
-        SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
-        SorobanAuthorizedInvocation, SorobanCredentials, Transaction, TransactionEnvelope,
-        TransactionExt, TransactionV1Envelope, Uint256, VecM,
+        SorobanAddressCredentials, SorobanAddressCredentialsWithDelegates,
+        SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanAuthorizedInvocation,
+        SorobanCredentials, Transaction, TransactionEnvelope, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM,
     };
 
     fn g_strkey(payload: [u8; 32]) -> String {
@@ -394,6 +405,69 @@ mod tests {
         );
         assert_ne!(pairs[0].1, g_strkey(op_source_payload));
         assert_ne!(pairs[0].1, g_strkey(tx_source_payload));
+    }
+
+    /// Case 6 — proto 27 `AddressV2` credentials. Same `SorobanAddressCredentials`
+    /// shape as `Address`; the wrapped account is the attributed deployer.
+    #[test]
+    fn factory_address_v2_credentials_uses_credentials_account() {
+        let tx_source_payload = [0xAA; 32];
+        let op_source_payload = [0xBB; 32];
+        let signer_payload = [0xCC; 32];
+        let creds = SorobanCredentials::AddressV2(SorobanAddressCredentials {
+            address: ScAddress::Account(account_id(signer_payload)),
+            nonce: 0,
+            signature_expiration_ledger: 0,
+            signature: ScVal::Void,
+        });
+        let tx = build_tx_with_op(
+            factory_invoke_op(Some(op_source_payload), creds),
+            tx_source_payload,
+        );
+        let inner = InnerTxRef::V1(&tx);
+        let net = network_id(MAINNET_PASSPHRASE);
+
+        let pairs = extract_op_source_per_contract(&inner, &g_strkey(tx_source_payload), &net);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].1,
+            g_strkey(signer_payload),
+            "AddressV2(Account) credentials → that account signs the deploy"
+        );
+        assert_ne!(pairs[0].1, g_strkey(op_source_payload));
+        assert_ne!(pairs[0].1, g_strkey(tx_source_payload));
+    }
+
+    /// Case 7 — proto 27 `AddressWithDelegates`. The primary authorizing
+    /// account (nested in `address_credentials`) is the attributed deployer;
+    /// the delegate-signature list does not change attribution.
+    #[test]
+    fn factory_address_with_delegates_uses_primary_account() {
+        let tx_source_payload = [0xAA; 32];
+        let signer_payload = [0xCC; 32];
+        let creds =
+            SorobanCredentials::AddressWithDelegates(SorobanAddressCredentialsWithDelegates {
+                address_credentials: SorobanAddressCredentials {
+                    address: ScAddress::Account(account_id(signer_payload)),
+                    nonce: 0,
+                    signature_expiration_ledger: 0,
+                    signature: ScVal::Void,
+                },
+                delegates: VecM::default(),
+            });
+        let tx = build_tx_with_op(factory_invoke_op(None, creds), tx_source_payload);
+        let inner = InnerTxRef::V1(&tx);
+        let net = network_id(MAINNET_PASSPHRASE);
+
+        let pairs = extract_op_source_per_contract(&inner, &g_strkey(tx_source_payload), &net);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].1,
+            g_strkey(signer_payload),
+            "AddressWithDelegates → the primary account signs the deploy"
+        );
     }
 
     /// Case 5 — factory deploy auth'd by a contract address. No human

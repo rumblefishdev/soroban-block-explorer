@@ -16,6 +16,24 @@ history:
     status: backlog
     who: karolkow
     note: 'Renumbered 0280 → 0282 — 0280/0281 already taken on develop (ci-swagger-flake / ch-maintenance-window).'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **The parking condition has been met — this is ready to work.** The task
+      deferred itself pending "a larger real-NFT sample than the single verified
+      mainnet contract available today (`CDA5FGE4…`)". Prod now carries
+      **13,054 NFT rows across 66 contracts**, plus **28,644 rows in
+      `nft_enrichment`**. That is the sample it was waiting for.
+      One correction for whoever picks it up, so they do not start in the wrong
+      table: **`nfts.media_url` is NULL on all 13,054 rows** — the column is
+      vestigial on ClickHouse, as `crates/api/src/nfts/queries.rs:10` already
+      states. The URLs live in `nft_enrichment`. Both remaining items
+      (content-type validation, `token_image()` fetch fallback) target that
+      table, not `nfts`.
+      I nearly closed this as "chasing a dead column" on the strength of that
+      NULL count alone. The task's own first paragraph says it is parked and
+      why; reading it prevented the mistake. Worth remembering as a pattern.
 ---
 
 # NFT media-URL quality: content-type validation + token_image() fallback

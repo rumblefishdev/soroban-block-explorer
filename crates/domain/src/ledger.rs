@@ -1,4 +1,4 @@
-//! Ledger domain type matching the `ledgers` PostgreSQL table.
+//! Ledger domain type matching the `ledgers` ClickHouse table.
 //!
 //! Schema: ADR 0027 Part I §1. Hash stored as `BYTEA(32)` per ADR 0024;
 //! API layer hex-encodes on serialization.

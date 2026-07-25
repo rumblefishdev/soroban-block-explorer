@@ -15,8 +15,6 @@ mod openapi;
 mod ops;
 mod search;
 pub mod state;
-#[cfg(test)]
-mod tests_integration;
 mod transactions;
 // Runtime details enrichment — S3 archive reread + HTTP stellar.toml fetch.
 // stellar_archive submodule drives E3 (`/transactions/:hash`) and E14
@@ -175,34 +173,21 @@ async fn main() {
         .init();
 
     let config = AppConfig::from_env();
-    tracing::info!(ch_enabled = config.ch_enabled, "api cold start");
+    tracing::info!("api cold start");
 
-    // Overlap the two independent network fetches: PG secrets resolution
-    // and (when configured) the mTLS bundle fetch from the Secrets
-    // Lambda Extension. Both are tens to hundreds of milliseconds; running
-    // them sequentially would double the cold-start budget on CH-enabled
-    // deploys.
-    let database_url_fut = db::secrets::resolve_or_env();
-    let ch_fut = async {
-        if config.ch_enabled {
-            Some(
-                db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE)
-                    .await
-                    .expect("failed to build mTLS ClickHouse client"),
-            )
-        } else {
-            None
-        }
-    };
+    // Overlap the two independent cold-start network fetches: the mTLS bundle
+    // fetch from the Secrets Lambda Extension and the AWS SDK config load. Both
+    // are tens to hundreds of milliseconds; running them sequentially would
+    // double the cold-start budget.
+    let ch_fut = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE);
     let aws_config_fut = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
         .region(aws_sdk_s3::config::Region::new("us-east-2"))
         .timeout_config(runtime_enrichment::stellar_archive::default_timeout_config())
         .load();
-    let (database_url, ch, aws_config) = tokio::join!(database_url_fut, ch_fut, aws_config_fut);
-    let database_url = database_url.expect("failed to resolve database URL");
+    let (ch, aws_config) = tokio::join!(ch_fut, aws_config_fut);
+    let ch = ch.expect("failed to build mTLS ClickHouse client");
 
-    let db = db::pool::create_pool(&database_url).expect("failed to create DB pool");
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
     let runtime_enrichment = RuntimeEnrichment {
         stellar_archive: StellarArchiveFetcher::new(s3_client),
@@ -220,7 +205,7 @@ async fn main() {
         )
     });
     let network_id = xdr_parser::network_id(&passphrase);
-    let state = AppState::new(db, ch, runtime_enrichment, network_id);
+    let state = AppState::new(ch, runtime_enrichment, network_id);
     let app = app(&config, state);
 
     lambda_http::run(app).await.expect("failed to run Lambda");
@@ -237,7 +222,6 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             base_url: "http://localhost:9000".to_string(),
-            ch_enabled: false,
             edge_secret: None,
             jwt_secret: None,
             turnstile_secret: None,
@@ -247,10 +231,10 @@ mod tests {
         }
     }
 
-    /// Build a test app. Uses `connect_lazy` so no real DB connection is opened.
+    /// Build a test app. The CH client is unconnected — these spec / health
+    /// tests never issue a query.
     fn test_app() -> Router {
-        let db = sqlx::PgPool::connect_lazy("postgres://localhost/test_unused")
-            .expect("connect_lazy never fails");
+        let ch = clickhouse::Client::default();
         let runtime_enrichment = RuntimeEnrichment {
             stellar_archive: StellarArchiveFetcher::new(
                 runtime_enrichment::stellar_archive::test_client(),
@@ -262,7 +246,7 @@ mod tests {
             nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        app(&test_config(), AppState::for_tests(db, runtime_enrichment))
+        app(&test_config(), AppState::for_tests(ch, runtime_enrichment))
     }
 
     #[tokio::test]

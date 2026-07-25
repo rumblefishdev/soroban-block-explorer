@@ -1,6 +1,6 @@
 //! Ledger header extraction from LedgerCloseMeta.
 
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 use crate::types::ExtractedLedger;
 

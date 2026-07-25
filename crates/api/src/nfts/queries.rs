@@ -1,22 +1,63 @@
-//! Database queries for the NFT endpoints.
+//! ClickHouse queries for the NFT endpoints (task 0243 — NFT slice).
 //!
-//! Aligned with canonical SQL `endpoint-queries/{15,16,17}_*.sql`.
+//! Returns the [`NftRow`] / [`NftItem`] / [`NftTransferItem`] shapes, so the
+//! handler stays backend-agnostic after the fetch. CH is the sole datastore
+//! (PG removed, task 0244).
 //!
-//! Row mapping note: NFT row shapes are 1:1 with the wire DTOs
-//! (`NftItem`, `NftTransferItem`) — no fields are dropped or restructured
-//! between DB and JSON, unlike the assets / pools modules where Row and
-//! Item diverge (Asset Row carries an extra `deployed_at_ledger` column
-//! used only by detail; Pool Row uses flat asset columns that the
-//! handler folds into a nested JSONB shape). To avoid pure pass-through
-//! mappers, we read straight into the wire DTOs here.
+//! Schema notes worth calling out (all verified against
+//! `crates/db-clickhouse/schema/init.sql`):
+//!
+//! - **`nfts.{name,media_url,collection_name}` are vestigial NULL on CH.**
+//!   The live indexer re-writes a whole `nfts` row on every ownership change
+//!   with metadata NULL (it owns the `current_owner_ledger` RMT version), so
+//!   the real metadata lives in the `nft_enrichment` side table (task 0231).
+//!   We collapse it with `argMax(_, version) GROUP BY (contract_id, token_id)`
+//!   — NOT a `FINAL` join — so an un-merged RMT duplicate can never multiply
+//!   the base rows (same idiom as `asset_enrichment`). **Without this join CH
+//!   NFTs read NULL names despite the enrichment table being populated.**
+//! - **No surrogate `id` on CH `nfts`** (`ORDER BY (contract_id, token_id)`).
+//!   The wire `NftItem.id` was dropped (see `dto.rs`); the list cursor keys on
+//!   `(minted_at_ledger, contract_id, token_id)`, the transfers timeline keys
+//!   on `(contract_id, token_id)` directly (no `nft_id` indirection).
+//! - **`nfts n FINAL`** collapses re-ingested ownership versions on the base
+//!   RMT. Identity lookups (`accounts` / `soroban_contracts`) are never a
+//!   whole-dimension JOIN — a hash JOIN reads the entire right table (~23M /
+//!   ~25M rows), which a `WHERE id IN (lit)` bloom seek (`idx_acc_id`) avoids
+//!   (task 0355 / fix c468c356).
+//! - **`accounts` reverse lookup (owner_id → G-StrKey)** uses that bloom seek:
+//!   the list / transfers paths via a page-scoped restricted CTE (`WHERE id IN
+//!   (page ids) GROUP BY id`, no `FINAL`); the single-row detail resolves its
+//!   one owner id in Rust via [`resolve_accounts`] (the shared `WHERE id IN`
+//!   resolver), and echoes the contract StrKey straight from the request input.
+//! - **`nullIf(...)`** maps a JOIN miss / sentinel to `None`. We do NOT use
+//!   `SETTINGS join_use_nulls = 1` — `api_reader` runs `readonly = 1` and
+//!   rejects per-query setting overrides.
+//! - **No `created_at` column on CH.** Transfers recover it via a JOIN to
+//!   `ledgers.closed_at` (`millis_to_utc`), and the cursor keys on
+//!   `(ledger_sequence, event_order)` — NOT the lossy `closed_at` (fix
+//!   c03c098c). `created_at` stays in the cursor payload for wire byte-parity
+//!   with the PG cursor; the CH `WHERE` ignores it.
+//! - **`nft_event_type_name()` is a PG SQL function** with no CH equivalent —
+//!   mapped in Rust ([`nft_event_type_name`]).
+//! - **Positional `clickhouse::Row` decode:** every `SELECT` column order MUST
+//!   match its Row struct field order; a reorder silently decodes into the
+//!   wrong field. The `CH_URL`-gated `decode_smoke` test is the only guard.
+//!
+//! ponytail: the list does a full `nft_enrichment` collapse + a non-PK
+//! `minted_at_ledger` sort, i.e. a full `nfts` scan per page. Fine at the
+//! current hot-set (~12.8k NFTs). If the NFT count grows ~100x, add a skip
+//! index on `minted_at_ledger` + page-scope the enrichment collapse (or a
+//! denormalized enriched-nfts projection) — not before (YAGNI).
 
-use sqlx::postgres::PgRow;
-use sqlx::{PgPool, Row};
+use clickhouse::Row;
+use serde::Deserialize;
 
+use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
 
+/// Resolved, validated `GET /v1/nfts` list params handed to `fetch_list`.
 pub struct ResolvedListParams {
     pub limit: i64,
     pub cursor: Option<NftListCursor>,
@@ -26,11 +67,10 @@ pub struct ResolvedListParams {
     pub filter_name: Option<String>,
 }
 
-/// Datasource-agnostic NFT list row: the wire [`NftItem`] fields plus the
-/// internal `contract_surrogate` the composite cursor needs for its PK-suffix
-/// tiebreak (not on the wire). Both the PG path here and `queries_ch` return
-/// this so the handler stays backend-agnostic after the fetch (same shape as
-/// the assets `AssetRow`).
+/// NFT list row: the wire [`NftItem`] fields plus the internal
+/// `contract_surrogate` the composite cursor needs for its PK-suffix tiebreak
+/// (not on the wire). Returned by `fetch_list` so the handler stays decoupled
+/// from the CH-decode struct (same shape as the assets `AssetRow`).
 pub struct NftRow {
     pub contract_id: String,
     pub token_id: String,
@@ -40,265 +80,526 @@ pub struct NftRow {
     pub minted_at_ledger: Option<i64>,
     pub owner_account: Option<String>,
     pub last_seen_ledger: Option<i64>,
-    /// Internal `soroban_contracts.id` (PG `BIGINT` / CH `Int64`) surrogate —
-    /// cursor tiebreak only, never serialized.
+    /// Internal `soroban_contracts.id` (CH `Int64`) surrogate — cursor
+    /// tiebreak only, never serialized.
     pub contract_surrogate: i64,
 }
 
-fn map_nft_row(r: &PgRow) -> NftRow {
+/// `nft_ownership.event_type` SMALLINT → canonical label, matching the PG
+/// `nft_event_type_name` function. Discriminants confirmed from
+/// `domain::NftEventType` (Mint=0, Transfer=1, Burn=2) and the PG SQL `CASE`
+/// (no `ELSE` → NULL). `None` for an out-of-range code preserves the PG-NULL
+/// wire shape (the DTO field is `Option<String>`), NOT a degrade label.
+fn nft_event_type_name(event_type: i16) -> Option<String> {
+    match event_type {
+        0 => Some("mint"),
+        1 => Some("transfer"),
+        2 => Some("burn"),
+        _ => None,
+    }
+    .map(str::to_string)
+}
+
+// ---------------------------------------------------------------------------
+// List — GET /v1/nfts (canonical 15)
+// ---------------------------------------------------------------------------
+
+/// SELECT column order MUST match the projection in [`fetch_list`] (positional
+/// decode). `contract_id` is a bare `String`: `sc` is an INNER JOIN to a
+/// page-scoped CTE, so the column is non-Nullable (every NFT has a known
+/// contract). `last_seen_ledger` is `nullIf(current_owner_ledger, 0)` →
+/// `Option` (CH stores `0` for "unknown"; PG stored NULL — `nullIf` aligns them).
+#[derive(Debug, Row, Deserialize)]
+struct NftListChRow {
+    contract_id: String,
+    token_id: String,
+    collection_name: Option<String>,
+    name: Option<String>,
+    media_url: Option<String>,
+    minted_at_ledger: Option<i64>,
+    owner_account: Option<String>,
+    last_seen_ledger: Option<i64>,
+    contract_surrogate: i64,
+}
+
+fn map_list_row(r: NftListChRow) -> NftRow {
     NftRow {
-        contract_id: r.get("contract_id"),
-        token_id: r.get("token_id"),
-        collection_name: r.get("collection_name"),
-        name: r.get("name"),
-        media_url: r.get("media_url"),
-        minted_at_ledger: r.get("minted_at_ledger"),
-        owner_account: r.get("owner_account"),
-        last_seen_ledger: r.get("last_seen_ledger"),
-        contract_surrogate: r.get("contract_surrogate"),
+        contract_id: r.contract_id,
+        token_id: r.token_id,
+        collection_name: r.collection_name,
+        name: r.name,
+        media_url: r.media_url,
+        minted_at_ledger: r.minted_at_ledger,
+        owner_account: r.owner_account,
+        last_seen_ledger: r.last_seen_ledger,
+        contract_surrogate: r.contract_surrogate,
     }
 }
 
-fn map_nft_item(r: &PgRow) -> NftItem {
-    NftItem {
-        contract_id: r.get("contract_id"),
-        token_id: r.get("token_id"),
-        collection_name: r.get("collection_name"),
-        name: r.get("name"),
-        media_url: r.get("media_url"),
-        minted_at_ledger: r.get("minted_at_ledger"),
-        owner_account: r.get("owner_account"),
-        last_seen_ledger: r.get("last_seen_ledger"),
-    }
-}
-
-/// `GET /v1/nfts` — paginated list with optional filters.
-///
-/// Ordered by `(minted_at_ledger DESC, contract_id DESC, token_id DESC)` —
-/// a total keyset matching the CH `nfts` PK suffix `(contract_id, token_id)`
-/// with `minted_at_ledger` (recency) as the lead key. The old `id DESC`
-/// order is gone with the surrogate (task 0243 NFT slice); this PG path
-/// orders on the same tuple as `queries_ch::fetch_list` so the opaque
-/// cursor round-trips across a datasource flip.
-///
-/// The contract-id resolve uses a CTE so it runs once even when the
-/// planner materialises `idx_nfts_collection` / `idx_nfts_name_trgm`.
-///
-/// `filter_name` is wrapped in `'%' || $4 || '%'` for the trigram match.
-/// We do NOT add an `ESCAPE` clause here: the upstream handler rejects
-/// values containing literal `%` / `_` with a 400 envelope (mirrors the
-/// `assets` handler convention). The value is always bound, never
-/// concatenated, so the worst case of a bypass is a wider trigram match,
-/// not SQL injection.
+/// `GET /v1/nfts` — paginated list, ordered `(minted_at_ledger, contract_id,
+/// token_id)` DESC (lead = recency; tail = the `nfts` PK suffix). Same tuple as
+/// the PG path so the opaque cursor round-trips across a flag flip.
 pub async fn fetch_list(
-    pool: &PgPool,
+    client: &clickhouse::Client,
     params: &ResolvedListParams,
     direction: Direction,
-) -> Result<Vec<NftRow>, sqlx::Error> {
-    let (cur_minted, cur_contract, cur_token): (Option<i64>, Option<i64>, Option<String>) =
-        match &params.cursor {
-            Some(c) => (
-                Some(c.minted_at_ledger),
-                Some(c.contract_surrogate),
-                Some(c.token_id.clone()),
-            ),
-            None => (None, None, None),
-        };
+) -> Result<Vec<NftRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Static query plan per direction. SQL fragments `{op}` and `{order}`
-    // are hardcoded literals (`<`/`>`, `DESC`/`ASC`) — no injection risk.
+    // Untrusted free-text + the C-StrKey are `.bind()`-ed; i64 cursor surrogates
+    // are bound too (no interpolation anywhere here). The keyset clause is
+    // present ONLY on continuation pages — page 1 binds no NULL into the tuple,
+    // sidestepping the clickhouse-rs 0.15 "None-into-tuple keyset returns 0
+    // rows" defect.
+    let contract_clause = if params.filter_contract_id.is_some() {
+        " AND n.contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1)"
+    } else {
+        ""
+    };
+    // Filter must match the SERVED value: coalesce(ledger METADATA name,
+    // enrichment collection), ledger-precedence. Branch 1 — contract's latest
+    // METADATA name = ?. Branch 2 — enrichment collection = ?, but only for
+    // contracts with NO ledger name (else coalesce would serve the ledger name,
+    // not the enrichment one). Keeps filter[collection] consistent with the
+    // collection_name the list displays.
+    let collection_pred = if params.filter_collection.is_some() {
+        " AND ( \
+             n.contract_id IN (SELECT sc0.id FROM soroban_contracts sc0 WHERE sc0.contract_id IN \
+                 (SELECT contract_id FROM soroban_contract_metadata GROUP BY contract_id HAVING argMax(name, version) = ?)) \
+             OR (e.collection_name = ? AND n.contract_id NOT IN \
+                 (SELECT sc1.id FROM soroban_contracts sc1 WHERE sc1.contract_id IN \
+                     (SELECT contract_id FROM soroban_contract_metadata GROUP BY contract_id HAVING argMax(name, version) != ''))) \
+         )"
+    } else {
+        ""
+    };
+    let name_pred = if params.filter_name.is_some() {
+        " AND positionCaseInsensitive(ifNull(e.name, ''), ?) > 0"
+    } else {
+        ""
+    };
+    let keyset = if params.cursor.is_some() {
+        format!(" AND (ifNull(n.minted_at_ledger, 0), n.contract_id, n.token_id) {op} (?, ?, ?)")
+    } else {
+        String::new()
+    };
+
     let sql = format!(
-        r#"
-        WITH ct AS (
-            SELECT id
-            FROM soroban_contracts
-            WHERE $3::varchar IS NOT NULL
-              AND contract_id = $3
-        )
-        SELECT
-            sc.contract_id        AS contract_id,
-            n.token_id,
-            n.collection_name,
-            n.name,
-            n.media_url,
-            n.minted_at_ledger,
-            own.account_id        AS owner_account,
-            n.current_owner_ledger AS last_seen_ledger,
-            n.contract_id         AS contract_surrogate
-        FROM nfts n
-        JOIN      soroban_contracts sc  ON sc.id = n.contract_id
-        LEFT JOIN accounts          own ON own.id = n.current_owner_id
-        WHERE
-            ($2::varchar IS NULL OR n.collection_name = $2)
-            AND ($3::varchar IS NULL OR n.contract_id = (SELECT id FROM ct))
-            AND ($4::text    IS NULL OR n.name ILIKE '%' || $4 || '%')
-            AND ($5::bigint  IS NULL
-                 OR (COALESCE(n.minted_at_ledger, 0), n.contract_id, n.token_id) {op} ($5, $6, $7))
-        ORDER BY COALESCE(n.minted_at_ledger, 0) {order}, n.contract_id {order}, n.token_id {order}
-        LIMIT $1
-        "#
+        "WITH \
+         enr AS ( \
+             SELECT contract_id, token_id, \
+                    argMax(name, version)            AS name, \
+                    argMax(media_url, version)       AS media_url, \
+                    argMax(collection_name, version) AS collection_name \
+             FROM nft_enrichment \
+             GROUP BY contract_id, token_id \
+         ), \
+         page AS ( \
+             SELECT n.contract_id          AS contract_surrogate, \
+                    n.token_id             AS token_id, \
+                    n.minted_at_ledger     AS minted_at_ledger, \
+                    n.current_owner_id     AS current_owner_id, \
+                    n.current_owner_ledger AS current_owner_ledger, \
+                    e.name                 AS e_name, \
+                    e.media_url            AS e_media_url, \
+                    e.collection_name      AS e_collection_name \
+             FROM nfts n FINAL \
+             LEFT JOIN enr e ON e.contract_id = n.contract_id AND e.token_id = n.token_id \
+             WHERE 1 = 1{contract_clause}{collection_pred}{name_pred}{keyset} \
+             ORDER BY ifNull(n.minted_at_ledger, 0) {order}, n.contract_id {order}, n.token_id {order} \
+             LIMIT ? \
+         ), \
+         own AS ( \
+             SELECT id, any(account_id) AS account_id \
+             FROM accounts \
+             WHERE id IN (SELECT current_owner_id FROM page WHERE current_owner_id IS NOT NULL) \
+             GROUP BY id \
+         ), \
+         sc AS ( \
+             SELECT id, any(contract_id) AS contract_id \
+             FROM soroban_contracts \
+             WHERE id IN (SELECT contract_surrogate FROM page) \
+             GROUP BY id \
+         ), \
+         scm AS ( \
+             SELECT contract_id, argMax(name, version) AS name \
+             FROM soroban_contract_metadata \
+             WHERE contract_id IN (SELECT contract_id FROM sc) \
+             GROUP BY contract_id \
+         ) \
+         SELECT \
+             sc.contract_id                    AS contract_id, \
+             p.token_id                        AS token_id, \
+             coalesce(nullIf(scm.name, ''), nullIf(p.e_collection_name, '')) AS collection_name, \
+             nullIf(p.e_name, '')              AS name, \
+             nullIf(p.e_media_url, '')         AS media_url, \
+             p.minted_at_ledger                AS minted_at_ledger, \
+             nullIf(own.account_id, '')        AS owner_account, \
+             nullIf(p.current_owner_ledger, 0) AS last_seen_ledger, \
+             p.contract_surrogate              AS contract_surrogate \
+         FROM page p \
+         INNER JOIN sc  ON sc.id  = p.contract_surrogate \
+         LEFT JOIN  scm ON scm.contract_id = sc.contract_id \
+         LEFT JOIN  own ON own.id = p.current_owner_id \
+         ORDER BY ifNull(p.minted_at_ledger, 0) {order}, p.contract_surrogate {order}, p.token_id {order}"
     );
 
-    let rows = sqlx::query(&sql)
-        .bind(params.limit)
-        .bind(&params.filter_collection)
-        .bind(&params.filter_contract_id)
-        .bind(&params.filter_name)
-        .bind(cur_minted)
-        .bind(cur_contract)
-        .bind(cur_token)
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows.iter().map(map_nft_row).collect())
+    let mut query = client.query(&sql);
+    if let Some(c) = &params.filter_contract_id {
+        query = query.bind(c);
+    }
+    if let Some(c) = &params.filter_collection {
+        // Two placeholders in `collection_pred`: ledger-name match + enrichment
+        // match (same filter value bound to both).
+        query = query.bind(c).bind(c);
+    }
+    if let Some(n) = &params.filter_name {
+        query = query.bind(n);
+    }
+    if let Some(c) = &params.cursor {
+        query = query
+            .bind(c.minted_at_ledger)
+            .bind(c.contract_surrogate)
+            .bind(&c.token_id);
+    }
+    // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
+    let rows = query.bind(params.limit).fetch_all::<NftListChRow>().await?;
+    Ok(rows.into_iter().map(map_list_row).collect())
 }
 
-/// `GET /v1/nfts/:contract_id/:token_id` — composite lookup.
+// ---------------------------------------------------------------------------
+// Detail — GET /v1/nfts/{contract_id}/{token_id} (canonical 16)
+// ---------------------------------------------------------------------------
+
+/// SELECT column order MUST match [`fetch_by_composite`] (positional decode).
+/// `current_owner_id` is the raw `Nullable(Int64)` surrogate (unowned NFT →
+/// NULL); its G-StrKey is resolved in Rust via [`resolve_accounts`], not a
+/// whole-`accounts` JOIN. The `contract_id` StrKey is the request input, echoed
+/// back (no `soroban_contracts` JOIN).
+#[derive(Debug, Row, Deserialize)]
+struct NftChRow {
+    current_owner_id: Option<i64>,
+    token_id: String,
+    collection_name: Option<String>,
+    name: Option<String>,
+    media_url: Option<String>,
+    minted_at_ledger: Option<i64>,
+    last_seen_ledger: Option<i64>,
+}
+
+/// `GET /v1/nfts/{contract_id}/{token_id}` — single-row composite lookup.
 ///
-/// Per task 0264 Phase 8a, the external NFT identity is
-/// `(contract C-strkey, token_id)` rather than the internal `nfts.id i32`
-/// surrogate PK. Joining `soroban_contracts sc` resolves the C-strkey to
-/// the BIGINT FK that `nfts.contract_id` actually stores (ADR 0030); the
-/// `UNIQUE (contract_id, token_id)` index on `nfts` (migration
-/// `0005_tokens_nfts.sql`) is used to satisfy the equality predicate.
+/// One `nfts` PK seek (`(contract_id, token_id)`, resolving the C-StrKey → Int64
+/// surrogate in the `cid` CTE) plus a scoped `nft_enrichment` collapse. The
+/// owner G-StrKey is resolved in Rust via [`resolve_accounts`] (a `WHERE id IN`
+/// bloom seek on the single owner id) instead of a whole-`accounts` JOIN, and
+/// the contract StrKey is echoed from the request input instead of a
+/// whole-`soroban_contracts` JOIN — the two joins that turned this into a
+/// ~25M-row dimension scan (task 0355; same swap as 0344/0345/0354).
 pub async fn fetch_by_composite(
-    pool: &PgPool,
+    client: &clickhouse::Client,
     contract_id: &str,
     token_id: &str,
-) -> Result<Option<NftItem>, sqlx::Error> {
-    let raw: Option<PgRow> = sqlx::query(
-        r#"
-        SELECT
-            sc.contract_id        AS contract_id,
-            n.token_id,
-            n.collection_name,
-            n.name,
-            n.media_url,
-            n.minted_at_ledger,
-            own.account_id        AS owner_account,
-            n.current_owner_ledger AS last_seen_ledger
-        FROM nfts n
-        JOIN      soroban_contracts sc  ON sc.id  = n.contract_id
-        LEFT JOIN accounts          own ON own.id = n.current_owner_id
-        WHERE sc.contract_id = $1
-          AND n.token_id     = $2
-        "#,
-    )
-    .bind(contract_id)
-    .bind(token_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(raw.as_ref().map(map_nft_item))
+) -> Result<Option<NftItem>, clickhouse::error::Error> {
+    let sql = "WITH cid AS ( \
+                   SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1 \
+               ) \
+               SELECT \
+                   n.current_owner_id                AS current_owner_id, \
+                   n.token_id                        AS token_id, \
+                   coalesce( \
+                       nullIf((SELECT argMax(name, version) FROM soroban_contract_metadata WHERE contract_id = ?), ''), \
+                       nullIf(ne.collection_name, '') \
+                   )                                 AS collection_name, \
+                   nullIf(ne.name, '')               AS name, \
+                   nullIf(ne.media_url, '')          AS media_url, \
+                   n.minted_at_ledger                AS minted_at_ledger, \
+                   nullIf(n.current_owner_ledger, 0) AS last_seen_ledger \
+               FROM nfts n FINAL \
+               LEFT JOIN ( \
+                   SELECT contract_id, token_id, \
+                          argMax(name, version)            AS name, \
+                          argMax(media_url, version)       AS media_url, \
+                          argMax(collection_name, version) AS collection_name \
+                   FROM nft_enrichment \
+                   WHERE contract_id IN (SELECT id FROM cid) \
+                   GROUP BY contract_id, token_id \
+               ) ne ON ne.contract_id = n.contract_id AND ne.token_id = n.token_id \
+               WHERE n.contract_id IN (SELECT id FROM cid) \
+                 AND n.token_id = ? \
+               LIMIT 1";
+    let Some(r) = client
+        .query(sql)
+        .bind(contract_id)
+        .bind(contract_id)
+        .bind(token_id)
+        .fetch_optional::<NftChRow>()
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    // Owner G-StrKey via a single-id `WHERE id IN` bloom seek (unowned → None).
+    // `.filter(non-empty)` preserves the old `nullIf(own.account_id, '')` shape.
+    let owner_account = match r.current_owner_id {
+        Some(id) => resolve_accounts(client, vec![id])
+            .await?
+            .remove(&id)
+            .filter(|s| !s.is_empty()),
+        None => None,
+    };
+
+    Ok(Some(NftItem {
+        contract_id: contract_id.to_string(),
+        token_id: r.token_id,
+        collection_name: r.collection_name,
+        name: r.name,
+        media_url: r.media_url,
+        minted_at_ledger: r.minted_at_ledger,
+        owner_account,
+        last_seen_ledger: r.last_seen_ledger,
+    }))
 }
 
-/// Resolve a `(contract_id, token_id)` composite to the internal
-/// `nfts.id i32` surrogate. Returns `None` when the NFT doesn't exist —
-/// disambiguates 404 from `200 + data: []` on the transfers endpoint
-/// while also surfacing the surrogate that downstream queries
-/// (`fetch_transfers`, cursor payloads) need.
-pub async fn nft_exists_by_composite(
-    pool: &PgPool,
+/// Existence probe for the transfers endpoint's 404-vs-empty disambiguation.
+/// Returns `true` iff `(contract_id, token_id)` exists in `nfts`. No `FINAL`
+/// (existence doesn't care which version), no enrichment / owner resolution.
+pub async fn nft_exists(
+    client: &clickhouse::Client,
     contract_id: &str,
     token_id: &str,
-) -> Result<Option<i32>, sqlx::Error> {
-    let row: Option<(i32,)> = sqlx::query_as(
-        r#"
-        SELECT n.id
-        FROM nfts n
-        JOIN soroban_contracts sc ON sc.id = n.contract_id
-        WHERE sc.contract_id = $1
-          AND n.token_id     = $2
-        "#,
-    )
-    .bind(contract_id)
-    .bind(token_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(id,)| id))
+) -> Result<bool, clickhouse::error::Error> {
+    let sql = "SELECT 1 \
+               FROM nfts \
+               WHERE contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
+                 AND token_id = ? \
+               LIMIT 1";
+    let hit = client
+        .query(sql)
+        .bind(contract_id)
+        .bind(token_id)
+        .fetch_optional::<u8>()
+        .await?;
+    Ok(hit.is_some())
 }
 
-/// `GET /v1/nfts/:id/transfers` — paginated ownership history.
+// ---------------------------------------------------------------------------
+// Transfers — GET /v1/nfts/{contract_id}/{token_id}/transfers (canonical 17)
+// ---------------------------------------------------------------------------
+
+/// SELECT column order MUST match [`fetch_transfers`] (positional decode).
+/// `created_at_ms` reads `ledgers.closed_at` (`DateTime64(3)`) as raw i64
+/// millis, converted with [`millis_to_utc`] — same as the assets tx path.
+#[derive(Debug, Row, Deserialize)]
+struct NftTransferChRow {
+    transaction_hash: Option<String>,
+    ledger_sequence: i64,
+    event_type: i16,
+    to_account: Option<String>,
+    from_account: Option<String>,
+    created_at_ms: i64,
+    event_order: i16,
+}
+
+fn map_transfer_row(r: NftTransferChRow) -> NftTransferItem {
+    NftTransferItem {
+        transaction_hash: r.transaction_hash.unwrap_or_default(),
+        ledger_sequence: r.ledger_sequence,
+        event_type_name: nft_event_type_name(r.event_type),
+        event_type: r.event_type,
+        from_account: r.from_account,
+        to_account: r.to_account,
+        created_at: millis_to_utc(r.created_at_ms),
+        event_order: r.event_order,
+    }
+}
+
+/// `GET /v1/nfts/{contract_id}/{token_id}/transfers` — paginated ownership
+/// history, newest first.
+///
+/// `nft_ownership` is `ORDER BY (contract_id, token_id, ledger_sequence,
+/// event_order)`, so the `(contract_id, token_id)` predicate is the leading PK
+/// prefix → one granule-pruned seek per page. `LIMIT 1 BY (ledger_sequence,
+/// event_order)` collapses re-ingest duplicates (plain RMT, no version column)
+/// BEFORE the `LEAD` window reconstructs `from_account` — a duplicate would
+/// otherwise corrupt the window. The `txs` join is a `(ledger_sequence, id)`
+/// tuple seek (transactions is keyed on `ledger_sequence`; a bare `id IN`
+/// can't prune) and is `GROUP BY id`-deduped so it stays provably 1:1 (panel
+/// review: both fixes guard the `LEAD` window).
 pub async fn fetch_transfers(
-    pool: &PgPool,
-    nft_id: i32,
+    client: &clickhouse::Client,
+    contract_id: &str,
+    token_id: &str,
     cursor: Option<&NftTransferCursor>,
     limit: i64,
     direction: Direction,
-) -> Result<Vec<NftTransferItem>, sqlx::Error> {
-    let (cur_ts, cur_ledger, cur_order): (
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<i64>,
-        Option<i16>,
-    ) = match cursor {
-        Some(c) => (
-            Some(c.created_at),
-            Some(c.ledger_sequence),
-            Some(c.event_order),
-        ),
-        None => (None, None, None),
-    };
+) -> Result<Vec<NftTransferItem>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Direction caveat: the LEAD window walks DESC to compute the
-    // previous owner (oldest event below the current row). When fetching
-    // Prev (ASC), the LEAD direction would invert — but the caller
-    // reverses the resulting rows in `finalize_page` to restore DESC
-    // presentation order. The window function still computes owners in
-    // DESC order so that previous-owner semantics stay correct after the
-    // outer reverse: we ALWAYS read the window in DESC, regardless of
-    // fetch direction. This is achieved by keeping the `OVER (... ORDER
-    // BY ... DESC)` hardcoded; only the outer ORDER BY + cursor
-    // predicate swap.
+    // Keyset keys on (ledger_sequence, event_order) — NOT the lossy closed_at.
+    // Present only on continuation pages (page 1 binds no NULL into the tuple).
+    let cursor_clause = if cursor.is_some() {
+        format!(" AND (no.ledger_sequence, no.event_order) {op} (?, ?)")
+    } else {
+        String::new()
+    };
+
+    // The from-owner window is HARDCODED DESC regardless of fetch direction
+    // (the previous owner is the older event = the FOLLOWING row in DESC
+    // order); only the page ORDER BY + cursor comparator swap on Prev, and
+    // `finalize_page` reverses Prev rows for presentation — same contract as
+    // the PG query (`17_get_nfts_transfers.sql`).
+    //
+    // CH has NO SQL-standard `LEAD()` — it is `leadInFrame()`, and its DEFAULT
+    // frame (`RANGE … CURRENT ROW`) excludes the following row, so it would
+    // always return NULL. The explicit `ROWS BETWEEN UNBOUNDED PRECEDING AND
+    // UNBOUNDED FOLLOWING` frame makes the next row in-frame, matching PG
+    // `LEAD`. (This errors only against a live CH — the `decode_smoke` test
+    // covers it; an offline build cannot.)
     let sql = format!(
-        r#"
-        SELECT
-            no.created_at,
-            no.ledger_sequence,
-            no.event_order,
-            nft_event_type_name(no.event_type)  AS event_type_name,
-            no.event_type                       AS event_type,
-            LEAD(own.account_id) OVER (
-                PARTITION BY no.nft_id
-                ORDER BY no.created_at DESC,
-                         no.ledger_sequence DESC,
-                         no.event_order DESC
-            )                                   AS from_account,
-            own.account_id                      AS to_account,
-            encode(t.hash, 'hex')               AS transaction_hash
-        FROM nft_ownership no
-        LEFT JOIN accounts     own ON own.id = no.owner_id
-        JOIN      transactions t
-               ON t.id         = no.transaction_id
-              AND t.created_at = no.created_at
-        WHERE no.nft_id = $1
-          AND ($3::timestamptz IS NULL
-               OR (no.created_at, no.ledger_sequence, no.event_order) {op} ($3, $4, $5))
-        ORDER BY no.created_at {order}, no.ledger_sequence {order}, no.event_order {order}
-        LIMIT $2
-        "#
+        "WITH \
+         page AS ( \
+             SELECT no.ledger_sequence AS ledger_sequence, \
+                    no.event_order     AS event_order, \
+                    no.event_type      AS event_type, \
+                    no.owner_id        AS owner_id, \
+                    no.transaction_id  AS transaction_id \
+             FROM nft_ownership no \
+             WHERE no.contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
+               AND no.token_id = ?{cursor_clause} \
+             ORDER BY no.ledger_sequence {order}, no.event_order {order} \
+             LIMIT 1 BY no.ledger_sequence, no.event_order \
+             LIMIT ? \
+         ), \
+         owners AS ( \
+             SELECT id, any(account_id) AS account_id \
+             FROM accounts \
+             WHERE id IN (SELECT owner_id FROM page WHERE owner_id IS NOT NULL) \
+             GROUP BY id \
+         ), \
+         txs AS ( \
+             SELECT id, any(lower(hex(hash))) AS hash \
+             FROM transactions \
+             WHERE (ledger_sequence, id) IN (SELECT ledger_sequence, transaction_id FROM page) \
+               AND intDiv(ledger_sequence, 500000) IN (SELECT DISTINCT intDiv(ledger_sequence, 500000) FROM page) \
+             GROUP BY id \
+         ), \
+         led AS ( \
+             SELECT sequence, any(closed_at) AS closed_at \
+             FROM ledgers \
+             WHERE sequence IN (SELECT ledger_sequence FROM page) \
+             GROUP BY sequence \
+         ) \
+         SELECT \
+             nullIf(txs.hash, '')   AS transaction_hash, \
+             p.ledger_sequence      AS ledger_sequence, \
+             p.event_type           AS event_type, \
+             nullIf(own.account_id, '') AS to_account, \
+             leadInFrame(nullIf(own.account_id, '')) OVER ( \
+                 ORDER BY p.ledger_sequence DESC, p.event_order DESC \
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
+             )                      AS from_account, \
+             led.closed_at          AS created_at_ms, \
+             p.event_order          AS event_order \
+         FROM page p \
+         LEFT JOIN owners own ON own.id = p.owner_id \
+         LEFT JOIN txs        ON txs.id = p.transaction_id \
+         INNER JOIN led       ON led.sequence = p.ledger_sequence \
+         ORDER BY p.ledger_sequence {order}, p.event_order {order}"
     );
 
-    let rows = sqlx::query(&sql)
-        .bind(nft_id)
-        .bind(limit)
-        .bind(cur_ts)
-        .bind(cur_ledger)
-        .bind(cur_order)
-        .fetch_all(pool)
-        .await?;
+    let mut query = client.query(&sql).bind(contract_id).bind(token_id);
+    if let Some(c) = cursor {
+        query = query.bind(c.ledger_sequence).bind(c.event_order);
+    }
+    let rows = query.bind(limit).fetch_all::<NftTransferChRow>().await?;
+    Ok(rows.into_iter().map(map_transfer_row).collect())
+}
 
-    Ok(rows
-        .iter()
-        .map(|r| NftTransferItem {
-            transaction_hash: r.get("transaction_hash"),
-            ledger_sequence: r.get("ledger_sequence"),
-            event_type_name: r.get("event_type_name"),
-            event_type: r.get("event_type"),
-            from_account: r.get("from_account"),
-            to_account: r.get("to_account"),
-            created_at: r.get("created_at"),
-            event_order: r.get("event_order"),
-        })
-        .collect())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nft_event_type_name_matches_pg_function() {
+        assert_eq!(nft_event_type_name(0).as_deref(), Some("mint"));
+        assert_eq!(nft_event_type_name(1).as_deref(), Some("transfer"));
+        assert_eq!(nft_event_type_name(2).as_deref(), Some("burn"));
+        // Out-of-range → None, matching the PG CASE's NULL (no degrade label).
+        assert_eq!(nft_event_type_name(3), None);
+        assert_eq!(nft_event_type_name(-1), None);
+    }
+}
+
+/// Live-CH decode smoke for the NFT read path. The curl `FORMAT` box smokes
+/// do NOT exercise the clickhouse-rs RowBinary decoder, so a wire-type↔struct
+/// mismatch (e.g. a Nullable column decoded into a non-Option field, or a
+/// positional reorder) passes a curl check yet 500s the live endpoint. This
+/// decodes rows a real CH produced for each NFT fetch fn.
+///
+/// **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
+/// Run against a reachable CH (local replica or SSH tunnel):
+///
+/// ```text
+/// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
+///   cargo test -p api --lib nfts::queries::decode_smoke -- --nocapture
+/// ```
+#[cfg(test)]
+mod decode_smoke {
+    use super::*;
+    use crate::common::cursor::Direction;
+
+    fn client() -> Option<clickhouse::Client> {
+        let url = std::env::var("CH_URL").ok()?;
+        let mut c = clickhouse::Client::default().with_url(url);
+        if let Ok(u) = std::env::var("CH_USER") {
+            c = c.with_user(u);
+        }
+        if let Ok(p) = std::env::var("CH_PASSWORD") {
+            c = c.with_password(p);
+        }
+        if let Ok(d) = std::env::var("CH_DATABASE") {
+            c = c.with_database(d);
+        }
+        Some(c)
+    }
+
+    /// Every NFT CH row struct must decode the rows a real CH emits.
+    #[tokio::test]
+    async fn nft_ch_rows_decode() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping NFT CH decode smoke");
+            return;
+        };
+
+        // `list` returns rows on any populated CH → always exercises the
+        // `NftListChRow` decode, and bootstraps a real (contract_id, token_id)
+        // for the per-NFT fetches below.
+        let params = ResolvedListParams {
+            limit: 5,
+            cursor: None,
+            filter_collection: None,
+            filter_contract_id: None,
+            filter_name: None,
+        };
+        let list = fetch_list(&ch, &params, Direction::Next)
+            .await
+            .expect("NftListChRow must decode");
+
+        let Some(first) = list.first() else {
+            eprintln!("CH has no NFTs — list decode ok, skipping per-NFT smoke");
+            return;
+        };
+        let (contract_id, token_id) = (first.contract_id.clone(), first.token_id.clone());
+
+        nft_exists(&ch, &contract_id, &token_id)
+            .await
+            .expect("nft_exists must run");
+        fetch_by_composite(&ch, &contract_id, &token_id)
+            .await
+            .expect("NftChRow (detail) must decode");
+        fetch_transfers(&ch, &contract_id, &token_id, None, 5, Direction::Next)
+            .await
+            .expect("NftTransferChRow must decode");
+    }
 }

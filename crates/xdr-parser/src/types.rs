@@ -1,4 +1,4 @@
-//! Output types that map directly to the PostgreSQL schema.
+//! Output types that map directly to the ClickHouse schema.
 //!
 //! These types are the contract between the XDR parser and the database persistence layer.
 //! Field names match DB column names (snake_case).
@@ -46,7 +46,7 @@ pub struct ExtractedLedger {
     /// hex-encoded (64 chars). Matches Horizon `/ledgers/:N.hash` and every
     /// other Stellar tool — populated by core, never recomputed.
     pub hash: String,
-    /// Ledger close time as Unix timestamp (seconds). `i64` for PostgreSQL BIGINT compatibility.
+    /// Ledger close time as Unix timestamp (seconds). `i64` for the DB `Int64` column.
     pub closed_at: i64,
     /// Stellar protocol version at this ledger.
     pub protocol_version: u32,
@@ -70,6 +70,11 @@ pub struct ExtractedTransaction {
     pub ledger_sequence: u32,
     /// Transaction source account (G... or M... address, max 56 chars).
     pub source_account: String,
+    /// Fee-bump payer account (`fee_source`), G-StrKey. `Some` only for a
+    /// fee-bump envelope, where the payer funds the fee but is neither the inner
+    /// `source_account` nor an op participant — registered separately into
+    /// `transaction_participants` (task 0359 K2-4). `None` otherwise.
+    pub fee_source: Option<String>,
     /// Actual fee charged in stroops.
     pub fee_charged: i64,
     /// Whether the transaction succeeded.
@@ -89,10 +94,18 @@ pub struct ExtractedTransaction {
     pub memo_type: Option<String>,
     /// Memo value as string. Nullable.
     pub memo: Option<String>,
-    /// Timestamp derived from parent ledger close time (Unix seconds). `i64` for PostgreSQL BIGINT compatibility.
+    /// Timestamp derived from parent ledger close time (Unix seconds). `i64` for the DB `Int64` column.
     pub created_at: i64,
     /// True if XDR parsing failed for this transaction.
     pub parse_error: bool,
+    /// Per-(account, asset) ledger balance deltas (task 0393), from the tx's
+    /// `TransactionMeta`. Populated for EVERY tx, classic AND Soroban:
+    /// `ledger_balance_deltas` reads the authoritative before→after balance
+    /// changes on `AccountEntry` / `TrustLineEntry` / `ContractData` — the ledger
+    /// is the unspoofable source of value, never the token events. There is no
+    /// `soroban_meta` short-circuit; a Soroban invocation's value moves as
+    /// `ContractData` balance changes the reader also covers.
+    pub ledger_deltas: Vec<crate::ledger_value::LedgerDelta>,
 }
 
 /// Container an `ExtractedEvent` was sourced from in the on-chain meta.
@@ -192,7 +205,7 @@ pub struct ExtractedInvocation {
 /// Extracted contract interface from WASM bytecode at deployment time.
 ///
 /// Produced by `extract_contract_interfaces` when LedgerEntryChanges contain
-/// new `ContractCodeEntry` items. Stored in `soroban_contracts.metadata` JSONB.
+/// new `ContractCodeEntry` items. Stored in the contract `metadata` column.
 #[derive(Debug, Clone)]
 pub struct ExtractedContractInterface {
     /// SHA-256 hash of the WASM bytecode, hex-encoded (64 chars).
@@ -344,17 +357,6 @@ pub struct ExtractedContractDeployment {
     /// but always set when the parser produces a deployment).
     pub contract_type: ContractType,
     pub is_sac: bool,
-    /// Human-readable contract name extracted from the standard
-    /// `Symbol("name")` ContractData persistent storage entry, when
-    /// present in the same ledger as the deployment (constructor
-    /// pattern). For deploy-then-init contracts where storage writes
-    /// land in a later ledger, this is `None` at deployment time and
-    /// the indexer's retroactive UPDATE path
-    /// (`extract_contract_data_name_writes`) populates the column on
-    /// the next ledger that emits the storage entry.
-    ///
-    /// Maps to `soroban_contracts.name VARCHAR(256)` per ADR 0042.
-    pub name: Option<String>,
     /// Task 0160 — SAC underlying asset identity resolved from
     /// `ContractIdPreimage::FromAsset` (top-level op OR auth-entry
     /// `CreateContractHostFn`), correlated by the preimage-derived
@@ -445,7 +447,6 @@ pub struct ExtractedAsset {
     /// `true` from a SAC deploy sighting; `false` for an un-deployed SAC seen
     /// only via events. Meaningless (and `false`) when `sac_contract_id` is `None`.
     pub sac_deployed: bool,
-    pub name: Option<String>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
 }
@@ -541,6 +542,17 @@ pub struct ExtractedOperation {
     /// source.
     pub source_account: Option<String>,
     /// Type-specific details as a JSON value. Consumed by staging to extract
-    /// identity columns; not persisted as JSONB anywhere in the DB.
+    /// identity columns; not persisted as JSON anywhere in the DB.
     pub details: serde_json::Value,
+    /// The assets declared in this operation's body (task 0359). Pure presence,
+    /// staged into `operation_asset_appearances`. Deterministic: identical
+    /// between live ingest and the archive backfill re-parse (both run this
+    /// parser).
+    pub asset_appearances: Vec<crate::asset_appearances::AssetRef>,
+    /// Account counterparties the operation touches beyond its source (task 0359
+    /// F-C / K1-5): crossed-offer sellers (result claim atoms), claimable-balance
+    /// claimants, `SetOptions.inflationDest`, revoke-sponsorship targets. Raw
+    /// G-StrKeys, staged into `transaction_participants` (deduped there).
+    /// Deterministic between live ingest and the backfill re-parse.
+    pub counterparties: Vec<String>,
 }

@@ -19,6 +19,7 @@ with subcommands per kind plus a `status` aggregator.
 | -------------- | ----------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
 | `sep1-assets`  | `Sep1Assets` (wire `"sep1_assets"`) | `enrich_and_persist::sep1_assets::enrich_asset_from_sep1` | `assets.icon_url` (all types) and `assets.name` (ClassicCredit, `asset_type = 1` — a SAC is a facet, ADR 0051) — both from the issuer's SEP-1 TOML `CURRENCIES[]` entry |
 | `nft-metadata` | `NftTokenUri`                       | `enrich_and_persist::nft_token_uri::enrich_nft_token_uri` | `nfts.name`, `nfts.media_url`, `nfts.collection_name` |
+| `nft-collection-name` | (per-contract, no wire kind) | `enrich_and_persist::nft_collection_name::backfill_contract_collection_name` | `nft_enrichment.collection_name` — SEP-50 `name()` FALLBACK for ledger-uncovered contracts (task 0340; ledger is primary) |
 | `status`       | (read-only)                         | inline `COUNT(*) FILTER` query                            | none — prints a Markdown table             |
 
 > **Naming note:** the `sep1-assets` subcommand is the SEP-1 enrichment
@@ -40,6 +41,36 @@ in task 0195 §2d Phase E. The subcommand is fully functional against
 real NFT rows; the join-error handler in `collect_join` still catches
 any unexpected spawn panic and tallies it as `db_failed` so a single
 bad row never tears down the drain.
+
+### `nft-collection-name` (task 0340)
+
+`nft_enrichment.collection_name` is served (list / detail / search). The
+`token_uri` JSON `"collection"` field that `nft-metadata` reads is emitted
+by no real-world Stellar NFT (0/68 collections). The **primary** source is
+the ledger: the parser captures the OZ NFT collection name from the contract
+instance-storage metadata into `soroban_contract_metadata` (#330), and the
+read path serves it via `COALESCE(soroban_contract_metadata.name,
+nft_enrichment.collection_name)` (#331). The contract-level SEP-50 `name()`
+view function (a separate RPC `simulateTransaction`) is a **FALLBACK** only,
+for the ledger-uncovered remainder — hand-rolled contracts with empty
+instance storage but a WASM-baked `name()`.
+
+This subcommand walks DISTINCT **contracts** whose `nft_enrichment` rows
+still lack a collection name AND that have **no** ledger-sourced name in
+`soroban_contract_metadata` (ledger-covered contracts are excluded — the
+ledger path already serves them). For each it fetches `name()` **once per
+contract** (cached in the fetcher — a 10k-token collection costs one RPC,
+not 10k), then re-INSERTs that contract's rows with the name stamped on and
+each row's existing `name` / `media_url` **preserved**. It exists as a
+distinct subcommand because the target rows carry real `name` / `media_url`
+and so match neither the default "no row yet" drain nor `--retry-sentinels`
+(all columns empty). Idempotent: the per-contract INSERT re-applies the
+`collection_name = ''` predicate, so a re-run is a no-op for already-stamped
+rows.
+
+```bash
+CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- nft-collection-name
+```
 
 ## Standard filter vs `--force-retry`
 

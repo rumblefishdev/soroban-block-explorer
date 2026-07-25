@@ -8,13 +8,12 @@
 //! transaction detail endpoint; list rows stay slim.
 //!
 //! Canonical SQL refs:
-//!   - `docs/architecture/database-schema/endpoint-queries/04_get_ledgers_list.sql`
-//!   - `docs/architecture/database-schema/endpoint-queries/05_get_ledgers_by_sequence.sql`
+//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/04_get_ledgers_list.sql`
+//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/05_get_ledgers_by_sequence.sql`
 
 pub mod dto;
 mod handlers;
 mod queries;
-mod queries_ch;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;

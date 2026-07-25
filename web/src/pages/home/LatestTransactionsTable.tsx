@@ -4,11 +4,14 @@ import {
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierWithCopy,
-  StatusChip,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { OperationCell } from '../transactions/cells.js';
+import {
+  hashColumn,
+  OperationCell,
+  statusColumn,
+} from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 interface LatestTransactionsTableProps {
@@ -18,12 +21,7 @@ interface LatestTransactionsTableProps {
 }
 
 const columns: ExplorerTableColumn<TransactionListItem>[] = [
-  {
-    id: 'hash',
-    header: 'Hash',
-    width: 160,
-    cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
-  },
+  hashColumn<TransactionListItem>(),
   {
     id: 'source',
     header: 'Source account',
@@ -41,12 +39,7 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
     width: 190,
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
-  {
-    id: 'status',
-    header: 'Status',
-    width: 120,
-    cell: (row) => <StatusChip successful={row.successful} />,
-  },
+  statusColumn<TransactionListItem>(),
   {
     id: 'time',
     header: 'Time',

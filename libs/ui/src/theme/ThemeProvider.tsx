@@ -37,11 +37,8 @@ function readInitialMode(defaultMode: PaletteMode): PaletteMode {
   } catch {
     // localStorage access blocked (private mode, etc.) — fall through.
   }
-  if (typeof window.matchMedia === 'function') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
-  }
+  // ponytail: OS preference deliberately ignored — dark is the product default;
+  // only an explicit user toggle (stored above) overrides it.
   return defaultMode;
 }
 

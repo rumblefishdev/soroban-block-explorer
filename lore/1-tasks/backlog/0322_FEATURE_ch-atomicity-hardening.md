@@ -23,6 +23,26 @@ history:
     status: backlog
     who: karolkow
     note: 'Renumbered 0311 → 0322 to resolve an id collision: the active, merged 0311 (FEATURE enrichment multi-provider RPC, PR #270) keeps the id; this not-yet-started backlog task takes the new id. No external references pointed here.'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Item (C) is half-true and the measurement makes this task MORE valuable,
+      not less — checked on prod 2026-07-22.**
+      The engine change is done: both `ledgers` and `wasm_interface_metadata` are
+      `ReplacingMergeTree` keyed by their `ORDER BY` with no version column,
+      exactly the shape (C) prescribes.
+      **The promised effect did not follow.** (C) argues the swap makes duplicates
+      "self-heal" and stops `ledgers` doubling rows in JOINs. Measured now:
+      `ledgers` **25,983,782 physical rows vs 13,138,832 distinct sequences =
+      1.98x**; `wasm_interface_metadata` 6,193 vs 4,323 = 1.43x. The JOIN-doubling
+      the task warns about (`ledgers/queries_ch.rs:234`,
+      `contracts/queries_ch.rs:180/302/487/627`) is therefore still live.
+      Cause: RMT collapses only when a merge happens, and prod never merges these
+      down to a single part. Changing the engine bought the *ability* to dedup,
+      not dedup itself. Whoever picks this up must either force the collapse
+      (0422 owns the historical copy) or dedup on read — and must not assume the
+      engine did it. Same trap as the `FINAL`-vs-duplicates family.
 ---
 
 # CH atomicity hardening: backfill orphan guard + read-side transactions dedup decision

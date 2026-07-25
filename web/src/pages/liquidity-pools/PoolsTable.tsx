@@ -23,7 +23,6 @@ import {
 } from '../pool-shared/helpers.js';
 
 import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
-import { FeePill } from '../pool-shared/FeePill.js';
 
 export const POOL_COLUMN_COUNT = 5;
 
@@ -96,12 +95,6 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
         </Stack>
       );
     },
-  },
-  {
-    id: 'fee',
-    header: 'Fee',
-    width: 120,
-    cell: (row) => <FeePill raw={row.fee_percent} />,
   },
   {
     id: 'reserves',
@@ -186,8 +179,10 @@ interface PoolsTableProps {
 /**
  * Table for the liquidity-pools list page. Columns mirror the Figma node
  * `266:36052` design: Pool (stacked color-coded asset avatars + pair +
- * truncated id) / Fee (success pill) / Reserves (per-leg) / Total
- * shares (right-aligned, unit label) / Participants.
+ * truncated id) / Reserves (per-leg) / Total shares (right-aligned, unit
+ * label) / Participants. Fee column dropped (task 0348 F9): every classic
+ * pool is protocol-fixed at 0.30% (`LIQUIDITY_POOL_FEE_V18`), so a per-row
+ * Fee column carried no comparative signal.
  */
 export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (

@@ -35,10 +35,10 @@ pub struct ListParams {
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
-/// freely; the flip side is that a cursor which decodes but carries the
-/// *other* backend's intent MUST be rejected with `invalid_cursor` rather
+/// freely; the flip side is that a cursor which decodes but carries a
+/// legacy backend's intent MUST be rejected with `invalid_cursor` rather
 /// than silently mis-paginating. `list_transactions` enforces that the
-/// decoded variant matches the active `DataSource`, and a legacy/untagged
+/// decoded variant is the current `Ch` keyset, and a legacy/untagged
 /// cursor (pre-0243, no `src`) fails to decode at all — both surface as a
 /// clean HTTP 400, exactly the "fail, don't silent-promote" contract ADR
 /// 0008 prescribes. The tie-break is non-optional on the `Ch` variant, so a
@@ -46,7 +46,6 @@ pub struct ListParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    Pg { ts: DateTime<Utc>, id: i64 },
     Ch { ledger_sequence: i64, tiebreak: i64 },
 }
 
@@ -62,7 +61,8 @@ pub struct TransactionListItem {
     /// could not be decoded (lore-0209). Always populated for ordinary
     /// (successful or failed-but-decoded) transactions.
     pub source_account: Option<String>,
-    /// Fee charged in stroops.
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     /// Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise.
     pub inner_tx_hash: Option<String>,
@@ -74,16 +74,42 @@ pub struct TransactionListItem {
     /// All distinct operation type names in the transaction
     /// (e.g. `["INVOKE_HOST_FUNCTION", "PAYMENT"]`).
     pub operation_types: Vec<String>,
-    /// C-StrKeys of the contracts invoked as a root-operation `contract_id`.
-    /// On the ClickHouse path this is sourced from `operations_appearances`
-    /// only (primary-key seek): a contract reached solely via a nested
-    /// sub-invocation or an emitted event — never a root-op `contract_id` — is
-    /// NOT listed. For the overwhelming majority of Soroban transactions the
-    /// invoked contract IS the root-op `contract_id`, so this matches the PG
-    /// path in practice; the full 3-source set was dropped because its scan
-    /// blew the read_rows quota (task 0243; see `common::ch`).
-    pub contract_ids: Vec<String>,
+    /// Net-settled "value moved" per asset the transaction touched (task 0393):
+    /// `max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the
+    /// frontend scales. Ordered native-first (`asset_type`, then `asset_id`) so
+    /// `values[0]` is XLM when the tx moved it; empty when nothing net-settled
+    /// (a wash / pure cycle is zero by the flow decomposition theorem) or when
+    /// history has not been backfilled yet.
+    pub values: Vec<TransactionValue>,
     pub created_at: DateTime<Utc>,
+}
+
+/// One asset's net-settled "value moved" in a transaction (task 0393).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransactionValue {
+    /// Asset identity for the asset detail link — `"native"`, `"CODE-ISSUER"`, or a
+    /// contract `C…` StrKey for a bespoke type-3 Soroban token (all accepted by
+    /// `GET /assets/{id}`).
+    pub asset: String,
+    /// Asset code for display (e.g. `"USDC"`) — the on-chain token symbol for a
+    /// bespoke type-3 token; `null` for native XLM and for a bespoke token whose
+    /// metadata symbol is unavailable.
+    pub asset_code: Option<String>,
+    /// Raw net-settled value as a stringified `Int128`; scale by `decimals`.
+    pub net_settled: String,
+    /// Display decimals (`7` for classic / SAC assets).
+    pub decimals: u32,
+}
+
+impl From<crate::common::ch::TxValueMoved> for TransactionValue {
+    fn from(v: crate::common::ch::TxValueMoved) -> Self {
+        Self {
+            asset: v.asset,
+            asset_code: v.asset_code,
+            net_settled: v.net_settled.to_string(),
+            decimals: v.decimals,
+        }
+    }
 }
 
 // `memo_type` / `memo` are NOT exposed on the list item by design — list
@@ -109,7 +135,8 @@ pub struct TransactionDetailLight {
     /// `null` for Variant A `parse_error` transactions whose envelope
     /// could not be decoded (lore-0209).
     pub source_account: Option<String>,
-    /// Fee charged in stroops.
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     /// Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise.
     pub inner_tx_hash: Option<String>,
@@ -136,7 +163,6 @@ pub struct TransactionDetailLight {
 pub struct EventAppearanceItem {
     pub contract_id: String,
     pub ledger_sequence: i64,
-    pub amount: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -146,7 +172,6 @@ pub struct InvocationAppearanceItem {
     /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
     pub caller_account: Option<String>,
     pub ledger_sequence: i64,
-    pub amount: i32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -177,13 +202,9 @@ pub struct OperationItem {
     /// offers that filled against a pool (task 0261/0268 — replaces the
     /// former nullable scalar `pool_id`).
     ///
-    /// **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
-    /// pool" **only** for ClickHouse-served responses. The Postgres backend
-    /// (default until each module flips to CH, per task 0243) never received
-    /// the claim-atom extraction, so it returns `[]` for *every* path-payment
-    /// and offer op regardless of whether a pool was crossed — only LP
-    /// deposit/withdraw carry a pool there. Treat `[]` as authoritative for
-    /// pool absence only once the module reads from CH.
+    /// Empty `[]` means "no pool crossed" — authoritative on the ClickHouse
+    /// read path, which extracts pool crossings from claim atoms across
+    /// path-payment, offer, and LP deposit/withdraw ops.
     pub pool_ids: Vec<String>,
     /// 1-based per-tx apply position carrying on-chain operation order
     /// (task 0192). For folded appearance rows (multiple identical-identity
@@ -196,22 +217,11 @@ pub struct OperationItem {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::cursor::{self, CursorError, Direction};
     use chrono::TimeZone;
-
-    #[test]
-    fn pg_cursor_round_trips() {
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let c = TxListCursor::Pg { ts, id: 42 };
-        let encoded = cursor::encode(&c, Direction::Next);
-        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-        assert_eq!(dir, Direction::Next);
-        assert!(matches!(decoded, TxListCursor::Pg { id: 42, .. }));
-    }
 
     #[test]
     fn ch_cursor_round_trips() {
@@ -237,13 +247,9 @@ mod tests {
 
     #[test]
     fn variant_carries_the_src_tag_on_the_wire() {
-        // The `src` discriminant is what lets `list_transactions` detect a
-        // cross-datasource cursor and reject it (ADR 0008 fail-clean).
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        assert_eq!(
-            serde_json::to_value(TxListCursor::Pg { ts, id: 1 }).unwrap()["src"],
-            "pg"
-        );
+        // The `src` discriminant is what lets `list_transactions` reject a
+        // stale PG cursor (ADR 0008 fail-clean): a decoded cursor without the
+        // current `ch` tag is refused.
         assert_eq!(
             serde_json::to_value(TxListCursor::Ch {
                 ledger_sequence: 1,

@@ -16,8 +16,16 @@
 //! zero. The instance value reaches this module via `cd.val` (an
 //! `ScVal::ContractInstance`) in `ledger_entry_changes.rs`; `scval_to_typed_json`
 //! drops `inst.storage`, so the struct must be pulled from the raw `ScVal`.
+//!
+//! OpenZeppelin **NFTs** use the same instance-storage mechanism under a
+//! DIFFERENT key: the `NFTStorageKey::Metadata` enum variant serializes as
+//! `ScVal::Vec([Symbol("Metadata")])` (value `Map { base_uri, name, symbol }`),
+//! not `Symbol("METADATA")`. [`is_metadata_key`] matches both, so an NFT's
+//! collection name (the `name` field — exactly what SEP-50 `name()` returns) is
+//! captured straight from the ledger. Chain-verified mainnet 2026-07-13
+//! (CARTUL5A… "SushiSwap V3 Positions NFT-V1", CAKSC7JH… "Minah").
 
-use stellar_xdr::curr::{ContractExecutable, ScMapEntry, ScVal};
+use stellar_xdr::{ContractExecutable, ScMapEntry, ScVal};
 
 /// Typed token metadata recovered from the instance-storage `METADATA` struct.
 ///
@@ -43,7 +51,7 @@ pub fn extract_token_metadata(val: &ScVal) -> Option<TokenMetadata> {
     let storage = inst.storage.as_ref()?;
     let metadata = storage
         .iter()
-        .find(|e| symbol_is(&e.key, "METADATA"))
+        .find(|e| is_metadata_key(&e.key))
         .map(|e| &e.val)?;
     let ScVal::Map(Some(fields)) = metadata else {
         return None;
@@ -91,12 +99,22 @@ pub fn has_metadata_key(val: &ScVal) -> bool {
     };
     inst.storage
         .as_ref()
-        .is_some_and(|storage| storage.iter().any(|e| symbol_is(&e.key, "METADATA")))
+        .is_some_and(|storage| storage.iter().any(|e| is_metadata_key(&e.key)))
 }
 
 /// True when `v` is exactly `Symbol(want)`.
 fn symbol_is(v: &ScVal, want: &str) -> bool {
     matches!(v, ScVal::Symbol(s) if s.0.as_slice() == want.as_bytes())
+}
+
+/// True when `v` is a metadata storage key in either on-chain shape:
+/// `Symbol("METADATA")` (SEP-41 / OZ fungible tokens and SACs) or
+/// `Vec([Symbol("Metadata")])` (OpenZeppelin NFT `NFTStorageKey::Metadata`).
+/// Both are chain-verified; matching only the first silently drops OZ NFT
+/// collection names (the `name()` value lives in exactly this slot).
+fn is_metadata_key(v: &ScVal) -> bool {
+    symbol_is(v, "METADATA")
+        || matches!(v, ScVal::Vec(Some(vec)) if vec.len() == 1 && symbol_is(&vec[0], "Metadata"))
 }
 
 /// `Symbol` → its UTF-8 text (used for struct keys).
@@ -130,9 +148,9 @@ fn scval_u32(v: &ScVal) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ContractExecutable, Hash, ScBytes, ScContractInstance, ScMap, ScMapEntry, ScString,
-        ScSymbol, ScVal,
+        ScSymbol, ScVal, ScVec,
     };
 
     fn sbytes(s: &str) -> ScVal {
@@ -244,5 +262,59 @@ mod tests {
         assert_eq!(m.name.as_deref(), Some("Wrapped BTC"));
         assert_eq!(m.symbol.as_deref(), Some("wBTC"));
         assert_eq!(m.decimals, Some(6));
+    }
+
+    #[test]
+    fn extracts_oz_nft_metadata_from_enum_key() {
+        // OpenZeppelin NFT: NFTStorageKey::Metadata → Vec([Symbol("Metadata")]),
+        // value Map{base_uri, name, symbol}. Chain-verified mainnet 2026-07-13:
+        // CARTUL5A… "SushiSwap V3 Positions NFT-V1", CAKSC7JH… "Minah". Before the
+        // is_metadata_key fix the Symbol("METADATA")-only match missed this key
+        // (wrong ScVal variant + casing) → collection_name was a false 0%.
+        let meta = ScVal::Map(Some(scmap(vec![
+            (sym("base_uri"), sstr("https://sushiswap.v3.positions/")),
+            (sym("name"), sstr("SushiSwap V3 Positions NFT-V1")),
+            (sym("symbol"), sstr("SUSHI-V3-POS")),
+        ])));
+        let nft_key = ScVal::Vec(Some(ScVec::try_from(vec![sym("Metadata")]).unwrap()));
+        let inst = ScVal::ContractInstance(ScContractInstance {
+            executable: ContractExecutable::Wasm(Hash([0xAB; 32])),
+            storage: Some(scmap(vec![(nft_key, meta)])),
+        });
+
+        assert!(
+            has_metadata_key(&inst),
+            "OZ NFT enum key must be recognized"
+        );
+        let m = extract_token_metadata(&inst).expect("OZ NFT Metadata present");
+        assert_eq!(m.name.as_deref(), Some("SushiSwap V3 Positions NFT-V1"));
+        assert_eq!(m.symbol.as_deref(), Some("SUSHI-V3-POS"));
+        assert_eq!(m.decimals, None); // NFTs carry no decimals
+
+        // A bare Symbol("Metadata") (not wrapped in a Vec) must NOT match — only
+        // the OZ enum shape and the fungible Symbol("METADATA") are valid keys.
+        assert!(!is_metadata_key(&sym("Metadata")));
+    }
+
+    #[test]
+    fn extracts_real_mainnet_oz_nft_instance_from_ledger() {
+        // Ground-truth regression: the ACTUAL ContractInstance ScVal of the
+        // mainnet OZ NFT CARTUL5A… (SushiSwap V3 Positions), fetched 2026-07-13
+        // via RPC getLedgerEntries. Instance storage carries
+        // NFTStorageKey::Metadata as Vec([Symbol("Metadata")]) → Map{base_uri,
+        // name, symbol}. Pre-fix this real key was missed (0340's false "0%");
+        // this decodes the raw XDR through the production extractor and proves
+        // the collection name is now recovered straight from the ledger.
+        use stellar_xdr::{Limits, ReadXdr};
+        // Raw ContractInstance ScVal XDR (hex) — exactly as it sits in the ledger.
+        const INSTANCE_HEX: &str = "0000001300000000be969de545da89a04508e4952e94a53a77e76ecfa67d74b23fd56e0be42290d400000001000000090000000f00000008736368656d615f7600000003000000010000001000000001000000010000000f0000000541646d696e000000000000120000000000000000bf143f83fd09350734f95b4c5bb7447487ae901d743a4f31554be16dfa0760410000001000000001000000010000000f00000007466163746f7279000000001200000001f6a8a8c38d6cfbd43badd746414cbfaf9f4347def88ae47cbdda062a51ac17d30000001000000001000000010000000f000000084d657461646174610000001100000001000000030000000f00000008626173655f7572690000000e0000001f68747470733a2f2f7375736869737761702e76332e706f736974696f6e732f000000000f000000046e616d650000000e0000001d53757368695377617020563320506f736974696f6e73204e46542d56310000000000000f0000000673796d626f6c00000000000e0000000c53555348492d56332d504f530000001000000001000000010000000f0000000a4e657874506f6f6c4964000000000003000000370000001000000001000000010000000f0000000b4e657874546f6b656e496400000000030000008d0000001000000001000000010000000f0000000f546f6b656e44657363726970746f72000000001200000001429aede68a254f5a638dfda9c870d81b4bc8ca838b7eb21d4f7df5e92d9210bf0000001000000001000000010000000f0000000e546f6b656e4964436f756e7465720000000000030000008d0000001000000001000000010000000f0000000a586c6d416464726573730000000000120000000125b4fcd859aec2fa6348438c489b3c3c10c98b6d21be4fd3cb30cb68953ef977";
+        let bytes = hex::decode(INSTANCE_HEX).unwrap();
+        let val =
+            ScVal::from_xdr(bytes, Limits::none()).expect("real CARTUL5A instance XDR decodes");
+        assert!(has_metadata_key(&val));
+        let m = extract_token_metadata(&val).expect("real OZ NFT METADATA present");
+        assert_eq!(m.name.as_deref(), Some("SushiSwap V3 Positions NFT-V1"));
+        assert_eq!(m.symbol.as_deref(), Some("SUSHI-V3-POS"));
+        assert_eq!(m.decimals, None); // NFT: no decimals
     }
 }

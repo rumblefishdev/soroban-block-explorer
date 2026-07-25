@@ -133,6 +133,12 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
 /// persisted. `_ => contract_id` is kept only so the fn stays total on an
 /// unexpected legacy type-2 input; `TokenAssetType::TryFrom` already rejects 2.
 ///
+/// The native XLM asset surrogate — `asset_id(0, "", 0, 0)` = `hash64("native")`,
+/// a stable FIRST-CLASS key (task 0359 / ADR 0051), never the empty-string
+/// sentinel. Named so call sites read as "the native asset" instead of the magic
+/// empty 4-tuple; the golden test pins `NATIVE_ASSET_ID == asset_id(0, "", 0, 0)`.
+pub const NATIVE_ASSET_ID: i64 = -6_959_166_271_784_855_184;
+
 /// Deterministic (replay-idempotent), no central counter.
 #[inline]
 pub fn asset_id(asset_type: i16, asset_code: &str, issuer_id: i64, contract_id: i64) -> i64 {
@@ -144,6 +150,17 @@ pub fn asset_id(asset_type: i16, asset_code: &str, issuer_id: i64, contract_id: 
         // id (ADR 0051), so a type-2 result is never stored.
         _ => contract_id,
     }
+}
+
+/// The classic credit-asset surrogate for `asset_code` issued by G-StrKey
+/// `issuer` — i.e. `asset_id(1, asset_code, account_id(issuer), 0)`. The single
+/// canonical resolution shared by the `operation_asset_appearances` presence
+/// rows and the value-moved rows (task 0393) and by the classic + Soroban value
+/// paths, so their keys always match. Call this instead of re-spelling the
+/// 4-arg formula, so the surrogate scheme lives in exactly one place.
+#[inline]
+pub fn credit_asset_id(asset_code: &str, issuer: &str) -> i64 {
+    asset_id(1, asset_code, account_id(issuer), 0)
 }
 
 #[cfg(test)]
@@ -197,6 +214,7 @@ mod tests {
         assert_eq!(address_id(g), 4_204_727_763_610_853_148);
         assert_eq!(contract_id(c), -8_283_827_203_770_785_938);
         assert_eq!(asset_id(0, "", 0, 0), -6_959_166_271_784_855_184); // native
+        assert_eq!(NATIVE_ASSET_ID, asset_id(0, "", 0, 0)); // const == fn (dedup pin)
         assert_eq!(
             asset_id(1, "USDC", account_id(g), 0),
             -5_142_557_507_226_545_233
@@ -228,5 +246,16 @@ mod tests {
         assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(1, "EURC", iss, 0));
         assert_ne!(asset_id(0, "", 0, 0), asset_id(1, "USDC", iss, 0));
         assert_eq!(asset_id(0, "", 0, 0), asset_id(0, "", 0, 0));
+    }
+
+    /// `credit_asset_id` MUST equal the raw 4-arg classic formula — it is the one
+    /// canonical helper all credit-asset call sites share (task 0393), so this
+    /// pins the equivalence and catches any drift.
+    #[test]
+    fn credit_asset_id_matches_raw_formula() {
+        assert_eq!(
+            credit_asset_id("USDC", "GISSUER"),
+            asset_id(1, "USDC", account_id("GISSUER"), 0)
+        );
     }
 }

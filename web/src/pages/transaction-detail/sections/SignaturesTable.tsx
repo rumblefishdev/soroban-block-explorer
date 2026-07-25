@@ -12,6 +12,7 @@ import {
 import {
   CopyButton,
   Dash,
+  DEFAULT_TRUNCATION,
   IdentifierWithCopy,
   monoFontFamily,
   truncateMiddle,
@@ -96,10 +97,7 @@ export function SignaturesTable({ signatures }: SignaturesTableProps) {
                           color: theme.palette.text.primary,
                         })}
                       >
-                        {truncateMiddle(sig.signature, {
-                          prefix: 12,
-                          suffix: 12,
-                        })}
+                        {truncateMiddle(sig.signature, DEFAULT_TRUNCATION)}
                       </Typography>
                       <CopyButton
                         value={sig.signature}

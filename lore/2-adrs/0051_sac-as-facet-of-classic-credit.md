@@ -136,6 +136,15 @@ contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap's IDENTITY 
    `CODE-ISSUER`; `fetch_by_contract_id` is extended to hash an input `C…` to its surrogate and
    match `asset_sac.sac_contract_id` so `/assets/{C…}` deep-links still resolve.
 
+   > **SUPERSEDED by task 0364 (2026-07-16).** The SAC-facet match arm was dropped from
+   > `fetch_by_contract_id`: `/assets/{SAC C…}` now **404s** instead of aliasing the wrapped
+   > asset. Rationale — nothing in the app links `/assets/{SAC}` (SAC renders as a
+   > `/contracts/{C…}` reference), and keeping the arm forced a whole-table `asset_sac` scan
+   > that blocked the bounded PK-seek. The canonical `CODE-ISSUER` / `native` address is
+   > unchanged and still resolves. Known residual: the FE `isAssetId()` still accepts a SAC
+   > `C…` as a valid asset id, so an external/bookmarked `/assets/{SAC}` deep-link degrades to
+   > 404 — tracked as 0364 Future-Work F5 (redirect to `/contracts/` or accept).
+
 6. **Frontend.** "SAC" filter → property filter; SAC badge derived from
    `sac_contract_id != 0`; the contract link renders from the (re-derived) `C…` strkey with
    deployment-awareness (`sac_deployed`) — **subsumes 0337**.

@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
+use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
 
 const TARGET_TX: &str = "b7b51065e0a6830e684269c3d4e0c1c3dc76b0c66e97fc7d46fbd15c3b163235";
 /// Manually verified against stellar.expert: the tx walks the router

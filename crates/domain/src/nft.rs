@@ -1,4 +1,4 @@
-//! NFT domain types matching the `nfts` and `nft_ownership` PostgreSQL tables.
+//! NFT domain types matching the `nfts` and `nft_ownership` ClickHouse tables.
 //!
 //! Schema: ADR 0027 Part I §12, §13. `nfts` gains a surrogate SERIAL PK;
 //! identity is still `(contract_id, token_id)` (UNIQUE). Ownership history

@@ -85,10 +85,7 @@ pub struct NftReclassifyStats {
 }
 
 pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("nft_reclassify: skipped (PG target — runbook 0118 handles PG cleanup)");
-        return Ok(NftReclassifyStats::default());
-    };
+    let client = sink.client();
 
     let mut stats = NftReclassifyStats {
         dry_run,
@@ -273,24 +270,4 @@ async fn drop_or_count(
         .map_err(BackfillError::Ch)?;
     info!(table, n, "nft_reclassify: dropped rows");
     Ok(n)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sink::Sink;
-
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = execute(&sink, false)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.promoted_nfts, 0);
-        assert_eq!(stats.dropped_pending_nfts, 0);
-    }
 }

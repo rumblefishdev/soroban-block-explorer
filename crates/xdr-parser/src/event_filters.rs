@@ -1,70 +1,142 @@
-//! SEP-0041 transfer-event classification for Soroban contract events.
+//! SEP-41 / CAP-67 token-event decoding for Soroban contract events.
 //!
-//! The transfer topic shape is the stable SEP-0041 convention:
-//! `topics == [Symbol("transfer"), Address(from), Address(to), ...]`
-//! with the amount carried in the event data payload. NFT transfers reuse
-//! the topic shape but carry a `token_id` in `data`; we surface those as
-//! transfers with `amount = None` so fungible vs. NFT is unambiguous at
-//! the call site.
-//!
-//! Consumed at ingest (indexer staging — participant registration) and
-//! at read time (API E10 — filter token transactions to transfer-emitting
-//! ones). Centralising the shape rules here avoids drift between the two
-//! paths.
+//! [`parse_token_event`] classifies a contract event's topics as a fungible
+//! token movement (transfer / mint / burn / clawback) and extracts the account
+//! operands + the moved asset. Centralising the shape rules here keeps ingest
+//! (`db_clickhouse::persist::stage`) and the `soroban-token-flow` backfill on a
+//! single decode.
 
 use serde_json::Value;
 
-/// A decoded SEP-0041 transfer event.
+/// The asset a SEP-41 / CAP-67 token event names — the EVENT domain's asset
+/// vocabulary (cf. `AssetRef` for op-declared assets, `LedgerAsset` for
+/// ledger-read balances; each domain owns its own small asset enum, resolved to a
+/// DB surrogate by the persistence layer).
 ///
-/// `amount` is `None` when `data` does not carry a numeric ScVal — the
-/// canonical case is an NFT transfer whose `data` is a `token_id`.
+/// CAP-67 "unified" SAC events carry the classic asset as a trailing SEP-11 string
+/// topic (`"native"` or `"CODE:ISSUER"`); bespoke non-SAC tokens omit it, so their
+/// identity IS the emitting contract (`Bespoke` — the caller supplies the emitter
+/// surrogate it already holds; the id is not in the topics).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Transfer {
-    pub from: String,
-    pub to: String,
-    pub amount: Option<String>,
+pub enum EventAsset {
+    /// Native XLM (`"native"` asset string).
+    Native,
+    /// A classic issued asset (`"CODE:ISSUER"` asset string).
+    Credit { code: String, issuer: String },
+    /// A bespoke non-SAC token: no asset string in the event, so the asset is the
+    /// emitting contract; resolved from the emitting contract id by the caller.
+    Bespoke,
 }
 
-/// Shape-only predicate: returns `true` iff `topics` matches the
-/// SEP-0041 transfer layout. Does not inspect the event data.
-pub fn is_transfer_event(topics: &Value) -> bool {
-    parse_transfer_shape(topics).is_some()
+/// The SEP-41 / CAP-67 token-event verb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenEventKind {
+    Transfer,
+    Mint,
+    Burn,
+    Clawback,
 }
 
-/// Decode only the `(from, to)` participants from a transfer event's
-/// topics. Returns `None` when topics do not match the SEP-0041 shape.
-/// Cheaper than `parse_transfer` when the amount is not needed (e.g.
-/// indexer participant registration).
-pub fn transfer_participants(topics: &Value) -> Option<(String, String)> {
-    parse_transfer_shape(topics)
+/// A decoded SEP-41 / CAP-67 token event (transfer / mint / burn / clawback).
+///
+/// `from` is `None` for mint; `to` is `None` for burn and clawback. No amount:
+/// the presence indexes never store it, and the tx-detail page decodes amounts
+/// from archive XDR at read time (E3, ADR 0029) — so it is not needed here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenEvent {
+    pub kind: TokenEventKind,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub asset: EventAsset,
 }
 
-/// Decode a transfer event's `(from, to, amount)` from its topics + data.
-/// Returns `None` when topics do not match the SEP-0041 shape.
-pub fn parse_transfer(topics: &Value, data: &Value) -> Option<Transfer> {
-    let (from, to) = parse_transfer_shape(topics)?;
-    Some(Transfer {
+/// Decode any SEP-41 / CAP-67 token event from its topics. Returns `None` when
+/// topics do not match a known token-event shape.
+///
+/// Shapes (verified against prod, task 0383):
+/// - transfer `[sym, addr(from), addr(to), string(asset)?]`
+/// - mint     `[sym, addr(to), string(asset)?]`
+/// - burn     `[sym, addr(from), string(asset)?]`
+/// - clawback `[sym, addr(from), string(asset)?]`
+///
+/// The trailing SEP-11 asset string is present on SAC events and absent on
+/// bespoke tokens (→ `EventAsset::Bespoke`).
+pub fn parse_token_event(topics: &Value) -> Option<TokenEvent> {
+    let arr = topics.as_array()?;
+    let verb = arr.first()?;
+    if verb.get("type").and_then(Value::as_str)? != "sym" {
+        return None;
+    }
+    let sym = verb.get("value").and_then(Value::as_str)?;
+
+    // (kind, from, to, asset_idx) — asset string, if any, sits after the
+    // address operand(s).
+    let (kind, from, to, asset_idx) = if sym.eq_ignore_ascii_case("transfer") {
+        (
+            TokenEventKind::Transfer,
+            Some(address_topic(arr.get(1)?)?),
+            Some(address_topic(arr.get(2)?)?),
+            3,
+        )
+    } else if sym.eq_ignore_ascii_case("mint") {
+        (
+            TokenEventKind::Mint,
+            None,
+            Some(address_topic(arr.get(1)?)?),
+            2,
+        )
+    } else if sym.eq_ignore_ascii_case("burn") {
+        (
+            TokenEventKind::Burn,
+            Some(address_topic(arr.get(1)?)?),
+            None,
+            2,
+        )
+    } else if sym.eq_ignore_ascii_case("clawback") {
+        (
+            TokenEventKind::Clawback,
+            Some(address_topic(arr.get(1)?)?),
+            None,
+            2,
+        )
+    } else {
+        return None;
+    };
+
+    Some(TokenEvent {
+        kind,
         from,
         to,
-        amount: numeric_scval(data),
+        asset: event_asset(arr.get(asset_idx)),
     })
 }
 
-fn parse_transfer_shape(topics: &Value) -> Option<(String, String)> {
-    let arr = topics.as_array()?;
-    if arr.len() < 3 {
+/// Resolve the asset from a trailing SEP-11 string topic. Absent, empty, or
+/// malformed → `Bespoke` (bespoke token; identity is the emitting contract).
+fn event_asset(topic: Option<&Value>) -> EventAsset {
+    let Some(s) = topic.and_then(string_topic) else {
+        return EventAsset::Bespoke;
+    };
+    if s == "native" {
+        return EventAsset::Native;
+    }
+    match s.split_once(':') {
+        Some((code, issuer)) if !code.is_empty() && !issuer.is_empty() => EventAsset::Credit {
+            code: code.to_string(),
+            issuer: issuer.to_string(),
+        },
+        _ => EventAsset::Bespoke,
+    }
+}
+
+fn string_topic(topic: &Value) -> Option<String> {
+    if topic.get("type").and_then(Value::as_str)? != "string" {
         return None;
     }
-    if arr[0].get("type").and_then(Value::as_str)? != "sym" {
-        return None;
-    }
-    let sym = arr[0].get("value").and_then(Value::as_str)?;
-    if !sym.eq_ignore_ascii_case("transfer") {
-        return None;
-    }
-    let from = address_topic(&arr[1])?;
-    let to = address_topic(&arr[2])?;
-    Some((from, to))
+    topic
+        .get("value")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn address_topic(topic: &Value) -> Option<String> {
@@ -76,27 +148,6 @@ fn address_topic(topic: &Value) -> Option<String> {
         None
     } else {
         Some(s.to_string())
-    }
-}
-
-/// Extract a NUMERIC(39,0)-compatible decimal string from a ScVal-typed
-/// JSON value. Accepts signed/unsigned 32/64/128 bit ints; 128-bit values
-/// are pre-formatted as decimal strings by `scval_to_typed_json`.
-///
-/// u256/i256 are intentionally not supported: `scval_to_typed_json` encodes
-/// them as concatenated hex (4 × 16 hex chars), not decimal, and SEP-0041
-/// transfer amounts in practice never exceed i128. Returning `None` for
-/// u256/i256 is safer than emitting a hex string into a NUMERIC bind.
-fn numeric_scval(data: &Value) -> Option<String> {
-    let ty = data.get("type").and_then(Value::as_str)?;
-    let val = data.get("value")?;
-    match ty {
-        "u32" | "i32" | "u64" | "i64" => val
-            .as_i64()
-            .map(|n| n.to_string())
-            .or_else(|| val.as_u64().map(|n| n.to_string())),
-        "u128" | "i128" => val.as_str().map(str::to_string),
-        _ => None,
     }
 }
 
@@ -113,143 +164,118 @@ mod tests {
         json!({ "type": "address", "value": value })
     }
 
-    fn transfer_topics(from: &str, to: &str) -> Value {
-        json!([sym("transfer"), addr(from), addr(to)])
+    // ---- parse_token_event (0383) ----------------------------------------
+
+    fn string_topic(value: &str) -> Value {
+        json!({ "type": "string", "value": value })
     }
 
-    #[test]
-    fn is_transfer_accepts_canonical_three_topic_shape() {
-        let topics = transfer_topics("GA...FROM", "GA...TO");
-        assert!(is_transfer_event(&topics));
-    }
+    const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
 
     #[test]
-    fn is_transfer_accepts_four_topic_shape_with_asset_code() {
-        let topics = json!([sym("transfer"), addr("GA"), addr("GB"), sym("USDC")]);
-        assert!(is_transfer_event(&topics));
-    }
-
-    #[test]
-    fn is_transfer_is_case_insensitive_on_symbol() {
-        assert!(is_transfer_event(&json!([
-            sym("Transfer"),
-            addr("GA"),
-            addr("GB")
-        ])));
-        assert!(is_transfer_event(&json!([
-            sym("TRANSFER"),
-            addr("GA"),
-            addr("GB")
-        ])));
-    }
-
-    #[test]
-    fn is_transfer_rejects_too_few_topics() {
-        assert!(!is_transfer_event(&json!([sym("transfer"), addr("GA")])));
-    }
-
-    #[test]
-    fn is_transfer_rejects_non_symbol_prefix() {
-        assert!(!is_transfer_event(&json!([
-            addr("GA"),
-            addr("GB"),
-            addr("GC")
-        ])));
-    }
-
-    #[test]
-    fn is_transfer_rejects_other_symbol() {
-        assert!(!is_transfer_event(&json!([
-            sym("mint"),
-            addr("GA"),
-            addr("GB")
-        ])));
-    }
-
-    #[test]
-    fn is_transfer_rejects_non_address_participants() {
-        assert!(!is_transfer_event(&json!([
+    fn token_event_transfer_sac_credit() {
+        let ev = parse_token_event(&json!([
             sym("transfer"),
-            sym("GA"),
-            addr("GB")
-        ])));
-        assert!(!is_transfer_event(&json!([
-            sym("transfer"),
-            addr("GA"),
-            sym("GB")
-        ])));
-    }
-
-    #[test]
-    fn is_transfer_rejects_empty_address_value() {
-        assert!(!is_transfer_event(&json!([
-            sym("transfer"),
-            addr(""),
-            addr("GB")
-        ])));
-    }
-
-    #[test]
-    fn parse_transfer_extracts_u64_amount() {
-        let t = parse_transfer(
-            &transfer_topics("GA", "GB"),
-            &json!({ "type": "u64", "value": 123_456_u64 }),
-        )
+            addr("GBFROM"),
+            addr("GBTO"),
+            string_topic(&format!("USDC:{ISSUER}"))
+        ]))
         .unwrap();
-        assert_eq!(t.from, "GA");
-        assert_eq!(t.to, "GB");
-        assert_eq!(t.amount.as_deref(), Some("123456"));
-    }
-
-    #[test]
-    fn parse_transfer_extracts_i128_amount_from_string() {
-        let t = parse_transfer(
-            &transfer_topics("GA", "GB"),
-            &json!({ "type": "i128", "value": "170141183460469231731687303715884105727" }),
-        )
-        .unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Transfer);
+        assert_eq!(ev.from.as_deref(), Some("GBFROM"));
+        assert_eq!(ev.to.as_deref(), Some("GBTO"));
         assert_eq!(
-            t.amount.as_deref(),
-            Some("170141183460469231731687303715884105727")
+            ev.asset,
+            EventAsset::Credit {
+                code: "USDC".to_string(),
+                issuer: ISSUER.to_string()
+            }
         );
     }
 
     #[test]
-    fn parse_transfer_returns_none_amount_for_u256() {
-        // `scval_to_typed_json` encodes u256/i256 as 64-char concatenated
-        // hex — not a decimal NUMERIC-compatible string. `numeric_scval`
-        // intentionally drops these rather than emit a hex blob into a
-        // NUMERIC(39,0) bind.
-        let t = parse_transfer(
-            &transfer_topics("GA", "GB"),
-            &json!({
-                "type": "u256",
-                "value": "0000000000000000000000000000000000000000000000000000000000000001"
-            }),
-        )
+    fn token_event_transfer_native() {
+        let ev = parse_token_event(&json!([
+            sym("transfer"),
+            addr("GBFROM"),
+            addr("GBTO"),
+            string_topic("native")
+        ]))
         .unwrap();
-        assert!(t.amount.is_none());
+        assert_eq!(ev.asset, EventAsset::Native);
     }
 
     #[test]
-    fn parse_transfer_returns_none_amount_for_nft_token_id() {
-        // NFT-style transfer: data carries a token_id (non-numeric ScVal).
-        let t = parse_transfer(
-            &transfer_topics("GA", "GB"),
-            &json!({ "type": "bytes", "value": "abcd" }),
-        )
-        .unwrap();
-        assert_eq!(t.from, "GA");
-        assert_eq!(t.to, "GB");
-        assert!(t.amount.is_none());
+    fn token_event_transfer_bespoke_no_asset_string_is_contract() {
+        let ev =
+            parse_token_event(&json!([sym("transfer"), addr("GBFROM"), addr("GBTO")])).unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Transfer);
+        assert_eq!(ev.from.as_deref(), Some("GBFROM"));
+        assert_eq!(ev.to.as_deref(), Some("GBTO"));
+        assert_eq!(ev.asset, EventAsset::Bespoke);
     }
 
     #[test]
-    fn parse_transfer_returns_none_for_non_transfer_topic() {
-        let out = parse_transfer(
-            &json!([sym("mint"), addr("GA"), addr("GB")]),
-            &json!({ "type": "u64", "value": 1 }),
-        );
-        assert!(out.is_none());
+    fn token_event_mint_has_to_no_from() {
+        let ev = parse_token_event(&json!([
+            sym("mint"),
+            addr("GBTO"),
+            string_topic(&format!("BISMUTH:{ISSUER}"))
+        ]))
+        .unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Mint);
+        assert_eq!(ev.from, None);
+        assert_eq!(ev.to.as_deref(), Some("GBTO"));
+    }
+
+    #[test]
+    fn token_event_burn_has_from_no_to() {
+        let ev = parse_token_event(&json!([
+            sym("burn"),
+            addr("GBFROM"),
+            string_topic(&format!("GOLD:{ISSUER}"))
+        ]))
+        .unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Burn);
+        assert_eq!(ev.from.as_deref(), Some("GBFROM"));
+        assert_eq!(ev.to, None);
+    }
+
+    #[test]
+    fn token_event_clawback_has_from_no_to() {
+        let ev = parse_token_event(&json!([
+            sym("clawback"),
+            addr("GBFROM"),
+            string_topic(&format!("VELO:{ISSUER}"))
+        ]))
+        .unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Clawback);
+        assert_eq!(ev.from.as_deref(), Some("GBFROM"));
+        assert_eq!(ev.to, None);
+    }
+
+    #[test]
+    fn token_event_mint_bespoke_two_topics_is_contract() {
+        let ev = parse_token_event(&json!([sym("mint"), addr("GBTO")])).unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Mint);
+        assert_eq!(ev.to.as_deref(), Some("GBTO"));
+        assert_eq!(ev.asset, EventAsset::Bespoke);
+    }
+
+    #[test]
+    fn token_event_is_case_insensitive_on_verb() {
+        let ev =
+            parse_token_event(&json!([sym("MINT"), addr("GBTO"), string_topic("native")])).unwrap();
+        assert_eq!(ev.kind, TokenEventKind::Mint);
+    }
+
+    #[test]
+    fn token_event_rejects_unknown_symbol() {
+        assert!(parse_token_event(&json!([sym("swap"), addr("GBA"), addr("GBB")])).is_none());
+    }
+
+    #[test]
+    fn token_event_rejects_mint_without_address() {
+        assert!(parse_token_event(&json!([sym("mint"), sym("not_an_address")])).is_none());
     }
 }

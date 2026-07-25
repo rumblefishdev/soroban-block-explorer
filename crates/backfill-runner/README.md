@@ -1,36 +1,27 @@
 # backfill-runner
 
 Production-grade backfill of the Soroban-era Stellar pubnet archive into
-Postgres. Syncs 64k-ledger partitions from the public
+ClickHouse (ADR 0044). Syncs 64k-ledger partitions from the public
 `aws-public-blockchain` bucket via `aws s3 sync`, decompresses +
-deserializes each ledger, and persists to the ADR 0027 schema via
-`indexer::handler::process::process_ledger` — the shared parse-and-persist
-contract. No reimplementation of the write path.
+deserializes each ledger, and persists via the `db_clickhouse::persist`
+partition-writer lifecycle — reusing the shared `indexer` parse path. No
+reimplementation of the write path.
 
-Also drives the ClickHouse pilot store (ADR 0044) behind
-`--target clickhouse`. As of task 0206 that path writes real rows
-into the 17 mirrored CH tables via partition-aligned streaming
-inserts — see [Targets](#targets) below.
+Real rows are written into the CH tables via partition-aligned streaming
+inserts — see [Writes](#writes) below.
 
 ## Prerequisites
 
 - The `aws` CLI on `PATH` (subprocess driver — no native SDK dependency).
   Startup fails fast if `aws --version` can't run.
-- A reachable Postgres with the project schema migrated (ADR 0027).
-  Startup fails fast if `SELECT 1` fails.
-- **Monthly partitions exist on every partitioned parent.** The runner
-  itself does **not** create partitions — assumes they're already
-  provisioned (in production, by the EventBridge-triggered partition-mgmt
-  Lambda; locally, by the CLI below). Without them, every ingested row
-  lands in `_default`, defeating partition pruning and forcing a costly
-  detach-and-migrate later. Run once before the backfill:
-  ```bash
-  cargo run -p db-partition-mgmt --bin cli   # uses $DATABASE_URL
-  ```
-  Idempotent — re-runs are a no-op once monthly children exist for the
-  Soroban era. See task **0130** + `lore/3-wiki/backfill-execution-plan.md`
-  for context.
-- `DATABASE_URL` exported, or passed via `--database-url`.
+- A reachable ClickHouse with the schema applied (`db-clickhouse-init` /
+  `init.sql`). Startup fails fast if `SELECT 1` fails. ClickHouse
+  partitions declaratively (`PARTITION BY intDiv(ledger_sequence, 500000)`),
+  so there is no partition-provisioning step.
+- `CLICKHOUSE_URL` exported (or `--clickhouse-url`); `CLICKHOUSE_USER` /
+  `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` default via
+  `db_clickhouse::Config::from_env`. For the mTLS Caddy endpoint pass
+  `--ch-cert` / `--ch-key` / `--ch-ca` (task 0307).
 - Run from `us-east-1` (same region as the public archive) to avoid
   cross-region ingress costs.
 - Local scratch disk: **~2 × partition_size** (a couple of GB). The runner
@@ -53,27 +44,124 @@ cargo run -p backfill-runner -- status --start 50457424 --end 50460000
 |---------------------|--------------------------|-----------------------------------------------------|
 | `--start`           | required                 | First ledger sequence (inclusive).                  |
 | `--end`             | required                 | Last ledger sequence (inclusive).                   |
-| `--target`          | `postgres`               | One of `postgres` \| `clickhouse`. See [Targets](#targets). |
-| `--database-url`    | env `DATABASE_URL`       | Postgres DSN (required when `--target postgres`).   |
-| `--clickhouse-url`  | env `CLICKHOUSE_URL`     | ClickHouse HTTP endpoint (used when `--target clickhouse`). |
+| `--clickhouse-url`  | env `CLICKHOUSE_URL`     | ClickHouse HTTP endpoint.                            |
+| `--ch-cert`/`--ch-key`/`--ch-ca` | env `CLICKHOUSE_CERT`/`_KEY`/`_CA` | mTLS PEMs for the Caddy endpoint (all three or none). |
 | `--temp-dir`        | `.temp/backfill-runner`  | Local scratch dir (env `BACKFILL_TEMP_DIR`).        |
 | `--keep-partitions` | off                      | Don't delete each partition's local folder after a successful index. Iteration / debug flag — see [Iteration](#iteration). |
 | `--verbose`/`-v`    | off                      | Enable per-ledger + per-partition info logs. Without it only warnings print during the run. |
 
-## Targets
+## Subcommands — the rule for one-off passes
 
-The runner writes to one of two parallel stores, selected by `--target`.
-Default is `postgres` so existing invocations (CI scripts, runbooks, the
-aws-public-blockchain workflow) keep working byte-for-byte without edits.
+Beyond `run` / `status`, this crate hosts maintenance subcommands that operate on
+an already-ingested dataset. **Operating** them — which to run, in what order,
+indexer stopped or not — is [`docs/backfills.md`](../../docs/backfills.md). This
+section is the authoring rule: when a new one is allowed to exist, and when it
+must be deleted. Established by lore task 0425.
 
-| Target       | Status              | Required env / flag                                                                        |
-|--------------|---------------------|--------------------------------------------------------------------------------------------|
-| `postgres`   | production          | `--database-url` / `DATABASE_URL`                                                          |
-| `clickhouse` | pilot (task 0206)   | `--clickhouse-url` / `CLICKHOUSE_URL`, plus `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` (defaults from `db_clickhouse::Config::from_env`) |
+A one-off pass fixes history that the live indexer already handles going forward.
+Four clauses, in order:
 
-### `--target clickhouse`
+1. **Never re-implement the ingest path — that is the only forbidden shape.** A
+   subcommand is the *right* home for a one-off: `--dry-run`, counters, tests, and
+   a diff a reviewer can read all beat SQL pasted into a prod client at 2am. What
+   is forbidden is narrower: a binary that re-walks S3, re-parses ledgers, and
+   cherry-picks which rows to keep. That is a third copy of the ingest path, on top
+   of the parser and the live writer. The removed `metadata-backfill` (0304) and
+   `pool-ids-backfill` (0266) were exactly that — each parsed **every ledger in the
+   range in full**, discarded all but one table's rows, and carried its own
+   partition loop, watermark file and resume logic to do it.
 
-The CH path drives a **partition-writer lifecycle** (task 0206):
+   So: data already in ClickHouse → a subcommand driving SQL is fine and good.
+   Data only in XDR → `run --reindex`, which re-parses the range through the one
+   shared path. Never your own re-parser.
+
+   > **The usual objection, and why it does not hold.** `docs/backfills.md` rule 4
+   > warns that re-parsing with a *different parser build* is unsafe on the 15 RMT
+   > tables that carry no version column, because ClickHouse could keep the stale
+   > row. Measured on CH 26.3 (lore 0425): it keeps the **last row inserted**, so a
+   > re-parse — which by construction lands after the data it replaces — wins in
+   > every shape tried, including after `OPTIMIZE`, across parallel inserts, and
+   > when read through `FINAL`. Every version-less table is also either keyed by
+   > ledger (a re-parse only competes with its own earlier parse) or holds a pure
+   > function of an immutable input. The real hazard is narrower and lives in the
+   > parser, not the engine: **two rows for one key inside a single insert**, where
+   > "last" is whatever order the code emitted (lore 0356, pool reserves). Emit one
+   > row per key and `--reindex` is safe.
+
+2. **Reuse the live code path — never reimplement it.** Call the same function
+   the indexer calls. The removed passes that did (`nft-reparse` → the parser's
+   own `detect_nft_events`; `assets-id-backfill` → `ids::asset_id`, the same fn
+   as `AssetRow::staged`; `metadata-backfill` → the same `PartitionWriter`) never
+   drifted — that discipline is what made them safe to delete. The two that reimplemented their logic in SQL — `repair-tier1` and
+   `contract-type-rebuild` — are the ones the 0388 → 0392 → 0394 → 0404 bug
+   family circles. A hand-written column list or an inlined verdict rule is a
+   second copy of something the codebase already owns, and second copies drift
+   silently.
+
+3. **If it cannot be expressed as "replay live logic over old data", live has a
+   hole.** That is a finding, not an inconvenience: open a task on the write path
+   first, and the one-off becomes catch-up rather than recurring maintenance.
+   This clause is a detector — it is what sorted the table below.
+
+4. **Delete it once it has run.** Git keeps it. A spent one-shot left in `--help`
+   reads as an available tool. Move it to `.trash/` (`rm` is forbidden
+   repo-wide) and record the removal in the task.
+
+### What survives, and why
+
+| Command | Why it stays |
+|---|---|
+| `run`, `status` | the backfill itself |
+| `bootstrap` | ⚠ **recurring mop — reclassified 2026-07-21 by measurement.** It reads as a one-off ("top up accounts the ingest window never observed"), but live re-creates the gap: the account writer stamps `sequence_number = 0` whenever it has no account-state override (`persist/stage.rs:699`), and the RMT version (`last_seen_ledger`) is bumped by that same write, so the zeroed row wins. Measured: **61.7% of accounts that sent a transaction** in a recent window carry `sequence_number = 0`, and skeletons are twice as common among *active* accounts (14.7%) as among dormant ones (6.75%). The live indexer has no bootstrap of any kind. Retire via lore 0421 |
+| `balance-seed` | RPC snapshot of holders who have not transacted since the parser shipped. Live writes a balance only when it **observes** a `ContractData Balance(Address)` change, so this is not a hole in live logic — it is a state read live cannot express. **Not yet measured the way `bootstrap` was**; treat the classification as provisional |
+| `repair-tier1` | ⚠ **recurring mop.** `ReplacingMergeTree` cannot express MIN, so the 6 Tier-1 columns re-drift under live ingest. Retire via lore 0232 / 0421 (`AggregatingMergeTree` + `SimpleAggregateFunction(min)`) |
+| `nft-reclassify` | ⚠ **recurring mop.** No continuous `pending → hot` promotion in live. Retire via lore 0392 |
+| `contract-type-rebuild` | ⚠ **partly covered.** Live has the G1 / G9 cross-ledger verdicts (`persist/stage.rs`); contracts the classifier cannot name still default to `Other`. Lore 0309 |
+
+The four marked ⚠ each fail clause 3 — which is exactly why they are still here.
+
+**The invariant that decides whether a defaulted write corrupts.** A whole-row
+write that fills missing fields with defaults is safe **only if it also carries
+the lowest version**. `soroban_contracts`' stub writer (`stage.rs:1761`) emits an
+all-NULL row but stamps `wasm_uploaded_at_ledger = 0` — the lowest possible
+version — so it always loses to the real deploy row. `accounts` breaks the rule:
+its version is `last_seen_ledger`, which the defaulting write *bumps to the
+current ledger*, so the emptied row wins. Tables with **no** version column
+(`assets`, `wasm_interface_metadata`) are exposed by default, because there the
+last write always wins. Check any new state-table writer against this.
+
+### Removed (lore 0425)
+
+Spent one-shots whose logic the live indexer now performs itself, each verified
+against the live write path before removal:
+
+| Removed | Live equivalent |
+|---|---|
+| `wasm-upgrade-backfill` (0320) | `build_wasm_upgrade_rows`, off the `executable_update` event |
+| `upgradeable-backfill` (0327) | parser writes `metadata.upgradeable` on every new WASM |
+| `nft-reparse` (0296) | fixed `detect_nft_events` in the parser |
+| `soroban-token-flow-backfill` (0383) | `stage.rs` registers token-event participants + SAC asset presence |
+| `pool-ids-backfill` (0266) | `pool_ids` + `gross_volume_a` computed live |
+| `assets-id-backfill` (0331) | `AssetRow::staged` computes `id` with the same Rust fn |
+| `metadata-backfill` (0304) | parser writes `soroban_contract_metadata` since 0297 |
+
+Live coverage was verified on prod before each removal, not assumed — e.g. at
+deletion time `soroban_contract_metadata` carried a write from 4 ledgers behind
+the chain tip, and `operations_appearances.pool_ids` from the tip itself. The
+shell wrappers that drove `pool-ids-backfill` (`scripts/0266/`) went with it.
+
+Recoverable from git history if a comparable pass is ever needed — but read
+clauses 1–4 first, because the answer is usually `run --reindex` or a live fix.
+
+## Writes
+
+The runner writes to ClickHouse (ADR 0044); Postgres was retired (task
+0244). Env / flags: `--clickhouse-url` / `CLICKHOUSE_URL`, plus
+`CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE`
+(defaults from `db_clickhouse::Config::from_env`); mTLS via
+`--ch-cert`/`--ch-key`/`--ch-ca`.
+
+The write path drives a **partition-writer lifecycle** (task 0206):
 `open_partition` → `write_ledger × N` → `commit` (or `abort` on
 error). The CH writer
 (`db_clickhouse::persist::PartitionWriter`) holds one long-lived
@@ -91,16 +179,11 @@ merger's comfort zone. Full design rationale lives in
 [`docs/architecture/database-schema/clickhouse-pilot.md`](../../docs/architecture/database-schema/clickhouse-pilot.md#writers).
 
 ```bash
-# Real ClickHouse run.
+# ClickHouse run.
 CLICKHOUSE_URL=http://localhost:8123 \
     cargo run -p backfill-runner -- \
-    --target clickhouse \
     run --start 62016000 --end 62016099
 ```
-
-The PG variant of the partition-writer lifecycle is a no-op around
-the existing per-ledger transaction — `--target postgres` behaviour
-is byte-for-byte equivalent to the pre-task-0206 path.
 
 ### Parallel partition runs
 
@@ -118,7 +201,6 @@ for i in 0 1 2 3; do
     END=$((START + 63999))
     CLICKHOUSE_URL=http://localhost:8123 \
         cargo run -p backfill-runner --release -- \
-        --target clickhouse \
         run --start "$START" --end "$END" &
 done
 wait
@@ -137,14 +219,12 @@ local folder right after it indexes (`partition local folder cleaned up`
 log line) to bound disk at ~2 × partition_size — see [Shape](#shape).
 For real backfills that's what you want.
 
-For tight iteration loops — typically against `--target clickhouse`
-where the persist path is a stub and you want to re-run the same range
+For tight iteration loops — when you want to re-run the same range
 many times — pass `--keep-partitions`:
 
 ```bash
 CLICKHOUSE_URL=http://localhost:8123 \
     cargo run -p backfill-runner -- \
-    --target clickhouse \
     --keep-partitions \
     run --start 62016000 --end 62016099
 ```
@@ -189,9 +269,9 @@ built at startup:
 1. **Pre-sync partition skip** — partitions whose clamped range
    (`max(start, p.start)..=min(end, p.end)`) is fully present in the set
    are filtered out and neither synced nor indexed. Re-running a
-   fully-done range does zero S3 work and zero `process_ledger` calls.
+   fully-done range does zero S3 work and zero `write_ledger` calls.
 2. **Per-ledger skip (inside a partition)** — for partitions that survive
-   the pre-sync filter, `process_ledger` is skipped for any sequence
+   the pre-sync filter, `write_ledger` is skipped for any sequence
    already in the set. Handles mid-partition crashes where the partition
    is only partially in DB.
 
@@ -309,28 +389,6 @@ of re-downloading from zero. If forensics aren't needed after a failure,
 Reference throughput per partition is **to be measured** on a `us-east-1`
 instance against the production DB. Update this section after the first
 dry-run.
-
-## Diff vs `crates/backfill-bench`
-
-Both crates target the **same sink** (Postgres, ADR 0027, via
-`process_ledger`) and use the **same unit of work** (one 64k-ledger
-partition via `aws s3 sync`). `backfill-bench` is the prototype /
-benchmark; `backfill-runner` is the operator-facing production tool.
-They coexist intentionally.
-
-| Axis                     | backfill-bench             | backfill-runner                      |
-|--------------------------|----------------------------|--------------------------------------|
-| S3 fetch                 | `aws s3 sync` subprocess   | `aws s3 sync` subprocess             |
-| Scratch dir              | `.temp/`                   | `.temp/backfill-runner/` (flag)      |
-| Cleanup after index      | no                         | yes (disk bounded at ~2 × partition) |
-| Concurrency              | sequential + prefetch      | sequential + prefetch (same)         |
-| Retry                    | none                       | 3× exp backoff on `aws s3 sync`      |
-| Subcommands              | single run                 | `run`, `status`                      |
-| Pre-flight checks        | none                       | `aws --version` + `SELECT 1`         |
-| Resume — partition level | none                       | pre-sync skip against DB             |
-| Resume — ledger level    | none                       | per-ledger skip against DB           |
-| Per-stage timing logs    | minimal                    | every ledger + per-partition totals  |
-| `DEFAULT` partition boot | yes (dev shortcut)         | no — assumes provisioned             |
 
 ## Nx targets
 

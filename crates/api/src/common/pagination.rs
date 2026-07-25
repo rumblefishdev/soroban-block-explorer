@@ -1,12 +1,12 @@
 //! Helpers that turn a `limit+1` row fetch into the canonical
 //! [`Paginated`](crate::openapi::schemas::Paginated) envelope.
 //!
-//! The helpers live outside any specific ORM layer on purpose: every
-//! list endpoint in this crate builds its SQL with a hand-written
-//! `sqlx::QueryBuilder`, so the pagination contract is "fetch one extra
-//! row, hand it here, receive a ready envelope back". This keeps the
-//! SQL plans per-endpoint explicit (no generic WHERE clause injection)
-//! while centralising the wire-shape choreography.
+//! The helpers live outside any specific query layer on purpose: every
+//! list endpoint in this crate hand-writes its ClickHouse SQL, so the
+//! pagination contract is "fetch one extra row, hand it here, receive a
+//! ready envelope back". This keeps the SQL plans per-endpoint explicit
+//! (no generic WHERE clause injection) while centralising the wire-shape
+//! choreography.
 
 use crate::openapi::schemas::{PageInfo, Paginated};
 

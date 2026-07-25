@@ -3,14 +3,12 @@ import { Link } from 'react-router-dom';
 
 import type { SearchHit } from '@rumblefish/api-types';
 import {
-  Chip,
   IdentifierDisplay,
   RelativeTimestamp,
-  routeForHit,
   StatusChip,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { ENTITY_LABEL } from './useSearchResults.js';
+import { routeForHit } from './routeForHit.js';
 
 interface SearchResultRowProps {
   hit: SearchHit;
@@ -60,20 +58,16 @@ export function SearchResultRow({
       })}
     >
       <Stack spacing={0.5} sx={{ minWidth: 0, flex: 1 }}>
-        <Stack direction="row" spacing={1.5} alignItems="center">
-          <Box sx={{ minWidth: 0, flexShrink: 1 }}>
-            <IdentifierDisplay
-              value={hit.identifier}
-              type={hit.entity_type}
-              linked={false}
-            />
-          </Box>
-          <Chip
-            size="sm"
-            color="neutral"
-            label={ENTITY_LABEL[hit.entity_type]}
+        {/* No per-row type chip: rows are always scoped by the active
+            entity-type tab (SearchResultsView is the only render path), so the
+            chip would just repeat the tab label. (task 0348 F16) */}
+        <Box sx={{ minWidth: 0, flexShrink: 1 }}>
+          <IdentifierDisplay
+            value={hit.identifier}
+            type={hit.entity_type}
+            linked={false}
           />
-        </Stack>
+        </Box>
         {hit.label && hit.label !== hit.identifier && (
           <Typography
             variant="bodySmRegular"

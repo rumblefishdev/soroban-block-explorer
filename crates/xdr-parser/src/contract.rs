@@ -5,7 +5,7 @@
 //! `ScSpecEntry` values, and produces `ExtractedContractInterface` with function
 //! signatures for storage in `soroban_contracts.metadata`.
 
-use stellar_xdr::curr::*;
+use stellar_xdr::*;
 
 use crate::types::{ContractFunction, ExtractedContractInterface, FunctionParam};
 
@@ -15,7 +15,7 @@ use crate::types::{ContractFunction, ExtractedContractInterface, FunctionParam};
 /// Returns one `ExtractedContractInterface` per new WASM deployment found.
 /// Non-Soroban transactions and transactions without new code produce an empty vec.
 pub fn extract_contract_interfaces(tx_meta: &TransactionMeta) -> Vec<ExtractedContractInterface> {
-    let changes = collect_ledger_changes(tx_meta);
+    let changes = crate::meta::ledger_changes(tx_meta);
     let mut interfaces = Vec::new();
 
     for change in changes {
@@ -31,40 +31,6 @@ pub fn extract_contract_interfaces(tx_meta: &TransactionMeta) -> Vec<ExtractedCo
     }
 
     interfaces
-}
-
-/// Collect all LedgerEntryChange refs from a TransactionMeta.
-fn collect_ledger_changes(meta: &TransactionMeta) -> Vec<&LedgerEntryChange> {
-    let mut changes = Vec::new();
-
-    match meta {
-        TransactionMeta::V3(v3) => {
-            collect_from_entry_changes(&v3.tx_changes_before, &mut changes);
-            for op_meta in v3.operations.iter() {
-                collect_from_entry_changes(&op_meta.changes, &mut changes);
-            }
-            collect_from_entry_changes(&v3.tx_changes_after, &mut changes);
-        }
-        TransactionMeta::V4(v4) => {
-            collect_from_entry_changes(&v4.tx_changes_before, &mut changes);
-            for op_meta in v4.operations.iter() {
-                collect_from_entry_changes(&op_meta.changes, &mut changes);
-            }
-            collect_from_entry_changes(&v4.tx_changes_after, &mut changes);
-        }
-        _ => {}
-    }
-
-    changes
-}
-
-fn collect_from_entry_changes<'a>(
-    changes: &'a LedgerEntryChanges,
-    out: &mut Vec<&'a LedgerEntryChange>,
-) {
-    for change in changes.iter() {
-        out.push(change);
-    }
 }
 
 /// Parse a single ContractCodeEntry into an ExtractedContractInterface.

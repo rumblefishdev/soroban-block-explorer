@@ -1,10 +1,12 @@
 //! XDR parser for the Soroban block explorer indexer.
 //!
 //! Deserializes `LedgerCloseMeta` payloads from Galexie S3 exports and extracts
-//! structured ledger and transaction data for PostgreSQL persistence.
+//! structured ledger and transaction data for ClickHouse persistence.
 //!
 //! This is the sole XDR parsing path (ADR-0004: Rust-only, ingestion-time).
 
+pub mod asset_appearances;
+pub mod asset_code;
 pub mod classification;
 pub mod contract;
 pub mod error;
@@ -13,8 +15,12 @@ pub mod event_filters;
 pub mod invocation;
 pub mod ledger;
 pub mod ledger_entry_changes;
+pub mod ledger_value;
 pub mod memo;
+pub mod meta;
+pub mod net_settled;
 pub mod nft;
+pub mod op_participants;
 pub mod op_source;
 pub mod operation;
 pub mod sac;
@@ -32,21 +38,23 @@ pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
 pub use event::extract_events;
-pub use event_filters::{Transfer, is_transfer_event, parse_transfer, transfer_participants};
+pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_event};
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
+pub use ledger_value::{LedgerAsset, LedgerDelta, ledger_balance_deltas};
+pub use net_settled::{AccountDelta, NetSettled, net_settled};
 pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;
 pub use operation::{extract_operations, tx_op_results};
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id, derive_sac_strkey,
-    extract_sac_identities, network_id, passphrase_for, sac_override_from_event_topics,
+    extract_sac_identities, net_id, network_id, passphrase_for, sac_override_from_event_topics,
 };
 pub use scval::scval_to_typed_json;
 pub use state::{
-    SacBalanceValue, decode_sac_balance_value, detect_assets, detect_classic_credit_assets,
-    detect_nfts, extract_account_states, extract_contract_data_name_writes,
+    SacBalanceValue, decode_sac_balance_value, dedup_final_pool_snapshots, detect_assets,
+    detect_classic_credit_assets, detect_nfts, extract_account_states,
     extract_contract_deployments, extract_contract_metadata_writes, extract_liquidity_pools,
     extract_lp_positions, extract_nft_ownership_events, extract_soroban_token_balances,
     native_asset_singleton,
@@ -62,7 +70,7 @@ pub use types::{
     SacAssetIdentity,
 };
 
-use stellar_xdr::curr::{LedgerCloseMetaBatch, ReadXdr};
+use stellar_xdr::{LedgerCloseMetaBatch, ReadXdr};
 
 /// Maximum decompressed size (64 MiB). Galexie batches are typically 2-5 MiB.
 const MAX_DECOMPRESSED_SIZE: usize = 64 * 1024 * 1024;

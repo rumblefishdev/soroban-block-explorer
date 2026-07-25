@@ -1,6 +1,8 @@
 -- ============================================================================
+-- ⚠️  `contract_ids` REMOVED from the API (task 0386) — the shared helper now
+--     returns `operation_types` only; the `contract_ids` array below is dead.
 -- ⚠️  CH 26.3 CORRECTION (task 0243) — do NOT implement the
---     `operation_types` / `contract_ids` arrays with the correlated scalar
+--     `operation_types` array with the correlated scalar
 --     subqueries shown below (`… WHERE oa.transaction_id = t.id`): ClickHouse
 --     26.3 rejects them with `Code: 48 NOT_IMPLEMENTED`. Use the NON-correlated
 --     two-step the shipped modules use — fetch the page of tx keys, then
@@ -16,26 +18,27 @@
 -- Data sources: DB-only.
 -- Inputs:
 --   $1  :pool_id             FixedString(32)   raw 32-byte pool id
---                            (matched via has(pool_ids, $1) — task 0261/0268)
+--                            (seeked via operation_pools.pool_id — task 0365)
 --   $2  :limit               Int               page size
 --   $3  :cursor_ledger       Int64             NULL on first page
 --   $4  :cursor_tx_id        Int64             NULL on first page
--- Indexes:      operations_appearances ORDER BY (ledger_sequence,
---                 transaction_id, id) + PARTITION BY intDiv. `pool_ids` is a
---                 non-leading Array filter column → full partition scan until
---                 the 0281-window seek replacement (skip index / arrayJoin
---                 projection / helper table) lands; pool-bound predicate
---                 selectivity reduces cost.
+-- Indexes:      operation_pools ORDER BY (pool_id, ledger_sequence,
+--                 transaction_id) + PARTITION BY intDiv (task 0365). `pool_id`
+--                 is the leading key → STEP 1 is a direct PK prefix-seek bounded
+--                 to the pool's own rows, superseding the 0281-C read-in-order
+--                 scan over operations_appearances (a popular pool sat in ~every
+--                 granule; the has(pool_ids, X) Array filter could not prune).
 --               transactions ORDER BY (ledger_sequence, application_order, id).
--- CH Engine:    All Replacing — FINAL.
--- CH Pattern:   same shape as E07 / E10, just with `has(pool_ids, …)` filter.
+-- CH Engine:    All Replacing — FINAL (operation_pools deduped via LIMIT 1 BY).
+-- CH Pattern:   same shape as E07 (account seek) / E10 (asset seek): a per-entity
+--               presence companion keyed entity-first, then id-IN hydration.
 -- ADR 0044 §:   §4.3 (operations_appearances Replacing partitioned),
 --                 §4.2 (transactions), §4.5 (accounts), §5.2 (no closed_at).
 -- Notes:
---   • Driver is `operations_appearances` filtered by `has(pool_ids, $1)`
---     (task 0261/0268: Array of crossed pools — path payments contribute
---     every pool crossed by their claim atoms; [] = no pool). Same shape
---     as PG E20.
+--   • Driver is `operation_pools` seeked by `pool_id = $1` (task 0365: the
+--     pool-keyed presence twin of transaction_participants, written by the
+--     indexer as a per-op fan-out over pool_ids — path payments contribute every
+--     pool crossed by their claim atoms). Same tx set as PG E20.
 --   • Cursor drops `created_at` (§5.2). Natural keyset
 --     `(ledger_sequence, transaction_id)`.
 --   • `operation_types[]` projected for frontend §6.14 trade-vs-LP-mgmt
@@ -59,13 +62,13 @@ SELECT
     )                                                                                   AS operation_types,
     t.id                                                                                AS cursor_tx_id
 FROM (
-    SELECT oa.transaction_id, oa.ledger_sequence
-    FROM operations_appearances oa FINAL
-    WHERE has(oa.pool_ids, $1)
-      AND ($3 IS NULL OR (oa.ledger_sequence, oa.transaction_id) < ($3, $4))
-    ORDER BY oa.ledger_sequence DESC, oa.transaction_id DESC
-    LIMIT 1 BY oa.transaction_id
-    LIMIT $2 * 4
+    SELECT transaction_id, ledger_sequence
+    FROM operation_pools
+    WHERE pool_id = $1
+      AND ($3 IS NULL OR (ledger_sequence, transaction_id) < ($3, $4))
+    ORDER BY ledger_sequence DESC, transaction_id DESC
+    LIMIT 1 BY ledger_sequence, transaction_id
+    LIMIT $2
 ) m
 JOIN transactions t FINAL ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence
 JOIN accounts src FINAL ON src.id = t.source_id

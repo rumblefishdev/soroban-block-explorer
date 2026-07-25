@@ -111,131 +111,11 @@ pub fn extract_contract_deployments(
             deployed_at_ledger: change.ledger_sequence,
             contract_type,
             is_sac,
-            name: None,
             sac_asset,
         });
     }
 
-    // Second pass — populate `name` for the constructor pattern (deploy
-    // tx writes the standard `Symbol("name")` storage entry in the same
-    // ledger). For deploy-then-init contracts where the storage write
-    // lands in a later ledger, the indexer's
-    // `extract_contract_data_name_writes` path fills the column then.
-    // Per ADR 0042 + task 0156.
-    for deployment in deployments.iter_mut() {
-        for change in changes {
-            if change.entry_type != "contract_data" || change.change_type != "created" {
-                continue;
-            }
-            if !is_symbol_name_key(&change.key, &deployment.contract_id) {
-                continue;
-            }
-            let Some(ref data) = change.data else {
-                continue;
-            };
-            if let Some(name) = decode_scval_string(data) {
-                deployment.name = Some(name);
-                break;
-            }
-        }
-    }
-
     deployments
-}
-
-/// Extract `(contract_id, name)` pairs from `Symbol("name")` ContractData
-/// `created` or `updated` entries, independently of any deployment in the
-/// same ledger.
-///
-/// Used for two scenarios that `extract_contract_deployments`'s
-/// constructor-pattern second pass cannot cover:
-///
-/// 1. **Late-init pattern** — contract deployed in ledger N (storage
-///    empty at deploy time), `init()` invocation in ledger N+k writes
-///    `Symbol("name")` to persistent storage. `extract_contract_deployments`
-///    in ledger N+k produces no deployment for this contract (it was
-///    already deployed), so the second pass there sees no deployment to
-///    populate. The indexer applies a retroactive UPDATE on
-///    `soroban_contracts.name` for each pair returned here, gated by
-///    `name IS NULL` to keep the write idempotent.
-///
-/// 2. **Re-init / name update** — a contract updates its `Symbol("name")`
-///    storage entry. The `change_type == "updated"` filter catches this
-///    case as well; the indexer overwrites the existing name.
-///
-/// Per ADR 0042 + task 0156.
-pub fn extract_contract_data_name_writes(
-    changes: &[ExtractedLedgerEntryChange],
-) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for change in changes {
-        if change.entry_type != "contract_data" {
-            continue;
-        }
-        if change.change_type != "created" && change.change_type != "updated" {
-            continue;
-        }
-        let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
-            continue;
-        };
-        if !is_symbol_name_key(&change.key, &contract_id) {
-            continue;
-        }
-        let Some(ref data) = change.data else {
-            continue;
-        };
-        if let Some(name) = decode_scval_string(data) {
-            out.push((contract_id, name));
-        }
-    }
-    out
-}
-
-/// True when `key` is the persistent storage entry for `Symbol("name")` on
-/// `contract_id` (the standard slot used by SEP-41 / OpenZeppelin Soroban
-/// FungibleToken implementations to store the human-readable token name).
-///
-/// Match shape: `key.contract == contract_id` AND
-/// `key.key.type == "sym"` AND `key.key.value == "name"`.
-fn is_symbol_name_key(key: &Value, contract_id: &str) -> bool {
-    let key_contract = key.get("contract").and_then(|v| v.as_str());
-    if key_contract != Some(contract_id) {
-        return false;
-    }
-    key.get("key")
-        .and_then(|k| {
-            let ty = k.get("type")?.as_str()?;
-            let val = k.get("value")?.as_str()?;
-            Some(ty == "sym" && val == "name")
-        })
-        .unwrap_or(false)
-}
-
-/// Decode `data.val` as a UTF-8 string for SCVal types that legally
-/// represent a name (`string`, `sym`, `bytes`).
-///
-/// Returns `None` for any other SCVal variant (Vec/Map/Bool/numeric/etc.) —
-/// the standard `Symbol("name")` slot is always one of the three string-y
-/// shapes in conforming SEP-41 implementations, so a non-matching variant
-/// is treated as "no extractable name" rather than a parse failure.
-///
-/// Robustness rationale: silently returning `None` for unsupported shapes
-/// keeps a misbehaving contract from poisoning the parser. The caller's
-/// caller (the indexer) treats `None` the same as an absent storage entry.
-fn decode_scval_string(data: &Value) -> Option<String> {
-    let val = data.get("val")?;
-    let ty = val.get("type")?.as_str()?;
-    let v = val.get("value")?;
-    match ty {
-        "string" | "sym" => v.as_str().map(String::from),
-        "bytes" => {
-            // Stellar XDR JSON intermediate encodes BytesM as hex string.
-            let hex_str = v.as_str()?;
-            let bytes = hex::decode(hex_str).ok()?;
-            String::from_utf8(bytes).ok()
-        }
-        _ => None,
-    }
 }
 
 /// Extract token-metadata writes from contract-instance `created` / `updated`
@@ -882,7 +762,20 @@ pub fn extract_liquidity_pools(
             created_at: change.created_at,
         };
 
-        let snapshot = ExtractedLiquidityPoolSnapshot {
+        pools.push(pool);
+
+        // lore-0356: emit a snapshot for every liquidity-pool change that reaches
+        // here (created/updated/restored/state). "One row per (pool, ledger)" is
+        // delegated to `dedup_final_pool_snapshots`, which keeps the LAST image in
+        // ledger apply order = the end-of-ledger reserves. We deliberately do NOT
+        // drop `state` snapshots: for a pool mutated in the ledger the last change
+        // is always the `updated` after-image (a `state` before-image is
+        // immediately followed by its `updated`, so it never wins), while for a
+        // pool referenced but not mutated (the lore-0189 case — e.g. a pool_share
+        // trustline change) the lone `state` read IS its correct end-of-ledger
+        // value; dropping it would leave that pool with no snapshot and blank
+        // reserves in the read path.
+        snapshots.push(ExtractedLiquidityPoolSnapshot {
             pool_id,
             ledger_sequence: change.ledger_sequence,
             created_at: change.created_at,
@@ -891,13 +784,44 @@ pub fn extract_liquidity_pools(
             tvl: None,
             volume: None,
             fee_revenue: None,
-        };
-
-        pools.push(pool);
-        snapshots.push(snapshot);
+        });
     }
 
     (pools, snapshots)
+}
+
+/// Collapse pool snapshots to exactly one per `(pool_id, ledger_sequence)`: the
+/// LAST one in ledger apply order, i.e. the end-of-ledger (final) reserves.
+///
+/// Producers push a snapshot for every liquidity-pool change in apply order
+/// (transaction order, then operation order), so the last snapshot for a
+/// `(pool, ledger)` reflects the pool's committed state at ledger close — the
+/// final `updated` after-image for a mutated pool, or the lone read-only `state`
+/// value for a pool that was only referenced. Deduping here makes the stored
+/// snapshot a deterministic function of the ledger (re-ingesting the same ledger
+/// yields the same row) instead of leaving "one row per (pool, ledger)" to CH's
+/// version-less `ReplacingMergeTree`, which would otherwise keep an arbitrary
+/// intra-ledger image. See lore-0356.
+///
+/// Call once per ledger, after aggregating every transaction's snapshots.
+pub fn dedup_final_pool_snapshots(
+    snapshots: Vec<ExtractedLiquidityPoolSnapshot>,
+) -> Vec<ExtractedLiquidityPoolSnapshot> {
+    use std::collections::HashMap;
+
+    let mut position: HashMap<(String, u32), usize> = HashMap::new();
+    let mut deduped: Vec<ExtractedLiquidityPoolSnapshot> = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        let key = (snapshot.pool_id.clone(), snapshot.ledger_sequence);
+        match position.get(&key) {
+            Some(&index) => deduped[index] = snapshot, // keep the last (final) image
+            None => {
+                position.insert(key, deduped.len());
+                deduped.push(snapshot);
+            }
+        }
+    }
+    deduped
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,9 +1014,6 @@ pub fn detect_assets(
                 contract_id: None,
                 sac_contract_id: Some(deployment.contract_id.clone()),
                 sac_deployed: true,
-                // The underlying asset's on-chain name is not carried by the
-                // SAC deploy (it derives from `asset_code` / SEP-1 metadata).
-                name: None,
                 total_supply: None,
                 holder_count: None,
             });
@@ -1115,12 +1036,6 @@ pub fn detect_assets(
                 // Bespoke Soroban token — no classic backing, so no SAC facet.
                 sac_contract_id: None,
                 sac_deployed: false,
-                // Per ADR 0042 / task 0156: thread the on-chain
-                // `Symbol("name")` extracted at deploy time into the
-                // asset row. Late-init / re-init paths land via the
-                // indexer's `apply_contract_name_writes` helper; that
-                // path also covers `assets.name` follow-up updates.
-                name: deployment.name.clone(),
                 total_supply: None,
                 holder_count: None,
             });
@@ -1222,7 +1137,6 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
             // a SAC, the deploy/override path folds it onto this same row.
             sac_contract_id: None,
             sac_deployed: false,
-            name: None,
             total_supply: None,
             holder_count: None,
         });
@@ -1250,7 +1164,6 @@ pub fn native_asset_singleton() -> ExtractedAsset {
         // XLM's SAC facet is folded on by the deploy/override path when seen.
         sac_contract_id: None,
         sac_deployed: false,
-        name: None,
         total_supply: None,
         holder_count: None,
     }
@@ -1438,6 +1351,91 @@ mod tests {
         }
     }
 
+    // -- lore-0356: LP snapshot = deterministic end-of-ledger image (keep-last) --
+
+    fn lp_change(
+        change_type: &str,
+        pool_id: &str,
+        reserve_a: i64,
+        reserve_b: i64,
+        shares: i64,
+    ) -> ExtractedLedgerEntryChange {
+        make_change(
+            "liquidity_pool",
+            change_type,
+            json!({}),
+            Some(json!({
+                "pool_id": pool_id,
+                "params": { "asset_a": null, "asset_b": null, "fee": 30 },
+                "reserve_a": reserve_a,
+                "reserve_b": reserve_b,
+                "total_pool_shares": shares,
+            })),
+        )
+    }
+
+    #[test]
+    fn lp_snapshot_final_wins_over_before_image() {
+        // Core writes `state` (before) then `updated` (after) per op. Both become
+        // snapshots, but ledger-scope dedup keeps the LAST (the `updated`
+        // after-image) — the stale before-image never wins for a mutated pool.
+        let (pools, snapshots) = extract_liquidity_pools(&[
+            lp_change("state", "POOL1", 100, 200, 50),
+            lp_change("updated", "POOL1", 110, 182, 50),
+        ]);
+        assert_eq!(pools.len(), 2, "dimension extracted from both changes");
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "a snapshot per change (state + updated)"
+        );
+
+        let deduped = dedup_final_pool_snapshots(snapshots);
+        assert_eq!(deduped.len(), 1, "one snapshot per (pool, ledger)");
+        assert_eq!(
+            deduped[0].reserves,
+            json!({ "a": 110, "b": 182 }),
+            "final (after) image, not the stale before-image"
+        );
+    }
+
+    #[test]
+    fn lp_snapshot_kept_for_state_only_pool() {
+        // lore-0356 regression guard: a pool referenced only as read-only `state`
+        // (the lore-0189 dormant case) must still get exactly one snapshot carrying
+        // its correct, unchanged reserves — otherwise the read path shows blank
+        // reserves for a real pool.
+        let (pools, snapshots) =
+            extract_liquidity_pools(&[lp_change("state", "POOL1", 100, 200, 50)]);
+        assert_eq!(pools.len(), 1);
+
+        let deduped = dedup_final_pool_snapshots(snapshots);
+        assert_eq!(deduped.len(), 1, "state-only pool keeps its snapshot");
+        assert_eq!(deduped[0].reserves, json!({ "a": 100, "b": 200 }));
+    }
+
+    #[test]
+    fn dedup_keeps_last_image_per_pool_ledger() {
+        // Multi-op pool: keep the last (end-of-ledger) image, not before/intermediate.
+        let (_pools, snapshots) = extract_liquidity_pools(&[
+            lp_change("state", "POOL1", 100, 200, 50),
+            lp_change("updated", "POOL1", 110, 190, 50),
+            lp_change("state", "POOL1", 110, 190, 50),
+            lp_change("updated", "POOL1", 121, 181, 50), // final
+            lp_change("updated", "POOL2", 7, 8, 3),
+        ]);
+        assert_eq!(snapshots.len(), 5, "a snapshot per change (incl. state)");
+
+        let deduped = dedup_final_pool_snapshots(snapshots);
+        assert_eq!(deduped.len(), 2, "one snapshot per (pool, ledger)");
+        let p1 = deduped.iter().find(|s| s.pool_id == "POOL1").unwrap();
+        assert_eq!(
+            p1.reserves,
+            json!({ "a": 121, "b": 181 }),
+            "final image, not before/intermediate"
+        );
+    }
+
     // -- Contract Deployment Tests --
 
     #[test]
@@ -1559,7 +1557,7 @@ mod tests {
     #[test]
     fn extract_balance_real_mainnet_entry() {
         use base64::Engine;
-        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+        use stellar_xdr::{LedgerEntryData, Limits, ReadXdr};
 
         let entry_b64 = "AAAABgAAAAAAAAABpNLnsQaIecmK0DuR3iIEA4DUoHpK2z+hSQS0L4ntArUAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAAAAAAALOU/zUgs2L4DJx225wMqTkYuiH78AX+HaE65g2akcB4AAAABAAAACgAAAAAAAAAAAAAJGFDU+gA=";
         let bytes = base64::engine::general_purpose::STANDARD
@@ -1612,7 +1610,7 @@ mod tests {
     #[test]
     fn decode_sac_balance_value_real_mainnet() {
         use base64::Engine;
-        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+        use stellar_xdr::{LedgerEntryData, Limits, ReadXdr};
 
         for (entry_b64, expected_amount) in [
             (
@@ -1683,7 +1681,7 @@ mod tests {
     #[test]
     fn extract_sac_struct_balance_real_mainnet() {
         use base64::Engine;
-        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+        use stellar_xdr::{LedgerEntryData, Limits, ReadXdr};
 
         let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
         let bytes = base64::engine::general_purpose::STANDARD
@@ -2389,8 +2387,10 @@ mod tests {
         // as a `state` snapshot (no reserves change), but a pool_share trustline
         // for that pool was simultaneously `removed` — producing an `lp_positions`
         // emit with a pool_id that, pre-fix, was not present in `pool_rows`.
-        // Post-fix, `state` is included in the filter so the pool dimension is
-        // captured from the snapshot.
+        // Post-fix (lore-0189), `state` is included so the pool dimension is
+        // captured. lore-0356: `state` also emits a snapshot — for this
+        // referenced-but-not-mutated pool it is the pool's correct end-of-ledger
+        // value, so the pool keeps exactly one snapshot instead of blank reserves.
         let changes = vec![make_change(
             "liquidity_pool",
             "state",
@@ -2413,7 +2413,12 @@ mod tests {
 
         let (pools, snapshots) = extract_liquidity_pools(&changes);
         assert_eq!(pools.len(), 1, "state change_type must produce 1 pool row");
-        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "lore-0356: state-only pool keeps one snapshot (its correct reserves)"
+        );
+        assert_eq!(snapshots[0].reserves, json!({ "a": 0, "b": 0 }));
 
         let pool = &pools[0];
         assert_eq!(
@@ -2605,7 +2610,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Token,
             is_sac: true,
-            name: None,
             sac_asset: Some(SacAssetIdentity::Credit {
                 code: "USDC".into(),
                 issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
@@ -2637,7 +2641,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Token,
             is_sac: true,
-            name: None,
             sac_asset: Some(SacAssetIdentity::Native),
         }];
 
@@ -2663,7 +2666,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Token,
             is_sac: true,
-            name: None,
             sac_asset: None,
         }];
 
@@ -2682,7 +2684,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Other,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
 
@@ -2701,7 +2702,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Fungible,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(
@@ -2728,7 +2728,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Nft,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(&wasm, &["owner_of", "token_uri", "transfer"])];
@@ -2749,7 +2748,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Other,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(&wasm, &["execute", "admin", "init"])];
@@ -2771,7 +2769,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Nft,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(&wasm, &["owner_of", "decimals", "transfer"])];
@@ -2791,7 +2788,6 @@ mod tests {
                 deployed_at_ledger: 100,
                 contract_type: ContractType::Token,
                 is_sac: true,
-                name: None,
                 sac_asset: Some(SacAssetIdentity::Credit {
                     code: "USDC".into(),
                     issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
@@ -2804,7 +2800,6 @@ mod tests {
                 deployed_at_ledger: 100,
                 contract_type: ContractType::Fungible,
                 is_sac: false,
-                name: None,
                 sac_asset: None,
             },
         ];

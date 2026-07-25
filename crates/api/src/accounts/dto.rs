@@ -1,4 +1,4 @@
-//! Wire shapes mirror canonical SQL `endpoint-queries/{06,07}_*.sql`.
+//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{06,07}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -91,11 +91,11 @@ pub struct AccountDetailResponse {
     pub last_seen_ledger: i64,
     /// `true` when the account was removed from the ledger via `account_merge`
     /// and never re-funded (its last lifecycle event is the merge). Derived,
-    /// not stored. CH-only — the PG fallback always reports `false`.
+    /// not stored.
     pub deleted: bool,
 }
 
-/// Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.
+/// Slim — `inner_tx_hash` lives on `/v1/transactions` only.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccountTransactionItem {
     /// 64-char lowercase hex.
@@ -104,11 +104,23 @@ pub struct AccountTransactionItem {
     /// 1-based position in ledger.
     pub application_order: i16,
     pub source_account: String,
-    /// Stroops.
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     pub successful: bool,
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
+    /// Net-settled "value moved" per asset the transaction touched (task 0393);
+    /// see `TransactionValue`. Raw amounts + `decimals` — the frontend scales.
+    pub values: Vec<crate::transactions::dto::TransactionValue>,
     pub created_at: DateTime<Utc>,
+}
+/// Keyset cursor for the accounts list — sorts on `last_seen_ledger` with the
+/// surrogate `id` as the unique tiebreak. Serialized (base64/JSON) into the
+/// opaque wire cursor (ADR 0008), so it lives on the DTO boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountsListCursor {
+    pub last_seen_ledger: i64,
+    pub id: i64,
 }

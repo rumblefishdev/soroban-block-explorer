@@ -23,7 +23,7 @@
 ## 1. Purpose and Scope
 
 XDR parsing is the translation layer between canonical Stellar ledger payloads and the
-structured explorer data model stored in PostgreSQL and served by the backend API.
+structured explorer data model stored in ClickHouse and served by the backend API.
 
 This document covers the current XDR parsing design. It does not redefine frontend
 behavior, backend transport contracts, or the full database schema except where those are
@@ -68,7 +68,7 @@ paths.
 > Per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md): Rust-only XDR
 > parsing — the shared `crates/xdr-parser` crate is the single decoder.
 > Per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md):
-> raw XDR is not stored in RDS; heavy-field endpoints re-parse from the public
+> raw XDR is not stored in ClickHouse; heavy-field endpoints re-parse from the public
 > Stellar ledger archive at read time.
 
 **Ingest path (Ledger Processor Lambda).** Every ledger's `LedgerCloseMeta` is
@@ -98,7 +98,7 @@ upgrades and no decode drift between ingest and read.
 
 ### 3.2 What Is Not Stored
 
-Per ADR 0029 the following are **not** stored in RDS:
+Per ADR 0029 the following are **not** stored in ClickHouse:
 
 - `envelope_xdr`, `result_xdr`, `result_meta_xdr` as strings or blobs on the
   `transactions` row
@@ -158,7 +158,7 @@ summary columns:
 - `result_code` is not persisted at ingest; it is re-derived on demand from
   the archive for the advanced view
 
-Raw envelope / result / result-meta XDR is **not** retained in RDS (ADR 0029).
+Raw envelope / result / result-meta XDR is **not** retained in ClickHouse (ADR 0029).
 The advanced transaction view pulls the corresponding `.xdr.zst` from the public
 archive at request time.
 
@@ -286,13 +286,20 @@ entities:
   `contract_id`s so the new verdict takes effect.
 - contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
   task 0297). `name` / `symbol` / `decimals` are read from the contract instance
-  entry's `Symbol("METADATA")` struct (`{decimal, name, symbol}`) via
+  entry's metadata struct (`{decimal?, name, symbol}`) via
   `token_metadata::extract_token_metadata`, collected by
   `state::extract_contract_metadata_writes` on `created` + `updated` instance
-  changes (SACs skipped — derivable from the SAC identity). This corrects the
-  legacy assumption that token names are a standalone `Symbol("name")` entry —
-  they are not (that path matched 0 contracts); the name lives nested in METADATA
-  in instance storage, which `scval_to_typed_json` used to drop.
+  changes (SACs skipped — derivable from the SAC identity). Two on-chain key
+  shapes are matched (`token_metadata::is_metadata_key`): fungible SEP-41 / OZ
+  tokens use `Symbol("METADATA")`; OpenZeppelin **NFTs** use the
+  `NFTStorageKey::Metadata` enum variant, which serializes as
+  `Vec([Symbol("Metadata")])` — so an NFT collection name is captured straight
+  from the ledger (lore-0340). The earlier `Symbol("METADATA")`-only match missed
+  the NFT key: the false "0%" that had wrongly implied a `name()` RPC was needed.
+  This also corrects the legacy assumption that token names are a standalone
+  `Symbol("name")` entry — they are not (that path matched 0 contracts); the name
+  lives nested in the metadata struct in instance storage, which
+  `scval_to_typed_json` used to drop.
 - WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
   wasm_hash BYTEA)
 - account state → `accounts` row + `account_balances_current` entries per
@@ -363,6 +370,50 @@ step 14, called out here so the parser/indexer boundary stays explicit):
   NFT contract's `token_uri()` JSON by Lambda 2 (`nft_token_uri` kind,
   task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
   `current_owner_id`) tuple — see §5.1 NFT pattern.
+
+### 4.7 Transaction Value — "net settled" (task 0393)
+
+The tx-list "Net settled" column needs a single figure per (transaction, asset).
+The protocol has no per-transaction amount — value lives on operations and Soroban
+token events — so the parser derives the **net-settled value**:
+`max(Σ positive account deltas, Σ negative account deltas)` per (tx, asset),
+which nets out routing hops (a pass-through account ends at delta 0) instead of
+double-counting them. The reducer is `xdr_parser::net_settled`
+(`net_settled.rs`); its three rules — `max` of both sides (so burns / payments
+-to-issuer stay non-zero), native canonicalised to one surrogate, fee excluded —
+are covered in task 0393.
+
+This figure is the network-flow **flow value**, not a heuristic: the flow
+decomposition theorem splits any flow into source→sink **paths** plus **cycles**,
+where a path contributes its flow and a **cycle contributes exactly zero**. Hence
+`gross = Σ path + Σ cycle`, `net = Σ path`. A wash / round-trip is a pure cycle
+and therefore nets to zero **by definition** (the same zero-balance-cycle
+signature the wash-trading literature uses to detect washes), and two offsetting
+but intent-wise unrelated payments decompose into a single path — the arithmetic
+cannot see intent and does not try to. Net is preferred to gross because
+`net ≤ gross` always: net never overstates, while gross inflates every routed
+payment (3 hops of 100 read as 300), and routing is the common case. If a gross
+figure is ever needed, `cycle volume = gross − net` falls out of the theorem.
+
+A single **ledger** reader feeds it, for EVERY tx (classic and Soroban):
+
+- `xdr_parser::ledger_balance_deltas` (`ledger_value.rs`) reads the before→after
+  balance changes on `AccountEntry` / `TrustLineEntry` / `ContractData` from
+  `TransactionMeta` (via the version-safe `meta.rs` change accessor). Every value
+  flow — payment, path payment, offer/DEX fill, LP deposit/withdraw,
+  claimable-balance create/claim, clawback, **and** Soroban SAC / bespoke-token
+  transfers (which settle as `ContractData` `Balance` changes) — is an
+  account / trustline / contract balance change, so this one reader covers them
+  all and auto-nets. Token EVENTS are contract-emitted logs and are **never** used
+  for value (any contract can emit any `"transfer"` it likes); a ledger balance
+  cannot be forged. The fee is charged in the ledger's separate `feeProcessing`
+  phase, not in `TransactionMeta`, so it is excluded by construction.
+
+Surrogate resolution and the net reduction run at ingest
+(`db_clickhouse::persist::stage`), which writes the result to
+`operation_asset_appearances.net_settled` (`Nullable(Int128)`; §4.3 / schema
+doc). Values are stored RAW; the read scales by the asset's decimals (classic /
+SAC = 7).
 
 ## 5. Soroban-Specific Handling
 
@@ -551,6 +602,33 @@ parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefo
 contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
 prod/RPC evidence behind these shapes.)
 
+### 5.6 Fungible Token Event Decode (`parse_token_event`)
+
+Fungible SEP-41 / CAP-67 token movements — `transfer` / `mint` / `burn` /
+`clawback` — are decoded by `parse_token_event` (`crates/xdr-parser/src/event_filters.rs`),
+the fungible counterpart to `detect_nft_events`. Where the NFT path keys on a
+`token_id`, this path reads the account operands and the asset identity (lore
+task [0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)):
+
+- **operands** — `transfer [sym, from, to, …]`, `mint [sym, to, …]`,
+  `burn`/`clawback [sym, from, …]`. Missing / non-address operands ⇒ not a token
+  event.
+- **asset** — CAP-67 "unified" SAC events carry the classic asset as a **trailing
+  SEP-11 string topic**: `"native"` → the native XLM asset, `"CODE:ISSUER"` → the
+  classic credit. A bespoke (non-SAC) token omits it, so its asset identity is the
+  emitting contract (`EventAsset::Contract`).
+- **amount** — not decoded here. The presence indexes never store it, and the
+  tx-detail page decodes amounts from archive XDR at read time (E3, ADR 0029), so
+  the flow parser only needs operands + asset (see indexing-pipeline overview §5.3).
+
+The decode lives in `db_clickhouse::persist::stage::derive_token_event`. The
+`soroban-token-flow-backfill` one-shot pass called that same fn so both emitted
+byte-identical surrogate rows; the pass was removed in lore 0425 once its history
+was closed, leaving live ingest as the only caller. NFT-shaped events (no SEP-11 asset string) still
+register their account operands as participants but are excluded from the fungible
+asset index — that identity is ambiguous and tracked separately by the NFT path
+above.
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR
@@ -585,7 +663,7 @@ public archive):
 
 ### 6.2 Two Phases of Materialization
 
-Ingestion owns writing typed summary + appearance-index rows into PostgreSQL.
+Ingestion owns writing typed summary + appearance-index rows into ClickHouse.
 That is the only phase that runs unconditionally per ledger close.
 
 The backend read path owns re-materializing heavy fields on demand for E3 / E14
@@ -669,7 +747,7 @@ The parsing design assumes protocol upgrades are:
 Responsibility is split along the two-path parsing model:
 
 - **ingestion** (Rust Ledger Processor) owns decode-at-ingest → typed summary
-  columns + appearance indexes written to PostgreSQL (single parser crate,
+  columns + appearance indexes written to ClickHouse (single parser crate,
   shared with the API — `crates/xdr-parser`)
 - **the database schema** owns persistence of typed summaries + appearance
   indexes; it does not hold raw XDR (ADR 0029)

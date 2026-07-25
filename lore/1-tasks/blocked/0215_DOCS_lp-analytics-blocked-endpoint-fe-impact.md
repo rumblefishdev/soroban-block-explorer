@@ -22,6 +22,20 @@ history:
       Status `blocked` not `backlog` because the doc itself can only
       meaningfully be written once 0199's scope is locked. For now,
       this task carries the FE-impact info so it doesn't get lost.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **The situation it documents is ending — 2026-07-22.**
+      This catalogues which endpoints and frontend views show empty values because
+      LP analytics are blocked on the price oracle. 0199 was unblocked today: the
+      `prices` database is live on the cluster (37 tables, 593.6M rows, 122,706
+      assets, history from 2024-02-20) and 39,370 of 52,288 pools (75.3%) have
+      both legs priceable through the `price_usd_series` view.
+      So the "blocked-on-oracle" framing is obsolete. What may still be worth
+      writing is the inverse: which views change once TVL starts returning values,
+      and how to present the ~1.5-day price staleness. Re-scope or close with
+      0199; do not publish the catalogue as-is.
 ---
 
 # LP analytics endpoints — blocked-on-oracle, frontend impact

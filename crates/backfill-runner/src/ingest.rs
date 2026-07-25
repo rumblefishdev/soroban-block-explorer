@@ -11,7 +11,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use indexer::handler::HandlerError;
-use indexer::handler::persist::ClassificationCache;
 use tracing::info;
 
 use crate::dashboard::Dashboard;
@@ -63,15 +62,12 @@ pub struct PartitionStats {
 ///
 /// Streams the ledger into `writer` (the open partition writer handle)
 /// rather than the bare sink — task 0206 collapsed per-ledger persist
-/// into the partition-writer lifecycle on the CH side. On PG that
-/// lifecycle is a no-op around per-ledger transactions, so behaviour
-/// is byte-for-byte equivalent to the pre-task path.
+/// into the ClickHouse partition-writer lifecycle.
 pub async fn ingest_ledger_from_file(
     path: &Path,
-    writer: &mut crate::sink::PartitionWriterHandle<'_>,
+    writer: &mut crate::sink::PartitionWriterHandle,
     seq: u32,
     partition_start: u32,
-    classification_cache: &ClassificationCache,
 ) -> Result<LedgerTimings, BackfillError> {
     let compressed = tokio::fs::read(path).await?;
     let bytes = compressed.len();
@@ -107,7 +103,7 @@ pub async fn ingest_ledger_from_file(
 
     let persist_start = Instant::now();
     for meta in batch.ledger_close_metas.iter() {
-        writer.write_ledger(meta, classification_cache).await?;
+        writer.write_ledger(meta).await?;
     }
     let persist_ms = persist_start.elapsed().as_millis();
 
@@ -148,7 +144,6 @@ pub async fn index_partition(
     range_end: u32,
     completed: &HashSet<u32>,
     dashboard: &Dashboard,
-    classification_cache: &ClassificationCache,
 ) -> Result<PartitionStats, BackfillError> {
     let (first, last) = partition.clamped(range_start, range_end);
 
@@ -160,9 +155,9 @@ pub async fn index_partition(
     let wall_start = Instant::now();
     let mut stats = PartitionStats::default();
 
-    // Open the partition writer once for the whole loop. On PG this
-    // is a borrow + no-op commit; on CH it holds the 14 long-lived
-    // `Insert<RowT>` handles open across every ledger in the range so
+    // Open the partition writer once for the whole loop. It holds the
+    // 14 long-lived `Insert<RowT>` handles open across every ledger in
+    // the range so
     // the server only sees one INSERT per table per partition (see
     // `db_clickhouse::persist::writer::PartitionWriter` docs).
     let mut writer = sink.open_partition();
@@ -180,14 +175,7 @@ pub async fn index_partition(
                 seq,
                 path.display()
             );
-            let t = ingest_ledger_from_file(
-                &path,
-                &mut writer,
-                seq,
-                partition.start,
-                classification_cache,
-            )
-            .await?;
+            let t = ingest_ledger_from_file(&path, &mut writer, seq, partition.start).await?;
             stats.indexed += 1;
             stats.total_bytes += t.bytes as u64;
             stats.parse_total_ms += t.parse_ms;
@@ -205,9 +193,7 @@ pub async fn index_partition(
     match loop_result {
         Ok(()) => writer.commit().await?,
         Err(err) => {
-            // Abort the writer first — drops in-flight CH inserts
-            // cleanly. PG variant is a no-op (each ledger committed
-            // independently before the failure point).
+            // Abort the writer first — drops in-flight CH inserts cleanly.
             writer.abort().await;
             return Err(err);
         }

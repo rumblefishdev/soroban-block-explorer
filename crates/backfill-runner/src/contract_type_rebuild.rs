@@ -75,10 +75,7 @@ pub async fn execute(
     sink: &Sink,
     dry_run: bool,
 ) -> Result<ContractTypeRebuildStats, BackfillError> {
-    let Sink::Clickhouse(client) = sink else {
-        info!("contract_type_rebuild: skipped (PG target — CH-only maintenance)");
-        return Ok(ContractTypeRebuildStats::default());
-    };
+    let client = sink.client();
 
     let mut stats = ContractTypeRebuildStats {
         dry_run,
@@ -203,7 +200,7 @@ async fn build_staging(
            sc.id, sc.contract_id, sc.wasm_hash, sc.wasm_uploaded_at_ledger, \
            sc.deployer_id, sc.deployed_at_ledger, \
            if(NOT sc.is_sac AND v.verdict IN (2, 3), v.verdict, sc.contract_type) AS contract_type, \
-           sc.is_sac, sc.name \
+           sc.is_sac \
          FROM soroban_contracts AS sc FINAL \
          LEFT JOIN {verdict_tbl} AS v ON v.wasm_hash = sc.wasm_hash"
     );
@@ -271,8 +268,8 @@ async fn count_assets_to_insert(
 async fn backfill_assets(client: &ClickhouseClient) -> Result<u64, BackfillError> {
     let before = assets_type3_count(client).await?;
     let sql = "INSERT INTO assets \
-         (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
-         SELECT 3, '', 0, sc.id, NULL, NULL, NULL, NULL \
+         (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count, icon_url) \
+         SELECT 3, '', 0, sc.id, NULL, NULL, NULL \
          FROM soroban_contracts AS sc FINAL \
          WHERE sc.contract_type = 3 AND NOT sc.is_sac \
            AND NOT EXISTS ( \
@@ -300,20 +297,6 @@ async fn assets_type3_count(client: &ClickhouseClient) -> Result<u64, BackfillEr
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn pg_target_short_circuits() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_lazy("postgres://noop")
-            .expect("lazy connect must succeed without I/O");
-        let sink = Sink::Postgres(pool);
-        let stats = execute(&sink, false)
-            .await
-            .expect("PG short-circuit must not error");
-        assert_eq!(stats.flipped_nft, 0);
-        assert_eq!(stats.assets_inserted, 0);
-    }
 
     /// End-to-end against a real ClickHouse — exercises the whole pipeline the
     /// operators actually run (classify → staging → EXCHANGE swap → assets
@@ -375,16 +358,16 @@ mod tests {
 
         cl.query(&format!(
             "INSERT INTO soroban_contracts \
-             (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name) VALUES \
-             (1001, 'CNFT', unhex('{nft_hash}'), 100, NULL, 100, 1, false, NULL), \
-             (1002, 'CFUN', unhex('{fun_hash}'), 100, NULL, 100, 1, false, NULL), \
-             (1003, 'CSAC', NULL, 0, NULL, NULL, 0, true, NULL)"
+             (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac) VALUES \
+             (1001, 'CNFT', unhex('{nft_hash}'), 100, NULL, 100, 1, false), \
+             (1002, 'CFUN', unhex('{fun_hash}'), 100, NULL, 100, 1, false), \
+             (1003, 'CSAC', NULL, 0, NULL, NULL, 0, true)"
         ))
         .execute()
         .await
         .expect("seed soroban_contracts");
 
-        let sink = Sink::Clickhouse(cl.clone());
+        let sink = Sink::new(cl.clone());
         let stats = execute(&sink, false).await.expect("rebuild run");
         assert_eq!(stats.flipped_nft, 1, "one Other -> Nft");
         assert_eq!(stats.flipped_fungible, 1, "one Other -> Fungible");

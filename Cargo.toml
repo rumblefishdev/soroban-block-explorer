@@ -4,14 +4,9 @@ members = [
     "crates/api",
     "crates/indexer",
     "crates/xdr-parser",
-    "crates/db",
-    "crates/db-migrate",
-    "crates/db-partition-mgmt",
     "crates/domain",
-    "crates/backfill-bench",
     "crates/backfill-runner",
     "crates/audit-harness",
-    "crates/db-merge",
     "crates/enrichment-shared",
     "crates/enrichment-worker",
     "crates/backfill-enrichment-runner",
@@ -37,14 +32,14 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 # OpenAPI
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-axum = "0.2"
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json", "chrono", "migrate"] }
 clickhouse = "=0.15.0"
 
 # Stellar XDR
-stellar-xdr = { version = "26", default-features = true, features = ["curr"] }
+stellar-xdr = { version = "27" }
 
 # Encoding
 base64 = "0.22"

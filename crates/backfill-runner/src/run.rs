@@ -15,7 +15,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use indexer::handler::persist::ClassificationCache;
 use indicatif::MultiProgress;
 use tokio::process::Command;
 use tokio::task::JoinHandle;
@@ -37,6 +36,7 @@ pub async fn execute(
     end: u32,
     keep_partitions: bool,
     soroban_rpc_url: Option<&str>,
+    reindex: bool,
     mp: &MultiProgress,
 ) -> Result<(), BackfillError> {
     assert!(
@@ -57,7 +57,17 @@ pub async fn execute(
         return Ok(());
     }
 
-    let completed = sink.load_completed(start, end).await?;
+    // `--reindex` bypasses the resume skip so an already-ingested range is
+    // re-parsed to populate a NEW derived table over history (task 0359
+    // `operation_asset_appearances`) — `load_completed` reads the `ledgers`
+    // table, which the original ingest already filled, so without this every
+    // partition reads as done. Empty completed-set → every ledger re-parsed;
+    // all writes are ReplacingMergeTree-idempotent.
+    let completed = if reindex {
+        std::collections::HashSet::new()
+    } else {
+        sink.load_completed(start, end).await?
+    };
 
     // Filter out partitions whose entire clamped range is already in the
     // `ledgers` table. With cleanup-after-index the local folder is gone
@@ -91,12 +101,6 @@ pub async fn execute(
     // Task 0225: counter for partitions skipped due to S3 archive lag.
     // Operator visibility only — does not abort the run.
     let mut partitions_skipped_s3_incomplete: usize = 0;
-
-    // Single cache instance reused across the whole run. Mirrors the
-    // indexer Lambda's per-invocation reuse pattern (task 0118 Phase 2)
-    // and the backfill-bench wiring — one batch `SELECT` per ledger for
-    // unseen contracts, zero lookups for already-classified ones.
-    let classification_cache = ClassificationCache::new();
 
     // Sticky dashboard. Visual bar covers the full range and is pre-
     // bumped by `completed.len()` (handled inside `Dashboard::new`);
@@ -146,14 +150,7 @@ pub async fn execute(
             SyncOutcome::Complete => {
                 dashboard.set_stage("indexing");
                 let stats = index_partition(
-                    partition,
-                    temp_dir,
-                    sink,
-                    start,
-                    end,
-                    &completed,
-                    &dashboard,
-                    &classification_cache,
+                    partition, temp_dir, sink, start, end, &completed, &dashboard,
                 )
                 .await?;
 
@@ -213,10 +210,8 @@ pub async fn execute(
     // `getLedgerEntries`. Phase 2's incremental top-up gate
     // (sequence_number = 0 filter) is intrinsic to the discovery
     // query, so a re-run of the same window only fixes the rows that
-    // still need it. On CH targets without `--soroban-rpc-url` the
-    // step short-circuits with a single info log; on PG targets the
-    // step is a no-op (PG's account-state path is independent — task
-    // 0119 + ADR 0027 §7 cover it).
+    // still need it. Without `--soroban-rpc-url` the step
+    // short-circuits with a single info log.
     match bootstrap_account_state(sink, soroban_rpc_url, start, end).await {
         Ok(stats) if stats.discovered > 0 || stats.staged_accounts > 0 => {
             info!(
@@ -229,8 +224,8 @@ pub async fn execute(
             );
         }
         Ok(_) => {
-            // discovered=0 either means CH/PG target without RPC or
-            // no skeletons to top up — already logged inside
+            // discovered=0 either means no RPC endpoint or no
+            // skeletons to top up — already logged inside
             // `bootstrap_account_state`.
         }
         Err(err) => {

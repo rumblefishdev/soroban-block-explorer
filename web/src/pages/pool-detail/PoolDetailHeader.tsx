@@ -4,7 +4,6 @@ import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
-import { FeePill } from '../pool-shared/FeePill.js';
 import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 
 import { assetLegLabel } from '../pool-shared/helpers.js';
@@ -30,12 +29,12 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
         {pool && <PoolAssetPair a={pool.asset_a} b={pool.asset_b} size={44} />}
         <Stack spacing={0.5}>
-          <Stack direction="row" spacing={2}>
-            <Typography variant="heading5SemiBold" component="h1">
-              {pair}
-            </Typography>
-            {pool && <FeePill raw={pool.fee_percent} prefix />}
-          </Stack>
+          {/* Fee badge dropped (task 0348 F9): classic pools are all
+              protocol-fixed at 0.30%, so the header pill was decorative.
+              The fee stays as a quiet key-value in the Summary card. */}
+          <Typography variant="heading5SemiBold" component="h1">
+            {pair}
+          </Typography>
           <IdentifierDisplay value={poolId} type="pool" linked={false} />
         </Stack>
       </Stack>

@@ -280,6 +280,27 @@ fn column_order_transaction_participants() {
 }
 
 #[test]
+fn column_order_operation_asset_appearances() {
+    assert_columns::<OperationAssetAppearanceRow>(
+        "operation_asset_appearances",
+        &[
+            "asset_id",
+            "ledger_sequence",
+            "transaction_id",
+            "net_settled",
+        ],
+    );
+}
+
+#[test]
+fn column_order_operation_pools() {
+    assert_columns::<OperationPoolRow>(
+        "operation_pools",
+        &["pool_id", "ledger_sequence", "transaction_id"],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",
@@ -393,6 +414,7 @@ fn synthetic_tx(hash_seed: u8) -> ExtractedTransaction {
         inner_tx_hash: None,
         ledger_sequence: 10,
         source_account: "G".to_string() + &"A".repeat(55),
+        fee_source: None,
         fee_charged: 100,
         successful: true,
         result_code: "txSuccess".into(),
@@ -404,6 +426,7 @@ fn synthetic_tx(hash_seed: u8) -> ExtractedTransaction {
         memo: None,
         created_at: 1_700_000_000,
         parse_error: false,
+        ledger_deltas: vec![],
     }
 }
 
@@ -482,6 +505,55 @@ fn prepare_surrogate_id_fk_consistency() {
 
     // tx surrogate id derived from same hash bytes as `hash` column.
     assert_eq!(tx_row.id, ids::transaction_id(&tx_row.hash));
+}
+
+/// Fee-bump: both the outer and the inner tx hash are indexed to the same
+/// ledger, so a lookup by either resolves to the fee-bump (task 0375).
+#[test]
+fn prepare_fee_bump_indexes_inner_hash() {
+    let ledger = synthetic_ledger();
+    let mut tx = synthetic_tx(0x10);
+    let mut inner = vec![0u8; 32];
+    inner[31] = 0x20;
+    tx.inner_tx_hash = Some(hex::encode(&inner));
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    // Two index rows: outer + inner, both → the tx's ledger.
+    assert_eq!(staged.hash_index_rows.len(), 2);
+    let seq = staged.transaction_rows[0].ledger_sequence;
+    let mut outer = [0u8; 32];
+    outer[31] = 0x10;
+    assert!(
+        staged
+            .hash_index_rows
+            .iter()
+            .any(|r| r.hash == outer && r.ledger_sequence == seq)
+    );
+    let mut inner_bytes = [0u8; 32];
+    inner_bytes[31] = 0x20;
+    assert!(
+        staged
+            .hash_index_rows
+            .iter()
+            .any(|r| r.hash == inner_bytes && r.ledger_sequence == seq)
+    );
 }
 
 #[test]
@@ -612,6 +684,8 @@ fn prepare_folds_identical_operations() {
         operation_index: idx,
         op_type: OperationType::Payment,
         source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "destination": dest,
             "asset": "native",
@@ -646,6 +720,225 @@ fn prepare_folds_identical_operations() {
 }
 
 #[test]
+fn prepare_registers_fee_bump_fee_source_as_participant() {
+    // Task 0359 K2-4: the fee-bump payer funds the fee but runs no ops and is
+    // not the inner source — it must still land in transaction_participants.
+    let ledger = synthetic_ledger();
+    let mut tx = synthetic_tx(0x64);
+    let payer = "G".to_string() + &"P".repeat(55);
+    tx.fee_source = Some(payer.clone());
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged
+            .participant_rows
+            .iter()
+            .any(|r| r.account_id == ids::account_id(&payer)),
+        "fee-bump payer registered as participant"
+    );
+    assert!(
+        staged
+            .account_rows
+            .iter()
+            .any(|a| a.id == ids::account_id(&payer)),
+        "payer gets an accounts stub"
+    );
+}
+
+#[test]
+fn prepare_registers_op_counterparties_as_participants() {
+    // Task 0359 F-C (K1-5): a parser-emitted counterparty (here a crossed-offer
+    // seller) lands in transaction_participants and gets an accounts stub — a
+    // role the string-`details` extraction dropped.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x63);
+    let seller = "G".to_string() + &"S".repeat(55);
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::ManageBuyOffer,
+        source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![seller.clone()],
+        details: serde_json::json!({ "selling": "native", "buying": "native" }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged
+            .participant_rows
+            .iter()
+            .any(|r| r.account_id == ids::account_id(&seller)),
+        "crossed-offer seller registered as tx participant"
+    );
+    assert!(
+        staged
+            .account_rows
+            .iter()
+            .any(|a| a.id == ids::account_id(&seller)),
+        "seller gets an accounts stub"
+    );
+}
+
+#[test]
+fn prepare_stages_operation_asset_appearances() {
+    use xdr_parser::asset_appearances::AssetRef;
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x35);
+    let issuer = "G".to_string() + &"I".repeat(55);
+    // A sell offer: ZERO assets in the legacy slot, two appearances here — native
+    // must key as the FIRST-CLASS surrogate, not an empty sentinel.
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::ManageSellOffer,
+        source_account: None,
+        asset_appearances: vec![
+            AssetRef::Native,
+            AssetRef::Credit {
+                code: "USDC".into(),
+                issuer: issuer.clone(),
+            },
+        ],
+        counterparties: vec![],
+        details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_asset_rows.len(), 2);
+    // Native = ids::asset_id(0,"",0,0) — the golden-pinned first-class key.
+    assert_eq!(staged.op_asset_rows[0].asset_id, ids::asset_id(0, "", 0, 0));
+    // Classic credit hashes code:issuer_surrogate (issuer StrKey hashed first).
+    assert_eq!(
+        staged.op_asset_rows[1].asset_id,
+        ids::asset_id(1, "USDC", ids::account_id(&issuer), 0)
+    );
+    // Same tx as the legacy fold row — join-back key intact.
+    assert_eq!(
+        staged.op_asset_rows[0].transaction_id,
+        staged.op_rows[0].transaction_id
+    );
+    // Task 0359 decision 1c: the credit-leg issuer is NOT a tx participant. The
+    // asset's activity lives on its asset page (`op_asset_rows` above); flooding
+    // the issuer's participant list with every tx touching its asset would be
+    // redundant with the asset index.
+    assert!(
+        !staged
+            .participant_rows
+            .iter()
+            .any(|r| r.account_id == ids::account_id(&issuer)),
+        "asset issuer must NOT be registered as a tx participant (decision 1c)"
+    );
+}
+
+#[test]
+fn op_asset_appearances_dedup_same_asset_across_ops_in_one_tx() {
+    use xdr_parser::asset_appearances::AssetRef;
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x36);
+    let issuer = "G".to_string() + &"I".repeat(55);
+    // TWO sell-offer ops in ONE tx, each touching {native, USDC} = 4 appearances.
+    // Per-tx dedup collapses to 2 rows, not 4 (PR #6).
+    let mk = |idx: u32| ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: idx,
+        op_type: OperationType::ManageSellOffer,
+        source_account: None,
+        asset_appearances: vec![
+            AssetRef::Native,
+            AssetRef::Credit {
+                code: "USDC".into(),
+                issuer: issuer.clone(),
+            },
+        ],
+        counterparties: vec![],
+        details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_asset_rows.len(), 2);
+    let mut ids_seen: Vec<i64> = staged.op_asset_rows.iter().map(|r| r.asset_id).collect();
+    ids_seen.sort_unstable();
+    let mut want = vec![
+        ids::asset_id(0, "", 0, 0),
+        ids::asset_id(1, "USDC", ids::account_id(&issuer), 0),
+    ];
+    want.sort_unstable();
+    assert_eq!(ids_seen, want);
+}
+
+#[test]
 fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x31);
@@ -657,6 +950,8 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
         operation_index: idx,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "destination": dest,
             "destAsset": "native",
@@ -719,6 +1014,8 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
         operation_index: 1,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "poolIds": [traded],
             "claimedAtoms": [
@@ -789,6 +1086,8 @@ fn prepare_lp_deposit_single_element_pool_ids() {
         operation_index: 1,
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({ "liquidityPoolId": pool }),
     };
     let ops = vec![(tx.hash.clone(), vec![op])];
@@ -813,6 +1112,13 @@ fn prepare_lp_deposit_single_element_pool_ids() {
 
     assert_eq!(staged.op_rows.len(), 1);
     assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
+    // task 0365: the same crossing fans out into operation_pools (pool, tx).
+    assert_eq!(staged.op_pool_rows.len(), 1);
+    assert_eq!(staged.op_pool_rows[0].pool_id, [0xABu8; 32]);
+    assert_eq!(
+        staged.op_pool_rows[0].transaction_id,
+        staged.op_rows[0].transaction_id
+    );
 }
 
 #[test]
@@ -828,6 +1134,8 @@ fn prepare_offer_op_pool_ids_from_details() {
         operation_index: 1,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
         details: serde_json::json!({
             "offerId": 0,
             "poolIds": [pool],
@@ -855,6 +1163,51 @@ fn prepare_offer_op_pool_ids_from_details() {
 
     assert_eq!(staged.op_rows.len(), 1);
     assert_eq!(staged.op_rows[0].pool_ids, vec![[0xCDu8; 32]]);
+}
+
+#[test]
+fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
+    // Two ops in one tx crossing the SAME pool → one (pool, tx) row (the per-tx
+    // dedup, task 0365). The RMT would collapse residuals anyway; deduping at write
+    // cuts the backfilled volume up front — the pool twin of the asset fan-out.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x34);
+    let pool = "ef".repeat(32);
+    let mk = |idx: u32| ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: idx,
+        op_type: OperationType::LiquidityPoolDeposit,
+        source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
+        details: serde_json::json!({ "liquidityPoolId": pool }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_pool_rows.len(), 1);
+    assert_eq!(staged.op_pool_rows[0].pool_id, [0xEFu8; 32]);
+    assert_eq!(
+        staged.op_pool_rows[0].transaction_id,
+        staged.op_rows[0].transaction_id
+    );
 }
 
 #[test]
@@ -962,7 +1315,6 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let event = ExtractedEvent {
@@ -1110,7 +1462,6 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other, // parser default; classifier overrides
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let nft = synthetic_nft(&contract, "tk1");
@@ -1180,7 +1531,6 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other, // parser default; prior verdict overrides
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let nft = synthetic_nft(&contract, "tk1");
@@ -1246,7 +1596,6 @@ fn prepare_emits_soroban_asset_row_for_fungible_contract() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
 
@@ -1298,7 +1647,6 @@ fn prepare_no_soroban_asset_row_for_nft_contract() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
 
@@ -1484,7 +1832,6 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Token,
         is_sac: true,
-        name: None,
         sac_asset: None,
     };
     let prior: std::collections::HashMap<[u8; 32], ContractType> =
@@ -1540,7 +1887,6 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
 
@@ -1595,7 +1941,6 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Other,
         is_sac: false,
-        name: None,
         sac_asset: None,
     };
     let nft = synthetic_nft(&contract, "tk1");
@@ -1796,7 +2141,6 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         deployed_at_ledger: 10,
         contract_type: ContractType::Token,
         is_sac: true,
-        name: None,
         sac_asset: Some(SacAssetIdentity::Native),
     };
     let overrides = vec![SacOverride {
@@ -1879,7 +2223,6 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         contract_id: None,
         sac_contract_id: None,
         sac_deployed: false,
-        name: None,
         total_supply: None,
         holder_count: None,
     };

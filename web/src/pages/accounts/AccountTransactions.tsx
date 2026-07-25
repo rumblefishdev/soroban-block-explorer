@@ -1,54 +1,38 @@
-import { Box, Typography } from '@mui/material';
+import { Typography } from '@mui/material';
 import type { AccountTransactionItem } from '@rumblefish/api-types';
 import {
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatFee,
-  IdentifierDisplay,
-  IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
   type SortDirection,
-  StatusChip,
   TableEmptyState,
   useCursorPagination,
-  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, type ReactNode } from 'react';
 
-import { useAccountTransactions } from '../../api/index.js';
+import { useAccountTransactions, usePagedRows } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { OperationCell } from '../transactions/cells.js';
+import {
+  hashColumn,
+  ledgerColumn,
+  OperationCell,
+  statusColumn,
+} from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
-  {
-    id: 'hash',
-    header: 'Hash',
-    width: 160,
-    cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
-  },
-  {
-    id: 'ledger',
-    header: 'Ledger',
-    width: 120,
-    cell: (row) => (
-      <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
-    ),
-  },
+  hashColumn<AccountTransactionItem>(),
+  ledgerColumn<AccountTransactionItem>(),
   {
     id: 'operation',
     header: 'Operation',
     width: 190,
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
-  {
-    id: 'status',
-    header: 'Status',
-    width: 120,
-    cell: (row) => <StatusChip successful={row.successful} />,
-  },
+  statusColumn<AccountTransactionItem>(),
   {
     id: 'fee',
     header: 'Fee',
@@ -99,9 +83,8 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useAccountTransactions(accountId, cursor, sortDir);
 
-  const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
-    data?.page,
+  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
+    data,
     goNext,
     goPrev
   );
@@ -138,7 +121,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
 
   return (
     <SectionCard title="Recent transactions">
-      <Box sx={{ minHeight: 280 }}>{body}</Box>
+      {body}
       <PaginationControls
         caption="Latest results"
         canPrev={canPrev}

@@ -17,10 +17,8 @@ use crate::transactions::dto::TransactionListItem;
 // pairs that fit the cursor codec without a custom payload type.
 
 /// Slim ledger row returned in the list endpoint and reused inside the
-/// detail response as the header block. Doubles as the `sqlx::FromRow`
-/// target for `fetch_list` — the SQL projection aliases match this
-/// struct's field names so no manual mapping is needed.
-#[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+/// detail response as the header block.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct LedgerListItem {
     pub sequence: i64,
     /// Ledger hash (64-char lowercase hex).

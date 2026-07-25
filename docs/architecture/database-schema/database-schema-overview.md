@@ -26,22 +26,27 @@ The database schema is the persistent storage model of the block explorer. Its r
 store all indexed chain data needed by the ingestion pipeline, backend API, and explorer UI
 without depending on any external explorer database.
 
-This document covers the target design of the PostgreSQL schema only. It does not redefine
-frontend behavior, backend transport concerns, or infrastructure provisioning except where
-those influence schema decisions.
+This document covers the **logical** design of the schema — entities, keys,
+relationships, field allocation, and partitioning strategy — which is store-agnostic.
+It does not redefine frontend behavior, backend transport concerns, or infrastructure
+provisioning except where those influence schema decisions.
 
-This document describes the **current production schema** as of the migrations in
-`crates/db/migrations/` (post-ADR 0036 rename `tokens → assets`); every DDL block
-in §4 matches the live migration state. The narrative
+**Store: ClickHouse.** Postgres was retired (task 0244); ClickHouse is the sole
+production store. The authoritative **physical** schema (engines, column types,
+partition keys) is `crates/db-clickhouse/schema/init.sql`, documented in
+[`clickhouse-pilot.md`](./clickhouse-pilot.md) with the full PG→CH type-translation
+table and divergence rationale. The `CREATE TABLE` blocks in §4 below are retained in
+their historical PostgreSQL notation to describe table **shape** readably — for the
+live ClickHouse form (`ReplacingMergeTree`, `Int64` surrogates, `Decimal128(7)`,
+`intDiv(ledger_sequence, 500000)` partitioning) defer to the authority. The narrative
 [`technical-design-general-overview.md`](../technical-design-general-overview.md)
-takes precedence for cross-component behavior, but where its §6 data model and this
-file disagree on schema specifics, this file is authoritative — it is kept in sync
-with the migrations per
-[ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md).
+takes precedence for cross-component behavior; per
+[ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md) this
+file and `init.sql` are updated together on any schema change.
 
 ## 2. Ownership and Design Goals
 
-The block explorer owns its full PostgreSQL schema. All chain data is stored here; there is
+The block explorer owns its full schema. All chain data is stored in ClickHouse; there is
 no dependency on an external database.
 
 The schema should satisfy four goals at the same time:
@@ -93,7 +98,7 @@ The schema is not intended to be:
 
 The current schema is centered around a small set of core explorer entities plus a
 handful of registry and history tables. Table names below are the physical names used
-by the current migrations (`crates/db/migrations/0001_*` through `0007_*`).
+by the ClickHouse schema (`crates/db-clickhouse/schema/init.sql`).
 
 Backbone timeline:
 
@@ -104,6 +109,17 @@ Backbone timeline:
   mixed transaction inspection (partitioned; per-op detail recovered from XDR on
   demand per task 0163)
 - `transaction_participants` — derived participant links for account-history reads (partitioned)
+- `operation_asset_appearances` — per-(asset, transaction) presence index powering
+  `/assets/:id/transactions` (task 0359; the asset-dimension twin of
+  `transaction_participants`, keyed asset-first; native XLM is a first-class
+  surrogate, not absence). Also carries `net_settled` ("value moved", nullable:
+  NULL = not computed yet) per (tx, asset) for the tx-list column (task 0393; the `(ledger, tx)`
+  value read is a partition-pruned scan — read-path optimisation is an open
+  follow-up pending measurement, see the table note)
+- `operation_pools` — per-(pool, transaction) presence index powering
+  `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
+  `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
+  hash — the same value `operations_appearances.pool_ids` stores per crossing)
 
 Soroban activity model (per ADRs 0033/0034 these are pure appearance indexes — parsed
 contract-event and invocation-tree payloads are fetched at read time from the public
@@ -145,6 +161,8 @@ ledgers
   └─ transactions (partitioned)
        ├─ operations_appearances (partitioned)
        ├─ transaction_participants (partitioned)
+       ├─ operation_asset_appearances (partitioned)
+       ├─ operation_pools (partitioned)
        ├─ soroban_events_appearances (partitioned)
        └─ soroban_invocations_appearances (partitioned)
 
@@ -444,6 +462,132 @@ Design notes:
   cascade driven by the composite FK back to `transactions`
 - `account_id` is the surrogate BIGINT FK per
   [ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md)
+
+### 4.5.1 Operation Asset Appearances (task 0359)
+
+ClickHouse-only (like the `balances` family; see `clickhouse-pilot.md`). The
+**asset-dimension twin of `transaction_participants`** — a per-(asset, transaction)
+presence index so a per-asset activity page is a PK-prefix seek.
+
+```sql
+CREATE TABLE operation_asset_appearances (
+    asset_id        Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
+    ledger_sequence Int64,
+    transaction_id  Int64,
+    net_settled     Nullable(Int128),  -- task 0393: net-settled "value moved" per
+                             -- (tx, asset), RAW (scale by decimals at read;
+                             -- classic/SAC = 7). NULL = not computable,
+                             -- 0 = genuinely nothing settled net
+    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (asset_id, ledger_sequence, transaction_id);
+```
+
+> **Read-path.** The tx-list value read filters `(ledger, tx)` on this
+> `asset_id`-leading table — not a prefix seek, so unaided it is a partition scan
+> (~26 M rows/page on a full partition). Mitigated by the `idx_oaa_transaction_id` > **bloom skip index** (task 0393), which prunes granules holding none of a page's
+> tx_ids (~10×); same pattern as `idx_oa_contract_id`. A projection is not a
+> candidate (CH 26.3 refuses projections on a ReplacingMergeTree, and a `(ledger,
+tx)`-ordered companion would re-store the incompressible `transaction_id` ~85 GiB)
+> — the companion is the heavier fallback only if the bloom proves insufficient at
+> scale. The read is also `wants_values`-gated: only the global tx list requests
+> values today (account + ledger lists pass `false`, task 0393 decision D1).
+
+**`net_settled` (task 0393)** is the transaction "value moved" figure surfaced by
+the tx-list endpoints (UI column "Net settled"). It is the **net-settled value**
+per (transaction, asset): `max(Σ positive account deltas, Σ negative account
+deltas)` over the transaction's transfers, computed one-shot in Rust and written
+as a non-key column.
+
+This is the network-flow **flow value**: by the flow decomposition theorem every
+flow splits into source→sink **paths** plus **cycles**, a path contributes its
+flow and a **cycle contributes exactly zero**. So `gross = Σ path + Σ cycle` while
+`net = Σ path`. Two consequences are definitional, not defects: a **wash /
+round-trip nets to 0** (that zero-balance cycle is also how the wash-trading
+literature identifies a wash), and two intent-wise unrelated but offsetting
+payments decompose into one path. Per-account netting is the same algorithm
+clearing houses use for multilateral netting. If a gross figure is ever wanted,
+the theorem yields `cycle volume = gross − net` for free. Net is preferred over
+gross because `net ≤ gross` always: net never overstates, whereas gross inflates
+routed payments (a 3-hop path payment of 100 reads as 300) — and routing is the
+common case, washes the rare one.
+
+**Nullable on purpose:** `NULL` = not computable (the reducer could not represent
+the result in i128, or a recognised event's amount was unreadable), `0` = genuinely
+nothing settled net. Without the distinction a value that could not be computed
+would masquerade as a real zero. The read filters `IS NOT NULL AND != 0` and uses
+`assumeNotNull` — an aggregate over a Nullable column is `Nullable(T)` and decoding
+that into a non-nullable field 500s (the task 0324 trap).
+
+**Version-less dedup.** The table is a plain `ReplacingMergeTree` (no version
+column). `net_settled` has a single writer — `persist::stage`, run by both live
+ingest and the full S3 re-ingest — so live and historical rows for a key are
+computed identically and the duplicate collapses cleanly; the read dedups with
+`max(net_settled)` (`max` ignores NULL, so a computed value wins over a
+not-computed one for the same key). There is deliberately no "newest insert wins"
+version: a downward correction of a deterministic figure only happens when the
+reducer itself changes — a deploy event, handled by re-running the re-ingest +
+`OPTIMIZE FINAL`, not worth a per-row version and the full-table engine rebuild it
+would force on prod. (The 0383 token-flow backfill is presence-only — it writes
+`net_settled: NULL` and must not run once the column is populated, or its NULL row
+could win the merge and blank a live value.) Classic txs derive the value from ledger-entry balance deltas;
+Soroban txs from token events (see the indexing-pipeline and XDR-parsing docs). The
+fee is excluded by construction (it is not in `TransactionMeta`).
+
+Purpose / design notes:
+
+- Fixes the single-asset-slot loss on `operations_appearances`: offers stored ZERO
+  assets, path payments kept only `destAsset`, and native XLM was an empty-string
+  sentinel. Here **every asset an op touches** is one row, keyed **asset-first** so
+  `/assets/:id/transactions` is a bounded seek (not a non-leading density-scan).
+- **Pure presence** — no `role` / `application_order` / `amount` / `pool_id`.
+  Duplicate (asset, tx) rows within a tx are deduped at write (per-tx set) and
+  collapse in the RMT; the read also applies `LIMIT 1 BY (ledger, tx)`.
+- **Native XLM is first-class**: `ids::asset_id(0,'',0,0)` (a stable non-zero
+  surrogate), never absence — so native has a real per-asset page.
+- Populated by the shared parse path (live ingest + the archive backfill run the
+  same `emit_asset_appearances`), from two grains: **body** (asset fields on the op
+  struct) and **meta** (claimable-balance / LP assets recovered from the same-op
+  `LedgerEntryChanges`). Failed txs keep their body-declared assets (parity with
+  `operations_appearances`); meta assets are naturally absent for a failed op.
+- **Backfill dependency**: needs the Soroban-era XDR re-parse to populate history;
+  run it in the SAME rollout as the read swap or the endpoint shows only
+  post-deploy classic activity.
+
+### 4.5.2 Operation Pools (task 0365)
+
+ClickHouse-only. The **pool-dimension twin of `transaction_participants`** — a
+per-(pool, transaction) presence index so `/liquidity-pools/:id/transactions` is a
+PK-prefix seek instead of the density-dependent `has(pool_ids, X)` scan over
+`operations_appearances` (the 0281-C read-in-order driver, superseded).
+
+```sql
+CREATE TABLE operation_pools (
+    pool_id         FixedString(32),  -- raw 32-byte pool hash (no surrogate)
+    ledger_sequence Int64,
+    transaction_id  Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, transaction_id);
+```
+
+Purpose / design notes:
+
+- `pool_id` is the raw 32-byte hash — the exact value `operations_appearances.pool_ids`
+  stores per crossing — so no surrogate resolution is needed (unlike the asset twin).
+- **Pure presence** — no `role` / `application_order` / `amount`. Duplicate (pool, tx)
+  rows within a tx are deduped at write (per-tx set) and collapse in the RMT; the read
+  also applies `LIMIT 1 BY (ledger, tx)`.
+- Populated by the indexer as a per-op Rust fan-out over each op's `pool_ids`,
+  written beside `transaction_participants` / `operation_asset_appearances`. (The
+  Path B backfill below re-keys history via `arrayJoin(pool_ids)`.)
+- **Backfill (task 0365 Path B)**: unlike the asset twin, the source `pool_ids` is
+  already in ClickHouse, so history is backfilled by a plain CH re-key
+  (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id
+FROM operations_appearances`) — no XDR re-parse.
 
 ### 4.6 Soroban Contracts
 
@@ -859,6 +1003,33 @@ Design notes:
   (see §4.17), not as JSONB on this row. The previously-planned partitioned
   `account_balance_history` companion was dropped per
   [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md)
+- **`accounts_recent` (ClickHouse read-model, task 0385):** the account-list browse
+  (`GET /v1/accounts`) sorts by `last_seen_ledger`, but the CH `accounts` table must
+  be `ORDER BY account_id` — that is the `ReplacingMergeTree` dedup key, and
+  `last_seen_ledger` mutates so it cannot sit in the sort key. A projection on the
+  RMT is refused by ClickHouse 26.3 (task 0353, Code 344), so the last_seen ordering
+  lives in a separate plain-`MergeTree` table filled by a refreshable MV (full
+  recompute + atomic EXCHANGE → reads need no `FINAL`; mirrors `balance_aggregates_mv`,
+  §4.17). `accounts::fetch_list` read-in-order SEEKs it (~page rows) instead of the
+  old `accounts FINAL` whole-dimension scan+sort (~24M). Freshness = the refresh
+  interval — a shared, server-side origin, ≤interval-stale, fine for a browse list.
+
+  ```sql
+  CREATE TABLE accounts_recent (
+      id                Int64,
+      account_id        String,
+      last_seen_ledger  Int64,
+      first_seen_ledger Int64,
+      home_domain       LowCardinality(Nullable(String))
+  ) ENGINE = MergeTree
+  ORDER BY (last_seen_ledger, id);
+
+  CREATE MATERIALIZED VIEW accounts_recent_mv
+  REFRESH EVERY 2 MINUTE
+  TO accounts_recent AS
+  SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+  FROM accounts FINAL;
+  ```
 
 ### 4.12 NFTs
 
@@ -1347,27 +1518,24 @@ The schema should continue to prioritize those explorer patterns over generic an
 #### Canonical query references
 
 Each `/v1/*` list / detail endpoint has a canonical SQL projection committed
-in this repo. Two parallel reference sets exist:
+in this repo:
 
-- [`endpoint-queries/`](./endpoint-queries/) — **PostgreSQL** canonical
-  source of truth for the live API handlers in
-  [`crates/api/`](../../../crates/api). Every endpoint enumerated in
+- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
+  canonical source of truth for the live API handlers in
+  [`crates/api/`](../../../crates/api)
+  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
+  tasks 0204 / 0206 / 0207). Every endpoint enumerated in
   [`backend-overview.md §6.2 Endpoint Inventory`](../backend/backend-overview.md#62-endpoint-inventory)
   maps 1:1 to a `NN_*.sql` file here.
   Field-allocation per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule-list-vs-detail.md);
   list-endpoint completeness verified by audit task 0197
   (see [`docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md`](../../audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)).
-- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
-  parallel reference set for the CH-side pilot
-  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
-  tasks 0204 / 0206 / 0207). Maintained alongside the PG set but the API
-  read-path does **not** call into it yet — CH is a parallel store, no live
-  `/v1/*` handler routes through it. A CH-side equivalence audit is deferred
-  until at least one handler is wired through ClickHouse.
 
-When editing a `/v1/*` endpoint behaviour, update the PG canonical SQL in the
-same PR. Update the CH parallel file only when explicitly working on the CH
-pilot (0207 scope).
+The retired PostgreSQL reference set (`endpoint-queries/`) was removed with the
+PG backend (task 0244).
+
+When editing a `/v1/*` endpoint behaviour, update the CH canonical SQL in the
+same PR.
 
 ### 7.3 Raw vs Derived Storage
 
@@ -1396,29 +1564,26 @@ The DB therefore holds only:
 This split — typed summaries in the DB, heavy payloads fetched on-demand from the
 public archive — is the core architectural choice, not accidental duplication.
 
-### 8.0 ClickHouse pilot (parallel store, read-empty)
+### 8.0 ClickHouse (sole production store)
 
-A parallel ClickHouse store was added next to the production Postgres
-schema per
+ClickHouse is the sole production store (task 0244 — Postgres retired). It began
+as a parallel pilot per
 [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
 (implementation in
-[task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)).
-It mirrors the table-by-table logical shape described above, with five
-deliberate divergences (full-content `soroban_events` replacing
-`soroban_events_appearances`, `created_at` dropped from every CH table
-except `ledgers`, `nfts.metadata` dropped CH-side, `_sqlx_migrations`
-replaced by an idempotent `init.sql`, `transaction_hash_index` exposed as
-a `Dictionary` for hot point lookups). **Postgres is unchanged by all
-five.**
+[task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)),
+then took over ingestion and all API reads in the hard cutover
+[task 0241](../../../lore/1-tasks/archive/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
+It carries the table-by-table logical shape described above, with five
+deliberate divergences from the former PG schema (full-content `soroban_events`
+replacing `soroban_events_appearances`, `created_at` dropped from every table
+except `ledgers`, `nfts.metadata` dropped, `_sqlx_migrations` replaced by an
+idempotent `init.sql`, `transaction_hash_index` also exposed as a `Dictionary`
+for hot point lookups).
 
-The ClickHouse copy lives in `crates/db-clickhouse/` and runs as the
-`clickhouse` service in `docker-compose.yml`. It is read-empty in scope —
-no indexer dual-write, no API reads. The full pilot schema reference,
+The store lives in `crates/db-clickhouse/` (schema `init.sql`) and runs as the
+`clickhouse` service in `docker-compose.yml`. The full physical schema reference,
 including the type-translation table and divergence rationale, lives in
 [`clickhouse-pilot.md`](./clickhouse-pilot.md).
-
-This subsection only flags that the pilot exists; the rest of this
-document continues to describe the Postgres source-of-truth schema.
 
 ## 8. Evolution Rules and Delivery Notes
 
@@ -1433,12 +1598,11 @@ Any future schema change should preserve the same general discipline:
 
 ### 8.2 Current Workspace State
 
-The repository now provides concrete DDL for every table in §4 under
-`crates/db/migrations/0001_*` through `0007_*` plus subsequent dated migrations for
-replay-safe uniqueness (`20260421*`), enum label helpers (`20260422000000_*`), and
-in-place enum-variant additions (`20260422000100_*`). Runtime persistence lives in
-the indexer (`crates/indexer/src/handler/persist/`) and follows the 14-step
-`persist_ledger` pipeline per
+The repository provides concrete DDL for every table in §4 in the ClickHouse schema
+`crates/db-clickhouse/schema/init.sql` — a single idempotent `CREATE … IF NOT EXISTS`
+script applied by `db-clickhouse-init` (there is no ordered migration sequence).
+Runtime persistence lives in the indexer, which stages and writes via the
+`crates/db-clickhouse/src/persist/` pipeline; the post-surrogate schema rationale is
 [ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md).
 
 This document is the detailed schema reference; the narrative

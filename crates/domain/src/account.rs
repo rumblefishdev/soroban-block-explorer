@@ -1,11 +1,11 @@
-//! Account domain type matching the `accounts` PostgreSQL table.
+//! Account domain type matching the `accounts` ClickHouse table.
 //!
 //! Schema: ADR 0027 Part I §2 (surrogate PK — ADR 0026).
 //! Balances moved to `account_balances_current` (see `crate::balance`).
 
 use serde::{Deserialize, Serialize};
 
-/// Account record as stored in PostgreSQL.
+/// Account record as stored in ClickHouse.
 ///
 /// `id` is the surrogate PK used for all FK references across the schema.
 /// `account_id` is the StrKey form (`G…`, 56 chars) — UNIQUE, used for

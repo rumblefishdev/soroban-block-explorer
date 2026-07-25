@@ -1,13 +1,27 @@
 # Stellar Block Explorer — ClickHouse Pilot
 
-> Companion to [`database-schema-overview.md`](./database-schema-overview.md).
-> The Postgres schema described there is the production source of truth; this
-> document describes the **parallel ClickHouse store** that stands next to it
-> for evaluation, **not** as a replacement.
-
-> **Status:** read-empty pilot. The schema and connection layer are landed;
-> indexer dual-write and API reads are deliberately deferred to follow-up
-> ADRs/tasks.
+> **Status: HISTORICAL — the pilot succeeded and this document is its record.**
+> Everything below is written in the present tense of early 2026 and is now false as a
+> description of production. ClickHouse is **the** production datastore per
+> [ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md); Postgres was
+> retired entirely in task 0244; the indexer writes ClickHouse and the API reads it.
+> For the live schema, read
+> [`database-schema-overview.md`](./database-schema-overview.md) and
+> `crates/db-clickhouse/schema/init.sql`, never this file.
+>
+> Retained because the pilot's evaluation criteria and measurements are the reasoning
+> behind ADR 0047. Read it as _why we chose this_, not _what runs_.
+>
+> <details><summary>Original header, as written</summary>
+>
+> > Companion to `database-schema-overview.md`. The Postgres schema described there is
+> > the production source of truth; this document describes the **parallel ClickHouse
+> > store** that stands next to it for evaluation, **not** as a replacement.
+> >
+> > **Status:** read-empty pilot. The schema and connection layer are landed; indexer
+> > dual-write and API reads are deliberately deferred to follow-up ADRs/tasks.
+>
+> </details>
 
 ---
 
@@ -359,7 +373,7 @@ Highlights:
 Nullable(Decimal128(7))` — per-(pool, ledger) trade volume in asset-A
   units from path-payment claim atoms (derived at ingest by the live
   indexer and, for history, by the 0266 backfill; USD `volume`/`fee_revenue`
-  stay NULL until the Prices API, ADR 0048)
+  stay NULL until the Prices API, ADR 0053)
 - `NUMERIC(28,7)` → `Decimal128(7)`
 - The only `TIMESTAMPTZ` column that survives is
   `ledgers.closed_at`, which becomes `DateTime64(3, 'UTC')`
@@ -728,9 +742,9 @@ The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 ### Read queries (reference set)
 
 [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/README.md) is
-the canonical reference set of CH-side read queries for the 23 public REST
-endpoints, parallel to the PG [`endpoint-queries/`](./endpoint-queries/README.md)
-set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
+the canonical reference set of read queries for the 23 public REST
+endpoints (the retired PostgreSQL reference set was removed with the PG backend,
+task 0244). Each query targets the ADR 0044 schema (`init.sql`), uses
 `FINAL` on `ReplacingMergeTree` reads, partition-prunes via
 `intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
 `ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
@@ -750,7 +764,13 @@ correlated column …`. The live read path instead fetches the page of tx
 > correlated projection the reference SQL still shows (those files carry a
 > correction banner).
 
-> **CH read-cost correction — `contract_ids` is ops-only (task 0243).** The
+> **`contract_ids` REMOVED from the API (task 0386).** The per-row
+> `contract_ids` array is no longer returned by any transaction-list endpoint —
+> a dead PG-parity field no frontend rendered, whose only cost was a whole-table
+> `JOIN soroban_contracts FINAL` (~200k rows/page). The live list response
+> carries `operation_types` only. The ops-only note below is kept for history.
+>
+> **CH read-cost correction — `contract_ids` was ops-only (task 0243).** The
 > reference SQL builds `contract_ids` from a 3-source UNION
 > (`operations_appearances` + `soroban_invocations_appearances` +
 > `soroban_events`) for full PG parity. Both `soroban_*` tables are

@@ -14,6 +14,17 @@ tags:
     'migration',
   ]
 history:
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      Scope corrected: **`assets.icon_url` is the third dead column** and was missing
+      from this task. 0293 moved supply/holders to `balance_aggregates`; `icon_url`
+      moved to `asset_enrichment` on the same principle, and `AssetRow::staged`
+      writes `None` into all three on every build. Found while auditing state-table
+      writers for 0425 — the three NULLs looked like a clobber until the DEAD
+      annotations in `init.sql` explained them. Drop all three together; splitting
+      them means a second prod ALTER for no reason.
   - date: 2026-06-22
     status: backlog
     who: karolkow
@@ -29,6 +40,59 @@ history:
       ledgers 12,582,889 unchanged (no dup sequences). snapshot_d backup taken
       first. Remaining: dead-columns drop + asset_aggregates refresh monitoring
       + docs. Task stays open (backlog).
+  - date: 2026-07-07
+    status: backlog
+    who: karolkow
+    note: >
+      Reality-sync (chq re-verify + PG-retirement fallout). (1) Engine swap
+      RE-CONFIRMED in prod 2026-07-07: ledgers + wasm_interface_metadata both
+      ReplacingMergeTree (system.tables). (2) TABLE RENAMED: the `asset_aggregates`
+      table + `asset_aggregates_mv` this spec references were RETIRED by task
+      0331/0339 (ADR 0051 — SACs folded into the wrapped classic asset, unified
+      supply per asset). Supply/holders now serve from `balance_aggregates`
+      (+ `balance_aggregates_mv`), keyed on the unified `asset_id`, NOT the old
+      `(asset_code, issuer_id)`. All `asset_aggregates` refs below updated. (3) §4
+      PG aggregate decommission is now MOOT — task 0244 (PG removal) merged
+      (PR #319), so `recompute_asset_aggregates` (PG) + the `DataSource::Pg` arm
+      are gone. (4) Still-outstanding (chq-confirmed): assets.total_supply +
+      holder_count STILL present in prod → the code-strip + ALTER DROP + docs are
+      the real remaining work. Monitoring AC may now belong to 0331 (owner of
+      balance_aggregates_mv) — flagged below.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Half of this task is already done — verified on prod 2026-07-22.**
+      The engine swap it asks for is in place: `wasm_interface_metadata` is
+      already `ReplacingMergeTree`, so that item can be struck.
+      The other half stands and is stronger than the task claims: `assets` holds
+      **361,015 rows of which exactly 25 carry a non-zero `total_supply` and 25 a
+      non-zero `holder_count`**. The live aggregates moved to `balance_aggregates`
+      (fed by a refreshable MV off `balances`), so these two columns are dead
+      weight on every read of the table. Dropping them is the whole remaining
+      scope. Note this is an `ALTER TABLE` on prod, so it needs an ops window.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Two more dead objects found while re-verifying this task. Both belong
+      here rather than in new tasks — same operation, same ops window.**
+      **1. `assets.icon_url` is emptier than the other two.** Re-measured
+      2026-07-22: of **361,232** rows, `total_supply` and `holder_count` carry a
+      value on **42**, and `icon_url` on **0**. Not a single row in the table has
+      ever had one. It is the same dead-column class already scoped here, so add
+      it to the same `ALTER`.
+      **2. `account_balances_current` is a dead TABLE, not just dead columns.**
+      **0 rows** in prod; no writer — `persist/stage.rs:1648` and
+      `persist/writer.rs:110` both record the insert being removed for the
+      single-write design; and no live reader, the only surviving mention in
+      `crates/api` being a comment about a join that was deleted. The live
+      equivalent is `balances`, at **89,634,237 rows**.
+      Do not drop it blind, though: task **0214** still lists "`account_balances_current`
+      row count > 0" as an acceptance criterion. That criterion is unsatisfiable
+      as written and is flagged there for rewriting onto `balances` — but the two
+      changes should land in a known order, criterion first, so nobody is left
+      chasing a table this task removed.
 ---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
@@ -40,8 +104,9 @@ stays reversible (option A backward-compat). Two independent migrations, both
 **after** the additive 0293 rollout is live and verified in prod (rollout
 runbook: `0293/README.md` → "Deploy / Migration Runbook"):
 
-1. Drop the now-dead `assets.total_supply` / `assets.holder_count` (served from
-   the `asset_aggregates` table since 0293; written `None` by the indexer, read by nothing).
+1. Drop the now-dead `assets.total_supply` / `assets.holder_count` / `icon_url` (served from
+   the `balance_aggregates` table — renamed from `asset_aggregates` by 0331/0339,
+   ADR 0051; written `None` by the indexer, read by nothing).
 2. Rebuild `ledgers` and `wasm_interface_metadata` as `ReplacingMergeTree`.
 
 Neither reaches prod via `init.sql` — every statement there is `CREATE TABLE IF
@@ -52,9 +117,12 @@ exist in ClickHouse, so an engine swap is a create-copy-`EXCHANGE TABLES`-drop.
 
 - **Dead columns.** 0293 stopped serving `total_supply` / `holder_count` from
   `assets` (clobbered to NULL by the per-ledger indexer — see
-  `0293/notes/G-assets-aggregate-clobber-proof.md`) and serves them from the
-  pre-computed `asset_aggregates` table (refreshable MV) instead. The columns are kept until this task so the rollout
-  is reversible.
+  `0293/notes/G-assets-aggregate-clobber-proof.md`) and serves them from a
+  pre-computed aggregate table (refreshable MV) instead. That table was
+  `asset_aggregates` at 0293; **0331/0339 (ADR 0051) retired it** and now serves
+  from `balance_aggregates` (keyed on the unified `asset_id`, folding SAC balances
+  into the wrapped classic asset). The dead columns are kept until this task so the
+  rollout is reversible.
 - **Engine swaps.** `ledgers` (commit marker, live-tail) and
   `wasm_interface_metadata` are `MergeTree` today; 0293's `init.sql` declares them
   `ReplacingMergeTree` so a crash / backfill re-run re-inserting the same key is
@@ -63,10 +131,12 @@ exist in ClickHouse, so an engine swap is a create-copy-`EXCHANGE TABLES`-drop.
 
 ## Implementation Plan
 
-> **Prerequisite:** the additive 0293 rollout (`asset_aggregates` table + refreshable MV created + first refresh run, API
-> deployed, read-rows smoke captured, assets flag flipped to CH) is live and
-> verified — see `0293/README.md`. Take a prod backup (0298 quiesce-backup item)
-> before any step here. None of this is reversible.
+> **Prerequisite:** the additive 0293 rollout (aggregate table + refreshable MV
+> created + first refresh run, API deployed, read-rows smoke captured, assets flag
+> flipped to CH) is live and verified — see `0293/README.md`. **Superseded by
+> 0331/0339:** that table is now `balance_aggregates` (+ `balance_aggregates_mv`),
+> already live in prod. Take a prod backup (0298 quiesce-backup item) before any
+> step here. None of this is reversible.
 
 ### 1. Engine swap `ledgers` and `wasm_interface_metadata` → ReplacingMergeTree
 
@@ -125,7 +195,11 @@ ALTER TABLE assets DROP COLUMN holder_count;
    the `crates/db-clickhouse/src/lib.rs` statement-count comment (count unchanged
    — still 22 — but the dead-column note goes).
 
-### 3. Monitor the `asset_aggregates` refresh (lore-0293 follow-up)
+### 3. Monitor the `balance_aggregates` refresh (lore-0293 follow-up)
+
+> **Ownership note (2026-07-07):** the MV is now `balance_aggregates_mv`, created
+> by 0331/0339. If those tasks already carry the refresh-monitoring item, drop this
+> AC as a duplicate rather than double-wiring the alert. Kept here until confirmed.
 
 The refreshable MV degrades safely on a failed refresh — a failed run leaves the
 previous good table intact (stale, never empty) — but there is **no signal** if a
@@ -135,37 +209,39 @@ alert on `system.view_refreshes`:
 ```sql
 SELECT view, status, last_success_time, exception
 FROM system.view_refreshes
-WHERE view = 'asset_aggregates_mv';
+WHERE view = 'balance_aggregates_mv';
 ```
 
 Alert if `exception != ''` OR `now() - last_success_time > ~10 min` (a few missed
 2-minute cycles). Cheap; pairs with the existing CH monitoring.
 
-### 4. (Optional, separate) PG aggregate decommission
+### 4. (Optional, separate) PG aggregate decommission — DONE (0244 merged)
 
-Only once the PG assets path is formally retired (task 0244).
-`recompute_asset_aggregates` (PG) is **alive** today (API `DataSource::Pg` +
-backfill `--target postgres`); do NOT remove it here. Listed only for trail
-completeness.
+**No longer applicable.** Task 0244 (full PG removal) merged 2026-07-07 (PR #319):
+`recompute_asset_aggregates` (PG), the `DataSource::Pg` arm, and the
+`--target postgres` backfill path are all gone. Nothing to decommission here.
 
 ## Acceptance Criteria
 
-- [ ] 0293 rollout confirmed live + verified in prod (prerequisite).
-- [ ] `asset_aggregates` refresh monitored (`system.view_refreshes` alert on
-      `exception` / stale `last_success_time`).
+- [x] 0293 rollout confirmed live + verified in prod (prerequisite) — prod serves
+      supply/holders from `balance_aggregates` (0331/0339 successor of the 0293
+      `asset_aggregates`); assets read path is all-CH.
+- [ ] `balance_aggregates` refresh monitored (`system.view_refreshes` alert on
+      `exception` / stale `last_success_time`) — **may be owned by 0331/0339**; drop
+      if already wired there.
 - [x] `ledgers` and `wasm_interface_metadata` are `ReplacingMergeTree`
       (`SELECT engine FROM system.tables WHERE name IN (...)`), row counts match
       pre-swap (modulo RMT dedup), no data gap at the swap boundary.
-      **DONE 2026-06-24:** both RMT; wasm 3760->3720 (40 byte-identical dups
-      collapsed), ledgers 12,582,889 unchanged (no dup sequences); create-copy-
-      `EXCHANGE`-`OPTIMIZE FINAL`-drop with a `uniqExact` distinct-key gate;
-      snapshot_d backup taken first.
+      **DONE 2026-06-24; RE-CONFIRMED in prod 2026-07-07 (chq):** both RMT; wasm
+      3760->3720 (40 byte-identical dups collapsed), ledgers 12,582,889 unchanged
+      (no dup sequences); create-copy-`EXCHANGE`-`OPTIMIZE FINAL`-drop with a
+      `uniqExact` distinct-key gate; snapshot_d backup taken first.
 - [ ] Indexer no longer references `assets.total_supply` / `holder_count`;
       `ALTER ... DROP COLUMN` applied; `init.sql` + `lib.rs` updated.
 - [ ] **Docs updated** — `docs/architecture/database-schema/**` reflects the three
       RMT engines and the dropped `assets` columns (matches prod state).
 - [ ] **API types regenerated** — N/A (no API DTO/handler change; the `AssetRow`
-      DTO keeps `total_supply`/`holder_count`, now sourced from `asset_aggregates`).
+      DTO keeps `total_supply`/`holder_count`, now sourced from `balance_aggregates`).
       Re-confirm at execution time if the diff touches `crates/api/**`.
 
 ## Notes

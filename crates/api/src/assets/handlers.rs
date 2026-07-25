@@ -7,8 +7,7 @@ use domain::TokenAssetType;
 
 use crate::common::cache_control;
 use crate::common::cursor;
-use crate::common::cursor::{Direction, TsIdCursor};
-use crate::common::datasource::{DataSource, Module};
+use crate::common::cursor::Direction;
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
@@ -19,60 +18,30 @@ use crate::runtime_enrichment::sep1::{Sep1Currency, Sep1TomlParsed};
 use crate::state::AppState;
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem, ListParams};
-use super::queries::{
-    AssetIdentity, AssetKeyCursor, AssetRow, AssetTxRow, ResolvedListParams,
-    asset_predicate_present, fetch_by_code_issuer, fetch_by_contract_id, fetch_list, fetch_native,
-    fetch_transactions,
+use super::dto::{
+    AssetDetailResponse, AssetItem, AssetKeyCursor, AssetTransactionItem, ListParams,
 };
-use super::queries_ch;
+use super::queries::{self, AssetRow, AssetTxRow, ResolvedListParams};
 
-/// Unified per-call fetch error so the handlers dispatch between PG and CH
-/// without leaking driver types up the call stack. Only `Display` is observed
-/// (forwarded to the canonical `db_error` envelope + tracing).
-#[derive(Debug, thiserror::Error)]
-enum AssetFetchError {
-    #[error("pg: {0}")]
-    Pg(sqlx::Error),
-    #[error("ch: {0}")]
-    Ch(clickhouse::error::Error),
-}
-
-/// List dispatch — PG (`sqlx`) or CH (`clickhouse`) per `API_DATASOURCE_ASSETS`.
 async fn fetch_list_for_source(
     state: &AppState,
-    source: DataSource,
     params: &ResolvedListParams,
     direction: Direction,
-) -> Result<Vec<AssetRow>, AssetFetchError> {
-    match source {
-        DataSource::Pg => fetch_list(&state.db, params, direction)
-            .await
-            .map_err(AssetFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, direction)
-            .await
-            .map_err(AssetFetchError::Ch),
-    }
+) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
+    queries::fetch_list(&state.ch(), params, direction).await
 }
 
-/// `:id` detail-row dispatch — resolves the `AssetRow` through PG or CH per the
-/// module flag. (The `/transactions` sub-resource stays PG-only via the
-/// separate [`fetch_with`] until the CH cursor migration lands.)
+/// `:id` detail-row dispatch — resolves the `AssetRow` from CH.
 async fn fetch_asset_row_for_source(
     state: &AppState,
-    source: DataSource,
     parsed: AssetIdRef<'_>,
-) -> Result<Option<AssetRow>, AssetFetchError> {
-    match source {
-        DataSource::Pg => fetch_with(state, parsed).await.map_err(AssetFetchError::Pg),
-        DataSource::Ch => match parsed {
-            AssetIdRef::Native => queries_ch::fetch_native(&state.ch()).await,
-            AssetIdRef::Contract(c) => queries_ch::fetch_by_contract_id(&state.ch(), c).await,
-            AssetIdRef::CodeIssuer(code, issuer) => {
-                queries_ch::fetch_by_code_issuer(&state.ch(), code, issuer).await
-            }
+) -> Result<Option<AssetRow>, clickhouse::error::Error> {
+    match parsed {
+        AssetIdRef::Native => queries::fetch_native(&state.ch()).await,
+        AssetIdRef::Contract(c) => queries::fetch_by_contract_id(&state.ch(), c).await,
+        AssetIdRef::CodeIssuer(code, issuer) => {
+            queries::fetch_by_code_issuer(&state.ch(), code, issuer).await
         }
-        .map_err(AssetFetchError::Ch),
     }
 }
 
@@ -214,15 +183,13 @@ pub async fn list_assets(
         sac_only,
     };
 
-    let source = DataSource::for_module(Module::Assets);
-    let mut rows: Vec<AssetRow> =
-        match fetch_list_for_source(&state, source, &resolved, direction).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(source = ?source, "DB error in list_assets: {e}");
-                return errors::internal_error(errors::DB_ERROR, "database error");
-            }
-        };
+    let mut rows: Vec<AssetRow> = match fetch_list_for_source(&state, &resolved, direction).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("DB error in list_assets: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
 
     let page = finalize_page(
         &mut rows,
@@ -280,12 +247,11 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
         }
     };
 
-    let source = DataSource::for_module(Module::Assets);
-    let row = match fetch_asset_row_for_source(&state, source, parsed).await {
+    let row = match fetch_asset_row_for_source(&state, parsed).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("asset not found"),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error fetching asset {id}: {e}");
+            tracing::error!("DB error fetching asset {id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -364,81 +330,53 @@ fn find_currency<'a>(
         .find(|c| c.code.as_deref() == Some(asset_code) && c.issuer.as_deref() == Some(issuer))
 }
 
-async fn fetch_with(
-    state: &AppState,
-    parsed: AssetIdRef<'_>,
-) -> Result<Option<AssetRow>, sqlx::Error> {
-    match parsed {
-        AssetIdRef::Native => fetch_native(&state.db).await,
-        AssetIdRef::Contract(c) => fetch_by_contract_id(&state.db, c).await,
-        AssetIdRef::CodeIssuer(code, issuer) => fetch_by_code_issuer(&state.db, code, issuer).await,
-    }
-}
-
-/// `:id/transactions` dispatch. PG keys the page on `(created_at, id)` via
-/// `AssetIdentity` (resolved StrKeys); CH keys on `(ledger_sequence, id)` over
-/// `operations_appearances`, using the surrogate ids carried on the row. The
-/// cross-source guard upstream guarantees a present cursor is the active
-/// backend's variant.
+/// `:id/transactions` dispatch — the composed read (task 0359): the
+/// `operation_asset_appearances` fan-out on `id` UNION the
+/// `soroban_invocations_appearances` activity of the asset's contract
+/// surrogate(s). The surrogates make EVERY asset type complete: a Soroban-native
+/// (type-3) token's own contract (its fan-out is empty — the F2/#1 fix), and a
+/// classic/native asset's SAC facet (its SAC-contract activity — F-F).
 async fn fetch_asset_tx_for_source(
     state: &AppState,
-    source: DataSource,
     row: &AssetRow,
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
-) -> Result<Vec<AssetTxRow>, AssetFetchError> {
-    match source {
-        DataSource::Pg => {
-            let ts_cursor = cursor.and_then(|c| match c {
-                TxListCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
-                TxListCursor::Ch { .. } => None,
-            });
-            let identity = AssetIdentity {
-                asset_code: row.asset_code.as_deref(),
-                issuer: row.issuer.as_deref(),
-                contract_id: row.contract_id.as_deref(),
-            };
-            fetch_transactions(&state.db, &identity, limit, ts_cursor.as_ref(), direction)
-                .await
-                .map_err(AssetFetchError::Pg)
-        }
-        DataSource::Ch => queries_ch::fetch_transactions(
-            &state.ch(),
-            row.asset_code.as_deref(),
-            row.issuer_id,
-            row.contract_surrogate_id,
-            limit,
-            cursor,
-            direction,
-        )
-        .await
-        .map_err(AssetFetchError::Ch),
-    }
-}
-
-/// Build the opaque asset-transactions cursor for a boundary row, tagged with
-/// the active datasource so a later request rejects a cross-backend replay.
-fn asset_tx_cursor_for(source: DataSource, r: &AssetTxRow) -> TxListCursor {
-    match source {
-        DataSource::Pg => TxListCursor::Pg {
-            ts: r.created_at,
-            id: r.id,
-        },
-        DataSource::Ch => TxListCursor::Ch {
-            ledger_sequence: r.ledger_sequence,
-            tiebreak: r.id,
-        },
-    }
-}
-
-/// True when the decoded cursor was minted for the currently-active datasource
-/// (ADR 0008 fail-clean on a cross-datasource replay).
-fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
-    matches!(
-        (source, cursor),
-        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
+    // ADR 0051: an asset has ONE associated contract, never both — its own
+    // contract if it is a Soroban-native (type-3) token, else the wrapping SAC of
+    // a classic / native asset. Arm B seeks that contract's invocations.
+    let contract_surrogate = if row.contract_surrogate_id != 0 {
+        Some(row.contract_surrogate_id)
+    } else if row.sac_contract_surrogate != 0 {
+        Some(row.sac_contract_surrogate)
+    } else {
+        None
+    };
+    queries::fetch_transactions(
+        &state.ch(),
+        row.id,
+        contract_surrogate,
+        limit,
+        cursor,
+        direction,
     )
+    .await
+}
+
+/// Build the opaque asset-transactions cursor for a boundary row. CH keys on
+/// `(ledger_sequence, id)`.
+fn asset_tx_cursor_for(r: &AssetTxRow) -> TxListCursor {
+    TxListCursor::Ch {
+        ledger_sequence: r.ledger_sequence,
+        tiebreak: r.id,
+    }
+}
+
+/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
+/// under the retired PG backend is rejected (ADR 0008 fail-clean).
+fn cursor_matches_source(cursor: &TxListCursor) -> bool {
+    matches!(cursor, TxListCursor::Ch { .. })
 }
 
 #[utoipa::path(
@@ -480,23 +418,21 @@ pub async fn list_asset_transactions(
         }
     };
 
-    let source = DataSource::for_module(Module::Assets);
-
-    // Reject a cursor minted for the other datasource (e.g. a PG cursor replayed
-    // after a flag flip to CH) — its keyset is meaningless under the active
-    // backend (ADR 0008 fail-clean). A legacy/untagged cursor already fails
-    // decode upstream; this guards the decodes-but-wrong-intent case.
+    // Reject a stale cursor minted under the retired PG backend — its keyset is
+    // meaningless under CH (ADR 0008 fail-clean). A legacy/untagged cursor
+    // already fails decode upstream; this guards the decodes-but-wrong-intent
+    // case.
     if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(source, cursor)
+        && !cursor_matches_source(cursor)
     {
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
-    let row = match fetch_asset_row_for_source(&state, source, parsed).await {
+    let row = match fetch_asset_row_for_source(&state, parsed).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("asset not found"),
         Err(e) => {
-            tracing::error!(source = ?source, "DB error fetching asset {id}: {e}");
+            tracing::error!("DB error fetching asset {id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -517,15 +453,14 @@ pub async fn list_asset_transactions(
         );
     }
 
-    let identity = AssetIdentity {
-        asset_code: row.asset_code.as_deref(),
-        issuer: row.issuer.as_deref(),
-        contract_id: row.contract_id.as_deref(),
-    };
-
-    // Native XLM has no DB-side identity referenced by ops — empty page
-    // rather than emit `WHERE ()` SQL.
-    if !asset_predicate_present(&identity) {
+    // Guard the unresolved-asset sentinel: a resolved asset always carries a real
+    // `ids::asset_id` surrogate, so `id == 0` means "no such asset key" — return an
+    // empty page rather than run `WHERE asset_id = 0`. Native is NOT caught here:
+    // it has a first-class surrogate (`ids::asset_id(0,"",0,0)`, non-zero), so the
+    // fan-out seek runs and native activity is served (task 0359 / devils-advocate
+    // C6, PR #9 — this replaces the old identity gate that emptied native because
+    // it has no classic code/issuer/contract).
+    if row.id == 0 {
         let empty = into_envelope::<AssetTransactionItem>(
             Vec::new(),
             PageInfo {
@@ -541,7 +476,6 @@ pub async fn list_asset_transactions(
 
     let mut rows = match fetch_asset_tx_for_source(
         &state,
-        source,
         &row,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
@@ -551,7 +485,7 @@ pub async fn list_asset_transactions(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(source = ?source, "DB error in list_asset_transactions: {e}");
+            tracing::error!("DB error in list_asset_transactions: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -561,7 +495,7 @@ pub async fn list_asset_transactions(
         pagination.limit,
         pagination.direction,
         pagination.has_predecessor(),
-        |dir, r| cursor::encode(&asset_tx_cursor_for(source, r), dir),
+        |dir, r| cursor::encode(&asset_tx_cursor_for(r), dir),
     );
     let data: Vec<AssetTransactionItem> = rows
         .into_iter()
@@ -616,6 +550,7 @@ mod tests {
             contract_surrogate_id: 0,
             sac_contract_surrogate: 0,
             sac_deployed: false,
+            id: 0,
         }
     }
 

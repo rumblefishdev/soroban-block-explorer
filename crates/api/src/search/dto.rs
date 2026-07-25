@@ -1,7 +1,7 @@
 //! Wire types for `GET /v1/search`.
 //!
 //! Spec source: lore task 0053 + canonical SQL in
-//! `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
+//! `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -20,7 +20,7 @@
 use core::str::FromStr;
 
 use sha2::{Digest, Sha256};
-use stellar_xdr::curr::{
+use stellar_xdr::{
     AccountId, AlphaNum4, AlphaNum12, Asset, AssetCode4, AssetCode12, ContractId,
     ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Hash, HashIdPreimage,
     HashIdPreimageContractId, HostFunction, Limits, OperationBody, ScAddress,
@@ -50,6 +50,24 @@ pub fn passphrase_for(network: &str) -> Option<&'static str> {
 /// `network_id = SHA256(passphrase_bytes)`.
 pub fn network_id(passphrase: &str) -> [u8; 32] {
     Sha256::digest(passphrase.as_bytes()).into()
+}
+
+/// Process-global network id, derived once from `STELLAR_NETWORK_PASSPHRASE`.
+/// The single cache the indexer's cold-start primes and reads: `init_network_id`
+/// validates the env and triggers this; the indexer's `network_id()` reads it.
+/// `None` when the env is unset (legacy / dev tools / unit tests). Callers that
+/// must pin a specific id pass it explicitly — e.g. `network_id(MAINNET_PASSPHRASE)`
+/// — rather than relying on this env-derived accessor. (Audit A4 consolidated a
+/// duplicate `OnceLock` that had lived in the indexer into this one.)
+pub fn net_id() -> Option<&'static [u8; 32]> {
+    static NET_ID: std::sync::OnceLock<Option<[u8; 32]>> = std::sync::OnceLock::new();
+    NET_ID
+        .get_or_init(|| {
+            let raw = std::env::var("STELLAR_NETWORK_PASSPHRASE").ok()?;
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then(|| network_id(trimmed))
+        })
+        .as_ref()
 }
 
 /// Derive the SAC `contract_id` StrKey from a `ContractIdPreimage` and the
@@ -238,22 +256,18 @@ fn build_credit_asset(code: &str, issuer: AccountId) -> Result<Asset, ()> {
 fn asset_to_identity(asset: &Asset) -> SacAssetIdentity {
     match asset {
         Asset::Native => SacAssetIdentity::Native,
+        // Shared normalizer (task 0359 concern 3) so a SAC-wrapped asset's
+        // `asset_id` matches the op / balance pipelines for the same asset — no
+        // more per-pipeline identity fracture on malformed codes.
         Asset::CreditAlphanum4(a) => SacAssetIdentity::Credit {
-            code: asset_code_to_string(&a.asset_code.0),
+            code: crate::asset_code::asset_code_str(&a.asset_code.0),
             issuer: a.issuer.0.to_string(),
         },
         Asset::CreditAlphanum12(a) => SacAssetIdentity::Credit {
-            code: asset_code_to_string(&a.asset_code.0),
+            code: crate::asset_code::asset_code_str(&a.asset_code.0),
             issuer: a.issuer.0.to_string(),
         },
     }
-}
-
-fn asset_code_to_string(bytes: &[u8]) -> String {
-    // Asset codes are zero-padded to 4 or 12 bytes; strip trailing NULs so
-    // "USDC\0\0\0\0" round-trips to "USDC".
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 fn push_preimage_identity(
@@ -398,7 +412,7 @@ mod tests {
 
     // -- Factory SAC: CreateContractHostFn carried inside auth entries --
 
-    use stellar_xdr::curr::{
+    use stellar_xdr::{
         ContractExecutable, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount,
         Operation, Preconditions, ScSymbol, SequenceNumber, SorobanAuthorizationEntry,
         SorobanCredentials, Transaction, TransactionExt, Uint256, VecM,

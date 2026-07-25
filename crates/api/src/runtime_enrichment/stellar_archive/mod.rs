@@ -18,7 +18,7 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::timeout::TimeoutConfig;
 use futures::stream::{self, StreamExt};
 use std::time::Duration;
-use stellar_xdr::curr::LedgerCloseMeta;
+use stellar_xdr::LedgerCloseMeta;
 use thiserror::Error;
 use tracing::instrument;
 
@@ -263,10 +263,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires network access to aws-public-blockchain"]
     async fn fetch_single_ledger_from_archive() {
-        use stellar_xdr::curr::LedgerCloseMeta;
+        use stellar_xdr::LedgerCloseMeta;
 
         let fetcher = StellarArchiveFetcher::new(unsigned_client().await);
-        // First Soroban-era ledger per backfill-bench how-to-run.
+        // First Soroban-era ledger (backfill runbook).
         let seq = 50_457_424_u32;
 
         let meta = fetcher.fetch_ledger(seq).await.expect("fetch failed");

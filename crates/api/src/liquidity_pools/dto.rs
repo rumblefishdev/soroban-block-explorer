@@ -2,7 +2,7 @@
 //!
 //! Participants endpoint (task 0126) and the list/detail/transactions/chart
 //! endpoints (tasks 0052) share this module. Wire shapes mirror canonical
-//! SQL `endpoint-queries/{18,19,20,21,23}_*.sql`.
+//! SQL `endpoint-queries-clickhouse/{18,19,20,21,23}_*.sql`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ pub struct SharesCursor {
 }
 
 /// One participant row returned by the participants list. Shape pinned to
-/// `docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`.
+/// `docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ParticipantItem {
     /// Participant account StrKey (G...).
@@ -171,6 +171,8 @@ pub struct PoolTransactionItem {
     pub hash: String,
     pub ledger_sequence: i64,
     pub source_account: String,
+    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
+    /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,
     pub successful: bool,
     pub operation_count: i16,
