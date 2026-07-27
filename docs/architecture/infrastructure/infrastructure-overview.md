@@ -607,8 +607,8 @@ what the source design currently commits to.
 
 Post-task-0249 there is only a production AWS environment. Profile:
 
-- public-internet availability with WAF and API throttling sized for
-  anonymous browser traffic
+- public-internet availability with API throttling sized for anonymous
+  browser traffic, and Cloudflare edge protection on the API hostname
 - response caching and Lambda concurrency tuned for real public demand
 - longer operational retention for logs, traces, and replay-relevant
   artifacts; production replay artifacts in `stellar-ledger-data`

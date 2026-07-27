@@ -474,7 +474,8 @@ device` → crash-loop → indexer starved. Recovered on its own (fresh-disk cat
 
 Spawned as backlog tasks (do not re-derive here):
 
-- **0283** — Drop AWS WAF after soak (`enableWaf:false`, both WebACLs).
+- **0283** — Drop AWS WAF after soak (`enableWaf:false`, both WebACLs). _(That id
+  was reassigned in a later ID-collision sweep; the task is now **0302**.)_
 - **0284** — Enable origin-lock synthetic canary for the edge-secret path.
 - **0285** — `disableExecuteApiEndpoint=true` (decouple from `enableApiMtls`) to kill the raw endpoint.
 - **0286** — Galexie `galexieEphemeralStorage` 30→100 (disk-full recurrence).

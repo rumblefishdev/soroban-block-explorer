@@ -506,7 +506,7 @@ Caching operates at two levels:
 │  API LAYER                  │                                                 │
 │  ┌──────────────────────────▼──────────┐  ┌────────────────────────────────┐  │
 │  │ API Gateway → Lambda (Rust/axum)    │  │ CloudFront CDN                 │  │
-│  │ REST, throttling, WAF               │  │ React SPA + static assets      │  │
+│  │ REST, throttling                    │  │ React SPA + static assets      │  │
 │  └─────────────────────────────────────┘  └────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
@@ -597,27 +597,31 @@ functionality. All data flows from the canonical ledger.
 
 Public browser traffic is anonymous and read-only. The SPA must not embed API keys or
 shared secrets. Abuse control for public traffic is enforced at the ingress layer through
-API Gateway throttling/request validation and AWS WAF. If API keys are later enabled, they
-are reserved for trusted non-browser consumers and are not required for normal explorer
-browsing.
+API Gateway throttling/request validation and, on the API hostname, the Cloudflare edge.
+There is no AWS WAF — both WebACLs were dropped
+([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md), task 0302) — and the
+CloudFront frontend distribution has no edge filtering: it serves a static, edge-cached
+bundle from a private S3 origin, so managed injection rules have no application to
+protect. If API keys are later enabled, they are reserved for trusted non-browser
+consumers and are not required for normal explorer browsing.
 
 ### 3.4 Tech Stack
 
-| Component     | Technology                    | Purpose                                                                                 |
-| ------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
-| Ingestion     | Galexie (ECS Fargate)         | Streams `LedgerCloseMeta` XDR from Stellar network to S3                                |
-| XDR parsing   | `stellar-xdr` crate (Rust)    | Deserializes all XDR types in Ledger Processor Lambda                                   |
-| API Framework | axum / Rust (per ADR 0005)    | Modular REST API with utoipa OpenAPI                                                    |
-| Compute       | AWS Lambda (ARM/Graviton2)    | Serverless; auto-scaling                                                                |
-| Gateway       | AWS API Gateway               | Request routing, throttling, validation, response caching                               |
-| Edge Security | AWS WAF                       | Managed rules, IP reputation, abuse protection                                          |
-| Database      | ClickHouse (Hetzner, mTLS)    | Block explorer schema; MergeTree family, `intDiv(ledger_sequence, 500000)` partitioning |
-| CDN           | CloudFront                    | Static asset delivery for frontend                                                      |
-| DNS           | Route 53                      | Domain management                                                                       |
-| Monitoring    | CloudWatch + X-Ray            | Logging, distributed tracing, alarms                                                    |
-| Secrets       | Secrets Manager               | Database credentials, non-browser integration keys                                      |
-| IaC           | AWS CDK (TypeScript)          | All infrastructure defined as code                                                      |
-| CI/CD         | GitHub Actions → `cdk deploy` | Automated deployment on merge to main                                                   |
+| Component     | Technology                    | Purpose                                                                                  |
+| ------------- | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| Ingestion     | Galexie (ECS Fargate)         | Streams `LedgerCloseMeta` XDR from Stellar network to S3                                 |
+| XDR parsing   | `stellar-xdr` crate (Rust)    | Deserializes all XDR types in Ledger Processor Lambda                                    |
+| API Framework | axum / Rust (per ADR 0005)    | Modular REST API with utoipa OpenAPI                                                     |
+| Compute       | AWS Lambda (ARM/Graviton2)    | Serverless; auto-scaling                                                                 |
+| Gateway       | AWS API Gateway               | Request routing, throttling, validation, response caching                                |
+| Edge Security | Cloudflare (API host only)    | Managed rules, IP reputation, DDoS, rate limiting; no AWS WAF, no edge filter on the SPA |
+| Database      | ClickHouse (Hetzner, mTLS)    | Block explorer schema; MergeTree family, `intDiv(ledger_sequence, 500000)` partitioning  |
+| CDN           | CloudFront                    | Static asset delivery for frontend                                                       |
+| DNS           | Route 53                      | Domain management                                                                        |
+| Monitoring    | CloudWatch + X-Ray            | Logging, distributed tracing, alarms                                                     |
+| Secrets       | Secrets Manager               | Database credentials, non-browser integration keys                                       |
+| IaC           | AWS CDK (TypeScript)          | All infrastructure defined as code                                                       |
+| CI/CD         | GitHub Actions → `cdk deploy` | Automated deployment on merge to main                                                    |
 
 ### 3.5 Environments
 

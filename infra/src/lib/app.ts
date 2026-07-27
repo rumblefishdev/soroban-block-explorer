@@ -4,7 +4,6 @@ import { validateConfig, type EnvironmentConfig } from './types.js';
 import { NetworkStack } from './stacks/network-stack.js';
 import { LedgerBucketStack } from './stacks/ledger-bucket-stack.js';
 import { ComputeStack } from './stacks/compute-stack.js';
-import { CloudFrontWafStack } from './stacks/cloudfront-waf-stack.js';
 import { DeliveryStack } from './stacks/delivery-stack.js';
 import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
@@ -60,28 +59,13 @@ export function createApp({
   // CDK auto-detects dependencies from cross-stack references
   // (vpc, ecsSecurityGroup, bucket ARN/name).
 
-  // CLOUDFRONT-scoped WAF must be created in us-east-1 (AWS requirement);
-  // the DeliveryStack distribution (in config.awsRegion) references its ARN
-  // via crossRegionReferences.
-  let cloudFrontWafArn: string | undefined;
-  if (config.enableWaf) {
-    const cloudFrontWaf = new CloudFrontWafStack(
-      app,
-      `${prefix}-CloudFrontWaf`,
-      {
-        env: { account: env.account, region: 'us-east-1' },
-        config,
-        crossRegionReferences: true,
-      }
-    );
-    cloudFrontWafArn = cloudFrontWaf.webAclArn;
-  }
-
+  // Edge protection is Cloudflare on the API hostname only (ADR 0048, task
+  // 0302). There is no AWS WAF: the CLOUDFRONT-scoped WebACL stack that used to
+  // live in us-east-1 and the REGIONAL one in ApiGatewayStack were both removed,
+  // which also took the only cross-region reference in this app with them.
   const delivery = new DeliveryStack(app, `${prefix}-Delivery`, {
     env,
     config,
-    cloudFrontWafArn,
-    crossRegionReferences: true,
   });
 
   new ObservabilityStack(app, `${prefix}-Observability`, { env, config });

@@ -38,7 +38,7 @@ layer_; it does not replace AWS for compute/storage/data.
 
 ---
 
-## Current setup (AWS WAF)
+## Setup at the time of this comparison (AWS WAF) — no longer live
 
 Two **AWS WAF WebACLs** (one construct, identical rule set — `infra/src/lib/constructs/waf-web-acl.ts`):
 
@@ -54,8 +54,10 @@ Each WebACL runs 4 rules (priority order):
 3. `AWSManagedRulesAmazonIpReputationList` — block IPs on AWS threat-intel list
 4. `RateLimit` — per-IP rate-based block
 
-`defaultAction: allow` (block-known-bad model). Logs go to CloudWatch Logs (`aws-waf-logs-*`,
-1-month retention). Toggled by `enableWaf: true` in `infra/envs/production.json`.
+`defaultAction: allow` (block-known-bad model). Logs went to CloudWatch Logs
+(`aws-waf-logs-*`, 1-month retention). Toggled by `enableWaf` in
+`infra/envs/production.json` — `true` when this comparison was written. That setting
+and the code behind it were removed entirely in task 0302.
 
 > **Note:** the data API (API Gateway) is currently fully public and anonymous (proxy mode,
 > `apiKeyRequired=false`); CORS is set to `https://sorobanscan.rumblefish.dev` but CORS does

@@ -71,8 +71,10 @@ own ClickHouse store, which is populated by the Galexie-based ingestion pipeline
 
 The public explorer API serves anonymous read traffic. Browser clients do not carry API
 keys; abuse controls are enforced at the ingress layer through throttling, request
-validation, and AWS WAF. If API keys are introduced, they are reserved for trusted
-non-browser consumers.
+validation, and the Cloudflare edge that fronts the API hostname. There is no AWS WAF —
+both WebACLs were dropped ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+task 0302). If API keys are introduced, they are reserved for trusted non-browser
+consumers.
 
 ```
 ┌──────────┐    HTTPS    ┌─────────────┐              ┌──────────────────────┐
@@ -126,7 +128,10 @@ The backend implementation direction implied by the current design is:
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
-- **AWS WAF** for managed-rule abuse protection on public ingress
+- **Cloudflare** for managed-rule abuse protection, DDoS and rate limiting on the API
+  hostname, with the AWS origin locked to it by a secret request header
+  (`crates/api/src/common/edge_lock.rs`) — replacing the AWS WAF WebACL that used to sit
+  on the API Gateway stage
 - **ClickHouse** as the only source of indexed chain data served by the API
 - **No XDR dependencies** — API serves pre-materialized data; raw XDR is passthrough only (per ADR 0004)
 

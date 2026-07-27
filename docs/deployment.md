@@ -124,7 +124,6 @@ the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 | `CloudWatch`                    | Alarms + dashboards                                                  | `deploy-production-cloudwatch`           |
 | `HetznerDns`                    | Route 53 A record → CH box IP (from SSM `/soroban/production/ch-ip`) | `deploy-production-hetzner-dns`          |
 | `CloudflareBootstrap`           | TF-state bucket for `infra/cloudflare/`                              | `deploy-production-cloudflare-bootstrap` |
-| `CloudFrontWaf`                 | CloudFront WebACL (conditional on `enableWaf`)                       | _(no target — see gotcha)_               |
 
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).
