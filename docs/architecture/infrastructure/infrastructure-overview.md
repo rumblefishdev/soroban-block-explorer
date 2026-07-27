@@ -334,17 +334,29 @@ multi-region failover plan.
 - may issue API keys for trusted non-browser consumers, but normal explorer browsing does
   not depend on browser-embedded keys
 
-**AWS WAF**
+**Edge protection — Cloudflare on the API, nothing on the frontend**
 
-- protects the public ingress layer attached to API Gateway and CloudFront
-- applies managed rule sets, IP reputation filtering, and basic abuse controls
-- provides browser-facing protection without relying on secrets in the SPA bundle
-- **Planned change ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-  task 0277):** both WebACLs are slated to be dropped (`enableWaf:false`) and the
-  edge moved to **Cloudflare** (WAF + unmetered DDoS + Managed Challenge), with the
-  AWS origins locked to Cloudflare (API via mTLS, CloudFront via a secret-header
-  viewer-request Function). The WebACLs remain live until the Step 7 cutover + soak;
-  this section is rewritten to present tense when that ADR flips to `accepted`.
+Per [ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md) and task
+0302, **both AWS WAF WebACLs were dropped** and the constructs, the us-east-1 stack
+and the `enableWaf` setting were deleted from the CDK app. There is no AWS WAF in
+this system and no switch to re-enable one. What replaced it is asymmetric, and the
+asymmetry is deliberate:
+
+- **API** (`api-sorobanscan.rumblefishdev.com`) — fronted by **Cloudflare**: WAF
+  managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
+  accepts Cloudflare only, via a secret request header verified in the application
+  (`crates/api/src/common/edge_lock.rs`).
+- **Frontend** (`sorobanscan.rumblefish.dev`) — **no edge filtering at all.** The
+  zone stays on Route 53; the nameserver flip in task 0277 covered
+  `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
+  state, not a pending migration: the distribution serves a static, edge-cached
+  bundle from a private S3 origin via Origin Access Control, so injection-oriented
+  managed rules have no application to protect, and putting Cloudflare ahead of
+  CloudFront would stack two CDNs. AWS Shield Standard still covers volumetric
+  L3/L4; nothing caps HTTP requests per IP.
+
+API Gateway throttling (`50` rps / `100` burst) and the usage-plan limits are
+independent of all of the above and remain in force.
 
 **CloudFront CDN**
 
@@ -464,12 +476,12 @@ records inside them are recreated as the new stacks come up in
 Post-task-0239 the AWS-side runtime is intentionally stateless and
 minimal. Network shape:
 
-- **CloudFront, API Gateway, AWS WAF** — public ingress layer
-  (CloudFront viewer cert in `us-east-1`, API Gateway regional cert
-  in `eu-central-1`). _Planned: a Cloudflare edge replaces the AWS WAF
-  layer and the origins are locked to Cloudflare —
+- **CloudFront, API Gateway** — public ingress layer (CloudFront viewer
+  cert in `us-east-1`, API Gateway regional cert in `eu-central-1`).
+  The AWS WAF layer that used to sit here is gone; edge protection is
+  Cloudflare on the API only, with the origin locked to it —
   [ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-  task 0277._
+  tasks 0277 and 0302.
 - **Application Lambdas (API, Ledger Processor, type-1 enrichment
   worker)** — run OUTSIDE the VPC. Egress via AWS-managed Lambda pool.
   Identity to Hetzner CH is asserted by mTLS (no IP pinning, no VPC
@@ -526,16 +538,16 @@ Publicly exposed surfaces are:
 - public DNS routing via Route 53
 - API documentation served from utoipa-swagger-ui `/api-docs` endpoint
 
-Those public surfaces should be protected by AWS WAF and API throttling. API keys, if
-issued, are for trusted automation or partner use cases and are never required by the
-browser application.
+Protection on those surfaces is API Gateway throttling plus, on the API only, the
+Cloudflare edge with the origin locked to it via a secret request header. API keys,
+if issued, are for trusted automation or partner use cases and are never required
+by the browser application; partner `x-api-key` callers egress through the proxied
+hostname. `ch.sorobanscan` stays DNS-only (mTLS + ACME).
 
-> **Planned ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-> task 0277):** edge protection moves to **Cloudflare** and the AWS origins are
-> locked to accept Cloudflare-only traffic — the API via API Gateway **mTLS**
-> (`disableExecuteApiEndpoint:true`), CloudFront via a **secret-header**
-> viewer-request Function. Partner `x-api-key` callers must then egress through the
-> proxied hostname. `ch.sorobanscan` stays DNS-only (mTLS + ACME).
+> **AWS WAF is not part of this picture** — both WebACLs were dropped
+> ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md), task
+> 0302). The frontend distribution has no edge filtering; see § 5.4 for why that is
+> the accepted end state rather than an open gap.
 
 Non-public components should remain directly unreachable to external users.
 

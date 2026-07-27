@@ -1,5 +1,31 @@
 # WAF vs Cloudflare — Cost & Capability Comparison
 
+> ## Outcome — this comparison has been acted on
+>
+> **Decided** in [ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md)
+> (accepted 2026-06-10), **executed** in task 0302 (2026-07-27): the Cloudflare edge
+> was armed on the API hostname (task 0277) and **both AWS WAF WebACLs were dropped**.
+> The constructs, the stack and the `enableWaf` / `*WafRateLimit` settings were
+> deleted outright — there is no toggle left to flip back.
+>
+> Two things this document did not anticipate, recorded here so the analysis is not
+> read as a description of the system:
+>
+> 1. **The migration covered half the edge.** The nameserver flip landed on
+>    `rumblefishdev.com` (the API), not on the parent `rumblefish.dev` zone, so
+>    `sorobanscan.rumblefish.dev` stays on Route 53. The frontend distribution ends up
+>    with **no edge filtering at all** — an accepted decision, not a pending
+>    migration: it serves static, edge-cached files from a private S3 origin, so the
+>    managed rule groups had nothing to protect, and fronting CloudFront with
+>    Cloudflare would stack two CDNs.
+> 2. **The cost argument below is framed on the wrong component.** The `$0.60/M`
+>    request fee that motivated the switch is ~0.08 USD/month at real volume
+>    (~130k req/mo). The saving is real but it is the fixed WebACL + rule fee —
+>    measured 18.07 USD in June 2026 — not runaway metered cost.
+>
+> Everything below is left as written on 2026-06-01. It records how the decision was
+> reached; it is not current-state documentation.
+>
 > **Scope:** edge protection for the Soroban Block Explorer — the public CloudFront SPA
 > distribution and the public **API Gateway** that serves on-chain data.
 > **Verified:** 2026-06-01 against official AWS and Cloudflare pricing/docs (sources at bottom).
