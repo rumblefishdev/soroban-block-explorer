@@ -78,9 +78,9 @@ consumers.
 
 ```
 ┌──────────┐    HTTPS    ┌─────────────┐              ┌──────────────────────┐
-│  Client  │────────────>│ API Gateway │─────────────>│  Lambda (Rust/axum)  │
-└──────────┘             └─────────────┘              │                      │
-                                                      │  axum Modules:       │
+│  Client  │─Cloudflare─>│ API Gateway │─────────────>│  Lambda (Rust/axum)  │
+└──────────┘ WAF·DDoS·RL └─────────────┘              │                      │
+             +X-Edge-Sec                              │  axum Modules:       │
                                                       │  ├─ Network ─────────┤
                                                       │  ├─ Transactions ────┤
                                                       │  ├─ Ledgers ─────────┤
@@ -103,8 +103,11 @@ consumers.
 
 The typical request path is:
 
-1. client calls a public REST endpoint through API Gateway
-2. API Gateway routes the request to the Rust/axum Lambda handler
+1. client calls a public REST endpoint on the Cloudflare-fronted hostname; Cloudflare
+   applies its managed rules, DDoS and rate limiting, and a Transform Rule stamps
+   `X-Edge-Secret` before forwarding to API Gateway
+2. API Gateway routes the request to the Rust/axum Lambda handler, which rejects
+   anything arriving without that header (`crates/api/src/common/edge_lock.rs`)
 3. the relevant module validates input and queries the explorer database
 4. backend-level normalization and enrichment are applied where needed
 5. the response is returned in a frontend-friendly form

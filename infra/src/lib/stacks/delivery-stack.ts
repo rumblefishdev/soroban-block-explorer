@@ -24,8 +24,11 @@ export interface DeliveryStackProps extends cdk.StackProps {
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
  *
- * This distribution has **no edge filtering** and that is deliberate (ADR 0048,
- * task 0302). It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
+ * This distribution has **no AWS WAF and no CDN-level request filtering**, and
+ * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
+ * can still attach is the CloudFront Function below, and only when
+ * `enableOriginSecretLock` or `enableBasicAuth` is set — both are `false` in
+ * production. It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
  * companion us-east-1 stack, wired in via crossRegionReferences; both were
  * removed. Cloudflare fronts the API hostname, not this one, and the
  * distribution serves static edge-cached files from a private S3 origin, so the

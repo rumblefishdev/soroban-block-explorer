@@ -62,7 +62,7 @@ history:
       stage throttle intact at 50.0/100, frontend 200, `/v1/ledgers` 401,
       `/api-docs-json` 200. Scope grew during the task: the WAF construct code was
       deleted outright rather than left behind `enableWaf:false`, which also
-      removed the app's only cross-region reference. 15 of 16 acceptance criteria
+      removed the app's only cross-region reference. 14 of 15 acceptance criteria
       met; the outstanding one is the `docs/scf/` handover, deliberately out of
       scope. Unrelated `CloudflareBootstrap` drift re-measured and appended to
       the existing 0312.
@@ -200,10 +200,14 @@ billing. `cdk ls` confirms it is absent. There is also no
    That stack holds only the WebACL, its log group, `AWS::Logs::ResourcePolicy`,
    `AWS::WAFv2::LoggingConfiguration`, and the export writer — nothing shared.
 
-Removal is one-way in practice: WAF log groups are `RemovalPolicy.DESTROY`
-(`infra/src/lib/constructs/waf-web-acl.ts`), so re-enabling is a fresh deploy and
-the old logs are gone. Every production deploy is manual from a laptop; there is
-no CI deploy path.
+Removal is one-way in practice: the WAF log groups were `RemovalPolicy.DESTROY` in
+the construct this task deletes (see the `feat(lore-0302)` commit for its last
+state), so re-arming means a fresh deploy and the old logs are gone. Every
+production deploy is manual from a laptop; there is no CI deploy path for
+production — see [`docs/deployment.md`](../../../../docs/deployment.md) § No
+staging, no CI, which is the current authority. ADR 0001 still describes CI/CD
+deployment because that was the intent when it was written; the dead workflow is
+task 0390's scope, not this one.
 
 ### 3. Documentation and comments — 17 files
 
@@ -242,8 +246,9 @@ written down.
 Two judgement calls follow from that rule and are recorded in the note so they
 read as decisions rather than oversights: `docs/waf-vs-cloudflare/README.md` gets
 an outcome banner rather than 41 rewrites (a dated comparison written to reach a
-decision, not a description of the system), and the WAF construct code stays for
-now — see Future Work.
+decision, not a description of the system), and the load-test material is
+annotated rather than rewritten, because it records the conditions real
+measurements were taken under.
 
 **Do not repeat ADR 0048's cost framing uncritically.** Its primary rationale was
 that AWS WAF's `$0.60/M` scales with abuse traffic. At ~130k req/mo that
