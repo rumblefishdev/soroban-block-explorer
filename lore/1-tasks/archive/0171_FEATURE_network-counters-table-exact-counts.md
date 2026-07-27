@@ -2,9 +2,9 @@
 id: '0171'
 title: 'Indexer: maintain network_counters table for exact entity counts'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: ['0021', '0037']
-related_tasks: ['0045', '0167']
+related_tasks: ['0045', '0167', '0420']
 tags: [layer-indexer, counters, exactness, phase-future]
 milestone: 3
 links:
@@ -20,9 +20,32 @@ history:
       canonical SQL header comment in `01_get_network_stats.sql`:
       "If exact is ever needed, spawn a periodic counter table — do NOT
       add COUNT(*) here."
+  - date: '2026-07-27'
+    status: superseded
+    who: karolkow
+    note: >
+      Archived as superseded by 0420. Every premise of this task was
+      Postgres-shaped and died with the ClickHouse migration: there is no
+      `pg_class.reltuples` to drift, no autovacuum to tune, and the proposed
+      `network_counters` DDL is Postgres syntax. `/network/stats` already
+      returns exact counts without a counter table
+      (`crates/api/src/network/queries.rs:68-104`) — `total_accounts` is
+      `count()` over the deduped `accounts_recent` MV (a metadata read on plain
+      MergeTree, exact to ±1 modulo the 2-minute refresh) and `total_contracts`
+      is `count() … FINAL` over a ~146k-row table. 0420 established that reading
+      `system.tables.total_rows` instead would over-report by +4.3% / +11.6% on
+      unmerged RMT duplicates, and that dedup must happen at read time. Nothing
+      here is worth reviving. Note for anyone arriving from user feedback about
+      counters: this task never covered transaction totals or a success/failed
+      split — that ask is 0445, a separate piece of work.
 ---
 
 # Indexer: maintain network_counters table for exact entity counts
+
+> **SUPERSEDED (2026-07-27) — do not implement.** Everything below assumes
+> Postgres. The counts it wanted are already exact on ClickHouse without a
+> counter table; see the history note and 0420. Kept for the reasoning trail
+> only. Transaction totals / success-failed split → 0445.
 
 ## Summary
 
