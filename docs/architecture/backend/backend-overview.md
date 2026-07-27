@@ -77,26 +77,26 @@ task 0302). If API keys are introduced, they are reserved for trusted non-browse
 consumers.
 
 ```
-┌──────────┐    HTTPS    ┌─────────────┐              ┌──────────────────────┐
-│  Client  │─Cloudflare─>│ API Gateway │─────────────>│  Lambda (Rust/axum)  │
-└──────────┘ WAF·DDoS·RL └─────────────┘              │                      │
-             +X-Edge-Sec                              │  axum Modules:       │
-                                                      │  ├─ Network ─────────┤
-                                                      │  ├─ Transactions ────┤
-                                                      │  ├─ Ledgers ─────────┤
-                                                      │  ├─ Accounts ────────┤
-                                                      │  ├─ Assets ──────────┤
-                                                      │  ├─ Contracts ───────┤
-                                                      │  ├─ NFTs ────────────┤
-                                                      │  ├─ Liquidity Pools ─┤
-                                                      │  └─ Search ──────────┤
-                                                      └──────────┬───────────┘
-                                                                 │
-                                                                 ▼
-                                                      ┌──────────────────────┐
-                                                      │  ClickHouse (Hetzner)│
-                                                      │  (block explorer DB) │
-                                                      └──────────────────────┘
+┌──────────┐ HTTPS ┌────────────┐ +X-Edge-Secret ┌─────────────┐  ┌──────────────────────┐
+│  Client  │──────>│ Cloudflare │───────────────>│ API Gateway │─>│  Lambda (Rust/axum)  │
+└──────────┘       │ WAF · DDoS │                └─────────────┘  │                      │
+                   │ rate limit │                                 │  axum Modules:       │
+                   └────────────┘                                 │  ├─ Network ─────────┤
+                                                                  │  ├─ Transactions ────┤
+                                                                  │  ├─ Ledgers ─────────┤
+                                                                  │  ├─ Accounts ────────┤
+                                                                  │  ├─ Assets ──────────┤
+                                                                  │  ├─ Contracts ───────┤
+                                                                  │  ├─ NFTs ────────────┤
+                                                                  │  ├─ Liquidity Pools ─┤
+                                                                  │  └─ Search ──────────┤
+                                                                  └──────────┬───────────┘
+                                                                             │
+                                                                             ▼
+                                                                  ┌──────────────────────┐
+                                                                  │  ClickHouse (Hetzner)│
+                                                                  │  (block explorer DB) │
+                                                                  └──────────────────────┘
 ```
 
 ### 3.2 Request Flow
