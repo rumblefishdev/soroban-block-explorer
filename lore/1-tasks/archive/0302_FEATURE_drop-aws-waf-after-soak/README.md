@@ -2,7 +2,7 @@
 id: '0302'
 title: 'FEATURE: Drop both AWS WAF WebACLs and reconcile every doc that claims them'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0048', '0032']
 related_tasks: ['0277', '0312']
 tags:
@@ -66,6 +66,18 @@ history:
       met; the outstanding one is the `docs/scf/` handover, deliberately out of
       scope. Unrelated `CloudflareBootstrap` drift re-measured and appended to
       the existing 0312.
+  - date: 2026-07-27
+    status: completed
+    who: karolkow
+    note: >
+      Closed. Merged to master as PR #362 (5 commits, 27 files, +883/-500 on the
+      code and docs, plus review fixes). 14 of 15 acceptance criteria met; the
+      fifteenth — reconciling the 14 AWS WAF claims in `docs/scf/**` — was
+      deliberately out of scope and is handed to whoever owns that package's
+      pending edits. It must land before milestone 3 is submitted; this task is
+      not self-sufficient for the submission. A review after the fact raised two
+      operational follow-ups. Neither reverses the decision and neither is
+      recorded here: they are held outside the repository, which is public.
 ---
 
 # Drop both AWS WAF WebACLs and reconcile every doc that claims them
@@ -397,7 +409,11 @@ Original`) as a rollback path independent of the git working tree. Not needed.
 ## Future Work
 
 - _(The construct-code question was decided during the task rather than deferred:
-  delete. See § 1. Nothing outstanding.)_
+  delete. See § 1.)_
+- Two operational follow-ups from the post-teardown review are held outside
+  this repository. They concern where abusive traffic is absorbed and what
+  notices it — not a defect in the teardown, and not something to restate in
+  a public repo. Ask the task owner for the handover.
 
 ## Branch
 
