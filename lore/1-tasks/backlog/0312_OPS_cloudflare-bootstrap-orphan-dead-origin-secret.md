@@ -16,6 +16,22 @@ history:
       deploy. `Explorer-production-CloudflareBootstrap` shows a pending
       `[-] AWS::SecretsManager::Secret OriginSecret ... orphan` — a committed
       but never-deployed remnant of the 0277 API-only re-scope.
+  - date: 2026-07-27
+    status: backlog
+    who: karolkow
+    note: >
+      Still pending five weeks on, re-measured during the task 0302 prod diff:
+      `[-] AWS::SecretsManager::Secret OriginSecret OriginSecret5DDC59F1 orphan`
+      is unchanged. Not folded into 0302 — that task deployed `Delivery` and
+      `ApiGateway` only, and left this stack untouched. Two things worth adding
+      to the decision: the drift is now the oldest of at least three undeployed
+      deltas sitting in production (`Compute` also carries two secret-description
+      fixes plus three Lambda asset hashes), and every one of them would ship
+      silently under `make deploy-production`, which is `--all`. A periodic
+      read-only `cdk diff --no-changeset` across the app would surface this class
+      of drift before someone runs `--all` by accident. Note also that
+      `cdk diff` hides entries containing non-ASCII characters unless `--strict`
+      is passed, so a diff read without it is not a complete diff.
 ---
 
 # Deploy CloudflareBootstrap slim-down — orphan the dead OriginSecret

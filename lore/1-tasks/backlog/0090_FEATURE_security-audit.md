@@ -66,7 +66,7 @@ Verify all IAM roles follow least-privilege: no wildcard policies, Lambda roles 
 
 ### Step 3: Infrastructure hardening verification
 
-Verify: RDS no public endpoint, RDS backups/PITR/deletion protection enabled, RDS and S3 encrypted with KMS, WAF active on API Gateway, all secrets in Secrets Manager, no hardcoded credentials.
+Verify: RDS no public endpoint, RDS backups/PITR/deletion protection enabled, RDS and S3 encrypted with KMS, ~~WAF active on API Gateway~~ → **replace**: API Gateway throttling + usage-plan limits in force, and the Cloudflare edge fronting the API hostname with the origin locked to it (there is no AWS WAF — both WebACLs dropped, task 0302), all secrets in Secrets Manager, no hardcoded credentials.
 
 ### Step 4: Produce security checklist
 
@@ -82,7 +82,11 @@ Document findings, remediations, and sign-off.
 
 - [ ] OWASP Top 10 review completed for all API endpoints
 - [ ] No wildcard IAM policies in production
-- [ ] WAF/throttling active on public ingress
+- [ ] ~~WAF/throttling active on public ingress~~ → **replace**: API Gateway
+      throttling active on every public route, and Cloudflare edge protection on
+      the API hostname with the origin locked to it. There is no AWS WAF (both
+      WebACLs dropped, task 0302), and the CloudFront frontend distribution
+      deliberately carries no edge filter — do not audit for one.
 - [ ] ~~RDS has no public endpoint~~ → **replace**: ClickHouse reachable only
       through the mTLS endpoint, never directly
 - [ ] ~~Production RDS: backups, PITR, deletion protection~~ → **replace**:

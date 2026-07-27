@@ -118,7 +118,14 @@ The intended implementation stack is:
   types — see [Section 4.5](#45-api-types-and-codegen) below.
 
 The frontend is a public, anonymous browser client. It must not embed API keys or other
-shared secrets; API protection belongs at the API Gateway/WAF boundary, not in the bundle.
+shared secrets; API protection belongs at the ingress boundary — API Gateway throttling
+plus the Cloudflare edge in front of the API hostname — not in the bundle. Note that the
+Cloudflare Turnstile widget the SPA loads gates **API access**: the widget produces a
+challenge token, the SPA posts it to `/auth/session`, and the backend verifies it against
+Cloudflare's siteverify endpoint before minting a free-tier session JWT
+(`crates/api/src/auth/`). The token and the JWT are different things — the widget never
+issues the session. This is also not Cloudflare fronting the frontend's own domain, which
+sits on Route 53 with no edge filter.
 
 ```
 ┌────────┐     ┌──────────────────────────────────────────────────┐

@@ -48,7 +48,7 @@ pub struct AppConfig {
     pub cors_allow_origin: Option<String>,
     /// Load-test correlation switch (task 0338). `true` (env `LOAD_TESTING=true`,
     /// set by `compute-stack.ts` only when `config.loadTesting` — the SAME flag
-    /// that lifts the API Gateway throttle/WAF) arms the
+    /// that lifts the API Gateway throttle) arms the
     /// [`crate::common::request_id`] middleware so CH queries stamp
     /// `system.query_log.log_comment` with the inbound `X-Request-Id` (B2).
     /// `false` (default) leaves the mechanism fully inert.

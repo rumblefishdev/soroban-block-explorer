@@ -1,5 +1,14 @@
 # load-tests — Soroban Block Explorer API load harness (task 0338)
 
+> **The edge changed after these runs — 2026-07-27, task 0302 / ADR 0048.** Both
+> AWS WAF WebACLs were dropped. The per-IP WAF rate rule referenced below no
+> longer exists, so every "5-min WAF window" figure records the conditions the
+> tiers were **measured** under, not a limit a run hits today. What binds a run
+> now: the API Gateway throttle (`50` rps / `100` burst) against the origin, and
+> Cloudflare's own rate limiting on the Cloudflare-fronted hostname. The numbers
+> and the reasoning below are left as recorded — they are why the measurements
+> are what they are.
+
 Two drivers. **Pick by the question you are answering:**
 
 | Flag | Model | Rate is | Use for |
@@ -28,7 +37,7 @@ req/month on startup, so a fat-fingered rate is obvious before the run.
 |---|---|---|---|
 | A | 1M | `0.386` | under both (116 per 5-min WAF window) |
 | B | 10M | `3.858` | under both (1,157 / 2,000 WAF window) |
-| C | 50M | `19.29` | **needs `loadTesting: true`** — 5,787 per 5-min window vs the 2,000 per-IP WAF rule |
+| C | 50M | `19.29` | **required `loadTesting: true`** — 5,787 per 5-min window vs the then-live 2,000 per-IP WAF rule |
 
 Two things to know before reading the numbers:
 
@@ -43,7 +52,7 @@ Two things to know before reading the numbers:
   fails, the fix is in the query/schema, not in the capacity.
 
 Tier C's 19.29 rps is a **single-IP** artifact — real 50M/month arrives from
-thousands of IPs, which is why the per-IP WAF rule has to come off for it and
+thousands of IPs, which is why the per-IP WAF rule had to come off for it and
 not because the rate itself is unrealistic. The prod throttle (`50` rps) is a
 ~130M req/month ceiling, so it is not the binding constraint at any tier.
 
@@ -75,7 +84,8 @@ rather than an auth error:
 aws configure set region eu-central-1 --profile sorobanscan
 ```
 
-- **ApiGateway** — lifts the 50 rps throttle + drops the WAF per-IP rate rule.
+- **ApiGateway** — lifts the 50 rps throttle. (It also dropped the WAF per-IP
+  rate rule while that WebACL existed; there is nothing left to drop.)
 - **Compute** — sets `LOAD_TESTING` on the API Lambda → arms the `log_comment` middleware.
 
 ## 2. Build the harness
@@ -176,7 +186,9 @@ prints the run dir and a **ready-to-paste** `--param_start='…' --param_end='�
 window — copy it for step 4 (no `date -u` needed).
 
 Diagnostics if the smoke isn't 200: `401` = `x-api-key` not in `API_KEYS`;
-`403` = missing `x-edge-secret` (or WAF `NoUserAgent` — the harness sets a UA);
+`403` = missing `x-edge-secret` (or a no-User-Agent block — the harness sets a
+UA; this was AWS WAF `NoUserAgent_HEADER` before task 0302, Cloudflare's managed
+equivalent after);
 `429`/`1015` = Cloudflare rate limit (use the direct origin); `500 db_error` =
 CH rejected `log_comment` — the `profiles.xml` `changeable_in_readonly`
 constraint (+ `config.d/access-control.xml`) isn't deployed to the box.

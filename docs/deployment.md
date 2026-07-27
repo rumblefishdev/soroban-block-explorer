@@ -124,7 +124,6 @@ the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 | `CloudWatch`                    | Alarms + dashboards                                                  | `deploy-production-cloudwatch`           |
 | `HetznerDns`                    | Route 53 A record → CH box IP (from SSM `/soroban/production/ch-ip`) | `deploy-production-hetzner-dns`          |
 | `CloudflareBootstrap`           | TF-state bucket for `infra/cloudflare/`                              | `deploy-production-cloudflare-bootstrap` |
-| `CloudFrontWaf`                 | CloudFront WebACL (conditional on `enableWaf`)                       | _(no target — see gotcha)_               |
 
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).
@@ -145,8 +144,29 @@ Frontend **content** is separate: `deploy-production-web`
   ```
   (Real lesson: shipping a CloudWatch-only alarm change without
   `--exclusively` dragged in a half-finished Compute lambda change.)
-- **`CloudFrontWaf` has no make target** (it is a conditional stack). Ship
-  it via `deploy-production` or the raw `cdk deploy Explorer-production-CloudFrontWaf`.
+- **CDK does not delete a stack you removed from the app.** Deleting a stack's
+  code makes it vanish from `cdk ls` and from `deploy --all`, while the real stack
+  keeps existing in CloudFormation and keeps billing. Worse, `cdk destroy <name>`
+  resolves names from the **synthesized app**, so once the code is gone CDK reports
+  no matching stack and cannot delete it either. The only route is raw
+  CloudFormation, and if the stack exported anything, in this order:
+
+  1. deploy the consumer stack(s) first, so nothing references the export any more;
+  2. confirm the export parameter is released — a cross-region export writer
+     refuses to remove a parameter a consumer still claims, and the whole stack
+     delete fails with it. The parameter lives in the **consuming** region, not the
+     producing one:
+     ```bash
+     aws ssm get-parameters-by-path --region eu-central-1 --path /cdk/exports/ --recursive
+     ```
+  3. then delete:
+     ```bash
+     aws cloudformation delete-stack --region us-east-1 --stack-name <StackName>
+     ```
+
+  (Real case: `Explorer-production-CloudFrontWaf` in `us-east-1`, task 0302. Its
+  WebACL ARN was consumed by `Delivery` in `eu-central-1`.)
+
 - **`--require-approval broadening`** — the deploy pauses for confirmation
   if the change broadens IAM or security-group rules. Review, then approve.
 - **Preview:** `make -C infra diff-production`, or raw `cdk diff <stack>`.

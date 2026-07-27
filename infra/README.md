@@ -20,7 +20,6 @@ LedgerBucketStack        S3 stellar-ledger-data (Galexie → indexer)
 ComputeStack             API + Indexer + Enrichment Lambdas + SQS/DLQ
 IngestionStack           Galexie ECS Fargate + ECR
 DeliveryStack            CloudFront + SPA S3 bucket
-CloudFrontWafStack       CloudFront WebACL (conditional on enableWaf)
 ApiGatewayStack          REST API Gateway (cache, throttle, mTLS lock)
 ObservabilityStack       X-Ray / logging
 CloudWatchStack          alarms + dashboards

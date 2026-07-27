@@ -13,12 +13,6 @@ import { relativeRecordName, type EnvironmentConfig } from '../types.js';
 
 export interface DeliveryStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
-  /**
-   * ARN of the CLOUDFRONT-scoped WAF WebACL (created in `us-east-1` by
-   * `CloudFrontWafStack`, passed in via crossRegionReferences). Undefined
-   * when `config.enableWaf` is false.
-   */
-  readonly cloudFrontWafArn?: string;
 }
 
 /**
@@ -26,18 +20,20 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
- * - CloudFront distribution with SPA routing fallback, attached (when
- *   `config.enableWaf`) to the CLOUDFRONT-scoped WAF WebACL whose ARN is
- *   passed in via `cloudFrontWafArn`
+ * - CloudFront distribution with SPA routing fallback
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
  *
- * The CLOUDFRONT-scoped WebACL itself lives in `CloudFrontWafStack`
- * (us-east-1 - AWS requires CLOUDFRONT-scope WebACLs there) and is wired in
- * via crossRegionReferences. The API Gateway has its own REGIONAL WebACL in
- * `ApiGatewayStack`. A single WebACL cannot serve both scopes; both stacks
- * instantiate `WafWebAcl` from `lib/constructs/waf-web-acl.ts` to keep rule
- * sets in lockstep.
+ * This distribution has **no AWS WAF and no CDN-level request filtering**, and
+ * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
+ * can still attach is the CloudFront Function below, and only when
+ * `enableOriginSecretLock` or `enableBasicAuth` is set — both are `false` in
+ * production. It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
+ * companion us-east-1 stack, wired in via crossRegionReferences; both were
+ * removed. Cloudflare fronts the API hostname, not this one, and the
+ * distribution serves static edge-cached files from a private S3 origin, so the
+ * managed rule groups had no application to protect. AWS Shield Standard still
+ * covers volumetric L3/L4; nothing caps HTTP requests per IP.
  */
 export class DeliveryStack extends cdk.Stack {
   readonly distribution: cloudfront.Distribution;
@@ -45,7 +41,7 @@ export class DeliveryStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DeliveryStackProps) {
     super(scope, id, props);
 
-    const { config, cloudFrontWafArn } = props;
+    const { config } = props;
 
     // ---------------------
     // S3 Bucket (SPA)
@@ -253,7 +249,6 @@ export class DeliveryStack extends cdk.Stack {
       certificate,
       defaultRootObject: 'index.html',
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      ...(cloudFrontWafArn && { webAclId: cloudFrontWafArn }),
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       defaultBehavior: {
@@ -347,10 +342,5 @@ export class DeliveryStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionId', {
       value: distribution.distributionId,
     });
-    if (cloudFrontWafArn) {
-      new cdk.CfnOutput(this, 'CloudFrontWafWebAclArn', {
-        value: cloudFrontWafArn,
-      });
-    }
   }
 }

@@ -308,7 +308,7 @@ export class ComputeStack extends cdk.Stack {
         // Load-test correlation (task 0338): arm the `common::request_id`
         // middleware + CH `log_comment` stamping ONLY in a load-test deploy.
         // Tied to the SAME `loadTesting` flag that lifts the API Gateway
-        // throttle/WAF (api-gateway-stack.ts), so one switch sets the whole
+        // throttle (api-gateway-stack.ts), so one switch sets the whole
         // load-test posture. Unset in normal deploys → the mechanism is inert.
         ...(config.loadTesting && { LOAD_TESTING: 'true' }),
       },

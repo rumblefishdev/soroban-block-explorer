@@ -506,7 +506,7 @@ Caching operates at two levels:
 │  API LAYER                  │                                                 │
 │  ┌──────────────────────────▼──────────┐  ┌────────────────────────────────┐  │
 │  │ API Gateway → Lambda (Rust/axum)    │  │ CloudFront CDN                 │  │
-│  │ REST, throttling, WAF               │  │ React SPA + static assets      │  │
+│  │ REST, throttling                    │  │ React SPA + static assets      │  │
 │  └─────────────────────────────────────┘  └────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
@@ -568,22 +568,22 @@ Lambdas were taken **out of the VPC** (removing the NAT Gateway), and Galexie mo
 
 **Hosted by Rumble Fish (AWS sub-account):**
 
-| Component                               | Service                              | Role                                                                                                                                                                                                                                                                                        |
-| --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Galexie process                         | ECS Fargate (1 task, continuous)     | Streams live ledger data from Stellar network to S3                                                                                                                                                                                                                                         |
-| Historical backfill (`backfill-runner`) | Developer workstation CLI (ADR 0010) | Streams history archives locally; writes directly to ClickHouse. Production tool (task 0145). See [`docs/backfills.md`](../backfills.md).                                                                                                                                                   |
-| S3 bucket `stellar-ledger-data`         | AWS S3                               | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor                                                                                                                                                                                                                             |
-| Lambda — Ledger Processor               | AWS Lambda (S3 event-driven)         | Parses XDR; writes explorer records and derived state to ClickHouse over mTLS                                                                                                                                                                                                               |
-| Lambda — Rust/axum API handlers         | AWS Lambda (per API Gateway route)   | Serves all public API requests                                                                                                                                                                                                                                                              |
-| ClickHouse                              | Hetzner dedicated `ch-prod-01`       | The block explorer database, per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md). Single node, Ubuntu 24.04 on mdadm RAID 1, reached only over mTLS via Caddy. The RDS PostgreSQL this row used to name was never deployed — see the Store-status note in the intro. |
-| API Gateway                             | AWS API Gateway                      | REST API, throttling, request validation, response caching                                                                                                                                                                                                                                  |
-| AWS WAF                                 | AWS WAF                              | Managed rules and abuse protection for public ingress                                                                                                                                                                                                                                       |
-| CloudFront CDN                          | AWS CloudFront                       | Serves React frontend                                                                                                                                                                                                                                                                       |
-| Swagger UI                              | utoipa-swagger-ui `/api-docs`        | OpenAPI spec + interactive documentation                                                                                                                                                                                                                                                    |
-| EventBridge Scheduler                   | AWS EventBridge                      | Cron triggers for operational tasks (e.g. partition management)                                                                                                                                                                                                                             |
-| Secrets Manager                         | AWS Secrets Manager                  | DB credentials, non-browser integration keys                                                                                                                                                                                                                                                |
-| CloudWatch + X-Ray                      | AWS CloudWatch                       | Logs, metrics, alarms, distributed tracing                                                                                                                                                                                                                                                  |
-| CI/CD pipeline                          | GitHub Actions → AWS CDK             | Infrastructure-as-code deploy                                                                                                                                                                                                                                                               |
+| Component                               | Service                              | Role                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Galexie process                         | ECS Fargate (1 task, continuous)     | Streams live ledger data from Stellar network to S3                                                                                                                                                                                                                                                                                           |
+| Historical backfill (`backfill-runner`) | Developer workstation CLI (ADR 0010) | Streams history archives locally; writes directly to ClickHouse. Production tool (task 0145). See [`docs/backfills.md`](../backfills.md).                                                                                                                                                                                                     |
+| S3 bucket `stellar-ledger-data`         | AWS S3                               | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor                                                                                                                                                                                                                                                                               |
+| Lambda — Ledger Processor               | AWS Lambda (S3 event-driven)         | Parses XDR; writes explorer records and derived state to ClickHouse over mTLS                                                                                                                                                                                                                                                                 |
+| Lambda — Rust/axum API handlers         | AWS Lambda (per API Gateway route)   | Serves all public API requests                                                                                                                                                                                                                                                                                                                |
+| ClickHouse                              | Hetzner dedicated `ch-prod-01`       | The block explorer database, per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md). Single node, Ubuntu 24.04 on mdadm RAID 1, reached only over mTLS via Caddy. The RDS PostgreSQL this row used to name was never deployed — see the Store-status note in the intro.                                                   |
+| API Gateway                             | AWS API Gateway                      | REST API, throttling, request validation, response caching                                                                                                                                                                                                                                                                                    |
+| Edge protection (API hostname only)     | Cloudflare                           | WAF managed rules, unmetered DDoS, Managed Challenge, rate limiting on `api-sorobanscan.rumblefishdev.com`; origin locked to Cloudflare by a secret request header. AWS WAF was dropped — both WebACLs — per [ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md) and task 0302. The CloudFront frontend has no edge filtering. |
+| CloudFront CDN                          | AWS CloudFront                       | Serves React frontend                                                                                                                                                                                                                                                                                                                         |
+| Swagger UI                              | utoipa-swagger-ui `/api-docs`        | OpenAPI spec + interactive documentation                                                                                                                                                                                                                                                                                                      |
+| EventBridge Scheduler                   | AWS EventBridge                      | Cron triggers for operational tasks (e.g. partition management)                                                                                                                                                                                                                                                                               |
+| Secrets Manager                         | AWS Secrets Manager                  | DB credentials, non-browser integration keys                                                                                                                                                                                                                                                                                                  |
+| CloudWatch + X-Ray                      | AWS CloudWatch                       | Logs, metrics, alarms, distributed tracing                                                                                                                                                                                                                                                                                                    |
+| CI/CD pipeline                          | GitHub Actions → AWS CDK             | Infrastructure-as-code deploy                                                                                                                                                                                                                                                                                                                 |
 
 **External services consumed (read-only):**
 
@@ -597,27 +597,31 @@ functionality. All data flows from the canonical ledger.
 
 Public browser traffic is anonymous and read-only. The SPA must not embed API keys or
 shared secrets. Abuse control for public traffic is enforced at the ingress layer through
-API Gateway throttling/request validation and AWS WAF. If API keys are later enabled, they
-are reserved for trusted non-browser consumers and are not required for normal explorer
-browsing.
+API Gateway throttling/request validation and, on the API hostname, the Cloudflare edge.
+There is no AWS WAF — both WebACLs were dropped
+([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md), task 0302) — and the
+CloudFront frontend distribution has no edge filtering: it serves a static, edge-cached
+bundle from a private S3 origin, so managed injection rules have no application to
+protect. If API keys are later enabled, they are reserved for trusted non-browser
+consumers and are not required for normal explorer browsing.
 
 ### 3.4 Tech Stack
 
-| Component     | Technology                    | Purpose                                                                                 |
-| ------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
-| Ingestion     | Galexie (ECS Fargate)         | Streams `LedgerCloseMeta` XDR from Stellar network to S3                                |
-| XDR parsing   | `stellar-xdr` crate (Rust)    | Deserializes all XDR types in Ledger Processor Lambda                                   |
-| API Framework | axum / Rust (per ADR 0005)    | Modular REST API with utoipa OpenAPI                                                    |
-| Compute       | AWS Lambda (ARM/Graviton2)    | Serverless; auto-scaling                                                                |
-| Gateway       | AWS API Gateway               | Request routing, throttling, validation, response caching                               |
-| Edge Security | AWS WAF                       | Managed rules, IP reputation, abuse protection                                          |
-| Database      | ClickHouse (Hetzner, mTLS)    | Block explorer schema; MergeTree family, `intDiv(ledger_sequence, 500000)` partitioning |
-| CDN           | CloudFront                    | Static asset delivery for frontend                                                      |
-| DNS           | Route 53                      | Domain management                                                                       |
-| Monitoring    | CloudWatch + X-Ray            | Logging, distributed tracing, alarms                                                    |
-| Secrets       | Secrets Manager               | Database credentials, non-browser integration keys                                      |
-| IaC           | AWS CDK (TypeScript)          | All infrastructure defined as code                                                      |
-| CI/CD         | GitHub Actions → `cdk deploy` | Automated deployment on merge to main                                                   |
+| Component     | Technology                    | Purpose                                                                                  |
+| ------------- | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| Ingestion     | Galexie (ECS Fargate)         | Streams `LedgerCloseMeta` XDR from Stellar network to S3                                 |
+| XDR parsing   | `stellar-xdr` crate (Rust)    | Deserializes all XDR types in Ledger Processor Lambda                                    |
+| API Framework | axum / Rust (per ADR 0005)    | Modular REST API with utoipa OpenAPI                                                     |
+| Compute       | AWS Lambda (ARM/Graviton2)    | Serverless; auto-scaling                                                                 |
+| Gateway       | AWS API Gateway               | Request routing, throttling, validation, response caching                                |
+| Edge Security | Cloudflare (API host only)    | Managed rules, IP reputation, DDoS, rate limiting; no AWS WAF, no edge filter on the SPA |
+| Database      | ClickHouse (Hetzner, mTLS)    | Block explorer schema; MergeTree family, `intDiv(ledger_sequence, 500000)` partitioning  |
+| CDN           | CloudFront                    | Static asset delivery for frontend                                                       |
+| DNS           | Route 53                      | Domain management                                                                        |
+| Monitoring    | CloudWatch + X-Ray            | Logging, distributed tracing, alarms                                                     |
+| Secrets       | Secrets Manager               | Database credentials, non-browser integration keys                                       |
+| IaC           | AWS CDK (TypeScript)          | All infrastructure defined as code                                                       |
+| CI/CD         | GitHub Actions → `cdk deploy` | Automated deployment on merge to main                                                    |
 
 ### 3.5 Environments
 
@@ -1525,8 +1529,9 @@ report.
 4. Load test report: p95 <200 ms at 1M requests/month equivalent; error rate <0.1%
 5. Security checklist signed off: no wildcard IAM, WAF/throttling active on public
    ingress, ClickHouse reachable only through Caddy with a client certificate whose CN
-   is on the allow-list (no anonymous public endpoint), weekly Borg backup verified
-   restorable, disk-level redundancy via mdadm RAID 1, the `stellar-ledger-data` bucket
+   is on the allow-list (no anonymous public endpoint), weekly off-box Borg backup
+   (Sunday 03:30 UTC, `--keep-weekly 4`) with a restore procedure drill-tested
+   locally end-to-end, disk-level redundancy via mdadm RAID 1, the `stellar-ledger-data` bucket
    with SSE-S3 (AES256), all secrets in Secrets Manager, all
    API inputs validated
 
@@ -1534,6 +1539,26 @@ report.
    > quietly dropped: **there is no PITR** (weekly Borg only — RPO up to 7 days), and
    > **no deletion protection** in the RDS sense, because the store is a self-hosted box.
    > Both were properties of a managed service that was never adopted.
+   >
+   > **"WAF/throttling active on public ingress" is satisfied without AWS WAF.** Both
+   > AWS WAF WebACLs were dropped ([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+   > task 0302). What holds the criterion: API Gateway throttling (`50` rps / `100`
+   > burst) plus usage-plan limits on every public route, and the Cloudflare edge —
+   > managed rules, DDoS, Managed Challenge, rate limiting — on the API hostname, with
+   > the origin locked to Cloudflare. The CloudFront frontend distribution carries no
+   > edge filter; it serves static, edge-cached files from a private S3 origin, so the
+   > managed rule groups had nothing to protect there.
+   >
+   > This wording is an expanded restatement of the criterion, not the approved text —
+   > the approved wording is the arbiter.
+   >
+   > **The backup clause was narrowed to what is demonstrable.** It previously read
+   > "weekly Borg backup **verified restorable**", which conflated two different
+   > things. Per [`docs/backups.md`](../backups.md): the restore procedure has been
+   > drill-tested locally end-to-end, but a real restore **from the Hetzner Storage
+   > Box has never been performed** — that would be the operator's first live
+   > exercise. "Verified restorable" would claim the second on the strength of the
+   > first. RPO is up to 7 days, as recorded above.
 
 6. 7-day post-launch monitoring report: uptime %, API error rate, p95 latency, Galexie
    ingestion lag per day
