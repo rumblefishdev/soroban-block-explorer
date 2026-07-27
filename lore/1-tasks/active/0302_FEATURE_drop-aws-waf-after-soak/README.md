@@ -4,7 +4,7 @@ title: 'FEATURE: Drop both AWS WAF WebACLs and reconcile every doc that claims t
 type: FEATURE
 status: active
 related_adr: ['0048', '0032']
-related_tasks: ['0277', '0438']
+related_tasks: ['0277', '0312']
 tags:
   [
     effort-medium,
@@ -64,8 +64,8 @@ history:
       deleted outright rather than left behind `enableWaf:false`, which also
       removed the app's only cross-region reference. 15 of 16 acceptance criteria
       met; the outstanding one is the `docs/scf/` handover, deliberately out of
-      scope. Unrelated `CloudflareBootstrap` drift spawned as 0438. Not yet
-      committed.
+      scope. Unrelated `CloudflareBootstrap` drift re-measured and appended to
+      the existing 0312.
 ---
 
 # Drop both AWS WAF WebACLs and reconcile every doc that claims them
@@ -360,9 +360,15 @@ the consumer marker was released and the stack delete went through unblocked.
    that operators learn to ignore.
 6. **Template snapshots taken before each deploy** (`get-template --template-stage
 Original`) as a rollback path independent of the git working tree. Not needed.
-7. **Drift found in `CloudflareBootstrap` spawned as [0438](../../backlog/0438_OPS_cloudflare-bootstrap-drift-origin-secret.md)**
-   rather than folded in — unrelated to WAF, and it would have shipped silently
-   under `--all`.
+7. **Drift found in `CloudflareBootstrap` appended to the existing
+   [0312](../../backlog/0312_OPS_cloudflare-bootstrap-orphan-dead-origin-secret.md)**
+   rather than folded in here — unrelated to WAF, and it would have shipped
+   silently under `--all`. It was first spawned as a new task before a backlog
+   search turned up 0312, which had recorded the same `orphan` diff five weeks
+   earlier and had already answered the open question (nothing reads it; the live
+   edge-auth secret is a different resource in `Compute`). The duplicate was
+   withdrawn. Search the backlog before spawning — this repo has a documented
+   history of id collisions.
 
 ## Issues Encountered
 

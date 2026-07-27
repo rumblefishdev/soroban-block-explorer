@@ -1,5 +1,5 @@
 ---
-type: G
+type: generation
 title: 'Every AWS WAF reference in the repo, classified'
 status: mature
 spawned_from: '0302'
