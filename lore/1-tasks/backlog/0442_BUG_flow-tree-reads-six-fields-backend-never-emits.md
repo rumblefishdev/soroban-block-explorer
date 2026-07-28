@@ -1,6 +1,6 @@
 ---
 id: '0442'
-title: 'BUG: tx flow tree reads five `details` fields no backend module emits — nested contract calls never render'
+title: 'BUG: tx flow tree reads six `details` fields no backend module emits — nested contract calls never render'
 type: BUG
 status: backlog
 related_adr: []
@@ -25,18 +25,29 @@ history:
       `function_name` / `functionName` key mismatch; this is the wider finding
       behind it — the flow tree was written against an API contract that was
       never implemented, so its entire nested-call branch is unreachable.
+  - date: '2026-07-28'
+    status: backlog
+    who: karolkow
+    note: >
+      Corrected: **six dead fields, not five.** `humanizeOp.ts:72-79` reads a
+      `details.summary` no crate emits, and it is consulted before everything
+      else — the early return that never fires is the only reason the
+      `INVOKE_HOST_FUNCTION` branch under it is reachable. Missed on the first
+      pass because the audit grepped `toFlowNodes.tsx` only. File renamed from
+      `…five-fields…` to match. Nothing else about the task changes; the
+      implement-vs-delete decision still comes first.
 ---
 
 # BUG: flow tree renders against fields the backend never emits
 
 ## Summary
 
-`web/src/pages/transaction-detail/normal/toFlowNodes.tsx` reads five keys out of
-the heavy `details` payload that **no crate produces**. The nested-call branch is
+The default transaction view reads six keys out of the heavy `details` payload
+that **no crate produces** — five in `toFlowNodes.tsx`, one in `humanizeOp.ts`. The nested-call branch is
 therefore dead: a contract calling a contract calling a contract renders as a
 single flat node, and the "Result" summary lines never appear.
 
-## The five fields
+## The six fields
 
 Repo-wide grep (excluding `node_modules`, `target`, `dist`) finds these only in
 the frontend and in one archived audit note — never in `crates/`:
@@ -48,8 +59,17 @@ the frontend and in one archived audit note — never in `crates/`:
 | `summary_line_2`      | `toFlowNodes.tsx:101`        | nobody     |
 | `invocations`         | `toFlowNodes.tsx:84`, `:157` | nobody     |
 | `destination_summary` | `toFlowNodes.tsx:69`         | nobody     |
+| `summary`             | `humanizeOp.ts:72-79`        | nobody     |
 
-`function_name` (`toFlowNodes.tsx:66`, `:153`) is a sixth, different failure —
+The last one was missed when this task was first written, which said "five".
+`summaryFromHeavy` reads `details.summary` and is consulted **first** in
+`humanizeOp`, returning early when it hits. Because nothing ever emits the key
+it always returns `null` — which is the only reason the `INVOKE_HOST_FUNCTION`
+branch below it is reachable at all. Harmless today, load-bearing by accident:
+anything that starts emitting `summary` silently overrides every humanised
+string in the default view.
+
+`function_name` (`toFlowNodes.tsx:66`, `:153`) is a different failure again —
 the backend _does_ emit it, as `functionName`. That one is task 0380.
 
 What the parser actually emits for `INVOKE_HOST_FUNCTION`
@@ -93,7 +113,7 @@ key mismatch survived a full frontend audit.
 - [ ] If implementing: nested invocations render for a known multi-hop
       transaction, verified against decoded XDR
 - [ ] If deleting: `NestedCallShape`, `buildNestedChildren`,
-      `buildResultSummary` reduced to what is reachable
+      `buildResultSummary` and `summaryFromHeavy` reduced to what is reachable
 - [ ] Coordinate with 0380 — same files, overlapping edits
 - [ ] **Docs updated** — only if option 1 changes the endpoint payload
       (`docs/architecture/**` frontend data contracts) per ADR 0032

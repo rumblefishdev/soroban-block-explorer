@@ -1,12 +1,21 @@
 ---
 id: '0352'
-title: 'FEATURE: surface WHY a tx failed — prominent fail-reason banner (ScError type+code+message)'
+title: 'FEATURE: surface WHY a tx failed — fail-reason banner for both Soroban ScErrors and classic operation results'
 type: FEATURE
 status: backlog
 related_adr: []
 related_tasks: []
 tags:
-  [frontend, transaction-detail, soroban, ux, priority-medium, effort-medium]
+  [
+    frontend,
+    backend,
+    api,
+    transaction-detail,
+    soroban,
+    ux,
+    priority-medium,
+    effort-medium,
+  ]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/364'
 history:
@@ -42,19 +51,34 @@ history:
       scoped. Decide whether that belongs here or in a sibling task before
       starting; shipping only the Soroban half would leave the reported
       transaction just as unexplained as it is today.
+  - date: '2026-07-28'
+    status: backlog
+    who: karolkow
+    note: >
+      Decision on the above: **widened, not split.** Classic operation failures
+      join this task as Step 6, and the task grows from frontend-only to
+      frontend + backend + API (tags updated). Reasoning: a sibling task would
+      let the Soroban half ship on its own and invite closing the reporting
+      issue on it, while the transaction that was actually reported stayed
+      blank — the banner has one job, "say why", and which XDR structure the
+      reason came from is our problem, not the reader's. Cost of the choice:
+      this is no longer a small frontend change and should not be sized as one.
 ---
 
 # FEATURE: prominent fail-reason banner on failed transactions
 
 ## Summary
 
-When a Soroban transaction fails, the explorer shows only the `Failed` status;
-the actual reason (a Soroban `ScError`) lives buried in the advanced-mode
-"Diagnostic events" section as raw ScVals. Surface a clear, human-readable
-**fail-reason banner** near the top of a failed tx detail — e.g.
-`Failed · Auth/ExistingValue — "nonce already exists for address"`. The data is
-already available on-demand (no indexing needed); this is presentation + a small
-decoder fix.
+When a transaction fails, the explorer shows only the `Failed` status. Surface a
+clear, human-readable **fail-reason banner** near the top of a failed tx
+detail — e.g. `Failed · Auth/ExistingValue — "nonce already exists for address"`
+for a Soroban error, or `Failed · CREATE_ACCOUNT — LOW_RESERVE` for a classic
+one. Two different XDR sources, one line for the reader.
+
+For Soroban failures the reason is already available on-demand (no indexing
+needed) and this is presentation plus a small decoder fix. **Classic failures
+are the harder half** — the per-operation result codes that carry the reason are
+not exposed by the API at all. See Step 6.
 
 ## Context — what we already have vs what's missing
 
@@ -133,11 +157,39 @@ If a fail-reason is wanted on the tx LIST or as a filter, index error type+code
 into CH at ingestion (the list can't archive-fetch per row). Out of scope for
 the detail banner.
 
+### Step 6 (REQUIRED, added 2026-07-28) — classic operation failures
+
+Steps 1–3 only ever explain Soroban failures. A transaction with no contract in
+it has no diagnostic events, so the banner would stay blank on exactly the case
+that prompted this — see the history note for the decoded counter-example. The
+reason for a classic failure lives in the per-operation result codes, which the
+API does not expose at all today.
+
+- **Backend.** Surface each operation's result code. The parser already receives
+  `op_results` (`crates/xdr-parser/src/operation.rs`) but consumes them only for
+  pool claims and counterparties; the DTO carries transaction-level `result_code`
+  and raw `result_xdr` with nothing between
+  (`crates/api/src/runtime_enrichment/stellar_archive/dto.rs:32-42`). Add a
+  per-operation `result_code` to the operation DTO.
+- **Naming.** These are XDR enum discriminants per operation type
+  (`CREATE_ACCOUNT_LOW_RESERVE`, `PATH_PAYMENT_STRICT_SEND_UNDER_DESTMIN`, …),
+  plus the operation-level rejections (`opNO_ACCOUNT`, `opBAD_AUTH`). Prefer the
+  library's own names over a hand-rolled table — the same lesson as 0431.
+- **Banner.** One reason line whichever the source: `Failed · CREATE_ACCOUNT —
+LOW_RESERVE` reads the same as `Failed · Auth/ExistingValue — …`. The reader
+  does not care which XDR structure it came from.
+- **Do not ship Steps 1–3 alone.** Half a banner that stays blank on classic
+  failures is indistinguishable from the current behaviour for the transaction
+  that was actually reported.
+
 ## Acceptance Criteria
 
 - [ ] Failed tx detail shows a prominent `Failed · <type>/<code> — <message>` banner
 - [ ] Decoder surfaces the numeric code (not just the type name)
 - [ ] Verified on all 4 fixtures above (Auth, Contract, Budget, Value)
+- [ ] **Classic-failure fixture also verified** — `7af6d0ed…` renders
+      `CREATE_ACCOUNT — LOW_RESERVE`, not a blank banner
+- [ ] Per-operation result codes exposed on the operation DTO
 - [ ] Advanced Diagnostic events section unchanged (still available)
 - [ ] **Docs updated** — N/A unless a new API field is added (if the banner is
       server-composed, document it in the tx-detail contract docs).

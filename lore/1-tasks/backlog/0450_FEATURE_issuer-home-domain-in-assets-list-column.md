@@ -52,14 +52,24 @@ its only consumer is `crates/api/src/assets/handlers.rs:262`, which uses it
 internally to drive the SEP-1 lookup behind the detail page's `description`. The
 frontend has never seen the field.
 
+## The frontend half already exists — on another page
+
+`GET /v1/accounts` exposes `home_domain` and the accounts list renders it as a
+linked chip beside the address, prefixing `https://` when the stored value omits
+it (`web/src/pages/accounts/AccountsTable.tsx:30-48`); there is even a
+`filter[with_domain]`. So this is not a new UI idea — it is the same treatment
+the accounts list already ships, applied to the assets list. Copy that cell
+rather than inventing a second look, and keep the two consistent if either
+changes.
+
 ## Scope
 
 1. Add `issuer_home_domain: Option<String>` to the assets **list** item DTO
    (the detail DTO may want it too — check before assuming).
 2. Regenerate API types.
-3. `web/src/pages/assets/AssetsTable.tsx:70` — render the domain as a secondary
-   line under the StrKey in the existing "Issuer / Contract ID" cell. The StrKey
-   stays the copyable canonical value.
+3. `web/src/pages/assets/AssetsTable.tsx:70` — render the domain in the existing
+   "Issuer / Contract ID" cell using the accounts-list chip treatment. The
+   StrKey stays the copyable canonical value.
 
 ## Constraints
 
