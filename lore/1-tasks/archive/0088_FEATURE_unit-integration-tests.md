@@ -2,9 +2,9 @@
 id: '0088'
 title: 'Unit and integration tests: XDR parsing, API endpoints'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: ['0005']
-related_tasks: ['0092']
+related_tasks: ['0092', '0244', '0360', '0361', '0406']
 tags: [priority-high, effort-large, layer-testing]
 milestone: 3
 links:
@@ -36,9 +36,33 @@ history:
       and the API integration tests still need rebuilding on CH fixtures (0360).
       Re-scope to "identify the remaining coverage gap" or close in favour of
       those two; do not start from the assumption that there are no tests.
+  - date: '2026-07-28'
+    status: superseded
+    who: karolkow
+    note: >
+      Taking the second option offered by the 2026-07-22 note: **closed, not
+      re-scoped.** Re-counted today — **920 tests across `crates/`: xdr-parser
+      360, api 248, db-clickhouse 96, enrichment-shared 94, indexer 21**, up
+      from 890/322/244 six days ago, so coverage is still accreting through
+      ordinary feature work without this task. Step by step: Step 1 (XDR
+      parsing) is the *most* covered area in the tree at 360 tests, so
+      narrowing the task to it would have been the one re-scope the evidence
+      rules out. Step 2 specifies "mock database layer with sqlx test
+      fixtures" and Step 3 an end-to-end run "→ PostgreSQL → API … using
+      `sqlx::test`" — both died with Postgres (0244), and both already
+      re-homed: 0360 rebuilds the API integration suite on ClickHouse
+      fixtures, 0361 ports the audit harness off sqlx, 0406 makes CI actually
+      run the ClickHouse-gated suite (which it currently never does — the real
+      remaining gap, and it is not this task's). Nothing here is left to do
+      that is not owned elsewhere. The D3 day-estimates below (20 days) are
+      historical and should not be read as outstanding effort.
 ---
 
 # Unit and integration tests: XDR parsing, API endpoints
+
+> **SUPERSEDED (2026-07-28) — do not implement.** The tests it asks for largely
+> exist (920 in-tree); the parts that do not are Postgres-shaped and re-homed to
+> 0360, 0361 and 0406. Kept for the reasoning trail only.
 
 ## Summary
 

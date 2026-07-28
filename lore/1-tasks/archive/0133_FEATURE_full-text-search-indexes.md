@@ -2,9 +2,9 @@
 id: '0133'
 title: 'DB: trigram index on assets.name for search-by-name (post-MVP parity)'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: ['0039']
-related_tasks: ['0053', '0156']
+related_tasks: ['0053', '0156', '0304', '0371']
 depends_on: ['0053', '0156']
 tags: [priority-low, effort-small, layer-db, post-mvp, audit-F22]
 milestone: 2
@@ -34,9 +34,29 @@ history:
       down to small. Depends on 0053 merge (PR #155) and 0156 merge
       (Soroban token name extraction — without it, Soroban-native
       token names remain NULL and trigram returns nothing for them).
+  - date: '2026-07-28'
+    status: superseded
+    who: karolkow
+    note: >
+      Archived as unimplementable, not merely deprioritised — three independent
+      reasons, any one fatal. (1) `pg_trgm` and `GIN` are Postgres-only; the
+      store is ClickHouse, which has no trigram index (the nearest primitives
+      are `ngrambf_v1` / `tokenbf_v1`, a different design). (2) **The column no
+      longer exists** — `assets.name` was dropped by 0304
+      (`crates/db-clickhouse/schema/init.sql:301`). (3) It was never populated:
+      that same comment records `0/336053` prod rows, dead since 0297, which is
+      why 0304 dropped it. So this task indexes a Postgres structure over an
+      absent, always-empty column. The blocking dependency 0156 completed —
+      the task did not stall, it became impossible. The surviving intent
+      (find an asset by a human-readable name rather than its code) lives in
+      0371, scoped to project name and issuer domain against fields that exist.
 ---
 
 # DB: trigram index on assets.name for search-by-name (post-MVP parity)
+
+> **SUPERSEDED (2026-07-28) — do not implement.** Postgres-only syntax over a
+> column that was dropped in 0304 and never held a single prod value. Search by
+> human-readable name is now 0371. Kept for the reasoning trail only.
 
 ## Summary
 

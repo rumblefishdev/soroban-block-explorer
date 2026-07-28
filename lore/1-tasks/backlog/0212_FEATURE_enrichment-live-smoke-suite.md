@@ -126,31 +126,24 @@ the regression risk doesn't snap back.
 
 ### In
 
-- `crates/enrichment-shared/tests/sep1_real_issuer_smoke.rs` —
-  `#[ignore] #[tokio::test] async fn sep1_real_issuer_smoke()` that:
-  - Picks a known stable issuer (suggestion: `ultrastellar.com` or a
-    similarly long-running anchor; final choice during implementation
-    after a stability sanity check on a few candidates).
-  - Calls the full `enrich_and_persist::sep1_assets::enrich_asset`
-    (canonical entry point; the example in Step 2 uses the same symbol —
-    if the public function is renamed during implementation, both
-    references update together).
-  - Asserts non-NULL `assets.icon_url` and `assets.name` on the resulting
-    row.
-- `crates/enrichment-shared/tests/nft_token_uri_real_collection_smoke.rs`
-  — `#[ignore] #[tokio::test] async fn nft_metadata_real_collection_smoke()`
-  that:
-  - Picks a known stable Soroban NFT collection (suggestion: a long-running
-    public collection with stable JSON-metadata behind IPFS; final choice
-    during implementation).
-  - Calls the full `enrich_and_persist::nft_token_uri::enrich_nft_token_uri`.
-  - Asserts non-NULL `nfts.name`, `nfts.media_url`. For
-    `nfts.collection_name`, pick a collection that exports SEP-50
-    `name()` (task 0340 — the source is the contract `name()` RPC, not
-    `token_uri()` JSON); a JSON-only collection legitimately leaves it
-    the `''` sentinel and should not be asserted non-NULL.
-  - Asserts `media_url` starts with `https://` (verifies the ipfs→https
-    gateway resolver shipped post-0196 merge is wired correctly).
+- ~~SEP-1 smoke test~~ — **DONE.** Landed inline in
+  `crates/enrichment-shared/src/enrich_and_persist/sep1_assets.rs`, not in a
+  `tests/` directory (none exists). Entry point is
+  `enrich_and_persist::sep1_assets::enrich_asset_from_sep1(client: &Client, …)`
+  — renamed from the `enrich_asset` this bullet used to name, and taking a
+  `clickhouse::Client` rather than a pool. Assertions read
+  `asset_enrichment.icon_url` / `.name`, not `assets.*`: `assets.name` was
+  dropped in 0304 (`crates/db-clickhouse/schema/init.sql:301`) and
+  `assets.icon_url` is marked dead in favour of `asset_enrichment`. Fixture
+  issuer is USDC (`GA5ZSEJY…`, home domain centre.io) rather than the
+  ultrastellar.com suggested here. See the Step 2 table for exact locations.
+- ~~NFT metadata smoke test~~ — **DONE.** Landed inline in
+  `crates/enrichment-shared/src/enrich_and_persist/nft_token_uri.rs:358`
+  (`smoke_ch_nft_real_and_sentinel`), plus
+  `live_mainnet_zero_arg_token_uri_success` in `nft_token_uri/client.rs`. The
+  `collection_name` caveat below still holds and is why it is not asserted
+  non-NULL: per 0340 the value comes from the contract-level SEP-50 `name()`
+  RPC, not from `token_uri()` JSON.
 - Manual workflow-dispatch entry in `.github/workflows/` (e.g.
   `live-smoke.yml`) that runs `cargo test -p enrichment-shared --tests
 -- --ignored`. Operator-driven, not on push.
@@ -186,30 +179,27 @@ Spend ~30 min looking at:
 
 Document the choice + rotation policy in the test file headers.
 
-### Step 2 — write the two test functions
+### Step 2 — write the two test functions — **DONE**
 
-Each follows the same pattern:
+Shipped, ClickHouse-native. The planning sketch that used to sit here was
+Postgres-shaped in five ways at once — `sqlx::query!`, a `$1` bind placeholder,
+a `test_pool()` handle, `FROM assets` for a column that now lives in
+`asset_enrichment`, and an `enrich_asset` entry point since renamed — so it has
+been replaced by pointers to what was actually committed. Do not resurrect it.
 
-```rust
-#[ignore]
-#[tokio::test]
-async fn sep1_real_issuer_smoke() {
-    let pool = test_pool().await;
-    let asset_id = insert_test_asset(&pool, "USDC", "GA5ZSE..." /* ultra issuer */).await;
-    let fetcher = Sep1Fetcher::new_default();
-    enrich_and_persist::sep1_assets::enrich_asset(&pool, asset_id, &fetcher)
-        .await
-        .expect("live SEP-1 fetch + persist");
-    let row = sqlx::query!("SELECT icon_url, name FROM assets WHERE id = $1", asset_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert!(row.icon_url.is_some(), "icon_url must be populated");
-    assert!(row.name.is_some(), "name must be populated");
-}
-```
+| Test                                      | Location                                                               |
+| ----------------------------------------- | ---------------------------------------------------------------------- |
+| `smoke_ch_sep1_real_and_sentinel`         | `crates/enrichment-shared/src/enrich_and_persist/sep1_assets.rs:414`   |
+| `smoke_real_sep1_resolves_icon_and_name`  | `crates/enrichment-shared/src/enrich_and_persist/sep1_assets.rs:388`   |
+| `smoke_ch_nft_real_and_sentinel`          | `crates/enrichment-shared/src/enrich_and_persist/nft_token_uri.rs:358` |
+| `live_mainnet_zero_arg_token_uri_success` | `crates/enrichment-shared/src/nft_token_uri/client.rs`                 |
 
-Mirror shape for NFT.
+The shipped shape, for reference: `enrich_asset_from_sep1(client: &Client, …)`
+takes a `clickhouse::Client`; readback is a `client.query("SELECT icon_url, name
+FROM asset_enrichment FINAL WHERE …").bind(…).fetch_one::<Readback>()` against a
+`#[derive(Row, Deserialize)]` struct. Each test carries an `#[ignore]` reason
+naming what it needs (live local ClickHouse, network, mainnet Soroban-RPC), so
+the default `cargo test` stays hermetic.
 
 ### Step 3 — GitHub Actions workflow
 
