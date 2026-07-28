@@ -60,6 +60,32 @@ avoided by tagging.
   partially-tagged account is only marginally better than an untagged one.
 - Record in `docs/deployment.md` that new stacks must carry the tag.
 
+## Detection, not just attribution
+
+Attribution answers "whose cost is this". It does not answer "why did nobody
+notice for three weeks". The July increase ran from 6 July and was found on
+28 July, by hand, because someone looked at a bill.
+
+There is no cost alarm on the account, and the CloudWatch dashboard covers
+ingestion lag, Lambda latency, API errors and queue depth — nothing about spend.
+
+Once the tag exists, per-project detection becomes possible:
+
+- **AWS Budgets** with an actual-vs-forecast alert per project tag, wired to the
+  existing SNS topic that already feeds Slack (`stacks/observability-stack.ts`).
+  A monthly budget with an 80 % / 100 % / forecast trigger would have fired in
+  the first week of July.
+- **Cost Anomaly Detection** with a monitor per tag value. This catches the shape
+  the July increase actually had — a step change against a stable baseline —
+  which a fixed threshold catches late or not at all.
+- A spend widget on the existing production dashboard, if only so the number is
+  in a place people already look.
+
+Worth stating plainly: the useful signal here was **usage quantity**, not dollars.
+Egress went 88.68 GB → 3,880.66 GB, a 43x step, while the dollar figure stayed
+small enough in absolute terms to look unremarkable on a shared account. Alarm on
+the quantity as well as the amount.
+
 ## Acceptance Criteria
 
 - [ ] Tag key and values agreed with the other project's owners
@@ -68,8 +94,12 @@ avoided by tagging.
 - [ ] `ce get-cost-and-usage --group-by TAG` returns a per-project split with no
       material spend in the untagged bucket
 - [ ] `docs/deployment.md` states the requirement for new stacks
+- [ ] A per-tag budget or anomaly monitor exists and routes to the Slack topic
+      already used by the production alarms
+- [ ] The alert is verified by a deliberate test, not assumed to work
 
 ## Not in scope
 
-Reducing any cost. This task only makes cost attributable; 0447 and the
-volume findings handed to the other project's team are where the money is.
+Reducing any cost. This task makes cost attributable and makes a change in it
+noticeable; 0447 and the volume findings handed to the other project's team are
+where the money actually is.
