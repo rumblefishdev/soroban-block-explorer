@@ -6,7 +6,7 @@ status: active # active | blocked | completed | backlog
 related_adr: []
 related_tasks: []
 tags: []
-links: []
+links: [] # spawned from a GitHub issue? put its URL here (one task may list several)
 history:
   - date: YYYY-MM-DD
     status: active
