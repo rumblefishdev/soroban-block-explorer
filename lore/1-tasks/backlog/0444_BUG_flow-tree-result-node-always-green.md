@@ -7,7 +7,9 @@ related_adr: []
 related_tasks: ['0352', '0380']
 tags:
   [frontend, transaction-detail, ux, correctness, priority-medium, effort-small]
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/363'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/364'
 history:
   - date: '2026-07-27'
     status: backlog

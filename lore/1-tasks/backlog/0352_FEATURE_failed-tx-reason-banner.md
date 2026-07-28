@@ -7,7 +7,8 @@ related_adr: []
 related_tasks: []
 tags:
   [frontend, transaction-detail, soroban, ux, priority-medium, effort-medium]
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/364'
 history:
   - date: 2026-07-03
     status: backlog
@@ -18,6 +19,29 @@ history:
       We already HAVE the data (heavy block, on-demand archive decode) — the
       ask is to surface a clear "why failed" banner higher up, plus a decoder
       fix so the numeric code isn't dropped. Root-caused with real examples.
+  - date: '2026-07-28'
+    status: backlog
+    who: karolkow
+    note: >
+      **Scope hole — this task as written covers only Soroban failures.** It
+      assumes every failure is an `ScError` in a diagnostic event, which is
+      false for classic operations. Counter-example from an external report:
+      transaction `7af6d0edad166f2ec276fc75e13d0613c70d9476c164db943ce64e183a44f6c5`
+      is `txFAILED` with three classic operations and no contract at all —
+      `BEGIN_SPONSORING_FUTURE_RESERVES` succeeded, `CREATE_ACCOUNT` failed
+      with `LOW_RESERVE`, the third was rejected `opNO_ACCOUNT` (decoded from
+      `result_xdr`; Horizon agrees `successful: false`). No contract means no
+      diagnostic events, so Advanced view genuinely shows nothing — the
+      reporter said exactly that and was right. The reason lives in the
+      per-operation result codes, which the API does not expose: the parser
+      reads `op_results` only for pool claims and counterparties
+      (`crates/xdr-parser/src/operation.rs`), and the DTO carries
+      transaction-level `result_code` plus raw `result_xdr`, nothing between
+      (`crates/api/src/runtime_enrichment/stellar_archive/dto.rs:32-42`).
+      So covering classic failures needs a backend change this task has not
+      scoped. Decide whether that belongs here or in a sibling task before
+      starting; shipping only the Soroban half would leave the reported
+      transaction just as unexplained as it is today.
 ---
 
 # FEATURE: prominent fail-reason banner on failed transactions

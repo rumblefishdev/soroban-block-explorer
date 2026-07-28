@@ -16,7 +16,8 @@ tags:
     priority-medium,
     effort-small,
   ]
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
   - date: '2026-07-27'
     status: backlog

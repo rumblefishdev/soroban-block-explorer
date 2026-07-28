@@ -32,14 +32,23 @@ gh issue list --state open --limit 50 \
   --json number,title,labels,createdAt,author,body
 ```
 
-For each open issue find its lore task:
+For each open issue find its lore task. **Resolve against `develop`, never
+against whatever happens to be checked out** — you are likely sitting in a
+worktree on a feature branch that does not have the recent tasks at all, and a
+plain `grep` there returns a screen of confident false negatives:
 
 ```bash
-grep -rl "issues/<N>" lore/1-tasks/
+git fetch origin develop --quiet
+git grep -l "issues/<N>" FETCH_HEAD -- lore/1-tasks/
 ```
 
 An issue with no task is untriaged. A task with no `links:` entry that clearly
-came from a report is a broken link — flag it.
+came from a report is a broken link — flag it. Before concluding that nothing
+is linked, confirm the tree you searched actually contains the tasks you expect.
+
+Directory-form tasks match as `NNNN_TYPE_slug/README.md`, so take the ID from
+the parent directory, not the filename — otherwise the report says `README.md`
+where it means `0199`.
 
 Then bucket every issue and report the buckets before doing anything else:
 
@@ -170,10 +179,3 @@ Backfilling 0
 
 Drafts to post: 3   (nothing has been posted)
 ```
-
-## First run
-
-Seven issues (#363–#369) predate this skill: no labels, no replies, but every
-one already has lore tasks linked. Treat them as **Waiting**, not Untriaged —
-they were triaged by hand. #363 is the bundle (0443 + 0380 + 0444); #364 maps
-to 0444 for the misleading render and 0352 for the underlying reason.

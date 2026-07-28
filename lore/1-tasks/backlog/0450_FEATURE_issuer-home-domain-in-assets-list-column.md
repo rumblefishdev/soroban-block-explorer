@@ -6,7 +6,8 @@ status: backlog
 related_adr: []
 related_tasks: ['0319', '0334', '0364', '0371']
 tags: [backend, api, frontend, assets, priority-medium, effort-small]
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/369'
 history:
   - date: '2026-07-28'
     status: backlog

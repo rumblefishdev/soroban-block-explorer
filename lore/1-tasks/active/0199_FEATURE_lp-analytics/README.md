@@ -14,7 +14,8 @@ tags:
     prices-api-live-2026-07-22,
   ]
 milestone: 2
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/367'
 history:
   - date: '2026-05-07'
     status: backlog

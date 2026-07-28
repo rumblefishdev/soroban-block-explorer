@@ -9,6 +9,7 @@ tags:
   [backend, enrichment, frontend, accounts, sep2, priority-low, effort-medium]
 links:
   - 'SEP-2 (Federation Protocol): https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0002.md'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/363'
 history:
   - date: '2026-07-27'
     status: backlog
