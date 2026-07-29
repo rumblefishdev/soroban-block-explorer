@@ -261,6 +261,7 @@ fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, V
             topics,
             data: e.data,
             event_index,
+            op_index: e.op_index.and_then(|i| i16::try_from(i).ok()),
         };
         if is_diagnostic {
             diagnostic.push(dto);

@@ -44,6 +44,7 @@ export function OperationsSection({
       fallbackOrder={selectedIndex + 1}
       txSourceAccount={tx.source_account ?? null}
       operationTree={tx.heavy?.operation_tree}
+      contractEvents={tx.heavy?.contract_events ?? []}
     />
   );
 

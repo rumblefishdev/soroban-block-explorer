@@ -1,4 +1,8 @@
-import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
+import type {
+  OperationItem,
+  XdrEventDto,
+  XdrOperationDto,
+} from '@rumblefish/api-types';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { Box, Collapse, Stack, Typography } from '@mui/material';
 import { Chip } from '@rumblefish/soroban-block-explorer-ui';
@@ -34,6 +38,24 @@ interface OperationCardProps {
   /** `heavy.operation_tree` — tx-level, safe to attach to the invoke card
    *  (protocol 21+: one InvokeHostFunction per transaction). */
   operationTree?: unknown;
+  /** Tx-level `heavy.contract_events`; the card shows the ones whose
+   *  `op_index` points at this operation (D7). Absent index → tx-level
+   *  events section only. */
+  contractEvents?: readonly XdrEventDto[];
+}
+
+/** First topic is the event name for well-formed token events. */
+function eventLabel(event: XdrEventDto): string {
+  const first = event.topics[0];
+  if (
+    first != null &&
+    typeof first === 'object' &&
+    (first as { type?: unknown }).type === 'sym' &&
+    typeof (first as { value?: unknown }).value === 'string'
+  ) {
+    return (first as { value: string }).value;
+  }
+  return event.event_type;
 }
 
 export function OperationCard({
@@ -44,6 +66,7 @@ export function OperationCard({
   fallbackOrder,
   txSourceAccount,
   operationTree,
+  contractEvents = [],
 }: OperationCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(defaultDetailsOpen);
 
@@ -70,6 +93,14 @@ export function OperationCard({
   const callNodes =
     light.type_name === 'INVOKE_HOST_FUNCTION'
       ? parseOperationTree(operationTree)
+      : [];
+  // op_index is the 0-based envelope position (CAP-67 V4 attribution);
+  // responses parsed before the field landed simply match nothing.
+  const opEvents =
+    heavy?.application_order != null
+      ? contractEvents.filter(
+          (event) => event.op_index === heavy.application_order - 1
+        )
       : [];
   const detailCount = Object.keys(detailsObj(heavy) ?? {}).length;
 
@@ -158,6 +189,43 @@ export function OperationCard({
               Call tree
             </Typography>
             <CallTree nodes={callNodes} />
+          </Box>
+        )}
+
+        {opEvents.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Typography
+              variant="bodyXsRegular"
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                fontWeight: 650,
+                mb: 0.5,
+              })}
+            >
+              Events · {opEvents.length}
+            </Typography>
+            {opEvents.map((event) => (
+              <Stack
+                key={event.event_index}
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                sx={{ py: 0.25 }}
+              >
+                <Chip size="sm" color="neutral" label={eventLabel(event)} />
+                {event.contract_id != null && (
+                  <Typography
+                    variant="bodyMonoSmRegular"
+                    sx={(theme) => ({ color: theme.palette.text.secondary })}
+                  >
+                    {event.contract_id.slice(0, 4)}…
+                    {event.contract_id.slice(-4)}
+                  </Typography>
+                )}
+              </Stack>
+            ))}
           </Box>
         )}
 

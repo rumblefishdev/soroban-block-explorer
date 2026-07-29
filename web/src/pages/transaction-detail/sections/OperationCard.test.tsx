@@ -64,4 +64,39 @@ describe('OperationCard', () => {
         .getAttribute('aria-expanded')
     ).toBe('true');
   });
+
+  it('shows only the events attributed to this operation via op_index', () => {
+    renderCard({
+      contractEvents: [
+        {
+          event_type: 'contract',
+          contract_id:
+            'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
+          topics: [{ type: 'sym', value: 'transfer' }],
+          data: {},
+          event_index: 0,
+          op_index: 1,
+        },
+        {
+          event_type: 'contract',
+          contract_id: null,
+          topics: [{ type: 'sym', value: 'mint' }],
+          data: {},
+          event_index: 1,
+          op_index: 0,
+        },
+        {
+          event_type: 'contract',
+          contract_id: null,
+          topics: [],
+          data: {},
+          event_index: 2,
+          op_index: null,
+        },
+      ],
+    });
+    // heavy.application_order = 2 → matches op_index 1 only.
+    expect(screen.getByText('transfer')).toBeTruthy();
+    expect(screen.queryByText('mint')).toBeNull();
+  });
 });

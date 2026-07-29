@@ -4604,6 +4604,11 @@
             "type": "string",
             "description": "`\"contract\"`, `\"system\"`, or `\"diagnostic\"`."
           },
+          "op_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 V4 per-operation container only; `None` for tx-level,\ndiagnostic and pre-Protocol-23 events). Matches\n`XdrOperationDto.application_order - 1`."
+          },
           "topics": {
             "type": "array",
             "items": {},
