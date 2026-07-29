@@ -136,11 +136,36 @@ export function toFlowNodes({ tx, light, heavy }: BuildNodesInput): FlowNode[] {
     });
   }
 
+  // The node is titled "Result" and painted like a verdict, so it has to carry
+  // one. Until task 0444 it was hardcoded green and its text described what the
+  // operation *did*, never whether it worked — two separate reporters read a
+  // green "Result" on a failed transaction as a success.
+  //
+  // The verdict is the TRANSACTION's, because that is the only one we have:
+  // per-operation result codes are not exposed by the API (see task 0352's
+  // Step 6). That is not a fudge — Stellar applies a transaction atomically, so
+  // when it fails no operation took effect, which is exactly what a reader
+  // needs to know. It does mean we cannot say WHICH operation was at fault.
+  const ok = tx.successful;
   const resultNode: FlowNode = {
     id: 'result',
-    kind: 'result',
-    title: 'Result',
-    summary: buildResultSummary(heavy?.details, humanizeOp(light, heavy)),
+    kind: ok ? 'result' : 'result-failed',
+    title: ok ? 'Result · Success' : 'Result · Failed',
+    summary: ok ? (
+      buildResultSummary(heavy?.details, humanizeOp(light, heavy))
+    ) : (
+      <Stack spacing={0.25}>
+        <Typography variant="bodySmRegular" sx={{ color: 'inherit' }}>
+          Transaction failed — this operation was not applied.
+        </Typography>
+        <Typography
+          variant="bodySmRegular"
+          sx={{ color: 'inherit', opacity: 0.85 }}
+        >
+          {buildResultSummary(heavy?.details, humanizeOp(light, heavy))}
+        </Typography>
+      </Stack>
+    ),
   };
 
   const destinationCollector: {
