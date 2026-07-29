@@ -106,6 +106,23 @@ describe('humanizeOp', () => {
     expect(humanizeOp(op, null)).toBe('Sent EURC to GA5X…GKTM');
   });
 
+  it('names the called function for invoke-host-function (camelCase key)', () => {
+    const op = light({
+      type_name: 'INVOKE_HOST_FUNCTION',
+      contract_id: 'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
+    });
+    const h = heavy({ functionName: 'plant', functionArgs: [] });
+    expect(humanizeOp(op, h)).toBe('Called plant() on CDL7…IGWA');
+  });
+
+  it('falls back to the contract-only label when functionName is absent', () => {
+    const op = light({
+      type_name: 'INVOKE_HOST_FUNCTION',
+      contract_id: 'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
+    });
+    expect(humanizeOp(op, heavy({}))).toBe('Invoked contract CDL7…IGWA');
+  });
+
   it('shows the starting balance for create-account', () => {
     const op = light({
       type_name: 'CREATE_ACCOUNT',

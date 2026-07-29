@@ -1,14 +1,11 @@
 import type { OperationItem } from '@rumblefish/api-types';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { Box, Stack, Typography } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 
-export type EnrichedOp = OperationItem & {
-  subtype?: string | null;
-};
+export type EnrichedOp = OperationItem;
 
 interface OperationPickerProps {
   operations: readonly EnrichedOp[];
@@ -16,15 +13,8 @@ interface OperationPickerProps {
   onSelect: (index: number) => void;
 }
 
-const ALL_TYPES = '__all__';
-
 function opNumber(op: EnrichedOp, index: number): number {
   return op.application_order ?? index + 1;
-}
-
-function rowSubLabel(op: EnrichedOp): string {
-  if (op.subtype != null && op.subtype.length > 0) return op.subtype;
-  return formatOperationType(op.type_name);
 }
 
 function OpAvatar() {
@@ -56,62 +46,16 @@ export function OperationPicker({
   selectedIndex,
   onSelect,
 }: OperationPickerProps) {
-  const [typeFilter, setTypeFilter] = useState<string>(ALL_TYPES);
-
-  const subtypes = useMemo(() => {
-    const seen = new Set<string>();
-    for (const op of operations) {
-      if (op.subtype != null && op.subtype.length > 0) seen.add(op.subtype);
-    }
-    return Array.from(seen);
-  }, [operations]);
-
   const visible = useMemo(
-    () =>
-      operations
-        .map((op, index) => ({ op, index }))
-        .filter(({ op }) =>
-          typeFilter === ALL_TYPES ? true : op.subtype === typeFilter
-        ),
-    [operations, typeFilter]
+    () => operations.map((op, index) => ({ op, index })),
+    [operations]
   );
 
   return (
     <Stack spacing={1.5} sx={{ height: '100%', minWidth: 0 }}>
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ flexWrap: 'wrap', rowGap: 0.75 }}
-      >
-        <Typography variant="heading6SemiBold" component="h3">
-          Choose operation
-        </Typography>
-        <Stack
-          direction="row"
-          spacing={0.75}
-          sx={{ flexWrap: 'wrap', rowGap: 0.75 }}
-        >
-          <Chip
-            size="sm"
-            color={typeFilter === ALL_TYPES ? 'accent' : 'neutral'}
-            label="All types"
-            clickable
-            onClick={() => setTypeFilter(ALL_TYPES)}
-          />
-          {subtypes.map((subtype) => (
-            <Chip
-              key={subtype}
-              size="sm"
-              color={typeFilter === subtype ? 'accent' : 'neutral'}
-              label={subtype}
-              clickable
-              onClick={() => setTypeFilter(subtype)}
-            />
-          ))}
-        </Stack>
-      </Stack>
+      <Typography variant="heading6SemiBold" component="h3">
+        Choose operation
+      </Typography>
       <Stack
         component="ul"
         spacing={1}
@@ -131,7 +75,7 @@ export function OperationPicker({
               variant="bodySmRegular"
               sx={(theme) => ({ color: theme.palette.text.tertiary })}
             >
-              No operations match the selected type.
+              No operations in this transaction.
             </Typography>
           </Box>
         ) : (
@@ -185,7 +129,7 @@ export function OperationPicker({
                     variant="bodyXsRegular"
                     sx={(theme) => ({ color: theme.palette.text.tertiary })}
                   >
-                    {rowSubLabel(op)}
+                    {formatOperationType(op.type_name)}
                   </Typography>
                 </Stack>
                 <KeyboardArrowRightIcon

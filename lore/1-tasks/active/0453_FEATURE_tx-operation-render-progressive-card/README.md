@@ -75,6 +75,18 @@ history:
       only (per-op index discarded at parse); heavy.operation_tree and
       heavy.result_code arrive unread — a third option for 0442 and a partial
       answer to #364. Redesign phase next: live benchmark + /ux-expert.
+  - date: '2026-07-29'
+    status: active
+    who: karolkow
+    note: >
+      From-zero design pass finished: live benchmark (stellar.expert,
+      stellarchain, Solscan), three interactive prototypes, UX literature +
+      deep dive (SE MIT templates, Blockscout interpretation, Tenderly trace).
+      Layout settled with Karol: one card, master-detail frame, index always
+      visible; toggle survives until parity. Converted to directory; governing
+      spec with 15 numbered decisions and 7 shippable waves in
+      notes/G-implementation-plan.md — it supersedes the audit's render
+      sketch. Starting wave 0 (dead code + functionName fix).
 ---
 
 # FEATURE: one progressive operation card
@@ -87,16 +99,19 @@ one-liner that is **factually wrong** for anything but a plain payment, and an
 **one card per operation** — a true human headline, the asset movement as key
 facts, then progressive disclosure down to raw XDR.
 
-The design work is already done. It is written up in
-[`0359/notes/S-tx-render-audit.md`](../archive/0359_FEATURE_asset-participation-index-remodel/notes/S-tx-render-audit.md),
+> **Governing spec: [`notes/G-implementation-plan.md`](notes/G-implementation-plan.md)**
+> (2026-07-29, after the from-zero design pass). The audit below remains the
+> finding record; where the two disagree on the solution, the G-note wins.
+
+The original design write-up is in
+[`0359/notes/S-tx-render-audit.md`](../../archive/0359_FEATURE_asset-participation-index-remodel/notes/S-tx-render-audit.md),
 including a per-op-type headline spec for 16+ operation types and the field
-mapping for each. **Read that note first — this task is its implementation, not
-a re-design.**
+mapping for each.
 
 ## Where this came from
 
 It was **planned and never spawned**. 0359's spawn plan
-([`notes/G-spawn-plan.md`](../archive/0359_FEATURE_asset-participation-index-remodel/notes/G-spawn-plan.md),
+([`notes/G-spawn-plan.md`](../../archive/0359_FEATURE_asset-participation-index-remodel/notes/G-spawn-plan.md),
 sibling **#6 "FE — transaction render"**) already scoped it, already flagged the
 `humanizeOp` mislabel as a standalone quick fix, and already established that it
 is independent of 0359's data work except the claim-CB headline. It then closed

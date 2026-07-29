@@ -63,17 +63,9 @@ function amountFieldsFor(typeName: string): { amount: string; asset: string } {
 function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
   const details = heavy?.details;
   if (details && typeof details === 'object' && !Array.isArray(details)) {
-    const fn = (details as { function_name?: unknown }).function_name;
+    // The parser emits camelCase keys (`functionName`), not snake_case.
+    const fn = (details as { functionName?: unknown }).functionName;
     if (typeof fn === 'string' && fn.length > 0) return fn;
-  }
-  return null;
-}
-
-function summaryFromHeavy(heavy: XdrOperationDto | null): string | null {
-  const details = heavy?.details;
-  if (details && typeof details === 'object' && !Array.isArray(details)) {
-    const value = (details as { summary?: unknown }).summary;
-    if (typeof value === 'string' && value.length > 0) return value;
   }
   return null;
 }
@@ -82,9 +74,6 @@ export function humanizeOp(
   light: OperationItem,
   heavy: XdrOperationDto | null
 ): string {
-  const explicit = summaryFromHeavy(heavy);
-  if (explicit != null) return explicit;
-
   const opLabel = formatOperationType(light.type_name);
 
   switch (light.type_name) {

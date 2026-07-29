@@ -132,7 +132,6 @@ export function OperationJsonDetail({
   const fnName = asString(pickDetailValue(details, 'functionName').value);
   const argsField = pickDetailValue(details, 'functionArgs');
   const returnField = pickDetailValue(details, 'returnValue');
-  const authField = pickDetailValue(details, 'auth');
 
   // Soroban (INVOKE_HOST_FUNCTION) gets the typed rows above; every other op
   // type (payment, manage_offer, change_trust, …) emits its own `details` map
@@ -183,12 +182,6 @@ export function OperationJsonDetail({
               <HighlightedJson value={returnField.value} />
             )
           }
-        />
-      )}
-      {authField.present && (
-        <AdvancedRow
-          label="auth"
-          value={<HighlightedJson value={authField.value} />}
         />
       )}
       {genericEntries.map(([key, value]) => (

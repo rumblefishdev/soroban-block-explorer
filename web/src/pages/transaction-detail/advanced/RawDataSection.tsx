@@ -7,7 +7,6 @@ import { XdrRow } from './XdrRow.js';
 interface RawDataSectionProps {
   envelopeXdr: string | null | undefined;
   resultXdr: string | null | undefined;
-  resultsMetaXdr: string | null | undefined;
 }
 
 interface XdrEntry {
@@ -22,15 +21,12 @@ function present(value: string | null | undefined): value is string {
 export function RawDataSection({
   envelopeXdr,
   resultXdr,
-  resultsMetaXdr,
 }: RawDataSectionProps) {
   const entries: XdrEntry[] = [];
   if (present(envelopeXdr))
     entries.push({ label: 'envelope_xdr', value: envelopeXdr });
   if (present(resultXdr))
     entries.push({ label: 'result_xdr', value: resultXdr });
-  if (present(resultsMetaXdr))
-    entries.push({ label: 'results_meta_xdr', value: resultsMetaXdr });
 
   return (
     <SectionCard
