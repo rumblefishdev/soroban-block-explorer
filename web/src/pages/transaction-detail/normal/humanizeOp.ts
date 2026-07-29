@@ -57,6 +57,22 @@ function isSelf(light: OperationItem): boolean {
  *  the top of the i64 range can only mean "no limit". */
 const UNLIMITED_STROOPS = 9.2e18;
 
+function detStr(
+  details: Record<string, unknown> | null,
+  key: string
+): string | null {
+  const v = details?.[key];
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+/** Offer price is the XDR rational `{n, d}`. */
+function priceStr(value: unknown): string | null {
+  if (value == null || typeof value !== 'object') return null;
+  const { n, d } = value as { n?: unknown; d?: unknown };
+  if (typeof n !== 'number' || typeof d !== 'number' || d === 0) return null;
+  return (n / d).toLocaleString('en-US', { maximumFractionDigits: 7 });
+}
+
 function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
   const details = heavy?.details;
   if (details && typeof details === 'object' && !Array.isArray(details)) {
@@ -67,6 +83,10 @@ function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
   return null;
 }
 
+/** One true sentence per operation type, built from the heavy `details` the
+ *  API already delivers (light fields as degraded fallback). Wording adapted
+ *  from stellar.expert's open-source explorer (stellar-expert/ui-framework,
+ *  `tx/op-description-view.js`, MIT). */
 export function humanizeOp(
   light: OperationItem,
   heavy: XdrOperationDto | null
@@ -180,6 +200,186 @@ export function humanizeOp(
           : `Created account ${dest}`;
       }
       break;
+    case 'MANAGE_SELL_OFFER':
+    case 'MANAGE_BUY_OFFER':
+    case 'CREATE_PASSIVE_SELL_OFFER': {
+      const details = detailsObj(heavy);
+      const selling = assetUnit(details?.selling, null);
+      const buying = assetUnit(details?.buying, null);
+      if (details == null || selling == null || buying == null) break;
+      const buySide = light.type_name === 'MANAGE_BUY_OFFER';
+      const amount = asAmount(details[buySide ? 'buyAmount' : 'amount']);
+      const offerId = asAmount(details.offerId);
+      const offerIdNum = offerId != null ? Number(offerId) : null;
+      if (
+        offerIdNum != null &&
+        offerIdNum !== 0 &&
+        amount != null &&
+        Number(amount) === 0
+      ) {
+        return `Cancelled offer #${offerIdNum}`;
+      }
+      const amountStr =
+        amount != null
+          ? formatTokenAmount(amount, buySide ? buying : selling)
+          : buySide
+          ? buying
+          : selling;
+      // XDR price is always "units of selling per 1 unit of buying" for buy
+      // offers and "units of buying per 1 unit of selling" for sell offers.
+      const price = priceStr(details.price);
+      const priceSuffix =
+        price != null
+          ? buySide
+            ? ` @ ${price} ${selling}/${buying}`
+            : ` @ ${price} ${buying}/${selling}`
+          : '';
+      const action = buySide
+        ? `buy ${amountStr} for ${selling}`
+        : `sell ${amountStr} for ${buying}`;
+      if (light.type_name === 'CREATE_PASSIVE_SELL_OFFER') {
+        return `Placed a passive offer: ${action}${priceSuffix}`;
+      }
+      if (offerIdNum != null && offerIdNum !== 0) {
+        return `Updated offer #${offerIdNum}: ${action}${priceSuffix}`;
+      }
+      return `Offered to ${action}${priceSuffix}`;
+    }
+    case 'LIQUIDITY_POOL_DEPOSIT': {
+      const id = detStr(detailsObj(heavy), 'liquidityPoolId');
+      if (id == null) break;
+      return `Deposited into liquidity pool ${shortId(id)}`;
+    }
+    case 'LIQUIDITY_POOL_WITHDRAW': {
+      const id = detStr(detailsObj(heavy), 'liquidityPoolId');
+      if (id == null) break;
+      return `Withdrew from liquidity pool ${shortId(id)}`;
+    }
+    case 'ACCOUNT_MERGE': {
+      const dest =
+        detStr(detailsObj(heavy), 'destination') ?? light.destination_account;
+      if (dest == null) break;
+      return `Merged this account into ${shortId(dest)}`;
+    }
+    case 'CREATE_CLAIMABLE_BALANCE': {
+      const details = detailsObj(heavy);
+      const unit = assetUnit(details?.asset, null);
+      const amount = asAmount(details?.amount);
+      if (unit == null || amount == null) break;
+      const claimants = asAmount(details?.claimants);
+      const who =
+        claimants != null
+          ? ` for ${claimants} claimant${Number(claimants) === 1 ? '' : 's'}`
+          : '';
+      return `Escrowed ${formatTokenAmount(amount, unit)}${who}`;
+    }
+    case 'CLAIM_CLAIMABLE_BALANCE': {
+      const id = detStr(detailsObj(heavy), 'balanceId');
+      if (id == null) break;
+      // The asset is not in the operation body; naming it needs the
+      // ledger-entry changes (spec D8). Until then: id only, like SE.
+      return `Claimed balance ${shortId(id)}`;
+    }
+    case 'CLAWBACK_CLAIMABLE_BALANCE': {
+      const id = detStr(detailsObj(heavy), 'balanceId');
+      if (id == null) break;
+      return `Clawed back balance ${shortId(id)}`;
+    }
+    case 'CLAWBACK': {
+      const details = detailsObj(heavy);
+      const unit = assetUnit(details?.asset, null);
+      const amount = asAmount(details?.amount);
+      const from = detStr(details, 'from');
+      if (unit == null || amount == null || from == null) break;
+      return `Clawed back ${formatTokenAmount(amount, unit)} from ${shortId(
+        from
+      )}`;
+    }
+    case 'SET_TRUST_LINE_FLAGS':
+    case 'ALLOW_TRUST': {
+      const details = detailsObj(heavy);
+      const trustor = detStr(details, 'trustor');
+      const code = assetUnit(details?.asset, null);
+      if (trustor == null || code == null) break;
+      const who = shortId(trustor);
+      // AUTHORIZED flag is bit 1 in both ops' flag fields.
+      const authorized =
+        light.type_name === 'ALLOW_TRUST'
+          ? Number(asAmount(details?.authorize) ?? 0) & 1
+          : Number(asAmount(details?.setFlags) ?? 0) & 1;
+      const authorizeField = asAmount(details?.authorize);
+      const revoked =
+        light.type_name === 'ALLOW_TRUST'
+          ? authorizeField != null && Number(authorizeField) === 0
+          : (Number(asAmount(details?.clearFlags) ?? 0) & 1) === 1;
+      if (authorized) return `Authorized ${who} for ${code}`;
+      if (revoked) return `Revoked ${who}'s authorization for ${code}`;
+      return `Updated trustline flags for ${who} on ${code}`;
+    }
+    case 'BEGIN_SPONSORING_FUTURE_RESERVES': {
+      const sponsored = detStr(detailsObj(heavy), 'sponsoredId');
+      if (sponsored == null) break;
+      return `Sponsored reserves for ${shortId(sponsored)}`;
+    }
+    case 'END_SPONSORING_FUTURE_RESERVES':
+      return 'Ended reserve sponsorship';
+    case 'REVOKE_SPONSORSHIP': {
+      const details = detailsObj(heavy);
+      const kind = detStr(details, 'kind');
+      if (kind === 'signer') {
+        const account = detStr(details, 'accountId');
+        return account != null
+          ? `Revoked sponsorship of a signer on ${shortId(account)}`
+          : 'Revoked sponsorship of a signer';
+      }
+      if (kind === 'ledgerEntry') {
+        const entry = detStr(details, 'ledgerKeyType');
+        return entry != null
+          ? `Revoked sponsorship of a ${entry} entry`
+          : 'Revoked sponsorship of a ledger entry';
+      }
+      break;
+    }
+    case 'SET_OPTIONS': {
+      const details = detailsObj(heavy);
+      if (details == null) break;
+      const signerKey = detStr(details, 'signerKey');
+      if (signerKey != null) {
+        const weight = asAmount(details.signerWeight);
+        return weight != null && Number(weight) === 0
+          ? `Removed signer ${shortId(signerKey)}`
+          : `Set signer ${shortId(signerKey)}${
+              weight != null ? ` (weight ${weight})` : ''
+            }`;
+      }
+      const homeDomain = detStr(details, 'homeDomain');
+      if (homeDomain != null) return `Set home domain to ${homeDomain}`;
+      return 'Updated account options';
+    }
+    case 'MANAGE_DATA': {
+      const details = detailsObj(heavy);
+      const name = detStr(details, 'name');
+      if (details == null || name == null) break;
+      return 'value' in details && details.value === null
+        ? `Deleted data entry "${name}"`
+        : `Set data entry "${name}"`;
+    }
+    case 'BUMP_SEQUENCE': {
+      const bumpTo = asAmount(detailsObj(heavy)?.bumpTo);
+      if (bumpTo == null) break;
+      return `Bumped sequence to ${bumpTo}`;
+    }
+    case 'EXTEND_FOOTPRINT_TTL': {
+      const extendTo = asAmount(detailsObj(heavy)?.extendTo);
+      if (extendTo == null) break;
+      return `Extended contract state TTL by ${Number(extendTo).toLocaleString(
+        'en-US'
+      )} ledgers`;
+    }
+    case 'RESTORE_FOOTPRINT':
+      return 'Restored archived contract state';
+    case 'INFLATION':
+      return 'Ran inflation';
   }
 
   return `${opLabel} processed`;

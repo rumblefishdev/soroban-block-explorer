@@ -239,4 +239,192 @@ describe('humanizeOp', () => {
       'Set trustline to VELO (issuer GDM4…2M5M)'
     );
   });
+
+  const GTRUSTOR = 'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM';
+
+  it('describes a new sell offer with price units', () => {
+    const op = light({ type_name: 'MANAGE_SELL_OFFER' });
+    const h = heavy({
+      selling: 'ETH:GISSUER',
+      buying: 'USDC:GISSUER',
+      amount: 50_000_000,
+      price: { n: 30012, d: 10 },
+      offerId: 0,
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Offered to sell 5 ETH for USDC @ 3,001.2 USDC/ETH'
+    );
+  });
+
+  it('reads amount 0 on an existing offer as cancellation', () => {
+    const op = light({ type_name: 'MANAGE_SELL_OFFER' });
+    const h = heavy({
+      selling: 'ETH:GISSUER',
+      buying: 'USDC:GISSUER',
+      amount: 0,
+      price: { n: 1, d: 1 },
+      offerId: 123,
+    });
+    expect(humanizeOp(op, h)).toBe('Cancelled offer #123');
+  });
+
+  it('describes a buy offer from buyAmount with inverted price units', () => {
+    const op = light({ type_name: 'MANAGE_BUY_OFFER' });
+    const h = heavy({
+      selling: 'USDC:GISSUER',
+      buying: 'ETH:GISSUER',
+      buyAmount: 50_000_000,
+      price: { n: 30012, d: 10 },
+      offerId: 0,
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Offered to buy 5 ETH for USDC @ 3,001.2 USDC/ETH'
+    );
+  });
+
+  it('labels a passive offer', () => {
+    const op = light({ type_name: 'CREATE_PASSIVE_SELL_OFFER' });
+    const h = heavy({
+      selling: 'ETH:GISSUER',
+      buying: 'USDC:GISSUER',
+      amount: 50_000_000,
+      price: { n: 3, d: 1 },
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Placed a passive offer: sell 5 ETH for USDC @ 3 USDC/ETH'
+    );
+  });
+
+  it('names the pool for a liquidity-pool deposit', () => {
+    const op = light({ type_name: 'LIQUIDITY_POOL_DEPOSIT' });
+    const h = heavy({
+      liquidityPoolId:
+        'c4f14da0a2c9be653a16bb52345f9e69b2b1e1b0c00c8d94aec6e0006bc07222',
+      maxAmountA: 1,
+      maxAmountB: 2,
+    });
+    expect(humanizeOp(op, h)).toBe('Deposited into liquidity pool c4f1…7222');
+  });
+
+  it('describes an account merge', () => {
+    const op = light({ type_name: 'ACCOUNT_MERGE' });
+    const h = heavy({ destination: GTRUSTOR });
+    expect(humanizeOp(op, h)).toBe('Merged this account into GA5X…GKTM');
+  });
+
+  it('describes escrowing a claimable balance with the claimant count', () => {
+    const op = light({ type_name: 'CREATE_CLAIMABLE_BALANCE' });
+    const h = heavy({
+      asset: 'USDC:GISSUER',
+      amount: 50_000_000,
+      claimants: 2,
+    });
+    expect(humanizeOp(op, h)).toBe('Escrowed 5 USDC for 2 claimants');
+  });
+
+  it('claims a balance by id only (asset needs meta, spec D8)', () => {
+    const op = light({ type_name: 'CLAIM_CLAIMABLE_BALANCE' });
+    const h = heavy({
+      balanceId:
+        '0abc14da0a2c9be653a16bb52345f9e69b2b1e1b0c00c8d94aec6e0006bcef12',
+    });
+    expect(humanizeOp(op, h)).toBe('Claimed balance 0abc…ef12');
+  });
+
+  it('describes a clawback', () => {
+    const op = light({ type_name: 'CLAWBACK' });
+    const h = heavy({
+      asset: 'USDC:GISSUER',
+      from: GTRUSTOR,
+      amount: 50_000_000,
+    });
+    expect(humanizeOp(op, h)).toBe('Clawed back 5 USDC from GA5X…GKTM');
+  });
+
+  it('reads the AUTHORIZED bit from set-trustline-flags', () => {
+    const op = light({ type_name: 'SET_TRUST_LINE_FLAGS' });
+    const h = heavy({
+      trustor: GTRUSTOR,
+      asset: `VELO:${VELO_ISSUER}`,
+      setFlags: 1,
+      clearFlags: 0,
+    });
+    expect(humanizeOp(op, h)).toBe('Authorized GA5X…GKTM for VELO');
+  });
+
+  it('reads authorize 0 in allow-trust as revocation', () => {
+    const op = light({ type_name: 'ALLOW_TRUST' });
+    const h = heavy({ trustor: GTRUSTOR, asset: 'VELO', authorize: 0 });
+    expect(humanizeOp(op, h)).toBe(
+      "Revoked GA5X…GKTM's authorization for VELO"
+    );
+  });
+
+  it('describes sponsorship begin/end', () => {
+    const begin = light({ type_name: 'BEGIN_SPONSORING_FUTURE_RESERVES' });
+    expect(humanizeOp(begin, heavy({ sponsoredId: GTRUSTOR }))).toBe(
+      'Sponsored reserves for GA5X…GKTM'
+    );
+    const end = light({ type_name: 'END_SPONSORING_FUTURE_RESERVES' });
+    expect(humanizeOp(end, heavy({}))).toBe('Ended reserve sponsorship');
+  });
+
+  it('describes revoking a ledger-entry sponsorship', () => {
+    const op = light({ type_name: 'REVOKE_SPONSORSHIP' });
+    const h = heavy({ kind: 'ledgerEntry', ledgerKeyType: 'Trustline' });
+    expect(humanizeOp(op, h)).toBe('Revoked sponsorship of a Trustline entry');
+  });
+
+  it('reads signer weight 0 in set-options as signer removal', () => {
+    const op = light({ type_name: 'SET_OPTIONS' });
+    const h = heavy({ signerKey: GTRUSTOR, signerWeight: 0 });
+    expect(humanizeOp(op, h)).toBe('Removed signer GA5X…GKTM');
+  });
+
+  it('summarises multi-field set-options generically', () => {
+    const op = light({ type_name: 'SET_OPTIONS' });
+    const h = heavy({ masterWeight: 1, lowThreshold: 2 });
+    expect(humanizeOp(op, h)).toBe('Updated account options');
+  });
+
+  it('reads a null manage-data value as deletion', () => {
+    const op = light({ type_name: 'MANAGE_DATA' });
+    expect(humanizeOp(op, heavy({ name: 'config', value: null }))).toBe(
+      'Deleted data entry "config"'
+    );
+    expect(humanizeOp(op, heavy({ name: 'config', value: 'YWJj' }))).toBe(
+      'Set data entry "config"'
+    );
+  });
+
+  it('covers the remaining short labels', () => {
+    expect(
+      humanizeOp(light({ type_name: 'BUMP_SEQUENCE' }), heavy({ bumpTo: 42 }))
+    ).toBe('Bumped sequence to 42');
+    expect(
+      humanizeOp(
+        light({ type_name: 'EXTEND_FOOTPRINT_TTL' }),
+        heavy({ extendTo: 120000 })
+      )
+    ).toBe('Extended contract state TTL by 120,000 ledgers');
+    expect(
+      humanizeOp(light({ type_name: 'RESTORE_FOOTPRINT' }), heavy({}))
+    ).toBe('Restored archived contract state');
+    expect(humanizeOp(light({ type_name: 'INFLATION' }), heavy({}))).toBe(
+      'Ran inflation'
+    );
+  });
+
+  it('falls back to the generic label for every detail-dependent type without heavy', () => {
+    for (const type_name of [
+      'MANAGE_SELL_OFFER',
+      'LIQUIDITY_POOL_DEPOSIT',
+      'CREATE_CLAIMABLE_BALANCE',
+      'CLAWBACK',
+      'REVOKE_SPONSORSHIP',
+      'MANAGE_DATA',
+    ]) {
+      expect(humanizeOp(light({ type_name }), null)).toMatch(/ processed$/);
+    }
+  });
 });
