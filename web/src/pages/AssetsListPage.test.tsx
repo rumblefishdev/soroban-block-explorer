@@ -234,4 +234,27 @@ describe('AssetsListPage', () => {
       .filter((a) => a.getAttribute('href')?.startsWith('https://'));
     expect(external).toHaveLength(0);
   });
+
+  // The issuer branch is tested first, which is only safe because a
+  // Soroban-native asset has no issuer (`issuer_id` is 0 for native and
+  // soroban-native). This pins that: the contract must still win when there is
+  // nobody to attribute the asset to.
+  it('falls back to the contract for a Soroban-native asset with no issuer', () => {
+    mockOk([
+      makeAsset({
+        id: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+        asset_code: null,
+        asset_type: 3,
+        asset_type_name: 'soroban',
+        symbol: 'SOR',
+        issuer: null,
+        issuer_home_domain: null,
+        contract_id: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+      }),
+    ]);
+
+    renderWithProviders(<AssetsListPage />);
+
+    expect(screen.getByText('CAS3…OWMA')).toBeInTheDocument();
+  });
 });

@@ -67,6 +67,30 @@ history:
       check -p api` clean, API types regenerated (additive only). Verified
       visually against a local stub, since the deployed API has no such field
       yet. NOT deployed — the issue stays open until it is.
+  - date: '2026-07-28'
+    status: active
+    who: karolkow
+    note: >
+      Two corrections to the entry above, both from review.
+      **(a) "Nothing is lost by the reorder" was wrong.** The SAC address is no
+      longer on the list at all: the Token column's `SAC` chip is a plain label,
+      not a link, and it only appears when `sac_deployed`, so a reserved
+      un-deployed SAC now shows nowhere on the list. The address is on the asset
+      detail page (`web/src/pages/assets/AssetSummary.tsx:102-130`),
+      untruncated and copyable — so it is one click away rather than gone, but
+      directness was lost and the commit message overstated it. Accepted: the
+      alternatives are a crowded cell, or linking the `SAC` chip, which would
+      make one chip navigate while the identical-looking `Classic`/`Soroban`
+      type badges do not — those are categories with nowhere to point (ADR 0051
+      keeps the SAC facet deliberately orthogonal to the type axis).
+      **(b) Branch order hardened.** `issuer` is now tested FIRST, not second.
+      Both orderings work today because `issuer_id` is 0 for native and
+      soroban-native (`crates/db-clickhouse/schema/init.sql:299`), but testing a
+      contract column first puts the original trap one refactor away — merging
+      `contract_id` and `sac_contract_id` would silently displace the issuer
+      again. Issuer-first is the only branch whose condition does not depend on
+      the contract columns. A third regression test pins the Soroban-native
+      fallback.
 ---
 
 # FEATURE: issuer home domain in the assets-list issuer column
@@ -155,7 +179,14 @@ issuer           → issuer G…
 The SAC branch wins over the issuer branch. So **for any classic asset with an
 observed SAC, the column shows a `C…` contract address and never shows the
 issuer at all** — and USDC, the reporter's own example, has one. The request
-described `G… - Centre.io`; today that row shows neither half.
+described `G… - Centre.io`; that row showed neither half.
+
+Calling this a bug overstates it. The branch arrived with 0339, which collapsed
+the classic↔SAC two-row split into one row — before that a SAC was its own asset
+whose identity _was_ the contract, so keeping the contract visible preserved
+what the old row showed. The comment written at the time justifies the _linking_
+rule, not the _precedence_. It is undocumented precedence with a consequence
+nobody weighed, not a mistake.
 
 So the column has to be decided before the chip means anything:
 
