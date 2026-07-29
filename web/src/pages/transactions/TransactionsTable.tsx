@@ -14,7 +14,6 @@ import {
   ledgerColumn,
   OperationCell,
   statusColumn,
-  ValueCell,
 } from './cells.js';
 import { TransactionTime } from './TransactionTime.js';
 
@@ -45,12 +44,13 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
   statusColumn<TransactionListItem>(),
-  {
-    id: 'net_settled',
-    header: 'Net settled',
-    width: 170,
-    cell: (row) => <ValueCell values={row.values} />,
-  },
+  // The "Net settled" column is built (`ValueCell` in ./cells.tsx) but NOT
+  // rendered: the value it shows only exists once the prod rollout in task 0419
+  // lands — the CH column, the indexer that writes it, and the full S3
+  // re-ingest that materialises history. Until then the API returns no
+  // `values` at all and every cell would read as a dash. Task 0411 owns when
+  // and where this column comes back; it is also gated on 0417 (the read is a
+  // partition scan on the polled global tx list).
   {
     id: 'fee',
     header: 'Fee',

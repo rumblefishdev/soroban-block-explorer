@@ -16,6 +16,18 @@ history:
     status: backlog
     who: karolkow
     note: 'Folded in 0393 code-review finding F: this task owns the per-endpoint `values` gating (which endpoints render the column), so the `wants_values` flag cleanup + moving the tx-value query out of the shared `common/ch.rs` belong here.'
+  - date: 2026-07-29
+    status: backlog
+    who: karolkow
+    note: >
+      Scope grew by one item: the column was REMOVED from the shipped tx-list
+      table, so this task now owns bringing it back as well as extending it.
+      A pre-deploy audit of production found no part of 0393 live — the CH
+      column, the API `values` field and the SPA bundle are all pre-0393 — so
+      shipping the frontend as it stood would have rendered a dash in every
+      row of every view that uses `TransactionsTable` (global list, ledger
+      detail, account detail), not merely for history. Blocked on 0419 (CH
+      ALTER → indexer deploy → S3 re-ingest) and 0417 (read-path release gate).
 ---
 
 # FEATURE: net-settled on tx detail page + remaining tx-list tables
@@ -45,6 +57,11 @@ consistent to do so.
 
 ## Implementation
 
+- **Restore the tx-list column** (`web/src/pages/transactions/TransactionsTable.tsx`):
+  the `net_settled` column entry was removed ahead of a frontend deploy, because
+  none of 0393 is live in production — the column definition is gone, the comment
+  in its place points here, and `ValueCell` / `cells.tsx` are untouched. Put the
+  entry back once 0419 has run; nothing else on the frontend was changed.
 - **Detail page** (`web/src/pages/TransactionDetailPage.tsx` /
   `transaction-detail/`): render the full per-asset net-settled list (each row:
   scaled amount + asset code link), reusing `scaleByDecimals` + `formatAmount`.
@@ -66,6 +83,8 @@ consistent to do so.
 
 ## Acceptance Criteria
 
+- [ ] Tx-list `net_settled` column restored in `TransactionsTable` (removed
+      pre-deploy; only valid once 0419 has run and the API returns `values`).
 - [ ] Tx detail page shows the full per-asset net-settled breakdown (scaled).
 - [ ] `LedgerTransactions` renders the "Net settled" column.
 - [ ] AssetTransactions decision recorded (added with API toggle, or explicitly
