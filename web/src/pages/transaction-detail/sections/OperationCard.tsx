@@ -8,8 +8,10 @@ import { formatOperationType } from '../../transactions/operationTypes.js';
 import { OperationJsonDetail } from '../advanced/OperationJsonDetail.js';
 import { detailsObj, humanizeOp } from '../normal/humanizeOp.js';
 
+import { CallTree, parseOperationTree } from './CallTree.js';
 import { opFacts } from './opFacts.js';
 import { OpIcon } from './opIcon.js';
+import { buildRouteModel, RouteStrip } from './RouteStrip.js';
 
 const SOROBAN_TYPES = new Set([
   'INVOKE_HOST_FUNCTION',
@@ -29,6 +31,9 @@ interface OperationCardProps {
   fallbackOrder: number;
   /** Ops without their own source inherit the transaction's (self-detection). */
   txSourceAccount: string | null;
+  /** `heavy.operation_tree` — tx-level, safe to attach to the invoke card
+   *  (protocol 21+: one InvokeHostFunction per transaction). */
+  operationTree?: unknown;
 }
 
 export function OperationCard({
@@ -38,6 +43,7 @@ export function OperationCard({
   defaultDetailsOpen,
   fallbackOrder,
   txSourceAccount,
+  operationTree,
 }: OperationCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(defaultDetailsOpen);
 
@@ -55,7 +61,16 @@ export function OperationCard({
   const order = light.application_order ?? fallbackOrder;
   const label = formatOperationType(light.type_name);
   const kind = SOROBAN_TYPES.has(light.type_name) ? 'Soroban' : 'Classic';
-  const facts = opFacts(light, heavy);
+  const routeModel = buildRouteModel(heavy);
+  // The strip shows the route with per-hop amounts; drop the plain-text
+  // Route row so the same chain is not stated twice.
+  const facts = opFacts(light, heavy).filter(
+    (fact) => routeModel == null || fact.label !== 'Route'
+  );
+  const callNodes =
+    light.type_name === 'INVOKE_HOST_FUNCTION'
+      ? parseOperationTree(operationTree)
+      : [];
   const detailCount = Object.keys(detailsObj(heavy) ?? {}).length;
 
   return (
@@ -125,6 +140,26 @@ export function OperationCard({
         >
           {humanizeOp(light, heavy, txSourceAccount)}
         </Typography>
+
+        {routeModel != null && <RouteStrip model={routeModel} />}
+
+        {callNodes.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Typography
+              variant="bodyXsRegular"
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                fontWeight: 650,
+                mb: 0.5,
+              })}
+            >
+              Call tree
+            </Typography>
+            <CallTree nodes={callNodes} />
+          </Box>
+        )}
 
         {facts.length > 0 && (
           <Box

@@ -43,6 +43,7 @@ export function OperationsSection({
       defaultDetailsOpen={mode === 'advanced'}
       fallbackOrder={selectedIndex + 1}
       txSourceAccount={tx.source_account ?? null}
+      operationTree={tx.heavy?.operation_tree}
     />
   );
 

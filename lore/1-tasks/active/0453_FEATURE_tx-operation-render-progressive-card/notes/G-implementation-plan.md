@@ -208,6 +208,19 @@ failure pinpoint, failure reason, story chip.
   they belong to the card render, not the tree that wave 3 replaces.
 - **Deep links** (wave-3 item, landed early): `#op-N` selects the operation,
   survives reload, preserves query params.
+- **Wave 3.5 — done**: story chip (`classifyTx`, D12) next to the status chip
+  — "Swap · 4 ops", "Contract call", "Payments · N"; null on mixed bags
+  (absent beats wrong).
+- **Wave 4 (frontend half) — done**: RouteStrip in path-payment cards — asset
+  chips with per-hop amounts chained from `claimedAtoms`, `partial` flag +
+  note when the route crossed the order book (atoms are LP-only, D9/D10);
+  CallTree in the invoke card fed by the previously unread
+  `heavy.operation_tree`, per-node ✓/✗ verdict (D11, Tenderly-lite) — first
+  render of nested contract calls in this product. Verified live on mainnet
+  (VELO arb strip with amounts; KALE plant→burn tree). REMAINING in wave 4:
+  the `op_index` micro-backend (D7) to pull events into cards — needs the
+  Rust parser + DTO change + API types regen; not started, pending explicit
+  go-ahead.
 - **Wave 3 — done**: `OperationCard` replaces both mode panels (one card, the
   mode toggle now only defaults the raw-details disclosure open); per-op icons
   in card + picker (D6 closed as _implemented_); PP facts grid (Route, pools,
