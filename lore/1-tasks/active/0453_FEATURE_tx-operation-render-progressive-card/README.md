@@ -271,26 +271,32 @@ id. Render "claimed balance {id}" until that lands; do not block on it.
 
 ## Acceptance criteria
 
-- [ ] Every op type renders a headline that is **true** — no swap reported as a
-      payment, no "processed" placeholder
-- [ ] `CHANGE_TRUST` names the asset and its issuer (the #370 case)
-- [ ] Received amount and route shown for both path-payment directions
-- [ ] Self-transfer (source == destination) recognised in the wording
-- [ ] Amounts formatted, never raw stroops; US number grouping preserved
-- [ ] The normal/advanced toggle is gone, and nothing it used to show is lost
-- [ ] A failed transaction never reads as successful (issue #364)
-- [ ] 0442, 0444 and the per-op icon spec explicitly resolved — implemented,
-      folded in, or withdrawn with the reason recorded
-- [ ] The 0305 boundary held: this task did not absorb pool-id linking, or it
-      did and 0305 was withdrawn saying so
-- [ ] **`/ux-expert` regression pass on the shipped card** — the same audit that
-      produced these eight findings, re-run against the result. It has caught
-      orphans before (0348, 0351): a fix that leaves a filter or a control
-      pointing at something that no longer exists
-- [ ] **Docs updated** — frontend data contracts under `docs/architecture/**`
-      per ADR 0032, if the render's field consumption changes
-- [ ] **API types regenerated** — `N/A` unless the backend contract changes;
-      state which when closing
+- [x] Every op type renders a headline that is **true** — no swap reported as a
+      payment, no "processed" placeholder (all 27 types, wave 1)
+- [x] `CHANGE_TRUST` names the asset and its issuer (the #370 case)
+- [ ] Received amount and route shown for both path-payment directions —
+      route: both; received: exact for strict-receive, **deliberately an
+      honest empty slot for strict-send** (spec D9: not derivable from
+      LP-only `claimedAtoms`; lights up when the net_settled read path lands)
+- [x] Self-transfer (source == destination) recognised in the wording —
+      including ops inheriting the tx source
+- [x] Amounts formatted, never raw stroops; US number grouping preserved
+      (raw numbers remain only inside the explicitly-raw details disclosure)
+- [x] The normal/advanced toggle is gone, and nothing it used to show is lost
+      (per-card details disclosure + always-rendered Events/Raw sections,
+      collapsed; old `?mode=` links degrade gracefully)
+- [x] A failed transaction never reads as successful (issue #364) — summary
+      banner + result_code + dimmed "not applied" cards
+- [x] 0442, 0444 and the per-op icon spec explicitly resolved — 0442 closed
+      (dead branches deleted, real tree from `operation_tree`), 0444 closed
+      (verdict moved to the banner), icons **implemented** (0257 spec adopted)
+- [x] The 0305 boundary held: route assets here, pool links stay in 0305
+- [x] **`/ux-expert` regression pass on the shipped card** —
+      [notes/S-ux-regression-pass.md](notes/S-ux-regression-pass.md)
+- [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`
+      §6.4 rewritten for the one-view contract
+- [x] **API types regenerated** — with the `op_index` DTO change, same commit
+      (freshness gate satisfied)
 
 ## Notes
 

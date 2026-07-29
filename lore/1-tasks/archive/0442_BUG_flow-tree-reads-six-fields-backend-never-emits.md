@@ -2,7 +2,7 @@
 id: '0442'
 title: 'BUG: tx flow tree reads six `details` fields no backend module emits — nested contract calls never render'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0380', '0359', '0453']
 tags:
@@ -16,6 +16,17 @@ tags:
   ]
 links: []
 history:
+  - date: '2026-07-29'
+    status: completed
+    who: karolkow
+    note: >
+      Resolved inside 0453 by the option this task did not know about: the
+      dead branches were deleted in wave 0 (commit dd03759e — six unreachable
+      readers plus the latent details.summary override), and the real nested
+      call tree now renders from the previously unread heavy.operation_tree
+      with a per-node verdict (wave 4). The flow tree itself was replaced by
+      the operation card; decision recorded in 0453
+      notes/G-implementation-plan.md (D4).
   - date: '2026-07-27'
     status: backlog
     who: karolkow

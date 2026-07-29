@@ -232,6 +232,17 @@ failure pinpoint, failure reason, story chip.
   reach production responses only after the next backend deploy (manual,
   docs/deployment.md); the frontend is absence-safe by construction and
   tested that way.
+- **Wave 5 — done**: parity closed and the toggle REMOVED (decision per the
+  layout section: benchmark + #364's own reporter journey; an Etherscan-style
+  raw-preference can return later as an additive slice). Events + Raw
+  sections render always (Events collapsed by default — the F2 wall stays
+  behind one click); `ModeToggle`/`useDetailMode` and the orphaned
+  `OperationFlowTree` (+ its `FlowNode` exports) deleted; docs
+  `frontend-overview.md` §6.4 rewritten (ADR 0032); 0442 + 0444 archived as
+  completed-via-0453; umbrella ACs ticked in the README (one deliberate
+  open box: strict-send received = honest D9 slot); regression audit in
+  notes/S-ux-regression-pass.md. Verified live: old `?mode=advanced` URLs
+  degrade gracefully to the one view.
 - **Wave 3 — done**: `OperationCard` replaces both mode panels (one card, the
   mode toggle now only defaults the raw-details disclosure open); per-op icons
   in card + picker (D6 closed as _implemented_); PP facts grid (Route, pools,

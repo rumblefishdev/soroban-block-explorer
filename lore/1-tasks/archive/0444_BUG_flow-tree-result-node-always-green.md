@@ -2,7 +2,7 @@
 id: '0444'
 title: 'BUG: operation flow-tree "Result" node is hardcoded green and shows a description, not the tx verdict'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0352', '0380', '0453']
 tags:
@@ -11,6 +11,17 @@ links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/363'
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/364'
 history:
+  - date: '2026-07-29'
+    status: completed
+    who: karolkow
+    note: >
+      Resolved inside 0453. The verdict moved to where it is honest: a
+      transaction-level failure banner in the summary (atomicity wording +
+      raw result_code passthrough, commit 314f6b3e) and per-card dimming with
+      a "not applied" label (wave 3). The interim Result-node verdict
+      (recovered from d5444023) shipped in wave 2 and was then removed
+      together with the flow tree it belonged to. Per-operation result codes
+      remain 0352 Step 6. Closes the user-visible face of issue #364.
   - date: '2026-07-27'
     status: backlog
     who: karolkow

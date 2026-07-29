@@ -357,39 +357,43 @@ Expanded behavior:
 
 ### 6.4 Transaction (`/transactions/:hash`)
 
-Both modes display the same base transaction details:
+One progressive view (ADR 0032 update, 2026-07: the former normal/advanced
+toggle is removed — everything it gated is reachable through per-section
+disclosures on a single page).
 
-- Transaction hash (full, copyable), status badge (success/failed), ledger sequence
-  (link), timestamp
-- Fee charged (XLM + stroops), source account (link), memo (type + content)
-- Signatures - signer, weight, signature hex
+Transaction-level sections:
 
-Two display modes toggle how **operations** are presented:
+- Summary: hash (full, copyable), status chip, a one-phrase story chip
+  classifying the whole transaction ("Swap · 4 ops", "Contract call") when the
+  operation shapes allow it, ledger (link), timestamp, fee, memo, source
+  account; for fee-bump envelopes also the fee source account and the inner
+  transaction hash (copy-only — inner hashes are not indexed as pages).
+- A failure banner when `successful` is false: atomicity wording ("no
+  operation was applied") plus the raw transaction result code
+  (`heavy.result_code`) when present.
+- Signatures; Events (all decoded events, collapsed by default); Raw data
+  (`envelope_xdr`, `result_xdr` as collapsible rows).
 
-- **Normal mode** - graph/tree representation of the transaction's operation flow.
-  Visually shows the relationships between source account, operations, and affected
-  accounts/contracts. Each node in the tree displays a human-readable summary (e.g.
-  "Sent 1,250 USDC to GD2M...K8J1", "Swapped 100 USDC for 95.2 XLM on Soroswap"). Soroban
-  invocations render as a nested call tree showing the contract-to-contract hierarchy.
-  Designed for general users exploring transactions.
+Operations render as a master-detail: a picker (per-type icon + label per
+operation, selection deep-linked as `#op-N`) and **one operation card** for the
+selected operation:
 
-- **Advanced mode** - targeted at developers and experienced users. Shows per-operation
-  raw parameters, full argument values, operation IDs, and return values. Includes events
-  emitted (type, topics, raw data), diagnostic events, and collapsible raw XDR sections
-  (`envelope_xdr`, `result_xdr`, `result_meta_xdr`). All values are shown in their
-  original format without simplification.
+- a truthful per-type headline sentence built from `heavy.details` (light
+  fields as degraded fallback; unknown types fall back to the type label);
+- a route strip for path payments — asset chips with per-hop amounts chained
+  from `claimedAtoms`, flagged as partial when the route also crossed the
+  order book (those fills are not in the LP-only atoms);
+- a call tree for contract invocations fed by `heavy.operation_tree`, with the
+  per-node verdict highlighting the failing nested call;
+- the operation's own events, matched via `XdrEventDto.op_index`
+  (`application_order - 1`);
+- an "Operation details" disclosure with every raw `details` key — exactness
+  preserved; nothing null/empty that matters for debugging is hidden;
+- on a failed transaction the card dims and carries a "not applied" label.
 
-Expanded behavior:
-
-- Normal and advanced modes should be alternate presentations over the same backend
-  transaction resource, not separate data domains.
-- The mode switch should be prominent and preserve the page context.
-- Normal mode must prioritize clarity over completeness and should never expose raw XDR as
-  the primary representation.
-- Advanced mode must preserve exactness and should not silently hide null, empty, or
-  protocol-level values that matter for debugging.
-- Large payload areas such as XDR and event data should be collapsible to keep the screen
-  usable.
+Consumed heavy fields: `operations[].details`, `operation_tree`,
+`contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
+`envelope_xdr`, `result_xdr`. Large payload areas stay collapsible.
 
 ### 6.5 Ledgers (`/ledgers`)
 

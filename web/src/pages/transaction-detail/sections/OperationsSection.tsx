@@ -3,7 +3,6 @@ import { Box, Grid } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
-import type { DetailMode } from '../useDetailMode.js';
 
 import { buildOperationEntries } from './operationEntries.js';
 import { OperationCard } from './OperationCard.js';
@@ -11,14 +10,12 @@ import { OperationPicker } from './OperationPicker.js';
 
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
-  mode: DetailMode;
   selectedIndex: number;
   onSelect: (index: number) => void;
 }
 
 export function OperationsSection({
   tx,
-  mode,
   selectedIndex,
   onSelect,
 }: OperationsSectionProps) {
@@ -31,16 +28,14 @@ export function OperationsSection({
   const selectedLightOp = selected?.light;
   const selectedHeavyOp = selected?.heavy ?? null;
 
-  // One card for both modes — advanced only changes the disclosure default
-  // (the mode toggle's fate is wave 5 of the 0453 spec). Remount on mode/op
-  // switch so the disclosure default re-applies.
+  // Remount on op switch so the disclosure state resets per operation.
   const rightPanel = (
     <OperationCard
-      key={`${mode}-${selectedIndex}`}
+      key={selectedIndex}
       light={selectedLightOp}
       heavy={selectedHeavyOp}
       applied={tx.successful}
-      defaultDetailsOpen={mode === 'advanced'}
+      defaultDetailsOpen={false}
       fallbackOrder={selectedIndex + 1}
       txSourceAccount={tx.source_account ?? null}
       operationTree={tx.heavy?.operation_tree}

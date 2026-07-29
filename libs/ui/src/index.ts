@@ -152,7 +152,6 @@ export {
   Tabs,
   useTabUrlState,
   TimeSeriesChart,
-  OperationFlowTree,
   LazySection,
 } from './visualization/index.js';
 export type {
@@ -163,10 +162,6 @@ export type {
   TimeSeriesChartProps,
   TimeSeriesPoint,
   TimeSeriesInterval,
-  OperationFlowTreeProps,
-  FlowNode,
-  FlowNodeKind,
-  FlowNodeIdentifier,
   LazySectionProps,
   UseIntersectionObserverOptions,
   UseIntersectionObserverResult,
