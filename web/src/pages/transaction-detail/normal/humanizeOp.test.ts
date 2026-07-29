@@ -52,24 +52,74 @@ describe('humanizeOp', () => {
     expect(humanizeOp(op, h)).toBe('Sent 25 USDC to GA5X…GKTM');
   });
 
-  it('reads destAmount/destAsset for a strict-receive path payment', () => {
+  it('narrates a strict-receive path payment as a swap with its spend bound', () => {
     const op = light({
       type_name: 'PATH_PAYMENT_STRICT_RECEIVE',
       destination_account:
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
-    const h = heavy({ destAmount: 50_000_000, destAsset: 'native' });
-    expect(humanizeOp(op, h)).toBe('Sent 5 XLM to GA5X…GKTM');
+    const h = heavy({
+      sendAsset: 'BTC:GISSUER',
+      sendMax: 75_000_000,
+      destAmount: 50_000_000,
+      destAsset: 'native',
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Swapped BTC → 5 XLM (max 7.5 BTC) for GA5X…GKTM'
+    );
   });
 
-  it('reads sendAmount/sendAsset for a strict-send path payment', () => {
+  it('narrates a strict-send path payment as a swap, never as a payment', () => {
     const op = light({
       type_name: 'PATH_PAYMENT_STRICT_SEND',
       destination_account:
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
-    const h = heavy({ sendAmount: 75_000_000, sendAsset: 'BTC:GISSUER' });
-    expect(humanizeOp(op, h)).toBe('Sent 7.5 BTC to GA5X…GKTM');
+    const h = heavy({
+      sendAmount: 75_000_000,
+      sendAsset: 'BTC:GISSUER',
+      destAsset: 'native',
+      destMin: 50_000_000,
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Swapped 7.5 BTC → XLM (min 5 XLM) for GA5X…GKTM'
+    );
+  });
+
+  it('drops the "for …" suffix on a self-swap', () => {
+    const op = light({
+      type_name: 'PATH_PAYMENT_STRICT_SEND',
+      source_account: 'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+      destination_account:
+        'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+    });
+    const h = heavy({
+      sendAmount: 75_000_000,
+      sendAsset: 'BTC:GISSUER',
+      destAsset: 'native',
+      destMin: 50_000_000,
+    });
+    expect(humanizeOp(op, h)).toBe('Swapped 7.5 BTC → XLM (min 5 XLM)');
+  });
+
+  it('says "to itself" for a self-payment', () => {
+    const op = light({
+      type_name: 'PAYMENT',
+      source_account: 'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+      destination_account:
+        'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+    });
+    const h = heavy({ amount: 1_005_000_000, asset: 'native' });
+    expect(humanizeOp(op, h)).toBe('Sent 100.5 XLM to itself');
+  });
+
+  it('falls back to the generic label for a path payment without heavy', () => {
+    const op = light({
+      type_name: 'PATH_PAYMENT_STRICT_SEND',
+      destination_account:
+        'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+    });
+    expect(humanizeOp(op, null)).toBe('Path Payment Strict Send processed');
   });
 
   it('renders a zero amount as "0 XLM"', () => {
@@ -140,5 +190,53 @@ describe('humanizeOp', () => {
         'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
     });
     expect(humanizeOp(op, heavy({}))).toBe('Created account GA5X…GKTM');
+  });
+
+  const VELO_ISSUER =
+    'GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M';
+
+  it('names the asset and issuer for change-trust (issue #370)', () => {
+    const op = light({ type_name: 'CHANGE_TRUST' });
+    const h = heavy({
+      asset: `VELO:${VELO_ISSUER}`,
+      limit: 2 ** 63,
+    });
+    expect(humanizeOp(op, h)).toBe('Set trustline to VELO (issuer GDM4…2M5M)');
+  });
+
+  it('shows a finite change-trust limit', () => {
+    const op = light({ type_name: 'CHANGE_TRUST' });
+    const h = heavy({ asset: `VELO:${VELO_ISSUER}`, limit: 5_000_000_000 });
+    expect(humanizeOp(op, h)).toBe(
+      'Set trustline to VELO (issuer GDM4…2M5M) · limit 500 VELO'
+    );
+  });
+
+  it('reads limit 0 as trustline removal', () => {
+    const op = light({ type_name: 'CHANGE_TRUST' });
+    const h = heavy({ asset: `VELO:${VELO_ISSUER}`, limit: 0 });
+    expect(humanizeOp(op, h)).toBe(
+      'Removed trustline to VELO (issuer GDM4…2M5M)'
+    );
+  });
+
+  it('labels a pool-share trustline without inventing the pair', () => {
+    const op = light({ type_name: 'CHANGE_TRUST' });
+    const h = heavy({
+      asset: { type: 'liquidityPool', params: 'LiquidityPoolConstantProduct' },
+      limit: 2 ** 63,
+    });
+    expect(humanizeOp(op, h)).toBe('Set trustline to liquidity pool shares');
+  });
+
+  it('builds the change-trust sentence from light fields when heavy is unavailable', () => {
+    const op = light({
+      type_name: 'CHANGE_TRUST',
+      asset_code: 'VELO',
+      asset_issuer: VELO_ISSUER,
+    });
+    expect(humanizeOp(op, null)).toBe(
+      'Set trustline to VELO (issuer GDM4…2M5M)'
+    );
   });
 });

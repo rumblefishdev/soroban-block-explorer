@@ -44,21 +44,18 @@ function assetUnit(value: unknown, fallback: string | null): string | null {
   return fallback;
 }
 
-/** The (amount field, asset field) in heavy `details` that best represents the
- *  value moved, per payment variant. PATH_PAYMENT_STRICT_SEND carries no actual
- *  destination amount (only `destMin`), so it falls back to what the source
- *  committed (`sendAmount`/`sendAsset`); STRICT_RECEIVE uses the delivered
- *  `destAmount`/`destAsset`; plain PAYMENT uses `amount`/`asset`. */
-function amountFieldsFor(typeName: string): { amount: string; asset: string } {
-  switch (typeName) {
-    case 'PATH_PAYMENT_STRICT_SEND':
-      return { amount: 'sendAmount', asset: 'sendAsset' };
-    case 'PATH_PAYMENT_STRICT_RECEIVE':
-      return { amount: 'destAmount', asset: 'destAsset' };
-    default:
-      return { amount: 'amount', asset: 'asset' };
-  }
+/** True when the operation pays its own source — wallets route swaps as
+ *  self-payments, and "to GAFB…36GD" is meaningless for those. */
+function isSelf(light: OperationItem): boolean {
+  return (
+    light.source_account != null &&
+    light.source_account === light.destination_account
+  );
 }
+
+/** i64::MAX stroops arrives lossy through JSON numbers; anything this close to
+ *  the top of the i64 range can only mean "no limit". */
+const UNLIMITED_STROOPS = 9.2e18;
 
 function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
   const details = heavy?.details;
@@ -78,29 +75,89 @@ export function humanizeOp(
 
   switch (light.type_name) {
     case 'PAYMENT':
-    case 'PATH_PAYMENT_STRICT_RECEIVE':
-    case 'PATH_PAYMENT_STRICT_SEND':
       if (light.destination_account != null) {
         const details = detailsObj(heavy);
-        const fields = amountFieldsFor(light.type_name);
-        const unit = assetUnit(
-          details?.[fields.asset],
-          light.asset_code ?? 'XLM'
-        );
-        const amount = asAmount(details?.[fields.amount]);
-        const dest = shortId(light.destination_account);
+        const unit = assetUnit(details?.asset, light.asset_code ?? 'XLM');
+        const amount = asAmount(details?.amount);
+        const target = isSelf(light)
+          ? 'itself'
+          : shortId(light.destination_account);
         // Prefer the precise "amount + asset" from the heavy XDR block; fall
         // back to the asset-only label when heavy is unavailable (degraded
         // response) or the amount field is missing.
         const formatted =
           amount != null ? formatTokenAmount(amount, unit) : null;
-        // `unit` already folds in `light.asset_code` (then 'XLM') as its
-        // fallback, so the asset-only branch just needs `unit`.
         return formatted != null
-          ? `Sent ${formatted} to ${dest}`
-          : `Sent ${unit ?? 'XLM'} to ${dest}`;
+          ? `Sent ${formatted} to ${target}`
+          : `Sent ${unit ?? 'XLM'} to ${target}`;
       }
       break;
+    case 'PATH_PAYMENT_STRICT_SEND':
+    case 'PATH_PAYMENT_STRICT_RECEIVE': {
+      const details = detailsObj(heavy);
+      const sendUnit = assetUnit(details?.sendAsset, light.asset_code ?? null);
+      const destUnit = assetUnit(details?.destAsset, null);
+      if (details == null || sendUnit == null || destUnit == null) break;
+      const strictSend = light.type_name === 'PATH_PAYMENT_STRICT_SEND';
+      // strict-send commits the exact SENT amount (received is only bounded by
+      // destMin); strict-receive commits the exact DELIVERED amount (spend is
+      // bounded by sendMax). Never report only the send leg as a payment.
+      const exact = asAmount(details[strictSend ? 'sendAmount' : 'destAmount']);
+      const bound = asAmount(details[strictSend ? 'destMin' : 'sendMax']);
+      const exactStr =
+        exact != null
+          ? formatTokenAmount(exact, strictSend ? sendUnit : destUnit)
+          : null;
+      let sentence = strictSend
+        ? `Swapped ${exactStr ?? sendUnit} → ${destUnit}`
+        : `Swapped ${sendUnit} → ${exactStr ?? destUnit}`;
+      if (bound != null) {
+        sentence += strictSend
+          ? ` (min ${formatTokenAmount(bound, destUnit)})`
+          : ` (max ${formatTokenAmount(bound, sendUnit)})`;
+      }
+      if (!isSelf(light) && light.destination_account != null) {
+        sentence += ` for ${shortId(light.destination_account)}`;
+      }
+      return sentence;
+    }
+    case 'CHANGE_TRUST': {
+      const details = detailsObj(heavy);
+      const asset = details?.asset;
+      if (typeof asset === 'string' && asset !== 'native') {
+        const [code, issuer] = asset.split(':');
+        const suffix = issuer ? ` (issuer ${shortId(issuer)})` : '';
+        const limit = asAmount(details?.limit);
+        if (limit != null) {
+          const limitNum = Number(limit);
+          if (limitNum === 0) return `Removed trustline to ${code}${suffix}`;
+          if (limitNum < UNLIMITED_STROOPS) {
+            return `Set trustline to ${code}${suffix} · limit ${formatTokenAmount(
+              limit,
+              code
+            )}`;
+          }
+        }
+        return `Set trustline to ${code}${suffix}`;
+      }
+      if (asset != null && typeof asset === 'object') {
+        // Pool-share trustline: the parser keeps only the XDR union arm name,
+        // so the pool's asset pair is not available here.
+        const poolLimit = asAmount(details?.limit);
+        return poolLimit != null && Number(poolLimit) === 0
+          ? 'Removed trustline to liquidity pool shares'
+          : 'Set trustline to liquidity pool shares';
+      }
+      // Degraded (heavy unavailable): light still carries the asset identity.
+      if (light.asset_code != null) {
+        const suffix =
+          light.asset_issuer != null
+            ? ` (issuer ${shortId(light.asset_issuer)})`
+            : '';
+        return `Set trustline to ${light.asset_code}${suffix}`;
+      }
+      break;
+    }
     case 'INVOKE_HOST_FUNCTION': {
       const fn = fnNameFromHeavy(heavy);
       if (fn != null && light.contract_id != null) {
