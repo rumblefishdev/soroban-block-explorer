@@ -18,9 +18,7 @@ export type FlowNodeKind =
   | 'operation'
   | 'contract'
   | 'destination'
-  | 'result'
-  /** Same node as `result`, on a transaction that failed. */
-  | 'result-failed';
+  | 'result';
 
 export interface FlowNodeIdentifier {
   value: string;
@@ -75,14 +73,6 @@ function nodeStyle(theme: Theme, kind: FlowNodeKind): NodePalette {
       return {
         backgroundColor: scales.green[950],
         borderColor: scales.green[600],
-        color: theme.palette.common.white,
-      };
-    // Mirrors the success palette exactly, one hue over. Colour alone is never
-    // the signal — the node also states the verdict in words (task 0444).
-    case 'result-failed':
-      return {
-        backgroundColor: scales.red[950],
-        borderColor: scales.red[600],
         color: theme.palette.common.white,
       };
     case 'account':

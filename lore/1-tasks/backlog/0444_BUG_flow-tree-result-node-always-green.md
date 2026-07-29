@@ -2,7 +2,7 @@
 id: '0444'
 title: 'BUG: operation flow-tree "Result" node is hardcoded green and shows a description, not the tx verdict'
 type: BUG
-status: active
+status: backlog
 related_adr: []
 related_tasks: ['0352', '0380']
 tags:
@@ -21,28 +21,29 @@ history:
       in code: the node's colour never depends on `tx.successful`. Not caught by
       the 0257 or 0359 frontend audits — both reviewed the node's *text*, not
       its colour.
-  - date: '2026-07-28'
-    status: active
+  - date: '2026-07-29'
+    status: backlog
     who: karolkow
     note: >
-      Implemented. `kind` and the title now both derive from `tx.successful`:
-      `Result · Success` on green, `Result · Failed` on a red palette that
-      mirrors the green one exactly. Colour is never the only signal — the
-      verdict is in words, which is what #370 asked for literally.
-      **The verdict is the transaction's, not the operation's**, because
-      per-operation result codes are not exposed by the API (0352 Step 6). That
-      is defensible rather than a fudge: Stellar applies a transaction
-      atomically, so on failure no operation took effect — the failed node says
-      "Transaction failed — this operation was not applied" above the existing
-      description. It does mean we cannot yet say WHICH operation was at fault;
-      that needs 0352's backend half.
-      New test file `toFlowNodes.test.tsx` (none existed — the same coverage gap
-      that let 0380's key mismatch survive a full frontend audit); verified it
-      fails with the fix removed. web 123 green, ui 76 green.
-      Serves both #364 and #370. Closes neither: #364 also wants the failure
-      REASON in the normal view (0352), #370 also wants operation targets such
-      as "for asset VELO issued by …" (a `humanizeOp` branch for classic ops,
-      still unscoped).
+      Implemented, then **reverted before it reached production** — deliberately,
+      not because it was broken. Driving the node's colour and title off
+      `tx.successful` does stop the node lying, and the tests passed, but it
+      treats the symptom: the node claims to be a per-OPERATION result while
+      the only verdict we can source is per-TRANSACTION, because the API
+      exposes no per-operation result codes (0352 Step 6). The version that was
+      reverted papered over that with wording ("Transaction failed — this
+      operation was not applied"), which is true under Stellar's atomicity but
+      still answers a question the reader did not ask.
+      Reverted to work the real shape out first rather than ship the patch and
+      lose the appetite for it. Whoever picks this up: decide whether the node
+      is per-operation (needs the backend half of 0352) or is honestly relabelled
+      as a transaction-level verdict, and note that this component sits inside
+      a view built against an API contract that never landed (0442) — see the
+      redesign spec in
+      `lore/1-tasks/archive/0359_.../notes/S-tx-render-audit.md`, whose finding
+      #5 is precisely "the normal/advanced binary gives two mediocre views".
+      The reverted work is recoverable from commit `d5444023` if any of it is
+      worth keeping.
 ---
 
 # BUG: flow-tree "Result" node is always green
