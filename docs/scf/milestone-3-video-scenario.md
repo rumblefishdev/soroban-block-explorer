@@ -17,7 +17,7 @@ Prepare these values and keep the tabs / consoles open:
 | CloudWatch dashboard    | `production-soroban-explorer` (eu-central-1) — [console link](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#dashboards/dashboard/production-soroban-explorer)                                                |
 | CloudWatch alarms       | [alarms list](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#alarmsV2:) — filter the name column to the `production-` block                                                                                   |
 | Load-test results       | `milestone-3-evidence.md` § AC4 (tier table + decomposition) — measured 2026-07-17                                                                                                                                                             |
-| Security checklist      | `milestone-3-security-checklist.md` (9 controls + OWASP Top 10 mapping, signed)                                                                                                                                                                |
+| Security checklist      | `milestone-3-security-checklist.md` (11 controls + OWASP Top 10 mapping, signed)                                                                                                                                                               |
 | Ledger (freshness demo) | Read the latest sequence off the explorer at record time and compare it with a neutral source — `stellar.expert/explorer/public` or `horizon.stellar.org/ledgers?order=desc&limit=1`. They should match within one or two ledgers (~5 s each). |
 
 ## Scene 1 - Intro and scope
@@ -57,14 +57,32 @@ SAY:
 
 ## Scene 4 - AC3: monitoring
 
-SHOW: CloudWatch dashboard (ingestion lag, API latency/errors, WAF blocks);
-alarms in OK state.
+> **Presenter note — read this before recording.** An earlier draft told you to
+> show "WAF blocks" on this dashboard. **Do not.** There is no such widget, and
+> as of 2026-07-27 there is no AWS WAF at all — both WebACLs were retired
+> (ADR 0048, task 0302) and edge filtering for the API now lives at the
+> Cloudflare edge, which has no panel here. The dashboard has eleven panels:
+> Galexie S3 freshness, last processed ledger sequence, ledger-processor
+> duration / errors / DLQ depth, enrichment DLQ depth, Lambda concurrency, API
+> Lambda latency, API Gateway 4xx/5xx, API Gateway cache hit/miss, and Lambda
+> cold starts. Edge protection is covered verbally in Scene 6.
+> Also: one alarm is raised (`production-enrichment-dlq-depth`). Do not say
+> "all alarms are OK" over a screen showing a red one — say the line below.
+
+SHOW: CloudWatch dashboard (Galexie freshness, ledger-processor panels, API
+Lambda latency, API Gateway 4xx/5xx); then the alarms list.
 
 SAY:
 
-> This is the production CloudWatch dashboard: ingestion lag under 30 seconds,
-> API latency and error rates, and WAF blocked requests. Alarms are wired to
-> Slack.
+> This is the production CloudWatch dashboard: ingestion lag, the ledger
+> processor's own health, and on the API side latency percentiles and Gateway
+> four-x-x and five-x-x errors. Alarms are wired to Slack.
+>
+> The four alarms that carry the acceptance criteria — API five-x-x rate,
+> Galexie ingestion lag, ledger-processor error rate, and ClickHouse writes —
+> are all in OK state. The one raised alarm watches the metadata-enrichment
+> queue rather than ledger data, and it is accounted for in the evidence
+> document.
 
 ## Scene 5 - AC4: load test
 
@@ -96,8 +114,8 @@ SHOW: the error-rate column across all tiers (all zeros).
 SAY:
 
 > On error rate, AC4 asks for under nought point one percent. We measured zero —
-> not a single failed request out of roughly thirty-three thousand, including a
-> tier at forty times the required load.
+> not a single failed request out of sixteen thousand two hundred and thirty
+> two, including a tier at forty times the required load.
 
 SHOW: the p95 row — 577 ms at 1.2M/month next to 575 ms at 49.3M/month.
 
@@ -145,15 +163,17 @@ SAY:
 
 ## Scene 6 - AC5: security posture
 
-SHOW: security checklist; WAF; ClickHouse not publicly reachable.
+SHOW: security checklist; ClickHouse not publicly reachable.
 
 SAY:
 
 > Security controls are verified against our checklist: least-privilege IAM with
-> no wildcard actions, AWS WAF and throttling on public ingress, no public
-> datastore endpoint — ClickHouse is bound to loopback behind mutually
-> authenticated TLS on a firewalled host — secrets in Secrets Manager, TLS
-> end-to-end, and server-side validation on every input.
+> no wildcard actions; the data API sits behind the Cloudflare edge, which
+> applies managed rule sets, rate limiting and a bot challenge, and the API
+> accepts only requests that came through that edge; API Gateway throttling
+> behind it; no public datastore endpoint — ClickHouse is bound to loopback
+> behind mutually authenticated TLS on a firewalled host — secrets in Secrets
+> Manager, TLS end-to-end, and server-side validation on every input.
 
 ## AC6 - 7-day report (not in this recording)
 

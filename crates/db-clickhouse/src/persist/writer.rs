@@ -452,8 +452,15 @@ where
 ///   takes effect on the wire. The settings here are belt-and-
 ///   suspenders for future CH versions that may honour them.
 ///
-/// `enable_http_compression` is left at the CH default (off) for
-/// loopback. Documented in `crates/db-clickhouse/README.md`.
+/// Compression is not a lever here, and the setting that looks like one
+/// is not. `enable_http_compression` is a CH server setting governing
+/// **response** bodies; it does not touch the INSERT request body. The
+/// `clickhouse` crate compresses responses only — `default = ["lz4"]`,
+/// and `src/insert.rs` carries no compression path at all (unlike
+/// `src/insert_formatted.rs`). So a typed `client.insert::<T>()` body
+/// always goes out uncompressed regardless of settings. On the loopback
+/// backfill this costs nothing; from a Lambda across the public internet
+/// it is paid egress. Documented in `crates/db-clickhouse/README.md`.
 fn apply_bulk_ingest_settings<T>(insert: Insert<T>) -> Insert<T> {
     insert
         .with_setting("async_insert", "0")

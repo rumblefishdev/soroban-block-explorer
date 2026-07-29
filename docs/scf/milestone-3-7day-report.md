@@ -38,7 +38,7 @@ that are pre-launch and must not be included.
 
 ## Summary
 
-- **Uptime (7-day):** 100.00 % derived — target ≥ 99.9%: **PASS**. Derived, not probed: zero 5XX on every day, and `production-api-gateway-5xx-rate` OK throughout. Two unrelated alarms did sit raised across the window — both predate it (see Incidents). No Synthetics canary is deployed, so this shows no _observed_ unavailability rather than a measured percentage (§ Sources).
+- **Uptime (7-day):** 100.00 % derived — target ≥ 99.9%: **PASS**. Derived, not probed: zero 5XX on every day against 30,378 requests actually served, and `production-api-gateway-5xx-rate` OK throughout. Two unrelated alarms did sit raised across the window — both predate it (see Incidents). No Synthetics canary is deployed, so this shows no _observed_ unavailability rather than a measured percentage (§ Sources).
 - **p95 (worst day):** 553 ms (Day 3) — target < 200 ms: **FAIL** (expected) — 4 of 7 days were under 200 ms (142/149/162/165); days 1/3/4 exceeded (330/553/496). This is API Gateway `Latency` (server-side, excludes the client network leg), lower than the load test's 577 ms client-side figure. The FAIL is expected for the reasons below.
   > **Expect FAIL, and do not present it as a surprise.** The 2026-07-17 load
   > test measured p95 = 577 ms at the required load (p50 = 168 ms, errors
@@ -50,7 +50,11 @@ that are pre-launch and must not be included.
   > report measures API Gateway `Latency`, which **excludes** the client-side
   > network leg the load test includes — the two numbers are not directly
   > comparable; say which one you are quoting.
-- **Error rate (7-day):** 0.000 % — target < 0.1%: **PASS** (zero 5XX responses across all 7 days)
+- **Error rate (7-day):** 0.000 % — target < 0.1%: **PASS**. Zero 5XX responses
+  out of **30,378 requests** served across the window (per-day counts from
+  `AWS/ApiGateway` `Count`: 3,770 · 772 · 784 · 213 · 4,983 · 15,336 · 4,520).
+  The zero is a measured value with traffic present on every day, not an absence
+  of data.
 - **Max ingestion lag:** 9 s (Day 6) — target < 30 s: **PASS** (range 7–9 s across the window)
 - **Ledger gaps:** 0 (all 7 days, verified on production ClickHouse) — target 0: **PASS**
 - **Incidents / alarms fired:** none during the window — no alarm was raised and none cleared inside it. The API 5XX-rate, Galexie ingestion-lag, ledger-processor error-rate and ClickHouse-write alarms were OK throughout. Two dead-letter-queue depth alarms were already raised when the window opened and stayed raised for its duration. Neither indicates a fault in the launched system, and neither affects the metrics above. The ledger-processor queue does not bear on completeness — that is independently verified at 0 gaps on every day. The enrichment queue holds fetches of off-chain metadata that is permanently unreachable at its source; the chain data itself is complete.

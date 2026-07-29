@@ -20,11 +20,18 @@ Milestone 3 is the public Mainnet Launch of the Soroban Block Explorer. The
 explorer is publicly accessible at its production URL with the pre-launch access
 gate removed; it renders live Stellar mainnet data within seconds of network
 tip from the project's own indexed ClickHouse datastore (no third-party chain
-API on the read path). The public surface is protected by AWS WAF and request
-throttling; a CloudWatch dashboard with Slack-wired alarms gives live
+API on the read path). The data API is fronted by the Cloudflare edge (managed
+rule sets, rate limiting, bot challenge) with API Gateway request throttling
+behind it; a CloudWatch dashboard with Slack-wired alarms gives live
 visibility into ingestion lag, API health, and error rates. Capacity is demonstrated by a load test of the production API, and
 all ingress and application security controls are verified against the security
-checklist.
+checklist. The full API reference is published and publicly readable (Swagger UI
+and OpenAPI JSON, linked in § 3).
+
+**Where we stand against the criteria.** Five of the six are met. AC4 is met on
+error rate with roughly a 100× margin (0.000 % against 0.1 %) and **missed on
+latency — p95 is 577 ms against the 200 ms target**, accounted for in full in
+§ AC4 and § Scope Refinement.
 
 - Frontend: `https://sorobanscan.rumblefish.dev`
 - API: `https://api-sorobanscan.rumblefishdev.com/v1`
@@ -37,30 +44,34 @@ Deliverable 3 - Mainnet Launch:
 > signed off against a security checklist, with a 7-day post-launch monitoring
 > report demonstrating stability.
 
-Acceptance criteria:
+Acceptance criteria, quoted verbatim from the approved submission:
 
-1. **AC1** — Publicly accessible at the production URL, serving live mainnet
-   data within 30 seconds of network tip.
-2. **AC2** — GitHub repository is public; `cdk deploy` from the README
-   reproduces the stack on a fresh AWS account.
-3. **AC3** — CloudWatch monitoring dashboard; alarms healthy; ingestion lag
-   under 30 seconds.
-4. **AC4** — Load-test report: p95 < 200 ms at the 1M-requests/month equivalent
-   with error rate < 0.1%.
-5. **AC5** — Security checklist signed off.
-6. **AC6** — 7-day post-launch monitoring report (uptime, error rate, p95,
-   ingestion lag per day).
+1. **AC1** — "Block explorer publicly accessible at production URL, showing live
+   mainnet data with ledger sequences matching network tip within 30 seconds"
+2. **AC2** — "GitHub repository public; `cdk deploy` from README works in a
+   fresh AWS account"
+3. **AC3** — "CloudWatch dashboard accessible to Stellar team (read-only IAM
+   role); all alarms OK; Galexie ingestion lag <30 s from network tip"
+4. **AC4** — "Load test report: p95 <200 ms at 1M requests/month equivalent;
+   error rate <0.1%"
+5. **AC5** — "Security checklist signed off: no wildcard IAM, RDS has no public
+   endpoint, all secrets in Secrets Manager, all API inputs validated"
+6. **AC6** — "7-day post-launch monitoring report: uptime %, API error rate, p95
+   latency, Galexie ingestion lag per day"
+
+Where the launched system does not match a criterion word for word, the gap is
+stated in § Scope Refinement rather than reworded here.
 
 ## 3. Live Endpoints and Reviewer Access
 
-| Resource         | URL / Access                                                                                                                                                                                                   |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Frontend         | `https://sorobanscan.rumblefish.dev` (public — gate removed)                                                                                                                                                   |
-| API base         | `https://api-sorobanscan.rumblefishdev.com/v1`                                                                                                                                                                 |
-| Swagger UI       | `https://api-sorobanscan.rumblefishdev.com/api-docs`                                                                                                                                                           |
-| OpenAPI JSON     | `https://api-sorobanscan.rumblefishdev.com/api-docs-json`                                                                                                                                                      |
-| API access model | Access-controlled — anonymous requests return `401`. The public explorer authenticates transparently at the edge; direct API access is available to reviewers on request (same model as Milestone 2).          |
-| Monitoring       | CloudWatch dashboard `production-soroban-explorer` (eu-central-1) with Slack-wired alarms and X-Ray tracing. Read-only dashboard access for the Stellar team is available on request via a read-only IAM role. |
+| Resource         | URL / Access                                                                                                                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend         | `https://sorobanscan.rumblefish.dev` (public — gate removed)                                                                                                                                          |
+| API base         | `https://api-sorobanscan.rumblefishdev.com/v1`                                                                                                                                                        |
+| Swagger UI       | `https://api-sorobanscan.rumblefishdev.com/api-docs` — **publicly readable, no key required**                                                                                                         |
+| OpenAPI JSON     | `https://api-sorobanscan.rumblefishdev.com/api-docs-json` — **publicly readable, no key required**                                                                                                    |
+| API access model | Access-controlled — anonymous requests return `401`. The public explorer authenticates transparently at the edge; direct API access is available to reviewers on request (same model as Milestone 2). |
+| Monitoring       | CloudWatch dashboard `production-soroban-explorer` (eu-central-1) with Slack-wired alarms and X-Ray tracing. Read-only access for the Stellar team is available on request.                           |
 
 At launch the frontend is publicly accessible with no Basic Auth gate. The
 verification video demonstrates the live application end-to-end.
@@ -77,21 +88,28 @@ Hetzner Ansible):
 2. **Read path** (Milestone 2) — Browser → Cloudflare edge → API Gateway → Rust
    / axum API Lambda → ClickHouse (Hetzner, mTLS). Static SPA: Browser →
    CloudFront → private S3.
-3. **Launch controls** (Milestone 3) — AWS WAF + request throttling on public
-   ingress; CloudWatch dashboard + Slack alarms + X-Ray tracing.
+3. **Launch controls** (Milestone 3) — the Cloudflare edge in front of the data
+   API (managed rule sets, rate limiting, bot challenge, DDoS mitigation) plus an
+   origin lock and API Gateway request throttling; CloudWatch dashboard + Slack
+   alarms + X-Ray tracing.
 
 Evidence images:
 
-![Milestone 2 read path](./architecture-m2-read-path.png){width=55%}
+![Read path — the browser loads the React SPA from CloudFront over a private S3 origin, while API calls carry a session JWT through the Cloudflare edge to API Gateway and the Rust/axum API Lambda, which reads ClickHouse on Hetzner over mTLS](./architecture-m2-read-path.png){width=55%}
 
-_Figure 1 — Read path (reused from M2), including the launch controls on the
-public ingress (AWS WAF + request throttling)._
+_Figure 1 — Read path as launched: the Cloudflare edge applies managed rule sets,
+rate limiting and the `X-Edge-Secret` origin lock (ADR 0048); the API Lambda verifies the
+Turnstile token and issues the session JWT carried as `Authorization: Bearer` on every subsequent call._
 
-![Milestone 1 ingestion / write path](./architecture.png){width=55%}
+![Ingestion / write path — Stellar mainnet peers to Galexie on ECS Fargate to S3, fanned out through an SNS topic to the SQS ingest queue and the Rust indexer Lambda, which writes to ClickHouse on Hetzner over mTLS and enqueues metadata lookups for a separate enrichment worker, each path with its own dead-letter queue](./architecture.png){width=60%}
 
 _Figure 2 — Ingestion / write path (reused from M1): Stellar mainnet peers →
-Galexie on ECS Fargate → S3 → SQS → Rust indexer Lambda → ClickHouse on Hetzner
-(mTLS). The CloudWatch dashboard and alarms are shown in § AC3._
+Galexie on ECS Fargate → S3 → SNS → SQS → Rust indexer Lambda → ClickHouse on Hetzner
+(mTLS). The SNS topic exists because a second project in the same AWS account
+subscribes its own queue to the same object-created events. The indexer also
+enqueues off-chain metadata lookups for a separate enrichment worker; that
+worker's dead-letter queue is the one alarm raised in § AC3. The CloudWatch
+dashboard and alarms are shown in § AC3._
 
 ## 5. Acceptance Criteria Evidence
 
@@ -104,7 +122,7 @@ HTTP 200 with no `WWW-Authenticate` challenge.
 Data freshness is measured rather than asserted. The indexer publishes
 `IngestionLagSeconds` (CloudWatch namespace `SorobanBlockExplorer/Indexer`,
 dimension `Environment=production`): the wall-clock gap between a ledger closing
-on mainnet and its row being committed to ClickHouse. Sampled over two hours on
+on mainnet and its row being committed to ClickHouse. Sampled over 75 minutes on
 2026-07-17 (15 × 5-minute datapoints):
 
 | Measure                | Value     | Target | Verdict |
@@ -112,8 +130,10 @@ on mainnet and its row being committed to ClickHouse. Sampled over two hours on
 | Ingestion lag, average | **3.1 s** | < 30 s | Met     |
 | Ingestion lag, worst   | **6.0 s** | < 30 s | Met     |
 
-In steady state the explorer is within ~3 seconds of network tip — a 5× margin
-against the 30-second criterion, with the worst observed sample at 6 s.
+In steady state the explorer is within ~3 seconds of network tip. Across the
+full 7-day post-launch window the daily average held at 2.87–2.98 s and the
+daily maximum in the 7–9 s band (§ AC6) — a 3× margin at the worst point
+measured.
 
 ![The production URL loads with no Basic Auth prompt — the explorer is publicly accessible and rendering live mainnet data, with the most recent transactions timestamped within seconds of real time.](screenshots/ac1-public-no-gate.png){width=85%}
 
@@ -149,8 +169,8 @@ criterion (figures and method in AC1). This metric is also the per-day source
 for the AC6 report.
 
 The dashboard's **API** section graphs API Lambda latency (p50/p95/p99) and API
-Gateway 4xx/5xx error counts alongside the ingestion panels; AWS WAF and request
-throttling protect the public ingress (see AC5). The alarms on the tracked metrics
+Gateway 4xx/5xx error counts alongside the ingestion panels; the Cloudflare edge
+and API Gateway throttling protect the public ingress (see AC5). The alarms on the tracked metrics
 — API 5XX-rate, Galexie ingestion-lag, ledger-processor error-rate, and
 ClickHouse-write failures — are in OK state.
 
@@ -160,7 +180,7 @@ _Figure — the production dashboard: ingestion and API health on a single pane.
 
 ![Production alarms (eu-central-1) — the API 5XX-rate, Galexie ingestion-lag, ledger-processor error-rate and ClickHouse-write alarms are in OK state.](screenshots/ac3-alarms.png){width=85%}
 
-_Figure — production alarms. The API 5XX-rate, Galexie ingestion-lag, ledger-processor error-rate and ClickHouse-write alarms are in OK state. `prices-` entries belong to a separate project in the same AWS account. The one raised alarm, `production-enrichment-dlq-depth`, fires on queue depth > 0 and covers metadata enrichment — not any metric reported in § AC6._
+_Figure — production alarms, captured 2026-07-25. The API 5XX-rate, Galexie ingestion-lag, ledger-processor error-rate and ClickHouse-write alarms are in OK state. `prices-` entries belong to a separate project in the same AWS account. One alarm is raised — `production-enrichment-dlq-depth`, which fires whenever the metadata-enrichment queue is non-empty. That queue retries two cosmetic fields, an icon URL and a display name, against sources the asset issuer controls; **97 % of assets carry them** and the rest have no reachable source. No chain data is involved, and no metric reported in § AC6 depends on it._
 
 ### AC4 - Load-test report
 
@@ -193,11 +213,12 @@ measures the stated criterion. (Recorded in task 0357.)
 
 #### Result across load tiers
 
-Two open-model series were run against the production API (~33k requests
-total). The runs targeted the API Gateway origin rather than the Cloudflare-fronted
+Three open-model runs were made against the production API (**16,232 requests**
+in total). The runs targeted the API Gateway origin rather than the Cloudflare-fronted
 hostname, so the figures measure the backend itself without the edge's own rate
-limiting; the 40× tier additionally ran with the per-IP WAF rate rule lifted, since
-that rule exists precisely to stop this traffic pattern from a single source.
+limiting; the 40× tier additionally ran with the per-IP AWS WAF rate rule lifted,
+since that rule exists precisely to stop this traffic pattern from a single
+source. (That WAF has since been retired — ADR 0048.)
 These map to the proposal's two documented load points — the
 **1.2M/month tier is the "1M baseline"** and the **10.2M/month tier is the "10M
 stress"** run — plus an additional **40× (49.3M/month)** capacity check.
@@ -210,7 +231,7 @@ Representative tiers:
 | **49.3M req/month (40×)**      | 19.04 /s |   13,701 | **0.000 %** | 151 ms | **575 ms** |
 
 **The p95 is flat across a 40× range of load (577 ms → 575 ms).** This is the
-central finding: latency is **not load-dependent** in the tested range. The
+central finding: the p95 is **not load-dependent** in the tested range. The
 system absorbs forty times the required traffic with an unchanged tail and zero
 failures — capacity is proven far beyond the criterion. The p95 miss is
 therefore **not a capacity problem**; it is a set of fixed per-request costs
@@ -255,6 +276,22 @@ Three distinct causes, in order of size:
    five queries has **already spent ~115 ms of the 200 ms budget** before
    ClickHouse returns a single row.
 
+#### Why pay for those round trips at all?
+
+Because the machine that serves them costs 9.5× more inside AWS. ClickHouse
+runs on a dedicated server — 24 threads, 128 GB RAM, 1.72 TiB of local NVMe
+holding our full 929 GiB working set, plus off-box backups — for
+**\$133/month, AWS egress included**. The closest on-demand configuration in
+`eu-central-1` — 128 GiB of RAM and ≈ 1.9 TB of local NVMe — is an
+`m6gd.8xlarge` at **\$1,273/month**, backups extra. The round-trip cost in
+cause 3 is the bill for that: at a mean of 3.29 ClickHouse queries, **≈ 50 ms per request**.
+(AWS list prices, 2026-07-27.)
+
+**It is also not why AC4 misses.** Remove every round trip outright — a
+strictly generous assumption about what moving into the VPC would recover —
+and p95 moves 577 → 547 ms: **8 % of the 377 ms gap.** The rest is the three
+causes above.
+
 #### Optimisation performed during this milestone
 
 The load test drove a measured optimisation pass on the read path. Total
@@ -297,34 +334,42 @@ measurement does establish:
 ### AC5 - Security checklist signed off
 
 All ingress and application controls are in place and verified: least-privilege
-IAM (no wildcard actions), AWS WAF + request throttling, no public datastore
-endpoint (ClickHouse published to loopback only — `127.0.0.1:8123`/`:9000` — behind
-Caddy mTLS on a firewalled host that admits only ports 22/80/443), secrets in AWS
-Secrets Manager, TLS end-to-end, server-side input validation on every endpoint,
-SSE-S3 at rest on the public ledger bucket, and automated weekly off-box
-ClickHouse backups.
+IAM (no wildcard actions), the Cloudflare edge in front of the data API with an
+origin lock and API Gateway request throttling, a Turnstile-to-session-JWT gate
+on the data endpoints, no public datastore endpoint (ClickHouse published to
+loopback only — `127.0.0.1:8123`/`:9000` — behind Caddy mTLS on a firewalled host
+that admits only ports 22/80/443), secrets in AWS Secrets Manager, TLS
+end-to-end, server-side input validation on every endpoint, SSE-S3 at rest on
+the public ledger bucket, and automated weekly off-box ClickHouse backups.
 
 The full control list and an OWASP Top 10 (2021) coverage mapping are in
 [`milestone-3-security-checklist.md`](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-3-security-checklist.md).
 The original KMS-at-rest and point-in-time-recovery items were RDS-specific and
 are met by equivalents after the RDS retirement — see § Scope Refinement.
 
+![Backup schedule and the archives it has produced, read from the production ClickHouse host: the cron entry runs the backup every Sunday at 03:30, and the repository holds four weekly archives dated 5, 12, 19 and 26 July](screenshots/ac5-backup-cron-and-archives.png){width=95%}
+
+_Figure — backups, verified on the host on 2026-07-27: a Sunday cron entry and
+four archives seven days apart, evidencing the weekly cadence and the four-week
+retention. The full run log is quoted in the security checklist._
+
 ### AC6 - 7-day post-launch monitoring report
 
 Generated from production telemetry over the first 7 days after launch.
 
-- Report template + metric queries: `milestone-3-7day-report.md`
+- Full report, per-day figures and the metric queries behind them:
+  [`milestone-3-7day-report.md`](https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-3-7day-report.md)
 
 The window ran **2026-07-17 13:40Z → 2026-07-24 13:40Z**. Per-day figures are in
 the report; the window summary:
 
-| Metric              | Result over the window                  | Target   | Verdict     |
-| ------------------- | --------------------------------------- | -------- | ----------- |
-| Uptime              | 100.00 % (derived — see report)         | ≥ 99.9 % | **Met**     |
-| API error rate      | 0.000 % (zero 5XX, all 7 days)          | < 0.1 %  | **Met**     |
-| Ingestion lag       | 7–9 s (worst 9 s)                       | < 30 s   | **Met**     |
-| Ledger completeness | 0 gaps, all 7 days                      | 0 gaps   | **Met**     |
-| API p95 latency     | 553 ms worst day (4 of 7 days < 200 ms) | < 200 ms | **Not met** |
+| Metric              | Result over the window                           | Target   | Verdict     |
+| ------------------- | ------------------------------------------------ | -------- | ----------- |
+| Uptime              | 100.00 % (derived — see report)                  | ≥ 99.9 % | **Met**     |
+| API error rate      | 0.000 % — zero 5XX out of 30,378 requests served | < 0.1 %  | **Met**     |
+| Ingestion lag       | 7–9 s (worst 9 s)                                | < 30 s   | **Met**     |
+| Ledger completeness | 0 gaps, all 7 days                               | 0 gaps   | **Met**     |
+| API p95 latency     | 553 ms worst day (4 of 7 days < 200 ms)          | < 200 ms | **Not met** |
 
 The p95 line is the same criterion as AC4 and misses for the same reasons. Note
 this report measures API Gateway `Latency` (server-side), which excludes the
@@ -336,7 +381,7 @@ metrics.
 
 ## Scope Refinement — Deviations from the Approved Plan
 
-Two points where the launched system differs from the original Deliverable 3
+Three points where the launched system differs from the original Deliverable 3
 wording, stated openly (following the Milestone 1 precedent, which recorded the
 PostgreSQL-on-RDS → ClickHouse-on-Hetzner change the same way):
 
@@ -356,13 +401,12 @@ PostgreSQL-on-RDS → ClickHouse-on-Hetzner change the same way):
    datastore is publicly reachable (ClickHouse is bound to loopback behind
    mTLS/Caddy on a firewalled host).
 
-The p95 line is the same criterion as AC4 and misses for the same reasons. Note
-this report measures API Gateway `Latency` (server-side), which excludes the
-client network leg the load test includes — hence the lower figures here, with
-four of seven days under target. Uptime is derived from zero 5XX responses and
-from `production-api-gateway-5xx-rate` holding OK throughout; the report records
-which alarms were raised over the window and why they do not bear on these
-metrics.
+3. **AC3 — one alarm raised.** The criterion asks for "all alarms OK". The four
+   alarms on the criteria-bearing metrics — API 5XX rate, Galexie ingestion lag,
+   ledger-processor error rate, ClickHouse write failures — are OK. One further
+   alarm, `production-enrichment-dlq-depth`, is raised: it fires whenever the
+   metadata-enrichment queue is non-empty, and bears on no AC6 metric — ledger
+   completeness is independently verified at 0 gaps on every day.
 
 ## 6. Source References
 
