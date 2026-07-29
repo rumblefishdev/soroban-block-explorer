@@ -99,14 +99,28 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           ]}
         />
       )}
-      {asset.sac_contract_id && (
+      {/* ADR 0051: the classic/native asset's Stellar Asset Contract.
+       *
+       * Gated on `sac_deployed`, not merely on the address existing (task
+       * 0450). Every classic asset HAS a SAC address — it is derived from
+       * (code, issuer, network) and needs nobody's permission to exist. We
+       * only learn one when the asset emits a CAP-67 unified asset event
+       * (`transfer`/`mint`/`burn`/…), which classic transfers now do whether
+       * or not a SAC was ever deployed. So an address with `sac_deployed =
+       * false` says "this asset has moved", not "this asset has a contract" —
+       * showing it under a "SAC contract" label answered a question nobody
+       * asked, and made the row appear or vanish based on whether the asset
+       * happened to have activity. Two otherwise-identical classic assets
+       * disagreed with no visible reason.
+       *
+       * With this gate all four surfaces mean one thing by "SAC": the list's
+       * `SAC` chip, the `Has SAC` filter (`HAVING max(sac_deployed)`), the
+       * assets-list issuer column, and this row. */}
+      {asset.sac_contract_id && asset.sac_deployed && (
         <SummaryRow
           cells={[
             {
               label: 'SAC contract',
-              // ADR 0051: the classic/native asset's Stellar Asset Contract.
-              // Link to the contract page only when deployed — an un-deployed
-              // SAC is a reserved address, not a live contract (subsumes 0337).
               value: (
                 <Box
                   sx={{
@@ -117,16 +131,7 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
                     value={asset.sac_contract_id}
                     type="contract"
                     truncate={false}
-                    linked={asset.sac_deployed ?? false}
                   />
-                  {!asset.sac_deployed && (
-                    <Typography
-                      variant="bodyXsRegular"
-                      sx={(theme) => ({ color: theme.palette.text.secondary })}
-                    >
-                      Reserved address — not deployed
-                    </Typography>
-                  )}
                 </Box>
               ),
             },

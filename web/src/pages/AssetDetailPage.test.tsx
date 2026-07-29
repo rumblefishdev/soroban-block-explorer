@@ -134,6 +134,12 @@ describe('AssetDetailPage', () => {
     // Two orthogonal axes (ADR 0051): the type badge AND the SAC property tag.
     expect(screen.getByText('Classic')).toBeInTheDocument();
     expect(screen.getByText('SAC')).toBeInTheDocument();
+    // A deployed SAC is a real contract, so the summary row carries its
+    // address, linked (task 0450).
+    expect(screen.getByText('SAC contract')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: SAC_CONTRACT })
+    ).toBeInTheDocument();
   });
 
   it('shows no "SAC" tag for a reserved (un-deployed) SAC', () => {
@@ -155,9 +161,16 @@ describe('AssetDetailPage', () => {
     });
 
     // Reserved SAC: type badge stays, but no SAC property tag (chip label
-    // "SAC"). "SAC contract" in the summary row is different exact text.
+    // "SAC").
     expect(screen.getByText('Classic')).toBeInTheDocument();
     expect(screen.queryByText('SAC')).not.toBeInTheDocument();
+    // Task 0450: the summary row is gone too. An un-deployed address is not a
+    // contract — we only know it because the asset emitted a CAP-67 event, so
+    // showing it under "SAC contract" claimed something untrue and made the
+    // row appear only for assets that happened to have activity.
+    expect(screen.queryByText('SAC contract')).not.toBeInTheDocument();
+    expect(screen.queryByText(SAC_CONTRACT)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Reserved address/)).not.toBeInTheDocument();
   });
 
   it('renders the asset name sub-line when present', () => {

@@ -91,6 +91,26 @@ history:
       again. Issuer-first is the only branch whose condition does not depend on
       the contract columns. A third regression test pins the Soroban-native
       fallback.
+  - date: '2026-07-28'
+    status: active
+    who: karolkow
+    note: >
+      Third pass, prompted by a live example where two adjacent classic assets
+      rendered differently for no visible reason. Root cause is one field, not
+      several: `sac_contract_id` is set whenever an asset emits a CAP-67
+      unified event, which classic transfers do with or without a deployed SAC,
+      so it means "has moved" rather than "has a contract". The assets-list
+      column and the asset-detail "SAC contract" row both keyed off it; the
+      `Has SAC` filter and the `SAC` chip already keyed off `sac_deployed` and
+      were right all along. Gated the detail row on `sac_deployed` too, which
+      also drops the "Reserved address — not deployed" line — it implied
+      somebody reserved the address when in fact every classic asset has one.
+      Two assertions added to the existing detail-page tests; verified they
+      fail without the gate. Correction to the previous entry: an earlier read
+      claimed the filter and the chip disagreed. They do not — that came from
+      misreading a hydration query (`queries.rs:508`) as the filter clause.
+      New section in the body documents where the handle leaked and where it
+      did not, including that the liquidity-pool path is safe only by accident.
 ---
 
 # FEATURE: issuer home domain in the assets-list issuer column
@@ -200,6 +220,49 @@ So the column has to be decided before the chip means anything:
 
 Whatever wins, Soroban-native assets genuinely have no issuer and must keep
 showing the contract with no chip.
+
+## What a "reserved SAC" actually is (investigated 2026-07-28)
+
+The issuer column was not the only surface reading the wrong field, and the
+reason it looked chaotic is worth writing down.
+
+**Every classic asset has a SAC address.** It is derived from
+`(code, issuer, network)` and needs nobody's permission to exist. Nothing is
+"reserved" by anyone.
+
+**We only learn about one when the asset emits a CAP-67 unified asset event** —
+`transfer` / `mint` / `burn` / `clawback` / `set_authorized`
+(`crates/xdr-parser/src/sac.rs:189-190`). Since CAP-67, ordinary classic
+transfers emit these under the asset's derived SAC address whether or not a SAC
+was ever deployed. `detect_undeployed_sac_overrides` proves
+`emitter == derive_sac(asset)` and records the handle with `sac_deployed = false`
+so the activity has somewhere to live (task 0323).
+
+So **`sac_contract_id != 0` means "this asset has moved", not "this asset has a
+contract"** — which is why two otherwise-identical classic assets disagreed on
+screen with no visible reason: one had activity, the other did not. Verified on
+a live example: `CC774ZITP2FCKQ3RACDQPZKCQXXFNJBSNG4VJ6PDNEI4REO6EZCEUP67` is
+absent from the ledger per both a hand-built `getLedgerEntries` RPC call
+(`entries: []`) and stellar.expert (404).
+
+### Where the handle leaked, and where it did not
+
+| Surface                         | Keyed on                                      | Saw reserved | Outcome                                                                     |
+| ------------------------------- | --------------------------------------------- | ------------ | --------------------------------------------------------------------------- |
+| Assets-list issuer column       | `sac_contract_id`                             | yes          | showed an unlinked `C…` — fixed by this task                                |
+| Asset-detail "SAC contract" row | `sac_contract_id`                             | yes          | showed the address + "Reserved address — not deployed" — fixed by this task |
+| `Has SAC` filter                | `max(sac_deployed)`                           | no           | already correct                                                             |
+| `SAC` chip                      | `sac_deployed`                                | no           | already correct                                                             |
+| Search                          | `soroban_contracts` only                      | no           | a reserved address is unfindable, correctly                                 |
+| `soroban_contracts`             | overrides suppressed (`persist/stage.rs:384`) | no           | contract counts not inflated, by design                                     |
+| Liquidity-pool legs             | `LEFT JOIN soroban_contracts`                 | no           | misses to null — **safe by accident**                                       |
+
+That last row is the one to watch: the LP path is protected only because it
+resolves through `soroban_contracts`, which reserved handles never enter. Anyone
+repointing it at `asset_sac` directly — as the assets path does — reintroduces
+this.
+
+All four user-facing surfaces now mean one thing by "SAC": a deployed contract.
 
 ## Scope
 
