@@ -134,6 +134,40 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
           },
         ]}
       />
+      {(tx.heavy?.fee_bump_source != null || tx.inner_tx_hash != null) && (
+        <SummaryRow
+          cells={[
+            {
+              label: 'Fee source',
+              value:
+                tx.heavy?.fee_bump_source != null ? (
+                  <IdentifierWithCopy
+                    value={tx.heavy.fee_bump_source}
+                    type="account"
+                    truncate={false}
+                  />
+                ) : (
+                  <Dash />
+                ),
+            },
+            {
+              label: 'Inner transaction',
+              // Copy only, deliberately unlinked: inner hashes are not
+              // indexed, so /transactions/{inner} would 404 (0359 plan #4).
+              value:
+                tx.inner_tx_hash != null ? (
+                  <IdentifierWithCopy
+                    value={tx.inner_tx_hash}
+                    type="transaction"
+                    linked={false}
+                  />
+                ) : (
+                  <Dash />
+                ),
+            },
+          ]}
+        />
+      )}
     </SectionCard>
   );
 }
