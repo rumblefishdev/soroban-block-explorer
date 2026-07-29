@@ -5,6 +5,8 @@ import { useMemo } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 
+import { OpIcon } from './opIcon.js';
+
 export type EnrichedOp = OperationItem;
 
 interface OperationPickerProps {
@@ -17,7 +19,7 @@ function opNumber(op: EnrichedOp, index: number): number {
   return op.application_order ?? index + 1;
 }
 
-function OpAvatar() {
+function OpAvatar({ typeName }: { typeName: string }) {
   return (
     <Box
       sx={(theme) => ({
@@ -30,13 +32,10 @@ function OpAvatar() {
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
-        fontFamily: theme.typography.fontFamily,
-        fontWeight: 600,
-        fontSize: 12,
-        letterSpacing: 0.5,
+        fontSize: 16,
       })}
     >
-      OP
+      <OpIcon typeName={typeName} />
     </Box>
   );
 }
@@ -117,7 +116,7 @@ export function OperationPicker({
                   }
                 }}
               >
-                <OpAvatar />
+                <OpAvatar typeName={op.type_name} />
                 <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
                   <Typography
                     variant="bodyMedium"

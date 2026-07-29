@@ -7,12 +7,12 @@ import {
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 
-function shortId(value: string): string {
+export function shortId(value: string): string {
   return truncateMiddle(value, DEFAULT_TRUNCATION);
 }
 
 /** Heavy `details` as a plain object, or null when absent / not an object. */
-function detailsObj(
+export function detailsObj(
   heavy: XdrOperationDto | null
 ): Record<string, unknown> | null {
   const d = heavy?.details;
@@ -35,7 +35,10 @@ function asAmount(value: unknown): string | number | null {
 
 /** Maps a heavy `details` asset (`"native"` or `"CODE:ISSUER"`) to its display
  *  unit, falling back to the DB-side `asset_code` (or XLM) when absent. */
-function assetUnit(value: unknown, fallback: string | null): string | null {
+export function assetUnit(
+  value: unknown,
+  fallback: string | null
+): string | null {
   if (typeof value === 'string' && value.length > 0) {
     if (value === 'native') return 'XLM';
     const code = value.split(':')[0];
@@ -45,12 +48,12 @@ function assetUnit(value: unknown, fallback: string | null): string | null {
 }
 
 /** True when the operation pays its own source — wallets route swaps as
- *  self-payments, and "to GAFB…36GD" is meaningless for those. */
-function isSelf(light: OperationItem): boolean {
-  return (
-    light.source_account != null &&
-    light.source_account === light.destination_account
-  );
+ *  self-payments, and "to GAFB…36GD" is meaningless for those. An operation
+ *  without its own source inherits the transaction's, so the caller passes
+ *  that as the fallback. */
+function isSelf(light: OperationItem, txSource: string | null): boolean {
+  const source = light.source_account ?? txSource;
+  return source != null && source === light.destination_account;
 }
 
 /** i64::MAX stroops arrives lossy through JSON numbers; anything this close to
@@ -89,7 +92,8 @@ function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
  *  `tx/op-description-view.js`, MIT). */
 export function humanizeOp(
   light: OperationItem,
-  heavy: XdrOperationDto | null
+  heavy: XdrOperationDto | null,
+  txSourceAccount: string | null = null
 ): string {
   const opLabel = formatOperationType(light.type_name);
 
@@ -99,7 +103,7 @@ export function humanizeOp(
         const details = detailsObj(heavy);
         const unit = assetUnit(details?.asset, light.asset_code ?? 'XLM');
         const amount = asAmount(details?.amount);
-        const target = isSelf(light)
+        const target = isSelf(light, txSourceAccount)
           ? 'itself'
           : shortId(light.destination_account);
         // Prefer the precise "amount + asset" from the heavy XDR block; fall
@@ -136,7 +140,10 @@ export function humanizeOp(
           ? ` (min ${formatTokenAmount(bound, destUnit)})`
           : ` (max ${formatTokenAmount(bound, sendUnit)})`;
       }
-      if (!isSelf(light) && light.destination_account != null) {
+      if (
+        !isSelf(light, txSourceAccount) &&
+        light.destination_account != null
+      ) {
         sentence += ` for ${shortId(light.destination_account)}`;
       }
       return sentence;

@@ -208,3 +208,15 @@ failure pinpoint, failure reason, story chip.
   they belong to the card render, not the tree that wave 3 replaces.
 - **Deep links** (wave-3 item, landed early): `#op-N` selects the operation,
   survives reload, preserves query params.
+- **Wave 3 — done**: `OperationCard` replaces both mode panels (one card, the
+  mode toggle now only defaults the raw-details disclosure open); per-op icons
+  in card + picker (D6 closed as _implemented_); PP facts grid (Route, pools,
+  the D9 "Received —" slot); failed ops dim + "not applied" chip (intent
+  TENSE still deferred — sentences stay factual, the chip and banner carry
+  the verdict); flow tree deleted (`toFlowNodes`, both mode panels →
+  `.trash/0453-wave3/`; `OperationFlowTree` in libs/ui is now consumer-less —
+  remove in wave 5 cleanup). Fixed en route: self-swap detection now falls
+  back to the tx source (ops inherit it when their own is null — caught
+  live on the VELO arbitrage tx). Verified live on dev server against
+  mainnet: VELO arb (change-trust wording from #370 + swap card with route),
+  failed LOW_RESERVE tx (banner + TxFailed code + not-applied chip).

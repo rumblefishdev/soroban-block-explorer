@@ -3,11 +3,10 @@ import { Box, Grid } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
-import { AdvancedRightPanel } from '../advanced/AdvancedRightPanel.js';
-import { NormalRightPanel } from '../normal/NormalRightPanel.js';
 import type { DetailMode } from '../useDetailMode.js';
 
 import { buildOperationEntries } from './operationEntries.js';
+import { OperationCard } from './OperationCard.js';
 import { OperationPicker } from './OperationPicker.js';
 
 interface OperationsSectionProps {
@@ -32,16 +31,20 @@ export function OperationsSection({
   const selectedLightOp = selected?.light;
   const selectedHeavyOp = selected?.heavy ?? null;
 
-  const rightPanel =
-    mode === 'normal' ? (
-      <NormalRightPanel
-        tx={tx}
-        lightOp={selectedLightOp}
-        heavyOp={selectedHeavyOp}
-      />
-    ) : (
-      <AdvancedRightPanel lightOp={selectedLightOp} heavyOp={selectedHeavyOp} />
-    );
+  // One card for both modes — advanced only changes the disclosure default
+  // (the mode toggle's fate is wave 5 of the 0453 spec). Remount on mode/op
+  // switch so the disclosure default re-applies.
+  const rightPanel = (
+    <OperationCard
+      key={`${mode}-${selectedIndex}`}
+      light={selectedLightOp}
+      heavy={selectedHeavyOp}
+      applied={tx.successful}
+      defaultDetailsOpen={mode === 'advanced'}
+      fallbackOrder={selectedIndex + 1}
+      txSourceAccount={tx.source_account ?? null}
+    />
+  );
 
   return (
     <SectionCard

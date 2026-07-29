@@ -102,6 +102,28 @@ describe('humanizeOp', () => {
     expect(humanizeOp(op, h)).toBe('Swapped 7.5 BTC → XLM (min 5 XLM)');
   });
 
+  it('recognises a self-swap when the op inherits the tx source', () => {
+    const op = light({
+      type_name: 'PATH_PAYMENT_STRICT_SEND',
+      source_account: null,
+      destination_account:
+        'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+    });
+    const h = heavy({
+      sendAmount: 75_000_000,
+      sendAsset: 'BTC:GISSUER',
+      destAsset: 'native',
+      destMin: 50_000_000,
+    });
+    expect(
+      humanizeOp(
+        op,
+        h,
+        'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM'
+      )
+    ).toBe('Swapped 7.5 BTC → XLM (min 5 XLM)');
+  });
+
   it('says "to itself" for a self-payment', () => {
     const op = light({
       type_name: 'PAYMENT',
