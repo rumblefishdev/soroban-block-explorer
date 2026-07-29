@@ -4,7 +4,7 @@ title: 'FEATURE: advanced tx-detail — decode ScVals to typed chips + collapse 
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0352', '0071']
+related_tasks: ['0352', '0071', '0453']
 tags:
   [frontend, transaction-detail, soroban, ux, priority-medium, effort-medium]
 links: []

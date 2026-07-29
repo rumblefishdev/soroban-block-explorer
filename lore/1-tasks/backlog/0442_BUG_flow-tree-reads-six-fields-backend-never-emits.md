@@ -4,7 +4,7 @@ title: 'BUG: tx flow tree reads six `details` fields no backend module emits —
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0380', '0359']
+related_tasks: ['0380', '0359', '0453']
 tags:
   [
     frontend,

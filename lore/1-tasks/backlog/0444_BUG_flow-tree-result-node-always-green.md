@@ -4,7 +4,7 @@ title: 'BUG: operation flow-tree "Result" node is hardcoded green and shows a de
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0352', '0380']
+related_tasks: ['0352', '0380', '0453']
 tags:
   [frontend, transaction-detail, ux, correctness, priority-medium, effort-small]
 links:

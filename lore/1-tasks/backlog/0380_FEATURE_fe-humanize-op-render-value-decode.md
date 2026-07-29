@@ -4,7 +4,7 @@ title: 'FE: humanize-op render + value-decode fidelity (u256/i256 decoded, not r
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0359']
+related_tasks: ['0359', '0453']
 tags: [priority-medium, effort-medium, layer-frontend-pages]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/363'
