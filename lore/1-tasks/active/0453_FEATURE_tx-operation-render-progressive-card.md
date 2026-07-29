@@ -2,7 +2,7 @@
 id: '0453'
 title: 'FEATURE: transaction operation render — one progressive card with a TRUE headline, replacing the normal/advanced split'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks:
   [
@@ -62,6 +62,19 @@ history:
       the ordering holds. Also pointed at 0363's separate `/ux-expert` run
       (it already answers findings #4 and #8) and added a regression pass on
       the shipped card as an acceptance criterion.
+  - date: '2026-07-29'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active after a full-context analysis session (code map,
+      per-op-type details inventory, satellite boundaries). Key corrections to
+      carry into the redesign: received amount is NOT generally derivable from
+      claimedAtoms (LP-only filter, absent on failure; result-side
+      SimplePaymentResult never extracted — partially covered by the net_settled
+      work, incomplete, do not design against it yet); events are tx-scoped
+      only (per-op index discarded at parse); heavy.operation_tree and
+      heavy.result_code arrive unread — a third option for 0442 and a partial
+      answer to #364. Redesign phase next: live benchmark + /ux-expert.
 ---
 
 # FEATURE: one progressive operation card
