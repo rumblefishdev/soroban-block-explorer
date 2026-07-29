@@ -1,5 +1,5 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import {
   Chip,
   Dash,
@@ -76,6 +76,33 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
         </Stack>
       }
     >
+      {!tx.successful && (
+        <Box
+          role="status"
+          sx={(theme) => ({
+            m: 2,
+            mb: 0,
+            px: 1.5,
+            py: 1,
+            borderRadius: `${theme.shape.radius.md}px`,
+            backgroundColor: theme.palette.surface.error,
+            border: `1px solid ${theme.palette.stroke.error}`,
+          })}
+        >
+          <Typography
+            variant="bodySmRegular"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            Transaction failed — no operation was applied
+            {/* Raw tx-level result code passthrough only. The decoded,
+                human-readable failure reason (Soroban errors + per-operation
+                codes) is task 0352. */}
+            {tx.heavy?.result_code != null && tx.heavy.result_code.length > 0
+              ? ` · ${tx.heavy.result_code}`
+              : ''}
+          </Typography>
+        </Box>
+      )}
       <SummaryRow
         cells={[
           {
