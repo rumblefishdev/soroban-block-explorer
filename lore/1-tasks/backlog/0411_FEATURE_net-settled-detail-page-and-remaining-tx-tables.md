@@ -4,7 +4,7 @@ title: 'FEATURE: net-settled on tx detail page + remaining tx-list tables'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0393']
+related_tasks: ['0393', '0453']
 tags: ['frontend', 'api', 'phase-future', 'effort-small', 'priority-low']
 links: []
 history:

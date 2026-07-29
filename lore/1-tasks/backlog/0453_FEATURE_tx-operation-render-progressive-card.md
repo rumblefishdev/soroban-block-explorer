@@ -4,7 +4,19 @@ title: 'FEATURE: transaction operation render — one progressive card with a TR
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0359', '0352', '0363', '0380', '0442', '0444']
+related_tasks:
+  [
+    '0359',
+    '0070',
+    '0071',
+    '0305',
+    '0352',
+    '0363',
+    '0380',
+    '0411',
+    '0442',
+    '0444',
+  ]
 tags:
   [
     frontend,
@@ -16,6 +28,7 @@ tags:
   ]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/370'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/364'
 history:
   - date: '2026-07-29'
     status: backlog
@@ -28,6 +41,27 @@ history:
       and the structural one. Issue #370 reports the same thing from outside,
       independently. Created as the umbrella the loose bug tasks (0442, 0444)
       were being patched underneath.
+  - date: '2026-07-29'
+    status: backlog
+    who: karolkow
+    note: >
+      Coverage re-checked on review rather than asserted, and it was not
+      complete. Added: 0305 (pool_ids links) which owns part of finding #3 and
+      was silently double-claimed; 0411 (net-settled on the same page); issue
+      #364, an OPEN report of the 0444 bug; 0070/0071 as the superseded
+      originals; the 0257 audit's never-implemented per-op icon spec; and the
+      lineage — 0359's spawn plan had already scoped this as sibling #6 and
+      parked it pending "a real traffic/support signal", which #370 now is.
+  - date: '2026-07-29'
+    status: backlog
+    who: karolkow
+    note: >
+      Restored the `/ux-expert` provenance. The eight findings were copied in
+      as if they were prose observations — unsourced, and stripped of the
+      Principle column that justifies each severity, which is the whole reason
+      the ordering holds. Also pointed at 0363's separate `/ux-expert` run
+      (it already answers findings #4 and #8) and added a regression pass on
+      the shipped card as an acceptance criterion.
 ---
 
 # FEATURE: one progressive operation card
@@ -45,6 +79,24 @@ The design work is already done. It is written up in
 including a per-op-type headline spec for 16+ operation types and the field
 mapping for each. **Read that note first — this task is its implementation, not
 a re-design.**
+
+## Where this came from
+
+It was **planned and never spawned**. 0359's spawn plan
+([`notes/G-spawn-plan.md`](../archive/0359_FEATURE_asset-participation-index-remodel/notes/G-spawn-plan.md),
+sibling **#6 "FE — transaction render"**) already scoped it, already flagged the
+`humanizeOp` mislabel as a standalone quick fix, and already established that it
+is independent of 0359's data work except the claim-CB headline. It then closed
+with the reason it stalled:
+
+> Priority/effort here are **provisional** — confirm against a real
+> traffic/support signal before locking the order.
+
+Issue #370 is that signal. The provisional flag is discharged.
+
+The two views themselves were built by **0070** (normal) and **0071**
+(advanced), both archived. Neither is a current spec — this task replaces their
+output, so do not read them as the target state.
 
 ## Why now
 
@@ -80,16 +132,27 @@ read it.
 
 ## The eight findings and who owns them
 
-| #   | Finding                                                          | Severity     | Owner                                       |
-| --- | ---------------------------------------------------------------- | ------------ | ------------------------------------------- |
-| 1   | Normal one-liner is factually misleading for path-payments/swaps | **Critical** | **this task**                               |
-| 2   | Organised around accounts, not around asset movement             | Major        | **this task**                               |
-| 3   | Route / hops / pool crossings invisible                          | Major        | **this task**                               |
-| 4   | Advanced is a raw dump of internal names + raw stroops           | Major        | 0363                                        |
-| 5   | The normal↔advanced binary yields two mediocre views             | Major        | **this task**                               |
-| 6   | Received amount discarded though present in `claimedAtoms`       | Major        | **this task** (0380 covers it only loosely) |
-| 7   | Self-transfer not recognised → "to [same account]"               | Minor        | **this task**                               |
-| 8   | Events table is raw ScVal JSON                                   | Minor        | 0363                                        |
+These are a **`/ux-expert` audit**, not an opinion — run against the live render
+on 2026-07-08 and recorded in the audit note. Each severity is anchored to a
+principle, which is why the ordering is not negotiable by taste: #1 outranks
+everything because a summary must be true before it can be useful.
+
+| #   | Finding                                                          | Severity     | Principle behind it                                              | Owner                                       |
+| --- | ---------------------------------------------------------------- | ------------ | ---------------------------------------------------------------- | ------------------------------------------- |
+| 1   | Normal one-liner is factually misleading for path-payments/swaps | **Critical** | A summary must be TRUE first; a wrong summary is worse than none | **this task**                               |
+| 2   | Organised around accounts, not around asset movement             | Major        | Group by the user's mental model, not by the data structure      | **this task**                               |
+| 3   | Route / hops / pool crossings invisible                          | Major        | Show the thing the operation is actually about                   | **this task** (+ 0305 for the pool links)   |
+| 4   | Advanced is a raw dump of internal names + raw stroops           | Major        | Even "raw" should format amounts and use human labels            | 0363                                        |
+| 5   | The normal↔advanced binary yields two mediocre views             | Major        | Summary first, details on demand (Shneiderman)                   | **this task**                               |
+| 6   | Received amount discarded though present in `claimedAtoms`       | Major        | Use the data you already have                                    | **this task** (0380 covers it only loosely) |
+| 7   | Self-transfer not recognised → "to [same account]"               | Minor        | Recognise the special cases                                      | **this task**                               |
+| 8   | Events table is raw ScVal JSON                                   | Minor        | Humanise; encode direction with sign and colour                  | 0363                                        |
+
+**0363 carries a second, independent `/ux-expert` run** — its
+`## UX Expert Analysis` section audits `EventsSection`, `OperationJsonDetail`,
+`HighlightedJson` and `XdrRow` against the decoder and gives a per-option
+verdict. Read it before designing the card's events section; it is the answer to
+findings #4 and #8, already worked out.
 
 ## Scope
 
@@ -105,6 +168,14 @@ sections, and the removal of the mode toggle.
   humanising.
 - **0352** — the transaction-level fail-reason banner. Per-transaction, not
   per-operation.
+- **0305** — rendering `OperationItem.pool_ids` as `L…` links. It is the
+  shippable slice of finding #3: this task owns the **route chain** (which
+  assets, in what order), 0305 owns making the **pools it crossed clickable**.
+  The API already carries the field and the frontend ignores it entirely, so
+  0305 lands without waiting for the card.
+- **0411** — the per-asset "Net settled" breakdown on the same detail page.
+  Transaction-level, above the operations. Named here only so two tasks do not
+  independently redesign one page.
 
 ## Ship first, on its own
 
@@ -145,9 +216,17 @@ Progressive sections absorb everything "advanced" shows today, without a mode.
   nested contract calls never render. Implement the missing contract, or delete
   the dead branches? The answer depends on whether the flow tree survives this
   redesign at all. **Decide here, not in 0442.**
-- **0444** — the "Result" node is hardcoded green and shows a description rather
-  than the verdict. A fix was written and reverted deliberately: patching one
-  node of a tree that may not survive is a plaster.
+- **0444 / issue #364** — the "Result" node is hardcoded green and shows a
+  description rather than the verdict, so a failed transaction reads as
+  successful. That is the user-visible face of this task: #364 is open, is a
+  reported correctness bug, and is closed by whatever this task decides. A fix
+  was written and reverted deliberately — patching one node of a tree that may
+  not survive is a plaster.
+- **Per-op-type icons.** The 0257 frontend audit records the spec ("operation
+  type → icon mapping consistent", task README 1.15) and confirms it was never
+  implemented — `categoryChip` returns a coloured chip, not an icon
+  (`0257/findings/AN-stellar-domain.md:59`). The card is where an icon would
+  live. Adopt or drop it explicitly; do not leave it as a third orphan spec.
 - **Naming.** #370 suggests "Basic / Detailed". If the toggle disappears the
   question is moot — but if any split remains, take the reporter's words.
 
@@ -171,8 +250,15 @@ id. Render "claimed balance {id}" until that lands; do not block on it.
 - [ ] Self-transfer (source == destination) recognised in the wording
 - [ ] Amounts formatted, never raw stroops; US number grouping preserved
 - [ ] The normal/advanced toggle is gone, and nothing it used to show is lost
-- [ ] 0442 and 0444 explicitly resolved — implemented, folded in, or withdrawn
-      with the reason recorded
+- [ ] A failed transaction never reads as successful (issue #364)
+- [ ] 0442, 0444 and the per-op icon spec explicitly resolved — implemented,
+      folded in, or withdrawn with the reason recorded
+- [ ] The 0305 boundary held: this task did not absorb pool-id linking, or it
+      did and 0305 was withdrawn saying so
+- [ ] **`/ux-expert` regression pass on the shipped card** — the same audit that
+      produced these eight findings, re-run against the result. It has caught
+      orphans before (0348, 0351): a fix that leaves a filter or a control
+      pointing at something that no longer exists
 - [ ] **Docs updated** — frontend data contracts under `docs/architecture/**`
       per ADR 0032, if the render's field consumption changes
 - [ ] **API types regenerated** — `N/A` unless the backend contract changes;

@@ -4,7 +4,7 @@ title: 'FEATURE: surface operation pool_ids (multi-hop crossed pools) in transac
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0261', '0268', '0257', '0281']
+related_tasks: ['0261', '0268', '0257', '0281', '0453']
 tags: [priority-low, effort-small, frontend, milestone-2]
 milestone: 2
 links:
