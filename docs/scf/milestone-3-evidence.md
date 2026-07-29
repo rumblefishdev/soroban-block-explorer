@@ -131,9 +131,8 @@ on mainnet and its row being committed to ClickHouse. Sampled over 75 minutes on
 | Ingestion lag, worst   | **6.0 s** | < 30 s | Met     |
 
 In steady state the explorer is within ~3 seconds of network tip. Across the
-full 7-day post-launch window the daily average held at 2.87–2.98 s and the
-daily maximum in the 7–9 s band (§ AC6) — a 3× margin at the worst point
-measured.
+full 7-day post-launch window the daily maximum held in the 7–9 s band
+(§ AC6) — a 3× margin at the worst point measured.
 
 ![The production URL loads with no Basic Auth prompt — the explorer is publicly accessible and rendering live mainnet data, with the most recent transactions timestamped within seconds of real time.](screenshots/ac1-public-no-gate.png){width=85%}
 
@@ -260,12 +259,14 @@ Three distinct causes, in order of size:
    read time rather than persisted), not defects — but they place the tail of
    those two endpoints partly outside our control.
 
-2. **A known ClickHouse cost on one endpoint.** `lplist` derives each pool's
-   creation ledger by scanning that pool's full snapshot history
-   (8.28M rows/request). This is our own technical debt: the design decision
+2. **A known ClickHouse cost on one endpoint.** `lplist` derives each listed
+   pool's creation ledger by scanning that pool's full snapshot history — the
+   endpoint reads **11.6M rows per request** (mean of per-request `read_rows`
+   for `lplist` at the 40× tier, `results.csv`). This is our own technical
+   debt: the design decision
    that removed the stored column (task 0208) assumed this read would be cheap;
-   measurement shows it is not. The cause is identified to the query, the fix is
-   specified, and it is scheduled — not unexplained.
+   measurement shows it is not. The cause is identified to the query; the
+   candidate fix is tracked in task 0401.
 
 3. **A fixed infrastructure floor (irreducible today).** Every request pays
    **≈ 40 ms** before any data is read (API Gateway + Lambda + mTLS to
@@ -322,11 +323,9 @@ measurement does establish:
 - the **median request meets the latency target** (168 ms at the required load);
 - **capacity is proven at 40× the required load** with no degradation and no
   errors;
-- every millisecond of the gap is **attributed to a named, measured cause**,
-  each with a decided path: persist the two runtime-fetched field sets (or
-  serve them asynchronously), restore `lplist`'s stored creation ledger, and
-  reduce the per-query overhead if the 15 ms proves to be a per-query mTLS
-  handshake rather than an irreducible round trip.
+- every millisecond of the gap is **attributed to a named, measured cause**;
+  follow-ups are tracked in tasks 0401 (`lplist`) and 0402 (per-query
+  overhead).
 
 [#347]: https://github.com/rumblefishdev/soroban-block-explorer/pull/347
 [#349]: https://github.com/rumblefishdev/soroban-block-explorer/pull/349

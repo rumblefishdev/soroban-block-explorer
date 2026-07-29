@@ -133,8 +133,8 @@ the database. Instead the indexer emits it at write time:
   and `--period 86400`, exactly like the API Gateway columns below. Use
   `Maximum` for the "max ingest lag" column and `Average` for context.
 
-Reference sample (2 h on 2026-07-17, 15 × 5-minute datapoints): average 3.1 s,
-worst 6.0 s, against the < 30 s criterion.
+Reference sample (75 minutes on 2026-07-17, 15 × 5-minute datapoints): average
+3.1 s, worst 6.0 s, against the < 30 s criterion.
 
 ### Generator skeleton (optional)
 
@@ -184,4 +184,3 @@ done
   no write time), so the per-day figures come from the CloudWatch
   `IngestionLagSeconds` metric emitted by the indexer (task 0399, live since
   2026-07-17). It cannot be backfilled for any period before that date.
-- Deliver the finished report to the Stellar team (task 0127 AC).
