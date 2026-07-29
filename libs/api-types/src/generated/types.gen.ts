@@ -166,6 +166,21 @@ export type AssetDetailResponse = {
    */
   id: string;
   issuer?: string | null;
+  /**
+   * The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.
+   * `centre.io`. Read from the same `accounts` key-seek that resolves
+   * `issuer`, so it costs no extra query (task 0450). `null` for native /
+   * Soroban-native assets (no issuer) and for issuers that never set one —
+   * most do not.
+   *
+   * NOT a verified identity: the account holder sets this field itself and
+   * nothing checks it. Render it as a claim, never as a badge implying we
+   * confirmed the domain owns the asset.
+   *
+   * Distinct from the detail response's `home_page`, which is fetched from
+   * the issuer's `stellar.toml` at request time.
+   */
+  issuer_home_domain?: string | null;
   name?: string | null;
   /**
    * SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey
@@ -244,6 +259,21 @@ export type AssetItem = {
    */
   id: string;
   issuer?: string | null;
+  /**
+   * The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.
+   * `centre.io`. Read from the same `accounts` key-seek that resolves
+   * `issuer`, so it costs no extra query (task 0450). `null` for native /
+   * Soroban-native assets (no issuer) and for issuers that never set one —
+   * most do not.
+   *
+   * NOT a verified identity: the account holder sets this field itself and
+   * nothing checks it. Render it as a claim, never as a badge implying we
+   * confirmed the domain owns the asset.
+   *
+   * Distinct from the detail response's `home_page`, which is fetched from
+   * the issuer's `stellar.toml` at request time.
+   */
+  issuer_home_domain?: string | null;
   name?: string | null;
   /**
    * SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey
@@ -1106,6 +1136,21 @@ export type PaginatedAssetItem = {
      */
     id: string;
     issuer?: string | null;
+    /**
+     * The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.
+     * `centre.io`. Read from the same `accounts` key-seek that resolves
+     * `issuer`, so it costs no extra query (task 0450). `null` for native /
+     * Soroban-native assets (no issuer) and for issuers that never set one —
+     * most do not.
+     *
+     * NOT a verified identity: the account holder sets this field itself and
+     * nothing checks it. Render it as a claim, never as a badge implying we
+     * confirmed the domain owns the asset.
+     *
+     * Distinct from the detail response's `home_page`, which is fetched from
+     * the issuer's `stellar.toml` at request time.
+     */
+    issuer_home_domain?: string | null;
     name?: string | null;
     /**
      * SAC facet (ADR 0051): the wrapping Stellar Asset Contract's `C…` StrKey

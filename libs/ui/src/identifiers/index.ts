@@ -1,4 +1,5 @@
 export { CopyButton, type CopyButtonProps } from './CopyButton.js';
+export { DomainChip, type DomainChipProps } from './DomainChip.js';
 export {
   IdentifierDisplay,
   type IdentifierDisplayProps,

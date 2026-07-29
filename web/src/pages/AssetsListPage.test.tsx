@@ -183,4 +183,55 @@ describe('AssetsListPage', () => {
     expect(f?.['filter[type]']).toBe('soroban');
     expect(f?.['filter[sac]']).toBeUndefined();
   });
+
+  // Task 0450. The issuer column used to test `sac_contract_id` before
+  // `issuer`, so every wrapped classic asset — USDC included — rendered a `C…`
+  // address and never its issuer. That also left the domain chip nothing to
+  // attach to. These two cases pin the ordering and the chip.
+  it('shows the issuer and its home domain for a classic asset that has a SAC', () => {
+    mockOk([
+      makeAsset({
+        id: 'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+        asset_code: 'USDC',
+        asset_type: 1,
+        asset_type_name: 'classic_credit',
+        issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+        issuer_home_domain: 'centre.io',
+        sac_contract_id:
+          'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75',
+        sac_deployed: true,
+      }),
+    ]);
+
+    renderWithProviders(<AssetsListPage />);
+
+    const domain = screen.getByRole('link', { name: 'centre.io' });
+    expect(domain).toHaveAttribute('href', 'https://centre.io');
+    // Identifiers render truncated (prefix 4 / suffix 4). The issuer is there;
+    // the SAC address no longer displaces it.
+    expect(screen.getByText('GA5Z…KZVN')).toBeInTheDocument();
+    expect(screen.queryByText('CCW6…MI75')).not.toBeInTheDocument();
+  });
+
+  it('renders no domain chip when the issuer never set a home domain', () => {
+    mockOk([
+      makeAsset({
+        id: 'FOO-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+        asset_code: 'FOO',
+        asset_type: 1,
+        asset_type_name: 'classic_credit',
+        issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+        issuer_home_domain: null,
+      }),
+    ]);
+
+    renderWithProviders(<AssetsListPage />);
+
+    expect(screen.getByText('GBBD…FLA5')).toBeInTheDocument();
+    // No chip means no outbound link anywhere in the table.
+    const external = screen
+      .queryAllByRole('link')
+      .filter((a) => a.getAttribute('href')?.startsWith('https://'));
+    expect(external).toHaveLength(0);
+  });
 });

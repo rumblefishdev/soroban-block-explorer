@@ -3,6 +3,7 @@ import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
   Dash,
+  DomainChip,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatAmount,
@@ -68,21 +69,40 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
   {
     id: 'issuer',
     header: 'Issuer / Contract ID',
-    width: 160,
-    // Soroban contract identity → always linked. A SAC facet (`sac_contract_id`)
-    // links to its contract page only when deployed — an un-deployed SAC is a
-    // reserved address, not a live contract (ADR 0051, subsumes 0337).
+    // Wider than a plain identifier: this cell also carries the issuer's
+    // home-domain chip. Matches the accounts list, which sized for the same
+    // content (task 0450).
+    width: 240,
+    // Soroban-native tokens have no issuer — the contract IS the asset, so it
+    // is all this cell can show, and it is always linked.
+    //
+    // A classic asset is shown by its ISSUER even when it has a SAC facet. The
+    // SAC used to win here, which meant every wrapped classic asset (USDC among
+    // them) rendered a `C…` address and never its issuer — the column contradicted
+    // its own header, and there was nothing for the domain chip to attach to
+    // (task 0450). Nothing is lost by the reorder: the Token column already
+    // flags a deployed SAC with its own chip, and the SAC address itself is on
+    // the asset detail page. An un-deployed SAC is a reserved address, not a
+    // live contract, hence the `linked` gate (ADR 0051, subsumes 0337).
     cell: (row) =>
       row.contract_id ? (
         <IdentifierWithCopy value={row.contract_id} type="contract" />
+      ) : row.issuer ? (
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ minWidth: 0 }}
+        >
+          <IdentifierWithCopy value={row.issuer} type="account" />
+          <DomainChip domain={row.issuer_home_domain} />
+        </Stack>
       ) : row.sac_contract_id ? (
         <IdentifierWithCopy
           value={row.sac_contract_id}
           type="contract"
           linked={row.sac_deployed ?? false}
         />
-      ) : row.issuer ? (
-        <IdentifierWithCopy value={row.issuer} type="account" />
       ) : (
         <Dash />
       ),

@@ -2149,6 +2149,10 @@
               "issuer": {
                 "type": ["string", "null"]
               },
+              "issuer_home_domain": {
+                "type": ["string", "null"],
+                "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
+              },
               "name": {
                 "type": ["string", "null"]
               },
@@ -2230,6 +2234,10 @@
           },
           "issuer": {
             "type": ["string", "null"]
+          },
+          "issuer_home_domain": {
+            "type": ["string", "null"],
+            "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
           },
           "name": {
             "type": ["string", "null"]
@@ -3416,6 +3424,10 @@
                 },
                 "issuer": {
                   "type": ["string", "null"]
+                },
+                "issuer_home_domain": {
+                  "type": ["string", "null"],
+                  "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
                 },
                 "name": {
                   "type": ["string", "null"]

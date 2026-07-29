@@ -46,6 +46,19 @@ pub struct AssetItem {
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
+    /// The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.
+    /// `centre.io`. Read from the same `accounts` key-seek that resolves
+    /// `issuer`, so it costs no extra query (task 0450). `null` for native /
+    /// Soroban-native assets (no issuer) and for issuers that never set one —
+    /// most do not.
+    ///
+    /// NOT a verified identity: the account holder sets this field itself and
+    /// nothing checks it. Render it as a claim, never as a badge implying we
+    /// confirmed the domain owns the asset.
+    ///
+    /// Distinct from the detail response's `home_page`, which is fetched from
+    /// the issuer's `stellar.toml` at request time.
+    pub issuer_home_domain: Option<String>,
     /// Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where
     /// the contract IS the asset. `null` for native / classic_credit (a wrapping
     /// SAC's address rides in `sac_contract_id`).

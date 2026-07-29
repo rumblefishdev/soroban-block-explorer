@@ -144,6 +144,8 @@ export {
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
+  DomainChip,
+  type DomainChipProps,
 } from './identifiers/index.js';
 
 export {
