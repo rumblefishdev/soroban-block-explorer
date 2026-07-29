@@ -679,7 +679,7 @@ pub async fn fetch_list(
     // derived-table aggregation; CH 26.3 rejects correlated subqueries in
     // SELECT), then merge onto the page rows by tx id.
     let keys: Vec<(i64, i64)> = rows.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys, true).await?;
+    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
     Ok(rows
         .into_iter()
         .map(|r| {

@@ -28,6 +28,22 @@ history:
       row of every view that uses `TransactionsTable` (global list, ledger
       detail, account detail), not merely for history. Blocked on 0419 (CH
       ALTER → indexer deploy → S3 re-ingest) and 0417 (read-path release gate).
+  - date: 2026-07-29
+    status: backlog
+    who: karolkow
+    note: >
+      The API-side value read was removed too, so this task now owns restoring
+      both halves. Leaving it in place would have kept a ~26M-row/page scan plus
+      three un-pruned dimension joins running on POLLED endpoints
+      (transactions, accounts, ledgers) to fill a field no client renders — the
+      exact shape that caused the 0243/0386 quota outages, and against the
+      warning in the function's own comment. Response shape unchanged: `values`
+      still serialises, always empty, so `api-types` regenerates byte-identical
+      and no client contract breaks. Side effect: 0393 review finding **F**
+      (the `wants_values` control-coupling flag, and the tx-only value query
+      living in the shared `common/ch.rs`) is resolved by deletion — the flag
+      and the query are both gone. Reinstating the read is the moment to place
+      it correctly, in the transactions domain, on 0417's companion table.
 ---
 
 # FEATURE: net-settled on tx detail page + remaining tx-list tables
@@ -57,6 +73,17 @@ consistent to do so.
 
 ## Implementation
 
+- **Restore the value read itself** (`crates/api/src/common/ch.rs`): the whole
+  net-settled aggregate was removed, not just gated — the `wants_values` flag,
+  the value SQL, its `TxValueChRow`, the issuer resolution and the merge are
+  gone, and all five callers now take `(client, keys)`. With the column pulled
+  from the frontend the read was scanning ~26M rows/page on POLLED endpoints for
+  a result nobody rendered. `TxListAggregates::values` stays in the response
+  shape (still serialised, always empty), so the OpenAPI surface and
+  `api-types` are unchanged — regenerated and verified byte-identical.
+  Reinstating it here means writing the read back, and 0417's `(ledger,tx)`
+  companion is the natural moment: this deletion removed finding **F** by
+  removing its subject, so the flag cleanup below is already satisfied.
 - **Restore the tx-list column** (`web/src/pages/transactions/TransactionsTable.tsx`):
   the `net_settled` column entry was removed ahead of a frontend deploy, because
   none of 0393 is live in production — the column definition is gone, the comment
