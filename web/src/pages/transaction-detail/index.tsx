@@ -6,7 +6,6 @@ import {
   SectionErrorBoundary,
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useState } from 'react';
 
 import { useTransactionDetail } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
@@ -20,12 +19,13 @@ import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
 import { TransactionDetailSkeleton } from './TransactionDetailSkeleton.js';
 import { useDetailMode } from './useDetailMode.js';
+import { useSelectedOp } from './useSelectedOp.js';
 import { useTxHashParam } from './useTxHashParam.js';
 
 export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
   const { mode, setMode } = useDetailMode();
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedIndex, setSelectedIndex] = useSelectedOp();
   const query = useTransactionDetail(valid ? hash : '');
 
   if (!valid) {

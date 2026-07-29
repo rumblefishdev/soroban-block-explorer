@@ -192,3 +192,19 @@ classification). Solscan = A + lenses (summary w/ USD, per-instruction raw,
 List/Tree, balance-changes tab). Tenderly/TON viewer = trace-first (G).
 Our differentiators on top of SE's foundation: decoded events, call tree with
 failure pinpoint, failure reason, story chip.
+
+## Progress
+
+- **Wave 0 — done** (`dd03759e`): dead code out, `functionName` fix, 0442
+  closed by deletion.
+- **Wave 1 — done** (`6cb8743b`, `0948fc11`, `a1e04b5d`): sentences for all
+  27 op types (SE wording, attribution in module docblock), fee-bump
+  source + inner hash in the summary (inner hash copy-only — link would 404).
+- **Wave 2 — done, one deliberate narrowing**: verdict banner in the summary
+  (atomicity wording + raw `result_code` passthrough; the decoded reason
+  stays 0352's), Result node verdict recovered from `d5444023`
+  (kind `result-failed`, title in words, `toFlowNodes` tests added).
+  _Dimming failed operations and intent-tense sentences moved to wave 3_ —
+  they belong to the card render, not the tree that wave 3 replaces.
+- **Deep links** (wave-3 item, landed early): `#op-N` selects the operation,
+  survives reload, preserves query params.
