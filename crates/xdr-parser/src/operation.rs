@@ -53,11 +53,9 @@ pub fn extract_operations(
             // override or tx source) is the AllowTrust issuer; it borrows
             // `source_account`, released before the move below.
             let op_source = source_account.as_deref().unwrap_or(&tx_source);
-            let asset_appearances = crate::asset_appearances::emit_asset_appearances(
-                &op.body,
-                op_source,
-                op_meta_changes(tx_meta, i),
-            );
+            let op_changes = op_meta_changes(tx_meta, i);
+            let asset_appearances =
+                crate::asset_appearances::emit_asset_appearances(&op.body, op_source, op_changes);
             // Shared by details (poolIds/claimedAtoms) and counterparties
             // (crossed-offer sellers); both read the same per-op result.
             let op_result = op_results.and_then(|rs| rs.get(i));
@@ -67,6 +65,7 @@ pub fn extract_operations(
                 &op.body,
                 return_value.as_ref(),
                 op_result,
+                op_changes,
                 ledger_sequence,
                 tx_index,
                 op_index,
@@ -248,6 +247,7 @@ fn extract_op_details(
     body: &OperationBody,
     return_value: Option<&ScVal>,
     op_result: Option<&OperationResult>,
+    op_changes: &[LedgerEntryChange],
     _ledger_sequence: u32,
     _tx_index: usize,
     _op_index: usize,
@@ -405,12 +405,21 @@ fn extract_op_details(
                 "claimants": op.claimants.len(),
             }),
         ),
-        OperationBody::ClaimClaimableBalance(op) => (
-            OperationType::ClaimClaimableBalance,
-            json!({
+        OperationBody::ClaimClaimableBalance(op) => (OperationType::ClaimClaimableBalance, {
+            // The body carries only the id; the asset + amount live in the
+            // same-op ledger entry (task 0453 D8). Keys are optional —
+            // absent when the meta lacks the entry, never guessed.
+            let mut d = json!({
                 "balanceId": format_claimable_balance_id(&op.balance_id),
-            }),
-        ),
+            });
+            if let Some((asset, amount)) =
+                crate::asset_appearances::claimed_cb_asset_amount(op_changes, &op.balance_id)
+            {
+                d["asset"] = json!(format_asset(&asset));
+                d["amount"] = json!(amount);
+            }
+            d
+        }),
         OperationBody::BeginSponsoringFutureReserves(op) => (
             OperationType::BeginSponsoringFutureReserves,
             json!({
@@ -442,12 +451,18 @@ fn extract_op_details(
                 "amount": op.amount,
             }),
         ),
-        OperationBody::ClawbackClaimableBalance(op) => (
-            OperationType::ClawbackClaimableBalance,
-            json!({
+        OperationBody::ClawbackClaimableBalance(op) => (OperationType::ClawbackClaimableBalance, {
+            let mut d = json!({
                 "balanceId": format_claimable_balance_id(&op.balance_id),
-            }),
-        ),
+            });
+            if let Some((asset, amount)) =
+                crate::asset_appearances::claimed_cb_asset_amount(op_changes, &op.balance_id)
+            {
+                d["asset"] = json!(format_asset(&asset));
+                d["amount"] = json!(amount);
+            }
+            d
+        }),
         OperationBody::SetTrustLineFlags(op) => (
             OperationType::SetTrustLineFlags,
             json!({

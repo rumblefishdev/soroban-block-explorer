@@ -221,6 +221,17 @@ failure pinpoint, failure reason, story chip.
   the `op_index` micro-backend (D7) to pull events into cards — needs the
   Rust parser + DTO change + API types regen; not started, pending explicit
   go-ahead.
+- **Micro-backends — done (D7 + D8)**: `op_index` kept from the CAP-67 V4
+  per-op container (`event.rs` enumerate; None for tx-level/diagnostic/V3),
+  exposed as `XdrEventDto.op_index` (0-based envelope position =
+  `application_order - 1`), API types regenerated; the card filters
+  tx-level `contract_events` into an "Events · N" block. Claim/clawback-CB
+  `details` now carry `asset` + `amount` recovered from the same-op ledger
+  entry (`claimed_cb_asset_amount`) — headline upgrades to "Claimed 5 USDC" /
+  "Clawed back escrowed 5 USDC", id-only fallback stays. NOTE: both fields
+  reach production responses only after the next backend deploy (manual,
+  docs/deployment.md); the frontend is absence-safe by construction and
+  tested that way.
 - **Wave 3 — done**: `OperationCard` replaces both mode panels (one card, the
   mode toggle now only defaults the raw-details disclosure open); per-op icons
   in card + picker (D6 closed as _implemented_); PP facts grid (Route, pools,

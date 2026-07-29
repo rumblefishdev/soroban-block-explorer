@@ -281,15 +281,28 @@ export function humanizeOp(
       return `Escrowed ${formatTokenAmount(amount, unit)}${who}`;
     }
     case 'CLAIM_CLAIMABLE_BALANCE': {
-      const id = detStr(detailsObj(heavy), 'balanceId');
+      const details = detailsObj(heavy);
+      const id = detStr(details, 'balanceId');
       if (id == null) break;
-      // The asset is not in the operation body; naming it needs the
-      // ledger-entry changes (spec D8). Until then: id only, like SE.
+      // asset + amount come from the same-op ledger entry (spec D8); absent
+      // on responses parsed before that landed, or when the meta lacks the
+      // entry — then the id is all we can honestly say (same as SE).
+      const unit = assetUnit(details?.asset, null);
+      const amount = asAmount(details?.amount);
+      if (unit != null && amount != null) {
+        return `Claimed ${formatTokenAmount(amount, unit)}`;
+      }
       return `Claimed balance ${shortId(id)}`;
     }
     case 'CLAWBACK_CLAIMABLE_BALANCE': {
-      const id = detStr(detailsObj(heavy), 'balanceId');
+      const details = detailsObj(heavy);
+      const id = detStr(details, 'balanceId');
       if (id == null) break;
+      const unit = assetUnit(details?.asset, null);
+      const amount = asAmount(details?.amount);
+      if (unit != null && amount != null) {
+        return `Clawed back escrowed ${formatTokenAmount(amount, unit)}`;
+      }
       return `Clawed back balance ${shortId(id)}`;
     }
     case 'CLAWBACK': {

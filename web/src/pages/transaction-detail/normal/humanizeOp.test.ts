@@ -344,13 +344,26 @@ describe('humanizeOp', () => {
     expect(humanizeOp(op, h)).toBe('Escrowed 5 USDC for 2 claimants');
   });
 
-  it('claims a balance by id only (asset needs meta, spec D8)', () => {
+  it('claims a balance by id only when the meta-sourced asset is absent (spec D8)', () => {
     const op = light({ type_name: 'CLAIM_CLAIMABLE_BALANCE' });
     const h = heavy({
       balanceId:
         '0abc14da0a2c9be653a16bb52345f9e69b2b1e1b0c00c8d94aec6e0006bcef12',
     });
     expect(humanizeOp(op, h)).toBe('Claimed balance 0abc…ef12');
+  });
+
+  it('names the claimed amount once the meta-sourced asset is present (spec D8)', () => {
+    const op = light({ type_name: 'CLAIM_CLAIMABLE_BALANCE' });
+    const h = heavy({
+      balanceId:
+        '0abc14da0a2c9be653a16bb52345f9e69b2b1e1b0c00c8d94aec6e0006bcef12',
+      asset: 'USDC:GISSUER',
+      amount: 50_000_000,
+    });
+    expect(humanizeOp(op, h)).toBe('Claimed 5 USDC');
+    const cb = light({ type_name: 'CLAWBACK_CLAIMABLE_BALANCE' });
+    expect(humanizeOp(cb, h)).toBe('Clawed back escrowed 5 USDC');
   });
 
   it('describes a clawback', () => {
