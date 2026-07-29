@@ -146,9 +146,27 @@ then only consider issues whose fix is in that component.
 - If verification fails, say so in the report and **draft nothing** — the issue
   stays open. A wrongly-closed issue costs more trust than a slow one.
 
+**Every close carries a link the reporter can click.** Not the site root, not
+the section — the exact page showing the thing they asked for, ideally their own
+example. They should be able to verify us in one click instead of taking our
+word for it, and if we got it wrong they will find out faster than we would.
+
+- They gave a URL (a transaction, an asset, a pool) → reuse **that** URL.
+- They gave a screenshot of a list or a search → rebuild the URL that reproduces
+  it, filters and query included, so the row they photographed is on screen.
+- Nothing to reuse → link the narrowest page that demonstrates the change, and
+  say what to look at on it.
+- The change is invisible on every real page (a filter that now matches
+  nothing, an empty state) → say so plainly rather than sending them somewhere
+  that shows nothing.
+
+Use the link you actually opened during verification above; if it was worth
+checking, it is worth sending.
+
 Then draft:
 
 > This is live on production now — [what was verified, concretely].
+> You can see it here: [link].
 > Thanks again for the report.
 
 **Bundled issues:** close only when every linked task has shipped. Exception:
@@ -163,6 +181,9 @@ landing. If the linked task is `needs-backfill`, at deploy time draft:
 
 > The fix is deployed. Historical data is still being re-processed, so older
 > records may look unchanged for a while — I'll confirm here when it's done.
+
+Send the link at that confirmation, not now: a link that still shows stale data
+reads as the fix not working.
 
 Keep the issue open until the backfill completes, then verify per Step 4.
 
