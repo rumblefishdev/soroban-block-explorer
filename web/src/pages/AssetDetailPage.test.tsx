@@ -161,16 +161,19 @@ describe('AssetDetailPage', () => {
     });
 
     // Reserved SAC: type badge stays, but no SAC property tag (chip label
-    // "SAC").
+    // "SAC"). "SAC contract" in the summary row is different exact text.
     expect(screen.getByText('Classic')).toBeInTheDocument();
     expect(screen.queryByText('SAC')).not.toBeInTheDocument();
-    // Task 0450: the summary row is gone too. An un-deployed address is not a
-    // contract — we only know it because the asset emitted a CAP-67 event, so
-    // showing it under "SAC contract" claimed something untrue and made the
-    // row appear only for assets that happened to have activity.
-    expect(screen.queryByText('SAC contract')).not.toBeInTheDocument();
-    expect(screen.queryByText(SAC_CONTRACT)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Reserved address/)).not.toBeInTheDocument();
+    // The summary row DOES stay, showing the address unlinked with its status.
+    // Keeping the oddity visible beats hiding it; making it consistent is
+    // task 0452.
+    expect(screen.getByText('SAC contract')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Reserved address — not deployed/)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: SAC_CONTRACT })
+    ).not.toBeInTheDocument();
   });
 
   it('renders the asset name sub-line when present', () => {

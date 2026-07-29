@@ -111,6 +111,18 @@ history:
       misreading a hydration query (`queries.rs:508`) as the filter clause.
       New section in the body documents where the handle leaked and where it
       did not, including that the liquidity-pool path is safe only by accident.
+  - date: '2026-07-28'
+    status: active
+    who: karolkow
+    note: >
+      Reverted the detail-page half of the previous entry on review. Hiding the
+      "SAC contract" row for un-deployed SACs was the lossy fix: the row's
+      CONTENT was true (here is the address, nothing is deployed at it) and it
+      surfaced a genuine oddity — what was wrong is that it appears only for
+      assets that have moved. The repair is to make it unconditional, not
+      absent, since the address is derivable for every classic asset from
+      `(code, issuer, network)` with no query at all. Deferred to 0452 rather
+      than widened here. The assets-list column change stands.
 ---
 
 # FEATURE: issuer home domain in the assets-list issuer column
