@@ -30,11 +30,21 @@ describe('HighlightedJson strkey awareness (0460 #14)', () => {
     ).toBe(`/accounts/${ACCOUNT}`);
   });
 
+  it('links canonical CODE:ISSUER assets to the asset page (dash route)', () => {
+    const asset = `USDC:${ACCOUNT}`;
+    renderJson({ asset });
+    expect(screen.getByRole('link', { name: asset }).getAttribute('href')).toBe(
+      `/assets/USDC-${ACCOUNT}`
+    );
+  });
+
   it('leaves ordinary strings and near-miss values untouched', () => {
     renderJson({
       note: 'hello',
+      native: 'native',
       // 55 chars after prefix required — this one is short.
       short: 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6',
+      badAsset: 'USDC:GSHORT',
       bytes: 'p0TleCgt/LYD1K7KZQcNKJSgWIqsvKfSV6Zmgs27koo=',
     });
     expect(screen.queryByRole('link')).toBeNull();

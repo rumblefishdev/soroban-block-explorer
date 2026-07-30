@@ -17,6 +17,32 @@ function strkeyType(value: string): 'account' | 'contract' | 'pool' {
   return 'account';
 }
 
+// Canonical credit-asset form the parser emits: CODE:ISSUER. The asset
+// route spells the same identity CODE-ISSUER, so the href maps the colon
+// to a dash while the visible text stays exactly as in the JSON. The bare
+// string "native" is NOT linked — without type context the word could be
+// any value, and a wrong link is worse than none.
+const ASSET_RE = /^([A-Za-z0-9]{1,12}):(G[A-Z2-7]{55})$/;
+
+function AssetString({ value }: { value: string }) {
+  const match = ASSET_RE.exec(value)!;
+  return (
+    <Token kind="string">
+      {'"'}
+      <IdentifierWithCopy
+        value={value}
+        type="asset"
+        href={`/assets/${match[1]}-${match[2]}`}
+        tone="inherit"
+        fontSize="inherit"
+        truncate={false}
+        mono
+      />
+      {'"'}
+    </Token>
+  );
+}
+
 /** A JSON string that IS an identifier renders as the house address
  *  component — clickable link + copy button — while keeping the JSON
  *  string colour and the surrounding quotes (0460 #14). */
@@ -67,12 +93,11 @@ function Token({ kind, children }: { kind: TokenKind; children: ReactNode }) {
 function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
-  if (typeof value === 'string')
-    return STRKEY_RE.test(value) ? (
-      <StrkeyString value={value} />
-    ) : (
-      <Token kind="string">{`"${value}"`}</Token>
-    );
+  if (typeof value === 'string') {
+    if (STRKEY_RE.test(value)) return <StrkeyString value={value} />;
+    if (ASSET_RE.test(value)) return <AssetString value={value} />;
+    return <Token kind="string">{`"${value}"`}</Token>;
+  }
   if (typeof value === 'number' || typeof value === 'bigint')
     return <Token kind="number">{String(value)}</Token>;
   if (typeof value === 'boolean')
