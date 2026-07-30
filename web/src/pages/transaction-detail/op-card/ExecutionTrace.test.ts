@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildExecutionTrace,
   contractStrkeyFromBase64,
+  eventArgsText,
   traceCallCount,
 } from './ExecutionTrace.js';
 
@@ -58,18 +59,26 @@ describe('contractStrkeyFromBase64', () => {
 });
 
 describe('buildExecutionTrace', () => {
-  it('rebuilds nesting, attaches events to the active call, sets returns', () => {
-    // swap(A) { burn_and_transfer(B) { [burn event] } ; balance(C) }
+  it('rebuilds nesting with events interleaved in stream order', () => {
+    // swap(A) { burn ; burn_and_transfer(B) ; transfer ; balance(C) } — the
+    // burn fires BEFORE the sub-call, the transfer between the two
+    // sub-calls; that chronology must survive as child order.
     const burn = ev(
       [{ type: 'sym', value: 'burn' }],
       { type: 'i128', value: '12958' },
       CDDT
     );
+    const transfer = ev(
+      [{ type: 'sym', value: 'transfer' }],
+      { type: 'i128', value: '13171' },
+      CDDT
+    );
     const nodes = buildExecutionTrace([
       fnCall('swap', CDDT_BYTES, { type: 'vec', value: [1, 2] }),
-      fnCall('burn_and_transfer'),
       burn,
+      fnCall('burn_and_transfer'),
       fnReturn('burn_and_transfer', { type: 'void' }),
+      transfer,
       fnCall('balance'),
       fnReturn('balance', { type: 'i128', value: '81813607' }),
       fnReturn('swap', { type: 'u128', value: '81404538' }),
@@ -81,12 +90,18 @@ describe('buildExecutionTrace', () => {
     expect(swap.contractId).toBe(CDDT);
     expect(swap.returnValue).toEqual({ type: 'u128', value: '81404538' });
     expect(swap.unfinished).toBe(false);
-    expect(swap.children.map((c) => c.fnName)).toEqual([
+    expect(
+      swap.children.map((child) =>
+        child.kind === 'call'
+          ? child.node.fnName
+          : `ev:${child.event.event_index}`
+      )
+    ).toEqual([
+      `ev:${burn.event_index}`,
       'burn_and_transfer',
+      `ev:${transfer.event_index}`,
       'balance',
     ]);
-    expect(swap.children[0].events).toEqual([burn]);
-    expect(swap.children[1].events).toEqual([]);
     expect(traceCallCount(nodes)).toBe(3);
   });
 
@@ -98,7 +113,7 @@ describe('buildExecutionTrace', () => {
       fnReturn('swap'),
     ]);
     expect(traceCallCount(nodes)).toBe(1);
-    expect(nodes[0].events).toEqual([]);
+    expect(nodes[0].children).toEqual([]);
   });
 
   it('marks calls still on the stack as unfinished (failed tx trace)', () => {
@@ -108,7 +123,9 @@ describe('buildExecutionTrace', () => {
       // trap: no fn_return for either
     ]);
     expect(nodes[0].unfinished).toBe(true);
-    expect(nodes[0].children[0].unfinished).toBe(true);
+    const child = nodes[0].children[0];
+    expect(child.kind).toBe('call');
+    if (child.kind === 'call') expect(child.node.unfinished).toBe(true);
   });
 
   it('tolerates a stray fn_return and non-diagnostic noise', () => {
@@ -119,5 +136,44 @@ describe('buildExecutionTrace', () => {
     ]);
     expect(traceCallCount(nodes)).toBe(1);
     expect(nodes[0].unfinished).toBe(false);
+  });
+});
+
+describe('eventArgsText', () => {
+  it('renders payload topics and data scalars inline', () => {
+    const transfer = ev(
+      [
+        { type: 'sym', value: 'transfer' },
+        {
+          type: 'address',
+          value: 'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ',
+        },
+        { type: 'address', value: CDDT },
+      ],
+      { type: 'i128', value: '13171' }
+    );
+    expect(eventArgsText(transfer)).toBe('(GC4Q…K7XQ, CDDT…RCTX, 13171)');
+  });
+
+  it('renders error diagnostics with quoted message and code', () => {
+    const error = ev([{ type: 'sym', value: 'error' }], {
+      type: 'vec',
+      value: [
+        { type: 'string', value: 'failing with contract error' },
+        { type: 'u32', value: 7 },
+      ],
+    });
+    expect(eventArgsText(error)).toBe('("failing with contract error", 7)');
+  });
+
+  it('elides values that do not fit instead of dropping the row', () => {
+    const long = ev(
+      [
+        { type: 'sym', value: 'trade' },
+        { type: 'string', value: 'x'.repeat(60) },
+      ],
+      { type: 'i128', value: '5' }
+    );
+    expect(eventArgsText(long)).toBe('(5, …)');
   });
 });

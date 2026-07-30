@@ -155,3 +155,37 @@ contract, 32B>, sym <fn name>]`, `data` = args; `fn_return` `data` =
   0460 item 14 (backend), not fixable here.
 - **Args format**: fn(N) counts vs literal inline args — options analysis
   delivered; decision pending (0460 #11 territory if inline).
+
+## Round 5 — unified rows (reviewer's design, 2026-07-30)
+
+The proposal: events stop being chips and become FIRST-CLASS ROWS,
+nested exactly like calls. Research before building:
+
+- **Phalcon (BlockSec) invocation flow**: "each node represents a function
+  call or event trigger" — the industry precedent for exactly this model.
+  Tenderly likewise interleaves log opcodes into the decoded call trace.
+  stellar.expert renders invocations and effects as two separate flat
+  lists — the anti-pattern we're leaving.
+- **Library check**: `@mui/x-tree-view` rejected deliberately — the
+  WAI-ARIA tree pattern expects one focusable per item, and our rows carry
+  a link + two buttons each; forcing them into `role="tree"` would degrade
+  a11y, and the repo has no `@mui/x-tree-view` dep today. Hand-rolled
+  disclosure rows keep correct semantics. No trace-specific React library
+  fits a MUI design system; the reusable "gotowiec" here is the EVENT
+  FORMATTER, which 0363/0457 will source from stellar-expert's MIT
+  tx-meta-effects-parser — until then a local ~40-line formatter covers
+  token events, error diagnostics (quoted message + code inline!) and a
+  generic elided fallback.
+- **Implementation**: `TraceNode.children` is now a single stream-ordered
+  list of `{kind:'call'}|{kind:'event'}` — chronology preserved (a
+  transfer firing between two sub-calls sits between them; chips used to
+  flatten that). Event rows: dot glyph, category-coloured name (blue
+  token / red diagnostics / grey protocol), inline payload
+  (`transfer(GC4Q…K7XQ, CCTU…V6J7, 13171)`), `by EMITTER` only when the
+  emitter differs from the surrounding call's contract, per-row raw
+  topics/data disclosure. Folded-branch badge counts calls AND events
+  (an events-only branch used to say "0 calls"). Legend updated.
+- Also this round: adaptive index (1 op → no picker, 0460 #5), `→ void`
+  explicit (secondary tone — full truth, not a UI abbreviation), literal
+  values in secondary tone, flexbox indent bug fixed (spacer squeezed to
+  zero on overflow).

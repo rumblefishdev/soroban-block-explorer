@@ -2,6 +2,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Box, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import type { ReactNode } from 'react';
 import { useState } from 'react';
 
 import type { XdrEventDto } from '@rumblefish/api-types';
@@ -20,10 +21,17 @@ export interface TraceNode {
   /** True when the trace ended before this call returned — on a failed
    *  transaction this marks where execution actually stopped. */
   unfinished: boolean;
-  children: TraceNode[];
-  /** Contract events raised while this call was on top of the stack. */
-  events: XdrEventDto[];
+  /** Everything that happened inside this call, in exact stream order:
+   *  sub-calls AND the events the call announced, interleaved — the
+   *  chronology is data (a transfer may fire between two sub-calls), so the
+   *  model must not split them into two lists (the unified-row design;
+   *  same node model as Phalcon's invocation flow). */
+  children: TraceChild[];
 }
+
+export type TraceChild =
+  | { kind: 'call'; node: TraceNode }
+  | { kind: 'event'; event: XdrEventDto };
 
 interface TypedVal {
   type?: unknown;
@@ -117,8 +125,9 @@ export function traceEventLabel(event: XdrEventDto): string {
  *  The host VM emits `fn_call` when a function is entered and `fn_return`
  *  when it exits, in stream order, with the contract events raised in
  *  between — so a plain stack walk rebuilds the exact execution: push on
- *  call, pop on return, attach everything else to the call currently on
- *  top. `core_metrics` are host resource counters, not calls or effects.
+ *  call, pop on return, and everything else becomes an event child of the
+ *  call currently on top, keeping the interleaved order. `core_metrics`
+ *  are host resource counters, not calls or effects.
  *
  *  A failed transaction's trace stops mid-flight: calls left on the stack
  *  at the end never returned and are marked `unfinished` — that is the
@@ -139,9 +148,12 @@ export function buildExecutionTrace(
         returnValue: undefined,
         unfinished: false,
         children: [],
-        events: [],
       };
-      (stack.length > 0 ? stack[stack.length - 1].children : roots).push(node);
+      if (stack.length > 0) {
+        stack[stack.length - 1].children.push({ kind: 'call', node });
+      } else {
+        roots.push(node);
+      }
       stack.push(node);
     } else if (kind === 'fn_return') {
       const node = stack.pop();
@@ -149,7 +161,7 @@ export function buildExecutionTrace(
     } else if (kind === 'core_metrics') {
       // Host resource counters — not part of the call story.
     } else if (stack.length > 0) {
-      stack[stack.length - 1].events.push(event);
+      stack[stack.length - 1].children.push({ kind: 'event', event });
     }
     // Events outside any call (fee events etc.) stay in the Events section.
   }
@@ -157,33 +169,63 @@ export function buildExecutionTrace(
   return roots;
 }
 
+function childCalls(node: TraceNode): TraceNode[] {
+  return node.children
+    .filter(
+      (child): child is Extract<TraceChild, { kind: 'call' }> =>
+        child.kind === 'call'
+    )
+    .map((child) => child.node);
+}
+
 /** Total call count, for the section header and collapsed-branch badges. */
 export function traceCallCount(nodes: readonly TraceNode[]): number {
   return nodes.reduce(
-    (sum, node) => sum + 1 + traceCallCount(node.children),
+    (sum, node) => sum + 1 + traceCallCount(childCalls(node)),
     0
   );
 }
 
-/** Same-label neighbours collapse into one `label ×N` chip — a failing call
- *  carries the contract error AND the host's escalation copy, both topic
- *  `error`; two identical chips read as a rendering bug. Full per-event data
- *  stays in the Events table. */
-function groupEventLabels(
-  events: readonly XdrEventDto[]
-): { label: string; count: number }[] {
-  const groups: { label: string; count: number }[] = [];
-  for (const event of events) {
-    const label = traceEventLabel(event);
-    const last = groups[groups.length - 1];
-    if (last != null && last.label === label) last.count += 1;
-    else groups.push({ label, count: 1 });
+function traceEventCount(nodes: readonly TraceNode[]): number {
+  return nodes.reduce(
+    (sum, node) =>
+      sum +
+      node.children.filter((child) => child.kind === 'event').length +
+      traceEventCount(childCalls(node)),
+    0
+  );
+}
+
+/** Folded-branch badge: whatever the branch actually hides — "5 calls",
+ *  "1 event", or both. A branch holding only events must not say "0 calls". */
+function foldedBadgeLabel(node: TraceNode): string {
+  const calls = traceCallCount(childCalls(node));
+  const events = traceEventCount([node]);
+  const parts: string[] = [];
+  if (calls > 0) parts.push(`${calls} call${calls === 1 ? '' : 's'}`);
+  if (events > 0) parts.push(`${events} event${events === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+
+/** Row colour encodes the KIND of announcement, not the individual event:
+ *  token movements / failure diagnostics / any other protocol event. Keep in
+ *  sync with the legend under the trace. */
+function eventCategory(label: string): {
+  paletteKey: 'info' | 'error' | 'secondary';
+  hint: string;
+} {
+  if (['transfer', 'mint', 'burn', 'clawback'].includes(label)) {
+    return { paletteKey: 'info', hint: 'token movement' };
   }
-  return groups;
+  if (['error', 'log', 'host_fn_failed'].includes(label)) {
+    return { paletteKey: 'error', hint: 'failure diagnostic' };
+  }
+  return { paletteKey: 'secondary', hint: 'protocol event' };
 }
 
 /** One argument as short inline text, or null when it wouldn't fit a row:
- *  addresses shorten to GC4Q…K7XQ form, numbers/symbols pass through. */
+ *  addresses shorten to GC4Q…K7XQ form, numbers/symbols pass through and
+ *  short strings render quoted (error messages). */
 function shortVal(value: unknown): string | null {
   if (value == null || typeof value !== 'object') return null;
   const { type, value: inner } = value as TypedVal;
@@ -197,6 +239,9 @@ function shortVal(value: unknown): string | null {
     // Big ints (i128/u128…) arrive as decimal strings; symbols stay short.
     if (/^-?\d+$/.test(inner)) return inner;
     if (type === 'sym' && inner.length <= 12) return inner;
+    if ((type === 'str' || type === 'string') && inner.length <= 28) {
+      return `"${inner}"`;
+    }
   }
   return null;
 }
@@ -228,32 +273,51 @@ function argsSummary(args: unknown): ArgsSummary {
     : { kind: 'count', count: typed.value.length };
 }
 
-/** Chip colour encodes the KIND of announcement, not the individual event:
- *  token movements / failure diagnostics / any other protocol event. Keep in
- *  sync with the legend under the trace. */
-function eventCategory(label: string): {
-  color: 'blue' | 'error' | 'neutral';
-  hint: string;
-} {
-  if (['transfer', 'mint', 'burn', 'clawback'].includes(label)) {
-    return { color: 'blue', hint: 'token movement' };
+/** Inline summary of what an event announced: the payload topics (skipping
+ *  the name) plus the data scalar(s) — `transfer(GC4Q…K7XQ, CCTU…V6J7,
+ *  13171)`, `error("failing with contract error", 7)`. Values that do not
+ *  fit are elided with `…`; the raw event stays behind the disclosure. */
+export function eventArgsText(event: XdrEventDto): string {
+  const parts: string[] = [];
+  let elided = false;
+  for (let i = 1; i < event.topics.length; i++) {
+    const short = shortVal(event.topics[i]);
+    if (short == null) elided = true;
+    else parts.push(short);
   }
-  if (['error', 'log', 'host_fn_failed'].includes(label)) {
-    return { color: 'error', hint: 'failure diagnostic' };
+  const data = event.data as TypedVal | null;
+  if (data != null && typeof data === 'object') {
+    if (data.type === 'vec' && Array.isArray(data.value)) {
+      for (const element of data.value) {
+        const short = shortVal(element);
+        if (short == null) elided = true;
+        else parts.push(short);
+      }
+    } else if (data.type !== 'void') {
+      const short = shortVal(data);
+      if (short == null) elided = true;
+      else parts.push(short);
+    }
   }
-  return { color: 'neutral', hint: 'protocol event' };
+  let joined = parts.join(', ');
+  if (joined.length > 48) {
+    joined = `${joined.slice(0, 48)}…`;
+    elided = false;
+  }
+  return `(${joined}${elided ? (joined.length > 0 ? ', …' : '…') : ''})`;
 }
 
 /** Short inline `→ value` for scalar returns; structured values stay behind
  *  the per-node disclosure. A call that returned NOTHING says `void`
- *  explicitly (muted, like the arg count) — silence would be ambiguous with
- *  "value too long to show". */
+ *  explicitly — silence would be ambiguous with "value too long to show".
+ *  `void` is the complete truth about the call (secondary tone, like real
+ *  values); only UI abbreviations like the arg count go tertiary. */
 function scalarReturn(
   value: unknown
 ): { kind: 'value' | 'void'; text: string } | null {
   if (value == null) return null;
   let inner: unknown = value;
-  const typed = value as { type?: unknown; value?: unknown };
+  const typed = value as TypedVal;
   if (typeof typed.type === 'string') {
     if (typed.type === 'void') return { kind: 'void', text: 'void' };
     if (typed.type === 'vec' || typed.type === 'map') return null;
@@ -270,6 +334,191 @@ function scalarReturn(
   return null;
 }
 
+/** Shared row shell: indent, guide line, vertical rhythm. */
+function RowShell({ depth, children }: { depth: number; children: ReactNode }) {
+  return (
+    <Stack
+      direction="row"
+      spacing={0.75}
+      alignItems="center"
+      sx={(theme) => ({
+        pl: depth * 2.5,
+        py: 0.25,
+        borderLeft:
+          depth > 0 ? `1px dashed ${theme.palette.stroke.default}` : 'none',
+        ml: depth > 0 ? 1 : 0,
+      })}
+    >
+      {children}
+    </Stack>
+  );
+}
+
+function DetailsToggle({
+  open,
+  onToggle,
+}: {
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <IconButton
+      size="small"
+      aria-label="Arguments and data"
+      aria-expanded={open}
+      onClick={onToggle}
+      sx={{ p: 0.25, flexShrink: 0 }}
+    >
+      <CodeIcon
+        sx={(theme) => ({
+          fontSize: 14,
+          color: open
+            ? theme.palette.text.primary
+            : theme.palette.text.tertiary,
+        })}
+      />
+    </IconButton>
+  );
+}
+
+function DetailsPanel({
+  depth,
+  sections,
+}: {
+  depth: number;
+  sections: { label: string; value: unknown }[];
+}) {
+  return (
+    <Box
+      sx={(theme) => ({
+        ml: depth * 2.5 + 3,
+        my: 0.5,
+        px: 1.5,
+        py: 1,
+        borderRadius: `${theme.shape.radius.s}px`,
+        backgroundColor: theme.palette.surface.background,
+      })}
+    >
+      {sections.map((section, index) => (
+        <Box key={section.label}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({
+              color: theme.palette.text.tertiary,
+              mt: index > 0 ? 1 : 0,
+            })}
+          >
+            {section.label}
+          </Typography>
+          <HighlightedJson value={section.value} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/** An event the call announced, as a first-class row: chronology-true
+ *  sibling of sub-calls (a transfer that fired between two sub-calls sits
+ *  between them). Distinguished from calls by FORM, not colour alone: dot
+ *  glyph instead of a chevron slot, category-coloured name, `by EMITTER`
+ *  (only when the emitter differs from the surrounding call's contract),
+ *  no return arrow, never any children. */
+function EventRow({
+  event,
+  depth,
+  parentContract,
+}: {
+  event: XdrEventDto;
+  depth: number;
+  parentContract: string | null;
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const label = traceEventLabel(event);
+  const category = eventCategory(label);
+  const showEmitter =
+    event.contract_id != null && event.contract_id !== parentContract;
+
+  return (
+    <>
+      <RowShell depth={depth}>
+        <Box
+          component="span"
+          aria-hidden
+          sx={(theme) => ({
+            width: 20,
+            flexShrink: 0,
+            textAlign: 'center',
+            color:
+              category.paletteKey === 'error'
+                ? theme.palette.text.error
+                : theme.palette.text.tertiary,
+            fontSize: 14,
+            lineHeight: 1,
+          })}
+        >
+          •
+        </Box>
+        <Typography
+          variant="bodyMonoSmRegular"
+          title={`Event announced by this call — ${category.hint}`}
+          sx={(theme) => ({
+            whiteSpace: 'nowrap',
+            color:
+              category.paletteKey === 'error'
+                ? theme.palette.text.error
+                : category.paletteKey === 'info'
+                ? // Same blue family as the themed Chip color="blue".
+                  theme.palette.blue[theme.palette.mode === 'dark' ? 400 : 600]
+                : theme.palette.text.secondary,
+          })}
+        >
+          {label}
+          <Box
+            component="span"
+            sx={(theme) => ({ color: theme.palette.text.secondary })}
+          >
+            {eventArgsText(event)}
+          </Box>
+        </Typography>
+        {showEmitter && (
+          <Typography
+            variant="bodyXsRegular"
+            component="span"
+            title="Contract that announced this event"
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.5,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Box
+              component="span"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              by
+            </Box>
+            <IdentifierDisplay value={event.contract_id!} type="contract" />
+          </Typography>
+        )}
+        <DetailsToggle
+          open={detailsOpen}
+          onToggle={() => setDetailsOpen((open) => !open)}
+        />
+      </RowShell>
+      <Collapse in={detailsOpen} unmountOnExit>
+        <DetailsPanel
+          depth={depth}
+          sections={[
+            { label: 'topics', value: event.topics },
+            { label: 'data', value: event.data },
+          ]}
+        />
+      </Collapse>
+    </>
+  );
+}
+
 function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
   // Deep branches start folded so a 40-call DeFi trace reads as a summary
   // first; the top two levels are the story. Unfinished branches ALWAYS
@@ -283,21 +532,11 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
   const inlineReturn = scalarReturn(node.returnValue);
   const hasDetails = node.args != null || node.returnValue != null;
   const args = argsSummary(node.args);
+  const calls = childCalls(node);
 
   return (
     <>
-      <Stack
-        direction="row"
-        spacing={0.75}
-        alignItems="center"
-        sx={(theme) => ({
-          pl: depth * 2.5,
-          py: 0.25,
-          borderLeft:
-            depth > 0 ? `1px dashed ${theme.palette.stroke.default}` : 'none',
-          ml: depth > 0 ? 1 : 0,
-        })}
-      >
+      <RowShell depth={depth}>
         {hasChildren ? (
           <IconButton
             size="small"
@@ -378,10 +617,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
           <Typography
             variant="bodyMonoSmRegular"
             sx={(theme) => ({
-              color:
-                inlineReturn.kind === 'void'
-                  ? theme.palette.text.tertiary
-                  : theme.palette.text.secondary,
+              color: theme.palette.text.secondary,
               fontStyle: inlineReturn.kind === 'void' ? 'italic' : 'normal',
               whiteSpace: 'nowrap',
             })}
@@ -389,111 +625,63 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             → {inlineReturn.text}
           </Typography>
         )}
-        {groupEventLabels(node.events).map((group, index) => {
-          const category = eventCategory(group.label);
-          return (
-            <Box
-              key={`${group.label}-${index}`}
-              component="span"
-              title={`Event announced by this call — ${category.hint}`}
-            >
-              <Chip
-                size="sm"
-                color={category.color}
-                label={
-                  group.count > 1
-                    ? `${group.label} ×${group.count}`
-                    : group.label
-                }
-              />
-            </Box>
-          );
-        })}
         {hasChildren && !childrenOpen && (
-          <Chip
-            size="sm"
-            color="neutral"
-            label={`${traceCallCount(node.children)} calls`}
-          />
+          <Chip size="sm" color="neutral" label={foldedBadgeLabel(node)} />
         )}
         {/* The whole unfinished stack path is marked in the model, but the
             chip renders only at the DEEPEST unfinished call — repeating it
             on every ancestor reads as noise (review finding); the nesting
             already shows the path. */}
-        {node.unfinished && !node.children.some((c) => c.unfinished) && (
+        {node.unfinished && !calls.some((call) => call.unfinished) && (
           <Chip size="sm" color="error" label="stopped here" />
         )}
         {hasDetails && (
-          <IconButton
-            size="small"
-            aria-label="Call arguments and return value"
-            aria-expanded={detailsOpen}
-            onClick={() => setDetailsOpen((open) => !open)}
-            sx={{ p: 0.25 }}
-          >
-            <CodeIcon
-              sx={(theme) => ({
-                fontSize: 14,
-                color: detailsOpen
-                  ? theme.palette.text.primary
-                  : theme.palette.text.tertiary,
-              })}
-            />
-          </IconButton>
+          <DetailsToggle
+            open={detailsOpen}
+            onToggle={() => setDetailsOpen((open) => !open)}
+          />
         )}
-      </Stack>
+      </RowShell>
       {hasDetails && (
         <Collapse in={detailsOpen} unmountOnExit>
-          <Box
-            sx={(theme) => ({
-              ml: depth * 2.5 + 3,
-              my: 0.5,
-              px: 1.5,
-              py: 1,
-              borderRadius: `${theme.shape.radius.s}px`,
-              backgroundColor: theme.palette.surface.background,
-            })}
-          >
-            {node.args != null && (
-              <>
-                <Typography
-                  variant="bodyXsRegular"
-                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                >
-                  arguments
-                </Typography>
-                <HighlightedJson value={node.args} />
-              </>
-            )}
-            {node.returnValue != null && (
-              <>
-                <Typography
-                  variant="bodyXsRegular"
-                  sx={(theme) => ({
-                    color: theme.palette.text.tertiary,
-                    mt: node.args != null ? 1 : 0,
-                  })}
-                >
-                  return
-                </Typography>
-                <HighlightedJson value={node.returnValue} />
-              </>
-            )}
-          </Box>
+          <DetailsPanel
+            depth={depth}
+            sections={[
+              ...(node.args != null
+                ? [{ label: 'arguments', value: node.args }]
+                : []),
+              ...(node.returnValue != null
+                ? [{ label: 'return', value: node.returnValue }]
+                : []),
+            ]}
+          />
         </Collapse>
       )}
       <Collapse in={childrenOpen} unmountOnExit>
-        {node.children.map((child, index) => (
-          <TraceNodeRow key={index} node={child} depth={depth + 1} />
-        ))}
+        {node.children.map((child, index) =>
+          child.kind === 'call' ? (
+            <TraceNodeRow key={index} node={child.node} depth={depth + 1} />
+          ) : (
+            <EventRow
+              key={index}
+              event={child.event}
+              depth={depth + 1}
+              parentContract={node.contractId}
+            />
+          )
+        )}
       </Collapse>
     </>
   );
 }
 
-function hasEvents(nodes: readonly TraceNode[]): boolean {
-  return nodes.some(
-    (node) => node.events.length > 0 || hasEvents(node.children)
+function hasEventChildren(nodes: readonly TraceNode[]): boolean {
+  return nodes.some((node) =>
+    node.children.some(
+      (child) =>
+        child.kind === 'event' ||
+        (child.kind === 'call' && hasEventChildren([child.node]))
+    )
   );
 }
 
@@ -506,14 +694,14 @@ export function ExecutionTrace({ nodes }: { nodes: TraceNode[] }) {
       {nodes.map((node, index) => (
         <TraceNodeRow key={index} node={node} depth={0} />
       ))}
-      {/* Legend for the chip colour categories (see eventCategory). */}
-      {hasEvents(nodes) && (
+      {/* Legend for the event-row colour categories (see eventCategory). */}
+      {hasEventChildren(nodes) && (
         <Typography
           variant="bodyXsRegular"
           sx={(theme) => ({ color: theme.palette.text.tertiary, mt: 0.5 })}
         >
-          Chips are events announced by a call — blue: token movement · grey:
-          protocol event · red: failure diagnostics.
+          • rows are events announced by the surrounding call — blue: token
+          movement · grey: protocol event · red: failure diagnostics.
         </Typography>
       )}
     </Box>
