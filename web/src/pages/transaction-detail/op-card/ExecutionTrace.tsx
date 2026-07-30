@@ -3,7 +3,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Box, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import type { Theme } from '@mui/material/styles';
-import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  Chip,
+  IdentifierWithCopy,
+} from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment, useState } from 'react';
 
@@ -369,7 +372,7 @@ function InlineParts({ parts }: { parts: readonly InlinePart[] }) {
           {part.kind === 'text' ? (
             part.text
           ) : (
-            <IdentifierDisplay
+            <IdentifierWithCopy
               value={part.value}
               type={idType(part.value)}
               tone="inherit"
@@ -625,7 +628,7 @@ function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
             >
               by
             </Box>
-            <IdentifierDisplay value={event.contract_id!} type="contract" />
+            <IdentifierWithCopy value={event.contract_id!} type="contract" />
           </Typography>
         )}
         <DetailsToggle
@@ -751,7 +754,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             >
               on
             </Box>
-            <IdentifierDisplay value={node.contractId} type="contract" />
+            <IdentifierWithCopy value={node.contractId} type="contract" />
           </Typography>
         )}
         {inlineReturn != null && (

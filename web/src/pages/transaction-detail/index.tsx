@@ -1,5 +1,6 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
+  Chip,
   DetailErrorState,
   getDefaultTruncation,
   NotFoundState,
@@ -11,6 +12,7 @@ import { useTransactionDetail } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 
+import { classifyTx } from './shared/classifyTx.js';
 import { EventsSection } from './sections/EventsSection.js';
 import { RawDataSection } from './sections/RawDataSection.js';
 import { OperationsSection } from './sections/OperationsSection.js';
@@ -48,6 +50,9 @@ export default function TransactionDetailPage() {
   if (query.data == null) return null;
   const tx = query.data;
   const heavy = tx.heavy ?? null;
+  // The one-line story ("Swap · 4 ops") belongs to the page title — next to
+  // the Success/Failed chip it read as a second STATUS (0460 #9).
+  const story = classifyTx(tx);
 
   return (
     <Stack spacing={3}>
@@ -60,9 +65,12 @@ export default function TransactionDetailPage() {
             },
           ]}
         />
-        <Typography variant="heading5SemiBold" component="h1">
-          Transaction Detail
-        </Typography>
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <Typography variant="heading5SemiBold" component="h1">
+            Transaction Detail
+          </Typography>
+          {story != null && <Chip size="sm" color="neutral" label={story} />}
+        </Stack>
       </Box>
 
       <SectionErrorBoundary sectionName="transaction-summary">

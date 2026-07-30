@@ -14,7 +14,6 @@ import { FeeCell } from '../../detail/FeeCell.js';
 import { SectionCard } from '../../detail/SectionCard.js';
 import { SummaryRow } from '../../detail/SummaryRow.js';
 import { formatAbsoluteUtc } from '../../transactions/formatters.js';
-import { classifyTx } from '../shared/classifyTx.js';
 import { describeMemo } from '../shared/describeMemo.js';
 
 interface TransactionSummaryProps {
@@ -66,7 +65,6 @@ function TimestampCell({ value }: { value: string }) {
 export function TransactionSummary({ tx }: TransactionSummaryProps) {
   const memoType = tx.heavy?.memo_type;
   const memo = tx.heavy?.memo;
-  const story = classifyTx(tx);
 
   return (
     <SectionCard
@@ -76,7 +74,6 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             Summary
           </Typography>
           <StatusChip successful={tx.successful} />
-          {story != null && <Chip size="sm" color="neutral" label={story} />}
         </Stack>
       }
     >
