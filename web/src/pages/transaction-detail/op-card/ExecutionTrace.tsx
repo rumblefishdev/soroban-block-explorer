@@ -243,8 +243,12 @@ function scalarReturn(value: unknown): string | null {
 
 function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
   // Deep branches start folded so a 40-call DeFi trace reads as a summary
-  // first; the top two levels are the story.
-  const [childrenOpen, setChildrenOpen] = useState(depth < 2);
+  // first; the top two levels are the story. Unfinished branches ALWAYS
+  // start open — the path to the trap point must be visible without
+  // digging, or the single "stopped here" marker would hide in a fold.
+  const [childrenOpen, setChildrenOpen] = useState(
+    depth < 2 || node.unfinished
+  );
   const [detailsOpen, setDetailsOpen] = useState(false);
   const hasChildren = node.children.length > 0;
   const inlineReturn = scalarReturn(node.returnValue);
@@ -286,7 +290,12 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
         )}
         <Typography
           variant="bodyMonoSmMedium"
-          sx={(theme) => ({ color: theme.palette.text.primary })}
+          sx={(theme) => ({
+            color: theme.palette.text.primary,
+            // Rows scroll inside the strip's overflowX container (RouteStrip
+            // pattern) — wrapping mid-token on narrow viewports is unreadable.
+            whiteSpace: 'nowrap',
+          })}
         >
           {node.fnName}({argsSummary(node.args)})
         </Typography>

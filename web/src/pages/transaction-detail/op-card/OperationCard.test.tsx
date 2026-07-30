@@ -183,9 +183,17 @@ describe('OperationCard', () => {
       light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
       heavy: heavyOf({}),
       applied: false,
-      // Three nested calls, none returned — the trap is in the deepest.
-      diagnosticEvents: [call('outer', 0), call('mid', 1), call('inner', 2)],
+      // Four nested calls, none returned — the trap is in the deepest,
+      // BELOW the default depth-2 fold, so this also proves unfinished
+      // branches auto-expand down to the trap point.
+      diagnosticEvents: [
+        call('outer', 0),
+        call('mid', 1),
+        call('inner', 2),
+        call('trap', 3),
+      ],
     });
+    expect(screen.getByText('trap(0)')).toBeTruthy();
     expect(screen.getAllByText('stopped here')).toHaveLength(1);
   });
 });
