@@ -1,6 +1,7 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   Box,
   ButtonBase,
@@ -18,6 +19,18 @@ import { useState } from 'react';
 interface XdrRowProps {
   label: string;
   value: string;
+}
+
+/** Deep link into the official Stellar Lab XDR viewer (lab.stellar.org,
+ *  maintained by the SDF) with the blob prefilled. The Lab's state
+ *  serializer has no docs — the format was captured from the app itself:
+ *  only `/` needs doubling; `+` and `=` pass through raw (verified live
+ *  with a crafted blob). */
+function stellarLabHref(xdr: string): string {
+  return `https://lab.stellar.org/xdr/view?$=xdr$blob=${xdr.replace(
+    /\//g,
+    '//'
+  )};;`;
 }
 
 export function XdrRow({ label, value }: XdrRowProps) {
@@ -123,6 +136,30 @@ export function XdrRow({ label, value }: XdrRowProps) {
             <ContentCopyIcon sx={{ fontSize: 14 }} />
             {copied ? 'Copied!' : 'Copy'}
           </ButtonBase>
+          <Box
+            component="a"
+            href={stellarLabHref(value)}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={(theme) => ({
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.75,
+              ml: 2.5,
+              ...theme.typography.bodySmMedium,
+              color: theme.palette.text.primary,
+              textDecoration: 'none',
+              '&:hover': { textDecoration: 'underline' },
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+                borderRadius: `${theme.shape.radius.xs}px`,
+              },
+            })}
+          >
+            <OpenInNewIcon sx={{ fontSize: 14 }} />
+            Decode in Stellar Lab
+          </Box>
         </Box>
       </Collapse>
     </Box>

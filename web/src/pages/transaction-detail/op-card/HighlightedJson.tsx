@@ -81,7 +81,13 @@ function BytesValue({ b64 }: { b64: string }) {
       {decoded != null && (
         <Box
           component="span"
-          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          title="Decoded reading — this address occurs elsewhere in this transaction"
+          sx={(theme) => ({
+            color: theme.palette.text.tertiary,
+            // The hint is an ANNOTATION, not part of the JSON: selecting and
+            // copying the block must yield pure JSON.
+            userSelect: 'none',
+          })}
         >
           {' = '}
           <IdentifierWithCopy
