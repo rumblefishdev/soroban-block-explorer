@@ -157,7 +157,13 @@ describe('OperationCard', () => {
       ],
     });
     expect(screen.getByText(/Execution trace · 1 calls/)).toBeTruthy();
-    expect(screen.getByText('swap(GC4Q…K7XQ, 13171)')).toBeTruthy();
+    // Literal args render in a nested (secondary-tone) span, so match the
+    // whole header row by its text content.
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === 'swap(GC4Q…K7XQ, 13171)'
+      )
+    ).toBeTruthy();
     expect(screen.getByText('→ 81404538')).toBeTruthy();
     // Auth tree is the fallback only — hidden when the trace is present.
     expect(screen.queryByText(/Authorized calls/)).toBeNull();

@@ -245,13 +245,17 @@ function eventCategory(label: string): {
 }
 
 /** Short inline `→ value` for scalar returns; structured values stay behind
- *  the per-node disclosure. */
-function scalarReturn(value: unknown): string | null {
+ *  the per-node disclosure. A call that returned NOTHING says `void`
+ *  explicitly (muted, like the arg count) — silence would be ambiguous with
+ *  "value too long to show". */
+function scalarReturn(
+  value: unknown
+): { kind: 'value' | 'void'; text: string } | null {
   if (value == null) return null;
   let inner: unknown = value;
   const typed = value as { type?: unknown; value?: unknown };
   if (typeof typed.type === 'string') {
-    if (typed.type === 'void') return null;
+    if (typed.type === 'void') return { kind: 'void', text: 'void' };
     if (typed.type === 'vec' || typed.type === 'map') return null;
     inner = typed.value;
   }
@@ -261,7 +265,7 @@ function scalarReturn(value: unknown): string | null {
     typeof inner === 'boolean'
   ) {
     const text = String(inner);
-    return text.length <= 24 ? text : null;
+    return text.length <= 24 ? { kind: 'value', text } : null;
   }
   return null;
 }
@@ -300,7 +304,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             aria-label={childrenOpen ? 'Collapse calls' : 'Expand calls'}
             aria-expanded={childrenOpen}
             onClick={() => setChildrenOpen((open) => !open)}
-            sx={{ p: 0.25 }}
+            sx={{ p: 0.25, flexShrink: 0 }}
           >
             <ExpandMoreIcon
               sx={(theme) => ({
@@ -312,7 +316,10 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             />
           </IconButton>
         ) : (
-          <Box sx={{ width: 20 }} />
+          // flexShrink 0 is load-bearing: when the row overflows, flexbox
+          // would squeeze this empty spacer to nothing and a leaf call would
+          // visually lose its indent level.
+          <Box sx={{ width: 20, flexShrink: 0 }} />
         )}
         <Typography
           variant="bodyMonoSmMedium"
@@ -325,7 +332,14 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
         >
           {node.fnName}(
           {args.kind === 'inline' ? (
-            args.text
+            // Literal values in a distinct (secondary) tone so they never
+            // read as part of the function name.
+            <Box
+              component="span"
+              sx={(theme) => ({ color: theme.palette.text.secondary })}
+            >
+              {args.text}
+            </Box>
           ) : (
             <Box
               component="span"
@@ -364,11 +378,15 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
           <Typography
             variant="bodyMonoSmRegular"
             sx={(theme) => ({
-              color: theme.palette.text.secondary,
+              color:
+                inlineReturn.kind === 'void'
+                  ? theme.palette.text.tertiary
+                  : theme.palette.text.secondary,
+              fontStyle: inlineReturn.kind === 'void' ? 'italic' : 'normal',
               whiteSpace: 'nowrap',
             })}
           >
-            → {inlineReturn}
+            → {inlineReturn.text}
           </Typography>
         )}
         {groupEventLabels(node.events).map((group, index) => {

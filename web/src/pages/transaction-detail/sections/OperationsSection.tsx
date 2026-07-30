@@ -25,37 +25,48 @@ export function OperationsSection({
   const count = tx.operation_count;
   const selected = entries[selectedIndex] ?? entries[0];
 
+  // 87 % of mainnet transactions have exactly one operation — an index with
+  // one entry is pure width tax, so the card takes the full row (0460 #5,
+  // the adaptive-index option deferred from 0453).
+  const showPicker = entries.length > 1;
+
+  const card = (
+    /* Remount on op switch so disclosure state resets per operation. */
+    <OperationCard
+      key={selectedIndex}
+      light={selected?.light}
+      heavy={selected?.heavy ?? null}
+      applied={tx.successful}
+      fallbackOrder={selectedIndex + 1}
+      txSourceAccount={tx.source_account ?? null}
+      operationTree={tx.heavy?.operation_tree}
+      contractEvents={tx.heavy?.contract_events ?? []}
+      diagnosticEvents={tx.heavy?.diagnostic_events ?? []}
+    />
+  );
+
   return (
     <SectionCard
       title="Operations"
       meta={`${count} Operation${count === 1 ? '' : 's'}`}
     >
       <Box sx={{ p: 2 }}>
-        <Grid container spacing={2}>
-          {/* The card carries the substance; the picker is an index — keep it
-              narrow (0460 #10). */}
-          <Grid size={{ xs: 12, md: 5, lg: 4 }}>
-            <OperationPicker
-              operations={entries.map((entry) => entry.row)}
-              selectedIndex={selectedIndex}
-              onSelect={onSelect}
-            />
+        {showPicker ? (
+          <Grid container spacing={2}>
+            {/* The card carries the substance; the picker is an index — keep
+                it narrow (0460 #10). */}
+            <Grid size={{ xs: 12, md: 5, lg: 4 }}>
+              <OperationPicker
+                operations={entries.map((entry) => entry.row)}
+                selectedIndex={selectedIndex}
+                onSelect={onSelect}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, md: 7, lg: 8 }}>{card}</Grid>
           </Grid>
-          <Grid size={{ xs: 12, md: 7, lg: 8 }}>
-            {/* Remount on op switch so disclosure state resets per operation. */}
-            <OperationCard
-              key={selectedIndex}
-              light={selected?.light}
-              heavy={selected?.heavy ?? null}
-              applied={tx.successful}
-              fallbackOrder={selectedIndex + 1}
-              txSourceAccount={tx.source_account ?? null}
-              operationTree={tx.heavy?.operation_tree}
-              contractEvents={tx.heavy?.contract_events ?? []}
-              diagnosticEvents={tx.heavy?.diagnostic_events ?? []}
-            />
-          </Grid>
-        </Grid>
+        ) : (
+          card
+        )}
       </Box>
     </SectionCard>
   );
