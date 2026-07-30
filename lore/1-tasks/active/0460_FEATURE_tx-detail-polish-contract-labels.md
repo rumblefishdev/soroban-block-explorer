@@ -82,7 +82,17 @@ history:
     layer the page cannot show; add the DTO field + an XdrRow;
     (b) the XDR rows are bare base64 — add an "open in Stellar Lab viewer"
     deep link per row for one-click decoding (stellar.expert does this).
-14. **Claimable-balance claimants are a bare count** (0462 review,
+14. **Strkey-aware JSON viewer** (review request, 2026-07-30 —
+    investigated, NOT built): make addresses inside `HighlightedJson`
+    clickable + copyable. Verdict: cheap and worth it (~half a day with
+    tests). The string branch of `HighlightedJson.Node` matches
+    `^[GCLM][A-Z2-7]{55}$` → renders the house `IdentifierDisplay`
+    (`tone="inherit"`, `fontSize="inherit"` — designed for exactly this)
+    plus a mini copy IconButton; works inside the `<pre>` without breaking
+    text selection. Do NOT auto-decode generic `{type:"bytes"}` values to
+    C-strkeys — 32 bytes may be any hash, decode only where semantics are
+    known (fn_call topics already are, and the trace shows them decoded).
+15. **Claimable-balance claimants are a bare count** (0462 review,
     tx `a821ee85…` op 3): the card says "for 2 claimants" but cannot name
     them — the PARSER reduces the claimants XDR vec to `claimants: 2`
     (`extract_op_details`, CREATE_CLAIMABLE_BALANCE arm). Backend fix: emit
