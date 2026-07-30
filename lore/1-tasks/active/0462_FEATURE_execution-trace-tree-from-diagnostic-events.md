@@ -2,7 +2,7 @@
 id: '0462'
 title: 'FEATURE: execution trace — nested call tree from diagnostic events on the operation card'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0453', '0456', '0363', '0352']
 tags: [frontend, transaction-detail, soroban, ux, priority-high, effort-medium]

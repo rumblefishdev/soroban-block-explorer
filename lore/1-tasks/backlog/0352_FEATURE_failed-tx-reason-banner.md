@@ -13,7 +13,7 @@ tags:
     transaction-detail,
     soroban,
     ux,
-    priority-medium,
+    priority-high,
     effort-medium,
   ]
 links:
@@ -63,6 +63,16 @@ history:
       blank — the banner has one job, "say why", and which XDR structure the
       reason came from is our problem, not the reader's. Cost of the choice:
       this is no longer a small frontend change and should not be sized as one.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Priority raised to high: the reason a transaction failed must be
+      visible at the very top of the page — the 0453 redesign shipped the
+      failed-status strip (0460 #8), which is exactly where the reason line
+      from this task should land. The strip already passes through tx-level
+      `result_code` when it says more than txFAILED; this task replaces that
+      with the real per-op / ScError reason.
 ---
 
 # FEATURE: prominent fail-reason banner on failed transactions
@@ -123,6 +133,40 @@ in prod — a Rust panic usually surfaces as a typed host error or `Contract`, n
 | **Contract** (user code)   | `9bdcaba0777e481301c2191538f8e13fea8489aebe3088368a4be51e55922432` | "failing with contract error", u32 `7`                               |
 | **Budget** (host)          | `c699738038906921e32d7e5d76e6ffd2258fa5ac49d6c3e977bce10080117d00` | "operation instructions exceeds amount specified", 9812442 > 9812025 |
 | **Value** (host, archival) | `2a06fd61f5a275941ecbefb4d5fc8461efe72505c08ec3c95cab40d5f9322255` | "trying to access an archived contract data entry" + address         |
+
+## Root cause — verified end-to-end 2026-07-30 (fixture `7af6d0ed…`)
+
+Traced the live request on the dev proxy against production data. The reason is
+present in every response and is dropped by our own code at layer 2 of 5:
+
+1. **XDR has it.** `heavy.result_xdr` (48 bytes, shipped raw in the response)
+   decodes to `feeCharged=300, txFAILED, 3 op results`:
+   `BEGIN_SPONSORING_FUTURE_RESERVES=0 (success)`,
+   `CREATE_ACCOUNT=-3 (LOW_RESERVE)`, `op-level disc -2 (opNO_ACCOUNT)`.
+   `TransactionResultResult::TxFailed(VecM<OperationResult>)` — the failing
+   union arm carries the same per-op array as the successful one.
+2. **The parser throws it away.** `tx_op_results()`
+   (`crates/xdr-parser/src/operation.rs:97-106`) matches only `TxSuccess` and
+   `TxFeeBumpInnerSuccess` → returns `None` for `TxFailed` **and**
+   `TxFeeBumpInnerFailed`. It was written for pool claims (which only exist on
+   success), but it is the single gateway to op results, so on a failed
+   transaction the reason array never reaches any consumer — indexer or the
+   live heavy path alike.
+3. Even with the array in hand, `extract_op_details` consumes `op_result` only
+   for `poolIds`/`claimedAtoms` and counterparties — no result code is emitted.
+4. The DTO has no per-op result field; only tx-level
+   `result_code = "TxFailed"` (`transaction.rs:123`, `.name()` of the union arm).
+5. The banner suppresses `"TxFailed"` as noise
+   (`web/src/pages/transaction-detail/sections/TransactionSummary.tsx`) — correct
+   given it means only "some operation failed", so the strip shows no reason.
+
+Also confirmed on this fixture: `diagnostic_events: 0` (classic tx, no
+contract) — the #364 reporter was right that Advanced view shows nothing, and
+this is why the Soroban-only half of the plan cannot cover it.
+
+**Fix order implied:** widen `tx_op_results` to the failed arms FIRST (one
+match arm; everything downstream is blocked on it), then emit the code, then
+the DTO field, then the banner line.
 
 ## Implementation Plan
 

@@ -24,6 +24,18 @@ history:
       Spawned from 0453 follow-ups (five-agent review of PR #373). Groups the
       three wire-truth threads so one task owns the contract between the
       parser and the operation card.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Scope-1 update from the 0462 investigation: the DETAIL PAGE does not
+      need the backend to expose the diagnostic tree — `heavy.
+      diagnostic_events` already carries fn_call/fn_return and a client-side
+      stack walk reconstructs execution exactly (verified on prod fixture,
+      depth 5). 0462 ships that render FE-only. Scope 1 here remains
+      valuable for OTHER surfaces (contract page, indexed queries) and for
+      replacing the auth-tree fallback, but is no longer the blocker for an
+      honest per-node view on the card.
 ---
 
 # REFACTOR: typed truth for the operation card wire

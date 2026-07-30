@@ -68,6 +68,27 @@ history:
     that atom's `amountBought` as its own output (e.g. the missing VELO→XLM
     edge = the XLM the XLM/KALE pool took in). FE-only; only valid when the
     next hop has exactly one atom (multi-fill hops split the input).
+    Better root fix (same day): `claim_atoms()` already returns the
+    ORDER-BOOK atoms too (full sold/bought amounts + seller) — only
+    `claim_lp_atoms` filters them out before `claimedAtoms` is built. Emit
+    them with a `source: orderBook|pool` marker and every edge gets its
+    amount directly; pool-volume consumers filter on `poolId`. Belongs to
+    0457's scope (it owns fill amounts), supersedes the borrowing trick.
+13. **Raw-data completeness** (post-ship review, 2026-07-30: "always keep the full raw
+    data reachable as a fallback"): mostly already true after 0453 (op-card
+    details disclosure renders every key; Events table collapsed; Raw data
+    section always present). Two real gaps: (a) `result_meta_xdr` is parsed
+    but not exposed on `heavy` — the ledger-entry changes are the one raw
+    layer the page cannot show; add the DTO field + an XdrRow;
+    (b) the XDR rows are bare base64 — add an "open in Stellar Lab viewer"
+    deep link per row for one-click decoding (stellar.expert does this).
+14. **Claimable-balance claimants are a bare count** (0462 review,
+    tx `a821ee85…` op 3): the card says "for 2 claimants" but cannot name
+    them — the PARSER reduces the claimants XDR vec to `claimants: 2`
+    (`extract_op_details`, CREATE_CLAIMABLE_BALANCE arm). Backend fix: emit
+    `[{destination, predicate}, …]`; then humanizeOp/facts list the
+    addresses (keep count-compat while old parses linger). Not reachable
+    from the frontend today.
 
 ## Acceptance criteria
 
