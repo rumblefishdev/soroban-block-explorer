@@ -20,7 +20,7 @@ function heavy(details: Record<string, unknown>): XdrOperationDto {
 }
 
 describe('opFacts', () => {
-  it('adds the pool count and the D9 Received slot for strict-send (route lives in RouteStrip)', () => {
+  it('adds the D9 Received slot for strict-send (route in RouteStrip, pools as card links)', () => {
     const facts = opFacts(
       light('PATH_PAYMENT_STRICT_SEND'),
       heavy({
@@ -30,10 +30,7 @@ describe('opFacts', () => {
         poolIds: ['c4f1', '9d02'],
       })
     );
-    expect(facts).toEqual([
-      { label: 'Pools crossed', value: '2' },
-      { label: 'Received', value: '—' },
-    ]);
+    expect(facts).toEqual([{ label: 'Received', value: '—' }]);
   });
 
   it('omits the Received slot for strict-receive (exact amount is in the headline)', () => {

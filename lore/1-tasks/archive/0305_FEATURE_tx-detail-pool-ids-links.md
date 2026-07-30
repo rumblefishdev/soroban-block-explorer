@@ -2,7 +2,7 @@
 id: '0305'
 title: 'FEATURE: surface operation pool_ids (multi-hop crossed pools) in transaction detail UI'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0261', '0268', '0257', '0281', '0453']
 tags: [priority-low, effort-small, frontend, milestone-2]
@@ -10,6 +10,15 @@ milestone: 2
 links:
   - docs/runbooks/artifacts/e20_validation_20260618.md
 history:
+  - date: '2026-07-30'
+    status: completed
+    who: karolkow
+    note: >
+      Absorbed into 0453 with Karol's explicit go (the umbrella's boundary AC
+      allowed exactly this: "or it did and 0305 was withdrawn saying so").
+      The operation card renders light.pool_ids as IdentifierDisplay
+      type="pool" links under a "Pools crossed" label — SEP-23 L-strkeys
+      straight from the API, no hex conversion needed. Render test included.
   - date: '2026-06-18'
     status: backlog
     who: stkrolikiewicz

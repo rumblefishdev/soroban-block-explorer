@@ -87,6 +87,24 @@ history:
       spec with 15 numbered decisions and 7 shippable waves in
       notes/G-implementation-plan.md — it supersedes the audit's render
       sketch. Starting wave 0 (dead code + functionName fix).
+  - date: '2026-07-30'
+    status: completed
+    who: karolkow
+    note: >
+      All waves shipped on PR #373 (16 commits): truthful sentences for all
+      27 op types (SE MIT wording), one progressive card, verdict banner,
+      route strip on the declared path, authorized-calls tree, story chip,
+      deep links, per-op icons, two micro-backends (op_index, claim-CB
+      asset — live after next backend deploy), 0305 absorbed (pool links),
+      ~1k lines of dead render deleted, directory taxonomy regrouped.
+      Hardened by a five-agent review (findings fixed same-session, record
+      amended: D2/D3 as-built, D11 corrected). Verified field-by-field
+      against Horizon on ~20 real mainnet txs across 15+ op types, plus
+      live benchmarks vs stellar.expert/stellarchain. One AC deferred to
+      0457/0411 (strict-send received — honest empty slot by design).
+      Follow-ups spawned: 0456-0460; 0442/0444/0305 archived via this
+      task; 0380 superseded by 0456. Issues #364/#370 addressed in code,
+      close at deploy per repo policy.
 ---
 
 # FEATURE: one progressive operation card
@@ -277,7 +295,8 @@ id. Render "claimed balance {id}" until that lands; do not block on it.
 - [ ] Received amount and route shown for both path-payment directions —
       route: both; received: exact for strict-receive, **deliberately an
       honest empty slot for strict-send** (spec D9: not derivable from
-      LP-only `claimedAtoms`; lights up when the net_settled read path lands)
+      LP-only `claimedAtoms`) — (deferred to 0457 effects / 0411
+      net_settled, whichever lands first)
 - [x] Self-transfer (source == destination) recognised in the wording —
       including ops inheriting the tx source
 - [x] Amounts formatted, never raw stroops; US number grouping preserved
@@ -290,7 +309,9 @@ id. Render "claimed balance {id}" until that lands; do not block on it.
 - [x] 0442, 0444 and the per-op icon spec explicitly resolved — 0442 closed
       (dead branches deleted, real tree from `operation_tree`), 0444 closed
       (verdict moved to the banner), icons **implemented** (0257 spec adopted)
-- [x] The 0305 boundary held: route assets here, pool links stay in 0305
+- [x] The 0305 boundary: resolved via the AC's second arm — 0305 was
+      absorbed with Karol's explicit go and archived saying so (pool links
+      render from `light.pool_ids` in the card)
 - [x] **`/ux-expert` regression pass on the shipped card** —
       [notes/S-ux-regression-pass.md](notes/S-ux-regression-pass.md)
 - [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`

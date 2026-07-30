@@ -166,7 +166,7 @@ export function OperationJsonDetail({
       )}
       {isInvoke && (
         <AdvancedRow
-          label="function_name"
+          label="functionName"
           value={<Chip size="sm" color="neutral" label={fnName} />}
         />
       )}

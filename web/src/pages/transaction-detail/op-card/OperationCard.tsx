@@ -5,7 +5,7 @@ import type {
 } from '@rumblefish/api-types';
 import { Box, Collapse, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
+import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import { useState } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
@@ -184,6 +184,19 @@ export function OperationCard({
                 )}
               </Stack>
             ))}
+          </Box>
+        )}
+
+        {light.pool_ids.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Overline mb={0.5}>
+              Pools crossed · {light.pool_ids.length}
+            </Overline>
+            <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap' }}>
+              {light.pool_ids.map((poolId) => (
+                <IdentifierDisplay key={poolId} value={poolId} type="pool" />
+              ))}
+            </Stack>
           </Box>
         )}
 

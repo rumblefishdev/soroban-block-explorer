@@ -55,6 +55,18 @@ describe('OperationCard', () => {
     ).toBeTruthy();
   });
 
+  it('links crossed pools from light.pool_ids (task 0305, absorbed)', () => {
+    renderCard({
+      light: light({
+        type_name: 'PATH_PAYMENT_STRICT_SEND',
+        destination_account: DEST,
+        pool_ids: ['LA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA'],
+      }),
+    });
+    expect(screen.getByText(/Pools crossed · 1/)).toBeTruthy();
+    expect(screen.getByText(/LA7Q/)).toBeTruthy();
+  });
+
   it('starts with the raw details collapsed', () => {
     renderCard();
     expect(

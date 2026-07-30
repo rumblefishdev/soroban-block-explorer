@@ -25,14 +25,9 @@ export function opFacts(
   const details = detailsObj(heavy);
   if (details == null) return [];
 
+  // Crossed pools render as links in the card (task 0305, absorbed here) —
+  // no count fact needed.
   const facts: OpFact[] = [];
-  const poolIds = Array.isArray(details.poolIds) ? details.poolIds : null;
-  if (poolIds != null && poolIds.length > 0) {
-    facts.push({
-      label: 'Pools crossed',
-      value: String(poolIds.length),
-    });
-  }
   if (light.type_name === 'PATH_PAYMENT_STRICT_SEND') {
     facts.push({ label: 'Received', value: '—' });
   }
