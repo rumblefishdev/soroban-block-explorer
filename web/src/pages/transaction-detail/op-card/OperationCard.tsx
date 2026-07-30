@@ -15,6 +15,11 @@ import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
 import { CallTree, parseOperationTree } from './CallTree.js';
+import {
+  buildExecutionTrace,
+  ExecutionTrace,
+  traceCallCount,
+} from './ExecutionTrace.js';
 import { opFacts } from './opFacts.js';
 import { OpAvatar } from './opIcon.js';
 import { buildRouteModel, RouteStrip } from './RouteStrip.js';
@@ -36,6 +41,10 @@ interface OperationCardProps {
    *  `op_index` points at this operation (D7). Absent index → tx-level
    *  events section only. */
   contractEvents?: readonly XdrEventDto[];
+  /** Tx-level `heavy.diagnostic_events` — the host-VM execution trace
+   *  (fn_call/fn_return). Tx-level is safe on the invoke card for the same
+   *  reason as `operationTree` (one InvokeHostFunction per tx). */
+  diagnosticEvents?: readonly XdrEventDto[];
 }
 
 /** First topic is the event name for well-formed token events. */
@@ -78,6 +87,7 @@ export function OperationCard({
   txSourceAccount,
   operationTree,
   contractEvents = [],
+  diagnosticEvents = [],
 }: OperationCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -100,8 +110,14 @@ export function OperationCard({
   const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);
   const facts = opFacts(light, heavy);
+  // Execution trace (0462): rebuilt client-side from the diagnostic
+  // fn_call/fn_return stream — the EXECUTED calls, superset of the auth
+  // tree. When present it supersedes "Authorized calls"; the auth tree
+  // stays as the fallback for txs without diagnostic events.
+  const isInvoke = light.type_name === 'INVOKE_HOST_FUNCTION';
+  const traceNodes = isInvoke ? buildExecutionTrace(diagnosticEvents) : [];
   const callNodes =
-    light.type_name === 'INVOKE_HOST_FUNCTION'
+    isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)
       : [];
   // op_index is the 0-based envelope position (CAP-67 V4 attribution);
@@ -150,7 +166,18 @@ export function OperationCard({
           {humanizeOp(light, heavy, txSourceAccount)}
         </Typography>
 
-        {routeModel != null && <RouteStrip model={routeModel} />}
+        {routeModel != null && (
+          <RouteStrip model={routeModel} applied={applied} />
+        )}
+
+        {traceNodes.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Overline mb={0.5}>
+              Execution trace · {traceCallCount(traceNodes)} calls
+            </Overline>
+            <ExecutionTrace nodes={traceNodes} />
+          </Box>
+        )}
 
         {callNodes.length > 0 && (
           <Box sx={{ mt: 1.25 }}>

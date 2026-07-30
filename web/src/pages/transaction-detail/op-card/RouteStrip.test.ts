@@ -52,16 +52,16 @@ describe('buildRouteModel', () => {
       '4.821599 LIBRE',
     ]);
     expect(model?.partial).toBe(true);
-    expect(model?.hasFills).toBe(true);
   });
 
-  it('renders the declared route without blaming the order book when no fills exist', () => {
+  // No-fills case (all-order-book or failed tx): the model keeps the declared
+  // route; the render picks the explanation from `applied`, not the model.
+  it('keeps the declared route when no fills exist', () => {
     const model = buildRouteModel(
       heavy({ sendAsset: 'native', destAsset: 'USDC:GA', path: [] })
     );
     expect(model?.chips).toEqual(['XLM', 'USDC']);
     expect(model?.partial).toBe(true);
-    expect(model?.hasFills).toBe(false);
   });
 
   it('returns null for non-path-payment shapes', () => {

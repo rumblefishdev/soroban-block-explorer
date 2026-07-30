@@ -110,4 +110,45 @@ describe('OperationCard', () => {
     expect(screen.getByText('transfer')).toBeTruthy();
     expect(screen.queryByText('mint')).toBeNull();
   });
+
+  it('renders the execution trace for invoke ops and hides the auth tree', () => {
+    renderCard({
+      light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+      heavy: heavyOf({}),
+      operationTree: [{ functionName: 'authorized_fn', args: [] }],
+      diagnosticEvents: [
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_call' },
+            {
+              type: 'bytes',
+              value: 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=',
+            },
+            { type: 'sym', value: 'swap' },
+          ],
+          data: null,
+          event_index: 0,
+          op_index: null,
+        },
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_return' },
+            { type: 'sym', value: 'swap' },
+          ],
+          data: { type: 'u128', value: '81404538' },
+          event_index: 1,
+          op_index: null,
+        },
+      ],
+    });
+    expect(screen.getByText(/Execution trace · 1 calls/)).toBeTruthy();
+    expect(screen.getByText('swap(0)')).toBeTruthy();
+    expect(screen.getByText('→ 81404538')).toBeTruthy();
+    // Auth tree is the fallback only — hidden when the trace is present.
+    expect(screen.queryByText(/Authorized calls/)).toBeNull();
+  });
 });

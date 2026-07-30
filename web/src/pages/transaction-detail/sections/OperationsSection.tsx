@@ -52,6 +52,7 @@ export function OperationsSection({
               txSourceAccount={tx.source_account ?? null}
               operationTree={tx.heavy?.operation_tree}
               contractEvents={tx.heavy?.contract_events ?? []}
+              diagnosticEvents={tx.heavy?.diagnostic_events ?? []}
             />
           </Grid>
         </Grid>

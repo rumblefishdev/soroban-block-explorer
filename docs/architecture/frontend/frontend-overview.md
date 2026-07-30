@@ -383,12 +383,17 @@ selected operation:
 - a route strip for path payments — asset chips with per-hop amounts chained
   from `claimedAtoms`, flagged as partial when the route also crossed the
   order book (those fills are not in the LP-only atoms);
-- an **authorized-calls** tree for contract invocations fed by
-  `heavy.operation_tree`. This is the auth-entry tree (what the transaction
-  was signed to do), and the backend stamps every node with the whole
-  transaction's verdict — so the UI deliberately renders no per-node ✓/✗;
-  real per-node verdicts require the diagnostic execution tree on the
-  backend first;
+- an **execution trace** for contract invocations, rebuilt client-side from
+  `heavy.diagnostic_events` (`fn_call`/`fn_return` stack walk): the calls
+  that actually ran, nested, with per-node args/return behind a disclosure,
+  the contract events attached to the call that raised them, and — on a
+  failed transaction — a truthful "stopped here" on the calls that never
+  returned. `core_metrics` host counters are excluded;
+- when a transaction carries no diagnostic events, the card falls back to
+  the **authorized-calls** tree fed by `heavy.operation_tree`. That is the
+  auth-entry tree (what the transaction was signed to do), and the backend
+  stamps every node with the whole transaction's verdict — so the UI
+  deliberately renders no per-node ✓/✗ there;
 - the operation's own events, matched via `XdrEventDto.op_index`
   (`application_order - 1`);
 - an "Operation details" disclosure with every raw `details` key — exactness
@@ -396,8 +401,9 @@ selected operation:
 - on a failed transaction the card dims and carries a "not applied" label.
 
 Consumed heavy fields: `operations[].details`, `operation_tree`,
-`contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
-`envelope_xdr`, `result_xdr`. Large payload areas stay collapsible.
+`diagnostic_events` (execution trace + raw table), `contract_events[].op_index`,
+`result_code`, `fee_bump_source`, `signatures`, `envelope_xdr`, `result_xdr`.
+Large payload areas stay collapsible.
 
 ### 6.5 Ledgers (`/ledgers`)
 
