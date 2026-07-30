@@ -169,6 +169,64 @@ describe('OperationCard', () => {
     expect(screen.queryByText(/Authorized calls/)).toBeNull();
   });
 
+  it('renders void args as fn() and inlines short vec returns with links', () => {
+    renderCard({
+      light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+      heavy: heavyOf({}),
+      diagnosticEvents: [
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_call' },
+            {
+              type: 'bytes',
+              value: 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=',
+            },
+            { type: 'sym', value: 'get_tokens' },
+          ],
+          // Void payload = ZERO arguments — never "1 arg".
+          data: { type: 'void', value: null },
+          event_index: 0,
+          op_index: null,
+        },
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_return' },
+            { type: 'sym', value: 'get_tokens' },
+          ],
+          data: {
+            type: 'vec',
+            value: [
+              {
+                type: 'address',
+                value:
+                  'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+              },
+              {
+                type: 'address',
+                value:
+                  'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75',
+              },
+            ],
+          },
+          event_index: 1,
+          op_index: null,
+        },
+      ],
+    });
+    expect(
+      screen.getByText((_, element) => element?.textContent === 'get_tokens()')
+    ).toBeTruthy();
+    // The returned pair inlines as LINKS, not an opaque ellipsis.
+    expect(
+      screen.getByRole('link', { name: /CAS3J7GY/ }).getAttribute('href')
+    ).toContain('/contracts/CAS3J7GY');
+    expect(screen.getByRole('link', { name: /CCW67TSZ/ })).toBeTruthy();
+  });
+
   it('marks only the deepest unfinished call with "stopped here"', () => {
     const call = (name: string, index: number) => ({
       event_type: 'diagnostic',

@@ -1,6 +1,7 @@
 import CodeIcon from '@mui/icons-material/Code';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Box, Collapse, IconButton, Stack, Typography } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import type { Theme } from '@mui/material/styles';
 import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -303,6 +304,9 @@ type ArgsSummary =
 export function argsSummary(args: unknown): ArgsSummary {
   if (args == null) return { kind: 'inline', parts: [] };
   const typed = args as TypedVal;
+  // A void payload means NO arguments — it must render as `fn()`, never
+  // fall through to the "1 arg" count (a plausible-but-wrong display).
+  if (typed.type === 'void') return { kind: 'inline', parts: [] };
   if (typed.type !== 'vec' || !Array.isArray(typed.value)) {
     const single = shortPart(args);
     return single != null && partLength(single) <= 40
@@ -358,31 +362,35 @@ export function eventArgsText(event: XdrEventDto): string {
  *  the per-node disclosure. A call that returned NOTHING says `void`
  *  explicitly — silence would be ambiguous with "value too long to show".
  *  `void` is the complete truth about the call (secondary tone, like real
- *  values); only UI abbreviations like the arg count go tertiary. A return
- *  that exists but cannot inline (struct, long value) shows `→ …` — silence
- *  would be indistinguishable from "returned nothing" (silent-fallback
- *  audit). */
-function scalarReturn(
-  value: unknown
-): { kind: 'value' | 'void' | 'opaque'; text: string } | null {
+ *  values); only UI abbreviations go tertiary. A vec of short values (e.g.
+ *  a pair of token addresses from `get_tokens`) inlines with links, exactly
+ *  like arguments do. A return that exists but cannot inline (struct, long
+ *  value) shows `→ …` — silence would be indistinguishable from "returned
+ *  nothing" (silent-fallback audit). */
+type ReturnSummary =
+  | { kind: 'value'; parts: InlinePart[] }
+  | { kind: 'void' }
+  | { kind: 'opaque' };
+
+function returnSummary(value: unknown): ReturnSummary | null {
   if (value == null) return null;
-  const opaque = { kind: 'opaque' as const, text: '…' };
-  let inner: unknown = value;
   const typed = value as TypedVal;
-  if (typeof typed.type === 'string') {
-    if (typed.type === 'void') return { kind: 'void', text: 'void' };
-    if (typed.type === 'vec' || typed.type === 'map') return opaque;
-    inner = typed.value;
+  if (typed.type === 'void') return { kind: 'void' };
+  if (typed.type === 'vec' && Array.isArray(typed.value)) {
+    const parts: InlinePart[] = [];
+    for (const element of typed.value) {
+      const part = shortPart(element);
+      if (part == null) return { kind: 'opaque' };
+      parts.push(part);
+    }
+    return partsLength(parts) <= 40
+      ? { kind: 'value', parts }
+      : { kind: 'opaque' };
   }
-  if (
-    typeof inner === 'string' ||
-    typeof inner === 'number' ||
-    typeof inner === 'boolean'
-  ) {
-    const text = String(inner);
-    return text.length <= 24 ? { kind: 'value', text } : opaque;
-  }
-  return opaque;
+  const single = shortPart(value);
+  return single != null && partLength(single) <= 24
+    ? { kind: 'value', parts: [single] }
+    : { kind: 'opaque' };
 }
 
 /** Inline value list where every address is the house identifier link
@@ -420,6 +428,13 @@ function eventColor(paletteKey: EventPaletteKey, theme: Theme): string {
 }
 
 const CATEGORY_ORDER: EventPaletteKey[] = ['info', 'secondary', 'error'];
+
+// Short badge words — must match the legend and eventCategory hints.
+const CATEGORY_WORD: Record<EventPaletteKey, string> = {
+  info: 'token',
+  secondary: 'contract',
+  error: 'error',
+};
 
 /** Folded-branch badge: the calls count plus a colour-matched dot count per
  *  event category — 1:1 with the row colours, never one aggregate number. */
@@ -459,7 +474,7 @@ function FoldedBadge({ node }: { node: TraceNode }) {
             color: eventColor(key, theme),
           })}
         >
-          •{events[key]}
+          •{events[key]} {CATEGORY_WORD[key]}
         </Box>
       ))}
     </Box>
@@ -589,7 +604,22 @@ function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
             color: eventColor(category.paletteKey, theme),
           })}
         >
-          {label}
+          {/* Tinted pill behind the NAME: shape separates events from call
+              rows even where hue alone is not enough (contrast review). */}
+          <Box
+            component="span"
+            sx={(theme) => ({
+              px: 0.75,
+              py: 0.125,
+              borderRadius: `${theme.shape.radius.s}px`,
+              backgroundColor: alpha(
+                eventColor(category.paletteKey, theme),
+                theme.palette.mode === 'dark' ? 0.16 : 0.12
+              ),
+            })}
+          >
+            {label}
+          </Box>
           <Box
             component="span"
             sx={(theme) => ({ color: theme.palette.text.secondary })}
@@ -646,7 +676,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
   );
   const [detailsOpen, setDetailsOpen] = useState(false);
   const hasChildren = node.children.length > 0;
-  const inlineReturn = scalarReturn(node.returnValue);
+  const inlineReturn = returnSummary(node.returnValue);
   const hasDetails = node.args != null || node.returnValue != null;
   const args = argsSummary(node.args);
   const calls = childCalls(node);
@@ -758,7 +788,14 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
               whiteSpace: 'nowrap',
             })}
           >
-            → {inlineReturn.text}
+            →{' '}
+            {inlineReturn.kind === 'value' ? (
+              <InlineParts parts={inlineReturn.parts} />
+            ) : inlineReturn.kind === 'void' ? (
+              'void'
+            ) : (
+              '…'
+            )}
           </Typography>
         )}
         {hasChildren && !childrenOpen && <FoldedBadge node={node} />}
