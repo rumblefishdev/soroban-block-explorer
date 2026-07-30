@@ -1,4 +1,5 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { Box, Stack, Typography } from '@mui/material';
 import {
   Chip,
@@ -80,21 +81,27 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
       }
     >
       {!tx.successful && (
+        // Full-bleed status strip, not a floating alert box — the theme has
+        // no MuiAlert style, so the strip borrows the error Chip's palette
+        // (surface.error + text.error) to stay in the house style (0460 #8).
         <Box
           role="status"
           sx={(theme) => ({
-            m: 2,
-            mb: 0,
-            px: 1.5,
-            py: 1,
-            borderRadius: `${theme.shape.radius.md}px`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 2,
+            py: 0.75,
             backgroundColor: theme.palette.surface.error,
-            border: `1px solid ${theme.palette.stroke.error}`,
+            borderBottom: `1px solid ${theme.palette.stroke.error}`,
           })}
         >
+          <ErrorOutlineIcon
+            sx={(theme) => ({ fontSize: 16, color: theme.palette.text.error })}
+          />
           <Typography
             variant="bodySmRegular"
-            sx={(theme) => ({ color: theme.palette.text.primary })}
+            sx={(theme) => ({ color: theme.palette.text.error })}
           >
             Transaction failed — no operation was applied
             {/* Raw tx-level result code passthrough only — and only when it

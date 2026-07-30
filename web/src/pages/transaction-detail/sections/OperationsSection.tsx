@@ -32,14 +32,16 @@ export function OperationsSection({
     >
       <Box sx={{ p: 2 }}>
         <Grid container spacing={2}>
-          <Grid size={{ xs: 12, md: 6 }}>
+          {/* The card carries the substance; the picker is an index — keep it
+              narrow (0460 #10). */}
+          <Grid size={{ xs: 12, md: 5, lg: 4 }}>
             <OperationPicker
               operations={entries.map((entry) => entry.row)}
               selectedIndex={selectedIndex}
               onSelect={onSelect}
             />
           </Grid>
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid size={{ xs: 12, md: 7, lg: 8 }}>
             {/* Remount on op switch so disclosure state resets per operation. */}
             <OperationCard
               key={selectedIndex}

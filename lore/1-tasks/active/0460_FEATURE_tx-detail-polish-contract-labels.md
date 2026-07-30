@@ -2,7 +2,7 @@
 id: '0460'
 title: 'FEATURE: transaction-detail polish — contract labels + small UX debts from 0453'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0453', '0297']
 tags:
@@ -15,6 +15,12 @@ history:
     note: >
       Spawned from 0453: the deliberate deferrals and small debts that did
       not merit their own tasks, grouped so they do not rot as prose.
+  - date: '2026-07-30'
+    status: active
+    who: karolkow
+    note: >
+      Activated to ship items 8 (failed-banner redesign) and 10 (picker
+      width) directly on develop per the post-ship review.
 ---
 
 # FEATURE: transaction-detail polish
@@ -33,27 +39,35 @@ history:
    quiet line in the events section instead of unexplained absence.
 5. **Adaptive index** — the deferred layout option: hide the picker when a
    transaction has exactly one operation (87% of mainnet); revisit with
-   Karol.
+   the team.
 6. **Toggle-as-preference decision** — the wave-5 question parked for
    evidence: an Etherscan-style "always expand raw" preference; add the
    cheap click-counter telemetry first (product call).
 7. **XdrRow / DisclosureRow unification** — when a third disclosure-style
    consumer appears, not before.
-8. **Failed-transaction banner redesign** (Karol, post-ship review): the red
-   box is the only custom alert on the page and the theme has no MuiAlert
-   style to match — replace with a thin status strip under the Summary title
-   or add a house Alert to libs/ui; keep the "not applied" chip (already a
-   themed Chip).
+8. **Failed-transaction banner redesign** — SHIPPED 2026-07-30 (develop):
+   replaced the floating red box with a full-bleed thin status strip under
+   the Summary header, borrowing the error Chip's palette (`surface.error`
+   bg, `text.error` text + 16px ErrorOutline icon, `stroke.error` bottom
+   border) so it stays in the house style without adding a MuiAlert theme.
+   The "not applied" chip on the operation card is untouched.
 9. **Story-chip placement**: next to the Success chip it reads as a second
    status — move next to the page title or the Operations header.
-10. **Picker width**: the 50/50 grid gives the index half the page; try
-    5/7 or 4/8 (pairs with item 5, adaptive index).
+10. **Picker width** — SHIPPED 2026-07-30 (develop): grid is now
+    `md: 5/7, lg: 4/8` (was 50/50); pairs with item 5, adaptive index.
 11. **Clickable values in headlines/facts**: sentences are plain strings, so
     assets/accounts in them are dead text — needs ReactNode sentences;
     coordinate with 0456 (typed details → componentised templates).
 12. **Route-strip edge labels**: hop amounts are the pools' actual payouts
     while the headline shows the min/max bound — label edges (e.g. "actual")
     so the two numbers read as different facts, not a mismatch.
+    Finding (2026-07-30): `claimedAtoms` carries BOTH sides of each fill
+    (`amountSold` + `amountBought`, `operation.rs::append_pool_claims`), and
+    path-payment hops chain exactly (output of hop N = input of hop N+1) —
+    so an order-book hop whose NEXT hop is a single pool fill can borrow
+    that atom's `amountBought` as its own output (e.g. the missing VELO→XLM
+    edge = the XLM the XLM/KALE pool took in). FE-only; only valid when the
+    next hop has exactly one atom (multi-fill hops split the input).
 
 ## Acceptance criteria
 
