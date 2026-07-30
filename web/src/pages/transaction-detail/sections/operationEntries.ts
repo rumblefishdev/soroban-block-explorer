@@ -4,8 +4,6 @@ import type {
   XdrOperationDto,
 } from '@rumblefish/api-types';
 
-import type { EnrichedOp } from './OperationPicker.js';
-
 /**
  * One pickable operation: the row the picker renders plus the light/heavy
  * pair the detail panels read.
@@ -17,7 +15,7 @@ import type { EnrichedOp } from './OperationPicker.js';
  * light rows (task 0329).
  */
 export interface OperationEntry {
-  row: EnrichedOp;
+  row: OperationItem;
   light: OperationItem | undefined;
   heavy: XdrOperationDto | null;
 }
@@ -60,7 +58,7 @@ export function buildOperationEntries(
     // appearance_id keys the picker list; override so folded entries sharing
     // one light row still get unique, stable keys (the real appearance_id
     // lives on `light`, which the panels use).
-    const row: EnrichedOp = {
+    const row: OperationItem = {
       ...base,
       appearance_id: heavy.application_order,
       application_order: heavy.application_order,

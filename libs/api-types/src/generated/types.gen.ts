@@ -1974,6 +1974,13 @@ export type XdrEventDto = {
    */
   event_type: string;
   /**
+   * Zero-based envelope position of the operation that emitted this event
+   * (CAP-67 V4 per-operation container only; `None` for tx-level,
+   * diagnostic and pre-Protocol-23 events). Matches
+   * `XdrOperationDto.application_order - 1`.
+   */
+  op_index?: number | null;
+  /**
    * Decoded topic array.
    */
   topics: Array<unknown>;

@@ -14,14 +14,6 @@ export type {
   TimeSeriesInterval,
 } from './TimeSeriesChart.js';
 
-export { OperationFlowTree } from './OperationFlowTree.js';
-export type {
-  OperationFlowTreeProps,
-  FlowNode,
-  FlowNodeKind,
-  FlowNodeIdentifier,
-} from './OperationFlowTree.js';
-
 export { LazySection } from './LazySection.js';
 export type { LazySectionProps } from './LazySection.js';
 

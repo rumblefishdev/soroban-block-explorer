@@ -1,0 +1,113 @@
+import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
+import { render, screen } from '@testing-library/react';
+import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
+import { describe, expect, it } from 'vitest';
+
+import { OperationCard } from './OperationCard.js';
+
+const DEST = 'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM';
+
+function light(
+  partial: Partial<OperationItem> & { type_name: string }
+): OperationItem {
+  return {
+    appearance_id: 1,
+    type: 1,
+    application_order: 2,
+    ledger_sequence: 1,
+    created_at: '2026-01-01T00:00:00Z',
+    pool_ids: [],
+    ...partial,
+  } as OperationItem;
+}
+
+function heavyOf(details: Record<string, unknown>): XdrOperationDto {
+  return { op_type: 'PAYMENT', application_order: 2, details };
+}
+
+function renderCard(props: Partial<Parameters<typeof OperationCard>[0]> = {}) {
+  return render(
+    <ExplorerThemeProvider>
+      <OperationCard
+        light={light({ type_name: 'PAYMENT', destination_account: DEST })}
+        heavy={heavyOf({ amount: 1_005_000_000, asset: 'native' })}
+        applied
+        fallbackOrder={1}
+        txSourceAccount={null}
+        {...props}
+      />
+    </ExplorerThemeProvider>
+  );
+}
+
+describe('OperationCard', () => {
+  it('renders the headline sentence, order and type label', () => {
+    renderCard();
+    expect(screen.getByText('Sent 100.5 XLM to GA5X…GKTM')).toBeTruthy();
+    expect(screen.getByText('2 · Payment')).toBeTruthy();
+  });
+
+  it('labels the card "not applied" and keeps the disclosure on a failed transaction', () => {
+    renderCard({ applied: false });
+    expect(screen.getByText('not applied')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /Operation details/ })
+    ).toBeTruthy();
+  });
+
+  it('links crossed pools from light.pool_ids (task 0305, absorbed)', () => {
+    renderCard({
+      light: light({
+        type_name: 'PATH_PAYMENT_STRICT_SEND',
+        destination_account: DEST,
+        pool_ids: ['LA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA'],
+      }),
+    });
+    expect(screen.getByText(/Pools crossed · 1/)).toBeTruthy();
+    expect(screen.getByText(/LA7Q/)).toBeTruthy();
+  });
+
+  it('starts with the raw details collapsed', () => {
+    renderCard();
+    expect(
+      screen
+        .getByRole('button', { name: /Operation details/ })
+        .getAttribute('aria-expanded')
+    ).toBe('false');
+  });
+
+  it('shows only the events attributed to this operation via op_index', () => {
+    renderCard({
+      contractEvents: [
+        {
+          event_type: 'contract',
+          contract_id:
+            'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
+          topics: [{ type: 'sym', value: 'transfer' }],
+          data: {},
+          event_index: 0,
+          op_index: 1,
+        },
+        {
+          event_type: 'contract',
+          contract_id: null,
+          topics: [{ type: 'sym', value: 'mint' }],
+          data: {},
+          event_index: 1,
+          op_index: 0,
+        },
+        {
+          event_type: 'contract',
+          contract_id: null,
+          topics: [],
+          data: {},
+          event_index: 2,
+          op_index: null,
+        },
+      ],
+    });
+    // heavy.application_order = 2 → matches op_index 1 only.
+    expect(screen.getByText('transfer')).toBeTruthy();
+    expect(screen.queryByText('mint')).toBeNull();
+  });
+});

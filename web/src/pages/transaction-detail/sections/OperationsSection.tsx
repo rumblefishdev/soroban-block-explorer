@@ -3,45 +3,27 @@ import { Box, Grid } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
-import { AdvancedRightPanel } from '../advanced/AdvancedRightPanel.js';
-import { NormalRightPanel } from '../normal/NormalRightPanel.js';
-import type { DetailMode } from '../useDetailMode.js';
 
 import { buildOperationEntries } from './operationEntries.js';
+import { OperationCard } from '../op-card/OperationCard.js';
 import { OperationPicker } from './OperationPicker.js';
 
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
-  mode: DetailMode;
   selectedIndex: number;
   onSelect: (index: number) => void;
 }
 
 export function OperationsSection({
   tx,
-  mode,
   selectedIndex,
   onSelect,
 }: OperationsSectionProps) {
   const entries = useMemo(() => buildOperationEntries(tx), [tx]);
-  const rows = useMemo(() => entries.map((e) => e.row), [entries]);
   // Header count from operation_count (always present, never folded) — the
-  // picker list (rows) may be shorter when heavy is unavailable (task 0329).
+  // picker list may be shorter when heavy is unavailable (task 0329).
   const count = tx.operation_count;
   const selected = entries[selectedIndex] ?? entries[0];
-  const selectedLightOp = selected?.light;
-  const selectedHeavyOp = selected?.heavy ?? null;
-
-  const rightPanel =
-    mode === 'normal' ? (
-      <NormalRightPanel
-        tx={tx}
-        lightOp={selectedLightOp}
-        heavyOp={selectedHeavyOp}
-      />
-    ) : (
-      <AdvancedRightPanel lightOp={selectedLightOp} heavyOp={selectedHeavyOp} />
-    );
 
   return (
     <SectionCard
@@ -52,12 +34,24 @@ export function OperationsSection({
         <Grid container spacing={2}>
           <Grid size={{ xs: 12, md: 6 }}>
             <OperationPicker
-              operations={rows}
+              operations={entries.map((entry) => entry.row)}
               selectedIndex={selectedIndex}
               onSelect={onSelect}
             />
           </Grid>
-          <Grid size={{ xs: 12, md: 6 }}>{rightPanel}</Grid>
+          <Grid size={{ xs: 12, md: 6 }}>
+            {/* Remount on op switch so disclosure state resets per operation. */}
+            <OperationCard
+              key={selectedIndex}
+              light={selected?.light}
+              heavy={selected?.heavy ?? null}
+              applied={tx.successful}
+              fallbackOrder={selectedIndex + 1}
+              txSourceAccount={tx.source_account ?? null}
+              operationTree={tx.heavy?.operation_tree}
+              contractEvents={tx.heavy?.contract_events ?? []}
+            />
+          </Grid>
         </Grid>
       </Box>
     </SectionCard>

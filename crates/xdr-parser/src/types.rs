@@ -160,6 +160,10 @@ pub struct ExtractedEvent {
     pub data: serde_json::Value,
     /// Zero-based index of this event within the transaction.
     pub event_index: u32,
+    /// Zero-based envelope position of the operation that emitted this event.
+    /// Only the CAP-67 V4 per-operation container carries the attribution —
+    /// `None` for tx-level, diagnostic and V3 events (task 0453 D7).
+    pub op_index: Option<u32>,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds), used for monthly partitioning.

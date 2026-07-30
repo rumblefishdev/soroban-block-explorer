@@ -15,6 +15,15 @@ function stroopsToDecimal(stroops: string | number): string | null {
   return scaleByDecimals(stroops, 7);
 }
 
+/** US thousands grouping on the integer part of an exact decimal string —
+ *  string-based so values beyond 2^53 keep their digits (`formatAmount`
+ *  would round-trip through a lossy number). */
+function groupDecimalString(decimal: string): string {
+  const [int, frac] = decimal.split('.');
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return frac != null ? `${grouped}.${frac}` : grouped;
+}
+
 /**
  * Formats a fee in stroops as an XLM amount with unit, trimming trailing
  * zeros. BigInt arithmetic keeps large values exact. `100` → `0.00001 XLM`,
@@ -23,12 +32,13 @@ function stroopsToDecimal(stroops: string | number): string | null {
  */
 export function formatFee(stroops: number): string {
   const xlm = stroopsToDecimal(stroops);
-  return xlm == null ? '—' : `${xlm} XLM`;
+  return xlm == null ? '—' : `${groupDecimalString(xlm)} XLM`;
 }
 
 /**
- * Formats an on-chain stroop amount as a decimal with its asset unit, e.g.
- * `1005000000 → "100.5 XLM"`, or `("250", "USDC") → "250 USDC"`. The unit
+ * Formats an on-chain stroop amount as a US-grouped decimal with its asset
+ * unit, e.g. `1005000000 → "100.5 XLM"`,
+ * `33831901066092 → "3,383,190.1066092 bubba"`. The unit
  * defaults to `XLM` (the native asset) when `assetCode` is null/empty. Returns
  * `null` when the amount is not a valid non-negative integer, so callers can
  * fall back to an amount-less label.
@@ -44,7 +54,7 @@ export function formatTokenAmount(
   const decimal = stroopsToDecimal(stroops);
   if (decimal == null) return null;
   const unit = assetCode != null && assetCode.length > 0 ? assetCode : 'XLM';
-  return `${decimal} ${unit}`;
+  return `${groupDecimalString(decimal)} ${unit}`;
 }
 
 /**

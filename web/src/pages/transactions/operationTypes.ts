@@ -73,6 +73,11 @@ export const OPERATION_TYPE_OPTIONS: readonly OperationTypeOption[] = (
 /** Pre-computed set for O(1) validation in `normalizeOperationType`. */
 const VALID_OPS = new Set<string>(Object.keys(DISPLAY_LABELS));
 
+/** True when `raw` is one of the backend `OperationType` enum values. */
+export function isKnownOperationType(raw: string): boolean {
+  return VALID_OPS.has(raw);
+}
+
 /**
  * Normalises a raw `op` URL param to the case-sensitive backend enum
  * form, or an empty string if the value is missing / unknown.

@@ -1,5 +1,5 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import {
   Chip,
   Dash,
@@ -13,6 +13,7 @@ import { FeeCell } from '../../detail/FeeCell.js';
 import { SectionCard } from '../../detail/SectionCard.js';
 import { SummaryRow } from '../../detail/SummaryRow.js';
 import { formatAbsoluteUtc } from '../../transactions/formatters.js';
+import { classifyTx } from '../shared/classifyTx.js';
 import { describeMemo } from '../shared/describeMemo.js';
 
 interface TransactionSummaryProps {
@@ -64,6 +65,7 @@ function TimestampCell({ value }: { value: string }) {
 export function TransactionSummary({ tx }: TransactionSummaryProps) {
   const memoType = tx.heavy?.memo_type;
   const memo = tx.heavy?.memo;
+  const story = classifyTx(tx);
 
   return (
     <SectionCard
@@ -73,9 +75,40 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             Summary
           </Typography>
           <StatusChip successful={tx.successful} />
+          {story != null && <Chip size="sm" color="neutral" label={story} />}
         </Stack>
       }
     >
+      {!tx.successful && (
+        <Box
+          role="status"
+          sx={(theme) => ({
+            m: 2,
+            mb: 0,
+            px: 1.5,
+            py: 1,
+            borderRadius: `${theme.shape.radius.md}px`,
+            backgroundColor: theme.palette.surface.error,
+            border: `1px solid ${theme.palette.stroke.error}`,
+          })}
+        >
+          <Typography
+            variant="bodySmRegular"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            Transaction failed — no operation was applied
+            {/* Raw tx-level result code passthrough only — and only when it
+                says more than the sentence already did ("TxFailed" is the
+                generic any-op-failed code, pure noise here). The decoded
+                failure reason (Soroban errors + per-op codes) is task 0352. */}
+            {tx.heavy?.result_code != null &&
+            tx.heavy.result_code.length > 0 &&
+            tx.heavy.result_code !== 'TxFailed'
+              ? ` · ${tx.heavy.result_code}`
+              : ''}
+          </Typography>
+        </Box>
+      )}
       <SummaryRow
         cells={[
           {
@@ -134,6 +167,40 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
           },
         ]}
       />
+      {(tx.heavy?.fee_bump_source != null || tx.inner_tx_hash != null) && (
+        <SummaryRow
+          cells={[
+            {
+              label: 'Fee source',
+              value:
+                tx.heavy?.fee_bump_source != null ? (
+                  <IdentifierWithCopy
+                    value={tx.heavy.fee_bump_source}
+                    type="account"
+                    truncate={false}
+                  />
+                ) : (
+                  <Dash />
+                ),
+            },
+            {
+              label: 'Inner transaction',
+              // Copy only, deliberately unlinked: inner hashes are not
+              // indexed, so /transactions/{inner} would 404 (0359 plan #4).
+              value:
+                tx.inner_tx_hash != null ? (
+                  <IdentifierWithCopy
+                    value={tx.inner_tx_hash}
+                    type="transaction"
+                    linked={false}
+                  />
+                ) : (
+                  <Dash />
+                ),
+            },
+          ]}
+        />
+      )}
     </SectionCard>
   );
 }

@@ -6,26 +6,23 @@ import {
   SectionErrorBoundary,
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useState } from 'react';
 
 import { useTransactionDetail } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 
-import { EventsSection } from './advanced/EventsSection.js';
-import { RawDataSection } from './advanced/RawDataSection.js';
-import { ModeToggle } from './sections/ModeToggle.js';
+import { EventsSection } from './sections/EventsSection.js';
+import { RawDataSection } from './sections/RawDataSection.js';
 import { OperationsSection } from './sections/OperationsSection.js';
 import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
 import { TransactionDetailSkeleton } from './TransactionDetailSkeleton.js';
-import { useDetailMode } from './useDetailMode.js';
+import { useSelectedOp } from './useSelectedOp.js';
 import { useTxHashParam } from './useTxHashParam.js';
 
 export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
-  const { mode, setMode } = useDetailMode();
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedIndex, setSelectedIndex] = useSelectedOp();
   const query = useTransactionDetail(valid ? hash : '');
 
   if (!valid) {
@@ -63,18 +60,9 @@ export default function TransactionDetailPage() {
             },
           ]}
         />
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="space-between"
-          spacing={2}
-          sx={{ flexWrap: 'wrap' }}
-        >
-          <Typography variant="heading5SemiBold" component="h1">
-            Transaction Detail
-          </Typography>
-          <ModeToggle mode={mode} onChange={setMode} />
-        </Stack>
+        <Typography variant="heading5SemiBold" component="h1">
+          Transaction Detail
+        </Typography>
       </Box>
 
       <SectionErrorBoundary sectionName="transaction-summary">
@@ -84,7 +72,6 @@ export default function TransactionDetailPage() {
       <SectionErrorBoundary sectionName="transaction-operations">
         <OperationsSection
           tx={tx}
-          mode={mode}
           selectedIndex={selectedIndex}
           onSelect={setSelectedIndex}
         />
@@ -94,30 +81,21 @@ export default function TransactionDetailPage() {
         <SignaturesTable signatures={heavy?.signatures ?? []} />
       </SectionErrorBoundary>
 
-      {mode === 'advanced' && (
-        <>
-          <SectionErrorBoundary sectionName="transaction-events">
-            <EventsSection
-              contractEvents={heavy?.contract_events ?? []}
-              diagnosticEvents={heavy?.diagnostic_events ?? []}
-            />
-          </SectionErrorBoundary>
-          <SectionErrorBoundary sectionName="transaction-raw-data">
-            <RawDataSection
-              envelopeXdr={heavy?.envelope_xdr}
-              resultXdr={heavy?.result_xdr}
-              resultsMetaXdr={
-                (
-                  heavy as
-                    | { results_meta_xdr?: string | null }
-                    | null
-                    | undefined
-                )?.results_meta_xdr
-              }
-            />
-          </SectionErrorBoundary>
-        </>
-      )}
+      {/* One progressive view (0453): the former advanced-only sections render
+          always — Events collapsed by default, raw XDR already collapses per
+          row — so nothing the old toggle gated is lost. */}
+      <SectionErrorBoundary sectionName="transaction-events">
+        <EventsSection
+          contractEvents={heavy?.contract_events ?? []}
+          diagnosticEvents={heavy?.diagnostic_events ?? []}
+        />
+      </SectionErrorBoundary>
+      <SectionErrorBoundary sectionName="transaction-raw-data">
+        <RawDataSection
+          envelopeXdr={heavy?.envelope_xdr}
+          resultXdr={heavy?.result_xdr}
+        />
+      </SectionErrorBoundary>
     </Stack>
   );
 }

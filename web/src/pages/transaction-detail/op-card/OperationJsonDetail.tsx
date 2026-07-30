@@ -4,6 +4,8 @@ import { Box, Stack, Typography } from '@mui/material';
 import { Chip, EmptyState } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
+import { isSorobanOp } from '../shared/opKind.js';
+
 import { HighlightedJson } from './HighlightedJson.js';
 
 interface OperationJsonDetailProps {
@@ -76,9 +78,9 @@ function AdvancedRow({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function categoryChip(opType: string): ReactNode {
-  // op_type arrives SCREAMING_SNAKE (`INVOKE_HOST_FUNCTION`); compare lowercased
-  // so the Soroban chip actually fires (was stuck on "Classic").
-  if (opType.toLowerCase() === 'invoke_host_function') {
+  // Shared definition with the card's kind chip — the two must never disagree
+  // on the same operation.
+  if (isSorobanOp(opType)) {
     return <Chip size="sm" color="success" label="Soroban" />;
   }
   return <Chip size="sm" color="neutral" label="Classic" />;
@@ -132,7 +134,6 @@ export function OperationJsonDetail({
   const fnName = asString(pickDetailValue(details, 'functionName').value);
   const argsField = pickDetailValue(details, 'functionArgs');
   const returnField = pickDetailValue(details, 'returnValue');
-  const authField = pickDetailValue(details, 'auth');
 
   // Soroban (INVOKE_HOST_FUNCTION) gets the typed rows above; every other op
   // type (payment, manage_offer, change_trust, …) emits its own `details` map
@@ -165,7 +166,7 @@ export function OperationJsonDetail({
       )}
       {isInvoke && (
         <AdvancedRow
-          label="function_name"
+          label="functionName"
           value={<Chip size="sm" color="neutral" label={fnName} />}
         />
       )}
@@ -183,12 +184,6 @@ export function OperationJsonDetail({
               <HighlightedJson value={returnField.value} />
             )
           }
-        />
-      )}
-      {authField.present && (
-        <AdvancedRow
-          label="auth"
-          value={<HighlightedJson value={authField.value} />}
         />
       )}
       {genericEntries.map(([key, value]) => (

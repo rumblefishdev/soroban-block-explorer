@@ -90,6 +90,11 @@ pub struct XdrEventDto {
     pub data: serde_json::Value,
     /// Event index within the transaction (zero-based).
     pub event_index: i16,
+    /// Zero-based envelope position of the operation that emitted this event
+    /// (CAP-67 V4 per-operation container only; `None` for tx-level,
+    /// diagnostic and pre-Protocol-23 events). Matches
+    /// `XdrOperationDto.application_order - 1`.
+    pub op_index: Option<i16>,
 }
 
 /// Operation raw parameters (XDR-decoded full details).

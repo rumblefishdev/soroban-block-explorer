@@ -75,6 +75,36 @@ history:
       only (per-op index discarded at parse); heavy.operation_tree and
       heavy.result_code arrive unread — a third option for 0442 and a partial
       answer to #364. Redesign phase next: live benchmark + /ux-expert.
+  - date: '2026-07-29'
+    status: active
+    who: karolkow
+    note: >
+      From-zero design pass finished: live benchmark (stellar.expert,
+      stellarchain, Solscan), three interactive prototypes, UX literature +
+      deep dive (SE MIT templates, Blockscout interpretation, Tenderly trace).
+      Layout settled with Karol: one card, master-detail frame, index always
+      visible; toggle survives until parity. Converted to directory; governing
+      spec with 15 numbered decisions and 7 shippable waves in
+      notes/G-implementation-plan.md — it supersedes the audit's render
+      sketch. Starting wave 0 (dead code + functionName fix).
+  - date: '2026-07-30'
+    status: completed
+    who: karolkow
+    note: >
+      All waves shipped on PR #373 (16 commits): truthful sentences for all
+      27 op types (SE MIT wording), one progressive card, verdict banner,
+      route strip on the declared path, authorized-calls tree, story chip,
+      deep links, per-op icons, two micro-backends (op_index, claim-CB
+      asset — live after next backend deploy), 0305 absorbed (pool links),
+      ~1k lines of dead render deleted, directory taxonomy regrouped.
+      Hardened by a five-agent review (findings fixed same-session, record
+      amended: D2/D3 as-built, D11 corrected). Verified field-by-field
+      against Horizon on ~20 real mainnet txs across 15+ op types, plus
+      live benchmarks vs stellar.expert/stellarchain. One AC deferred to
+      0457/0411 (strict-send received — honest empty slot by design).
+      Follow-ups spawned: 0456-0460; 0442/0444/0305 archived via this
+      task; 0380 superseded by 0456. Issues #364/#370 addressed in code,
+      close at deploy per repo policy.
 ---
 
 # FEATURE: one progressive operation card
@@ -87,16 +117,19 @@ one-liner that is **factually wrong** for anything but a plain payment, and an
 **one card per operation** — a true human headline, the asset movement as key
 facts, then progressive disclosure down to raw XDR.
 
-The design work is already done. It is written up in
-[`0359/notes/S-tx-render-audit.md`](../archive/0359_FEATURE_asset-participation-index-remodel/notes/S-tx-render-audit.md),
+> **Governing spec: [`notes/G-implementation-plan.md`](notes/G-implementation-plan.md)**
+> (2026-07-29, after the from-zero design pass). The audit below remains the
+> finding record; where the two disagree on the solution, the G-note wins.
+
+The original design write-up is in
+[`0359/notes/S-tx-render-audit.md`](../../archive/0359_FEATURE_asset-participation-index-remodel/notes/S-tx-render-audit.md),
 including a per-op-type headline spec for 16+ operation types and the field
-mapping for each. **Read that note first — this task is its implementation, not
-a re-design.**
+mapping for each.
 
 ## Where this came from
 
 It was **planned and never spawned**. 0359's spawn plan
-([`notes/G-spawn-plan.md`](../archive/0359_FEATURE_asset-participation-index-remodel/notes/G-spawn-plan.md),
+([`notes/G-spawn-plan.md`](../../archive/0359_FEATURE_asset-participation-index-remodel/notes/G-spawn-plan.md),
 sibling **#6 "FE — transaction render"**) already scoped it, already flagged the
 `humanizeOp` mislabel as a standalone quick fix, and already established that it
 is independent of 0359's data work except the claim-CB headline. It then closed
@@ -256,26 +289,35 @@ id. Render "claimed balance {id}" until that lands; do not block on it.
 
 ## Acceptance criteria
 
-- [ ] Every op type renders a headline that is **true** — no swap reported as a
-      payment, no "processed" placeholder
-- [ ] `CHANGE_TRUST` names the asset and its issuer (the #370 case)
-- [ ] Received amount and route shown for both path-payment directions
-- [ ] Self-transfer (source == destination) recognised in the wording
-- [ ] Amounts formatted, never raw stroops; US number grouping preserved
-- [ ] The normal/advanced toggle is gone, and nothing it used to show is lost
-- [ ] A failed transaction never reads as successful (issue #364)
-- [ ] 0442, 0444 and the per-op icon spec explicitly resolved — implemented,
-      folded in, or withdrawn with the reason recorded
-- [ ] The 0305 boundary held: this task did not absorb pool-id linking, or it
-      did and 0305 was withdrawn saying so
-- [ ] **`/ux-expert` regression pass on the shipped card** — the same audit that
-      produced these eight findings, re-run against the result. It has caught
-      orphans before (0348, 0351): a fix that leaves a filter or a control
-      pointing at something that no longer exists
-- [ ] **Docs updated** — frontend data contracts under `docs/architecture/**`
-      per ADR 0032, if the render's field consumption changes
-- [ ] **API types regenerated** — `N/A` unless the backend contract changes;
-      state which when closing
+- [x] Every op type renders a headline that is **true** — no swap reported as a
+      payment, no "processed" placeholder (all 27 types, wave 1)
+- [x] `CHANGE_TRUST` names the asset and its issuer (the #370 case)
+- [ ] Received amount and route shown for both path-payment directions —
+      route: both; received: exact for strict-receive, **deliberately an
+      honest empty slot for strict-send** (spec D9: not derivable from
+      LP-only `claimedAtoms`) — (deferred to 0457 effects / 0411
+      net_settled, whichever lands first)
+- [x] Self-transfer (source == destination) recognised in the wording —
+      including ops inheriting the tx source
+- [x] Amounts formatted, never raw stroops; US number grouping preserved
+      (raw numbers remain only inside the explicitly-raw details disclosure)
+- [x] The normal/advanced toggle is gone, and nothing it used to show is lost
+      (per-card details disclosure + always-rendered Events/Raw sections,
+      collapsed; old `?mode=` links degrade gracefully)
+- [x] A failed transaction never reads as successful (issue #364) — summary
+      banner + result_code + dimmed "not applied" cards
+- [x] 0442, 0444 and the per-op icon spec explicitly resolved — 0442 closed
+      (dead branches deleted, real tree from `operation_tree`), 0444 closed
+      (verdict moved to the banner), icons **implemented** (0257 spec adopted)
+- [x] The 0305 boundary: resolved via the AC's second arm — 0305 was
+      absorbed with Karol's explicit go and archived saying so (pool links
+      render from `light.pool_ids` in the card)
+- [x] **`/ux-expert` regression pass on the shipped card** —
+      [notes/S-ux-regression-pass.md](notes/S-ux-regression-pass.md)
+- [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`
+      §6.4 rewritten for the one-view contract
+- [x] **API types regenerated** — with the `op_index` DTO change, same commit
+      (freshness gate satisfied)
 
 ## Notes
 

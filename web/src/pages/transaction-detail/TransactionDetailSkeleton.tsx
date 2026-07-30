@@ -27,7 +27,7 @@ function RowsSkeleton({ rows }: { rows: number }) {
 
 /**
  * Loading skeleton for the transaction detail page. Mirrors the real section
- * structure (header + ModeToggle, Summary, Operations 2-col, Signatures) via
+ * structure (header, Summary, Operations 2-col, Signatures) via
  * `SectionCard` so the skeleton looks like the page, not three generic cards.
  * Used as BOTH the route Suspense fallback (phase A) and the page's
  * `isLoading` return (phase B). Reads the hash from the URL for the breadcrumb.
@@ -45,19 +45,9 @@ export function TransactionDetailSkeleton() {
             },
           ]}
         />
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="space-between"
-          spacing={2}
-          sx={{ flexWrap: 'wrap' }}
-        >
-          <Typography variant="heading5SemiBold" component="h1">
-            Transaction Detail
-          </Typography>
-          {/* ModeToggle (Normal/Advanced) placeholder */}
-          <Skeleton variant="rounded" width={184} height={36} />
-        </Stack>
+        <Typography variant="heading5SemiBold" component="h1">
+          Transaction Detail
+        </Typography>
       </Box>
 
       {/* Summary — title is "Summary" + status chip, same as loaded */}

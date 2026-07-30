@@ -85,16 +85,20 @@ pub fn extract_events(
                 .collect();
 
             let mut next_idx = extracted.len();
-            for op_meta in v4.operations.iter() {
+            for (op_i, op_meta) in v4.operations.iter().enumerate() {
                 for event in op_meta.events.iter() {
-                    extracted.push(extract_single_event(
+                    let mut ev = extract_single_event(
                         event,
                         transaction_hash,
                         ledger_sequence,
                         created_at,
                         next_idx,
                         EventSource::PerOp,
-                    ));
+                    );
+                    // Keep the envelope position — it is the only place the
+                    // meta states which operation emitted the event (D7).
+                    ev.op_index = u32::try_from(op_i).ok();
+                    extracted.push(ev);
                     next_idx += 1;
                 }
             }
@@ -154,6 +158,7 @@ fn extract_single_event(
         topics,
         data,
         event_index: u32::try_from(index).expect("event index does not fit into u32"),
+        op_index: None,
         ledger_sequence,
         created_at,
     }
@@ -709,6 +714,10 @@ mod tests {
         assert_eq!(events[0].source, EventSource::TxLevel);
         assert_eq!(events[1].source, EventSource::PerOp);
         assert_eq!(events[2].source, EventSource::Diagnostic);
+        // Only the per-op container carries the operation attribution (D7).
+        assert_eq!(events[0].op_index, None);
+        assert_eq!(events[1].op_index, Some(0));
+        assert_eq!(events[2].op_index, None);
     }
 
     #[test]
@@ -765,6 +774,11 @@ mod tests {
         assert!(
             events.iter().all(|e| e.source == EventSource::PerOp),
             "every per-op event across operations must be tagged PerOp"
+        );
+        // Attribution follows the envelope position of the emitting op (D7).
+        assert_eq!(
+            events.iter().map(|e| e.op_index).collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(1)]
         );
     }
 }
