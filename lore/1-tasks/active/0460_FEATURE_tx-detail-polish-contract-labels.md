@@ -96,7 +96,16 @@ history:
     reasonable doubt and can render decoded + linked with a hint. Zero
     false links by construction; pairs with the fn_call-topic decoding the
     trace already does.
-15. **Claimable-balance claimants are a bare count** (0462 review,
+15. **Root-call full inline arguments** (stellar.expert parity, review
+    thread 2026-07-30): SE renders the ROOT invocation with every literal
+    argument inline (wrapping over 2-3 lines), e.g.
+    `swap_collateral(GC4Q…, [SolvBTC] CBIJ…, …, 13171, …) → 81404538`,
+    while our root falls back to `(6 args)` under the 40-char budget.
+    Proposal: depth-0 call gets an unlimited budget with wrapping allowed
+    (nested calls keep the one-line budget); pairs with item 1 (display
+    names — the `[SolvBTC]` half of SE's line) and optionally SE-style
+    type subscripts.
+16. **Claimable-balance claimants are a bare count** (0462 review,
     tx `a821ee85…` op 3): the card says "for 2 claimants" but cannot name
     them — the PARSER reduces the claimants XDR vec to `claimants: 2`
     (`extract_op_details`, CREATE_CLAIMABLE_BALANCE arm). Backend fix: emit

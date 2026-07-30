@@ -282,38 +282,43 @@ export function argsSummary(args: unknown): ArgsSummary {
     : { kind: 'count', count: typed.value.length };
 }
 
+type EventArgsSummary =
+  | { kind: 'inline'; parts: InlinePart[] }
+  | { kind: 'count'; count: number };
+
 /** Inline summary of what an event announced: the payload topics (skipping
  *  the name) plus the data scalar(s) — `transfer(GC4Q…K7XQ, CCTU…V6J7,
- *  13171)`, `error("failing with contract error", 7)`. Values that do not
- *  fit are elided with `…`; the raw event stays behind the disclosure. */
-export function eventArgsParts(event: XdrEventDto): InlinePart[] {
-  const parts: InlinePart[] = [];
-  let elided = false;
-  const push = (value: unknown) => {
-    const part = shortPart(value);
-    if (part == null) elided = true;
-    else parts.push(part);
-  };
-  for (let i = 1; i < event.topics.length; i++) push(event.topics[i]);
+ *  13171)`, `error("failing with contract error", 7)`. The fallback speaks
+ *  the same vocabulary as calls: everything inlines or the COUNT shows
+ *  (`transfer(4 fields)`) — no bespoke mid-list ellipsis (consistency
+ *  review). The raw event stays behind the disclosure either way. */
+export function eventArgsSummary(event: XdrEventDto): EventArgsSummary {
+  const values: unknown[] = event.topics.slice(1);
   const data = event.data as TypedVal | null;
   if (data != null && typeof data === 'object') {
     if (data.type === 'vec' && Array.isArray(data.value)) {
-      for (const element of data.value) push(element);
+      values.push(...data.value);
     } else if (data.type !== 'void') {
-      push(data);
+      values.push(data);
     }
   }
-  while (partsLength(parts) > 48 && parts.length > 0) {
-    parts.pop();
-    elided = true;
+  const parts: InlinePart[] = [];
+  for (const value of values) {
+    const part = shortPart(value);
+    if (part == null) return { kind: 'count', count: values.length };
+    parts.push(part);
   }
-  if (elided) parts.push({ kind: 'text', text: '…' });
-  return parts;
+  return partsLength(parts) <= 48
+    ? { kind: 'inline', parts }
+    : { kind: 'count', count: values.length };
 }
 
 /** Plain-text form of the event payload summary (kept for tests). */
 export function eventArgsText(event: XdrEventDto): string {
-  return `(${partsToText(eventArgsParts(event))})`;
+  const summary = eventArgsSummary(event);
+  return summary.kind === 'inline'
+    ? `(${partsToText(summary.parts)})`
+    : `(${summary.count} field${summary.count === 1 ? '' : 's'})`;
 }
 
 /** Short inline `→ value` for scalar returns; structured values stay behind
@@ -535,6 +540,7 @@ function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const label = traceEventLabel(event);
   const category = eventCategory(label);
+  const payload = eventArgsSummary(event);
 
   return (
     <>
@@ -584,7 +590,21 @@ function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
             component="span"
             sx={(theme) => ({ color: theme.palette.text.secondary })}
           >
-            (<InlineParts parts={eventArgsParts(event)} />)
+            (
+            {payload.kind === 'inline' ? (
+              <InlineParts parts={payload.parts} />
+            ) : (
+              <Box
+                component="span"
+                sx={(theme) => ({
+                  color: theme.palette.text.tertiary,
+                  fontStyle: 'italic',
+                })}
+              >
+                {payload.count} {payload.count === 1 ? 'field' : 'fields'}
+              </Box>
+            )}
+            )
           </Box>
         </Typography>
         {event.contract_id != null && (

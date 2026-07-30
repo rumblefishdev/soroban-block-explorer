@@ -185,7 +185,7 @@ describe('eventArgsText', () => {
     expect(eventArgsText(error)).toBe('("failing with contract error", 7)');
   });
 
-  it('elides values that do not fit instead of dropping the row', () => {
+  it('falls back to a field count when the payload cannot inline', () => {
     const long = ev(
       [
         { type: 'sym', value: 'trade' },
@@ -193,6 +193,6 @@ describe('eventArgsText', () => {
       ],
       { type: 'i128', value: '5' }
     );
-    expect(eventArgsText(long)).toBe('(5, …)');
+    expect(eventArgsText(long)).toBe('(2 fields)');
   });
 });
