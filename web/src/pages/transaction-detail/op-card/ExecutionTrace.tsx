@@ -10,6 +10,7 @@ import { Fragment, useState } from 'react';
 import type { XdrEventDto } from '@rumblefish/api-types';
 
 import { HighlightedJson } from './HighlightedJson.js';
+import { STRKEY_VERSION, strkeyFromBase64 } from './strkeyDecode.js';
 
 /** One executed call, reconstructed from the host-VM diagnostic trace. */
 export interface TraceNode {
@@ -54,55 +55,9 @@ function symTopic(event: XdrEventDto, index: number): string | null {
     : null;
 }
 
-const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-
-function crc16xmodem(bytes: Uint8Array): number {
-  let crc = 0;
-  for (const byte of bytes) {
-    crc ^= byte << 8;
-    for (let bit = 0; bit < 8; bit++) {
-      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
-    }
-  }
-  return crc;
-}
-
-function base32(bytes: Uint8Array): string {
-  let out = '';
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32_ALPHABET[(buffer >> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) out += BASE32_ALPHABET[(buffer << (5 - bits)) & 31];
-  return out;
-}
-
-/** SEP-23 strkey for a contract address: version byte 0x10 ('C') + 32-byte
- *  hash + CRC16-XModem (little-endian), base32 without padding. The fn_call
- *  topic carries the called contract as raw bytes; everywhere else in the
- *  API contracts already arrive as strkeys, so this is the one place the
- *  frontend needs to encode. */
+/** Contract strkey from the fn_call bytes topic — see strkeyDecode.ts. */
 export function contractStrkeyFromBase64(b64: string): string | null {
-  let bin: string;
-  try {
-    bin = atob(b64);
-  } catch {
-    return null;
-  }
-  if (bin.length !== 32) return null;
-  const payload = new Uint8Array(35);
-  payload[0] = 0x10;
-  for (let i = 0; i < 32; i++) payload[i + 1] = bin.charCodeAt(i);
-  const crc = crc16xmodem(payload.subarray(0, 33));
-  payload[33] = crc & 0xff;
-  payload[34] = crc >> 8;
-  return base32(payload);
+  return strkeyFromBase64(b64, STRKEY_VERSION.contract);
 }
 
 function calledContract(event: XdrEventDto): string | null {
@@ -373,27 +328,29 @@ export function eventArgsText(event: XdrEventDto): string {
 type ReturnSummary =
   | { kind: 'value'; parts: InlinePart[] }
   | { kind: 'void' }
-  | { kind: 'opaque' };
+  | { kind: 'count'; text: string };
 
 function returnSummary(value: unknown): ReturnSummary | null {
   if (value == null) return null;
   const typed = value as TypedVal;
   if (typed.type === 'void') return { kind: 'void' };
   if (typed.type === 'vec' && Array.isArray(typed.value)) {
+    const count = {
+      kind: 'count' as const,
+      text: `${typed.value.length} value${typed.value.length === 1 ? '' : 's'}`,
+    };
     const parts: InlinePart[] = [];
     for (const element of typed.value) {
       const part = shortPart(element);
-      if (part == null) return { kind: 'opaque' };
+      if (part == null) return count;
       parts.push(part);
     }
-    return partsLength(parts) <= 40
-      ? { kind: 'value', parts }
-      : { kind: 'opaque' };
+    return partsLength(parts) <= 40 ? { kind: 'value', parts } : count;
   }
   const single = shortPart(value);
   return single != null && partLength(single) <= 24
     ? { kind: 'value', parts: [single] }
-    : { kind: 'opaque' };
+    : { kind: 'count', text: '1 value' };
 }
 
 /** Inline value list where every address is the house identifier link
@@ -784,7 +741,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
               // opaque `…` is a UI abbreviation → tertiary, like the arg
               // count; void and real values are the truth → secondary.
               color:
-                inlineReturn.kind === 'opaque'
+                inlineReturn.kind === 'count'
                   ? theme.palette.text.tertiary
                   : theme.palette.text.secondary,
               fontStyle: inlineReturn.kind === 'value' ? 'normal' : 'italic',
@@ -797,7 +754,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             ) : inlineReturn.kind === 'void' ? (
               'void'
             ) : (
-              '…'
+              inlineReturn.text
             )}
           </Typography>
         )}

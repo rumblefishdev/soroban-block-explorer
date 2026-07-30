@@ -7,9 +7,12 @@ import {
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { useMemo } from 'react';
+
 import { useTransactionDetail } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
+import { collectStrkeys, TxKnownIdsContext } from './op-card/strkeyDecode.js';
 
 import { EventsSection } from './sections/EventsSection.js';
 import { RawDataSection } from './sections/RawDataSection.js';
@@ -24,6 +27,9 @@ export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
   const [selectedIndex, setSelectedIndex] = useSelectedOp();
   const query = useTransactionDetail(valid ? hash : '');
+  // Corroboration set for decoding raw bytes in the JSON viewer: every
+  // strkey occurring anywhere in this transaction's payload.
+  const knownIds = useMemo(() => collectStrkeys(query.data), [query.data]);
 
   if (!valid) {
     return <NotFoundState entity="transaction" identifier={hash} />;
@@ -50,52 +56,57 @@ export default function TransactionDetailPage() {
   const heavy = tx.heavy ?? null;
 
   return (
-    <Stack spacing={3}>
-      <Box>
-        <PageBreadcrumb
-          items={[
-            { label: 'Transactions', to: routes.transactions },
-            {
-              label: truncateMiddle(hash, getDefaultTruncation('transaction')),
-            },
-          ]}
-        />
-        <Typography variant="heading5SemiBold" component="h1">
-          Transaction Detail
-        </Typography>
-      </Box>
+    <TxKnownIdsContext.Provider value={knownIds}>
+      <Stack spacing={3}>
+        <Box>
+          <PageBreadcrumb
+            items={[
+              { label: 'Transactions', to: routes.transactions },
+              {
+                label: truncateMiddle(
+                  hash,
+                  getDefaultTruncation('transaction')
+                ),
+              },
+            ]}
+          />
+          <Typography variant="heading5SemiBold" component="h1">
+            Transaction Detail
+          </Typography>
+        </Box>
 
-      <SectionErrorBoundary sectionName="transaction-summary">
-        <TransactionSummary tx={tx} />
-      </SectionErrorBoundary>
+        <SectionErrorBoundary sectionName="transaction-summary">
+          <TransactionSummary tx={tx} />
+        </SectionErrorBoundary>
 
-      <SectionErrorBoundary sectionName="transaction-operations">
-        <OperationsSection
-          tx={tx}
-          selectedIndex={selectedIndex}
-          onSelect={setSelectedIndex}
-        />
-      </SectionErrorBoundary>
+        <SectionErrorBoundary sectionName="transaction-operations">
+          <OperationsSection
+            tx={tx}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+          />
+        </SectionErrorBoundary>
 
-      <SectionErrorBoundary sectionName="transaction-signatures">
-        <SignaturesTable signatures={heavy?.signatures ?? []} />
-      </SectionErrorBoundary>
+        <SectionErrorBoundary sectionName="transaction-signatures">
+          <SignaturesTable signatures={heavy?.signatures ?? []} />
+        </SectionErrorBoundary>
 
-      {/* One progressive view (0453): the former advanced-only sections render
+        {/* One progressive view (0453): the former advanced-only sections render
           always — Events collapsed by default, raw XDR already collapses per
           row — so nothing the old toggle gated is lost. */}
-      <SectionErrorBoundary sectionName="transaction-events">
-        <EventsSection
-          contractEvents={heavy?.contract_events ?? []}
-          diagnosticEvents={heavy?.diagnostic_events ?? []}
-        />
-      </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="transaction-raw-data">
-        <RawDataSection
-          envelopeXdr={heavy?.envelope_xdr}
-          resultXdr={heavy?.result_xdr}
-        />
-      </SectionErrorBoundary>
-    </Stack>
+        <SectionErrorBoundary sectionName="transaction-events">
+          <EventsSection
+            contractEvents={heavy?.contract_events ?? []}
+            diagnosticEvents={heavy?.diagnostic_events ?? []}
+          />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary sectionName="transaction-raw-data">
+          <RawDataSection
+            envelopeXdr={heavy?.envelope_xdr}
+            resultXdr={heavy?.result_xdr}
+          />
+        </SectionErrorBoundary>
+      </Stack>
+    </TxKnownIdsContext.Provider>
   );
 }

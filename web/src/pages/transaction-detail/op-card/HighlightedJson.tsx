@@ -4,6 +4,8 @@ import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 
+import { corroboratedStrkey, useTxKnownIds } from './strkeyDecode.js';
+
 type TokenKind = 'string' | 'number' | 'bool' | 'null' | 'key';
 
 // Strkey shape (SEP-23): G = account, C = contract, L = liquidity pool —
@@ -64,6 +66,36 @@ function Token({ kind, children }: { kind: TokenKind; children: ReactNode }) {
   );
 }
 
+/** Raw 32-byte values (base64) decode to SOME checksum-valid strkey no
+ *  matter what they are — so a decoded reading is shown ONLY when that
+ *  strkey already occurs elsewhere in the same transaction (corroboration;
+ *  zero false links by construction). The Slack-thread confusion — a
+ *  base64 `TSCr…` value versus a `CBGS…` address being the same bytes in
+ *  two encodings — is exactly what this hint answers in place. */
+function BytesValue({ b64 }: { b64: string }) {
+  const knownIds = useTxKnownIds();
+  const decoded = corroboratedStrkey(b64, knownIds);
+  return (
+    <>
+      <Token kind="string">{`"${b64}"`}</Token>
+      {decoded != null && (
+        <Box
+          component="span"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
+          {' = '}
+          <IdentifierWithCopy
+            value={decoded}
+            type={strkeyType(decoded)}
+            tone="inherit"
+            fontSize="inherit"
+          />
+        </Box>
+      )}
+    </>
+  );
+}
+
 function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
@@ -98,6 +130,7 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.length === 0) return '{}';
+    const isBytesObject = (value as Record<string, unknown>).type === 'bytes';
     return (
       <>
         {'{\n'}
@@ -106,7 +139,11 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
             {pad(level + 1)}
             <Token kind="key">{`"${k}"`}</Token>
             {': '}
-            <Node value={v} level={level + 1} />
+            {isBytesObject && k === 'value' && typeof v === 'string' ? (
+              <BytesValue b64={v} />
+            ) : (
+              <Node value={v} level={level + 1} />
+            )}
             {i < entries.length - 1 ? ',' : ''}
             {'\n'}
           </Fragment>
