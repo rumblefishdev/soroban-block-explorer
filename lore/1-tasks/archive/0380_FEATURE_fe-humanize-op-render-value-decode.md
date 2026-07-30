@@ -2,13 +2,23 @@
 id: '0380'
 title: 'FE: humanize-op render + value-decode fidelity (u256/i256 decoded, not raw hex)'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0359', '0453']
 tags: [priority-medium, effort-medium, layer-frontend-pages]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/363'
 history:
+  - date: '2026-07-30'
+    status: superseded
+    who: karolkow
+    by: ['0456']
+    note: >
+      Scope resolved in two places: the details.function_name/functionName
+      key mismatch was fixed by 0453 (wave 0) and Stage-D humanisation is
+      superseded by 0453's per-type sentence layer; the remaining
+      u256/i256 hex-to-decimal decode moved into 0456 (wire-truth
+      umbrella) so one task owns the parser<->card contract.
   - date: 2026-07-13
     status: backlog
     who: karolkow
