@@ -144,7 +144,10 @@ export function buildExecutionTrace(
     const kind = symTopic(event, 0);
     if (kind === 'fn_call') {
       const node: TraceNode = {
-        fnName: symTopic(event, 2) ?? 'call',
+        // The host always names the function in the third topic; a missing
+        // name means malformed data, and the display must SAY so — a
+        // plausible generic like `call` would read as a real fn name.
+        fnName: symTopic(event, 2) ?? '(unknown)',
         contractId: calledContract(event),
         args: event.data,
         returnValue: undefined,

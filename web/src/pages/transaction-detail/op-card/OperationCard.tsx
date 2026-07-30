@@ -278,7 +278,11 @@ export function OperationCard({
       />
       <Collapse in={detailsOpen} unmountOnExit>
         <Box sx={{ mt: 1.5 }}>
-          <OperationJsonDetail light={light} heavy={heavy} />
+          <OperationJsonDetail
+            light={light}
+            heavy={heavy}
+            traceShown={traceNodes.length > 0}
+          />
         </Box>
       </Collapse>
     </Box>

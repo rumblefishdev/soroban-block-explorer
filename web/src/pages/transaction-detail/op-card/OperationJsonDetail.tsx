@@ -11,6 +11,10 @@ import { HighlightedJson } from './HighlightedJson.js';
 interface OperationJsonDetailProps {
   light: OperationItem;
   heavy: XdrOperationDto | null;
+  /** True when the card already renders the execution trace — the root
+   *  call's name/arguments/return are then visible (and expandable) in the
+   *  trace itself, so repeating them here is pure redundancy. */
+  traceShown?: boolean;
 }
 
 function pickDetailValue(
@@ -121,6 +125,7 @@ function HeavyUnavailable() {
 export function OperationJsonDetail({
   light,
   heavy,
+  traceShown = false,
 }: OperationJsonDetailProps) {
   if (heavy == null) return <HeavyUnavailable />;
 
@@ -164,19 +169,22 @@ export function OperationJsonDetail({
           value={<MonoText>{light.contract_id}</MonoText>}
         />
       )}
-      {isInvoke && (
+      {/* With the execution trace on the card, the root call already shows
+          the function name, arguments and return (expandable) — repeating
+          them here was flagged as redundancy in review. */}
+      {isInvoke && !traceShown && (
         <AdvancedRow
           label="functionName"
           value={<Chip size="sm" color="neutral" label={fnName} />}
         />
       )}
-      {argsField.present && (
+      {argsField.present && !traceShown && (
         <AdvancedRow
           label="arguments"
           value={<HighlightedJson value={argsField.value} />}
         />
       )}
-      {returnField.present && (
+      {returnField.present && !traceShown && (
         <AdvancedRow
           label="return_value"
           value={
