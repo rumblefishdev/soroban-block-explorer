@@ -3,7 +3,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Box, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 
 import type { XdrEventDto } from '@rumblefish/api-types';
 
@@ -220,56 +220,97 @@ function eventCategory(label: string): {
   if (['error', 'log', 'host_fn_failed'].includes(label)) {
     return { paletteKey: 'error', hint: 'failure diagnostic' };
   }
-  return { paletteKey: 'secondary', hint: 'protocol event' };
+  return { paletteKey: 'secondary', hint: 'contract event' };
 }
 
-/** One argument as short inline text, or null when it wouldn't fit a row:
- *  addresses shorten to GC4Q…K7XQ form, numbers/symbols pass through and
- *  short strings render quoted (error messages). */
-function shortVal(value: unknown): string | null {
+/** One inline piece of a value list: plain text, or an ADDRESS that must
+ *  render as the house identifier link (review requirement: every address on the page is
+ *  clickable). */
+export type InlinePart =
+  | { kind: 'text'; text: string }
+  | { kind: 'id'; value: string; short: string };
+
+function idType(value: string): 'contract' | 'account' | 'pool' {
+  if (value.startsWith('C')) return 'contract';
+  if (value.startsWith('L')) return 'pool';
+  return 'account';
+}
+
+/** One argument as an inline part, or null when it wouldn't fit a row:
+ *  addresses become linkable parts (shortened GC4Q…K7XQ), numbers/symbols
+ *  pass through and short strings render quoted (error messages). */
+function shortPart(value: unknown): InlinePart | null {
   if (value == null || typeof value !== 'object') return null;
   const { type, value: inner } = value as TypedVal;
   if (type === 'address' && typeof inner === 'string' && inner.length > 12) {
-    return `${inner.slice(0, 4)}…${inner.slice(-4)}`;
+    return {
+      kind: 'id',
+      value: inner,
+      short: `${inner.slice(0, 4)}…${inner.slice(-4)}`,
+    };
   }
   if (typeof inner === 'number' || typeof inner === 'boolean') {
-    return String(inner);
+    return { kind: 'text', text: String(inner) };
   }
   if (typeof inner === 'string') {
     // Big ints (i128/u128…) arrive as decimal strings; symbols stay short.
-    if (/^-?\d+$/.test(inner)) return inner;
-    if (type === 'sym' && inner.length <= 12) return inner;
+    if (/^-?\d+$/.test(inner)) return { kind: 'text', text: inner };
+    if (type === 'sym' && inner.length <= 12) {
+      return { kind: 'text', text: inner };
+    }
     if ((type === 'str' || type === 'string') && inner.length <= 28) {
-      return `"${inner}"`;
+      return { kind: 'text', text: `"${inner}"` };
     }
   }
   return null;
 }
 
+function partLength(part: InlinePart): number {
+  return part.kind === 'text' ? part.text.length : part.short.length;
+}
+
+function partsLength(parts: readonly InlinePart[]): number {
+  return (
+    parts.reduce((sum, part) => sum + partLength(part), 0) +
+    Math.max(0, parts.length - 1) * 2
+  );
+}
+
+/** Plain-text form of an inline part list (tests + length budget). */
+export function partsToText(parts: readonly InlinePart[]): string {
+  return parts
+    .map((part) => (part.kind === 'text' ? part.text : part.short))
+    .join(', ');
+}
+
 type ArgsSummary =
-  | { kind: 'inline'; text: string }
+  | { kind: 'inline'; parts: InlinePart[] }
   | { kind: 'count'; count: number };
 
 /** Hybrid header (option C): literal args inline when every one is
  *  short and the whole list fits a row — `transfer(GC4Q…K7XQ, 13171)`;
  *  otherwise the COUNT, which the row must render visually distinct from a
  *  literal value (muted `6 args`, not a bare `6` that reads as an argument).
+ *  A single scalar argument (the host does not wrap one-arg calls in a vec)
+ *  inlines the same way — `balance(CB3E…KXWE)`, not `balance(1 arg)`.
  *  The full typed args stay behind the per-node disclosure either way. */
-function argsSummary(args: unknown): ArgsSummary {
-  if (args == null) return { kind: 'inline', text: '' };
+export function argsSummary(args: unknown): ArgsSummary {
+  if (args == null) return { kind: 'inline', parts: [] };
   const typed = args as TypedVal;
   if (typed.type !== 'vec' || !Array.isArray(typed.value)) {
-    return { kind: 'count', count: 1 };
+    const single = shortPart(args);
+    return single != null && partLength(single) <= 40
+      ? { kind: 'inline', parts: [single] }
+      : { kind: 'count', count: 1 };
   }
-  const parts: string[] = [];
+  const parts: InlinePart[] = [];
   for (const element of typed.value) {
-    const short = shortVal(element);
-    if (short == null) return { kind: 'count', count: typed.value.length };
-    parts.push(short);
+    const part = shortPart(element);
+    if (part == null) return { kind: 'count', count: typed.value.length };
+    parts.push(part);
   }
-  const joined = parts.join(', ');
-  return joined.length <= 40
-    ? { kind: 'inline', text: joined }
+  return partsLength(parts) <= 40
+    ? { kind: 'inline', parts }
     : { kind: 'count', count: typed.value.length };
 }
 
@@ -277,34 +318,34 @@ function argsSummary(args: unknown): ArgsSummary {
  *  the name) plus the data scalar(s) — `transfer(GC4Q…K7XQ, CCTU…V6J7,
  *  13171)`, `error("failing with contract error", 7)`. Values that do not
  *  fit are elided with `…`; the raw event stays behind the disclosure. */
-export function eventArgsText(event: XdrEventDto): string {
-  const parts: string[] = [];
+export function eventArgsParts(event: XdrEventDto): InlinePart[] {
+  const parts: InlinePart[] = [];
   let elided = false;
-  for (let i = 1; i < event.topics.length; i++) {
-    const short = shortVal(event.topics[i]);
-    if (short == null) elided = true;
-    else parts.push(short);
-  }
+  const push = (value: unknown) => {
+    const part = shortPart(value);
+    if (part == null) elided = true;
+    else parts.push(part);
+  };
+  for (let i = 1; i < event.topics.length; i++) push(event.topics[i]);
   const data = event.data as TypedVal | null;
   if (data != null && typeof data === 'object') {
     if (data.type === 'vec' && Array.isArray(data.value)) {
-      for (const element of data.value) {
-        const short = shortVal(element);
-        if (short == null) elided = true;
-        else parts.push(short);
-      }
+      for (const element of data.value) push(element);
     } else if (data.type !== 'void') {
-      const short = shortVal(data);
-      if (short == null) elided = true;
-      else parts.push(short);
+      push(data);
     }
   }
-  let joined = parts.join(', ');
-  if (joined.length > 48) {
-    joined = `${joined.slice(0, 48)}…`;
-    elided = false;
+  while (partsLength(parts) > 48 && parts.length > 0) {
+    parts.pop();
+    elided = true;
   }
-  return `(${joined}${elided ? (joined.length > 0 ? ', …' : '…') : ''})`;
+  if (elided) parts.push({ kind: 'text', text: '…' });
+  return parts;
+}
+
+/** Plain-text form of the event payload summary (kept for tests). */
+export function eventArgsText(event: XdrEventDto): string {
+  return `(${partsToText(eventArgsParts(event))})`;
 }
 
 /** Short inline `→ value` for scalar returns; structured values stay behind
@@ -332,6 +373,30 @@ function scalarReturn(
     return text.length <= 24 ? { kind: 'value', text } : null;
   }
   return null;
+}
+
+/** Inline value list where every address is the house identifier link
+ *  (default truncation), inheriting the surrounding tone and font size. */
+function InlineParts({ parts }: { parts: readonly InlinePart[] }) {
+  return (
+    <>
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 && ', '}
+          {part.kind === 'text' ? (
+            part.text
+          ) : (
+            <IdentifierDisplay
+              value={part.value}
+              type={idType(part.value)}
+              tone="inherit"
+              fontSize="inherit"
+            />
+          )}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** Shared row shell: indent, guide line, vertical rhythm. */
@@ -419,24 +484,15 @@ function DetailsPanel({
 
 /** An event the call announced, as a first-class row: chronology-true
  *  sibling of sub-calls (a transfer that fired between two sub-calls sits
- *  between them). Distinguished from calls by FORM, not colour alone: dot
- *  glyph instead of a chevron slot, category-coloured name, `by EMITTER`
- *  (only when the emitter differs from the surrounding call's contract),
- *  no return arrow, never any children. */
-function EventRow({
-  event,
-  depth,
-  parentContract,
-}: {
-  event: XdrEventDto;
-  depth: number;
-  parentContract: string | null;
-}) {
+ *  between them). Distinguished from calls by FORM and colour: dot glyph
+ *  instead of a chevron slot, category-coloured name, `by EMITTER` always
+ *  shown (mirrors the calls' `on CALLEE`; hiding it when it matched the
+ *  surrounding call read as an omission), no return arrow, never
+ *  any children. */
+function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const label = traceEventLabel(event);
   const category = eventCategory(label);
-  const showEmitter =
-    event.contract_id != null && event.contract_id !== parentContract;
 
   return (
     <>
@@ -469,7 +525,9 @@ function EventRow({
                 : category.paletteKey === 'info'
                 ? // Same blue family as the themed Chip color="blue".
                   theme.palette.blue[theme.palette.mode === 'dark' ? 400 : 600]
-                : theme.palette.text.secondary,
+                : // Amber: custom contract events must not blend into the
+                  // grey call rows (swap_exec read as a call row next to balance).
+                  theme.palette.text.warning,
           })}
         >
           {label}
@@ -477,10 +535,10 @@ function EventRow({
             component="span"
             sx={(theme) => ({ color: theme.palette.text.secondary })}
           >
-            {eventArgsText(event)}
+            (<InlineParts parts={eventArgsParts(event)} />)
           </Box>
         </Typography>
-        {showEmitter && (
+        {event.contract_id != null && (
           <Typography
             variant="bodyXsRegular"
             component="span"
@@ -577,7 +635,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
               component="span"
               sx={(theme) => ({ color: theme.palette.text.secondary })}
             >
-              {args.text}
+              <InlineParts parts={args.parts} />
             </Box>
           ) : (
             <Box
@@ -662,12 +720,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
           child.kind === 'call' ? (
             <TraceNodeRow key={index} node={child.node} depth={depth + 1} />
           ) : (
-            <EventRow
-              key={index}
-              event={child.event}
-              depth={depth + 1}
-              parentContract={node.contractId}
-            />
+            <EventRow key={index} event={child.event} depth={depth + 1} />
           )
         )}
       </Collapse>
@@ -701,7 +754,7 @@ export function ExecutionTrace({ nodes }: { nodes: TraceNode[] }) {
           sx={(theme) => ({ color: theme.palette.text.tertiary, mt: 0.5 })}
         >
           • rows are events announced by the surrounding call — blue: token
-          movement · grey: protocol event · red: failure diagnostics.
+          movement · amber: contract event · red: failure diagnostics.
         </Typography>
       )}
     </Box>

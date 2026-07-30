@@ -2,9 +2,11 @@ import type { XdrEventDto } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
 import {
+  argsSummary,
   buildExecutionTrace,
   contractStrkeyFromBase64,
   eventArgsText,
+  partsToText,
   traceCallCount,
 } from './ExecutionTrace.js';
 
@@ -136,6 +138,23 @@ describe('buildExecutionTrace', () => {
     ]);
     expect(traceCallCount(nodes)).toBe(1);
     expect(nodes[0].unfinished).toBe(false);
+  });
+});
+
+describe('argsSummary', () => {
+  it('inlines a single scalar argument (the host does not wrap it in a vec)', () => {
+    const summary = argsSummary({ type: 'address', value: CDDT });
+    expect(summary.kind).toBe('inline');
+    if (summary.kind === 'inline') {
+      expect(partsToText(summary.parts)).toBe('CDDT…RCTX');
+    }
+  });
+
+  it('falls back to a count for a single non-inlinable argument', () => {
+    expect(argsSummary({ type: 'map', value: [] })).toEqual({
+      kind: 'count',
+      count: 1,
+    });
   });
 });
 
