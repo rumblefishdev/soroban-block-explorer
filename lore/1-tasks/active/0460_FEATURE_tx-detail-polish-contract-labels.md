@@ -35,8 +35,13 @@ history:
    the humanizeOp sentence (truncated) as the secondary line.
 3. **Fee-bump fee breakdown** — SE shows non-refundable/refundable split;
    needs result-meta fee fields (may ride on 0457's enrichment).
-4. **Pre-Protocol-23 note** — V3-meta txs have tx-level-only events; one
-   quiet line in the events section instead of unexplained absence.
+4. **Pre-Protocol-23 note** — scope corrected 2026-07-30 after the 0462
+   research: tx-level-only events now attach via the emitter-match
+   fallback where provable, so the note is needed ONLY for the truly
+   empty case — an invoke tx whose archive meta has no diagnostic events
+   at all (trace absent, auth-tree fallback shown). One quiet line there:
+   "no execution record for this older transaction — outcomes in the
+   Events section", until 0457 renders real effects for that tier.
 5. **Adaptive index** — the deferred layout option: hide the picker when a
    transaction has exactly one operation (87% of mainnet); revisit with
    the team.

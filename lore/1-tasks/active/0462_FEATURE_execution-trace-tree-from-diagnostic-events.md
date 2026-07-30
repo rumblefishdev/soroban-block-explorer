@@ -189,3 +189,30 @@ nested exactly like calls. Research before building:
   explicit (secondary tone — full truth, not a UI abbreviation), literal
   values in secondary tone, flexbox indent bug fixed (spacer squeezed to
   zero on overflow).
+
+## Round 6 — pre-P23 research + emitter-match (2026-07-30)
+
+Question from review: "old txs show no events in the trace — can nothing
+be done? how does stellar.expert cope?"
+
+- **Emitter-match fallback SHIPPED**: old-format (tx-level) events attach
+  to the trace when exactly ONE call targets the event's emitter —
+  provable, never guessed; ambiguous emitters and unmatched ones (e.g.
+  tx-level `fee` events raised by a non-callee, seen on the `f82f4e90…`
+  fixture) stay in the Events table. Runs only when the stream carried no
+  event copies, so new-format traces cannot double-attach. 3 tests.
+- **Empirical limit found**: a 12-tx scan around ledger 51M — most pre-P23
+  archive metas have NO diagnostic events at all → no trace exists to
+  attach anything to. Fixture `a404570a…` (7 transfer events, diag 0).
+- **stellar.expert verified live on that fixture**: ZERO invocation lines
+  (they cannot build the tree either) but a full effects list ("54.9 AQUA
+  debited from GD6X…") computed from ledger-entry changes — era-proof.
+  That mechanism is exactly task 0457, whose priority was raised with
+  this evidence (see its Summary).
+- Resulting truth tiers: (1) new tx → full chronological trace; (2) old
+  tx with a trace → trace + emitter-match; (3) old tx without a trace →
+  auth fallback + (0460 #4 note) until 0457 renders meta effects.
+- Also this round: story chip moved to the page title (0460 #9 shipped),
+  copy buttons on every identifier in the trace, canonical CODE:ISSUER
+  asset strings link from the JSON viewer, Lab deep links verified on the
+  10,920-char envelope.
