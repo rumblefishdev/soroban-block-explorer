@@ -115,7 +115,9 @@ export function OperationCard({
   // tree. When present it supersedes "Authorized calls"; the auth tree
   // stays as the fallback for txs without diagnostic events.
   const isInvoke = light.type_name === 'INVOKE_HOST_FUNCTION';
-  const traceNodes = isInvoke ? buildExecutionTrace(diagnosticEvents) : [];
+  const traceNodes = isInvoke
+    ? buildExecutionTrace(diagnosticEvents, contractEvents)
+    : [];
   const callNodes =
     isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)

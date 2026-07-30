@@ -94,7 +94,8 @@ export function traceEventLabel(event: XdrEventDto): string {
  *  truthful "execution stopped here", unlike the auth tree (see CallTree).
  */
 export function buildExecutionTrace(
-  events: readonly XdrEventDto[]
+  events: readonly XdrEventDto[],
+  contractEvents: readonly XdrEventDto[] = []
 ): TraceNode[] {
   const roots: TraceNode[] = [];
   const stack: TraceNode[] = [];
@@ -129,7 +130,49 @@ export function buildExecutionTrace(
     // Events outside any call (fee events etc.) stay in the Events section.
   }
   for (const node of stack) node.unfinished = true;
+  attachByEmitter(roots, contractEvents);
   return roots;
+}
+
+/** Pre-Protocol-23 fallback: the old meta format stores contract events
+ *  tx-level, with no position in the call stream — but every event still
+ *  names its EMITTER, and the emitter is always the contract whose code
+ *  was running. When the trace contains exactly ONE call on that contract
+ *  the attachment is provable, not guessed; ambiguous events (contract
+ *  called more than once, or no matching call — e.g. tx-level fee events)
+ *  stay in the Events section. Runs only when the stream carried no event
+ *  copies at all (new-format traces already have them interleaved). */
+function attachByEmitter(
+  roots: readonly TraceNode[],
+  contractEvents: readonly XdrEventDto[]
+) {
+  if (contractEvents.length === 0) return;
+  const anyEventChild = (nodes: readonly TraceNode[]): boolean =>
+    nodes.some(
+      (node) =>
+        node.children.some((child) => child.kind === 'event') ||
+        anyEventChild(childCalls(node))
+    );
+  if (anyEventChild(roots)) return;
+  const byCallee = new Map<string, TraceNode[]>();
+  const index = (nodes: readonly TraceNode[]) => {
+    for (const node of nodes) {
+      if (node.contractId != null) {
+        const list = byCallee.get(node.contractId) ?? [];
+        list.push(node);
+        byCallee.set(node.contractId, list);
+      }
+      index(childCalls(node));
+    }
+  };
+  index(roots);
+  for (const event of contractEvents) {
+    if (event.contract_id == null) continue;
+    const matches = byCallee.get(event.contract_id);
+    if (matches?.length === 1) {
+      matches[0].children.push({ kind: 'event', event });
+    }
+  }
 }
 
 function childCalls(node: TraceNode): TraceNode[] {

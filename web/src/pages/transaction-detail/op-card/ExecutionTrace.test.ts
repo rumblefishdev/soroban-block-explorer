@@ -141,6 +141,58 @@ describe('buildExecutionTrace', () => {
   });
 });
 
+describe('buildExecutionTrace — pre-P23 emitter-match fallback', () => {
+  const CDDT2_BYTES = 'TSCrDMO85hjwvdrgxNWgy0HUWrrFuV3N7HUm3QuP7iU=';
+
+  const contractEvent = (emitter: string | null) =>
+    ev(
+      [{ type: 'sym', value: 'transfer' }],
+      { type: 'i128', value: '5' },
+      emitter
+    );
+
+  it('attaches a tx-level event when exactly one call matches its emitter', () => {
+    const nodes = buildExecutionTrace(
+      [fnCall('set_price'), fnReturn('set_price', { type: 'void' })],
+      [contractEvent(CDDT)]
+    );
+    expect(nodes[0].children).toHaveLength(1);
+    expect(nodes[0].children[0].kind).toBe('event');
+  });
+
+  it('leaves ambiguous and unmatched events in the Events section', () => {
+    const nodes = buildExecutionTrace(
+      [
+        fnCall('a'),
+        fnReturn('a'),
+        fnCall('b'),
+        fnReturn('b'),
+        fnCall('other', CDDT2_BYTES),
+        fnReturn('other'),
+      ],
+      [
+        contractEvent(CDDT), // two calls on CDDT → ambiguous
+        // no call on this contract (like a tx-level fee event) → unmatched
+        contractEvent(
+          'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75'
+        ),
+      ]
+    );
+    const eventChildren = (n: (typeof nodes)[number]) =>
+      n.children.filter((c) => c.kind === 'event');
+    expect(nodes.flatMap(eventChildren)).toHaveLength(0);
+  });
+
+  it('never double-attaches when the stream already carries copies', () => {
+    const copy = contractEvent(CDDT);
+    const nodes = buildExecutionTrace(
+      [fnCall('swap'), copy, fnReturn('swap')],
+      [contractEvent(CDDT)]
+    );
+    expect(nodes[0].children.filter((c) => c.kind === 'event')).toHaveLength(1);
+  });
+});
+
 describe('argsSummary', () => {
   it('inlines a single scalar argument (the host does not wrap it in a vec)', () => {
     const summary = argsSummary({ type: 'address', value: CDDT });
