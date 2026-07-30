@@ -5,7 +5,10 @@ import {
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { formatOperationType } from '../../transactions/operationTypes.js';
+import {
+  formatOperationType,
+  isKnownOperationType,
+} from '../../transactions/operationTypes.js';
 
 export function shortId(value: string): string {
   return truncateMiddle(value, DEFAULT_TRUNCATION);
@@ -76,14 +79,17 @@ function priceStr(value: unknown): string | null {
   return (n / d).toLocaleString('en-US', { maximumFractionDigits: 7 });
 }
 
-function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
-  const details = heavy?.details;
-  if (details && typeof details === 'object' && !Array.isArray(details)) {
-    // The parser emits camelCase keys (`functionName`), not snake_case.
-    const fn = (details as { functionName?: unknown }).functionName;
-    if (typeof fn === 'string' && fn.length > 0) return fn;
-  }
-  return null;
+/** `details.asset` + `details.amount` as one formatted string, or null when
+ *  either half is missing — the shape most asset-carrying ops share. */
+function fmtAssetAmount(
+  details: Record<string, unknown> | null,
+  fallbackUnit: string | null = null
+): string | null {
+  const unit = assetUnit(details?.asset, fallbackUnit);
+  const amount = asAmount(details?.amount);
+  return unit != null && amount != null
+    ? formatTokenAmount(amount, unit)
+    : null;
 }
 
 /** One true sentence per operation type, built from the heavy `details` the
@@ -186,11 +192,32 @@ export function humanizeOp(
       break;
     }
     case 'INVOKE_HOST_FUNCTION': {
-      const fn = fnNameFromHeavy(heavy);
+      const details = detailsObj(heavy);
+      // The parser emits camelCase keys (`functionName`), not snake_case.
+      const fn = detStr(details, 'functionName');
       if (fn != null && light.contract_id != null) {
         return `Called ${fn}() on ${shortId(light.contract_id)}`;
       }
       if (fn != null) return `Called ${fn}()`;
+      // Deploy/upload variants carry no functionName — the discriminator says
+      // what actually happened instead of a generic "Invoked contract".
+      const hostFnType = detStr(details, 'hostFunctionType');
+      if (
+        hostFnType === 'createContract' ||
+        hostFnType === 'createContractV2'
+      ) {
+        return light.contract_id != null
+          ? `Deployed contract ${shortId(light.contract_id)}`
+          : 'Deployed a contract';
+      }
+      if (hostFnType === 'uploadContractWasm') {
+        const bytes = asAmount(details?.wasmLength);
+        return bytes != null
+          ? `Uploaded contract code (${Number(bytes).toLocaleString(
+              'en-US'
+            )} bytes)`
+          : 'Uploaded contract code';
+      }
       if (light.contract_id != null) {
         return `Invoked contract ${shortId(light.contract_id)}`;
       }
@@ -252,15 +279,13 @@ export function humanizeOp(
       }
       return `Offered to ${action}${priceSuffix}`;
     }
-    case 'LIQUIDITY_POOL_DEPOSIT': {
-      const id = detStr(detailsObj(heavy), 'liquidityPoolId');
-      if (id == null) break;
-      return `Deposited into liquidity pool ${shortId(id)}`;
-    }
+    case 'LIQUIDITY_POOL_DEPOSIT':
     case 'LIQUIDITY_POOL_WITHDRAW': {
       const id = detStr(detailsObj(heavy), 'liquidityPoolId');
       if (id == null) break;
-      return `Withdrew from liquidity pool ${shortId(id)}`;
+      return light.type_name === 'LIQUIDITY_POOL_DEPOSIT'
+        ? `Deposited into liquidity pool ${shortId(id)}`
+        : `Withdrew from liquidity pool ${shortId(id)}`;
     }
     case 'ACCOUNT_MERGE': {
       const dest =
@@ -270,50 +295,40 @@ export function humanizeOp(
     }
     case 'CREATE_CLAIMABLE_BALANCE': {
       const details = detailsObj(heavy);
-      const unit = assetUnit(details?.asset, null);
-      const amount = asAmount(details?.amount);
-      if (unit == null || amount == null) break;
+      const formatted = fmtAssetAmount(details);
+      if (formatted == null) break;
       const claimants = asAmount(details?.claimants);
       const who =
         claimants != null
           ? ` for ${claimants} claimant${Number(claimants) === 1 ? '' : 's'}`
           : '';
-      return `Escrowed ${formatTokenAmount(amount, unit)}${who}`;
+      return `Escrowed ${formatted}${who}`;
     }
-    case 'CLAIM_CLAIMABLE_BALANCE': {
-      const details = detailsObj(heavy);
-      const id = detStr(details, 'balanceId');
-      if (id == null) break;
-      // asset + amount come from the same-op ledger entry (spec D8); absent
-      // on responses parsed before that landed, or when the meta lacks the
-      // entry — then the id is all we can honestly say (same as SE).
-      const unit = assetUnit(details?.asset, null);
-      const amount = asAmount(details?.amount);
-      if (unit != null && amount != null) {
-        return `Claimed ${formatTokenAmount(amount, unit)}`;
-      }
-      return `Claimed balance ${shortId(id)}`;
-    }
+    case 'CLAIM_CLAIMABLE_BALANCE':
     case 'CLAWBACK_CLAIMABLE_BALANCE': {
       const details = detailsObj(heavy);
       const id = detStr(details, 'balanceId');
       if (id == null) break;
-      const unit = assetUnit(details?.asset, null);
-      const amount = asAmount(details?.amount);
-      if (unit != null && amount != null) {
-        return `Clawed back escrowed ${formatTokenAmount(amount, unit)}`;
+      const claim = light.type_name === 'CLAIM_CLAIMABLE_BALANCE';
+      // asset + amount come from the same-op ledger entry (spec D8); absent
+      // on responses parsed before that landed, or when the meta lacks the
+      // entry — then the id is all we can honestly say (same as SE).
+      const formatted = fmtAssetAmount(details);
+      if (formatted != null) {
+        return claim
+          ? `Claimed ${formatted}`
+          : `Clawed back escrowed ${formatted}`;
       }
-      return `Clawed back balance ${shortId(id)}`;
+      return claim
+        ? `Claimed balance ${shortId(id)}`
+        : `Clawed back balance ${shortId(id)}`;
     }
     case 'CLAWBACK': {
       const details = detailsObj(heavy);
-      const unit = assetUnit(details?.asset, null);
-      const amount = asAmount(details?.amount);
+      const formatted = fmtAssetAmount(details);
       const from = detStr(details, 'from');
-      if (unit == null || amount == null || from == null) break;
-      return `Clawed back ${formatTokenAmount(amount, unit)} from ${shortId(
-        from
-      )}`;
+      if (formatted == null || from == null) break;
+      return `Clawed back ${formatted} from ${shortId(from)}`;
     }
     case 'SET_TRUST_LINE_FLAGS':
     case 'ALLOW_TRUST': {
@@ -392,9 +407,9 @@ export function humanizeOp(
     case 'EXTEND_FOOTPRINT_TTL': {
       const extendTo = asAmount(detailsObj(heavy)?.extendTo);
       if (extendTo == null) break;
-      return `Extended contract state TTL by ${Number(extendTo).toLocaleString(
-        'en-US'
-      )} ledgers`;
+      return `Extended contract state TTL to at least ${Number(
+        extendTo
+      ).toLocaleString('en-US')} ledgers`;
     }
     case 'RESTORE_FOOTPRINT':
       return 'Restored archived contract state';
@@ -402,5 +417,10 @@ export function humanizeOp(
       return 'Ran inflation';
   }
 
+  if (!isKnownOperationType(light.type_name)) {
+    // D2: an unknown type must never crash the page, but it must not pass
+    // silently either — this is how new protocol ops get noticed.
+    console.warn(`humanizeOp: no sentence template for "${light.type_name}"`);
+  }
   return `${opLabel} processed`;
 }

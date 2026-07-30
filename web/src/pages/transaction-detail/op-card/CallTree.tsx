@@ -5,8 +5,12 @@ export interface CallNode {
   contractId: string | null;
   functionName: string | null;
   argCount: number;
-  /** Per-node verdict from the parser (`operation_tree` carries it) — lets
-   *  the tree pinpoint WHICH nested call failed (spec D11, Tenderly-lite). */
+  /** Parsed but NOT rendered per node: the backend builds this tree from the
+   *  transaction's AUTH entries and stamps every node with the whole
+   *  transaction's verdict (`invocation.rs` — "derived from the parent
+   *  transaction's success status"), so a per-node ✓/✗ here would be the
+   *  0444 lie reborn. Real per-node verdicts need the diagnostic execution
+   *  tree on the backend first. */
   successful: boolean | null;
   children: CallNode[];
 }
@@ -14,18 +18,13 @@ export interface CallNode {
 function asNode(value: unknown): CallNode | null {
   if (value == null || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
-  const children = Array.isArray(raw.children)
-    ? raw.children
-        .map(asNode)
-        .filter((child): child is CallNode => child != null)
-    : [];
   return {
     contractId: typeof raw.contractId === 'string' ? raw.contractId : null,
     functionName:
       typeof raw.functionName === 'string' ? raw.functionName : null,
     argCount: Array.isArray(raw.args) ? raw.args.length : 0,
     successful: typeof raw.successful === 'boolean' ? raw.successful : null,
-    children,
+    children: parseOperationTree(raw.children),
   };
 }
 
@@ -37,7 +36,6 @@ export function parseOperationTree(value: unknown): CallNode[] {
 }
 
 function CallNodeRow({ node, depth }: { node: CallNode; depth: number }) {
-  const failed = node.successful === false;
   return (
     <>
       <Stack
@@ -54,11 +52,7 @@ function CallNodeRow({ node, depth }: { node: CallNode; depth: number }) {
       >
         <Typography
           variant="bodyMonoSmMedium"
-          sx={(theme) => ({
-            color: failed
-              ? theme.palette.text.error
-              : theme.palette.text.primary,
-          })}
+          sx={(theme) => ({ color: theme.palette.text.primary })}
         >
           {node.functionName ?? 'call'}({node.argCount})
         </Typography>
@@ -67,16 +61,6 @@ function CallNodeRow({ node, depth }: { node: CallNode; depth: number }) {
             <IdentifierDisplay value={node.contractId} type="contract" />
           </Typography>
         )}
-        <Typography
-          variant="bodyXsRegular"
-          sx={(theme) => ({
-            color: failed
-              ? theme.palette.text.error
-              : theme.palette.text.success,
-          })}
-        >
-          {node.successful == null ? '' : failed ? '✗ failed here' : '✓'}
-        </Typography>
       </Stack>
       {node.children.map((child, index) => (
         <CallNodeRow key={index} node={child} depth={depth + 1} />
@@ -85,6 +69,8 @@ function CallNodeRow({ node, depth }: { node: CallNode; depth: number }) {
   );
 }
 
+/** The AUTHORIZED call tree — what the transaction was signed to do, not an
+ *  execution trace. The section label must say so (see `CallNode.successful`). */
 export function CallTree({ nodes }: { nodes: CallNode[] }) {
   return (
     <Box sx={{ overflowX: 'auto' }}>

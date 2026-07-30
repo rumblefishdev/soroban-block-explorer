@@ -97,10 +97,13 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             sx={(theme) => ({ color: theme.palette.text.primary })}
           >
             Transaction failed — no operation was applied
-            {/* Raw tx-level result code passthrough only. The decoded,
-                human-readable failure reason (Soroban errors + per-operation
-                codes) is task 0352. */}
-            {tx.heavy?.result_code != null && tx.heavy.result_code.length > 0
+            {/* Raw tx-level result code passthrough only — and only when it
+                says more than the sentence already did ("TxFailed" is the
+                generic any-op-failed code, pure noise here). The decoded
+                failure reason (Soroban errors + per-op codes) is task 0352. */}
+            {tx.heavy?.result_code != null &&
+            tx.heavy.result_code.length > 0 &&
+            tx.heavy.result_code !== 'TxFailed'
               ? ` · ${tx.heavy.result_code}`
               : ''}
           </Typography>

@@ -383,8 +383,12 @@ selected operation:
 - a route strip for path payments — asset chips with per-hop amounts chained
   from `claimedAtoms`, flagged as partial when the route also crossed the
   order book (those fills are not in the LP-only atoms);
-- a call tree for contract invocations fed by `heavy.operation_tree`, with the
-  per-node verdict highlighting the failing nested call;
+- an **authorized-calls** tree for contract invocations fed by
+  `heavy.operation_tree`. This is the auth-entry tree (what the transaction
+  was signed to do), and the backend stamps every node with the whole
+  transaction's verdict — so the UI deliberately renders no per-node ✓/✗;
+  real per-node verdicts require the diagnostic execution tree on the
+  backend first;
 - the operation's own events, matched via `XdrEventDto.op_index`
   (`application_order - 1`);
 - an "Operation details" disclosure with every raw `details` key — exactness

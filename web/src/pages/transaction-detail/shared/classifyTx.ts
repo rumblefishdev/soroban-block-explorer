@@ -1,5 +1,10 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
 
+const SPONSORSHIP = new Set([
+  'BEGIN_SPONSORING_FUTURE_RESERVES',
+  'END_SPONSORING_FUTURE_RESERVES',
+]);
+
 /** One-phrase classification of the whole transaction (spec D12, the
  *  stellarchain/Blockscout "story chip" pattern) — heuristic over operation
  *  types only. Returns null whenever unsure: an absent chip is fine, a wrong
@@ -9,32 +14,27 @@ export function classifyTx(
 ): string | null {
   const types = (tx.operations ?? []).map((op) => op.type_name);
   if (types.length === 0) return null;
-  const unique = new Set(types);
   const count = tx.operation_count;
   const suffix = count > 1 ? ` · ${count} ops` : '';
+  const only = (pred: (t: string) => boolean) => types.every(pred);
 
-  if (unique.has('INVOKE_HOST_FUNCTION')) return 'Contract call';
-  if (
-    [...unique].every(
-      (t) => t === 'EXTEND_FOOTPRINT_TTL' || t === 'RESTORE_FOOTPRINT'
-    )
-  ) {
+  if (types.includes('INVOKE_HOST_FUNCTION')) return 'Contract call';
+  if (only((t) => t === 'EXTEND_FOOTPRINT_TTL' || t === 'RESTORE_FOOTPRINT')) {
     return 'Contract maintenance';
   }
   const isPathPayment = (t: string) =>
     t === 'PATH_PAYMENT_STRICT_SEND' || t === 'PATH_PAYMENT_STRICT_RECEIVE';
   if (types.some(isPathPayment)) {
     // Trustline open/close around swaps is one motion, not a mixed bag.
-    const rest = [...unique].filter(
-      (t) => !isPathPayment(t) && t !== 'CHANGE_TRUST'
-    );
-    return rest.length === 0 ? `Swap${suffix}` : null;
+    return only((t) => isPathPayment(t) || t === 'CHANGE_TRUST')
+      ? `Swap${suffix}`
+      : null;
   }
-  if ([...unique].every((t) => t === 'PAYMENT')) {
+  if (only((t) => t === 'PAYMENT')) {
     return count > 1 ? `Payments · ${count}` : 'Payment';
   }
   if (
-    [...unique].every(
+    only(
       (t) =>
         t === 'MANAGE_SELL_OFFER' ||
         t === 'MANAGE_BUY_OFFER' ||
@@ -43,9 +43,14 @@ export function classifyTx(
   ) {
     return `Trading${suffix}`;
   }
-  if ([...unique].every((t) => t === 'CHANGE_TRUST')) {
-    return `Trustline update${suffix}`;
+  if (only((t) => t === 'CHANGE_TRUST')) return `Trustline update${suffix}`;
+  // Sponsored onboarding (begin-sponsoring · create-account · end-sponsoring)
+  // is account creation as one motion; anything else mixed stays unlabelled.
+  if (
+    types.includes('CREATE_ACCOUNT') &&
+    only((t) => t === 'CREATE_ACCOUNT' || SPONSORSHIP.has(t))
+  ) {
+    return `Account creation${suffix}`;
   }
-  if (unique.has('CREATE_ACCOUNT')) return `Account creation${suffix}`;
   return null;
 }

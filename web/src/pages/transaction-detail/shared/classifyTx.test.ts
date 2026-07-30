@@ -53,6 +53,20 @@ describe('classifyTx', () => {
     expect(
       classifyTx(tx(['PATH_PAYMENT_STRICT_SEND', 'MANAGE_SELL_OFFER']))
     ).toBeNull();
+    // A create-account inside an unrelated batch must NOT brand the whole tx.
+    expect(classifyTx(tx(['CREATE_ACCOUNT', 'PAYMENT']))).toBeNull();
     expect(classifyTx(tx([]))).toBeNull();
+  });
+
+  it('treats the sponsored-onboarding sandwich as account creation', () => {
+    expect(
+      classifyTx(
+        tx([
+          'BEGIN_SPONSORING_FUTURE_RESERVES',
+          'CREATE_ACCOUNT',
+          'END_SPONSORING_FUTURE_RESERVES',
+        ])
+      )
+    ).toBe('Account creation · 3 ops');
   });
 });

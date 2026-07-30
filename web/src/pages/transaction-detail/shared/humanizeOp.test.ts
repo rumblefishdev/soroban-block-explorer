@@ -195,6 +195,32 @@ describe('humanizeOp', () => {
     expect(humanizeOp(op, heavy({}))).toBe('Invoked contract CDL7…IGWA');
   });
 
+  it('names deploys and wasm uploads from the host-function discriminator', () => {
+    const op = light({
+      type_name: 'INVOKE_HOST_FUNCTION',
+      contract_id: 'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
+    });
+    expect(humanizeOp(op, heavy({ hostFunctionType: 'createContract' }))).toBe(
+      'Deployed contract CDL7…IGWA'
+    );
+    expect(
+      humanizeOp(
+        light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+        heavy({ hostFunctionType: 'uploadContractWasm', wasmLength: 24576 })
+      )
+    ).toBe('Uploaded contract code (24,576 bytes)');
+  });
+
+  it('groups thousands in headline amounts (US grouping)', () => {
+    const op = light({
+      type_name: 'PAYMENT',
+      destination_account:
+        'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM',
+    });
+    const h = heavy({ amount: 33_831_901_066_092, asset: 'bubba:GB' });
+    expect(humanizeOp(op, h)).toBe('Sent 3,383,190.1066092 bubba to GA5X…GKTM');
+  });
+
   it('shows the starting balance for create-account', () => {
     const op = light({
       type_name: 'CREATE_ACCOUNT',
@@ -441,7 +467,7 @@ describe('humanizeOp', () => {
         light({ type_name: 'EXTEND_FOOTPRINT_TTL' }),
         heavy({ extendTo: 120000 })
       )
-    ).toBe('Extended contract state TTL by 120,000 ledgers');
+    ).toBe('Extended contract state TTL to at least 120,000 ledgers');
     expect(
       humanizeOp(light({ type_name: 'RESTORE_FOOTPRINT' }), heavy({}))
     ).toBe('Restored archived contract state');

@@ -22,7 +22,6 @@ describe('buildRouteModel', () => {
         ],
       })
     );
-    expect(model).not.toBeNull();
     expect(model?.chips).toEqual(['LIBRE', 'BLND', 'LMNR', 'VELO']);
     expect(model?.edges.map((e) => e.label)).toEqual([
       '0.1181422 BLND',
@@ -32,7 +31,7 @@ describe('buildRouteModel', () => {
     expect(model?.partial).toBe(false);
   });
 
-  it('flags a mixed route whose order-book hop is invisible to claimedAtoms', () => {
+  it('keeps the DECLARED chain on a mixed route and leaves order-book hops unlabelled', () => {
     const model = buildRouteModel(
       heavy({
         sendAsset: 'VELO:GB',
@@ -44,18 +43,35 @@ describe('buildRouteModel', () => {
         ],
       })
     );
+    // The XLM hop crossed the order book — it stays IN the chain, only its
+    // amount is unknown (the old model dropped the asset entirely).
+    expect(model?.chips).toEqual(['VELO', 'XLM', 'KALE', 'LIBRE']);
+    expect(model?.edges.map((e) => e.label)).toEqual([
+      null,
+      '86.1037745 KALE',
+      '4.821599 LIBRE',
+    ]);
     expect(model?.partial).toBe(true);
-    expect(model?.chips.at(-1)).toBe('LIBRE');
+    expect(model?.hasFills).toBe(true);
   });
 
-  it('returns null without atoms (direct payment, OB-only or failed tx)', () => {
-    expect(buildRouteModel(heavy({ sendAsset: 'native' }))).toBeNull();
+  it('renders the declared route without blaming the order book when no fills exist', () => {
+    const model = buildRouteModel(
+      heavy({ sendAsset: 'native', destAsset: 'USDC:GA', path: [] })
+    );
+    expect(model?.chips).toEqual(['XLM', 'USDC']);
+    expect(model?.partial).toBe(true);
+    expect(model?.hasFills).toBe(false);
+  });
+
+  it('returns null for non-path-payment shapes', () => {
+    expect(buildRouteModel(heavy({ amount: 1, asset: 'native' }))).toBeNull();
     expect(buildRouteModel(null)).toBeNull();
   });
 });
 
 describe('parseOperationTree', () => {
-  it('parses nodes defensively and keeps the per-node verdict', () => {
+  it('parses nodes defensively and keeps the per-node field without rendering it', () => {
     const nodes = parseOperationTree([
       {
         contractId: 'CDL7',

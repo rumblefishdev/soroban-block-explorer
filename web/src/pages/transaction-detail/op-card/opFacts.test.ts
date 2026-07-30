@@ -20,7 +20,7 @@ function heavy(details: Record<string, unknown>): XdrOperationDto {
 }
 
 describe('opFacts', () => {
-  it('builds the route chain with hops for a path payment', () => {
+  it('adds the pool count and the D9 Received slot for strict-send (route lives in RouteStrip)', () => {
     const facts = opFacts(
       light('PATH_PAYMENT_STRICT_SEND'),
       heavy({
@@ -31,7 +31,6 @@ describe('opFacts', () => {
       })
     );
     expect(facts).toEqual([
-      { label: 'Route', value: 'XLM → TF → bubba' },
       { label: 'Pools crossed', value: '2' },
       { label: 'Received', value: '—' },
     ]);
@@ -42,7 +41,7 @@ describe('opFacts', () => {
       light('PATH_PAYMENT_STRICT_RECEIVE'),
       heavy({ sendAsset: 'native', destAsset: 'USDC:GA', path: [] })
     );
-    expect(facts).toEqual([{ label: 'Route', value: 'XLM → USDC' }]);
+    expect(facts).toEqual([]);
   });
 
   it('returns nothing for non-path-payment types and degraded responses', () => {
