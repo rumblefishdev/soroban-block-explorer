@@ -88,14 +88,13 @@ history:
     `tone`/`fontSize` inherit) while keeping JSON string colour and
     quotes; near-miss strings and raw base64 untouched. Muxed M-addresses
     left as strings (no detail route).
-    Follow-up idea (recorded, not built): **corroborated bytes decode** —
-    a generic 32-byte `{type:"bytes"}` value may be any hash, so never
-    auto-decode blindly; BUT if its candidate C/G/L strkey decoding equals
-    an identifier that already occurs elsewhere in the SAME transaction
-    (participants, events, trace callees), the value is an address beyond
-    reasonable doubt and can render decoded + linked with a hint. Zero
-    false links by construction; pairs with the fn_call-topic decoding the
-    trace already does.
+    **Corroborated bytes decode — built, then WITHDRAWN same day** (review:
+    raw JSON must stay raw; an annotation that sometimes appears and
+    sometimes not reads as magic even at zero false positives). The
+    technique stays on record for a NON-raw surface if one ever wants it:
+    decode a 32-byte value as C/G/L candidates and show it only when the
+    result already occurs elsewhere in the same transaction. The strkey
+    encoder lives on in `strkeyDecode.ts` (the trace's `on X` uses it).
 15. **Root-call full inline arguments** (stellar.expert parity, review
     thread 2026-07-30): SE renders the ROOT invocation with every literal
     argument inline (wrapping over 2-3 lines), e.g.

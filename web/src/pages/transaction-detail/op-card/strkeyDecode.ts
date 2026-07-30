@@ -1,5 +1,3 @@
-import { createContext, useContext } from 'react';
-
 /** SEP-23 strkey encoding: version byte + 32-byte payload + CRC16-XModem
  *  (little-endian), base32 without padding. Version bytes are the base32
  *  index of the leading letter shifted left by 3 — G (account) = 6<<3,
@@ -40,8 +38,8 @@ function base32(bytes: Uint8Array): string {
 }
 
 /** Encode 32 raw bytes (base64) as a strkey with the given version byte.
- *  Total: ANY 32 bytes yield a checksum-valid strkey, so a successful
- *  decode proves nothing by itself — see `corroboratedStrkey`. */
+ *  Total: ANY 32 bytes yield a checksum-valid strkey — a successful
+ *  decode proves nothing by itself, so never decode blindly. */
 export function strkeyFromBase64(b64: string, version: number): string | null {
   let bin: string;
   try {
@@ -57,44 +55,4 @@ export function strkeyFromBase64(b64: string, version: number): string | null {
   payload[33] = crc & 0xff;
   payload[34] = crc >> 8;
   return base32(payload);
-}
-
-const STRKEY_STRING_RE = /^[GCL][A-Z2-7]{55}$/;
-
-/** Every strkey that literally occurs anywhere in the transaction payload —
- *  the corroboration set for decoding raw bytes. */
-export function collectStrkeys(value: unknown, into = new Set<string>()) {
-  if (typeof value === 'string') {
-    if (STRKEY_STRING_RE.test(value)) into.add(value);
-  } else if (Array.isArray(value)) {
-    for (const item of value) collectStrkeys(item, into);
-  } else if (value != null && typeof value === 'object') {
-    for (const item of Object.values(value)) collectStrkeys(item, into);
-  }
-  return into;
-}
-
-/** Decode 32 raw bytes as C/G/L candidates and return the first one that
- *  ALREADY OCCURS elsewhere in the same transaction. Any 32 bytes decode to
- *  a checksum-valid strkey, so blind decoding would fabricate addresses out
- *  of arbitrary hashes — the in-transaction occurrence is what makes the
- *  reading safe (zero false links by construction). */
-export function corroboratedStrkey(
-  b64: string,
-  knownIds: ReadonlySet<string>
-): string | null {
-  if (knownIds.size === 0) return null;
-  for (const version of Object.values(STRKEY_VERSION)) {
-    const candidate = strkeyFromBase64(b64, version);
-    if (candidate != null && knownIds.has(candidate)) return candidate;
-  }
-  return null;
-}
-
-/** Strkeys occurring in the currently viewed transaction; provided by the
- *  transaction-detail page, consumed by the JSON viewer's bytes hint. */
-export const TxKnownIdsContext = createContext<ReadonlySet<string>>(new Set());
-
-export function useTxKnownIds(): ReadonlySet<string> {
-  return useContext(TxKnownIdsContext);
 }
