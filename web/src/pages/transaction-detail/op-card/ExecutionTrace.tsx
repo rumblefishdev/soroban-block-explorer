@@ -201,22 +201,47 @@ function shortVal(value: unknown): string | null {
   return null;
 }
 
+type ArgsSummary =
+  | { kind: 'inline'; text: string }
+  | { kind: 'count'; count: number };
+
 /** Hybrid header (option C): literal args inline when every one is
  *  short and the whole list fits a row — `transfer(GC4Q…K7XQ, 13171)`;
- *  otherwise fall back to the count — `swap_collateral(6)`. The full typed
- *  args stay behind the per-node disclosure either way. */
-function argsSummary(args: unknown): string {
-  if (args == null) return '0';
+ *  otherwise the COUNT, which the row must render visually distinct from a
+ *  literal value (muted `6 args`, not a bare `6` that reads as an argument).
+ *  The full typed args stay behind the per-node disclosure either way. */
+function argsSummary(args: unknown): ArgsSummary {
+  if (args == null) return { kind: 'inline', text: '' };
   const typed = args as TypedVal;
-  if (typed.type !== 'vec' || !Array.isArray(typed.value)) return '1';
+  if (typed.type !== 'vec' || !Array.isArray(typed.value)) {
+    return { kind: 'count', count: 1 };
+  }
   const parts: string[] = [];
   for (const element of typed.value) {
     const short = shortVal(element);
-    if (short == null) return String(typed.value.length);
+    if (short == null) return { kind: 'count', count: typed.value.length };
     parts.push(short);
   }
   const joined = parts.join(', ');
-  return joined.length <= 40 ? joined : String(typed.value.length);
+  return joined.length <= 40
+    ? { kind: 'inline', text: joined }
+    : { kind: 'count', count: typed.value.length };
+}
+
+/** Chip colour encodes the KIND of announcement, not the individual event:
+ *  token movements / failure diagnostics / any other protocol event. Keep in
+ *  sync with the legend under the trace. */
+function eventCategory(label: string): {
+  color: 'blue' | 'error' | 'neutral';
+  hint: string;
+} {
+  if (['transfer', 'mint', 'burn', 'clawback'].includes(label)) {
+    return { color: 'blue', hint: 'token movement' };
+  }
+  if (['error', 'log', 'host_fn_failed'].includes(label)) {
+    return { color: 'error', hint: 'failure diagnostic' };
+  }
+  return { color: 'neutral', hint: 'protocol event' };
 }
 
 /** Short inline `→ value` for scalar returns; structured values stay behind
@@ -253,6 +278,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
   const hasChildren = node.children.length > 0;
   const inlineReturn = scalarReturn(node.returnValue);
   const hasDetails = node.args != null || node.returnValue != null;
+  const args = argsSummary(node.args);
 
   return (
     <>
@@ -297,10 +323,40 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             whiteSpace: 'nowrap',
           })}
         >
-          {node.fnName}({argsSummary(node.args)})
+          {node.fnName}(
+          {args.kind === 'inline' ? (
+            args.text
+          ) : (
+            <Box
+              component="span"
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                fontStyle: 'italic',
+              })}
+            >
+              {args.count} {args.count === 1 ? 'arg' : 'args'}
+            </Box>
+          )}
+          )
         </Typography>
         {node.contractId != null && (
-          <Typography variant="bodyXsRegular" component="span">
+          <Typography
+            variant="bodyXsRegular"
+            component="span"
+            title="Contract the call executed on"
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.5,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Box
+              component="span"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              on
+            </Box>
             <IdentifierDisplay value={node.contractId} type="contract" />
           </Typography>
         )}
@@ -315,16 +371,26 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             → {inlineReturn}
           </Typography>
         )}
-        {groupEventLabels(node.events).map((group, index) => (
-          <Chip
-            key={`${group.label}-${index}`}
-            size="sm"
-            color="blue"
-            label={
-              group.count > 1 ? `${group.label} ×${group.count}` : group.label
-            }
-          />
-        ))}
+        {groupEventLabels(node.events).map((group, index) => {
+          const category = eventCategory(group.label);
+          return (
+            <Box
+              key={`${group.label}-${index}`}
+              component="span"
+              title={`Event announced by this call — ${category.hint}`}
+            >
+              <Chip
+                size="sm"
+                color={category.color}
+                label={
+                  group.count > 1
+                    ? `${group.label} ×${group.count}`
+                    : group.label
+                }
+              />
+            </Box>
+          );
+        })}
         {hasChildren && !childrenOpen && (
           <Chip
             size="sm"
@@ -407,6 +473,12 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
   );
 }
 
+function hasEvents(nodes: readonly TraceNode[]): boolean {
+  return nodes.some(
+    (node) => node.events.length > 0 || hasEvents(node.children)
+  );
+}
+
 /** The EXECUTED call tree, rebuilt from the host-VM diagnostic trace —
  *  a superset of the auth tree and the only source that can truthfully say
  *  where a failed execution stopped (see `buildExecutionTrace`). */
@@ -416,6 +488,16 @@ export function ExecutionTrace({ nodes }: { nodes: TraceNode[] }) {
       {nodes.map((node, index) => (
         <TraceNodeRow key={index} node={node} depth={0} />
       ))}
+      {/* Legend for the chip colour categories (see eventCategory). */}
+      {hasEvents(nodes) && (
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary, mt: 0.5 })}
+        >
+          Chips are events announced by a call — blue: token movement · grey:
+          protocol event · red: failure diagnostics.
+        </Typography>
+      )}
     </Box>
   );
 }

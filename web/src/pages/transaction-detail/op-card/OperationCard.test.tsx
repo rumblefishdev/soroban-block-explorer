@@ -193,7 +193,7 @@ describe('OperationCard', () => {
         call('trap', 3),
       ],
     });
-    expect(screen.getByText('trap(0)')).toBeTruthy();
+    expect(screen.getByText('trap()')).toBeTruthy();
     expect(screen.getAllByText('stopped here')).toHaveLength(1);
   });
 });
