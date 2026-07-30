@@ -182,14 +182,41 @@ function groupEventLabels(
   return groups;
 }
 
-/** Arg count for the `fn(N)` header; diagnostic args arrive as a typed vec. */
-function argCount(args: unknown): number {
-  if (args == null) return 0;
-  const typed = args as { type?: unknown; value?: unknown };
-  if (typed.type === 'vec' && Array.isArray(typed.value)) {
-    return typed.value.length;
+/** One argument as short inline text, or null when it wouldn't fit a row:
+ *  addresses shorten to GC4Q…K7XQ form, numbers/symbols pass through. */
+function shortVal(value: unknown): string | null {
+  if (value == null || typeof value !== 'object') return null;
+  const { type, value: inner } = value as TypedVal;
+  if (type === 'address' && typeof inner === 'string' && inner.length > 12) {
+    return `${inner.slice(0, 4)}…${inner.slice(-4)}`;
   }
-  return 1;
+  if (typeof inner === 'number' || typeof inner === 'boolean') {
+    return String(inner);
+  }
+  if (typeof inner === 'string') {
+    // Big ints (i128/u128…) arrive as decimal strings; symbols stay short.
+    if (/^-?\d+$/.test(inner)) return inner;
+    if (type === 'sym' && inner.length <= 12) return inner;
+  }
+  return null;
+}
+
+/** Hybrid header (option C): literal args inline when every one is
+ *  short and the whole list fits a row — `transfer(GC4Q…K7XQ, 13171)`;
+ *  otherwise fall back to the count — `swap_collateral(6)`. The full typed
+ *  args stay behind the per-node disclosure either way. */
+function argsSummary(args: unknown): string {
+  if (args == null) return '0';
+  const typed = args as TypedVal;
+  if (typed.type !== 'vec' || !Array.isArray(typed.value)) return '1';
+  const parts: string[] = [];
+  for (const element of typed.value) {
+    const short = shortVal(element);
+    if (short == null) return String(typed.value.length);
+    parts.push(short);
+  }
+  const joined = parts.join(', ');
+  return joined.length <= 40 ? joined : String(typed.value.length);
 }
 
 /** Short inline `→ value` for scalar returns; structured values stay behind
@@ -261,7 +288,7 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
           variant="bodyMonoSmMedium"
           sx={(theme) => ({ color: theme.palette.text.primary })}
         >
-          {node.fnName}({argCount(node.args)})
+          {node.fnName}({argsSummary(node.args)})
         </Typography>
         {node.contractId != null && (
           <Typography variant="bodyXsRegular" component="span">
@@ -296,7 +323,11 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             label={`${traceCallCount(node.children)} calls`}
           />
         )}
-        {node.unfinished && (
+        {/* The whole unfinished stack path is marked in the model, but the
+            chip renders only at the DEEPEST unfinished call — repeating it
+            on every ancestor reads as noise (review finding); the nesting
+            already shows the path. */}
+        {node.unfinished && !node.children.some((c) => c.unfinished) && (
           <Chip size="sm" color="error" label="stopped here" />
         )}
         {hasDetails && (

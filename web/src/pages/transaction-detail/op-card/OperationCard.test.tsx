@@ -128,7 +128,18 @@ describe('OperationCard', () => {
             },
             { type: 'sym', value: 'swap' },
           ],
-          data: null,
+          // Short args render inline (hybrid header, option C).
+          data: {
+            type: 'vec',
+            value: [
+              {
+                type: 'address',
+                value:
+                  'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ',
+              },
+              { type: 'i128', value: '13171' },
+            ],
+          },
           event_index: 0,
           op_index: null,
         },
@@ -146,9 +157,35 @@ describe('OperationCard', () => {
       ],
     });
     expect(screen.getByText(/Execution trace · 1 calls/)).toBeTruthy();
-    expect(screen.getByText('swap(0)')).toBeTruthy();
+    expect(screen.getByText('swap(GC4Q…K7XQ, 13171)')).toBeTruthy();
     expect(screen.getByText('→ 81404538')).toBeTruthy();
     // Auth tree is the fallback only — hidden when the trace is present.
     expect(screen.queryByText(/Authorized calls/)).toBeNull();
+  });
+
+  it('marks only the deepest unfinished call with "stopped here"', () => {
+    const call = (name: string, index: number) => ({
+      event_type: 'diagnostic',
+      contract_id: null,
+      topics: [
+        { type: 'sym', value: 'fn_call' },
+        {
+          type: 'bytes',
+          value: 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=',
+        },
+        { type: 'sym', value: name },
+      ],
+      data: null,
+      event_index: index,
+      op_index: null,
+    });
+    renderCard({
+      light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+      heavy: heavyOf({}),
+      applied: false,
+      // Three nested calls, none returned — the trap is in the deepest.
+      diagnosticEvents: [call('outer', 0), call('mid', 1), call('inner', 2)],
+    });
+    expect(screen.getAllByText('stopped here')).toHaveLength(1);
   });
 });
