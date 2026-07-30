@@ -58,3 +58,20 @@ something that no longer exists).
 - `op_index` / claim-CB asset reach production responses only after the next
   backend deploy; the frontend is absence-safe (tested).
 - Balance-changes section parked behind the net_settled read path (D13).
+
+## Post-review corrections (5-agent review of PR #373)
+
+This pass itself missed three things the review caught — recorded so the
+note stops overclaiming:
+
+- **Finding #3 verdict was too generous**: the strip built its chain from
+  LP atoms, silently dropping order-book hops and suppressing the complete
+  `details.path` route. Fixed: chips now come from the declared path, atom
+  amounts overlay where they match, unlabelled hops = order-book (with the
+  note conditional on fills actually existing).
+- **The orphan sweep checked imports, not visual mirrors**: the loading
+  skeleton still rendered a ModeToggle placeholder. Removed.
+- **The call tree rendered per-node verdicts the data cannot support**
+  (tx-level bool stamped on every node) — the 0444 bug shape reborn one
+  level down. De-lied: "Authorized calls", no per-node glyphs (see D11
+  correction in the G-note).

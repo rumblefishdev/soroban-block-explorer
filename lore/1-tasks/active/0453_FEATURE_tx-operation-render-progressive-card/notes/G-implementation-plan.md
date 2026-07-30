@@ -52,11 +52,21 @@ same page rather than switching worlds.
   fallback, never a crash. Port templates from
   `stellar-expert/ui-framework` `tx/op-description-view.js` (MIT — keep an
   attribution comment). Do not invent 23 sentences from scratch.
+  _As-built amendment (post-review):_ shipped as a `switch`, not a lookup
+  table — TypeScript narrows `details` per case, which a table loses; the
+  substance (per-type coverage, SE wording + attribution, safe fallback,
+  `console.warn` on types outside the enum) is intact. Recorded so the next
+  session does not treat the mechanism gap as an unimplemented promise.
 - **D3 — Dual-tense templates.** Each template renders factual tense
   ("sent X to Y") and intent tense ("attempted to send X to Y") — SE's
   `isEphemeral` pattern repurposed for failed transactions. Kills the
   benchmark-wide bug (SE and stellarchain both narrate failed ops as if they
   happened).
+  _As-built amendment (post-review):_ grammatical intent tense was DROPPED,
+  deliberately — the verdict is carried structurally instead (red summary
+  banner, dimmed card, "not applied" chip adjacent to the sentence), which
+  keeps 27 templates single-form. Revisit only if user reports show the
+  chip+banner combination still misleads.
 - **D4 — The flow tree dies; the card replaces it.** Its honest content today
   is three boxes saying what one sentence says; its nested-call branch reads
   six `details` keys no backend ever emitted (0442). Resolution recorded here:
@@ -96,6 +106,15 @@ same page rather than switching worlds.
 - **D11 — Call tree with failure pinpoint.** `operation_tree` nodes carry
   `successful` per node — render the failing nested call highlighted
   (Tenderly-lite). No Stellar explorer has this.
+  _CORRECTED (post-review):_ the premise was FALSE — the backend builds
+  `operation_tree` from AUTH entries and stamps the whole transaction's
+  verdict on every node (`invocation.rs`: "derived from the parent
+  transaction's success status"), so a per-node ✗ would mark every node of a
+  failed invoke "failed here" — the 0444 lie reborn. As-built: the section
+  is labeled **Authorized calls**, no per-node glyphs render, and the
+  failure pinpoint waits for a backend that emits the diagnostic execution
+  tree (follow-up to spawn; the same `invocation.rs` already computes it
+  for the unexposed flat `invocations` list).
 - **D12 — Story chip (wave 3.5).** One heuristic classification for the whole
   tx ("Swap", "Arbitrage · 4 ops", "Mint") from op types — stellarchain/
   Blockscout pattern, no LLM.
@@ -232,6 +251,29 @@ failure pinpoint, failure reason, story chip.
   reach production responses only after the next backend deploy (manual,
   docs/deployment.md); the frontend is absence-safe by construction and
   tested that way.
+- **Post-review hardening (uncommitted, after the 5-agent review of PR
+  #373)**: (1) CallTree de-lied — no per-node verdicts, section renamed
+  "Authorized calls" (see corrected D11); (2) RouteStrip rebuilt on the
+  DECLARED `details.path` chain with atom amounts overlaid sequentially —
+  order-book hops keep their chip, only the amount is absent; no-fills case
+  no longer blamed on the order book; (3) US thousands grouping added to
+  `formatTokenAmount`/`formatFee` (string-based, exact past 2^53 — closes
+  the overclaimed AC); (4) Karol's review edits accepted: `extendTo` reads
+  "to at least N ledgers" (it is a floor, not an increment) and `classifyTx`
+  requires every op to match for "Account creation", extended to allow the
+  sponsored-onboarding sandwich; (5) deploy/upload host functions get real
+  sentences from `hostFunctionType`; (6) card header order prefers
+  `heavy.application_order` (folded light rows carry the fold's FIRST
+  order); (7) generic `· TxFailed` suffix suppressed in the failure banner
+  (tautology); (8) ModeToggle ghost removed from the loading skeleton;
+  (9) simplify batch: shared `DisclosureRow` + `Overline` + `OpAvatar` +
+  `isSorobanOp` (card and details chips can no longer disagree), humanizeOp
+  twin-cases merged + `fmtAssetAmount` helper, `EnrichedOp` alias and dead
+  `defaultDetailsOpen` prop deleted, picker's duplicated sub-label dropped,
+  `console.warn` on unknown op types (D2). Deliberately NOT done: `normal/`
+  - `advanced/` directory regroup, typed `decodeOpDetails` boundary,
+    `pages/`-as-libs lint rule, `state.rs` split, XdrRow unification — real
+    structural moves, each its own follow-up task, not drive-bys.
 - **Wave 5 — done**: parity closed and the toggle REMOVED (decision per the
   layout section: benchmark + #364's own reporter journey; an Etherscan-style
   raw-preference can return later as an additive slice). Events + Raw
