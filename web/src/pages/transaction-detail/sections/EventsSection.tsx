@@ -1,5 +1,4 @@
 import type { XdrEventDto } from '@rumblefish/api-types';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import {
   Box,
   Collapse,
@@ -14,8 +13,9 @@ import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo, useState } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
+import { DisclosureRow } from '../shared/DisclosureRow.js';
 
-import { HighlightedJson } from './HighlightedJson.js';
+import { HighlightedJson } from '../op-card/HighlightedJson.js';
 
 interface EventsSectionProps {
   contractEvents: XdrEventDto[];
@@ -24,7 +24,8 @@ interface EventsSectionProps {
 
 type EventKind = 'contract' | 'diagnostic';
 
-interface MergedEvent extends XdrEventDto {
+interface MergedEvent {
+  event: XdrEventDto;
   kind: EventKind;
 }
 
@@ -34,8 +35,11 @@ export function EventsSection({
 }: EventsSectionProps) {
   const merged = useMemo<MergedEvent[]>(
     () => [
-      ...contractEvents.map((e) => ({ ...e, kind: 'contract' as const })),
-      ...diagnosticEvents.map((e) => ({ ...e, kind: 'diagnostic' as const })),
+      ...contractEvents.map((event) => ({ event, kind: 'contract' as const })),
+      ...diagnosticEvents.map((event) => ({
+        event,
+        kind: 'diagnostic' as const,
+      })),
     ],
     [contractEvents, diagnosticEvents]
   );
@@ -61,38 +65,14 @@ export function EventsSection({
         </Box>
       ) : (
         <>
-          <Box
-            role="button"
-            tabIndex={0}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                setOpen((v) => !v);
-              }
-            }}
-            sx={(theme) => ({
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.75,
-              px: 2,
-              py: 1.25,
-              cursor: 'pointer',
-              color: theme.palette.text.secondary,
-            })}
-          >
-            <KeyboardArrowRightIcon
-              sx={{
-                fontSize: 18,
-                transform: open ? 'rotate(90deg)' : 'none',
-                transition: 'transform 120ms ease',
-              }}
-            />
-            <Typography variant="bodySmSemiBold" sx={{ color: 'inherit' }}>
-              {open ? 'Hide' : 'Show'} {total} event{total === 1 ? '' : 's'}
-            </Typography>
-          </Box>
+          <DisclosureRow
+            open={open}
+            onToggle={() => setOpen((v) => !v)}
+            label={`${open ? 'Hide' : 'Show'} ${total} event${
+              total === 1 ? '' : 's'
+            }`}
+            sx={{ px: 2, py: 1.25 }}
+          />
           <Collapse in={open} unmountOnExit>
             <Box sx={{ overflowX: 'auto' }}>
               <Table size="small">
@@ -105,16 +85,14 @@ export function EventsSection({
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {merged.map((event) => (
-                    <TableRow key={`${event.kind}-${event.event_index}`}>
+                  {merged.map(({ event, kind }) => (
+                    <TableRow key={`${kind}-${event.event_index}`}>
                       <TableCell sx={{ verticalAlign: 'top' }}>
                         <Chip
                           size="sm"
-                          color={event.kind === 'contract' ? 'blue' : 'neutral'}
+                          color={kind === 'contract' ? 'blue' : 'neutral'}
                           label={
-                            event.kind === 'contract'
-                              ? 'Contract'
-                              : 'Diagnostic'
+                            kind === 'contract' ? 'Contract' : 'Diagnostic'
                           }
                         />
                       </TableCell>

@@ -1,3 +1,4 @@
+import { Box } from '@mui/material';
 import AccountBalanceWallet from '@mui/icons-material/AccountBalanceWallet';
 import AddCircleOutline from '@mui/icons-material/AddCircleOutline';
 import CallMerge from '@mui/icons-material/CallMerge';
@@ -52,4 +53,27 @@ const ICONS: Record<string, ComponentType<{ fontSize?: 'inherit' }>> = {
 export function OpIcon({ typeName }: { typeName: string }) {
   const Icon = ICONS[typeName] ?? Description;
   return <Icon fontSize="inherit" />;
+}
+
+/** The 32px circled per-type icon used by both the picker rows and the card
+ *  header. */
+export function OpAvatar({ typeName }: { typeName: string }) {
+  return (
+    <Box
+      sx={(theme) => ({
+        width: 32,
+        height: 32,
+        borderRadius: '50%',
+        backgroundColor: theme.palette.blue[100],
+        color: theme.palette.blue[600],
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        fontSize: 16,
+      })}
+    >
+      <OpIcon typeName={typeName} />
+    </Box>
+  );
 }

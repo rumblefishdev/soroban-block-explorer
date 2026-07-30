@@ -1,43 +1,19 @@
 import type { OperationItem } from '@rumblefish/api-types';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { Box, Stack, Typography } from '@mui/material';
-import { useMemo } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 
-import { OpIcon } from './opIcon.js';
-
-export type EnrichedOp = OperationItem;
+import { OpAvatar } from '../op-card/opIcon.js';
 
 interface OperationPickerProps {
-  operations: readonly EnrichedOp[];
+  operations: readonly OperationItem[];
   selectedIndex: number;
   onSelect: (index: number) => void;
 }
 
-function opNumber(op: EnrichedOp, index: number): number {
+function opNumber(op: OperationItem, index: number): number {
   return op.application_order ?? index + 1;
-}
-
-function OpAvatar({ typeName }: { typeName: string }) {
-  return (
-    <Box
-      sx={(theme) => ({
-        width: 32,
-        height: 32,
-        borderRadius: '50%',
-        backgroundColor: theme.palette.blue[100],
-        color: theme.palette.blue[600],
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-        fontSize: 16,
-      })}
-    >
-      <OpIcon typeName={typeName} />
-    </Box>
-  );
 }
 
 export function OperationPicker({
@@ -45,11 +21,6 @@ export function OperationPicker({
   selectedIndex,
   onSelect,
 }: OperationPickerProps) {
-  const visible = useMemo(
-    () => operations.map((op, index) => ({ op, index })),
-    [operations]
-  );
-
   return (
     <Stack spacing={1.5} sx={{ height: '100%', minWidth: 0 }}>
       <Typography variant="heading6SemiBold" component="h3">
@@ -68,7 +39,7 @@ export function OperationPicker({
           scrollbarGutter: 'stable',
         }}
       >
-        {visible.length === 0 ? (
+        {operations.length === 0 ? (
           <Box sx={{ p: 2 }}>
             <Typography
               variant="bodySmRegular"
@@ -78,7 +49,7 @@ export function OperationPicker({
             </Typography>
           </Box>
         ) : (
-          visible.map(({ op, index }) => {
+          operations.map((op, index) => {
             const selected = index === selectedIndex;
             return (
               <Box
@@ -117,20 +88,16 @@ export function OperationPicker({
                 }}
               >
                 <OpAvatar typeName={op.type_name} />
-                <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography
-                    variant="bodyMedium"
-                    sx={(theme) => ({ color: theme.palette.text.primary })}
-                  >
-                    {formatOperationType(op.type_name)} #{opNumber(op, index)}
-                  </Typography>
-                  <Typography
-                    variant="bodyXsRegular"
-                    sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                  >
-                    {formatOperationType(op.type_name)}
-                  </Typography>
-                </Stack>
+                <Typography
+                  variant="bodyMedium"
+                  sx={(theme) => ({
+                    color: theme.palette.text.primary,
+                    minWidth: 0,
+                    flex: 1,
+                  })}
+                >
+                  {formatOperationType(op.type_name)} #{opNumber(op, index)}
+                </Typography>
                 <KeyboardArrowRightIcon
                   sx={(theme) => ({
                     fontSize: 18,

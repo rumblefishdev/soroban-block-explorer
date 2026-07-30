@@ -32,7 +32,6 @@ function renderCard(props: Partial<Parameters<typeof OperationCard>[0]> = {}) {
         light={light({ type_name: 'PAYMENT', destination_account: DEST })}
         heavy={heavyOf({ amount: 1_005_000_000, asset: 'native' })}
         applied
-        defaultDetailsOpen={false}
         fallbackOrder={1}
         txSourceAccount={null}
         {...props}
@@ -56,13 +55,13 @@ describe('OperationCard', () => {
     ).toBeTruthy();
   });
 
-  it('opens the raw details by default in advanced mode', () => {
-    renderCard({ defaultDetailsOpen: true });
+  it('starts with the raw details collapsed', () => {
+    renderCard();
     expect(
       screen
         .getByRole('button', { name: /Operation details/ })
         .getAttribute('aria-expanded')
-    ).toBe('true');
+    ).toBe('false');
   });
 
   it('shows only the events attributed to this operation via op_index', () => {

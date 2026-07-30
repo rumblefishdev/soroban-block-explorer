@@ -405,21 +405,10 @@ fn extract_op_details(
                 "claimants": op.claimants.len(),
             }),
         ),
-        OperationBody::ClaimClaimableBalance(op) => (OperationType::ClaimClaimableBalance, {
-            // The body carries only the id; the asset + amount live in the
-            // same-op ledger entry (task 0453 D8). Keys are optional —
-            // absent when the meta lacks the entry, never guessed.
-            let mut d = json!({
-                "balanceId": format_claimable_balance_id(&op.balance_id),
-            });
-            if let Some((asset, amount)) =
-                crate::asset_appearances::claimed_cb_asset_amount(op_changes, &op.balance_id)
-            {
-                d["asset"] = json!(format_asset(&asset));
-                d["amount"] = json!(amount);
-            }
-            d
-        }),
+        OperationBody::ClaimClaimableBalance(op) => (
+            OperationType::ClaimClaimableBalance,
+            cb_details(op_changes, &op.balance_id),
+        ),
         OperationBody::BeginSponsoringFutureReserves(op) => (
             OperationType::BeginSponsoringFutureReserves,
             json!({
@@ -451,18 +440,10 @@ fn extract_op_details(
                 "amount": op.amount,
             }),
         ),
-        OperationBody::ClawbackClaimableBalance(op) => (OperationType::ClawbackClaimableBalance, {
-            let mut d = json!({
-                "balanceId": format_claimable_balance_id(&op.balance_id),
-            });
-            if let Some((asset, amount)) =
-                crate::asset_appearances::claimed_cb_asset_amount(op_changes, &op.balance_id)
-            {
-                d["asset"] = json!(format_asset(&asset));
-                d["amount"] = json!(amount);
-            }
-            d
-        }),
+        OperationBody::ClawbackClaimableBalance(op) => (
+            OperationType::ClawbackClaimableBalance,
+            cb_details(op_changes, &op.balance_id),
+        ),
         OperationBody::SetTrustLineFlags(op) => (
             OperationType::SetTrustLineFlags,
             json!({
@@ -594,6 +575,23 @@ fn format_claimable_balance_id(id: &ClaimableBalanceId) -> Value {
             json!(hex::encode(hash.0))
         }
     }
+}
+
+/// Details for claim/clawback-claimable-balance — shared by both arms. The
+/// body carries only the id; the asset + amount live in the same-op ledger
+/// entry (task 0453 D8). Keys are optional — absent when the meta lacks the
+/// entry, never guessed.
+fn cb_details(op_changes: &[LedgerEntryChange], balance_id: &ClaimableBalanceId) -> Value {
+    let mut d = json!({
+        "balanceId": format_claimable_balance_id(balance_id),
+    });
+    if let Some((asset, amount)) =
+        crate::asset_appearances::claimed_cb_asset_amount(op_changes, balance_id)
+    {
+        d["asset"] = json!(format_asset(&asset));
+        d["amount"] = json!(amount);
+    }
+    d
 }
 
 fn format_contract_executable(exec: &ContractExecutable) -> Value {

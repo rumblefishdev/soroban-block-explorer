@@ -3,25 +3,21 @@ import type {
   XdrEventDto,
   XdrOperationDto,
 } from '@rumblefish/api-types';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { Box, Collapse, Stack, Typography } from '@mui/material';
+import type { ReactNode } from 'react';
 import { Chip } from '@rumblefish/soroban-block-explorer-ui';
 import { useState } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
-import { OperationJsonDetail } from '../advanced/OperationJsonDetail.js';
-import { detailsObj, humanizeOp } from '../normal/humanizeOp.js';
+import { OperationJsonDetail } from './OperationJsonDetail.js';
+import { detailsObj, humanizeOp, shortId } from '../shared/humanizeOp.js';
+import { DisclosureRow } from '../shared/DisclosureRow.js';
+import { isSorobanOp } from '../shared/opKind.js';
 
 import { CallTree, parseOperationTree } from './CallTree.js';
 import { opFacts } from './opFacts.js';
-import { OpIcon } from './opIcon.js';
+import { OpAvatar } from './opIcon.js';
 import { buildRouteModel, RouteStrip } from './RouteStrip.js';
-
-const SOROBAN_TYPES = new Set([
-  'INVOKE_HOST_FUNCTION',
-  'EXTEND_FOOTPRINT_TTL',
-  'RESTORE_FOOTPRINT',
-]);
 
 interface OperationCardProps {
   light: OperationItem | undefined;
@@ -30,8 +26,6 @@ interface OperationCardProps {
    *  operation was applied (the summary banner states the verdict; the card
    *  dims and labels itself). */
   applied: boolean;
-  /** Advanced mode opens the raw-details section by default. */
-  defaultDetailsOpen: boolean;
   fallbackOrder: number;
   /** Ops without their own source inherit the transaction's (self-detection). */
   txSourceAccount: string | null;
@@ -58,17 +52,34 @@ function eventLabel(event: XdrEventDto): string {
   return event.event_type;
 }
 
+/** Small uppercase section label used across the card. */
+function Overline({ children, mb }: { children: ReactNode; mb?: number }) {
+  return (
+    <Typography
+      variant="bodyXsRegular"
+      sx={(theme) => ({
+        color: theme.palette.text.tertiary,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        fontWeight: 650,
+        mb,
+      })}
+    >
+      {children}
+    </Typography>
+  );
+}
+
 export function OperationCard({
   light,
   heavy,
   applied,
-  defaultDetailsOpen,
   fallbackOrder,
   txSourceAccount,
   operationTree,
   contractEvents = [],
 }: OperationCardProps) {
-  const [detailsOpen, setDetailsOpen] = useState(defaultDetailsOpen);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   if (light == null) {
     return (
@@ -81,15 +92,14 @@ export function OperationCard({
     );
   }
 
-  const order = light.application_order ?? fallbackOrder;
+  // heavy is 1:1 with the envelope; the light row is folded, so its
+  // application_order is the FIRST of the fold — wrong for later copies.
+  const order =
+    heavy?.application_order ?? light.application_order ?? fallbackOrder;
   const label = formatOperationType(light.type_name);
-  const kind = SOROBAN_TYPES.has(light.type_name) ? 'Soroban' : 'Classic';
+  const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);
-  // The strip shows the route with per-hop amounts; drop the plain-text
-  // Route row so the same chain is not stated twice.
-  const facts = opFacts(light, heavy).filter(
-    (fact) => routeModel == null || fact.label !== 'Route'
-  );
+  const facts = opFacts(light, heavy);
   const callNodes =
     light.type_name === 'INVOKE_HOST_FUNCTION'
       ? parseOperationTree(operationTree)
@@ -113,54 +123,22 @@ export function OperationCard({
       })}
     >
       <Stack direction="row" spacing={1.25} alignItems="center">
-        <Box
-          sx={(theme) => ({
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            backgroundColor: theme.palette.blue[100],
-            color: theme.palette.blue[600],
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            fontSize: 16,
-          })}
-        >
-          <OpIcon typeName={light.type_name} />
-        </Box>
-        <Typography
-          variant="bodyXsRegular"
-          sx={(theme) => ({
-            color: theme.palette.text.tertiary,
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-            fontWeight: 650,
-          })}
-        >
+        <OpAvatar typeName={light.type_name} />
+        <Overline>
           {order} · {label}
-        </Typography>
+        </Overline>
         <Chip
           size="sm"
-          color={kind === 'Soroban' ? 'success' : 'neutral'}
-          label={kind}
+          color={soroban ? 'success' : 'neutral'}
+          label={soroban ? 'Soroban' : 'Classic'}
         />
         {!applied && (
-          <Box
-            sx={(theme) => ({
-              ml: 'auto',
-              px: 1,
-              borderRadius: `${theme.shape.radius.s}px`,
-              border: `1px solid ${theme.palette.stroke.error}`,
-            })}
-          >
-            <Typography
-              variant="bodyXsRegular"
-              sx={(theme) => ({ color: theme.palette.text.error })}
-            >
-              not applied
-            </Typography>
-          </Box>
+          <Chip
+            size="sm"
+            color="error"
+            label="not applied"
+            sx={{ ml: 'auto' }}
+          />
         )}
       </Stack>
 
@@ -176,36 +154,17 @@ export function OperationCard({
 
         {callNodes.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
-            <Typography
-              variant="bodyXsRegular"
-              sx={(theme) => ({
-                color: theme.palette.text.tertiary,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                fontWeight: 650,
-                mb: 0.5,
-              })}
-            >
-              Call tree
-            </Typography>
+            {/* "Authorized" is load-bearing: the tree is built from the
+                transaction's auth entries (intent), not an execution trace —
+                see CallNode.successful for why no per-node verdict shows. */}
+            <Overline mb={0.5}>Authorized calls</Overline>
             <CallTree nodes={callNodes} />
           </Box>
         )}
 
         {opEvents.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
-            <Typography
-              variant="bodyXsRegular"
-              sx={(theme) => ({
-                color: theme.palette.text.tertiary,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                fontWeight: 650,
-                mb: 0.5,
-              })}
-            >
-              Events · {opEvents.length}
-            </Typography>
+            <Overline mb={0.5}>Events · {opEvents.length}</Overline>
             {opEvents.map((event) => (
               <Stack
                 key={event.event_index}
@@ -220,8 +179,7 @@ export function OperationCard({
                     variant="bodyMonoSmRegular"
                     sx={(theme) => ({ color: theme.palette.text.secondary })}
                   >
-                    {event.contract_id.slice(0, 4)}…
-                    {event.contract_id.slice(-4)}
+                    {shortId(event.contract_id)}
                   </Typography>
                 )}
               </Stack>
@@ -263,42 +221,21 @@ export function OperationCard({
         )}
       </Box>
 
-      <Box
-        role="button"
-        tabIndex={0}
-        aria-expanded={detailsOpen}
-        onClick={() => setDetailsOpen((open) => !open)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            setDetailsOpen((open) => !open);
-          }
-        }}
+      <DisclosureRow
+        open={detailsOpen}
+        onToggle={() => setDetailsOpen((open) => !open)}
+        label="Operation details"
+        trailing={
+          detailCount > 0 ? (
+            <Chip size="sm" color="neutral" label={String(detailCount)} />
+          ) : undefined
+        }
         sx={(theme) => ({
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.75,
           mt: 1.5,
           pt: 1.25,
           borderTop: `1px solid ${theme.palette.stroke.default}`,
-          cursor: 'pointer',
-          color: theme.palette.text.secondary,
         })}
-      >
-        <KeyboardArrowRightIcon
-          sx={{
-            fontSize: 18,
-            transform: detailsOpen ? 'rotate(90deg)' : 'none',
-            transition: 'transform 120ms ease',
-          }}
-        />
-        <Typography variant="bodySmSemiBold" sx={{ color: 'inherit' }}>
-          Operation details
-        </Typography>
-        {detailCount > 0 && (
-          <Chip size="sm" color="neutral" label={String(detailCount)} />
-        )}
-      </Box>
+      />
       <Collapse in={detailsOpen} unmountOnExit>
         <Box sx={{ mt: 1.5 }}>
           <OperationJsonDetail light={light} heavy={heavy} />

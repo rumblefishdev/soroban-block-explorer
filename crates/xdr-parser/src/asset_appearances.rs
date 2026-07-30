@@ -217,12 +217,7 @@ fn claimed_cb_asset(
     changes: &[LedgerEntryChange],
     balance_id: &ClaimableBalanceId,
 ) -> Option<AssetRef> {
-    changes.iter().find_map(|c| match &present_entry(c)?.data {
-        LedgerEntryData::ClaimableBalance(cb) if &cb.balance_id == balance_id => {
-            Some(asset_ref(&cb.asset))
-        }
-        _ => None,
-    })
+    claimed_cb_asset_amount(changes, balance_id).map(|(asset, _)| asset_ref(&asset))
 }
 
 /// Same lookup for the `details` payload: the claimed/clawed balance's full

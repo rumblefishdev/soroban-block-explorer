@@ -11,8 +11,8 @@ import { useTransactionDetail } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 
-import { EventsSection } from './advanced/EventsSection.js';
-import { RawDataSection } from './advanced/RawDataSection.js';
+import { EventsSection } from './sections/EventsSection.js';
+import { RawDataSection } from './sections/RawDataSection.js';
 import { OperationsSection } from './sections/OperationsSection.js';
 import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';

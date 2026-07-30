@@ -2,7 +2,7 @@ import { Box, Typography } from '@mui/material';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 
-import { XdrRow } from './XdrRow.js';
+import { XdrRow } from '../shared/XdrRow.js';
 
 interface RawDataSectionProps {
   envelopeXdr: string | null | undefined;
