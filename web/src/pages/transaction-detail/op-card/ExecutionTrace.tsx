@@ -1,6 +1,7 @@
 import CodeIcon from '@mui/icons-material/Code';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Box, Collapse, IconButton, Stack, Typography } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
 import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment, useState } from 'react';
@@ -186,25 +187,30 @@ export function traceCallCount(nodes: readonly TraceNode[]): number {
   );
 }
 
-function traceEventCount(nodes: readonly TraceNode[]): number {
-  return nodes.reduce(
-    (sum, node) =>
-      sum +
-      node.children.filter((child) => child.kind === 'event').length +
-      traceEventCount(childCalls(node)),
-    0
-  );
-}
+type EventPaletteKey = 'info' | 'error' | 'secondary';
 
-/** Folded-branch badge: whatever the branch actually hides — "5 calls",
- *  "1 event", or both. A branch holding only events must not say "0 calls". */
-function foldedBadgeLabel(node: TraceNode): string {
-  const calls = traceCallCount(childCalls(node));
-  const events = traceEventCount([node]);
-  const parts: string[] = [];
-  if (calls > 0) parts.push(`${calls} call${calls === 1 ? '' : 's'}`);
-  if (events > 0) parts.push(`${events} event${events === 1 ? '' : 's'}`);
-  return parts.join(' · ');
+/** Per-category event counts for a folded branch — the badge must break
+ *  events down 1:1 with the row colours, not lump them into one number. */
+function traceEventCountByCategory(
+  nodes: readonly TraceNode[]
+): Record<EventPaletteKey, number> {
+  const counts: Record<EventPaletteKey, number> = {
+    info: 0,
+    secondary: 0,
+    error: 0,
+  };
+  const walk = (list: readonly TraceNode[]) => {
+    for (const node of list) {
+      for (const child of node.children) {
+        if (child.kind === 'event') {
+          counts[eventCategory(traceEventLabel(child.event)).paletteKey] += 1;
+        }
+      }
+      walk(childCalls(node));
+    }
+  };
+  walk(nodes);
+  return counts;
 }
 
 /** Row colour encodes the KIND of announcement, not the individual event:
@@ -352,16 +358,20 @@ export function eventArgsText(event: XdrEventDto): string {
  *  the per-node disclosure. A call that returned NOTHING says `void`
  *  explicitly — silence would be ambiguous with "value too long to show".
  *  `void` is the complete truth about the call (secondary tone, like real
- *  values); only UI abbreviations like the arg count go tertiary. */
+ *  values); only UI abbreviations like the arg count go tertiary. A return
+ *  that exists but cannot inline (struct, long value) shows `→ …` — silence
+ *  would be indistinguishable from "returned nothing" (silent-fallback
+ *  audit). */
 function scalarReturn(
   value: unknown
-): { kind: 'value' | 'void'; text: string } | null {
+): { kind: 'value' | 'void' | 'opaque'; text: string } | null {
   if (value == null) return null;
+  const opaque = { kind: 'opaque' as const, text: '…' };
   let inner: unknown = value;
   const typed = value as TypedVal;
   if (typeof typed.type === 'string') {
     if (typed.type === 'void') return { kind: 'void', text: 'void' };
-    if (typed.type === 'vec' || typed.type === 'map') return null;
+    if (typed.type === 'vec' || typed.type === 'map') return opaque;
     inner = typed.value;
   }
   if (
@@ -370,9 +380,9 @@ function scalarReturn(
     typeof inner === 'boolean'
   ) {
     const text = String(inner);
-    return text.length <= 24 ? { kind: 'value', text } : null;
+    return text.length <= 24 ? { kind: 'value', text } : opaque;
   }
-  return null;
+  return opaque;
 }
 
 /** Inline value list where every address is the house identifier link
@@ -396,6 +406,63 @@ function InlineParts({ parts }: { parts: readonly InlinePart[] }) {
         </Fragment>
       ))}
     </>
+  );
+}
+
+function eventColor(paletteKey: EventPaletteKey, theme: Theme): string {
+  if (paletteKey === 'error') return theme.palette.text.error;
+  if (paletteKey === 'info') {
+    return theme.palette.blue[theme.palette.mode === 'dark' ? 400 : 600];
+  }
+  return theme.palette.mode === 'dark'
+    ? theme.palette.stroke.warning
+    : theme.palette.text.warning;
+}
+
+const CATEGORY_ORDER: EventPaletteKey[] = ['info', 'secondary', 'error'];
+
+/** Folded-branch badge: the calls count plus a colour-matched dot count per
+ *  event category — 1:1 with the row colours, never one aggregate number. */
+function FoldedBadge({ node }: { node: TraceNode }) {
+  const calls = traceCallCount(childCalls(node));
+  const events = traceEventCountByCategory([node]);
+  return (
+    <Box
+      component="span"
+      sx={(theme) => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 0.75,
+        px: 1,
+        py: 0.25,
+        borderRadius: 999,
+        border: `1px solid ${theme.palette.stroke.default}`,
+        color: theme.palette.text.secondary,
+        fontSize: 11,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      })}
+    >
+      {calls > 0 && (
+        <span>
+          {calls} call{calls === 1 ? '' : 's'}
+        </span>
+      )}
+      {CATEGORY_ORDER.filter((key) => events[key] > 0).map((key) => (
+        <Box
+          key={key}
+          component="span"
+          sx={(theme) => ({
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 0.25,
+            color: eventColor(key, theme),
+          })}
+        >
+          •{events[key]}
+        </Box>
+      ))}
+    </Box>
   );
 }
 
@@ -505,9 +572,9 @@ function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
             flexShrink: 0,
             textAlign: 'center',
             color:
-              category.paletteKey === 'error'
-                ? theme.palette.text.error
-                : theme.palette.text.tertiary,
+              category.paletteKey === 'secondary'
+                ? theme.palette.text.tertiary
+                : eventColor(category.paletteKey, theme),
             fontSize: 14,
             lineHeight: 1,
           })}
@@ -519,15 +586,7 @@ function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
           title={`Event announced by this call — ${category.hint}`}
           sx={(theme) => ({
             whiteSpace: 'nowrap',
-            color:
-              category.paletteKey === 'error'
-                ? theme.palette.text.error
-                : category.paletteKey === 'info'
-                ? // Same blue family as the themed Chip color="blue".
-                  theme.palette.blue[theme.palette.mode === 'dark' ? 400 : 600]
-                : // Amber: custom contract events must not blend into the
-                  // grey call rows (swap_exec read as a call row next to balance).
-                  theme.palette.text.warning,
+            color: eventColor(category.paletteKey, theme),
           })}
         >
           {label}
@@ -613,10 +672,24 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
             />
           </IconButton>
         ) : (
-          // flexShrink 0 is load-bearing: when the row overflows, flexbox
-          // would squeeze this empty spacer to nothing and a leaf call would
-          // visually lose its indent level.
-          <Box sx={{ width: 20, flexShrink: 0 }} />
+          // Every row carries a marker (event rows have their •): leaf calls
+          // get a muted ƒ so no row starts with a bare gap. flexShrink 0 is
+          // load-bearing: when the row overflows, flexbox would squeeze this
+          // spacer to nothing and a leaf call would visually lose its indent.
+          <Box
+            component="span"
+            aria-hidden
+            sx={(theme) => ({
+              width: 20,
+              flexShrink: 0,
+              textAlign: 'center',
+              color: theme.palette.text.tertiary,
+              fontSize: 13,
+              lineHeight: 1,
+            })}
+          >
+            ƒ
+          </Box>
         )}
         <Typography
           variant="bodyMonoSmMedium"
@@ -675,17 +748,20 @@ function TraceNodeRow({ node, depth }: { node: TraceNode; depth: number }) {
           <Typography
             variant="bodyMonoSmRegular"
             sx={(theme) => ({
-              color: theme.palette.text.secondary,
-              fontStyle: inlineReturn.kind === 'void' ? 'italic' : 'normal',
+              // opaque `…` is a UI abbreviation → tertiary, like the arg
+              // count; void and real values are the truth → secondary.
+              color:
+                inlineReturn.kind === 'opaque'
+                  ? theme.palette.text.tertiary
+                  : theme.palette.text.secondary,
+              fontStyle: inlineReturn.kind === 'value' ? 'normal' : 'italic',
               whiteSpace: 'nowrap',
             })}
           >
             → {inlineReturn.text}
           </Typography>
         )}
-        {hasChildren && !childrenOpen && (
-          <Chip size="sm" color="neutral" label={foldedBadgeLabel(node)} />
-        )}
+        {hasChildren && !childrenOpen && <FoldedBadge node={node} />}
         {/* The whole unfinished stack path is marked in the model, but the
             chip renders only at the DEEPEST unfinished call — repeating it
             on every ancestor reads as noise (review finding); the nesting

@@ -1,9 +1,40 @@
 import { Box, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
+import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 
 type TokenKind = 'string' | 'number' | 'bool' | 'null' | 'key';
+
+// Strkey shape (SEP-23): G = account, C = contract, L = liquidity pool —
+// 56 chars of base32. Muxed M-addresses have no detail route; leave them
+// as plain strings.
+const STRKEY_RE = /^[GCL][A-Z2-7]{55}$/;
+
+function strkeyType(value: string): 'account' | 'contract' | 'pool' {
+  if (value.startsWith('C')) return 'contract';
+  if (value.startsWith('L')) return 'pool';
+  return 'account';
+}
+
+/** A JSON string that IS an identifier renders as the house address
+ *  component — clickable link + copy button — while keeping the JSON
+ *  string colour and the surrounding quotes (0460 #14). */
+function StrkeyString({ value }: { value: string }) {
+  return (
+    <Token kind="string">
+      {'"'}
+      <IdentifierWithCopy
+        value={value}
+        type={strkeyType(value)}
+        tone="inherit"
+        fontSize="inherit"
+        truncate={false}
+      />
+      {'"'}
+    </Token>
+  );
+}
 
 function colorFor(kind: TokenKind, theme: Theme): string {
   switch (kind) {
@@ -37,7 +68,11 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
   if (typeof value === 'string')
-    return <Token kind="string">{`"${value}"`}</Token>;
+    return STRKEY_RE.test(value) ? (
+      <StrkeyString value={value} />
+    ) : (
+      <Token kind="string">{`"${value}"`}</Token>
+    );
   if (typeof value === 'number' || typeof value === 'bigint')
     return <Token kind="number">{String(value)}</Token>;
   if (typeof value === 'boolean')
