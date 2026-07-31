@@ -31,8 +31,10 @@ history:
    name lives ON-LEDGER in instance storage `Symbol("METADATA")` (the
    off-ledger verdict in 0156/0283/0297 was chain-refuted — see project
    memory). Surface it in the invoke headline + Authorized calls tree.
-2. **Picker mini-headlines** — rows currently repeat the type label; use
-   the humanizeOp sentence (truncated) as the secondary line.
+2. **Picker mini-headlines** — SHIPPED 2026-07-31: each picker row carries
+   the humanizeOp sentence as a second line, elided to one line. Rows whose
+   type has no sentence template omit the line rather than echo the label
+   above it. Closed the second half of issue #370.
 3. **Fee-bump fee breakdown** — SE shows non-refundable/refundable split;
    needs result-meta fee fields (may ride on 0457's enrichment).
 4. **Pre-Protocol-23 note** — scope corrected 2026-07-30 after the 0462
@@ -60,9 +62,16 @@ history:
    status — move next to the page title or the Operations header.
 10. **Picker width** — SHIPPED 2026-07-30 (develop): grid is now
     `md: 5/7, lg: 4/8` (was 50/50); pairs with item 5, adaptive index.
-11. **Clickable values in headlines/facts**: sentences are plain strings, so
-    assets/accounts in them are dead text — needs ReactNode sentences;
-    coordinate with 0456 (typed details → componentised templates).
+11. **Clickable values in headlines/facts** — SHIPPED 2026-07-31, without
+    the ReactNode rewrite this item assumed. `humanizeOp` still returns a
+    string; a presentation component splits it and replaces each SHORT form
+    with the house identifier control. The full values are collected from
+    the light row and heavy details — never parsed out of the sentence — so
+    no address can be invented, and the ~20 sentence templates stayed
+    untouched. Only well-formed 56-char strkeys with a detail page link;
+    hex balance ids and asset codes stay plain (same rule as #14). Assets
+    in sentences are still plain text — the sentences print a code, not a
+    canonical id, so there is nothing to resolve; revisit with 0456.
 12. **Route-strip edge labels**: hop amounts are the pools' actual payouts
     while the headline shows the min/max bound — label edges (e.g. "actual")
     so the two numbers read as different facts, not a mismatch.
@@ -124,6 +133,26 @@ history:
     "for 2 claimants" but could not name them — the parser reduced the
     claimants XDR vec to `claimants: 2`.
 
+17. **One event line, shown once per operation** — SHIPPED 2026-07-31,
+    found by reviewing production right after the deploy. The card's own
+    events section had been dormant (it filters on `op_index`, which the
+    API only started emitting that day) and came back rendering a weaker
+    copy of what the trace already showed. The event line is now a shared
+    component; the card renders it only when there is no execution trace,
+    which is the classic-operation case where nothing else shows events.
+    Canonical asset ids shorten like every other identifier — at 60 chars
+    they had pushed every classic transfer into a bare `(4 fields)`.
+
+## Status (2026-07-31)
+
+Shipped: **2, 5, 8, 9, 10, 11, 13, 14, 16, 17**. Open: **1** (contract
+display names), **3** (fee split, waits on 0457), **4** (pre-P23 note),
+**6** (toggle preference — product call), **7** (XdrRow unification —
+waits for a third consumer), **12** (route-strip "actual" labels),
+**15** (root-call full inline args). The task stays active until each of
+those is shipped or withdrawn with a reason.
+
 ## Acceptance criteria
 
 - [ ] Each item shipped or explicitly withdrawn with a recorded reason
+      (10 of 17 shipped as of 2026-07-31)

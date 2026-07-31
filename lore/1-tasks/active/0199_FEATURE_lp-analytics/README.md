@@ -16,6 +16,7 @@ tags:
 milestone: 2
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/367'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/371'
 history:
   - date: '2026-05-07'
     status: backlog
@@ -221,6 +222,39 @@ Two concerns:
 This task **consumes** the price API; it does not build it.
 
 Subsumes 0125 (original LP analytics) and absorbs 0195 §2b (LP TVL).
+
+### Also owns: per-row trade amounts on the pool page (issue #371, triaged 2026-07-31)
+
+An external report asks the pool's "Recent transactions" table to say what
+each trade actually moved, instead of a bare `Trade` chip — stellar.expert
+shows the amounts on the same view.
+
+Verified against the live page and the schema, not assumed:
+
+- the endpoint returns `hash, source_account, operation_types, fee_charged,
+created_at` and no amounts, so the table renders what it has;
+- the Event chip is derived correctly from `operation_types` (Deposit /
+  Withdrawal / Trade) — no bug there;
+- **per-pool fill amounts are not indexed at all**: `operation_pools` is a
+  (pool, ledger, tx) index with no values, and `operations_appearances.amount`
+  is the operation's own folded amount, not the pool's side of the fill.
+
+The amounts live in the same place this task already needs them — the
+per-op `claimedAtoms` extraction (`amountSold`/`amountBought` per fill,
+`operation.rs::append_pool_claims`). That makes #371 a **presentation
+consumer of Phase 1**, not separate work: once the extraction persists
+per-fill amounts, the table gains an "Amount" column reading
+`12,059.29 XLM → 38.5M KALE`, and no second pipeline is introduced.
+
+Size: **large / needs-backfill** — it is an ingestion change plus historical
+re-parse, exactly the gating this task already carries. Nothing shippable
+from the frontend alone; a "Trade" row cannot invent the amounts it never
+received (see the no-misleading-fallbacks rule).
+
+Sequencing note: 0460 #12 found that `claim_atoms()` already returns the
+ORDER-BOOK atoms too and only `claim_lp_atoms` filters them out — emitting
+both with a `source: orderBook|pool` marker is the cheaper root fix and
+serves #371 and the route-strip labels at once.
 
 ## Per-lambda ownership
 

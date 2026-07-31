@@ -2,7 +2,7 @@
 id: '0462'
 title: 'FEATURE: execution trace — nested call tree from diagnostic events on the operation card'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0453', '0456', '0363', '0352']
 tags: [frontend, transaction-detail, soroban, ux, priority-high, effort-medium]
@@ -21,6 +21,17 @@ history:
     status: active
     who: karolkow
     note: 'Green-lit for implementation, FE-only scope.'
+  - date: '2026-07-31'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped to production and verified there. Seven review rounds; the
+      trace ended up carrying calls and events as one chronological row
+      stream, with a truthful stop marker on failed transactions. Deployed
+      2026-07-31 (SPA three times, API once) and checked live on four
+      fixtures. 205 web tests (+31 over the task), 822 backend tests, docs
+      updated. Follow-ups that outgrew this task live in 0460 (7 open
+      items), 0352 (ScError decode) and 0457 (effects for pre-P23 history).
 ---
 
 # FEATURE: execution trace — the real nested call tree, rendered readably
@@ -216,3 +227,35 @@ be done? how does stellar.expert cope?"
   copy buttons on every identifier in the trace, canonical CODE:ISSUER
   asset strings link from the JSON viewer, Lab deep links verified on the
   10,920-char envelope.
+
+## Round 7 — production, and what the deploy exposed (2026-07-31)
+
+Shipped: API (Compute stack, `--exclusively`) + SPA. Verified live on four
+fixtures — `7af6d0ed…` (fail reason), `54aab000…` (40-call trace),
+`f0ec7986…` (trap), `543d0159…` (claimants). Two findings only the real
+deploy could surface, both fixed the same day:
+
+- **A failing call hid its own reason.** Host errors carry message +
+  emitter + key + type; four fields exceeded the inline budget, so the row
+  read `error(4 fields)` and "trying to access contract data key outside of
+  the footprint" lived behind a disclosure. Diagnostics now always print
+  the message, clipped past 72 chars, with the rest as a muted count — the
+  same no-silent-elision rule the void-args fix established.
+- **The card's own events section woke up** with the backend deploy that
+  began attributing events to operations, and it duplicated the trace in a
+  weaker form (bare chip + unclickable emitter). The event line is now one
+  shared component; the card renders it only when there is NO trace, which
+  is exactly the classic-operation case (SAC events on a path payment)
+  where nothing else shows them. Canonical asset ids shorten like every
+  other identifier — at 60 chars they had been dragging every classic
+  transfer into `(4 fields)`.
+
+Also this round: identifiers inside headline sentences became links with
+copy buttons (0460 #11) — resolved from the operation data rather than by
+rewriting twenty sentence templates, so no address can be invented.
+
+**Deploy-order lesson worth keeping:** two 0453 backend features
+(per-operation event attribution, claimed-balance naming) sat dormant in
+production for two days because the frontend that consumes them shipped
+before the API that feeds them. Nothing was broken and nothing said so.
+Whoever ships next should state plainly which features a deploy wakes.
