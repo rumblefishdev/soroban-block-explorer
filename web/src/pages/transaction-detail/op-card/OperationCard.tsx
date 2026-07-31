@@ -10,7 +10,8 @@ import { useState } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 import { OperationJsonDetail } from './OperationJsonDetail.js';
-import { detailsObj, humanizeOp, shortId } from '../shared/humanizeOp.js';
+import { detailsObj, shortId } from '../shared/humanizeOp.js';
+import { HumanizedSentence } from '../shared/HumanizedSentence.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
@@ -165,7 +166,11 @@ export function OperationCard({
           variant="bodyMedium"
           sx={(theme) => ({ color: theme.palette.text.primary, mt: 1.25 })}
         >
-          {humanizeOp(light, heavy, txSourceAccount)}
+          <HumanizedSentence
+            light={light}
+            heavy={heavy}
+            txSourceAccount={txSourceAccount}
+          />
         </Typography>
 
         {routeModel != null && (

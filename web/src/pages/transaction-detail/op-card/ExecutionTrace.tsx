@@ -239,7 +239,10 @@ function eventCategory(label: string): {
  *  clickable). */
 export type InlinePart =
   | { kind: 'text'; text: string }
-  | { kind: 'id'; value: string; short: string };
+  | { kind: 'id'; value: string; short: string }
+  // A UI abbreviation, not a value — renders tertiary italic like the
+  // `6 args` counts so it never reads as part of the payload.
+  | { kind: 'muted'; text: string };
 
 function idType(value: string): 'contract' | 'account' | 'pool' {
   if (value.startsWith('C')) return 'contract';
@@ -277,7 +280,7 @@ function shortPart(value: unknown): InlinePart | null {
 }
 
 function partLength(part: InlinePart): number {
-  return part.kind === 'text' ? part.text.length : part.short.length;
+  return part.kind === 'id' ? part.short.length : part.text.length;
 }
 
 function partsLength(parts: readonly InlinePart[]): number {
@@ -290,7 +293,7 @@ function partsLength(parts: readonly InlinePart[]): number {
 /** Plain-text form of an inline part list (tests + length budget). */
 export function partsToText(parts: readonly InlinePart[]): string {
   return parts
-    .map((part) => (part.kind === 'text' ? part.text : part.short))
+    .map((part) => (part.kind === 'id' ? part.short : part.text))
     .join(', ');
 }
 
@@ -332,6 +335,26 @@ type EventArgsSummary =
   | { kind: 'inline'; parts: InlinePart[] }
   | { kind: 'count'; count: number };
 
+/** Longest error text kept inline; past it the tail is clipped rather than
+ *  dropped — a clipped sentence still says what went wrong, a count does not. */
+const MESSAGE_BUDGET = 72;
+
+/** The human-readable half of a failure diagnostic: the first string in the
+ *  payload (host errors put it first — message, then the offending address
+ *  and key). Null when the diagnostic carries no text at all. */
+function diagnosticMessage(values: readonly unknown[]): string | null {
+  for (const value of values) {
+    if (value == null || typeof value !== 'object') continue;
+    const { type, value: inner } = value as TypedVal;
+    if ((type === 'str' || type === 'string') && typeof inner === 'string') {
+      return inner.length > MESSAGE_BUDGET
+        ? `${inner.slice(0, MESSAGE_BUDGET - 1)}…`
+        : inner;
+    }
+  }
+  return null;
+}
+
 /** Inline summary of what an event announced: the payload topics (skipping
  *  the name) plus the data scalar(s) — `transfer(GC4Q…K7XQ, CCTU…V6J7,
  *  13171)`, `error("failing with contract error", 7)`. The fallback speaks
@@ -346,6 +369,31 @@ export function eventArgsSummary(event: XdrEventDto): EventArgsSummary {
       values.push(...data.value);
     } else if (data.type !== 'void') {
       values.push(data);
+    }
+  }
+  // Failure diagnostics: the MESSAGE is the whole reason the reader is here
+  // ("trying to access contract data key outside of the footprint"). Letting
+  // it fall into the generic `(4 fields)` count hides the one fact that
+  // matters, so the message always shows — clipped if long, with the
+  // remaining fields declared as a count. Full payload stays one click away.
+  if (eventCategory(traceEventLabel(event)).paletteKey === 'error') {
+    const message = diagnosticMessage(values);
+    if (message != null) {
+      const rest = values.length - 1;
+      return {
+        kind: 'inline',
+        parts: [
+          { kind: 'text', text: `"${message}"` },
+          ...(rest > 0
+            ? [
+                {
+                  kind: 'muted' as const,
+                  text: `+${rest} ${rest === 1 ? 'field' : 'fields'}`,
+                },
+              ]
+            : []),
+        ],
+      };
     }
   }
   const parts: InlinePart[] = [];
@@ -414,6 +462,16 @@ function InlineParts({ parts }: { parts: readonly InlinePart[] }) {
           {index > 0 && ', '}
           {part.kind === 'text' ? (
             part.text
+          ) : part.kind === 'muted' ? (
+            <Box
+              component="span"
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                fontStyle: 'italic',
+              })}
+            >
+              {part.text}
+            </Box>
           ) : (
             <IdentifierWithCopy
               value={part.value}

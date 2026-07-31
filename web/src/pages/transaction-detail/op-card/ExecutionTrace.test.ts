@@ -234,7 +234,46 @@ describe('eventArgsText', () => {
         { type: 'u32', value: 7 },
       ],
     });
-    expect(eventArgsText(error)).toBe('("failing with contract error", 7)');
+    expect(eventArgsText(error)).toBe(
+      '("failing with contract error", +1 field)'
+    );
+  });
+
+  it('keeps the message of a diagnostic that cannot inline (live trap fixture)', () => {
+    // f0ec7986…: message + emitter + storage key + type — four fields, so the
+    // generic path would have shown "(4 fields)" and hidden the reason.
+    const error = ev(
+      [
+        { type: 'sym', value: 'error' },
+        { type: 'error', value: 'Storage' },
+      ],
+      {
+        type: 'vec',
+        value: [
+          {
+            type: 'string',
+            value:
+              'trying to access contract data key outside of the footprint',
+          },
+          { type: 'address', value: CDDT },
+          { type: 'vec', value: [{ type: 'sym', value: 'Block' }] },
+        ],
+      }
+    );
+    expect(eventArgsText(error)).toBe(
+      '("trying to access contract data key outside of the footprint", +3 fields)'
+    );
+  });
+
+  it('clips an over-long diagnostic message instead of dropping it', () => {
+    const error = ev([{ type: 'sym', value: 'error' }], {
+      type: 'string',
+      value: 'x'.repeat(200),
+    });
+    const text = eventArgsText(error);
+    expect(text.startsWith('("xxx')).toBe(true);
+    expect(text.endsWith('…")')).toBe(true);
+    expect(text.length).toBeLessThan(80);
   });
 
   it('falls back to a field count when the payload cannot inline', () => {
