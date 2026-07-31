@@ -86,5 +86,16 @@ WHERE
     AND ($6 IS NULL OR lp.asset_b_code = $6)
     AND ($7 IS NULL OR lp.asset_b_issuer_id = (SELECT id FROM accounts FINAL WHERE account_id = $7 LIMIT 1))
     AND ($8 IS NULL OR s.tvl >= $8)
+    -- filter[asset_code], free text (task 0440). Appended by the handler in
+    -- one of two shapes; a native leg carries an EMPTY code, so both legs are
+    -- read as if(asset_type = 0, 'XLM', asset_code) — matching the column
+    -- directly hides every XLM pool and surfaces credit assets named "XLM".
+    --   fragment: positionCaseInsensitive(<leg_a>, $9) > 0
+    --          OR positionCaseInsensitive(<leg_b>, $9) > 0
+    --   pair:    (upper(<leg_a>) = $9 AND upper(<leg_b>) = $10)
+    --          OR (upper(<leg_a>) = $10 AND upper(<leg_b>) = $9)
+    -- Pair sides are exact: a pair names two assets, and substring sides
+    -- pulled in DXLM / yUSDC lookalikes. No sort-key pruning either way —
+    -- the table is ordered by pool_id, so this filter always scans.
 ORDER BY lp.last_updated_ledger DESC, lp.pool_id DESC
 LIMIT $1;

@@ -124,7 +124,6 @@ the 400 envelope and the rendered list. Both are post-deploy checks.
       the current exact-match plan
 - [x] Regex explicitly not accepted; malformed input rejected, not passed through
 - [x] Native legs searchable as `XLM` (found while verifying; pre-existing)
-- [ ] **Docs updated** — endpoint filter semantics under
-      `docs/architecture/**` if the LP endpoint contract is documented there
-- [ ] **API types regenerated** — touches `crates/api/**`; run
-      `npx nx run @rumblefish/api-types:generate`
+- [x] **Docs updated** — backend-overview (endpoint contract), frontend-overview
+      (§6.13 filter description) and the documented list SQL
+- [x] **API types regenerated** — `openapi.json` + `generated/*` in the same change

@@ -458,8 +458,12 @@ quality may vary significantly.
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** - Paginated list of pools. Query params: `limit`, `cursor`,
-`filter[asset_code]` (single-asset, case-insensitive, matches either leg —
-task 0246), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
+`filter[asset_code]` (free text, case-insensitive — a fragment is a SUBSTRING
+match against either leg, `USD` finds `USDC`; `CODE/CODE` is a pair
+constraining both legs in either order with exact per-side codes; a native leg
+matches as `XLM` because it stores an empty code; minimum 2 characters, shorter
+input and malformed pairs return `400 invalid_filter`; user regex deliberately
+rejected — tasks 0246, 0440), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
 `filter[asset_b_code]`, `filter[asset_b_issuer]` (G-StrKey),
 `filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
 or both omitted (classic identity). The single-asset and per-leg modes coexist
