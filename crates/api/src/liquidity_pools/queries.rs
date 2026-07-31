@@ -106,9 +106,77 @@ pub struct ResolvedPoolListParams {
     pub asset_b_issuer: Option<String>,
     /// Decimal string preserving NUMERIC(28,7) precision.
     pub min_tvl: Option<String>,
-    /// Single-asset filter (task 0246) — trimmed + uppercased at the handler
-    /// boundary, matched against either leg case-insensitively. NULL = no filter.
-    pub asset_code: Option<String>,
+    /// Free-text asset filter (tasks 0246, 0440) — parsed at the handler
+    /// boundary. NULL = no filter.
+    pub asset_code: Option<AssetFilter>,
+}
+
+/// What the free-text asset input resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetFilter {
+    /// One fragment, matched as a substring against either leg.
+    Single(String),
+    /// Both legs constrained; the query accepts either assignment, so
+    /// `USDC/XLM` and `XLM/USDC` return the same pools.
+    Pair(String, String),
+}
+
+/// A leg's searchable code. A NATIVE leg (`asset_type = 0`) stores an EMPTY
+/// `asset_code`, so matching the column directly misses every XLM pool —
+/// 16,578 of 76,957 on production, and the most-searched ones. Worse, the
+/// literal `XLM` DOES match ~740 pools whose leg is a credit asset someone
+/// named "XLM", so the filter answered with impostors while hiding the real
+/// thing. Substituting the canonical code for native legs fixes both, and
+/// costs nothing: the scan is full either way (measured 76,981 rows).
+///
+/// Pre-existing — the exact-match filter had the same blind spot; found while
+/// verifying the substring change against production data (task 0440).
+fn leg_code_expr(leg: &str) -> String {
+    format!("if(lp.asset_{leg}_type = 0, 'XLM', lp.asset_{leg}_code)")
+}
+
+/// Append the free-text asset predicate (task 0440).
+///
+/// Substring, not equality: `USD` has to find `USDC`, which the exact match
+/// could not. Free of charge — `liquidity_pools` is ordered by `pool_id`, so
+/// this filter never pruned on the sort key anyway; measured on production,
+/// equality and substring both read ~77k rows in ~8 ms.
+///
+/// A pair matches in either assignment: a user types a pair, not an ordering
+/// of legs, so `USDC/XLM` and `XLM/USDC` must return the same pools.
+///
+/// Kept separate from `fetch_pool_list` so the emitted SQL and its binds are
+/// unit-testable without a database.
+fn push_asset_filter(sql: &mut String, binds: &mut Vec<String>, filter: Option<&AssetFilter>) {
+    let (a, b) = (leg_code_expr("a"), leg_code_expr("b"));
+    match filter {
+        Some(AssetFilter::Single(fragment)) => {
+            sql.push_str(&format!(
+                " AND (positionCaseInsensitive({a}, ?) > 0 \
+                   OR positionCaseInsensitive({b}, ?) > 0)"
+            ));
+            binds.push(fragment.clone());
+            binds.push(fragment.clone());
+        }
+        // A pair is a PRECISE statement — "these two assets" — so each side
+        // matches the whole code, not a substring. Measured on production:
+        // substring sides answer `XLM/USDC` with 197 pools including
+        // `DXLM/USDC`, `native/yUSDC` and `USDC/LibreXLM`; exact sides answer
+        // with 63, all genuinely that pair. The lookalikes are the same class
+        // of noise as the native-leg bug above. A single fragment stays a
+        // substring — that is the reported complaint (`USD` must find `USDC`).
+        Some(AssetFilter::Pair(first, second)) => {
+            sql.push_str(&format!(
+                " AND ((upper({a}) = ? AND upper({b}) = ?) \
+                    OR (upper({a}) = ? AND upper({b}) = ?))"
+            ));
+            binds.push(first.clone());
+            binds.push(second.clone());
+            binds.push(second.clone());
+            binds.push(first.clone());
+        }
+        None => {}
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -972,11 +1040,7 @@ pub async fn fetch_pool_list(
         );
         binds.push(iss.clone());
     }
-    if let Some(code) = params.asset_code.as_ref() {
-        filters.push_str(" AND (upper(lp.asset_a_code) = ? OR upper(lp.asset_b_code) = ?)");
-        binds.push(code.clone());
-        binds.push(code.clone());
-    }
+    push_asset_filter(&mut filters, &mut binds, params.asset_code.as_ref());
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
     // `ledger_sequence` band around the page's `last_updated_ledger` range (the
@@ -1202,6 +1266,54 @@ mod tests {
         assert!(!is_hex_pool_id(&"A".repeat(64)), "uppercase rejected");
         assert!(!is_hex_pool_id("xyz"));
         assert!(!is_hex_pool_id(&"'; DROP--".repeat(8)));
+    }
+
+    #[test]
+    fn asset_filter_sql_is_substring_and_order_insensitive() {
+        let mut sql = String::new();
+        let mut binds = Vec::new();
+        push_asset_filter(&mut sql, &mut binds, None);
+        assert!(sql.is_empty(), "no filter emits no predicate");
+        assert!(binds.is_empty());
+
+        let mut sql = String::new();
+        let mut binds = Vec::new();
+        push_asset_filter(
+            &mut sql,
+            &mut binds,
+            Some(&AssetFilter::Single("USD".into())),
+        );
+        assert!(
+            sql.contains("positionCaseInsensitive(if(lp.asset_a_type = 0, 'XLM', lp.asset_a_code)")
+                && sql.contains(
+                    "positionCaseInsensitive(if(lp.asset_b_type = 0, 'XLM', lp.asset_b_code)"
+                ),
+            "substring match on both legs, native leg searchable as XLM: {sql}"
+        );
+        assert!(
+            !sql.contains("asset_a_code = ?"),
+            "equality would miss USDC for USD: {sql}"
+        );
+        assert_eq!(binds, vec!["USD".to_string(), "USD".to_string()]);
+
+        // Pair: both assignments, so USDC/XLM and XLM/USDC agree. Bind order
+        // is (a,b) then the swap (b,a) — placeholders are positional. Sides
+        // match the WHOLE code: a pair names two assets, and substring sides
+        // pulled in DXLM / yUSDC lookalikes (measured, see fn doc).
+        let mut sql = String::new();
+        let mut binds = Vec::new();
+        push_asset_filter(
+            &mut sql,
+            &mut binds,
+            Some(&AssetFilter::Pair("USDC".into(), "XLM".into())),
+        );
+        assert_eq!(sql.matches('?').count(), 4);
+        assert!(
+            !sql.contains("positionCaseInsensitive"),
+            "pair sides are exact, not substring: {sql}"
+        );
+        assert!(sql.contains("upper(if(lp.asset_a_type = 0, 'XLM'"));
+        assert_eq!(binds, vec!["USDC", "XLM", "XLM", "USDC"]);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use super::dto::{
     ChartParams, ChartResponse, ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor,
     PoolListParams, PoolTransactionItem, SharesCursor,
 };
-use super::queries::{self, PoolRow, PoolTxRow, ResolvedPoolListParams};
+use super::queries::{self, AssetFilter, PoolRow, PoolTxRow, ResolvedPoolListParams};
 
 #[utoipa::path(
     get,
@@ -158,6 +158,15 @@ fn is_valid_decimal_string(s: &str) -> bool {
     digits > 0 && dots <= 1
 }
 
+/// Shortest fragment accepted for a substring match. Not a cost guard — the
+/// pools table is scanned in full for this filter either way (it is ordered
+/// by `pool_id`, and the measured read is identical for equality and
+/// substring, task 0440). It is a usefulness guard: a single character
+/// matches most of the list and reads as a broken filter.
+const MIN_ASSET_FRAGMENT: usize = 2;
+/// Separator for the pair syntax the input has always advertised.
+const PAIR_SEPARATOR: char = '/';
+
 /// Normalize `filter[asset_code]` for the WHERE clause: trim surrounding
 /// whitespace and uppercase the result. Empty input (e.g. `?filter[asset_code]=`)
 /// is treated as "no filter" and dropped to `None`. The DB side applies
@@ -172,6 +181,40 @@ fn is_valid_decimal_string(s: &str) -> bool {
 fn normalize_asset_code(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_uppercase())
         .filter(|s| !s.is_empty())
+}
+
+/// Parse the free-text asset filter into what the query can act on: one
+/// fragment matched against either leg, or a PAIR constraining both.
+///
+/// `USDC` → single, `USDC/XLM` → pair (order-insensitive at the query side).
+/// Fragments shorter than [`MIN_ASSET_FRAGMENT`] and malformed pairs
+/// (`USDC/`, `/`, `A/B/C`) are rejected outright rather than silently
+/// degraded — a filter that quietly matches something other than what was
+/// typed is worse than one that says no.
+fn parse_asset_filter(raw: Option<String>) -> Result<Option<AssetFilter>, String> {
+    let Some(value) = normalize_asset_code(raw) else {
+        return Ok(None);
+    };
+    if !value.contains(PAIR_SEPARATOR) {
+        return if value.chars().count() >= MIN_ASSET_FRAGMENT {
+            Ok(Some(AssetFilter::Single(value)))
+        } else {
+            Err(format!(
+                "asset filter must be at least {MIN_ASSET_FRAGMENT} characters"
+            ))
+        };
+    }
+    let parts: Vec<&str> = value.split(PAIR_SEPARATOR).map(str::trim).collect();
+    if parts.len() != 2 || parts.iter().any(|p| p.chars().count() < MIN_ASSET_FRAGMENT) {
+        return Err(format!(
+            "asset pair must be `A{PAIR_SEPARATOR}B`, each side at least \
+             {MIN_ASSET_FRAGMENT} characters"
+        ));
+    }
+    Ok(Some(AssetFilter::Pair(
+        parts[0].to_string(),
+        parts[1].to_string(),
+    )))
 }
 
 fn map_pool_item(row: PoolRow) -> PoolItem {
@@ -302,7 +345,16 @@ pub async fn list_pools(
         asset_b_code: params.filter_asset_b_code,
         asset_b_issuer: params.filter_asset_b_issuer,
         min_tvl: params.filter_min_tvl,
-        asset_code: normalize_asset_code(params.filter_asset_code),
+        asset_code: match parse_asset_filter(params.filter_asset_code) {
+            Ok(filter) => filter,
+            Err(message) => {
+                return errors::bad_request_with_details(
+                    errors::INVALID_FILTER,
+                    &message,
+                    serde_json::json!({ "filter": "asset_code" }),
+                );
+            }
+        },
     };
 
     // The CH list keys on `last_updated_ledger` (see
@@ -704,6 +756,48 @@ mod normalize_asset_code_tests {
             normalize_asset_code(Some("usdc🪙".into())),
             Some("USDC🪙".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod parse_asset_filter_tests {
+    use super::{AssetFilter, parse_asset_filter};
+
+    fn parse(raw: &str) -> Result<Option<AssetFilter>, String> {
+        parse_asset_filter(Some(raw.into()))
+    }
+
+    #[test]
+    fn absent_and_empty_mean_no_filter() {
+        assert_eq!(parse_asset_filter(None), Ok(None));
+        assert_eq!(parse("   "), Ok(None));
+    }
+
+    #[test]
+    fn single_fragment_is_uppercased() {
+        assert_eq!(parse(" usd "), Ok(Some(AssetFilter::Single("USD".into()))));
+    }
+
+    #[test]
+    fn pair_splits_and_trims_both_sides() {
+        assert_eq!(
+            parse("usdc / xlm"),
+            Ok(Some(AssetFilter::Pair("USDC".into(), "XLM".into())))
+        );
+    }
+
+    #[test]
+    fn one_character_is_rejected_not_widened() {
+        // Silently dropping the guard would return most of the list and read
+        // as a broken filter.
+        assert!(parse("u").is_err());
+    }
+
+    #[test]
+    fn malformed_pairs_are_rejected() {
+        for input in ["usdc/", "/xlm", "/", "a/b/c", "usdc/x"] {
+            assert!(parse(input).is_err(), "expected rejection for {input}");
+        }
     }
 }
 

@@ -72,14 +72,58 @@ plus pair syntax covers the realistic uses (`USD…`, `…BTC`, `USDC/XLM`) with
 handing a query planner to anonymous callers. Record the reasoning in the reply
 to the reporter, not just here.
 
+## Implemented 2026-07-31 (feat/0462 branch, awaiting deploy)
+
+Measured against production ClickHouse before and after each decision.
+
+**The min-length rationale in "Scope" was wrong.** It said a guard keeps the
+scan bounded; the scan is full either way — `liquidity_pools` is ordered by
+`pool_id`, so this filter never pruned on the sort key. Equality and substring
+both read ~93.5k rows (~15 ms) through the real `page` CTE, `FINAL` included.
+The 2-character guard stays, for usefulness: one character matches most of the
+list and reads as a broken filter.
+
+**Native legs were the real bug, and it pre-dated this task.** A native leg
+stores `asset_type = 0` with an EMPTY `asset_code`, so `XLM` matched none of
+the 16,578 pools that hold XLM — while matching ~740 pools whose leg is a
+credit asset someone named "XLM". The filter answered with impostors and hid
+the real thing. Both legs are now read through
+`if(asset_type = 0, 'XLM', asset_code)`; `XLM` went from a handful of
+lookalikes to 21,590 pools, at identical cost.
+
+**Pair sides are EXACT, single fragments are substrings.** Verified on rows,
+not counts: substring sides answered `XLM/USDC` with 197 pools including
+`DXLM/USDC`, `native/yUSDC` and `USDC/LibreXLM`; exact sides answer with 63,
+all genuinely that pair (native-leg pools included). A pair names two assets —
+same lookalike-noise argument as the native fix. The reported complaint was
+about single fragments (`USD` must find `USDC`), and that stays a substring.
+
+Measured cost through the real query, `FINAL` included:
+
+| Filter                | rows_read |
+| --------------------- | --------- |
+| none (baseline page)  | 93,552    |
+| old exact-match `USD` | 93,530    |
+| new substring `USD`   | 93,552    |
+| new pair `XLM/USDC`   | 96,507    |
+
+Rejected input returns `400 invalid_filter` — `u`, `USDC/`, `/xlm`, `a/b/c`.
+SQL generation was extracted from `fetch_pool_list` into `push_asset_filter`
+so the emitted predicate and its bind order are unit-testable without a
+database.
+
+Not verified locally (no local ClickHouse with data): the HTTP path itself —
+the 400 envelope and the rendered list. Both are post-deploy checks.
+
 ## Acceptance criteria
 
-- [ ] Substring match on `asset_a_code` / `asset_b_code`, min-length guarded
-- [ ] `A/B` pair syntax, order-insensitive
-- [ ] Placeholder text matches actual behaviour
-- [ ] Query cost measured (`read_rows`) on the busiest codes; no regression vs
+- [x] Substring match on `asset_a_code` / `asset_b_code`, min-length guarded
+- [x] `A/B` pair syntax, order-insensitive
+- [x] Placeholder text matches actual behaviour
+- [x] Query cost measured (`read_rows`) on the busiest codes; no regression vs
       the current exact-match plan
-- [ ] Regex explicitly not accepted; malformed input rejected, not passed through
+- [x] Regex explicitly not accepted; malformed input rejected, not passed through
+- [x] Native legs searchable as `XLM` (found while verifying; pre-existing)
 - [ ] **Docs updated** — endpoint filter semantics under
       `docs/architecture/**` if the LP endpoint contract is documented there
 - [ ] **API types regenerated** — touches `crates/api/**`; run

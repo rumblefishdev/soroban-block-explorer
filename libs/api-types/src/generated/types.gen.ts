@@ -2640,10 +2640,11 @@ export type ListPoolsData = {
      */
     cursor?: string;
     /**
-     * Single-asset filter — matches either `asset_a_code` or
-     * `asset_b_code` case-insensitively (input is trimmed + uppercased
-     * before the query). Intended for the Figma list's free-text
-     * "Filter by asset pair" input.
+     * Free-text asset filter — a fragment matched as a case-insensitive
+     * substring against either leg, or a `CODE/CODE` pair constraining both
+     * legs in either order with exact per-side codes. Native legs match as
+     * `XLM`. Input is trimmed + uppercased before the query. Minimum 2
+     * characters per fragment. Regex is deliberately not accepted (0440).
      */
     'filter[asset_code]'?: string | null;
     'filter[asset_a_code]'?: string | null;

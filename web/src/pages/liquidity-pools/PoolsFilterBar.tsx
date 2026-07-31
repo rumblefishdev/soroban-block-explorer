@@ -62,8 +62,11 @@ export function PoolsFilterBar({
     >
       <DebouncedField
         value={asset}
-        placeholder="Filter by asset pair..."
-        ariaLabel="Filter by asset pair"
+        // Says what the filter actually does: a fragment matches either leg,
+        // a pair constrains both. The old "Filter by asset pair..." promised
+        // a syntax the backend rejected (task 0440).
+        placeholder="Filter by asset — USDC, or a pair USDC/XLM"
+        ariaLabel="Filter by asset or asset pair"
         width={400}
         onCommit={onAssetChange}
       />
