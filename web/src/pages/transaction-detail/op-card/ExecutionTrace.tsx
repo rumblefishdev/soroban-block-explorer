@@ -269,6 +269,16 @@ function shortPart(value: unknown): InlinePart | null {
   if (typeof inner === 'string') {
     // Big ints (i128/u128…) arrive as decimal strings; symbols stay short.
     if (/^-?\d+$/.test(inner)) return { kind: 'text', text: inner };
+    // Canonical asset id — SAC token events carry it as a topic, and at 60+
+    // characters it used to push every classic transfer into a bare field
+    // count. Shorten the issuer the way the rest of the page does.
+    const asset = /^([A-Za-z0-9]{1,12}):(G[A-Z2-7]{55})$/.exec(inner);
+    if (asset != null) {
+      return {
+        kind: 'text',
+        text: `${asset[1]}:${asset[2].slice(0, 4)}…${asset[2].slice(-4)}`,
+      };
+    }
     if (type === 'sym' && inner.length <= 12) {
       return { kind: 'text', text: inner };
     }
@@ -633,6 +643,111 @@ function DetailsPanel({
   );
 }
 
+/** The dot glyph that marks an event line, in its category colour. */
+export function EventDot({ event }: { event: XdrEventDto }) {
+  const category = eventCategory(traceEventLabel(event));
+  return (
+    <Box
+      component="span"
+      aria-hidden
+      sx={(theme) => ({
+        width: 20,
+        flexShrink: 0,
+        textAlign: 'center',
+        color:
+          category.paletteKey === 'secondary'
+            ? theme.palette.text.tertiary
+            : eventColor(category.paletteKey, theme),
+        fontSize: 14,
+        lineHeight: 1,
+      })}
+    >
+      •
+    </Box>
+  );
+}
+
+/** What an event says, in one line: category-coloured name pill, the payload
+ *  inline, and the emitter. Shared with the operation card's own events
+ *  section so an event reads identically wherever it appears — the card used
+ *  to render a bare chip plus a truncated, unclickable id. */
+export function EventLine({ event }: { event: XdrEventDto }) {
+  const label = traceEventLabel(event);
+  const category = eventCategory(label);
+  const payload = eventArgsSummary(event);
+
+  return (
+    <>
+      <Typography
+        variant="bodyMonoSmRegular"
+        title={`Event announced by this call — ${category.hint}`}
+        sx={(theme) => ({
+          whiteSpace: 'nowrap',
+          color: eventColor(category.paletteKey, theme),
+        })}
+      >
+        {/* Tinted pill behind the NAME: shape separates events from call
+            rows even where hue alone is not enough (contrast review). */}
+        <Box
+          component="span"
+          sx={(theme) => ({
+            px: 0.75,
+            py: 0.125,
+            borderRadius: `${theme.shape.radius.s}px`,
+            backgroundColor: alpha(
+              eventColor(category.paletteKey, theme),
+              theme.palette.mode === 'dark' ? 0.16 : 0.12
+            ),
+          })}
+        >
+          {label}
+        </Box>
+        <Box
+          component="span"
+          sx={(theme) => ({ color: theme.palette.text.secondary })}
+        >
+          (
+          {payload.kind === 'inline' ? (
+            <InlineParts parts={payload.parts} />
+          ) : (
+            <Box
+              component="span"
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                fontStyle: 'italic',
+              })}
+            >
+              {payload.count} {payload.count === 1 ? 'field' : 'fields'}
+            </Box>
+          )}
+          )
+        </Box>
+      </Typography>
+      {event.contract_id != null && (
+        <Typography
+          variant="bodyXsRegular"
+          component="span"
+          title="Contract that announced this event"
+          sx={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 0.5,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <Box
+            component="span"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
+            by
+          </Box>
+          <IdentifierWithCopy value={event.contract_id} type="contract" />
+        </Typography>
+      )}
+    </>
+  );
+}
+
 /** An event the call announced, as a first-class row: chronology-true
  *  sibling of sub-calls (a transfer that fired between two sub-calls sits
  *  between them). Distinguished from calls by FORM and colour: dot glyph
@@ -642,96 +757,12 @@ function DetailsPanel({
  *  any children. */
 function EventRow({ event, depth }: { event: XdrEventDto; depth: number }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const label = traceEventLabel(event);
-  const category = eventCategory(label);
-  const payload = eventArgsSummary(event);
 
   return (
     <>
       <RowShell depth={depth}>
-        <Box
-          component="span"
-          aria-hidden
-          sx={(theme) => ({
-            width: 20,
-            flexShrink: 0,
-            textAlign: 'center',
-            color:
-              category.paletteKey === 'secondary'
-                ? theme.palette.text.tertiary
-                : eventColor(category.paletteKey, theme),
-            fontSize: 14,
-            lineHeight: 1,
-          })}
-        >
-          •
-        </Box>
-        <Typography
-          variant="bodyMonoSmRegular"
-          title={`Event announced by this call — ${category.hint}`}
-          sx={(theme) => ({
-            whiteSpace: 'nowrap',
-            color: eventColor(category.paletteKey, theme),
-          })}
-        >
-          {/* Tinted pill behind the NAME: shape separates events from call
-              rows even where hue alone is not enough (contrast review). */}
-          <Box
-            component="span"
-            sx={(theme) => ({
-              px: 0.75,
-              py: 0.125,
-              borderRadius: `${theme.shape.radius.s}px`,
-              backgroundColor: alpha(
-                eventColor(category.paletteKey, theme),
-                theme.palette.mode === 'dark' ? 0.16 : 0.12
-              ),
-            })}
-          >
-            {label}
-          </Box>
-          <Box
-            component="span"
-            sx={(theme) => ({ color: theme.palette.text.secondary })}
-          >
-            (
-            {payload.kind === 'inline' ? (
-              <InlineParts parts={payload.parts} />
-            ) : (
-              <Box
-                component="span"
-                sx={(theme) => ({
-                  color: theme.palette.text.tertiary,
-                  fontStyle: 'italic',
-                })}
-              >
-                {payload.count} {payload.count === 1 ? 'field' : 'fields'}
-              </Box>
-            )}
-            )
-          </Box>
-        </Typography>
-        {event.contract_id != null && (
-          <Typography
-            variant="bodyXsRegular"
-            component="span"
-            title="Contract that announced this event"
-            sx={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 0.5,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <Box
-              component="span"
-              sx={(theme) => ({ color: theme.palette.text.tertiary })}
-            >
-              by
-            </Box>
-            <IdentifierWithCopy value={event.contract_id!} type="contract" />
-          </Typography>
-        )}
+        <EventDot event={event} />
+        <EventLine event={event} />
         <DetailsToggle
           open={detailsOpen}
           onToggle={() => setDetailsOpen((open) => !open)}

@@ -10,7 +10,7 @@ import { useState } from 'react';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 import { OperationJsonDetail } from './OperationJsonDetail.js';
-import { detailsObj, shortId } from '../shared/humanizeOp.js';
+import { detailsObj } from '../shared/humanizeOp.js';
 import { HumanizedSentence } from '../shared/HumanizedSentence.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
@@ -18,6 +18,8 @@ import { isSorobanOp } from '../shared/opKind.js';
 import { CallTree, parseOperationTree } from './CallTree.js';
 import {
   buildExecutionTrace,
+  EventDot,
+  EventLine,
   ExecutionTrace,
   traceCallCount,
 } from './ExecutionTrace.js';
@@ -46,20 +48,6 @@ interface OperationCardProps {
    *  (fn_call/fn_return). Tx-level is safe on the invoke card for the same
    *  reason as `operationTree` (one InvokeHostFunction per tx). */
   diagnosticEvents?: readonly XdrEventDto[];
-}
-
-/** First topic is the event name for well-formed token events. */
-function eventLabel(event: XdrEventDto): string {
-  const first = event.topics[0];
-  if (
-    first != null &&
-    typeof first === 'object' &&
-    (first as { type?: unknown }).type === 'sym' &&
-    typeof (first as { value?: unknown }).value === 'string'
-  ) {
-    return (first as { value: string }).value;
-  }
-  return event.event_type;
 }
 
 /** Small uppercase section label used across the card. */
@@ -125,8 +113,14 @@ export function OperationCard({
       : [];
   // op_index is the 0-based envelope position (CAP-67 V4 attribution);
   // responses parsed before the field landed simply match nothing.
+  //
+  // Suppressed when the execution trace is present: the trace already shows
+  // these very events as rows, in the call that raised them and with their
+  // payload — a flat repetition underneath adds nothing. Classic operations
+  // have no trace (SAC events on a payment, say), and there this list is the
+  // only per-operation view, so it stays.
   const opEvents =
-    heavy?.application_order != null
+    heavy?.application_order != null && traceNodes.length === 0
       ? contractEvents.filter(
           (event) => event.op_index === heavy.application_order - 1
         )
@@ -205,17 +199,10 @@ export function OperationCard({
                 direction="row"
                 spacing={1}
                 alignItems="center"
-                sx={{ py: 0.25 }}
+                sx={{ py: 0.25, overflowX: 'auto' }}
               >
-                <Chip size="sm" color="neutral" label={eventLabel(event)} />
-                {event.contract_id != null && (
-                  <Typography
-                    variant="bodyMonoSmRegular"
-                    sx={(theme) => ({ color: theme.palette.text.secondary })}
-                  >
-                    {shortId(event.contract_id)}
-                  </Typography>
-                )}
+                <EventDot event={event} />
+                <EventLine event={event} />
               </Stack>
             ))}
           </Box>

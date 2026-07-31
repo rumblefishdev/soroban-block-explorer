@@ -276,6 +276,26 @@ describe('eventArgsText', () => {
     expect(text.length).toBeLessThan(80);
   });
 
+  it('shortens the canonical asset id a SAC transfer carries', () => {
+    // Classic path payments emit these; the 60-char asset string used to push
+    // the whole row into "(4 fields)".
+    const transfer = ev(
+      [
+        { type: 'sym', value: 'transfer' },
+        { type: 'address', value: CDDT },
+        {
+          type: 'string',
+          value:
+            'LIBRE:GAYCCWKECNGDRHYU3UTREBD2XLC3CUQN6FV22TKM4WCQER3IWR7TF5CY',
+        },
+      ],
+      { type: 'i128', value: '47999995' }
+    );
+    expect(eventArgsText(transfer)).toBe(
+      '(CDDT…RCTX, LIBRE:GAYC…F5CY, 47999995)'
+    );
+  });
+
   it('falls back to a field count when the payload cannot inline', () => {
     const long = ev(
       [
