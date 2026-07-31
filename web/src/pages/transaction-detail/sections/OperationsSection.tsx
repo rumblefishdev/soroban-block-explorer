@@ -57,7 +57,8 @@ export function OperationsSection({
                 it narrow (0460 #10). */}
             <Grid size={{ xs: 12, md: 5, lg: 4 }}>
               <OperationPicker
-                operations={entries.map((entry) => entry.row)}
+                entries={entries}
+                txSourceAccount={tx.source_account ?? null}
                 selectedIndex={selectedIndex}
                 onSelect={onSelect}
               />
