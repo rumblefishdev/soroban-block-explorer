@@ -3,6 +3,7 @@ import { classifyError } from '../classifyError.js';
 import { GenericErrorState } from './GenericErrorState.js';
 import { RateLimitState } from './RateLimitState.js';
 import { TransientErrorState } from './TransientErrorState.js';
+import { ValidationErrorState } from './ValidationErrorState.js';
 
 interface QueryErrorStateProps {
   /** Raw query error; classified into rate-limit / transient / generic. */
@@ -26,5 +27,16 @@ export function QueryErrorState({ error, onRetry, py }: QueryErrorStateProps) {
     return <RateLimitState onRetry={onRetry} py={py} />;
   if (kind === 'transient')
     return <TransientErrorState onRetry={onRetry} py={py} />;
+  // `classifyError` has always separated 400/422, but every caller fell
+  // through to "Something went wrong · Try again" — wrong about the cause and
+  // useless as an action, since identical input fails identically.
+  if (kind === 'validation') {
+    return (
+      <ValidationErrorState
+        message={error instanceof Error ? error.message : undefined}
+        py={py}
+      />
+    );
+  }
   return <GenericErrorState onRetry={onRetry} py={py} />;
 }
