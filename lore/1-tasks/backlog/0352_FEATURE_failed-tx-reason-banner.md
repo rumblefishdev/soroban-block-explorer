@@ -73,6 +73,16 @@ history:
       from this task should land. The strip already passes through tx-level
       `result_code` when it says more than txFAILED; this task replaces that
       with the real per-op / ScError reason.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Core implemented on the 0462 branch (see "Implementation progress"):
+      per-op result codes end-to-end (parser accessor → heavy DTO →
+      regenerated API types → banner reason line), verified against the
+      real archive on the 7af6d0ed… fixture. Steps 1-2 (ScError decode with
+      numeric code, error-event picking) and Step 4 (code→name via ABI)
+      remain. Fruit lands at the next backend deploy.
 ---
 
 # FEATURE: prominent fail-reason banner on failed transactions
@@ -226,19 +236,56 @@ LOW_RESERVE` reads the same as `Failed · Auth/ExistingValue — …`. The reade
   failures is indistinguishable from the current behaviour for the transaction
   that was actually reported.
 
+## Implementation progress (2026-07-30, feat/0462 branch)
+
+The classic half (Step 6) + the banner line are BUILT; awaiting deploy:
+
+- **Parser** (`crates/xdr-parser/src/operation.rs`): `tx_op_results_any()` —
+  companion accessor unwrapping the failed arms (`TxFailed`,
+  `TxFeeBumpInnerFailed`); `tx_op_results` deliberately untouched so claim
+  atoms stay success-gated (0261 phantom-crossing guard lives at the
+  accessor, and the two consumers now use different accessors).
+  `op_result_code()` — per-op name from the XDR library's own `name()`
+  (27-arm unwrap of `OpInner`, op-level rejections pass through), no
+  hand-rolled table (0431 lesson). Unit test mirrors the fixture shape.
+- **Heavy path** (`extractors.rs` + `dto.rs`): `XdrOperationDto.result_code`
+  (nullable), populated from `tx_op_results_any`; claims path unchanged.
+  Off-by-one guarded: `operation_index` is 1-based, the XDR array 0-based.
+  API types regenerated. Indexer untouched — codes are detail-page-only,
+  no indexing (as planned).
+- **E2E against the real archive**: network-gated test
+  `e3_failed_tx_ops_carry_result_codes` fetches ledger 63687496 and asserts
+  `["Success", "LowReserve", "OpNoAccount"]` on `7af6d0ed…` — the exact
+  hand-decoded root-cause sequence.
+- **Banner** (`TransactionSummary.tsx`): `opFailReason()` — first failing
+  op as `Create Account #2 — LOW_RESERVE`, `(+N more failed)` when later
+  ops also failed (a tx fails when ANY op fails — count, don't hide);
+  falls back to the tx-level code passthrough when the per-op array is
+  absent (validation-level failures, pre-deploy responses). Code display is
+  a pure case transform (CamelCase → SCREAMING_SNAKE) of the library name.
+- **Docs**: frontend-overview §6.4 (banner + consumed heavy fields),
+  xdr-parsing-overview (accessor pair + who consumes which).
+
 ## Acceptance Criteria
 
-- [ ] Failed tx detail shows a prominent `Failed · <type>/<code> — <message>` banner
+- [x] Failed tx detail shows the reason on the failed strip (built; per-op
+      code line — the `<type>/<code> — <message>` ScError refinement for
+      Soroban failures is Steps 1-2, still open)
 - [ ] Decoder surfaces the numeric code (not just the type name)
-- [ ] Verified on all 4 fixtures above (Auth, Contract, Budget, Value)
-- [ ] **Classic-failure fixture also verified** — `7af6d0ed…` renders
-      `CREATE_ACCOUNT — LOW_RESERVE`, not a blank banner
-- [ ] Per-operation result codes exposed on the operation DTO
-- [ ] Advanced Diagnostic events section unchanged (still available)
-- [ ] **Docs updated** — N/A unless a new API field is added (if the banner is
-      server-composed, document it in the tx-detail contract docs).
-- [ ] **API types regenerated** — required IF Step 1/2 change the `heavy` DTO
-      shape (`crates/api/**` + `libs/api-types/**` → `nx run @rumblefish/api-types:generate`).
+- [ ] Verified on all 4 fixtures above (Auth, Contract, Budget, Value) —
+      those get `Invoke Host Function #1 — TRAPPED` from the per-op code
+      today (truthful, less specific than the ScError line will be); the
+      0462 execution trace already shows their error events with message +
+      code at the stop point
+- [x] **Classic-failure fixture also verified** — `7af6d0ed…` asserts
+      `Success/LowReserve/OpNoAccount` end-to-end against the real archive
+      (network-gated test); banner render pinned by unit test. Live page
+      check pending backend deploy.
+- [x] Per-operation result codes exposed on the operation DTO
+- [x] Advanced Diagnostic events section unchanged (still available)
+- [x] **Docs updated** — frontend-overview §6.4 + xdr-parsing-overview
+- [x] **API types regenerated** — `openapi.json` + `generated/*` in the
+      same change as the DTO field
 
 ## Notes
 

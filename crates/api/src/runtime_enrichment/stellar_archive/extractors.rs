@@ -80,11 +80,17 @@ pub fn extract_e3_heavy(
     };
 
     // Operations: raw details per op. Op results feed the path-payment
-    // pool claims (poolIds / claimedAtoms in details — task 0261).
+    // pool claims (poolIds / claimedAtoms in details — task 0261), so that
+    // path stays success-gated; per-op result CODES come from all applied
+    // arms — on a failed tx the failing op's code is the fail reason
+    // (task 0352).
     let tx_results = xdr_parser::collect_tx_results(meta);
     let op_results = tx_results
         .get(idx)
         .and_then(|r| xdr_parser::tx_op_results(r));
+    let any_op_results = tx_results
+        .get(idx)
+        .and_then(|r| xdr_parser::tx_op_results_any(r));
     let operations = envelope
         .map(|env| {
             let inner = xdr_parser::envelope::inner_transaction(env);
@@ -97,7 +103,14 @@ pub fn extract_e3_heavy(
                 idx,
             )
             .into_iter()
-            .filter_map(to_operation_dto)
+            .filter_map(|op| {
+                // operation_index is 1-based (Horizon convention); the XDR
+                // result array is 0-based.
+                let result_code = any_op_results
+                    .and_then(|rs| rs.get((op.operation_index as usize).saturating_sub(1)))
+                    .map(|r| xdr_parser::op_result_code(r).to_string());
+                to_operation_dto(op, result_code)
+            })
             .collect()
         })
         .unwrap_or_default();
@@ -109,6 +122,7 @@ pub fn extract_e3_heavy(
         fee_bump_source,
         envelope_xdr: Some(ext_tx.envelope_xdr.clone()).filter(|s| !s.is_empty()),
         result_xdr: Some(ext_tx.result_xdr.clone()).filter(|s| !s.is_empty()),
+        result_meta_xdr: ext_tx.result_meta_xdr.clone().filter(|s| !s.is_empty()),
         diagnostic_events,
         contract_events,
         operations,
@@ -279,11 +293,15 @@ fn topics_to_vec(topics: serde_json::Value) -> Vec<serde_json::Value> {
     }
 }
 
-fn to_operation_dto(op: xdr_parser::ExtractedOperation) -> Option<XdrOperationDto> {
+fn to_operation_dto(
+    op: xdr_parser::ExtractedOperation,
+    result_code: Option<String>,
+) -> Option<XdrOperationDto> {
     let application_order = to_i16_index(op.operation_index, "application_order")?;
     Some(XdrOperationDto {
         op_type: op.op_type.to_string(),
         application_order,
         details: op.details,
+        result_code,
     })
 }

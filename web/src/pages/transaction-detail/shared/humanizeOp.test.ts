@@ -360,14 +360,39 @@ describe('humanizeOp', () => {
     expect(humanizeOp(op, h)).toBe('Merged this account into GA5X…GKTM');
   });
 
-  it('describes escrowing a claimable balance with the claimant count', () => {
+  it('names one or two claimants outright (0460 #16)', () => {
     const op = light({ type_name: 'CREATE_CLAIMABLE_BALANCE' });
     const h = heavy({
       asset: 'USDC:GISSUER',
       amount: 50_000_000,
-      claimants: 2,
+      claimants: [
+        { destination: GTRUSTOR, predicate: { type: 'unconditional' } },
+        {
+          destination: 'GBMDIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOIPZ',
+          predicate: { type: 'unconditional' },
+        },
+      ],
     });
-    expect(humanizeOp(op, h)).toBe('Escrowed 5 USDC for 2 claimants');
+    expect(humanizeOp(op, h)).toBe(
+      'Escrowed 5 USDC for GA5X…GKTM and GBMD…OIPZ'
+    );
+  });
+
+  it('counts three or more claimants from the same list', () => {
+    const op = light({ type_name: 'CREATE_CLAIMABLE_BALANCE' });
+    const claimant = { destination: GTRUSTOR, predicate: {} };
+    const h = heavy({
+      asset: 'USDC:GISSUER',
+      amount: 50_000_000,
+      claimants: [claimant, claimant, claimant],
+    });
+    expect(humanizeOp(op, h)).toBe('Escrowed 5 USDC for 3 claimants');
+  });
+
+  it('drops the claimant clause entirely when the list is absent — no count fabrication', () => {
+    const op = light({ type_name: 'CREATE_CLAIMABLE_BALANCE' });
+    const h = heavy({ asset: 'USDC:GISSUER', amount: 50_000_000 });
+    expect(humanizeOp(op, h)).toBe('Escrowed 5 USDC');
   });
 
   it('claims a balance by id only when the meta-sourced asset is absent (spec D8)', () => {

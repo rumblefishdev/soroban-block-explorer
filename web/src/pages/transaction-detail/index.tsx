@@ -102,6 +102,7 @@ export default function TransactionDetailPage() {
         <RawDataSection
           envelopeXdr={heavy?.envelope_xdr}
           resultXdr={heavy?.result_xdr}
+          resultMetaXdr={heavy?.result_meta_xdr}
         />
       </SectionErrorBoundary>
     </Stack>

@@ -79,14 +79,13 @@ history:
     them with a `source: orderBook|pool` marker and every edge gets its
     amount directly; pool-volume consumers filter on `poolId`. Belongs to
     0457's scope (it owns fill amounts), supersedes the borrowing trick.
-13. **Raw-data completeness** (post-ship review, 2026-07-30: "always keep the full raw
-    data reachable as a fallback"): mostly already true after 0453 (op-card
-    details disclosure renders every key; Events table collapsed; Raw data
-    section always present). Two real gaps: (a) `result_meta_xdr` is parsed
-    but not exposed on `heavy` — the ledger-entry changes are the one raw
-    layer the page cannot show; add the DTO field + an XdrRow;
-    (b) the XDR rows are bare base64 — add an "open in Stellar Lab viewer"
-    deep link per row for one-click decoding (stellar.expert does this).
+13. **Raw-data completeness** — SHIPPED 2026-07-30 (feat/0462 branch), both
+    halves: (a) `result_meta_xdr` exposed on `heavy` (the parser always had
+    it — `ExtractedTransaction.result_meta_xdr`; the 0046 spec's "NOT
+    returned" decision reversed, DTO field + XdrRow added, types
+    regenerated; visible after the next backend deploy); (b) every XDR row
+    carries a "Decode in Stellar Lab" deep link (shipped earlier this
+    branch, `type` param included — Lab mis-guesses without it).
 14. **Strkey-aware JSON viewer** — SHIPPED 2026-07-30 (feat/0462 branch):
     strings matching `^[GCL][A-Z2-7]{55}$` inside `HighlightedJson` render
     as the house `IdentifierWithCopy` (link + copy button,
@@ -109,13 +108,21 @@ history:
     (nested calls keep the one-line budget); pairs with item 1 (display
     names — the `[SolvBTC]` half of SE's line) and optionally SE-style
     type subscripts.
-16. **Claimable-balance claimants are a bare count** (0462 review,
-    tx `a821ee85…` op 3): the card says "for 2 claimants" but cannot name
-    them — the PARSER reduces the claimants XDR vec to `claimants: 2`
-    (`extract_op_details`, CREATE_CLAIMABLE_BALANCE arm). Backend fix: emit
-    `[{destination, predicate}, …]`; then humanizeOp/facts list the
-    addresses (keep count-compat while old parses linger). Not reachable
-    from the frontend today.
+16. **Claimable-balance claimants are a bare count** — SHIPPED 2026-07-30
+    (feat/0462 branch): `claimants` in the op details IS now the vec —
+    `[{destination, predicate}, …]`, predicate as full recursive tagged
+    JSON, no lossy summary and no parallel count field (review ruling the
+    same day: no version-compat dual shapes — one truth shape, counts
+    derived from the list). humanizeOp names one or two claimants outright
+    ("Escrowed 5 USDC for GA5X…GKTM and GBMD…OIPZ"), three-plus become
+    "for N claimants" from the same list; list absent → no clause at all
+    (nothing fabricated). Addresses inside Operation details JSON
+    auto-link via the strkey-aware viewer (#14). Until the backend deploy
+    the live page shows "Escrowed 5 USDC" with no claimant clause — the
+    deploy wakes it, verified via the issue-close flow.
+    Original finding (0462 review, tx `a821ee85…` op 3): the card said
+    "for 2 claimants" but could not name them — the parser reduced the
+    claimants XDR vec to `claimants: 2`.
 
 ## Acceptance criteria
 

@@ -46,7 +46,7 @@ pub use ledger_value::{LedgerAsset, LedgerDelta, ledger_balance_deltas};
 pub use net_settled::{AccountDelta, NetSettled, net_settled};
 pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;
-pub use operation::{extract_operations, tx_op_results};
+pub use operation::{extract_operations, op_result_code, tx_op_results, tx_op_results_any};
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id, derive_sac_strkey,
     extract_sac_identities, net_id, network_id, passphrase_for, sac_override_from_event_topics,

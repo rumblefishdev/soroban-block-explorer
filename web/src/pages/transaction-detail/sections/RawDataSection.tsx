@@ -7,6 +7,7 @@ import { XdrRow } from '../shared/XdrRow.js';
 interface RawDataSectionProps {
   envelopeXdr: string | null | undefined;
   resultXdr: string | null | undefined;
+  resultMetaXdr: string | null | undefined;
 }
 
 interface XdrEntry {
@@ -22,6 +23,7 @@ function present(value: string | null | undefined): value is string {
 export function RawDataSection({
   envelopeXdr,
   resultXdr,
+  resultMetaXdr,
 }: RawDataSectionProps) {
   const entries: XdrEntry[] = [];
   if (present(envelopeXdr))
@@ -35,6 +37,13 @@ export function RawDataSection({
       label: 'result_xdr',
       value: resultXdr,
       xdrType: 'TransactionResult',
+    });
+  // The ledger-entry changes (0460 #13).
+  if (present(resultMetaXdr))
+    entries.push({
+      label: 'result_meta_xdr',
+      value: resultMetaXdr,
+      xdrType: 'TransactionMeta',
     });
 
   return (

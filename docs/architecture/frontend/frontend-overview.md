@@ -369,10 +369,14 @@ Transaction-level sections:
   account; for fee-bump envelopes also the fee source account and the inner
   transaction hash (copy-only — inner hashes are not indexed as pages).
 - A failure banner when `successful` is false: atomicity wording ("no
-  operation was applied") plus the raw transaction result code
-  (`heavy.result_code`) when present.
+  operation was applied") plus the fail reason — the first failing
+  operation's per-op result code (`heavy.operations[].result_code`, e.g.
+  `Create Account #2 — LOW_RESERVE`, with a count when more ops failed);
+  when no per-op array exists (validation-level failures, older cached
+  responses) the raw tx-level `heavy.result_code` shows instead.
 - Signatures; Events (all decoded events, collapsed by default); Raw data
-  (`envelope_xdr`, `result_xdr` as collapsible rows).
+  (`envelope_xdr`, `result_xdr`, `result_meta_xdr` as collapsible rows, each
+  with a Stellar Lab decode deep link).
 
 Operations render as a master-detail: a picker (per-type icon + label per
 operation, selection deep-linked as `#op-N`) and **one operation card** for the
@@ -400,9 +404,11 @@ selected operation:
   preserved; nothing null/empty that matters for debugging is hidden;
 - on a failed transaction the card dims and carries a "not applied" label.
 
-Consumed heavy fields: `operations[].details`, `operation_tree`,
-`diagnostic_events` (execution trace + raw table), `contract_events[].op_index`,
-`result_code`, `fee_bump_source`, `signatures`, `envelope_xdr`, `result_xdr`.
+Consumed heavy fields: `operations[].details`, `operations[].result_code`
+(per-op result names straight from the XDR library — the fail-reason source),
+`operation_tree`, `diagnostic_events` (execution trace + raw table),
+`contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
+`envelope_xdr`, `result_xdr`, `result_meta_xdr`.
 Large payload areas stay collapsible.
 
 ### 6.5 Ledgers (`/ledgers`)

@@ -297,10 +297,20 @@ export function humanizeOp(
       const details = detailsObj(heavy);
       const formatted = fmtAssetAmount(details);
       if (formatted == null) break;
-      const claimants = asAmount(details?.claimants);
+      // 0460 #16: `claimants` is the address list — name one or two
+      // outright; three or more read better as a count (derived from the
+      // same list, no second source).
+      const destinations = Array.isArray(details?.claimants)
+        ? details.claimants.flatMap((claimant) => {
+            const d = (claimant as { destination?: unknown }).destination;
+            return typeof d === 'string' && d.length > 0 ? [d] : [];
+          })
+        : [];
       const who =
-        claimants != null
-          ? ` for ${claimants} claimant${Number(claimants) === 1 ? '' : 's'}`
+        destinations.length >= 1 && destinations.length <= 2
+          ? ` for ${destinations.map(shortId).join(' and ')}`
+          : destinations.length > 2
+          ? ` for ${destinations.length} claimants`
           : '';
       return `Escrowed ${formatted}${who}`;
     }

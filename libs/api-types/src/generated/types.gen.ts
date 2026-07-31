@@ -507,8 +507,7 @@ export type E3HeavyFields = {
   memo_type?: string | null;
   /**
    * Nested Soroban invocation tree, derived from `result_meta_xdr` at
-   * extraction time (the raw `result_meta_xdr` itself is intentionally
-   * not surfaced — see 0046 spec "result_meta_xdr is NOT returned").
+   * extraction time.
    */
   operation_tree?: unknown;
   /**
@@ -520,6 +519,13 @@ export type E3HeavyFields = {
    * `None` only when the transaction had a parse error.
    */
   result_code?: string | null;
+  /**
+   * Base64-encoded `TransactionMeta` — the ledger-entry changes (who held
+   * what before/after). The 0046 spec originally withheld it; reversed by
+   * task 0460 #13: it is the one raw layer the page could not show, and
+   * the raw-data section renders every XDR blob with a Lab deep link.
+   */
+  result_meta_xdr?: string | null;
   /**
    * Base64-encoded `TransactionResult`.
    */
@@ -2003,6 +2009,15 @@ export type XdrOperationDto = {
    * Operation type tag (e.g. `"payment"`, `"invoke_host_function"`).
    */
   op_type: string;
+  /**
+   * Per-operation result code from the transaction result XDR, using the
+   * XDR library's variant names: `"Success"`, `"LowReserve"`, `"Trapped"`,
+   * op-level rejections as `"OpNoAccount"` etc. Present on failed
+   * transactions too — the failing op's code is the fail reason (task
+   * 0352). `None` when the result XDR carried no per-op array
+   * (validation-level failures) or was unavailable.
+   */
+  result_code?: string | null;
 };
 
 export type HealthData = {

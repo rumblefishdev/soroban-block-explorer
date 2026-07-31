@@ -30,6 +30,11 @@ pub struct E3HeavyFields {
     pub envelope_xdr: Option<String>,
     /// Base64-encoded `TransactionResult`.
     pub result_xdr: Option<String>,
+    /// Base64-encoded `TransactionMeta` — the ledger-entry changes (who held
+    /// what before/after). The 0046 spec originally withheld it; reversed by
+    /// task 0460 #13: it is the one raw layer the page could not show, and
+    /// the raw-data section renders every XDR blob with a Lab deep link.
+    pub result_meta_xdr: Option<String>,
     /// Diagnostic events emitted during Soroban invocation.
     pub diagnostic_events: Vec<XdrEventDto>,
     /// Non-diagnostic Soroban events (contract + system) with full topic
@@ -41,8 +46,7 @@ pub struct E3HeavyFields {
     /// `None` only when the transaction had a parse error.
     pub result_code: Option<String>,
     /// Nested Soroban invocation tree, derived from `result_meta_xdr` at
-    /// extraction time (the raw `result_meta_xdr` itself is intentionally
-    /// not surfaced — see 0046 spec "result_meta_xdr is NOT returned").
+    /// extraction time.
     pub operation_tree: Option<serde_json::Value>,
 }
 
@@ -107,6 +111,13 @@ pub struct XdrOperationDto {
     pub application_order: i16,
     /// Full operation details (type-specific JSON).
     pub details: serde_json::Value,
+    /// Per-operation result code from the transaction result XDR, using the
+    /// XDR library's variant names: `"Success"`, `"LowReserve"`, `"Trapped"`,
+    /// op-level rejections as `"OpNoAccount"` etc. Present on failed
+    /// transactions too — the failing op's code is the fail reason (task
+    /// 0352). `None` when the result XDR carried no per-op array
+    /// (validation-level failures) or was unavailable.
+    pub result_code: Option<String>,
 }
 
 /// Merged E3 response: DB light fields + optional XDR heavy fields.
