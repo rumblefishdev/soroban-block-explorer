@@ -20,7 +20,9 @@ export function IdentifierWithCopy({
       sx={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 1,
+        // Snug: the round button carries 6px of its own inner padding, so
+        // even a small flex gap reads as a visual gulf next to the text.
+        gap: 0.25,
         maxWidth: '100%',
       }}
     >
