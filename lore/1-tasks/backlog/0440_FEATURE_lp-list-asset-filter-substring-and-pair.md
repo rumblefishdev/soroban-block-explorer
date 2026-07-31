@@ -115,6 +115,67 @@ database.
 Not verified locally (no local ClickHouse with data): the HTTP path itself —
 the 400 envelope and the rendered list. Both are post-deploy checks.
 
+## How the field compares (first-hand, 2026-07-31)
+
+Each behaviour below was typed into the live product, not read from docs.
+
+**GeckoTerminal** (largest DEX analytics, covers Raydium) — one free-text box.
+`USD` matches as a substring across symbols AND names (`USD1Swap`, `USDFI`,
+"USD Coin", "Tether USD"); `SOL/USDC` returns exactly SOL/USDC pools across
+four DEXes, so the `/` convention we adopted is theirs too. Results are
+grouped by entity type, and every row carries identity: a verified tick, a
+numeric security score, the token address and the pool address. (Whether
+their pair is a strict AND was not confirmed — the modal wedged during the
+nonsense-pair probe.)
+
+**Aquarius** (the main Stellar DeFi hub) — "Search by token name or token
+address". `USD` returns "There's nothing here" — the exact-match limitation
+this task removes. `XLM/USDC` returns results, but so does
+`XLM/ZZZZNONSENSE`, so their separator splits and matches EITHER side; it is
+not a pair constraint. Every pool row is labelled with full names and issuer
+home domains: "Stellar Lumens (stellar.org) · USD Coin (circle.com)".
+
+**stellar.expert** — the liquidity-pool list has NO search field at all, only
+sorting. Its answer to lookalikes is curated labelling in the row itself:
+`LDEX [SCAM] GCTA…EH7N`, `AMM [caution: private pooling system]`,
+`USDC [Centre] GA5Z…KZVN`, plus home domains (aqua.network, ultracapital.xyz).
+
+**Uniswap** — support article returned 403; nothing claimed.
+
+### What this says about us
+
+On matching we now beat both Stellar-native products: Aquarius has the exact
+bug we fixed and a pair separator that does not constrain, stellar.expert has
+no filter. Two gaps remain, and both are things every competitor covers:
+
+1. **No identity signal.** `XLM` and `DXLM` look identical in our list. GT
+   uses verified ticks + a security score, Aquarius the issuer home domain,
+   stellar.expert curated `[SCAM]` labels. **We already have the data** —
+   `issuer_home_domain` ships on the assets endpoint (task 0450, live). Adding
+   it beside the code in the pool list is frontend-only and turns the exact
+   pair rule into something the reader can see. Recommended next step.
+2. **No search by asset id / issuer address.** Both GT and Aquarius accept an
+   address; a code alone cannot disambiguate issuers by construction.
+
+### Open question: a partially typed pair
+
+`SOL/US` returns NOTHING today, because pair sides match whole codes. Measured
+alternatives, all on production:
+
+| Pair-side rule        | `XLM/USDC` | `XLM/US` | Lets in                                                                |
+| --------------------- | ---------- | -------- | ---------------------------------------------------------------------- |
+| exact (shipped)       | 63         | **0**    | nothing                                                                |
+| substring             | 197        | many     | `DXLM`, `yUSDC`, `LibreXLM` (prefix impostors)                         |
+| prefix (`startsWith`) | 313        | 313      | `XLMFISHY`, `XLMPAYPAL`, `XLMGOOGLE`, `USDCSTELLAR` (suffix impostors) |
+
+No string rule wins: prefix simply trades one impostor family for another.
+The honest options are (a) keep exact and make the empty state say so — "no
+pools with exactly SOL and US; type one fragment to search partially" — or
+(b) accept substring sides and lean on the identity labels from gap 1. Do NOT
+implement "exact, then silently retry as substring": a filter that quietly
+answers a different question than the one typed is the failure mode this
+codebase keeps re-learning.
+
 ## Acceptance criteria
 
 - [x] Substring match on `asset_a_code` / `asset_b_code`, min-length guarded
