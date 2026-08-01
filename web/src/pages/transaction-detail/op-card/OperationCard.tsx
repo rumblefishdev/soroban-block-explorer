@@ -174,7 +174,8 @@ export function OperationCard({
         {traceNodes.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
             <Overline mb={0.5}>
-              Execution trace · {traceCallCount(traceNodes)} calls
+              Execution trace · {traceCallCount(traceNodes)}{' '}
+              {traceCallCount(traceNodes) === 1 ? 'call' : 'calls'}
             </Overline>
             <ExecutionTrace nodes={traceNodes} />
           </Box>

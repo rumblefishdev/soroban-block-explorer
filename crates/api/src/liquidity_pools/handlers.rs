@@ -164,8 +164,21 @@ fn is_valid_decimal_string(s: &str) -> bool {
 /// substring, task 0440). It is a usefulness guard: a single character
 /// matches most of the list and reads as a broken filter.
 const MIN_ASSET_FRAGMENT: usize = 2;
+/// Protocol maximum for a Stellar asset code (`alphanum12`).
+const MAX_ASSET_CODE: usize = 12;
 /// Separator for the pair syntax the input has always advertised.
 const PAIR_SEPARATOR: char = '/';
+
+/// Stellar asset codes are 1–12 ASCII alphanumerics, and a fragment of one
+/// can only be alphanumeric too — verified against production: zero pool legs
+/// carry anything else. Rejecting the rest is not an injection defence (the
+/// fragment travels as a bound parameter into `positionCaseInsensitive`, a
+/// literal substring function with no pattern language); it is so `.*` gets
+/// told it cannot be an asset code instead of silently matching nothing.
+fn is_asset_fragment(fragment: &str) -> bool {
+    (MIN_ASSET_FRAGMENT..=MAX_ASSET_CODE).contains(&fragment.chars().count())
+        && fragment.chars().all(|c| c.is_ascii_alphanumeric())
+}
 
 /// Normalize `filter[asset_code]` for the WHERE clause: trim surrounding
 /// whitespace and uppercase the result. Empty input (e.g. `?filter[asset_code]=`)
@@ -187,28 +200,29 @@ fn normalize_asset_code(raw: Option<String>) -> Option<String> {
 /// fragment matched against either leg, or a PAIR constraining both.
 ///
 /// `USDC` → single, `USDC/XLM` → pair (order-insensitive at the query side).
-/// Fragments shorter than [`MIN_ASSET_FRAGMENT`] and malformed pairs
-/// (`USDC/`, `/`, `A/B/C`) are rejected outright rather than silently
-/// degraded — a filter that quietly matches something other than what was
-/// typed is worse than one that says no.
+/// Anything that cannot be part of an asset code — too short, too long, a
+/// character outside `[A-Za-z0-9]`, or a malformed pair (`USDC/`, `/`,
+/// `A/B/C`) — is rejected outright rather than silently degraded. A filter
+/// that quietly matches something other than what was typed is worse than
+/// one that says no.
 fn parse_asset_filter(raw: Option<String>) -> Result<Option<AssetFilter>, String> {
     let Some(value) = normalize_asset_code(raw) else {
         return Ok(None);
     };
+    let fragment_rule = format!(
+        "an asset code fragment is {MIN_ASSET_FRAGMENT}–{MAX_ASSET_CODE} letters or digits"
+    );
     if !value.contains(PAIR_SEPARATOR) {
-        return if value.chars().count() >= MIN_ASSET_FRAGMENT {
+        return if is_asset_fragment(&value) {
             Ok(Some(AssetFilter::Single(value)))
         } else {
-            Err(format!(
-                "asset filter must be at least {MIN_ASSET_FRAGMENT} characters"
-            ))
+            Err(fragment_rule)
         };
     }
     let parts: Vec<&str> = value.split(PAIR_SEPARATOR).map(str::trim).collect();
-    if parts.len() != 2 || parts.iter().any(|p| p.chars().count() < MIN_ASSET_FRAGMENT) {
+    if parts.len() != 2 || !parts.iter().all(|p| is_asset_fragment(p)) {
         return Err(format!(
-            "asset pair must be `A{PAIR_SEPARATOR}B`, each side at least \
-             {MIN_ASSET_FRAGMENT} characters"
+            "asset pair must be `A{PAIR_SEPARATOR}B`, where {fragment_rule}"
         ));
     }
     Ok(Some(AssetFilter::Pair(
@@ -798,6 +812,28 @@ mod parse_asset_filter_tests {
         for input in ["usdc/", "/xlm", "/", "a/b/c", "usdc/x"] {
             assert!(parse(input).is_err(), "expected rejection for {input}");
         }
+    }
+
+    #[test]
+    fn non_alphanumeric_fragments_are_rejected() {
+        // Asset codes are ASCII alphanumerics (verified against production:
+        // no pool leg carries anything else), so a pattern-looking fragment
+        // is told it cannot be a code rather than matching nothing quietly.
+        // The value never reaches a pattern engine — it binds into
+        // `positionCaseInsensitive`, a literal substring function.
+        for input in [".*", "A+", "[X", "US%", "US_", "US'", "a b"] {
+            assert!(parse(input).is_err(), "expected rejection for {input}");
+        }
+        for input in [".*/XLM", "XLM/[X"] {
+            assert!(parse(input).is_err(), "expected rejection for {input}");
+        }
+    }
+
+    #[test]
+    fn over_long_fragments_are_rejected() {
+        // 12 is the protocol maximum for an asset code.
+        assert!(parse(&"A".repeat(12)).is_ok());
+        assert!(parse(&"A".repeat(13)).is_err());
     }
 }
 

@@ -98,14 +98,20 @@ exhaust an hour's budget on this one join.
 
 ### Decide before implementing
 
-1. **Accept the scan** — add a `read_rows` measurement to the acceptance
-   criteria and revisit when the asset table grows. Cheapest now, worst later.
+1. **Accept the scan** — cheapest now, worst later, and only defensible
+   against the stated bound below: it holds at today's 436,753 `asset_sac`
+   rows and stops holding as the asset table grows, so it needs the
+   re-measurement the criteria require.
 2. **ClickHouse projection ordered by `sac_contract_id`** — the engine
    maintains it, the query needs no change; cost is disk plus slower writes.
    Cleanest, and the only option that keeps the list page bounded.
-3. **Scope down to the contract DETAIL page only** (one row, no list join) —
-   closes the reported ask with a single-row read and leaves the list without
-   the mirrored asset. Partial, but honest and cheap.
+3. **Scope down to the contract DETAIL page only** (no list join) — closes the
+   reported ask and leaves the list without the mirrored asset. Cheaper only
+   in FREQUENCY, not in per-request cost: dropping the join adds no selective
+   access path, so the single-contract lookup still scans the whole table
+   (436,753 rows measured, and the duplicate collapse cannot short-circuit).
+   One detail page is one scan; a list page was fifty rows for the price of
+   one scan too.
 
 Recorded because the original "why this is cheap" reasoning was right about
 the join existing and wrong about it being reusable: it exists in the
@@ -125,8 +131,14 @@ direction that has a sort key.
 
 - [ ] Reverse-lookup access path decided (scan / projection / detail-only) and
       recorded — not left to whoever writes the query
-- [ ] `read_rows` measured on the contract LIST page, not just the detail
-      page; bounded as the asset table grows
+- [ ] `read_rows` measured on the contract LIST page (50 rows), not just the
+      detail page, and **≤ 1.5 M rows** — the baseline is 1,105,551 at the
+      measurement-day size of 436,753 `asset_sac` rows / 376,152 `assets`, so
+      the bound allows ~35 % growth before it must be re-decided
+- [ ] The measurement is repeated at the size current when the work lands,
+      and the option-1 "accept the scan" choice is void if it exceeds the
+      bound — a projection is then the only option that keeps the list page
+      inside it
 - [ ] Contract detail returns the mirrored classic asset when `is_sac`
 - [ ] Reverse join collapses `asset_sac` duplicates (mirror the LP subquery)
 - [ ] `is_sac` true with no resolvable asset degrades to the current bare badge

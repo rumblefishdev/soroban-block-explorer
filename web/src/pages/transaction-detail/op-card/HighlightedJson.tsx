@@ -4,12 +4,18 @@ import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 
+import { isValidStrkey } from './strkeyDecode.js';
+
 type TokenKind = 'string' | 'number' | 'bool' | 'null' | 'key';
 
-// Strkey shape (SEP-23): G = account, C = contract, L = liquidity pool —
-// 56 chars of base32. Muxed M-addresses have no detail route; leave them
-// as plain strings.
-const STRKEY_RE = /^[GCL][A-Z2-7]{55}$/;
+// Strkey (SEP-23): G = account, C = contract, L = liquidity pool. Muxed
+// M-addresses have no detail route; leave them as plain strings.
+//
+// CHECKSUM-verified, not shape-matched. This viewer renders contract-supplied
+// payloads — event data, memos, arguments — where a 56-character base32 blob
+// is ordinary, and the shape alone would turn one into a confident link to a
+// page that cannot exist.
+const isStrkey = isValidStrkey;
 
 function strkeyType(value: string): 'account' | 'contract' | 'pool' {
   if (value.startsWith('C')) return 'contract';
@@ -94,7 +100,7 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
   if (typeof value === 'string') {
-    if (STRKEY_RE.test(value)) return <StrkeyString value={value} />;
+    if (isStrkey(value)) return <StrkeyString value={value} />;
     if (ASSET_RE.test(value)) return <AssetString value={value} />;
     return <Token kind="string">{`"${value}"`}</Token>;
   }

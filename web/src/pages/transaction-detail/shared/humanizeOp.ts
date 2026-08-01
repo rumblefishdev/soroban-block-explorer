@@ -302,6 +302,10 @@ export function humanizeOp(
       // same list, no second source).
       const destinations = Array.isArray(details?.claimants)
         ? details.claimants.flatMap((claimant) => {
+            // Entries are objects from the parser, but reading `.destination`
+            // off a null would throw and take the whole card down — the
+            // sentence just drops the clause instead.
+            if (claimant == null || typeof claimant !== 'object') return [];
             const d = (claimant as { destination?: unknown }).destination;
             return typeof d === 'string' && d.length > 0 ? [d] : [];
           })

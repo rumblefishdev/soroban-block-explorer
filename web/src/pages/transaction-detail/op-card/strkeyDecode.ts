@@ -37,6 +37,47 @@ function base32(bytes: Uint8Array): string {
   return out;
 }
 
+/** Version byte expected for each leading letter we link. */
+const VERSION_BY_PREFIX: Record<string, number> = {
+  C: STRKEY_VERSION.contract,
+  G: STRKEY_VERSION.account,
+  L: STRKEY_VERSION.pool,
+};
+
+const STRKEY_SHAPE = /^[GCL][A-Z2-7]{55}$/;
+
+/** True when `value` is a strkey whose CHECKSUM verifies — not merely one
+ *  that looks like one.
+ *
+ *  The shape alone is 56 base32 characters, which any long base32 blob
+ *  satisfies: contract event data and memos can carry such strings, and
+ *  linking one produces a confident link to a page that cannot exist. The
+ *  CRC16 makes the claim provable, so only a real address is rendered as an
+ *  address. */
+export function isValidStrkey(value: string): boolean {
+  if (!STRKEY_SHAPE.test(value)) return false;
+  const bytes = new Uint8Array(35);
+  let buffer = 0;
+  let bits = 0;
+  let out = 0;
+  for (const char of value) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index < 0) return false;
+    buffer = (buffer << 5) | index;
+    bits += 5;
+    if (bits >= 8) {
+      bytes[out++] = (buffer >> (bits - 8)) & 0xff;
+      bits -= 8;
+    }
+  }
+  // 56 base32 chars carry 280 bits; the 35-byte payload uses 280, so the
+  // decode must land exactly.
+  if (out !== 35) return false;
+  if (bytes[0] !== VERSION_BY_PREFIX[value[0]]) return false;
+  const crc = crc16xmodem(bytes.subarray(0, 33));
+  return bytes[33] === (crc & 0xff) && bytes[34] === crc >> 8;
+}
+
 /** Encode 32 raw bytes (base64) as a strkey with the given version byte.
  *  Total: ANY 32 bytes yield a checksum-valid strkey — a successful
  *  decode proves nothing by itself, so never decode blindly. */

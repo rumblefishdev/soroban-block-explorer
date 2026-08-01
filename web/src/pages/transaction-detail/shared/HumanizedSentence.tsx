@@ -2,12 +2,17 @@ import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
 import { Fragment } from 'react';
 import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 
+import { isValidStrkey } from '../op-card/strkeyDecode.js';
 import { detailsObj, humanizeOp, shortId } from './humanizeOp.js';
 
 /** Strkeys with a detail route of their own: account, contract, pool. Balance
  *  ids (hex) and asset codes deliberately do not match — nothing links to a
- *  page that does not exist. Mirrors the JSON viewer's rule (0460 #14). */
-const LINKABLE_STRKEY = /^[GCL][A-Z2-7]{55}$/;
+ *  page that does not exist. Mirrors the JSON viewer's rule (0460 #14).
+ *
+ *  Checksum-verified, not shape-matched: 56 base32 characters is a shape any
+ *  long base32 blob satisfies, and a link built from one points at a page
+ *  that cannot exist. */
+const isLinkable = isValidStrkey;
 
 function idType(value: string): 'account' | 'contract' | 'pool' {
   if (value.startsWith('C')) return 'contract';
@@ -28,7 +33,7 @@ export function sentenceIds(
   const ids = new Map<string, string>();
   const visit = (value: unknown, depth = 0): void => {
     if (typeof value === 'string') {
-      if (LINKABLE_STRKEY.test(value)) ids.set(shortId(value), value);
+      if (isLinkable(value)) ids.set(shortId(value), value);
       return;
     }
     if (depth > 4 || value == null || typeof value !== 'object') return;

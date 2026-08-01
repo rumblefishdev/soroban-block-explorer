@@ -52,6 +52,20 @@ describe('sentenceIds', () => {
     expect(ids.get('CDDT…RCTX')).toBe(CONTRACT);
   });
 
+  it('ignores a 56-char lookalike whose checksum does not verify', () => {
+    // Shape-perfect: 56 base32 chars starting with G. Only the CRC says it is
+    // not an address, and contract-supplied payloads carry such blobs.
+    const tampered = `${DEST.slice(0, 10)}${
+      DEST[10] === 'A' ? 'B' : 'A'
+    }${DEST.slice(11)}`;
+    expect(/^[GCL][A-Z2-7]{55}$/.test(tampered)).toBe(true);
+    const ids = sentenceIds(
+      light({ type_name: 'PAYMENT', destination_account: tampered }),
+      null
+    );
+    expect(ids.size).toBe(0);
+  });
+
   it('ignores ids with no detail page (hex balance ids, asset codes)', () => {
     const ids = sentenceIds(light({ type_name: 'CLAIM_CLAIMABLE_BALANCE' }), {
       op_type: 'CLAIM_CLAIMABLE_BALANCE',

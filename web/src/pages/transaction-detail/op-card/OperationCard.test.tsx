@@ -156,7 +156,11 @@ describe('OperationCard', () => {
         },
       ],
     });
-    expect(screen.getByText(/Execution trace · 1 calls/)).toBeTruthy();
+    expect(
+      screen.getAllByText((_, node) =>
+        (node?.textContent ?? '').startsWith('Execution trace · 1 call')
+      ).length
+    ).toBeGreaterThan(0);
     // Literal args render in a nested (secondary-tone) span, so match the
     // whole header row by its text content.
     expect(
