@@ -55,15 +55,17 @@ pub struct ParticipantItem {
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools`.
 ///
 /// Two asset-filter modes coexist:
-///   * **`filter[asset_code]`** — free text. A single fragment is a
-///     case-insensitive SUBSTRING match against either leg (`USD` finds
-///     `USDC`); a pair `USDC/XLM` constrains both legs, order-insensitive,
-///     with each side matching the WHOLE code (a pair names two assets, so
-///     substring sides would answer with `DXLM` / `yUSDC` lookalikes).
-///     A native leg is searchable as `XLM` — it stores an empty code.
-///     Convenience for the Figma list filter (frontend §6.13). Each fragment
-///     must be at least 2 characters; shorter input and malformed pairs are
-///     rejected with `400 invalid_filter` rather than silently widened.
+///   * **`filter[asset_code]`** — free text, matched case-insensitively as a
+///     SUBSTRING against either leg (`USD` finds `USDC`). A pair `USDC/XLM`
+///     constrains both legs, order-insensitive, each side also a substring
+///     (`SOL/US` finds SOL/USDC). A native leg is searchable as `XLM` — it
+///     stores an empty code. Convenience for the Figma list filter (frontend
+///     §6.13). Fragments are 2–12 letters or digits, the asset-code charset;
+///     anything else and malformed pairs are rejected with
+///     `400 invalid_filter` rather than silently widened.
+///     Codes do not identify an asset — 407 distinct issuers publish `USDC`
+///     — so no matching rule can exclude a lookalike; that is the issuer's
+///     job at display time (task 0440).
 ///   * **Per-leg `asset_a_code` / `asset_a_issuer` / `asset_b_code` /
 ///     `asset_b_issuer`** — kept for API consumers that need exact
 ///     issuer disambiguation (`code, issuer` is the classic identity).
@@ -74,9 +76,9 @@ pub struct ParticipantItem {
 pub struct PoolListParams {
     /// Free-text asset filter — a fragment matched as a case-insensitive
     /// substring against either leg, or a `CODE/CODE` pair constraining both
-    /// legs in either order with exact per-side codes. Native legs match as
-    /// `XLM`. Input is trimmed + uppercased before the query. Minimum 2
-    /// characters per fragment. Regex is deliberately not accepted (0440).
+    /// legs in either order, each side also a substring. Native legs match as
+    /// `XLM`. Input is trimmed + uppercased before the query. Fragments are
+    /// 2–12 letters or digits. Regex is deliberately not accepted (0440).
     #[serde(rename = "filter[asset_code]")]
     pub filter_asset_code: Option<String>,
     #[serde(rename = "filter[asset_a_code]")]

@@ -158,17 +158,20 @@ fn push_asset_filter(sql: &mut String, binds: &mut Vec<String>, filter: Option<&
             binds.push(fragment.clone());
             binds.push(fragment.clone());
         }
-        // A pair is a PRECISE statement — "these two assets" — so each side
-        // matches the whole code, not a substring. Measured on production:
-        // substring sides answer `XLM/USDC` with 197 pools including
-        // `DXLM/USDC`, `native/yUSDC` and `USDC/LibreXLM`; exact sides answer
-        // with 63, all genuinely that pair. The lookalikes are the same class
-        // of noise as the native-leg bug above. A single fragment stays a
-        // substring — that is the reported complaint (`USD` must find `USDC`).
+        // Both sides are substrings too, for the same reason the single
+        // fragment is: `SOL/US` must find SOL/USDC. An earlier revision made
+        // pair sides exact, arguing it kept lookalikes out — the data refuted
+        // it. `DXLM` is issued by lobstr.co and `YXLM`/`YUSDC` are wrapped
+        // variants, not fakes; meanwhile 407 DISTINCT issuers publish the
+        // code `USDC`, so the exact form excludes nothing either. Codes
+        // cannot separate real from fake in any matching mode — only the
+        // issuer can, which is a display problem (task 0440).
         Some(AssetFilter::Pair(first, second)) => {
             sql.push_str(&format!(
-                " AND ((upper({a}) = ? AND upper({b}) = ?) \
-                    OR (upper({a}) = ? AND upper({b}) = ?))"
+                " AND ((positionCaseInsensitive({a}, ?) > 0 \
+                    AND positionCaseInsensitive({b}, ?) > 0) \
+                    OR (positionCaseInsensitive({a}, ?) > 0 \
+                    AND positionCaseInsensitive({b}, ?) > 0))"
             ));
             binds.push(first.clone());
             binds.push(second.clone());
@@ -1298,8 +1301,7 @@ mod tests {
 
         // Pair: both assignments, so USDC/XLM and XLM/USDC agree. Bind order
         // is (a,b) then the swap (b,a) — placeholders are positional. Sides
-        // match the WHOLE code: a pair names two assets, and substring sides
-        // pulled in DXLM / yUSDC lookalikes (measured, see fn doc).
+        // are substrings, so a partially typed side still matches.
         let mut sql = String::new();
         let mut binds = Vec::new();
         push_asset_filter(
@@ -1308,11 +1310,11 @@ mod tests {
             Some(&AssetFilter::Pair("USDC".into(), "XLM".into())),
         );
         assert_eq!(sql.matches('?').count(), 4);
-        assert!(
-            !sql.contains("positionCaseInsensitive"),
-            "pair sides are exact, not substring: {sql}"
+        assert_eq!(
+            sql.matches("positionCaseInsensitive").count(),
+            4,
+            "pair sides match as substrings: {sql}"
         );
-        assert!(sql.contains("upper(if(lp.asset_a_type = 0, 'XLM'"));
         assert_eq!(binds, vec!["USDC", "XLM", "XLM", "USDC"]);
     }
 

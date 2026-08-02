@@ -91,12 +91,25 @@ the real thing. Both legs are now read through
 `if(asset_type = 0, 'XLM', asset_code)`; `XLM` went from a handful of
 lookalikes to 21,590 pools, at identical cost.
 
-**Pair sides are EXACT, single fragments are substrings.** Verified on rows,
-not counts: substring sides answered `XLM/USDC` with 197 pools including
-`DXLM/USDC`, `native/yUSDC` and `USDC/LibreXLM`; exact sides answer with 63,
-all genuinely that pair (native-leg pools included). A pair names two assets —
-same lookalike-noise argument as the native fix. The reported complaint was
-about single fragments (`USD` must find `USDC`), and that stays a substring.
+**Pair sides are substrings, like a single fragment.** Shipped exact first,
+on the argument that substring sides pulled in "lookalikes" — `DXLM/USDC`,
+`native/yUSDC`, `USDC/LibreXLM`. Review challenged the word, and the data
+refuted it in both directions:
+
+- Those are not fakes. `DXLM` is issued by **lobstr.co**, a major Stellar
+  wallet; `YXLM` / `YUSDC` are wrapped variants with their own issuers. A
+  filter has no business deciding they do not count.
+- Exactness bought no safety anyway. **407 distinct issuers publish the code
+  `USDC`** (542 asset rows), and the most common issuer home domains under
+  that code are `lobstr.co`, `dreamlifestellar.com`, `atmethsol.com`,
+  `wrc-airdrops.com` — Circle is not even in the top five. Matching the whole
+  code excludes nothing.
+
+So the honest conclusion: **no matching rule over CODES can separate a real
+asset from a fake one** — only the issuer can, which is a display problem
+(see the identity-signal gap below), not a filter problem. Exact sides only
+broke partial input (`SOL/US` found nothing) in exchange for a safety that
+never existed. Reverted.
 
 Measured cost through the real query, `FINAL` included:
 
@@ -157,24 +170,24 @@ no filter. Two gaps remain, and both are things every competitor covers:
 2. **No search by asset id / issuer address.** Both GT and Aquarius accept an
    address; a code alone cannot disambiguate issuers by construction.
 
-### Open question: a partially typed pair
+### Settled: a partially typed pair works
 
-`SOL/US` returns NOTHING today, because pair sides match whole codes. Measured
-alternatives, all on production:
+Measured alternatives for the pair sides, all on production:
 
-| Pair-side rule        | `XLM/USDC` | `XLM/US` | Lets in                                                                |
-| --------------------- | ---------- | -------- | ---------------------------------------------------------------------- |
-| exact (shipped)       | 63         | **0**    | nothing                                                                |
-| substring             | 197        | many     | `DXLM`, `yUSDC`, `LibreXLM` (prefix impostors)                         |
-| prefix (`startsWith`) | 313        | 313      | `XLMFISHY`, `XLMPAYPAL`, `XLMGOOGLE`, `USDCSTELLAR` (suffix impostors) |
+| Pair-side rule          | `XLM/USDC` | `XLM/US` | Also returns                                        |
+| ----------------------- | ---------- | -------- | --------------------------------------------------- |
+| exact (tried, reverted) | 63         | **0**    | nothing                                             |
+| **substring (shipped)** | 197        | works    | `DXLM` (lobstr.co), `YXLM`, `YUSDC`, `LibreXLM`     |
+| prefix (`startsWith`)   | 313        | 313      | `XLMFISHY`, `XLMPAYPAL`, `XLMGOOGLE`, `USDCSTELLAR` |
 
-No string rule wins: prefix simply trades one impostor family for another.
-The honest options are (a) keep exact and make the empty state say so — "no
-pools with exactly SOL and US; type one fragment to search partially" — or
-(b) accept substring sides and lean on the identity labels from gap 1. Do NOT
-implement "exact, then silently retry as substring": a filter that quietly
-answers a different question than the one typed is the failure mode this
-codebase keeps re-learning.
+Substring wins because the alternatives buy nothing. Prefix trades one set of
+similar codes for another. Exact excludes only assets that a filter has no
+standing to exclude — and cannot exclude a fake anyway, since 407 issuers
+share the code `USDC`.
+
+Whatever the rule, do NOT implement "exact, then silently retry as substring":
+a filter that quietly answers a different question than the one typed is the
+failure mode this codebase keeps re-learning.
 
 ## Acceptance criteria
 

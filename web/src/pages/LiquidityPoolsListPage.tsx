@@ -43,16 +43,6 @@ export default function LiquidityPoolsListPage() {
     goPrev
   );
 
-  // A pair asks a precise question — both sides match WHOLE asset codes — so
-  // `SOL/US` legitimately finds nothing. Say the rule instead of leaving the
-  // reader to adjust at random; a partial code is what the single-fragment
-  // mode is for (task 0440).
-  const emptyFilterDescription = asset.includes('/')
-    ? `A pair matches whole asset codes on both sides, in either order, so a partial code finds nothing. Search one code — like ${
-        asset.split('/')[0]?.trim() || 'USDC'
-      } — to match partially.`
-    : undefined;
-
   const handleAssetChange = useCallback(
     (value: string) => setFilter('asset', value || null),
     [setFilter]
@@ -91,7 +81,6 @@ export default function LiquidityPoolsListPage() {
         hasActiveFilters={hasFilters}
         emptyKind="pools"
         emptyNoun="pools"
-        emptyFilterDescription={emptyFilterDescription}
         onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}

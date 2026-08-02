@@ -40,13 +40,6 @@ interface DataListCardProps<T> {
   hasActiveFilters?: boolean;
   emptyKind: TableEmptyKind;
   emptyNoun: string;
-  /**
-   * Replaces the generic "try adjusting the filters" line when a filter has
-   * a rule the reader cannot guess from an empty table — a pool pair search
-   * matches whole codes, so `SOL/US` returns nothing and the default text
-   * would leave the reader adjusting at random.
-   */
-  emptyFilterDescription?: string;
   onClearFilters?: () => void;
   paginationCaption?: string;
   canPrev: boolean;
@@ -70,7 +63,6 @@ export function DataListCard<T>({
   hasActiveFilters = false,
   emptyKind,
   emptyNoun,
-  emptyFilterDescription,
   onClearFilters,
   paginationCaption = 'Latest results',
   canPrev,
@@ -104,10 +96,7 @@ export function DataListCard<T>({
       <EmptyState
         icon={<SearchIcon />}
         title={`No ${emptyNoun} match your filters`}
-        description={
-          emptyFilterDescription ??
-          'Try adjusting or clearing the active filters'
-        }
+        description="Try adjusting or clearing the active filters"
         action={
           onClearFilters ? (
             <Button variant="contained" onClick={onClearFilters}>

@@ -92,10 +92,14 @@ WHERE
     -- directly hides every XLM pool and surfaces credit assets named "XLM".
     --   fragment: positionCaseInsensitive(<leg_a>, $9) > 0
     --          OR positionCaseInsensitive(<leg_b>, $9) > 0
-    --   pair:    (upper(<leg_a>) = $9 AND upper(<leg_b>) = $10)
-    --          OR (upper(<leg_a>) = $10 AND upper(<leg_b>) = $9)
-    -- Pair sides are exact: a pair names two assets, and substring sides
-    -- pulled in DXLM / yUSDC lookalikes. No sort-key pruning either way —
-    -- the table is ordered by pool_id, so this filter always scans.
+    --   pair:    (positionCaseInsensitive(<leg_a>, $9)  > 0
+    --             AND positionCaseInsensitive(<leg_b>, $10) > 0)
+    --          OR (positionCaseInsensitive(<leg_a>, $10) > 0
+    --             AND positionCaseInsensitive(<leg_b>, $9)  > 0)
+    -- Pair sides are substrings too, so `SOL/US` finds SOL/USDC. Exact sides
+    -- were tried and reverted: they excluded no lookalike worth excluding —
+    -- 407 distinct issuers publish the code `USDC` — while breaking partial
+    -- input. No sort-key pruning either way; the table is ordered by pool_id,
+    -- so this filter always scans.
 ORDER BY lp.last_updated_ledger DESC, lp.pool_id DESC
 LIMIT $1;

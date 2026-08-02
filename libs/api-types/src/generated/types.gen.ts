@@ -2642,9 +2642,9 @@ export type ListPoolsData = {
     /**
      * Free-text asset filter — a fragment matched as a case-insensitive
      * substring against either leg, or a `CODE/CODE` pair constraining both
-     * legs in either order with exact per-side codes. Native legs match as
-     * `XLM`. Input is trimmed + uppercased before the query. Minimum 2
-     * characters per fragment. Regex is deliberately not accepted (0440).
+     * legs in either order, each side also a substring. Native legs match as
+     * `XLM`. Input is trimmed + uppercased before the query. Fragments are
+     * 2–12 letters or digits. Regex is deliberately not accepted (0440).
      */
     'filter[asset_code]'?: string | null;
     'filter[asset_a_code]'?: string | null;
