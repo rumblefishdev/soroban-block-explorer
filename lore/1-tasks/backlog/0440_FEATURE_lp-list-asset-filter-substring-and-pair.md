@@ -86,10 +86,11 @@ list and reads as a broken filter.
 **Native legs were the real bug, and it pre-dated this task.** A native leg
 stores `asset_type = 0` with an EMPTY `asset_code`, so `XLM` matched none of
 the 16,578 pools that hold XLM — while matching ~740 pools whose leg is a
-credit asset someone named "XLM". The filter answered with impostors and hid
-the real thing. Both legs are now read through
-`if(asset_type = 0, 'XLM', asset_code)`; `XLM` went from a handful of
-lookalikes to 21,590 pools, at identical cost.
+credit asset someone named "XLM". Not a judgment about those assets: the
+defect is that the one thing everybody means by "XLM" was the one thing the
+filter could not return. Both legs are now read through
+`if(asset_type = 0, 'XLM', asset_code)`; `XLM` went from ~740 pools to
+21,590, at identical cost.
 
 **Pair sides are substrings, like a single fragment.** Shipped exact first,
 on the argument that substring sides pulled in "lookalikes" — `DXLM/USDC`,
@@ -118,7 +119,7 @@ Measured cost through the real query, `FINAL` included:
 | none (baseline page)  | 93,552    |
 | old exact-match `USD` | 93,530    |
 | new substring `USD`   | 93,552    |
-| new pair `XLM/USDC`   | 96,507    |
+| new pair `XLM/USDC`   | 79,401    |
 
 Rejected input returns `400 invalid_filter` — `u`, `USDC/`, `/xlm`, `a/b/c`.
 SQL generation was extracted from `fetch_pool_list` into `push_asset_filter`
@@ -161,12 +162,15 @@ On matching we now beat both Stellar-native products: Aquarius has the exact
 bug we fixed and a pair separator that does not constrain, stellar.expert has
 no filter. Two gaps remain, and both are things every competitor covers:
 
-1. **No identity signal.** `XLM` and `DXLM` look identical in our list. GT
-   uses verified ticks + a security score, Aquarius the issuer home domain,
-   stellar.expert curated `[SCAM]` labels. **We already have the data** —
-   `issuer_home_domain` ships on the assets endpoint (task 0450, live). Adding
-   it beside the code in the pool list is frontend-only and turns the exact
-   pair rule into something the reader can see. Recommended next step.
+1. **No identity signal — and this is the whole ballgame.** `XLM` and `DXLM`
+   look identical in our list, and so do the 407 different assets called
+   `USDC`. Matching rules cannot fix that; every competitor solves it at
+   display time — GT with verified ticks and a security score, Aquarius with
+   the issuer home domain, stellar.expert with curated `[SCAM]` labels.
+   **We already have the data**: `issuer_home_domain` ships on the assets
+   endpoint (task 0450, live). Showing it beside the code in the pool list is
+   frontend-only and is the recommended next step — it is what makes a
+   broad substring filter safe to use.
 2. **No search by asset id / issuer address.** Both GT and Aquarius accept an
    address; a code alone cannot disambiguate issuers by construction.
 
