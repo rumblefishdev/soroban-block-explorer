@@ -5,8 +5,7 @@ type: FEATURE
 status: backlog
 related_adr: []
 related_tasks: ['0453', '0411', '0352']
-tags:
-  [backend, api, frontend, transaction-detail, priority-medium, effort-large]
+tags: [backend, api, frontend, transaction-detail, priority-high, effort-large]
 links: []
 history:
   - date: '2026-07-30'
@@ -28,6 +27,18 @@ order-book fills, actual LP deposit/withdraw reserve amounts, credited/
 debited lines, claim-CB asset without waiting for details keys. All of it
 is derivable from `crates/xdr-parser/src/ledger_entry_changes.rs`, which no
 endpoint exposes.
+
+**Weight raised 2026-07-30 (0462 pre-P23 research).** Effects-from-meta is
+not a polish item — it is the ONLY truth layer that covers the entire old
+history: a 12-tx scan around ledger 51M showed most pre-P23 archive metas
+carry NO diagnostic events at all, so the 0462 execution trace (and its
+emitter-match fallback) has nothing to build from there. Verified live on
+stellar.expert with such a transaction: they render ZERO invocations (they
+cannot either) yet a full effects list ("54.9 AQUA debited from GD6X…") —
+computed from ledger-entry changes, which exist for every transaction of
+every era. Three truth tiers after 0462: (1) new txs → full chronological
+trace; (2) old txs with a trace → trace + provable emitter-match
+attachment; (3) old txs without a trace → effects from meta = THIS task.
 
 ## Scope
 

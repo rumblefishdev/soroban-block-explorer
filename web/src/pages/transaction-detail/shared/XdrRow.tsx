@@ -1,6 +1,7 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   Box,
   ButtonBase,
@@ -18,9 +19,25 @@ import { useState } from 'react';
 interface XdrRowProps {
   label: string;
   value: string;
+  /** Lab XDR type for the deep link (TransactionEnvelope,
+   *  TransactionResult, TransactionMeta, …) — without it the Lab guesses
+   *  TransactionEnvelope and errors out on every other blob. */
+  xdrType: string;
 }
 
-export function XdrRow({ label, value }: XdrRowProps) {
+/** Deep link into the official Stellar Lab XDR viewer (lab.stellar.org,
+ *  maintained by the SDF) with the blob prefilled. The Lab's state
+ *  serializer has no docs — the format was captured from the app itself:
+ *  only `/` needs doubling; `+` and `=` pass through raw (verified live
+ *  with a crafted blob). */
+function stellarLabHref(xdr: string, xdrType: string): string {
+  return `https://lab.stellar.org/xdr/view?$=xdr$blob=${xdr.replace(
+    /\//g,
+    '//'
+  )}&type=${xdrType};;`;
+}
+
+export function XdrRow({ label, value, xdrType }: XdrRowProps) {
   const [expanded, setExpanded] = useState(false);
   const { copied, copy } = useCopyToClipboard();
 
@@ -122,6 +139,28 @@ export function XdrRow({ label, value }: XdrRowProps) {
           >
             <ContentCopyIcon sx={{ fontSize: 14 }} />
             {copied ? 'Copied!' : 'Copy'}
+          </ButtonBase>
+          <ButtonBase
+            component="a"
+            href={stellarLabHref(value, xdrType)}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={(theme) => ({
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.75,
+              ml: 2.5,
+              ...theme.typography.bodySmMedium,
+              color: theme.palette.text.primary,
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+                borderRadius: `${theme.shape.radius.xs}px`,
+              },
+            })}
+          >
+            <OpenInNewIcon sx={{ fontSize: 14 }} />
+            Decode in Stellar Lab
           </ButtonBase>
         </Box>
       </Collapse>

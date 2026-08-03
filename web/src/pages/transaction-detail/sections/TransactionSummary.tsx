@@ -14,11 +14,37 @@ import { FeeCell } from '../../detail/FeeCell.js';
 import { SectionCard } from '../../detail/SectionCard.js';
 import { SummaryRow } from '../../detail/SummaryRow.js';
 import { formatAbsoluteUtc } from '../../transactions/formatters.js';
-import { classifyTx } from '../shared/classifyTx.js';
+import { formatOperationType } from '../../transactions/operationTypes.js';
 import { describeMemo } from '../shared/describeMemo.js';
 
 interface TransactionSummaryProps {
   tx: E3ResponseTransactionDetailLight;
+}
+
+/** `"LowReserve"` → `"LOW_RESERVE"` — Stellar's canonical constant style for
+ *  result codes; a pure case transform of the XDR library's variant name. */
+function screamingSnake(code: string): string {
+  return code.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+
+/** The fail reason from per-op result codes (task 0352): the FIRST failing
+ *  operation named with its code, e.g. `Create Account #2 — LOW_RESERVE`.
+ *  A transaction fails when ANY op fails, so later failures are counted, not
+ *  hidden. Null for validation-level failures (`TxBadSeq`, …), where no
+ *  operation was ever attempted and the tx-level code is the whole truth. */
+export function opFailReason(
+  tx: E3ResponseTransactionDetailLight
+): string | null {
+  const failed = (tx.heavy?.operations ?? []).filter(
+    (op) => op.result_code != null && op.result_code !== 'Success'
+  );
+  const first = failed[0];
+  if (first?.result_code == null) return null;
+  const label = formatOperationType(first.op_type.toUpperCase());
+  const more = failed.length - 1;
+  return `${label} #${first.application_order} — ${screamingSnake(
+    first.result_code
+  )}${more > 0 ? ` (+${more} more failed)` : ''}`;
 }
 
 function MemoCell({
@@ -66,7 +92,7 @@ function TimestampCell({ value }: { value: string }) {
 export function TransactionSummary({ tx }: TransactionSummaryProps) {
   const memoType = tx.heavy?.memo_type;
   const memo = tx.heavy?.memo;
-  const story = classifyTx(tx);
+  const failReason = tx.successful ? null : opFailReason(tx);
 
   return (
     <SectionCard
@@ -76,7 +102,6 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             Summary
           </Typography>
           <StatusChip successful={tx.successful} />
-          {story != null && <Chip size="sm" color="neutral" label={story} />}
         </Stack>
       }
     >
@@ -104,13 +129,16 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             sx={(theme) => ({ color: theme.palette.text.error })}
           >
             Transaction failed — no operation was applied
-            {/* Raw tx-level result code passthrough only — and only when it
-                says more than the sentence already did ("TxFailed" is the
-                generic any-op-failed code, pure noise here). The decoded
-                failure reason (Soroban errors + per-op codes) is task 0352. */}
-            {tx.heavy?.result_code != null &&
-            tx.heavy.result_code.length > 0 &&
-            tx.heavy.result_code !== 'TxFailed'
+            {/* The reason (task 0352). Two failure classes, one line each:
+                an operation failed → that op's result code; the transaction
+                never ran (validation) → the tx-level code, shown only when
+                it says more than the sentence already did ("TxFailed" is
+                the generic any-op-failed code, pure noise here). */}
+            {failReason != null
+              ? ` · ${failReason}`
+              : tx.heavy?.result_code != null &&
+                tx.heavy.result_code.length > 0 &&
+                tx.heavy.result_code !== 'TxFailed'
               ? ` · ${tx.heavy.result_code}`
               : ''}
           </Typography>

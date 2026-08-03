@@ -7,11 +7,13 @@ import { XdrRow } from '../shared/XdrRow.js';
 interface RawDataSectionProps {
   envelopeXdr: string | null | undefined;
   resultXdr: string | null | undefined;
+  resultMetaXdr: string | null | undefined;
 }
 
 interface XdrEntry {
   label: string;
   value: string;
+  xdrType: string;
 }
 
 function present(value: string | null | undefined): value is string {
@@ -21,12 +23,28 @@ function present(value: string | null | undefined): value is string {
 export function RawDataSection({
   envelopeXdr,
   resultXdr,
+  resultMetaXdr,
 }: RawDataSectionProps) {
   const entries: XdrEntry[] = [];
   if (present(envelopeXdr))
-    entries.push({ label: 'envelope_xdr', value: envelopeXdr });
+    entries.push({
+      label: 'envelope_xdr',
+      value: envelopeXdr,
+      xdrType: 'TransactionEnvelope',
+    });
   if (present(resultXdr))
-    entries.push({ label: 'result_xdr', value: resultXdr });
+    entries.push({
+      label: 'result_xdr',
+      value: resultXdr,
+      xdrType: 'TransactionResult',
+    });
+  // The ledger-entry changes (0460 #13).
+  if (present(resultMetaXdr))
+    entries.push({
+      label: 'result_meta_xdr',
+      value: resultMetaXdr,
+      xdrType: 'TransactionMeta',
+    });
 
   return (
     <SectionCard
@@ -45,7 +63,12 @@ export function RawDataSection({
       ) : (
         <Box>
           {entries.map((entry) => (
-            <XdrRow key={entry.label} label={entry.label} value={entry.value} />
+            <XdrRow
+              key={entry.label}
+              label={entry.label}
+              value={entry.value}
+              xdrType={entry.xdrType}
+            />
           ))}
         </Box>
       )}

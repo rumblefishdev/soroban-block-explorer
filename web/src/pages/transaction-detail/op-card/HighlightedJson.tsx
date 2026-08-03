@@ -1,9 +1,66 @@
 import { Box, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
+import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 
 type TokenKind = 'string' | 'number' | 'bool' | 'null' | 'key';
+
+// Strkey shape (SEP-23): G = account, C = contract, L = liquidity pool —
+// 56 chars of base32. Muxed M-addresses have no detail route; leave them
+// as plain strings.
+const STRKEY_RE = /^[GCL][A-Z2-7]{55}$/;
+
+function strkeyType(value: string): 'account' | 'contract' | 'pool' {
+  if (value.startsWith('C')) return 'contract';
+  if (value.startsWith('L')) return 'pool';
+  return 'account';
+}
+
+// Canonical credit-asset form the parser emits: CODE:ISSUER. The asset
+// route spells the same identity CODE-ISSUER, so the href maps the colon
+// to a dash while the visible text stays exactly as in the JSON. The bare
+// string "native" is NOT linked — without type context the word could be
+// any value, and a wrong link is worse than none.
+const ASSET_RE = /^([A-Za-z0-9]{1,12}):(G[A-Z2-7]{55})$/;
+
+function AssetString({ value }: { value: string }) {
+  const match = ASSET_RE.exec(value)!;
+  return (
+    <Token kind="string">
+      {'"'}
+      <IdentifierWithCopy
+        value={value}
+        type="asset"
+        href={`/assets/${match[1]}-${match[2]}`}
+        tone="inherit"
+        fontSize="inherit"
+        truncate={false}
+        mono
+      />
+      {'"'}
+    </Token>
+  );
+}
+
+/** A JSON string that IS an identifier renders as the house address
+ *  component — clickable link + copy button — while keeping the JSON
+ *  string colour and the surrounding quotes (0460 #14). */
+function StrkeyString({ value }: { value: string }) {
+  return (
+    <Token kind="string">
+      {'"'}
+      <IdentifierWithCopy
+        value={value}
+        type={strkeyType(value)}
+        tone="inherit"
+        fontSize="inherit"
+        truncate={false}
+      />
+      {'"'}
+    </Token>
+  );
+}
 
 function colorFor(kind: TokenKind, theme: Theme): string {
   switch (kind) {
@@ -36,8 +93,11 @@ function Token({ kind, children }: { kind: TokenKind; children: ReactNode }) {
 function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
-  if (typeof value === 'string')
+  if (typeof value === 'string') {
+    if (STRKEY_RE.test(value)) return <StrkeyString value={value} />;
+    if (ASSET_RE.test(value)) return <AssetString value={value} />;
     return <Token kind="string">{`"${value}"`}</Token>;
+  }
   if (typeof value === 'number' || typeof value === 'bigint')
     return <Token kind="number">{String(value)}</Token>;
   if (typeof value === 'boolean')

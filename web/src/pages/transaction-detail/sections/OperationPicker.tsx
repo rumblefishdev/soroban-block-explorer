@@ -3,11 +3,16 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { Box, Stack, Typography } from '@mui/material';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
+import { humanizeOp } from '../shared/humanizeOp.js';
 
+import type { OperationEntry } from './operationEntries.js';
 import { OpAvatar } from '../op-card/opIcon.js';
 
 interface OperationPickerProps {
-  operations: readonly OperationItem[];
+  entries: readonly OperationEntry[];
+  /** Ops without their own source inherit the transaction's (self-detection
+   *  inside humanizeOp). */
+  txSourceAccount: string | null;
   selectedIndex: number;
   onSelect: (index: number) => void;
 }
@@ -17,7 +22,8 @@ function opNumber(op: OperationItem, index: number): number {
 }
 
 export function OperationPicker({
-  operations,
+  entries,
+  txSourceAccount,
   selectedIndex,
   onSelect,
 }: OperationPickerProps) {
@@ -39,7 +45,7 @@ export function OperationPicker({
           scrollbarGutter: 'stable',
         }}
       >
-        {operations.length === 0 ? (
+        {entries.length === 0 ? (
           <Box sx={{ p: 2 }}>
             <Typography
               variant="bodySmRegular"
@@ -49,8 +55,22 @@ export function OperationPicker({
             </Typography>
           </Box>
         ) : (
-          operations.map((op, index) => {
+          entries.map((entry, index) => {
+            const op = entry.row;
             const selected = index === selectedIndex;
+            // Mini-headline (0460 #2): the same sentence the card shows, so
+            // the index answers "which op does what" without clicking through.
+            // The template-less fallback ("X processed") would only repeat
+            // the type label above it — omit the line instead.
+            const sentence = humanizeOp(
+              entry.light ?? op,
+              entry.heavy,
+              txSourceAccount
+            );
+            const summary =
+              sentence === `${formatOperationType(op.type_name)} processed`
+                ? null
+                : sentence;
             return (
               <Box
                 key={op.appearance_id}
@@ -88,16 +108,36 @@ export function OperationPicker({
                 }}
               >
                 <OpAvatar typeName={op.type_name} />
-                <Typography
-                  variant="bodyMedium"
-                  sx={(theme) => ({
-                    color: theme.palette.text.primary,
+                {/* Column flex: the typography variants render as inline
+                    spans, so without it label + summary flow as one text. */}
+                <Box
+                  sx={{
                     minWidth: 0,
                     flex: 1,
-                  })}
+                    display: 'flex',
+                    flexDirection: 'column',
+                  }}
                 >
-                  {formatOperationType(op.type_name)} #{opNumber(op, index)}
-                </Typography>
+                  <Typography
+                    variant="bodyMedium"
+                    sx={(theme) => ({
+                      color: theme.palette.text.primary,
+                    })}
+                  >
+                    {formatOperationType(op.type_name)} #{opNumber(op, index)}
+                  </Typography>
+                  {summary != null && (
+                    <Typography
+                      variant="bodyXsRegular"
+                      noWrap
+                      sx={(theme) => ({
+                        color: theme.palette.text.secondary,
+                      })}
+                    >
+                      {summary}
+                    </Typography>
+                  )}
+                </Box>
                 <KeyboardArrowRightIcon
                   sx={(theme) => ({
                     fontSize: 18,

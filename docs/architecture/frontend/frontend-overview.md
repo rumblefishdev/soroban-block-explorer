@@ -369,10 +369,14 @@ Transaction-level sections:
   account; for fee-bump envelopes also the fee source account and the inner
   transaction hash (copy-only — inner hashes are not indexed as pages).
 - A failure banner when `successful` is false: atomicity wording ("no
-  operation was applied") plus the raw transaction result code
-  (`heavy.result_code`) when present.
+  operation was applied") plus the fail reason — the first failing
+  operation's per-op result code (`heavy.operations[].result_code`, e.g.
+  `Create Account #2 — LOW_RESERVE`, with a count when more ops failed);
+  when no per-op array exists (validation-level failures, older cached
+  responses) the raw tx-level `heavy.result_code` shows instead.
 - Signatures; Events (all decoded events, collapsed by default); Raw data
-  (`envelope_xdr`, `result_xdr` as collapsible rows).
+  (`envelope_xdr`, `result_xdr`, `result_meta_xdr` as collapsible rows, each
+  with a Stellar Lab decode deep link).
 
 Operations render as a master-detail: a picker (per-type icon + label per
 operation, selection deep-linked as `#op-N`) and **one operation card** for the
@@ -383,21 +387,29 @@ selected operation:
 - a route strip for path payments — asset chips with per-hop amounts chained
   from `claimedAtoms`, flagged as partial when the route also crossed the
   order book (those fills are not in the LP-only atoms);
-- an **authorized-calls** tree for contract invocations fed by
-  `heavy.operation_tree`. This is the auth-entry tree (what the transaction
-  was signed to do), and the backend stamps every node with the whole
-  transaction's verdict — so the UI deliberately renders no per-node ✓/✗;
-  real per-node verdicts require the diagnostic execution tree on the
-  backend first;
+- an **execution trace** for contract invocations, rebuilt client-side from
+  `heavy.diagnostic_events` (`fn_call`/`fn_return` stack walk): the calls
+  that actually ran, nested, with per-node args/return behind a disclosure,
+  the contract events attached to the call that raised them, and — on a
+  failed transaction — a truthful "stopped here" on the calls that never
+  returned. `core_metrics` host counters are excluded;
+- when a transaction carries no diagnostic events, the card falls back to
+  the **authorized-calls** tree fed by `heavy.operation_tree`. That is the
+  auth-entry tree (what the transaction was signed to do), and the backend
+  stamps every node with the whole transaction's verdict — so the UI
+  deliberately renders no per-node ✓/✗ there;
 - the operation's own events, matched via `XdrEventDto.op_index`
   (`application_order - 1`);
 - an "Operation details" disclosure with every raw `details` key — exactness
   preserved; nothing null/empty that matters for debugging is hidden;
 - on a failed transaction the card dims and carries a "not applied" label.
 
-Consumed heavy fields: `operations[].details`, `operation_tree`,
+Consumed heavy fields: `operations[].details`, `operations[].result_code`
+(per-op result names straight from the XDR library — the fail-reason source),
+`operation_tree`, `diagnostic_events` (execution trace + raw table),
 `contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
-`envelope_xdr`, `result_xdr`. Large payload areas stay collapsible.
+`envelope_xdr`, `result_xdr`, `result_meta_xdr`.
+Large payload areas stay collapsible.
 
 ### 6.5 Ledgers (`/ledgers`)
 

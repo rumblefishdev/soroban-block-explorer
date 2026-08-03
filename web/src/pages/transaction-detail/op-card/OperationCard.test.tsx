@@ -110,4 +110,154 @@ describe('OperationCard', () => {
     expect(screen.getByText('transfer')).toBeTruthy();
     expect(screen.queryByText('mint')).toBeNull();
   });
+
+  it('renders the execution trace for invoke ops and hides the auth tree', () => {
+    renderCard({
+      light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+      heavy: heavyOf({}),
+      operationTree: [{ functionName: 'authorized_fn', args: [] }],
+      diagnosticEvents: [
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_call' },
+            {
+              type: 'bytes',
+              value: 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=',
+            },
+            { type: 'sym', value: 'swap' },
+          ],
+          // Short args render inline (hybrid header, option C).
+          data: {
+            type: 'vec',
+            value: [
+              {
+                type: 'address',
+                value:
+                  'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ',
+              },
+              { type: 'i128', value: '13171' },
+            ],
+          },
+          event_index: 0,
+          op_index: null,
+        },
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_return' },
+            { type: 'sym', value: 'swap' },
+          ],
+          data: { type: 'u128', value: '81404538' },
+          event_index: 1,
+          op_index: null,
+        },
+      ],
+    });
+    expect(screen.getByText(/Execution trace · 1 calls/)).toBeTruthy();
+    // Literal args render in a nested (secondary-tone) span, so match the
+    // whole header row by its text content.
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === 'swap(GC4Q…K7XQ, 13171)'
+      )
+    ).toBeTruthy();
+    expect(screen.getByText('→ 81404538')).toBeTruthy();
+    // Auth tree is the fallback only — hidden when the trace is present.
+    expect(screen.queryByText(/Authorized calls/)).toBeNull();
+  });
+
+  it('renders void args as fn() and inlines short vec returns with links', () => {
+    renderCard({
+      light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+      heavy: heavyOf({}),
+      diagnosticEvents: [
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_call' },
+            {
+              type: 'bytes',
+              value: 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=',
+            },
+            { type: 'sym', value: 'get_tokens' },
+          ],
+          // Void payload = ZERO arguments — never "1 arg".
+          data: { type: 'void', value: null },
+          event_index: 0,
+          op_index: null,
+        },
+        {
+          event_type: 'diagnostic',
+          contract_id: null,
+          topics: [
+            { type: 'sym', value: 'fn_return' },
+            { type: 'sym', value: 'get_tokens' },
+          ],
+          data: {
+            type: 'vec',
+            value: [
+              {
+                type: 'address',
+                value:
+                  'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+              },
+              {
+                type: 'address',
+                value:
+                  'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75',
+              },
+            ],
+          },
+          event_index: 1,
+          op_index: null,
+        },
+      ],
+    });
+    expect(
+      screen.getByText((_, element) => element?.textContent === 'get_tokens()')
+    ).toBeTruthy();
+    // The returned pair inlines as LINKS, not an opaque ellipsis.
+    expect(
+      screen.getByRole('link', { name: /CAS3J7GY/ }).getAttribute('href')
+    ).toContain('/contracts/CAS3J7GY');
+    expect(screen.getByRole('link', { name: /CCW67TSZ/ })).toBeTruthy();
+  });
+
+  it('marks only the deepest unfinished call with "stopped here"', () => {
+    const call = (name: string, index: number) => ({
+      event_type: 'diagnostic',
+      contract_id: null,
+      topics: [
+        { type: 'sym', value: 'fn_call' },
+        {
+          type: 'bytes',
+          value: 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=',
+        },
+        { type: 'sym', value: name },
+      ],
+      data: null,
+      event_index: index,
+      op_index: null,
+    });
+    renderCard({
+      light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),
+      heavy: heavyOf({}),
+      applied: false,
+      // Four nested calls, none returned — the trap is in the deepest,
+      // BELOW the default depth-2 fold, so this also proves unfinished
+      // branches auto-expand down to the trap point.
+      diagnosticEvents: [
+        call('outer', 0),
+        call('mid', 1),
+        call('inner', 2),
+        call('trap', 3),
+      ],
+    });
+    expect(screen.getByText('trap()')).toBeTruthy();
+    expect(screen.getAllByText('stopped here')).toHaveLength(1);
+  });
 });

@@ -13,7 +13,7 @@ tags:
     transaction-detail,
     soroban,
     ux,
-    priority-medium,
+    priority-high,
     effort-medium,
   ]
 links:
@@ -63,6 +63,26 @@ history:
       blank — the banner has one job, "say why", and which XDR structure the
       reason came from is our problem, not the reader's. Cost of the choice:
       this is no longer a small frontend change and should not be sized as one.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Priority raised to high: the reason a transaction failed must be
+      visible at the very top of the page — the 0453 redesign shipped the
+      failed-status strip (0460 #8), which is exactly where the reason line
+      from this task should land. The strip already passes through tx-level
+      `result_code` when it says more than txFAILED; this task replaces that
+      with the real per-op / ScError reason.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Core implemented on the 0462 branch (see "Implementation progress"):
+      per-op result codes end-to-end (parser accessor → heavy DTO →
+      regenerated API types → banner reason line), verified against the
+      real archive on the 7af6d0ed… fixture. Steps 1-2 (ScError decode with
+      numeric code, error-event picking) and Step 4 (code→name via ABI)
+      remain. Fruit lands at the next backend deploy.
 ---
 
 # FEATURE: prominent fail-reason banner on failed transactions
@@ -124,6 +144,40 @@ in prod — a Rust panic usually surfaces as a typed host error or `Contract`, n
 | **Budget** (host)          | `c699738038906921e32d7e5d76e6ffd2258fa5ac49d6c3e977bce10080117d00` | "operation instructions exceeds amount specified", 9812442 > 9812025 |
 | **Value** (host, archival) | `2a06fd61f5a275941ecbefb4d5fc8461efe72505c08ec3c95cab40d5f9322255` | "trying to access an archived contract data entry" + address         |
 
+## Root cause — verified end-to-end 2026-07-30 (fixture `7af6d0ed…`)
+
+Traced the live request on the dev proxy against production data. The reason is
+present in every response and is dropped by our own code at layer 2 of 5:
+
+1. **XDR has it.** `heavy.result_xdr` (48 bytes, shipped raw in the response)
+   decodes to `feeCharged=300, txFAILED, 3 op results`:
+   `BEGIN_SPONSORING_FUTURE_RESERVES=0 (success)`,
+   `CREATE_ACCOUNT=-3 (LOW_RESERVE)`, `op-level disc -2 (opNO_ACCOUNT)`.
+   `TransactionResultResult::TxFailed(VecM<OperationResult>)` — the failing
+   union arm carries the same per-op array as the successful one.
+2. **The parser throws it away.** `tx_op_results()`
+   (`crates/xdr-parser/src/operation.rs:97-106`) matches only `TxSuccess` and
+   `TxFeeBumpInnerSuccess` → returns `None` for `TxFailed` **and**
+   `TxFeeBumpInnerFailed`. It was written for pool claims (which only exist on
+   success), but it is the single gateway to op results, so on a failed
+   transaction the reason array never reaches any consumer — indexer or the
+   live heavy path alike.
+3. Even with the array in hand, `extract_op_details` consumes `op_result` only
+   for `poolIds`/`claimedAtoms` and counterparties — no result code is emitted.
+4. The DTO has no per-op result field; only tx-level
+   `result_code = "TxFailed"` (`transaction.rs:123`, `.name()` of the union arm).
+5. The banner suppresses `"TxFailed"` as noise
+   (`web/src/pages/transaction-detail/sections/TransactionSummary.tsx`) — correct
+   given it means only "some operation failed", so the strip shows no reason.
+
+Also confirmed on this fixture: `diagnostic_events: 0` (classic tx, no
+contract) — the #364 reporter was right that Advanced view shows nothing, and
+this is why the Soroban-only half of the plan cannot cover it.
+
+**Fix order implied:** widen `tx_op_results` to the failed arms FIRST (one
+match arm; everything downstream is blocked on it), then emit the code, then
+the DTO field, then the banner line.
+
 ## Implementation Plan
 
 ### Step 1 — decoder: keep the code (`scval.rs`)
@@ -182,19 +236,56 @@ LOW_RESERVE` reads the same as `Failed · Auth/ExistingValue — …`. The reade
   failures is indistinguishable from the current behaviour for the transaction
   that was actually reported.
 
+## Implementation progress (2026-07-30, feat/0462 branch)
+
+The classic half (Step 6) + the banner line are BUILT; awaiting deploy:
+
+- **Parser** (`crates/xdr-parser/src/operation.rs`): `tx_op_results_any()` —
+  companion accessor unwrapping the failed arms (`TxFailed`,
+  `TxFeeBumpInnerFailed`); `tx_op_results` deliberately untouched so claim
+  atoms stay success-gated (0261 phantom-crossing guard lives at the
+  accessor, and the two consumers now use different accessors).
+  `op_result_code()` — per-op name from the XDR library's own `name()`
+  (27-arm unwrap of `OpInner`, op-level rejections pass through), no
+  hand-rolled table (0431 lesson). Unit test mirrors the fixture shape.
+- **Heavy path** (`extractors.rs` + `dto.rs`): `XdrOperationDto.result_code`
+  (nullable), populated from `tx_op_results_any`; claims path unchanged.
+  Off-by-one guarded: `operation_index` is 1-based, the XDR array 0-based.
+  API types regenerated. Indexer untouched — codes are detail-page-only,
+  no indexing (as planned).
+- **E2E against the real archive**: network-gated test
+  `e3_failed_tx_ops_carry_result_codes` fetches ledger 63687496 and asserts
+  `["Success", "LowReserve", "OpNoAccount"]` on `7af6d0ed…` — the exact
+  hand-decoded root-cause sequence.
+- **Banner** (`TransactionSummary.tsx`): `opFailReason()` — first failing
+  op as `Create Account #2 — LOW_RESERVE`, `(+N more failed)` when later
+  ops also failed (a tx fails when ANY op fails — count, don't hide);
+  falls back to the tx-level code passthrough when the per-op array is
+  absent (validation-level failures, pre-deploy responses). Code display is
+  a pure case transform (CamelCase → SCREAMING_SNAKE) of the library name.
+- **Docs**: frontend-overview §6.4 (banner + consumed heavy fields),
+  xdr-parsing-overview (accessor pair + who consumes which).
+
 ## Acceptance Criteria
 
-- [ ] Failed tx detail shows a prominent `Failed · <type>/<code> — <message>` banner
+- [x] Failed tx detail shows the reason on the failed strip (built; per-op
+      code line — the `<type>/<code> — <message>` ScError refinement for
+      Soroban failures is Steps 1-2, still open)
 - [ ] Decoder surfaces the numeric code (not just the type name)
-- [ ] Verified on all 4 fixtures above (Auth, Contract, Budget, Value)
-- [ ] **Classic-failure fixture also verified** — `7af6d0ed…` renders
-      `CREATE_ACCOUNT — LOW_RESERVE`, not a blank banner
-- [ ] Per-operation result codes exposed on the operation DTO
-- [ ] Advanced Diagnostic events section unchanged (still available)
-- [ ] **Docs updated** — N/A unless a new API field is added (if the banner is
-      server-composed, document it in the tx-detail contract docs).
-- [ ] **API types regenerated** — required IF Step 1/2 change the `heavy` DTO
-      shape (`crates/api/**` + `libs/api-types/**` → `nx run @rumblefish/api-types:generate`).
+- [ ] Verified on all 4 fixtures above (Auth, Contract, Budget, Value) —
+      those get `Invoke Host Function #1 — TRAPPED` from the per-op code
+      today (truthful, less specific than the ScError line will be); the
+      0462 execution trace already shows their error events with message +
+      code at the stop point
+- [x] **Classic-failure fixture also verified** — `7af6d0ed…` asserts
+      `Success/LowReserve/OpNoAccount` end-to-end against the real archive
+      (network-gated test); banner render pinned by unit test. Live page
+      check pending backend deploy.
+- [x] Per-operation result codes exposed on the operation DTO
+- [x] Advanced Diagnostic events section unchanged (still available)
+- [x] **Docs updated** — frontend-overview §6.4 + xdr-parsing-overview
+- [x] **API types regenerated** — `openapi.json` + `generated/*` in the
+      same change as the DTO field
 
 ## Notes
 

@@ -2569,7 +2569,7 @@
             "description": "Memo type as ASCII tag (`\"text\"`, `\"id\"`, `\"hash\"`, `\"return\"`, `\"none\"`)."
           },
           "operation_tree": {
-            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time (the raw `result_meta_xdr` itself is intentionally\nnot surfaced — see 0046 spec \"result_meta_xdr is NOT returned\")."
+            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time."
           },
           "operations": {
             "type": "array",
@@ -2581,6 +2581,10 @@
           "result_code": {
             "type": ["string", "null"],
             "description": "Transaction result code (e.g. `\"txSuccess\"`, `\"txFailed\"`).\n`None` only when the transaction had a parse error."
+          },
+          "result_meta_xdr": {
+            "type": ["string", "null"],
+            "description": "Base64-encoded `TransactionMeta` — the ledger-entry changes (who held\nwhat before/after). The 0046 spec originally withheld it; reversed by\ntask 0460 #13: it is the one raw layer the page could not show, and\nthe raw-data section renders every XDR blob with a Lab deep link."
           },
           "result_xdr": {
             "type": ["string", "null"],
@@ -4632,6 +4636,10 @@
           "op_type": {
             "type": "string",
             "description": "Operation type tag (e.g. `\"payment\"`, `\"invoke_host_function\"`)."
+          },
+          "result_code": {
+            "type": ["string", "null"],
+            "description": "Per-operation result code from the transaction result XDR, using the\nXDR library's variant names: `\"Success\"`, `\"LowReserve\"`, `\"Trapped\"`,\nop-level rejections as `\"OpNoAccount\"` etc. Present on failed\ntransactions too — the failing op's code is the fail reason (task\n0352). `None` when the result XDR carried no per-op array\n(validation-level failures) or was unavailable."
           }
         }
       }

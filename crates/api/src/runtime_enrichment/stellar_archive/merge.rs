@@ -45,6 +45,7 @@ mod tests {
             fee_bump_source: None,
             envelope_xdr: Some("AAAA".into()),
             result_xdr: Some("AAAB".into()),
+            result_meta_xdr: None,
             diagnostic_events: Vec::new(),
             contract_events: Vec::new(),
             operations: Vec::new(),

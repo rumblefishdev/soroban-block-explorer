@@ -203,7 +203,12 @@ failed transaction rolls every op back, yet an op that executed before the
 failing one still shows op-level `Success` with claim atoms — gating on tx
 success keeps those phantom crossings out of `pool_ids` and
 `gross_volume_a`. Failed (or order-book-only) ops therefore contribute no
-pool attribution. The CH writer folds `poolIds` into
+pool attribution. Its companion `tx_op_results_any` unwraps the failed arms
+too (`TxFailed` carries the same per-op array) — consumed only by the
+request-time heavy path, where `op_result_code` names each op's result with
+the XDR library's own variant names (`"LowReserve"`, `"OpNoAccount"`, …) and
+the API surfaces it as `operations[].result_code`, the fail-reason source
+for the transaction page (task 0352). Claim-atom extraction never reads it. The CH writer folds `poolIds` into
 `operations_appearances.pool_ids Array(FixedString(32))` (sorted + deduped;
 one row per op identity — task 0268); the PG store keeps the legacy scalar
 `pool_id`, where these ops remain NULL pending PG retirement.

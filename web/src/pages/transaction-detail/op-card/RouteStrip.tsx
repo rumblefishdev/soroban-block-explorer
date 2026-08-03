@@ -18,10 +18,6 @@ export interface RouteModel {
   edges: RouteEdge[];
   /** True when at least one hop has no pool fill. */
   partial: boolean;
-  /** True when any pool fill exists at all — distinguishes "partly crossed
-   *  the order book" (D9/D10) from "no fills, e.g. failed or degraded tx",
-   *  which must not be blamed on the order book. */
-  hasFills: boolean;
 }
 
 interface Atom {
@@ -70,11 +66,20 @@ export function buildRouteModel(
     chips,
     edges,
     partial: edges.some((edge) => edge.label == null),
-    hasFills: atoms.length > 0,
   };
 }
 
-export function RouteStrip({ model }: { model: RouteModel }) {
+/** `applied` (tx.successful) picks the right explanation for missing edge
+ *  amounts: on an applied tx they crossed the order book (those fills are
+ *  not in the LP-only atoms — D9); on a failed tx nothing executed at all,
+ *  so blaming the order book would be a lie. */
+export function RouteStrip({
+  model,
+  applied,
+}: {
+  model: RouteModel;
+  applied: boolean;
+}) {
   return (
     <Box sx={{ mt: 1.25, overflowX: 'auto' }}>
       <Stack
@@ -133,13 +138,14 @@ export function RouteStrip({ model }: { model: RouteModel }) {
           );
         })}
       </Stack>
-      {model.partial && model.hasFills && (
+      {model.partial && (
         <Typography
           variant="bodyXsRegular"
           sx={(theme) => ({ color: theme.palette.text.tertiary, mt: 0.5 })}
         >
-          Hops without an amount crossed the order book — those fills are not in
-          the pool data this page reads yet.
+          {applied
+            ? 'Hops without an amount crossed the order book — those fills are not in the pool data this page reads yet.'
+            : 'Route as signed — the transaction failed, so no exchange was executed.'}
         </Typography>
       )}
     </Box>
