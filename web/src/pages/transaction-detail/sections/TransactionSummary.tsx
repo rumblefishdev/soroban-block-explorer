@@ -47,13 +47,35 @@ export function opFailReason(
   )}${more > 0 ? ` (+${more} more failed)` : ''}`;
 }
 
+/** Deliberately NOT `<Dash />`: these fields live only in the archive-gated
+ *  `heavy` block, so their absence means "could not load", which a dash would
+ *  render identically to a real "has none" (0377 F1). */
+function Unavailable() {
+  return (
+    <Typography
+      variant="bodySmRegular"
+      sx={(theme) => ({
+        color: theme.palette.text.tertiary,
+        fontStyle: 'italic',
+      })}
+    >
+      unavailable
+    </Typography>
+  );
+}
+
 function MemoCell({
   memoType,
   memo,
+  unavailable,
 }: {
   memoType: string | null | undefined;
   memo: string | null | undefined;
+  unavailable: boolean;
 }) {
+  // A memo can carry an exchange deposit id, so "no memo" is load-bearing and
+  // must not stand in for "we never fetched the memo".
+  if (unavailable) return <Unavailable />;
   const { typeLabel, content } = describeMemo(memoType, memo);
   if (typeLabel == null) return <Dash />;
   return (
@@ -92,6 +114,7 @@ function TimestampCell({ value }: { value: string }) {
 export function TransactionSummary({ tx }: TransactionSummaryProps) {
   const memoType = tx.heavy?.memo_type;
   const memo = tx.heavy?.memo;
+  const heavyUnavailable = tx.heavy == null;
   const failReason = tx.successful ? null : opFailReason(tx);
 
   return (
@@ -136,6 +159,11 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
                 the generic any-op-failed code, pure noise here). */}
             {failReason != null
               ? ` · ${failReason}`
+              : heavyUnavailable
+              ? // Without `heavy` we have neither per-op codes nor the tx-level
+                // code, and a bare sentence would read as the validation-failure
+                // class (the documented meaning of a null reason).
+                ' · reason unavailable'
               : tx.heavy?.result_code != null &&
                 tx.heavy.result_code.length > 0 &&
                 tx.heavy.result_code !== 'TxFailed'
@@ -181,7 +209,13 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
           { label: 'Fee charged', value: <FeeCell stroops={tx.fee_charged} /> },
           {
             label: 'Memo',
-            value: <MemoCell memoType={memoType} memo={memo} />,
+            value: (
+              <MemoCell
+                memoType={memoType}
+                memo={memo}
+                unavailable={heavyUnavailable}
+              />
+            ),
           },
         ]}
       />
@@ -214,6 +248,11 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
                     type="account"
                     truncate={false}
                   />
+                ) : heavyUnavailable ? (
+                  // The row is reachable via the light `inner_tx_hash` alone,
+                  // and a fee-bump envelope always HAS a fee source — a dash
+                  // here would assert something impossible.
+                  <Unavailable />
                 ) : (
                   <Dash />
                 ),
