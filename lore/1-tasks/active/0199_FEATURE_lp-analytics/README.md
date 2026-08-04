@@ -236,6 +236,22 @@ history:
       LedgerEntryChanges + its own backfill). #371 is claimed by both this
       task (§"Also owns", 2026-07-31) and 0279 (re-scoped 2026-07-30) —
       ownership overlap to resolve before Phase B starts.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SCOPE RE-CUT (human decision, stkrolikiewicz): Phase A ships all three
+      columns — tvl, volume, fee_revenue — computed at read via the
+      prices.price_usd_series join (ADR 0053, no materialization). The
+      2026-06-09 TVL-only cut is retired because both of its premises are
+      gone: gross_volume_a has been backfilled since 0266 (2026-06-16,
+      261.32M rows) and the Prices API is live in-cluster. Marginal cost is
+      two expressions in the same price join (volume = gross_volume_a x
+      price_a; fee_revenue = volume x fee_bps / 10000). The plan's Phase 1/2
+      (SQS emit + Lambda 2 column writes) is OBSOLETE for these columns —
+      superseded by compute-at-read; the indexer already persists every
+      on-chain input. Phase B (#371 per-tx amounts) unchanged and still
+      pending the 0199/0279 ownership decision.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
