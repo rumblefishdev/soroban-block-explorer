@@ -206,6 +206,36 @@ history:
       Reminder for whoever writes the SQL: key on `asset_kind`, never join raw
       `prices.assets` on `(asset_code, issuer_address)` — that silently prices
       native legs off one of its 153 empty-code rows.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Two updates. (1) Recorded Oskar's 2026-08-03 message as
+      notes/R-prices-freeze-incident-and-current-price-usd-v13.md: the
+      ~1.5-day staleness flagged at activation was an INCIDENT (coarse OHLCV
+      frozen 07-21 02:44 → recovered 08-03 09:57), not steady state — the
+      "confirm with the prices owner" gate is closed. The 07-21→08-03 hole in
+      1h/1d does not backfill itself; their pre-roll pends (they ping when
+      done) — do not run AC validation over that window until then.
+      Compute-at-read (ADR 0053) means our charts self-heal, zero recompute.
+      Also: current_price_usd goes 6→13 columns (additive) with SENTINEL
+      semantics (0 = unavailable, sources='' is invalid JSON) — named column
+      lists only, never positional; full trap table in the note.
+      (2) Verified against schema + archive: the activation note's premise
+      "volume/fee_revenue stay out — they need gross_volume_a" is STALE.
+      `liquidity_pool_snapshots.gross_volume_a` exists (init.sql, 0268 ALTER),
+      is written by live ingest (stage.rs gross_volume_a_by_pool), and was
+      historically backfilled by the 0266 re-parse (261.32M non-NULL rows,
+      verify-gates + 0267 E20 passed 2026-06). The only remaining gate for USD
+      volume/fee_revenue is the same read-time price join TVL needs, per the
+      schema comment itself. Scope re-cut (TVL-only vs TVL+volume+fee in one
+      pass) is an OPEN question for the humans, deliberately not decided here.
+      Distinct from #371: gross_volume_a is a per-(pool, ledger) SUM and
+      cannot serve per-transaction amounts — that is 0279's
+      lp_operation_amounts plan (per-atom rows + deposits/withdrawals from
+      LedgerEntryChanges + its own backfill). #371 is claimed by both this
+      task (§"Also owns", 2026-07-31) and 0279 (re-scoped 2026-07-30) —
+      ownership overlap to resolve before Phase B starts.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
