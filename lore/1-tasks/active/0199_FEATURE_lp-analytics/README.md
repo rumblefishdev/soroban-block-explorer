@@ -252,6 +252,35 @@ history:
       superseded by compute-at-read; the indexer already persists every
       on-chain input. Phase B (#371 per-tx amounts) unchanged and still
       pending the 0199/0279 ownership decision.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase A IMPLEMENTED — PR #380 (feat/0199_lp-analytics, Refs #367/#371).
+      Chart: per-snapshot join against price_usd_series (1d/1w) /
+      price_usd_series_1h (1h) at the interval's grain; TVL = last priceable
+      snapshot per bucket (both legs required); volume prices each ledger's
+      gross_volume_a at its own bucket, any unpriceable swap NULLs the
+      bucket (honest hole, no under-sum); fee = volume x fee_bps/10000.
+      0356 perf shape preserved. Detail: tuned #347 query untouched; second
+      small fetch (current_price_usd spot + 24h gross_volume_a sum), USD in
+      Rust, prices errors DEGRADE to NULL + error log (never 500). Emerged
+      decisions: (a) Float64 USD rounded to cents — Decimal128 scale
+      overflow avoided, 1% AC tolerance covers it; (b) nullIf(close_usd,0)
+      instead of join_use_nulls (readonly-user rejection gotcha); (c) 1w
+      interval joins the DAILY series — prices provides 1h+1d grains only;
+      (d) detail volume priced at CURRENT spot, not per-trade (upgrade
+      path: hourly join); (e) list endpoint deliberately untouched —
+      list-side TVL + min_tvl filter is its own perf problem (lplist cr
+      history). FE needs nothing: PoolCharts.tsx already renders all three
+      metrics. GATES before merge/deploy: (1) box read-cost measurement of
+      the prices-view join on the hottest pool (ADR 0053 gate — the views
+      aggregate price_ohlcv under the hood; identity predicate may not
+      push down); (2) SELECT grant on prices.* for the API CH user via
+      ansible users.d + compose recreate (prices_writer lesson); (3) E2E
+      numbers validation vs Horizon AC after Oskar's pre-roll closes the
+      07-21..08-03 hole. Canonical SQL 19/21 + tech-design + ADR 0053
+      updated in the PR; api-types regenerated.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
