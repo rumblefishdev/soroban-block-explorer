@@ -26,6 +26,17 @@ history:
       always empty", and nobody has checked which is worse. Converted to a
       directory per the RESEARCH convention; the deciding measurement is now
       step 1.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Step 1 measured on mainnet: 3 804 deployed vs 296 437 reserved — 1.3%.
+      The premise both earlier versions rested on is refuted. The row does not
+      appear arbitrarily; it already renders on ~89% of classic asset pages and
+      says "not deployed" on 98.7% of them. So it is not a signal, it is the
+      default state, and hiding it loses a constant rather than information.
+      Recommendation recorded (B, address kept reachable as an explicitly
+      derived value); the choice itself is still open.
 ---
 
 # RESEARCH: what to show for a SAC address nobody deployed
@@ -64,45 +75,90 @@ The address in that second row is genuinely not on chain — confirmed for
 `CC774ZITP2FCKQ3RACDQPZKCQXXFNJBSNG4VJ6PDNEI4REO6EZCEUP67` by a hand-built
 `getLedgerEntries` call (`entries: []`) and by stellar.expert (404).
 
-## Step 1 — the measurement that decides it
+## Step 1 — the measurement that decides it — DONE
 
-Everything below hinges on one ratio nobody has looked at:
+Measured on mainnet 2026-07-30.
+
+|                                     |       count |          |
+| ----------------------------------- | ----------: | -------: |
+| reserved (`sac_deployed = 0`)       | **296 437** |    98.7% |
+| deployed (`sac_deployed = 1`)       |   **3 804** | **1.3%** |
+| rows in `asset_sac` (one per asset) |     300 241 |          |
+| classic assets in total             |     337 705 |          |
 
 ```sql
+-- Reserved vs deployed. The GROUP BY is not optional: asset_sac is an
+-- AggregatingMergeTree, so a raw countIf counts PARTS, not assets.
 SELECT countIf(sac_deployed = 0) AS reserved,
-       countIf(sac_deployed = 1) AS deployed
-FROM asset_sac
-WHERE sac_contract_id != 0;
+       countIf(sac_deployed = 1) AS deployed,
+       count()                   AS total
+FROM (
+    SELECT max(sac_deployed) AS sac_deployed
+    FROM asset_sac
+    GROUP BY asset_type, asset_code, issuer_id, contract_id
+);
+
+-- Denominator.
+SELECT count() FROM (
+    SELECT 1 FROM assets WHERE asset_type IN (0, 1)
+    GROUP BY asset_type, asset_code, issuer_id, contract_id
+);
 ```
 
-And, for the denominator, how many classic assets exist at all:
+The original `WHERE sac_contract_id != 0` predicate was dropped — every row in
+the table carries a non-zero surrogate, so it filtered nothing.
 
-```sql
-SELECT count() FROM assets WHERE asset_type IN (0, 1);
-```
+### What the number means
 
-Read it as: **of the classic assets that have moved, how many have a real
-contract?** If reserved handles dominate, the row is mostly noise and option C
-looks weak. If they are rare, the whole question is marginal and the cheapest
-option wins.
+**Of the classic assets that have ever moved, 1.3% have a real contract.**
 
-## The three answers
+And the second ratio reframes the whole question: 300 241 of 337 705 classic
+assets already have an `asset_sac` row, so **the row this task is about already
+renders on ~89% of asset detail pages — and on 98.7% of those it says "reserved,
+not deployed".**
+
+So the premise that the row appears "arbitrarily" was wrong. It appears almost
+always, and almost always says the same thing. **A signal that fires on 98.7% of
+cases carries no information.** That is the finding, and it is what decides
+between A, B and C below.
+
+## The three answers — re-read against the number
 
 **A — derive always, show always with status.** Every classic asset gets the
 row; `sac_deployed` becomes a status rather than a gate on visibility. Nothing
-is arbitrary and nothing is hidden. Cost: most rows show an address where
-nothing is deployed and probably never will be — consistency bought with noise.
-Backend change is one line (drop the `sac_contract_surrogate != 0` gate at
-`crates/api/src/assets/handlers.rs:72`).
+is arbitrary and nothing is hidden. Backend change is one line (drop the
+`sac_contract_surrogate != 0` gate at `crates/api/src/assets/handlers.rs:72`).
+
+> **After the measurement:** this is barely a change — the row already shows on
+> ~89% of pages, and A takes it to 100%. It buys consistency at the price of
+> 98.7% of asset pages carrying an address that points at nothing. The cost was
+> stated as a guess; it is now known and it is the whole population.
 
 **B — show only deployed.** Consistent and quiet, and matches what every other
 surface already means by "SAC" (the `Has SAC` filter and the `SAC` chip both
 key off `sac_deployed`). Cost: loses the signal that a reserved address exists —
 which was the reason the 0450 attempt at this was reverted.
 
+> **After the measurement:** the objection weakens sharply. The "signal" fires
+> on 98.7% of assets, so it does not distinguish anything — it is the default
+> state of every classic asset that ever moved. B would drop the row from ~89%
+> of pages to 1.3%, and what it drops is a constant. It stays lossy only if
+> someone genuinely needs the derivable address on a page where no contract
+> exists — and if they do, that is a different feature (show the address as a
+> derived fact, not as a deployment).
+
 **C — leave it, explain it.** Cheapest, and keeps the oddity visible. Cost:
 requires explaining CAP-67 event attribution inside a table cell, which is a
 lot to ask of a caption.
+
+> **After the measurement:** there is no oddity to keep visible. C now means
+> "explain, on 89% of pages, why a near-universal row is near-universally
+> empty". Cheapest to build, hardest to word.
+
+**Recommendation: B, with the address kept reachable rather than deleted** — the
+row disappears from pages where nothing is deployed, and the derivable address,
+if wanted at all, returns as an explicitly-labelled derived value rather than as
+something that looks like a deployment. Decide it; do not let it default.
 
 Whichever wins, **"Reserved address — not deployed" needs rewording** — nobody
 reserved anything.
@@ -122,7 +178,7 @@ reserved anything.
 
 ## Done when
 
-- [ ] The ratio above is measured and recorded here
+- [x] The ratio above is measured and recorded here — 1.3% deployed
 - [ ] One of A / B / C chosen, with the reason and the number behind it
 - [ ] A follow-up implementation task spawned (or this closed as "leave it")
 - [ ] Replacement wording drafted for the "Reserved address" caption
