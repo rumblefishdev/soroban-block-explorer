@@ -57,7 +57,7 @@ pub fn extract_events(
         }
         TransactionMeta::V4(v4) => {
             // CAP-67 (Protocol 23+) reorganises events into three locations
-            // — tx-level (fee BeforeAllTxs / AfterTx refund / AfterAllTxs),
+            // — tx-level (fee charge and refund, carrying a `stage`),
             // per-operation (Soroban contract events emitted during
             // InvokeHostFunction execution + classic-op SAC events under
             // Protocol 23 unification), and diagnostic. `event_index` is
@@ -74,10 +74,13 @@ pub fn extract_events(
                 .enumerate()
                 .map(|(i, tx_event)| {
                     // CAP-67 gives tx-level events a `stage`, and it is the
-                    // only statement of WHEN they happened: the fee charge is
-                    // BeforeAllTxs, the refund AfterTx — after the operations
-                    // that sit later in `event_index`. Without it the index
-                    // reads as a timeline it is not.
+                    // only statement of WHEN they happened. Measured on
+                    // mainnet, not inferred (`tests/tx_event_stage_real_meta`):
+                    // the fee charge is `BeforeAllTxs`, the refund
+                    // `AfterAllTxs` — settled after every transaction in the
+                    // ledger, yet numbered ahead of the operation it refunds.
+                    // Without the stage, `event_index` reads as a timeline it
+                    // is not.
                     let mut ev = extract_single_event(
                         &tx_event.event,
                         transaction_hash,
@@ -593,8 +596,11 @@ mod tests {
     #[test]
     fn extract_events_v4_carries_transaction_event_stage() {
         // CAP-67 gives ONLY tx-level events a stage, and it is the protocol's
-        // one statement of when they fired. The `AfterTx` refund below is
-        // numbered 1 — ahead of the operation event at 2 that it refunds —
+        // one statement of when they fired. `AfterTx` here is a synthetic
+        // value chosen to prove the field is carried verbatim — real mainnet
+        // refunds arrive as `AfterAllTxs`, pinned in
+        // `tests/tx_event_stage_real_meta.rs`. The second event is numbered 1,
+        // ahead of the operation event at 2 that it refunds —
         // which is exactly why `event_index` must not be read as a timeline.
         let charge = TransactionEvent {
             stage: TransactionEventStage::BeforeAllTxs,

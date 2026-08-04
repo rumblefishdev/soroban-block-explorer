@@ -166,10 +166,12 @@ pub struct ExtractedEvent {
     /// `None` for tx-level, diagnostic and V3 events (task 0453 D7).
     pub op_index: Option<u32>,
     /// CAP-67 `TransactionEvent.stage` — when in ledger application the event
-    /// fired (`BeforeAllTxs` fee charge, `AfterTx` refund, `AfterAllTxs`).
+    /// fired. Measured on mainnet (`tests/tx_event_stage_real_meta.rs`): the
+    /// fee charge is `BeforeAllTxs` and the refund is `AfterAllTxs` — settled
+    /// after every transaction in the ledger, not after this one.
     /// The protocol's own statement of ordering, and the only one there is:
     /// `event_index` is our flat counter over the three containers, so an
-    /// `AfterTx` refund is numbered ahead of the operations it refunds.
+    /// refund is numbered ahead of the operations it refunds.
     /// `None` for per-op, diagnostic and V3 events — only `v4.events` carries
     /// a stage.
     pub stage: Option<TransactionEventStage>,
