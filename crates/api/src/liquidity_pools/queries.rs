@@ -499,7 +499,19 @@ pub async fn fetch_participants(
 
     // Resolve the provider StrKey by surrogate id (bloom seek) instead of a
     // whole-`accounts` `JOIN accounts acc FINAL` (task 0354). INNER-JOIN drop
-    // semantics preserved via filter_map (a position always has its account).
+    // semantics preserved via filter_map.
+    //
+    // "A position always has its account" is now MEASURED, not assumed: on prod
+    // all 6010 distinct `shares > 0` participants resolved — 0 missing, 0 empty
+    // StrKeys (2026-08-04) — and outside test teardown nothing deletes an
+    // `accounts` row, so the miss below is unreachable by construction.
+    //
+    // It is still logged rather than swallowed, because the failure mode is not
+    // proportional to the cause: the drop happens BEFORE `finalize_page` reads
+    // the `limit + 1` sentinel, so losing the sentinel row would report "no next
+    // page" and hide the REST of the list, not one participant. Only 82 of
+    // 26_487 pools hold more than one page, but the largest holds 684. `error!`
+    // (not `debug!`) because the Lambda runs at `RUST_LOG=info` (0377 F3).
     let accounts = resolve_accounts(
         client,
         rows.iter().map(|r| r.account_id_surrogate).collect(),
@@ -508,7 +520,16 @@ pub async fn fetch_participants(
     Ok(rows
         .into_iter()
         .filter_map(|r| {
-            let account = accounts.get(&r.account_id_surrogate)?.clone();
+            let Some(account) = accounts.get(&r.account_id_surrogate).cloned() else {
+                tracing::error!(
+                    account_id_surrogate = r.account_id_surrogate,
+                    pool_id = pool_id_hex,
+                    "lp_positions row resolves to no accounts row: participant \
+                     dropped, so participant_count disagrees with the list and \
+                     pagination may terminate early"
+                );
+                return None;
+            };
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,

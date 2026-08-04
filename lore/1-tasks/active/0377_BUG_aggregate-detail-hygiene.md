@@ -95,18 +95,48 @@ claim — so F1/F2 covers these too, or the page ships half-honest:
   failure, no operation attempted". An archive miss is rendered as a _different
   failure class_.
 
-### F3 — participant count vs list, with pagination truncation
+### F3 — participant count vs list — LATENT, not live (measured)
 
 `liquidity_pools/queries.rs:323-325` (detail) and `:1096-1099` (list) count
 `lp_positions FINAL WHERE shares > 0`. `fetch_participants` then builds rows
-through `filter_map` (`:501-512`) which **silently drops** any position whose
-account surrogate does not resolve to a StrKey. The comment calls the invariant
+through `filter_map` which **silently drops** any position whose account
+surrogate does not resolve to a StrKey. The comment called the invariant
 "a position always has its account" — unenforced and unobserved.
 
-Worse than a count mismatch: the drop happens inside `fetch_participants`,
-i.e. **before** `finalize_page` (`handlers.rs:100`) inspects the `limit + 1`
-sentinel. Dropping the sentinel row flips `has_next` to false and terminates
-pagination early — losing the remainder of the list, not one row.
+The mechanism is worse than a count mismatch: the drop happens inside
+`fetch_participants`, i.e. **before** `finalize_page` (`handlers.rs:100`)
+inspects the `limit + 1` sentinel. Dropping the sentinel row flips `has_next`
+to false and ends pagination early — hiding the remainder of the list.
+
+**Prod measurement (`chq`, 2026-08-04) — the trigger does not occur:**
+
+| Probe (mirrors the code: `lp_positions FINAL WHERE shares > 0` vs `accounts … LIMIT 1 BY id`) | Result |
+| --------------------------------------------------------------------------------------------- | ------ |
+| distinct participants with `shares > 0`                                                       | 6010   |
+| of those, absent from `accounts` (would be dropped)                                           | **0**  |
+| of those, resolving to an empty StrKey (renders blank; `get()` does not drop it)              | **0**  |
+
+Structural too, not luck: all four `ALTER TABLE accounts DELETE` sites in the
+repo are inside `#[cfg(test)]` teardown, so production never removes an account
+row and the surrogate always resolves.
+
+Blast radius if it ever did break: 82 of 26_487 pools hold more than one page
+(>20 participants), 17 hold >100, largest 684 — in the other 26_405 every
+participant fits on one page, where truncation is impossible by definition.
+
+**Verdict: latent defect, not a live bug.** Earlier framing as "the most severe
+backend item" was a mis-call — the mechanism was traced but the trigger never
+checked.
+
+**Fix taken: the tripwire only.** Replaced the silent `?` with a
+`tracing::error!` naming the surrogate and pool, and recorded the measurement in
+the comment. Deliberately NOT restructuring pagination or re-deriving the count
+from the resolved set — that is real complexity against a case that cannot
+currently arise. The log makes the invariant observable, so if a write-path
+change ever breaks it we get a CloudWatch hit
+(`/aws/lambda/production-soroban-explorer-api`, 30-day retention) instead of a
+user silently seeing a truncated list. `error!` not `debug!` because the Lambda
+runs at `RUST_LOG=info`.
 
 ### F4 — network totals: the docs are stale, not the numbers
 
@@ -160,7 +190,7 @@ elsewhere. Not fixed here — listed so the next pass has the inventory.
 - [x] F1 — signatures section distinguishes "archive unavailable" from "no signatures"; no `0 signatures` meta when `heavy_fields_status == "unavailable"`
 - [x] F2 — events + raw-data sections likewise; `HeavyUnavailable` extracted to a shared module and reused by all three
 - [x] F1/F2 extension — memo, fee source and fail reason on the same page no longer collapse "not loaded" into a definite claim
-- [ ] F3 — participant count and participants list derive from one basis; unresolved account no longer silently dropped, and cannot truncate pagination; miss is logged
+- [x] F3 — trigger measured absent on prod (0/6010) and structurally unreachable; unresolved account no longer dropped silently — `tracing::error!` makes it observable. Pagination restructure and single-basis count deliberately skipped as unjustified complexity; revisit only if the log ever fires
 - [x] F4 — `network/dto.rs` docs describe the actual mechanism (deduped read-time count, accounts lag MV refresh ≤2 min); API types regenerated; frontend left unchanged
 - [ ] F5 — list and detail apply one zero-balance rule; DTO doc states it
 - [x] F6 — `ContractListItem` carries the window label; API types regenerated
