@@ -2,7 +2,7 @@
 id: '0455'
 title: 'OPS: observability umbrella — "declared vs actual, never compared" and "health measured by success"'
 type: OPS
-status: backlog
+status: active
 related_adr: []
 related_tasks:
   [
@@ -38,6 +38,13 @@ history:
       tasks turned out to be instances of two recurring defects rather than
       sixteen separate problems. This task owns the two defects; the children own
       their instances.
+  - date: 2026-08-04
+    status: active
+    who: karolkow
+    note: >
+      Activated. Starting with the ordered implementation list: read-only AWS
+      principal first, then signal inversion in cloudwatch-stack.ts, then the
+      declared-vs-actual comparator.
 ---
 
 # Observability umbrella — two recurring defects, sixteen instances
