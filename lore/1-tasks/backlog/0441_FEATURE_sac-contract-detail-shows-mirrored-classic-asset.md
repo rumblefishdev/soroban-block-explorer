@@ -39,6 +39,22 @@ history:
       50-row list page). Still `effort-small` in code, but it now carries an
       access-path decision — see "Decide before implementing". Dropped from
       first place in the quick-win ranking because of it.
+  - date: '2026-07-30'
+    status: backlog
+    who: karolkow
+    note: >
+      Access path decided: **accept the scan**. The row count was the wrong
+      unit — `system.parts` puts the whole table at **7.79 MiB** over 7 parts,
+      the query runs in ~0.10 s, and `EXPLAIN ESTIMATE` is identical for 1 and
+      for 50 ids, so a list page costs one scan rather than one per row. The
+      1,105,551-row figure was a different query shape and is corrected. SACs
+      are 2.89% of contracts and the default list page holds none, so the
+      query usually does not fire at all. A projection would mean an ALTER on
+      a live table plus write amplification for an 8 MB read; detail-only
+      scoping would give up the list for zero saving. The upgrade path is
+      named instead — a `bloom_filter` skip index (not `minmax`, which cannot
+      prune a cityhash64 surrogate), triggered past ~5M rows. Implementation
+      in `stash@{2}` already uses the batched shape.
 ---
 
 # FEATURE: surface the classic asset behind a SAC contract
@@ -96,20 +112,52 @@ with the asset count (376k assets and climbing), and against the read-row
 quota a contract-list page costs ~1.1M rows — roughly 1,800 requests to
 exhaust an hour's budget on this one join.
 
-### Decide before implementing
+### Access path — DECIDED 2026-07-30: accept the scan
 
-1. **Accept the scan** — add a `read_rows` measurement to the acceptance
-   criteria and revisit when the asset table grows. Cheapest now, worst later.
-2. **ClickHouse projection ordered by `sac_contract_id`** — the engine
-   maintains it, the query needs no change; cost is disk plus slower writes.
-   Cleanest, and the only option that keeps the list page bounded.
-3. **Scope down to the contract DETAIL page only** (one row, no list join) —
-   closes the reported ask with a single-row read and leaves the list without
-   the mirrored asset. Partial, but honest and cheap.
+Three options were open: accept the scan, add a projection ordered by
+`sac_contract_id`, or scope down to the detail page. **Accept the scan.**
+
+Four measurements settled it.
+
+**The scan is 7.79 MiB, not 436k rows of pain.** `system.parts` on prod:
+443,606 rows across 7 active parts, **7.79 MiB on disk**, 66 marks. The row
+count is the alarming-sounding number; the byte count is the one that matters,
+and we read 4 of 6 narrow columns from it. End-to-end **~0.10 s**, measured
+three times through the same transport as any other query.
+
+**One batched query, not one per row.** `EXPLAIN ESTIMATE` for a 50-id
+`IN (…)` list and for a single id return the identical plan — 443,614 rows,
+59 marks, 7 parts. A whole list page costs one scan, and the earlier
+**1,105,551 rows for a 50-row page is not this query's shape** — it came from
+a per-id or repeated-aggregate form. Corrected here rather than left standing.
+
+**It usually does not run at all.** SACs are **2.89%** of contracts (3,944 of
+136,538), and the query is skipped when a page holds none. The newest 50
+contracts — the default list page — contain **zero**.
+
+**A projection is over-engineering at this size.** It means an `ALTER` on a
+live table plus permanent write amplification, to optimise an 8 MB read that
+fires on a minority of page loads. **Detail-only scoping buys nothing** — the
+list page costs the same single scan, so giving up the list feature saves
+zero.
+
+#### The upgrade, named so nobody has to re-derive it
+
+If this ever bites, add a **`bloom_filter` skip index on `sac_contract_id`** —
+not `minmax`, which prunes nothing on a cityhash64 surrogate because the values
+are random with respect to the sort order. The table has ~59 marks and a page
+carries one or two SAC ids, so a bloom would prune to a handful of granules.
+This is the same pattern as `idx_oaa_transaction_id` (task 0393), which exists
+for exactly this shape: filtering a non-sort-key column by a scattered id set.
+
+**Trigger to revisit:** `asset_sac` past ~5M rows, or this query showing up in
+the slow log. Not before — at 7.79 MiB the index would cost more to maintain
+than the scan costs to run.
 
 Recorded because the original "why this is cheap" reasoning was right about
 the join existing and wrong about it being reusable: it exists in the
-direction that has a sort key.
+direction that has a sort key. The direction really is the whole cost — it is
+just that the whole cost is 8 MB.
 
 ## Scope
 
@@ -123,8 +171,11 @@ direction that has a sort key.
 
 ## Acceptance criteria
 
-- [ ] Reverse-lookup access path decided (scan / projection / detail-only) and
-      recorded — not left to whoever writes the query
+- [x] Reverse-lookup access path decided (scan / projection / detail-only) and
+      recorded — **accept the scan**, 2026-07-30, see above
+- [ ] The query is issued **once per page** with every SAC id in one `IN` list —
+      a per-id form multiplies the scan and is the shape the 1.1M figure came
+      from
 - [ ] `read_rows` measured on the contract LIST page, not just the detail
       page; bounded as the asset table grows
 - [ ] Contract detail returns the mirrored classic asset when `is_sac`
