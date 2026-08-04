@@ -743,10 +743,12 @@ export type LedgerListItem = {
 /**
  * Top-level chain overview returned by `GET /v1/network/stats`.
  *
- * `total_accounts` and `total_contracts` are planner
- * estimates, not exact counts. `latest_ledger_closed_at` is `None`
- * only on a cold-bootstrap cluster where no ledger has been indexed
- * yet.
+ * `total_accounts` and `total_contracts` are deduped read-time counts —
+ * see the per-field docs for the exactness each one carries. (They were
+ * `system.tables.total_rows` planner estimates until 0420, which counted
+ * unmerged ReplacingMergeTree duplicates and over-reported; that source is
+ * gone.) `latest_ledger_closed_at` is `None` only on a cold-bootstrap
+ * cluster where no ledger has been indexed yet.
  *
  * `generated_at` is the wall-clock time the underlying SELECT ran on
  * the DB. Cache hits keep the original value, so frontend can derive
@@ -774,11 +776,15 @@ export type NetworkStats = {
    */
   latest_ledger_sequence: number;
   /**
-   * Estimated indexed account count (planner estimate, not exact).
+   * Indexed account count: `count()` over `accounts_recent`, the deduped
+   * MV the `/accounts` list also pages from — so this KPI and that list
+   * agree. Exact to ±1 vs `accounts FINAL`, modulo the ~2-minute MV
+   * refresh. Safe to render as a total.
    */
   total_accounts: number;
   /**
-   * Estimated indexed Soroban contract count (planner estimate, not exact).
+   * Indexed Soroban contract count: `count() FROM soroban_contracts FINAL`.
+   * Exact — `FINAL` is affordable on a table this size.
    */
   total_contracts: number;
   /**

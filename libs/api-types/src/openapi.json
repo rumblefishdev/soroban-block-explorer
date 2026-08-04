@@ -2967,7 +2967,7 @@
       },
       "NetworkStats": {
         "type": "object",
-        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\n`total_accounts` and `total_contracts` are planner\nestimates, not exact counts. `latest_ledger_closed_at` is `None`\nonly on a cold-bootstrap cluster where no ledger has been indexed\nyet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
+        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\n`total_accounts` and `total_contracts` are deduped read-time counts —\nsee the per-field docs for the exactness each one carries. (They were\n`system.tables.total_rows` planner estimates until 0420, which counted\nunmerged ReplacingMergeTree duplicates and over-reported; that source is\ngone.) `latest_ledger_closed_at` is `None` only on a cold-bootstrap\ncluster where no ledger has been indexed yet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
         "required": [
           "tps_60s",
           "total_accounts",
@@ -2994,12 +2994,12 @@
           "total_accounts": {
             "type": "integer",
             "format": "int64",
-            "description": "Estimated indexed account count (planner estimate, not exact)."
+            "description": "Indexed account count: `count()` over `accounts_recent`, the deduped\nMV the `/accounts` list also pages from — so this KPI and that list\nagree. Exact to ±1 vs `accounts FINAL`, modulo the ~2-minute MV\nrefresh. Safe to render as a total."
           },
           "total_contracts": {
             "type": "integer",
             "format": "int64",
-            "description": "Estimated indexed Soroban contract count (planner estimate, not exact)."
+            "description": "Indexed Soroban contract count: `count() FROM soroban_contracts FINAL`.\nExact — `FINAL` is affordable on a table this size."
           },
           "tps_60s": {
             "type": "number",
