@@ -326,6 +326,49 @@ history:
       #367 at deploy. Side observation: current_price_usd began pricing
       WGUARDIAN mid-session but still not native XLM — consistent with
       the reported 0039 gap.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SELF-REVIEW of the branch found 6 issues; 5 fixed in d0efb496, CI
+      green. The one that mattered: the chart NULLed its NEWEST bucket for
+      any pool with an illiquid leg, because a price candle only exists
+      once the asset trades in that bucket and we joined on exact bucket
+      equality. Reproduced on prod (pool a01fce81 had today's yXLM candle
+      but none for WGUARDIAN) - and the detail endpoint, which uses a 48h
+      lookback, happily returned a TVL at the same moment, so the page
+      contradicted itself on its most-read number. Fix: ASOF LEFT JOIN
+      taking the last close at or before the wanted bucket, CAPPED at 48h
+      (MAX_PRICE_CARRY_SECONDS, shared with detail). The cap is the whole
+      point - uncapped carry-forward would have rendered the 07-21..08-03
+      freeze as live TVL priced off a 12-day-old candle (verified: the ASOF
+      match for 07-28 IS a 07-21 candle). ASOF needs an equi-join column
+      hence the constant k - a real column, not ON 1=1 (that pins
+      join_algorithm to hash). Post-fix on prod as api_reader: today's
+      bucket reports 25.59, freeze window stays NULL, and 1h got CHEAPER
+      (204ms/2.5M vs 272ms/2.8M - ASOF merges instead of hashing).
+      Also fixed: chart and detail emitted different wire shapes for the
+      same field (CH toString(round(x,2)) gives "25"/"1.5"/"0" vs Rust
+      "25.00") - SQL now returns raw Nullable(Float64) and one Rust helper
+      formats both, with fee_revenue derived from the volume float (removed
+      a fragile positional bind); detail reported "$0.00 traded" on a parse
+      failure (only SQL NULL means zero now); and two comments asserted
+      falsehoods (the prices grant gate, and detail/chart price
+      consistency). DELIBERATELY NOT FIXED, needs karolkow's call: the
+      per-bucket volume veto still discards a whole 1w bucket on one
+      unpriced ledger - an unmarked partial sum reads as a real number, so
+      that wants a coverage field, not a silent change.
+      DECODE: Nullable(Float64) -> Option<f64> is exactly the wire-type
+      contract decode_smoke guards, and SSH forwarding to the box is
+      administratively prohibited (AllowTcpForwarding no - do not work
+      around it), so it is now covered by a schema-free test against a
+      local CH 26.3 docker; NULL survives as None, not 0.0.
+      UPSTREAM (for Oskar, not our bug): the IN-PROGRESS candle is
+      unstable - yXLM's 13:00 hourly close read 1.3085 USD against ~0.170
+      in every neighbouring hour (7.7x), briefly quadrupling the newest 1h
+      TVL point while reserves stayed flat. We report it faithfully and do
+      NOT apply our own outlier filter (prices owns that; diverging would
+      make our numbers disagree with theirs).
 ---
 
 # LP analytics: TVL + volume + fee_revenue
