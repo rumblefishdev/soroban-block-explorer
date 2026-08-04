@@ -2,7 +2,7 @@
 id: '0407'
 title: 'FEATURE: soft-launch feedback — header "Report a bug" link → GitHub issue-form template'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-small, layer-frontend, phase-launch]
@@ -13,7 +13,7 @@ links:
   - libs/ui/src/layout/SecondaryNav.tsx
   - libs/ui/src/layout/Footer.tsx
 history:
-  - date: 2026-07-17
+  - date: '2026-07-17'
     status: active
     who: karolkow
     note: >
@@ -26,7 +26,7 @@ history:
       stellarchain has nothing); dev-tools converge on
       issues/new?template=<form>.yml with a structured .yml issue form and
       blank_issues_enabled:false (Zed, n8n, Vercel, 11/12 surveyed).
-  - date: 2026-07-22
+  - date: '2026-07-22'
     status: active
     who: karolkow
     note: >
@@ -35,6 +35,20 @@ history:
       Voyager's separated top-right "Report a bug". Footer entry removed —
       one affordance, not two. Shipped as 09acbbd2 + e16fb0a1 (drawer
       sizing). The issue form + user-facing guide are still open.
+  - date: '2026-07-30'
+    status: completed
+    who: karolkow
+    note: >
+      Closed on evidence rather than on the checklist. The affordance shipped
+      and worked: eight external reports (#364-#371) arrived through it, five
+      of which became tasks and three of which are already closed. The
+      structured-intake half is **dropped, not deferred** — no
+      `.github/ISSUE_TEMPLATE/` exists, eight reports came in as free text and
+      were triageable, and the `/issues` skill now pays that cost explicitly
+      by opening with a clarifying question when a report is a bare
+      screenshot. Building a form after the launch it was for would be
+      solving a problem the launch already answered. The user-facing guide is
+      the one item worth keeping — see Future Work.
 ---
 
 # FEATURE: soft-launch feedback — header "Report a bug" → GitHub Issues
@@ -90,14 +104,56 @@ Prefill safe params only: `template`, and optionally `url` (text field).
 
 - [x] Header shows a `Report a bug` link, separated from the nav tabs
       (`09acbbd2`); drawer variant matches its neighbours' sizing (`e16fb0a1`)
-- [ ] `bug_report.yml` renders as a form; auto-applies `soft-launch` label
-- [ ] `config.yml` disables blank issues; general questions routed elsewhere
-      — **not Discussions**: they are disabled on the repo (verified
-      `gh repo view`), so pick another contact link
-- [ ] Header href carries `?template=bug_report.yml` once the form is on the
-      default branch (GitHub reads templates from `master` only)
-- [ ] User-facing guide on how to file an issue (asked for on Slack)
+- ~~`bug_report.yml` renders as a form; auto-applies `soft-launch` label~~
+  **DROPPED** — see "What actually shipped"
+- ~~`config.yml` disables blank issues; general questions routed elsewhere~~
+  **DROPPED**. Also worth recording: Discussions are **disabled** on the
+  repo (verified `gh repo view`), so the planned `contact_links`
+  destination did not exist either
+- ~~Header href carries `?template=bug_report.yml`~~ **DROPPED** — it was
+  conditional on the form. The link stays a bare `issues/new`
+- [ ] User-facing guide on how to file an issue (asked for on Slack) —
+      **deferred**, not dropped; see Future Work
 - [x] FE tests / typecheck / lint green (pre-commit hooks on both commits)
+
+## What actually shipped
+
+**The affordance, in the header, and nothing else.**
+
+`Report a bug ↗` lives in `libs/ui/src/layout/SecondaryNav.tsx:54` — top-right
+cluster, divided from the nav tabs, next to the theme toggle; below `md` it
+drops into the hamburger drawer. Href is a bare
+`https://github.com/rumblefishdev/soroban-block-explorer/issues/new`.
+Commits `09acbbd2` + `e16fb0a1`. The footer entry from `9588255c` is gone —
+one affordance, not two.
+
+### It worked, measured by what came back
+
+Eight external reports arrived through it: **#364-#371**. Five became lore
+tasks (0440, 0441, 0445, 0279, 0453), three are already closed (#364, #369,
+#370). The reports were specific enough to act on — one even named the exact
+wording we should show, which matched a spec written three weeks earlier.
+
+That is the evidence the task is done: it existed to open a channel for the
+soft launch, and the channel carried real traffic.
+
+### Why the issue form was dropped rather than finished
+
+Three reasons, in order of weight:
+
+1. **Free text proved sufficient.** All eight reports were triageable without
+   a form. The single recurring cost was a bare screenshot with no text.
+2. **The cost is now absorbed elsewhere.** The `/issues` skill opens triage
+   with a clarifying question when a report lacks context, and says so
+   explicitly: _"there is no issue form, so this is where that cost is paid."_
+   That is a deliberate placement of the cost, not an oversight.
+3. **The planned `config.yml` fallback did not exist.** It was to route
+   general questions to Discussions — which are **disabled** on this repo.
+   Half of that criterion was unbuildable as written.
+
+Building the form now would be answering a question the launch already
+answered. If intake volume grows past what a human can triage, that is a new
+task with a new justification, not this one's leftovers.
 
 ## Design Decisions
 
@@ -129,6 +185,12 @@ Prefill safe params only: `template`, and optionally `url` (text field).
 
 ## Future Work
 
+- **User-facing guide on how to file an issue** (asked for on Slack) —
+  deferred, not dropped. It is the only unfinished criterion that does not
+  depend on the issue form, and it is cheap. Not spawned as a task yet: it
+  needs an owner and a destination (README section? docs page? Slack pin?)
+  before it is worth an id.
 - Per-page prefill: `&url=<current href>` on the header link so the reporter
   does not paste the address by hand (needs router context inside
-  `SecondaryNav`, which today takes none).
+  `SecondaryNav`, which today takes none). Worth reconsidering — the two
+  reports that cost the most triage effort were the ones without a URL.
