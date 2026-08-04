@@ -24,7 +24,7 @@ interface EventsSectionProps {
   diagnosticEvents: XdrEventDto[];
 }
 
-export type EventKind = 'contract' | 'system' | 'diagnostic' | 'core_metrics';
+type EventKind = 'contract' | 'system' | 'diagnostic' | 'core_metrics';
 
 /** Order of the filter chips — loudest first, noise last. */
 const KINDS: readonly EventKind[] = [
@@ -41,21 +41,17 @@ const KIND_LABEL: Record<EventKind, string> = {
   core_metrics: 'Host counters',
 };
 
-/** `subtle` is deliberately NOT used here: its fill is `surface.grayMain`,
- *  which is this card's own background (#272727 dark / #fff light) — an "on"
- *  chip in it reads as off. Host counters share the diagnostic grey; they are
- *  a subset of the diagnostics and the label is what tells them apart. */
+/** Row chips only — the filter chips follow the house on/off pair (see below).
+ *  `subtle` is deliberately NOT used: its fill is `surface.grayMain`, this
+ *  card's own background (#272727 dark / #fff light), so it reads as no chip
+ *  at all. Host counters share the diagnostic grey — they ARE diagnostics,
+ *  and the label is what tells the subset apart. */
 const KIND_COLOR: Record<EventKind, 'blue' | 'violet' | 'neutral'> = {
   contract: 'blue',
   system: 'violet',
   diagnostic: 'neutral',
   core_metrics: 'neutral',
 };
-
-/** Host resource counters (instructions, memory, ledger reads). Not part of
- *  what the transaction did — the execution trace drops them for the same
- *  reason (`buildExecutionTrace`). Hidden here by default, never silently. */
-const NOISE: EventKind = 'core_metrics';
 
 interface MergedEvent {
   event: XdrEventDto;
@@ -95,9 +91,11 @@ export function EventsSection({
         })),
         // `event_index` is one monotonic sequence across all three XDR event
         // containers (`extract_events`), so this restores the transaction's
-        // own order rather than imposing one. The section is the raw
-        // chronological record — its order IS content, which is why the
-        // kinds filter instead of splitting into per-kind groups (#378).
+        // own numbering rather than imposing an order. NOT chronology: the
+        // containers come tx-level → per-op → diagnostic, so the AfterTx fee
+        // refund is numbered before the operations it refunds. That numbering
+        // is still the record, which is why the kinds filter one list instead
+        // of splitting it into per-kind groups (#378).
       ].sort((a, b) => a.event.event_index - b.event.event_index),
     [contractEvents, diagnosticEvents]
   );
@@ -108,9 +106,9 @@ export function EventsSection({
     return out;
   }, [merged]);
 
-  const [hidden, setHidden] = useState<ReadonlySet<EventKind>>(
-    () => new Set([NOISE])
-  );
+  // Nothing hidden at rest: this section is the raw record, so it opens as
+  // one. Filtering is the reader's move, not ours.
+  const [hidden, setHidden] = useState<ReadonlySet<EventKind>>(() => new Set());
   const toggle = (kind: EventKind) =>
     setHidden((prev) => {
       const next = new Set(prev);
@@ -159,30 +157,19 @@ export function EventsSection({
               {KINDS.filter((kind) => counts.has(kind)).map((kind) => {
                 const off = hidden.has(kind);
                 return (
+                  // Same on/off pair as every other filter bar in the app
+                  // (AccountsFilters, AssetFilters, ContractsFilters): swap
+                  // the `color` prop, never patch the fill with `sx`. `sm`
+                  // rather than their `lg` — this row sits inside a card,
+                  // next to `sm` row chips, not on a page-level filter bar.
                   <Chip
                     key={kind}
                     size="sm"
                     clickable
-                    color={KIND_COLOR[kind]}
+                    color={off ? 'neutral' : 'accent'}
                     aria-pressed={!off}
                     onClick={() => toggle(kind)}
                     label={`${KIND_LABEL[kind]} ${counts.get(kind) ?? 0}`}
-                    // Off is drawn here rather than via `variant="outlined"`:
-                    // the theme's colour variants set their fill for every
-                    // variant, so outlined alone keeps the "on" background
-                    // and the state reads as a guess.
-                    sx={(theme) =>
-                      off
-                        ? {
-                            backgroundColor: 'transparent',
-                            border: `1px solid ${theme.palette.stroke.default}`,
-                            color: theme.palette.text.tertiary,
-                            '&.MuiChip-clickable:hover': {
-                              backgroundColor: theme.palette.surface.grayHover,
-                            },
-                          }
-                        : {}
-                    }
                   />
                 );
               })}
@@ -198,7 +185,7 @@ export function EventsSection({
                 </Typography>
               )}
             </Stack>
-            {shown.length === 0 && (
+            {shown.length === 0 ? (
               <Box sx={{ px: 2, pb: 2 }}>
                 <Typography
                   variant="bodySmRegular"
@@ -207,68 +194,69 @@ export function EventsSection({
                   Every event is filtered out — turn a kind back on above.
                 </Typography>
               </Box>
-            )}
-            <Box sx={{ overflowX: 'auto' }}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    {/* The index is the transaction's own event numbering, so
+            ) : (
+              <Box sx={{ overflowX: 'auto' }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      {/* The index is the transaction's own event numbering, so
                         a filtered list shows its own gaps instead of looking
                         complete. */}
-                    <TableCell sx={{ width: 56 }}>#</TableCell>
-                    <TableCell sx={{ width: 130 }}>Type</TableCell>
-                    <TableCell sx={{ width: 200 }}>Contract</TableCell>
-                    <TableCell>Topics</TableCell>
-                    <TableCell>Data</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {shown.map(({ event, kind }) => (
-                    <TableRow key={`${kind}-${event.event_index}`}>
-                      <TableCell
-                        sx={(theme) => ({
-                          verticalAlign: 'top',
-                          color: theme.palette.text.tertiary,
-                          fontVariantNumeric: 'tabular-nums',
-                        })}
-                      >
-                        {event.event_index}
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top' }}>
-                        <Chip
-                          size="sm"
-                          color={KIND_COLOR[kind]}
-                          label={KIND_LABEL[kind]}
-                        />
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top' }}>
-                        {event.contract_id != null ? (
-                          <IdentifierDisplay
-                            value={event.contract_id}
-                            type="contract"
-                          />
-                        ) : (
-                          <Typography
-                            component="span"
-                            sx={(theme) => ({
-                              color: theme.palette.text.tertiary,
-                            })}
-                          >
-                            —
-                          </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top' }}>
-                        <HighlightedJson value={event.topics} />
-                      </TableCell>
-                      <TableCell sx={{ verticalAlign: 'top' }}>
-                        <HighlightedJson value={event.data} />
-                      </TableCell>
+                      <TableCell sx={{ width: 56 }}>#</TableCell>
+                      <TableCell sx={{ width: 130 }}>Type</TableCell>
+                      <TableCell sx={{ width: 200 }}>Contract</TableCell>
+                      <TableCell>Topics</TableCell>
+                      <TableCell>Data</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Box>
+                  </TableHead>
+                  <TableBody>
+                    {shown.map(({ event, kind }) => (
+                      <TableRow key={`${kind}-${event.event_index}`}>
+                        <TableCell
+                          sx={(theme) => ({
+                            verticalAlign: 'top',
+                            color: theme.palette.text.tertiary,
+                            fontVariantNumeric: 'tabular-nums',
+                          })}
+                        >
+                          {event.event_index}
+                        </TableCell>
+                        <TableCell sx={{ verticalAlign: 'top' }}>
+                          <Chip
+                            size="sm"
+                            color={KIND_COLOR[kind]}
+                            label={KIND_LABEL[kind]}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ verticalAlign: 'top' }}>
+                          {event.contract_id != null ? (
+                            <IdentifierDisplay
+                              value={event.contract_id}
+                              type="contract"
+                            />
+                          ) : (
+                            <Typography
+                              component="span"
+                              sx={(theme) => ({
+                                color: theme.palette.text.tertiary,
+                              })}
+                            >
+                              —
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ verticalAlign: 'top' }}>
+                          <HighlightedJson value={event.topics} />
+                        </TableCell>
+                        <TableCell sx={{ verticalAlign: 'top' }}>
+                          <HighlightedJson value={event.data} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            )}
           </Collapse>
         </>
       )}

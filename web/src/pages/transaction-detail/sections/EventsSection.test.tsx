@@ -61,7 +61,7 @@ function shownIndices(): string[] {
 }
 
 describe('EventsSection (#378 — event taxonomy)', () => {
-  it('hides host counters by default and says how many are hidden', async () => {
+  it('shows every kind at rest — the raw record is the default view', async () => {
     const user = userEvent.setup();
     renderSection(
       [event(0, 'transfer')],
@@ -69,21 +69,35 @@ describe('EventsSection (#378 — event taxonomy)', () => {
     );
     await expand(user);
 
+    expect(shownIndices()).toEqual(['0', '1', '2', '3']);
+    expect(screen.queryByText(/hidden/)).not.toBeInTheDocument();
+  });
+
+  it('drops a kind when its chip is clicked and says how many went', async () => {
+    const user = userEvent.setup();
+    renderSection(
+      [event(0, 'transfer')],
+      [event(1, 'fn_call'), event(2, 'core_metrics'), event(3, 'core_metrics')]
+    );
+    await expand(user);
+
+    await user.click(screen.getByRole('button', { name: /Host counters 2/ }));
     expect(shownIndices()).toEqual(['0', '1']);
+    // Never silent: what is gone is said, and the section's own count stays
+    // the full one.
     expect(screen.getByText('2 hidden')).toBeInTheDocument();
-    // Never silent: the count the section advertises stays the full one.
     expect(screen.getAllByText(/4 events/).length).toBeGreaterThan(0);
   });
 
-  it('brings the hidden kind back when its chip is clicked', async () => {
+  it('says so rather than showing an empty table when nothing is left', async () => {
     const user = userEvent.setup();
     renderSection([event(0, 'transfer')], [event(1, 'core_metrics')]);
     await expand(user);
 
-    expect(shownIndices()).toEqual(['0']);
+    await user.click(screen.getByRole('button', { name: /Contract 1/ }));
     await user.click(screen.getByRole('button', { name: /Host counters 1/ }));
-    expect(shownIndices()).toEqual(['0', '1']);
-    expect(screen.queryByText(/hidden/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Every event is filtered out/)).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('keeps one list in transaction event order, never per-kind groups', async () => {
@@ -121,6 +135,7 @@ describe('EventsSection (#378 — event taxonomy)', () => {
     expect(shownRows()).toEqual([
       { index: '0', kind: 'Contract' },
       { index: '1', kind: 'Diagnostic' },
+      { index: '2', kind: 'Host counters' },
     ]);
   });
 });
