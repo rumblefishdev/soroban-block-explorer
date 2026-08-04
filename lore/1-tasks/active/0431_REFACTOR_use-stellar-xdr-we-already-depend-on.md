@@ -28,6 +28,20 @@ history:
     status: active
     who: karolkow
     note: Promoted to active — starting implementation.
+  - date: '2026-07-23'
+    status: active
+    who: karolkow
+    note: >
+      Adoption half landed; oracle half still open (task stays active).
+      Adopted `tx_hash` and — beyond the original scope — `ledgerkey`, deleting
+      9 per-entry key builders plus the hand-rolled `config_setting` key list.
+      Added the `OperationType` drift guard. Workspace build + tests + clippy
+      green (xdr-parser 346 tests). Two corrections to this task's own premises,
+      both from tracing the full data-flow rather than single files: the
+      `tx_auths` item is superseded by 0430, and most "hand-rolled copies" in
+      section A are thin wrappers over a real contract (serde label, tagged-JSON
+      storage shape, i16 repr) that are correctly kept — recorded per module in
+      the verdict section. Remaining: corpus + differential harness + CI.
 ---
 
 # Use the `stellar-xdr` API we already pay for, and pin it with a differential oracle
@@ -116,13 +130,59 @@ envelope shape added.
 
 ## Implementation
 
+### Adoption half — done (2026-07-23)
+
+- [x] Assert `domain::OperationType` against `stellar_xdr::OperationType` so
+      drift fails the build. — `crates/xdr-parser/tests/operation_type_drift.rs`.
+      The exhaustive match makes an upstream-added variant a _compile_ error; the
+      loop catches a renumbered discriminant; the count catches a removed one.
+      Mutation-checked (mis-mapped one arm → red, reverted → green).
+- [x] Survey the remaining helper modules and record which are worth adopting —
+      `num256` should be handed to 0380 rather than duplicated there. — see
+      "Helper-module verdict" below. Sweep covered the whole parser + indexer,
+      not just the listed modules.
+- [x] Adopt `tx_hash`: `tx_envelope_hash` / `inner_tx_hash` now delegate to
+      `TransactionEnvelope::hash` / `FeeBumpTransactionInnerTx::hash`.
+      _(Not in the original list — it was framed as the risky one to verify.)_
+- [x] Adopt `ledgerkey` (**beyond the original scope**): 9 per-entry `*_key`
+      builders + the `format_trustline_asset_key` alias deleted; `(entry_type,
+    key)` now derives from `LedgerEntryData::to_key()` through the same
+      `extract_key_info` the removed path uses. Created and removed keys can no
+      longer drift apart. Equivalence test pins every variant.
+- [x] Fold `config_setting` into that uniform key path (**beyond scope**) —
+      was a hand-maintained snake_case list with an `"unknown"` fallback for 8 of
+      21 variants, inconsistent with the removed path. Traced end to end: the key
+      is dead output (never stored, never consumed), flagged with a `ponytail:`
+      comment naming the real fix if a config-history feature is ever built.
+
+**Partially done:**
+
+- [~] Verify `tx_envelope_hash` against `TransactionEnvelope::hash()` **on the
+  corpus** BEFORE replacing it — if they already disagree anywhere, that is a
+  live bug, not a refactor. — Equivalence was established **structurally**
+  (the library's `From<TransactionV0> for Transaction` is field-for-field
+  identical to our hand promotion, and the tag → `to_xdr(Limits::none())` →
+  SHA-256 algorithm matches), plus the existing unit + real-corpus tests are
+  green. **The corpus check itself did not run**: `tests/envelope_apply_order.rs`
+  skips without an `XDR_FIXTURE` (it prints "no XDR fixture available"). Owed
+  once the corpus below exists — that suite is exactly the oracle's job.
+
+**Superseded:**
+
+- [N/A] ~~Replace the hand-rolled auth traversal with `tx_auths::auths()`~~ —
+  **superseded by 0430.** Its raw-XDR evidence showed factory deploys leave
+  no `CreateContractHostFn` node in the auth tree at all, so `auths()` cannot
+  see them; and 0430 decided the whole `extract_op_source_per_contract`
+  machinery is deleted in favour of reading the `ContractIDPreimage` address.
+  Refactoring it here would rework code that 0430 removes, and still not fix
+  the bug.
+
+### Oracle half — not started (stays in this task)
+
 - [ ] Put the oracle in its own directory (e.g. `crates/xdr-parser/tests/oracle/`)
       — separate corpus + harness from the unit tests. Different purpose,
       different runtime, different reason to fail; mixing them makes both harder
       to reason about.
-- [ ] Verify `tx_envelope_hash` against `TransactionEnvelope::hash()` on the
-      corpus BEFORE replacing it — if they already disagree anywhere, that is a
-      live bug, not a refactor.
 - [ ] Corpus: N real envelopes pulled via `getTransaction` on Soroban RPC,
       deliberately covering plain v0/v1, fee-bump, per-op source override,
       factory deployment, multi-auth. Store base64 as fixtures (RPC retention is
@@ -132,13 +192,9 @@ envelope shape added.
       output on the fields we emit.
 - [ ] Wire into CI. Note 0406: the ClickHouse-gated suite never runs; this
       harness must not land in the same silent-skip trap — it needs no database,
-      so it can run unconditionally.
-- [ ] Replace the hand-rolled auth traversal with `tx_auths::auths()` (this is
-      also 0430's fix, coordinate).
-- [ ] Assert `domain::OperationType` against `stellar_xdr::OperationType` so
-      drift fails the build.
-- [ ] Survey the remaining helper modules and record which are worth adopting —
-      `num256` should be handed to 0380 rather than duplicated there.
+      so it can run unconditionally. Note also that `envelope_apply_order.rs`
+      already silently skips today for want of a fixture — the corpus fixes that
+      too.
 
 ## Helper-module verdict (2026-07-23)
 
