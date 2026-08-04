@@ -35,10 +35,17 @@ pub struct E3HeavyFields {
     /// task 0460 #13: it is the one raw layer the page could not show, and
     /// the raw-data section renders every XDR blob with a Lab deep link.
     pub result_meta_xdr: Option<String>,
-    /// Diagnostic events emitted during Soroban invocation.
+    /// The host-VM debug channel (`v4.diagnostic_events`): the `fn_call` /
+    /// `fn_return` trace, `core_metrics` counters, and — when diagnostic mode
+    /// is on, which is always for the archive — a byte-identical COPY of every
+    /// consensus event above. Not hashed into consensus, and CAP-67's own
+    /// event stream (`getEvents`) does not carry it at all. Presenting these
+    /// alongside `contract_events` as one list shows the copies as extra
+    /// events; they are one channel about the other, not a continuation of it.
     pub diagnostic_events: Vec<XdrEventDto>,
-    /// Non-diagnostic Soroban events (contract + system) with full topic
-    /// array + decoded data payload.
+    /// The consensus event stream: `contract` + `system` events from the
+    /// tx-level and per-operation containers. This — and only this — is what
+    /// CAP-67 / `getEvents` mean by "the events of a transaction".
     pub contract_events: Vec<XdrEventDto>,
     /// Operations with full XDR-decoded details (type-specific JSON).
     pub operations: Vec<XdrOperationDto>,
@@ -99,6 +106,13 @@ pub struct XdrEventDto {
     /// diagnostic and pre-Protocol-23 events). Matches
     /// `XdrOperationDto.application_order - 1`.
     pub op_index: Option<i16>,
+    /// CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
+    /// `"after_all_txs"`. The protocol's only statement of when a tx-level
+    /// event fired, and the reason `event_index` must not be read as a
+    /// timeline: the `after_tx` fee refund is numbered ahead of the
+    /// operations it refunds. `None` for per-operation, diagnostic and
+    /// pre-Protocol-23 events, which carry no stage.
+    pub stage: Option<String>,
 }
 
 /// Operation raw parameters (XDR-decoded full details).

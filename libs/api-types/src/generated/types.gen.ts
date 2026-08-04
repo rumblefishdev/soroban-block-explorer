@@ -481,12 +481,19 @@ export type ContractStats = {
  */
 export type E3HeavyFields = {
   /**
-   * Non-diagnostic Soroban events (contract + system) with full topic
-   * array + decoded data payload.
+   * The consensus event stream: `contract` + `system` events from the
+   * tx-level and per-operation containers. This — and only this — is what
+   * CAP-67 / `getEvents` mean by "the events of a transaction".
    */
   contract_events: Array<XdrEventDto>;
   /**
-   * Diagnostic events emitted during Soroban invocation.
+   * The host-VM debug channel (`v4.diagnostic_events`): the `fn_call` /
+   * `fn_return` trace, `core_metrics` counters, and — when diagnostic mode
+   * is on, which is always for the archive — a byte-identical COPY of every
+   * consensus event above. Not hashed into consensus, and CAP-67's own
+   * event stream (`getEvents`) does not carry it at all. Presenting these
+   * alongside `contract_events` as one list shows the copies as extra
+   * events; they are one channel about the other, not a continuation of it.
    */
   diagnostic_events: Array<XdrEventDto>;
   /**
@@ -1986,6 +1993,15 @@ export type XdrEventDto = {
    * `XdrOperationDto.application_order - 1`.
    */
   op_index?: number | null;
+  /**
+   * CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
+   * `"after_all_txs"`. The protocol's only statement of when a tx-level
+   * event fired, and the reason `event_index` must not be read as a
+   * timeline: the `after_tx` fee refund is numbered ahead of the
+   * operations it refunds. `None` for per-operation, diagnostic and
+   * pre-Protocol-23 events, which carry no stage.
+   */
+  stage?: string | null;
   /**
    * Decoded topic array.
    */
