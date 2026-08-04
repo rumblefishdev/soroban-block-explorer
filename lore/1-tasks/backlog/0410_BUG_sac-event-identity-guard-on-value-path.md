@@ -13,7 +13,7 @@ tags:
     'security',
     'phase-future',
     'effort-medium',
-    'priority-medium',
+    'priority-high',
   ]
 links: []
 history:
