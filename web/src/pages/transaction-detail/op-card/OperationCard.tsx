@@ -15,11 +15,7 @@ import { HumanizedSentence } from '../shared/HumanizedSentence.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
-import {
-  allResourceFacts,
-  readResourceCounters,
-  resourceSummary,
-} from './resources.js';
+import { allResourceFacts, readResourceCounters } from './resources.js';
 import { CallTree, parseOperationTree } from './CallTree.js';
 import {
   buildExecutionTrace,
@@ -118,7 +114,6 @@ export function OperationCard({
   const counters = isInvoke
     ? readResourceCounters(diagnosticEvents)
     : new Map<string, number>();
-  const resourceFacts = resourceSummary(counters);
   const allCounters = allResourceFacts(counters);
   const callNodes =
     isInvoke && traceNodes.length === 0
@@ -193,45 +188,25 @@ export function OperationCard({
           </Box>
         )}
 
-        {resourceFacts.length > 0 && (
+        {allCounters.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
-            {/* What the execution COST, next to what it did. Lifted out of the
-                diagnostic stream, where nineteen identical counters were
-                rendering as nineteen event rows (task 0363 / issue #378). */}
-            <Overline mb={0.5}>Resources</Overline>
-            <Stack
-              direction="row"
-              sx={{ flexWrap: 'wrap', columnGap: 2, rowGap: 0.5 }}
-            >
-              {resourceFacts.map((fact) => (
-                <Typography
-                  key={fact.label}
-                  variant="bodySmRegular"
-                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                >
-                  {fact.label}{' '}
-                  <Box
-                    component="span"
-                    sx={(theme) => ({
-                      color: theme.palette.text.secondary,
-                      fontVariantNumeric: 'tabular-nums',
-                    })}
-                  >
-                    {fact.value}
-                  </Box>
-                </Typography>
-              ))}
-            </Stack>
-            {/* The five above are a summary of nineteen; the rest are their
-                breakdowns (`read_key_byte`, the `max_rw_*` ceilings…). Say so
-                and keep them one click away rather than dropping them
-                silently — a contract author tuning a footprint wants exactly
-                those. */}
+            {/* What the execution COST, next to what it did — lifted out of
+                the diagnostic stream, where these were rendering as nineteen
+                event rows (task 0363 / issue #378). All of them or none: a
+                curated handful on top of the same list underneath would say
+                the same thing twice, and choosing which five matter is a
+                ranking the protocol does not state. */}
             <DisclosureRow
               open={countersOpen}
               onToggle={() => setCountersOpen((open) => !open)}
-              label={`All ${allCounters.length} counters`}
-              sx={{ mt: 0.75 }}
+              label="Resources"
+              trailing={
+                <Chip
+                  size="sm"
+                  color="neutral"
+                  label={String(allCounters.length)}
+                />
+              }
             />
             <Collapse in={countersOpen} unmountOnExit>
               <Box

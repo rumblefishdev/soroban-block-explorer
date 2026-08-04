@@ -1,11 +1,7 @@
 import type { XdrEventDto } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
-import {
-  allResourceFacts,
-  readResourceCounters,
-  resourceSummary,
-} from './resources.js';
+import { allResourceFacts, readResourceCounters } from './resources.js';
 
 function counter(name: string, value: number): XdrEventDto {
   return {
@@ -67,20 +63,7 @@ describe('resource counters (#378)', () => {
     expect([...counters]).toEqual([['cpu_insn', 5063570]]);
   });
 
-  it('summarises the real mainnet set to five grouped facts', () => {
-    const facts = resourceSummary(
-      readResourceCounters(REAL.map(([n, v]) => counter(n, v)))
-    );
-    expect(facts).toEqual([
-      { label: 'Instructions', value: '5,063,570' },
-      { label: 'Memory', value: '1,690,992 B' },
-      { label: 'Ledger I/O', value: '116 B read · 412 B written' },
-      { label: 'Entries', value: '8 read · 3 written' },
-      { label: 'Time', value: '757,843 ns' },
-    ]);
-  });
-
-  it('keeps every counter available behind the summary', () => {
+  it('exposes every counter, in the host emission order', () => {
     const all = allResourceFacts(
       readResourceCounters(REAL.map(([n, v]) => counter(n, v)))
     );
@@ -93,16 +76,9 @@ describe('resource counters (#378)', () => {
   });
 
   it('reports nothing for a classic transaction, which emits no counters', () => {
-    // Classic operations emit no diagnostics at all (CAP-67), so the strip
-    // must not render an empty shell.
-    expect(resourceSummary(readResourceCounters([]))).toEqual([]);
-    expect(resourceSummary(readResourceCounters([fnCall()]))).toEqual([]);
-  });
-
-  it('omits a fact whose counter is missing rather than showing a blank', () => {
-    const facts = resourceSummary(
-      readResourceCounters([counter('cpu_insn', 42)])
-    );
-    expect(facts).toEqual([{ label: 'Instructions', value: '42' }]);
+    // Classic operations emit no diagnostics at all (CAP-67), so the
+    // disclosure must not render an empty shell.
+    expect(allResourceFacts(readResourceCounters([]))).toEqual([]);
+    expect(allResourceFacts(readResourceCounters([fnCall()]))).toEqual([]);
   });
 });

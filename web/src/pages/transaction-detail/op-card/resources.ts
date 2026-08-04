@@ -18,9 +18,12 @@ import { symTopic } from './ExecutionTrace.js';
  * panel, stellar.expert not at all, and the protocol's own `getEvents` never
  * returns diagnostic events in the first place.
  *
- * Placement: the invoke operation card, beside the execution trace. The
- * counters are per-transaction, but a Soroban transaction carries exactly one
- * invoke operation (protocol rule, confirmed across 1,376,903 mainnet
+ * Placement: behind a disclosure on the invoke operation card, beside the
+ * execution trace. ALL of them or none — a curated five above the fold with
+ * the same five repeated inside would be saying the same thing twice, and
+ * picking a favourite handful is a hierarchy the protocol does not state.
+ * The counters are per-transaction, but a Soroban transaction carries exactly
+ * one invoke operation (protocol rule, confirmed across 1,376,903 mainnet
  * transactions — never two), so per-transaction and per-operation are the
  * same thing here.
  */
@@ -49,49 +52,10 @@ export interface ResourceFact {
 }
 
 /**
- * The five facts worth reading at a glance. The other fourteen counters are
- * breakdowns of these (`read_key_byte`, `write_data_byte`, the `max_rw_*`
- * ceilings…) and stay behind the full list — summary first, details on demand.
- *
- * Returns `[]` when the stream carried no counters, which is every classic
- * transaction: they emit no diagnostics at all (CAP-67).
- */
-export function resourceSummary(counters: Map<string, number>): ResourceFact[] {
-  if (counters.size === 0) return [];
-  const n = (key: string) => counters.get(key);
-  const facts: ResourceFact[] = [];
-  const push = (label: string, value: string | null) => {
-    if (value != null) facts.push({ label, value });
-  };
-  const int = (key: string, unit = '') => {
-    const v = n(key);
-    return v == null ? null : `${formatInteger(v)}${unit}`;
-  };
-  const pair = (readKey: string, writeKey: string, unit: string) => {
-    const r = n(readKey);
-    const w = n(writeKey);
-    return r == null || w == null
-      ? null
-      : `${formatInteger(r)}${unit} read · ${formatInteger(w)}${unit} written`;
-  };
-
-  // Instructions lead: they are the largest component of the resource fee, so
-  // this is the number that explains the charge on the summary above.
-  push('Instructions', int('cpu_insn'));
-  push('Memory', int('mem_byte', ' B'));
-  push('Ledger I/O', pair('ledger_read_byte', 'ledger_write_byte', ' B'));
-  push('Entries', pair('read_entry', 'write_entry', ''));
-  push('Time', int('invoke_time_nsecs', ' ns'));
-  return facts;
-}
-
-/**
- * Every counter the host reported, in its own emission order, for the
- * disclosure under the strip. The summary above answers "what did it cost";
- * this answers "where exactly did it go" — the audience is a contract author
- * tuning a footprint, and for them `emit_event_byte` and the `max_rw_*`
- * ceilings are the point. Showing five and staying silent about the other
- * fourteen would be the same quiet omission we removed elsewhere.
+ * Every counter the host reported, in its own emission order — re-sorting
+ * would invent a ranking the protocol never states. The audience is a
+ * contract author tuning a footprint, and there `emit_event_byte` and the
+ * `max_rw_*` ceilings matter as much as `cpu_insn`.
  */
 export function allResourceFacts(
   counters: Map<string, number>
