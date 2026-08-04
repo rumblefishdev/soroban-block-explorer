@@ -15,7 +15,11 @@ import { HumanizedSentence } from '../shared/HumanizedSentence.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
-import { readResourceCounters, resourceSummary } from './resources.js';
+import {
+  allResourceFacts,
+  readResourceCounters,
+  resourceSummary,
+} from './resources.js';
 import { CallTree, parseOperationTree } from './CallTree.js';
 import {
   buildExecutionTrace,
@@ -80,6 +84,7 @@ export function OperationCard({
   diagnosticEvents = [],
 }: OperationCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [countersOpen, setCountersOpen] = useState(false);
 
   if (light == null) {
     return (
@@ -110,9 +115,11 @@ export function OperationCard({
     : [];
   // Resource counters belong to the Soroban invocation, and a Soroban tx
   // carries exactly one (protocol rule) — so per-tx equals per-op here.
-  const resourceFacts = isInvoke
-    ? resourceSummary(readResourceCounters(diagnosticEvents))
-    : [];
+  const counters = isInvoke
+    ? readResourceCounters(diagnosticEvents)
+    : new Map<string, number>();
+  const resourceFacts = resourceSummary(counters);
+  const allCounters = allResourceFacts(counters);
   const callNodes =
     isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)
@@ -215,6 +222,58 @@ export function OperationCard({
                 </Typography>
               ))}
             </Stack>
+            {/* The five above are a summary of nineteen; the rest are their
+                breakdowns (`read_key_byte`, the `max_rw_*` ceilings…). Say so
+                and keep them one click away rather than dropping them
+                silently — a contract author tuning a footprint wants exactly
+                those. */}
+            <DisclosureRow
+              open={countersOpen}
+              onToggle={() => setCountersOpen((open) => !open)}
+              label={`All ${allCounters.length} counters`}
+              sx={{ mt: 0.75 }}
+            />
+            <Collapse in={countersOpen} unmountOnExit>
+              <Box
+                sx={{
+                  mt: 0.5,
+                  display: 'grid',
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    sm: 'repeat(2, minmax(0, 1fr))',
+                    md: 'repeat(3, minmax(0, 1fr))',
+                  },
+                  columnGap: 2,
+                  rowGap: 0.25,
+                }}
+              >
+                {allCounters.map((fact) => (
+                  <Typography
+                    key={fact.label}
+                    variant="bodyXsRegular"
+                    sx={(theme) => ({
+                      color: theme.palette.text.tertiary,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                    })}
+                  >
+                    <Box component="span" sx={{ fontFamily: 'monospace' }}>
+                      {fact.label}
+                    </Box>
+                    <Box
+                      component="span"
+                      sx={(theme) => ({
+                        color: theme.palette.text.secondary,
+                        fontVariantNumeric: 'tabular-nums',
+                      })}
+                    >
+                      {fact.value}
+                    </Box>
+                  </Typography>
+                ))}
+              </Box>
+            </Collapse>
           </Box>
         )}
 

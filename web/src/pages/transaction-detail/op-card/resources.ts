@@ -84,3 +84,20 @@ export function resourceSummary(counters: Map<string, number>): ResourceFact[] {
   push('Time', int('invoke_time_nsecs', ' ns'));
   return facts;
 }
+
+/**
+ * Every counter the host reported, in its own emission order, for the
+ * disclosure under the strip. The summary above answers "what did it cost";
+ * this answers "where exactly did it go" — the audience is a contract author
+ * tuning a footprint, and for them `emit_event_byte` and the `max_rw_*`
+ * ceilings are the point. Showing five and staying silent about the other
+ * fourteen would be the same quiet omission we removed elsewhere.
+ */
+export function allResourceFacts(
+  counters: Map<string, number>
+): ResourceFact[] {
+  return [...counters].map(([label, value]) => ({
+    label,
+    value: formatInteger(value),
+  }));
+}

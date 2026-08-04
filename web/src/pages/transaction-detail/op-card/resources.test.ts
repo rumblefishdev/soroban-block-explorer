@@ -1,7 +1,11 @@
 import type { XdrEventDto } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
-import { readResourceCounters, resourceSummary } from './resources.js';
+import {
+  allResourceFacts,
+  readResourceCounters,
+  resourceSummary,
+} from './resources.js';
 
 function counter(name: string, value: number): XdrEventDto {
   return {
@@ -74,6 +78,18 @@ describe('resource counters (#378)', () => {
       { label: 'Entries', value: '8 read · 3 written' },
       { label: 'Time', value: '757,843 ns' },
     ]);
+  });
+
+  it('keeps every counter available behind the summary', () => {
+    const all = allResourceFacts(
+      readResourceCounters(REAL.map(([n, v]) => counter(n, v)))
+    );
+    expect(all).toHaveLength(19);
+    // Emission order preserved — the host's own ordering is the only one
+    // these have, and re-sorting would invent a hierarchy.
+    expect(all[0]).toEqual({ label: 'read_entry', value: '8' });
+    expect(all[12]).toEqual({ label: 'cpu_insn', value: '5,063,570' });
+    expect(all.at(-1)).toEqual({ label: 'max_emit_event_byte', value: '244' });
   });
 
   it('reports nothing for a classic transaction, which emits no counters', () => {
