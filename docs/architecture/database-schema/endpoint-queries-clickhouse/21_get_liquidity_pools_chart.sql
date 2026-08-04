@@ -65,12 +65,22 @@
 --   • NEVER join raw `prices.assets` (empty-code rows silently price
 --     native legs as an arbitrary asset) and NEVER decode `prices.*`
 --     positionally (views grow additively).
--- Upstream caveat: the IN-PROGRESS candle is unstable. Measured 2026-08-04,
---   the current hour's yXLM close read 1.3085 USD against ~0.170 in every
---   neighbouring hour (7.7×), briefly quadrupling the newest 1h TVL point.
---   That is price-source data, faithfully reported; we do not second-guess
---   it with our own outlier filter (prices owns that, and diverging would
---   make our numbers disagree with theirs).
+-- Upstream caveat — PARTIAL ENRICHMENT skews the newest bucket's price.
+--   `price_usd_series*` volume-weights `close_usd` across every per-source
+--   / per-quote row of a bucket, but only over rows passing its
+--   `close_usd > 0` filter. `close_usd` is baked by a separate enrichment
+--   pass, so a freshly-landed bucket has some rows enriched and some still
+--   at 0 — the average is then taken over an ARBITRARY SUBSET.
+--   Diagnosed 2026-08-04 on yXLM's 13:00 hour: the only enriched row at
+--   that moment was a 0.096-unit dust print at 1.3085 USD, so the view
+--   returned 1.3085 against ~0.170 in every neighbouring hour (7.7×). The
+--   volume weighting itself is sound — the same dust print sits in the
+--   12:00 bucket beside 42 038 units of real volume and moves the weighted
+--   close by nothing. It is the filter, not the maths.
+--   Reported to the prices owner. We do NOT add our own outlier filter:
+--   prices owns that, and diverging would make our numbers disagree with
+--   theirs. NOTE the carry-forward above does not help here — it stands in
+--   for a MISSING candle, not a WRONG one.
 -- Access:       no grant needed — `api_reader` has no <grants> block in
 --               users.d/services.xml, so its read_only profile already
 --               reads `prices.*` (verified on the box 2026-08-04).
