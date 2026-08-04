@@ -14,12 +14,15 @@ import { useMemo, useState } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
+import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
 
 import { HighlightedJson } from '../op-card/HighlightedJson.js';
 
 interface EventsSectionProps {
   contractEvents: XdrEventDto[];
   diagnosticEvents: XdrEventDto[];
+  /** `heavy` absent — events were never loaded, not proven absent. */
+  unavailable?: boolean;
 }
 
 type EventKind = 'contract' | 'diagnostic';
@@ -32,6 +35,7 @@ interface MergedEvent {
 export function EventsSection({
   contractEvents,
   diagnosticEvents,
+  unavailable = false,
 }: EventsSectionProps) {
   const merged = useMemo<MergedEvent[]>(
     () => [
@@ -49,6 +53,17 @@ export function EventsSection({
   // (0453 wave 5) — a fully expanded raw-JSON table is a wall of pixels.
   // Typed/humanised event rendering is task 0363.
   const [open, setOpen] = useState(false);
+
+  // After the hooks: an absent `heavy` means the events were never fetched, so
+  // the count below would assert a zero nothing measured (0377 F2).
+  if (unavailable) {
+    return (
+      <SectionCard title="Events">
+        <HeavyUnavailable what="Events" />
+      </SectionCard>
+    );
+  }
+
   return (
     <SectionCard
       title="Events"

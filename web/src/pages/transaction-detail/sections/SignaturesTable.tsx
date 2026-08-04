@@ -19,6 +19,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../../detail/SectionCard.js';
+import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
 
 export interface SignatureRow extends SignatureDto {
   signer?: string | null;
@@ -27,9 +28,25 @@ export interface SignatureRow extends SignatureDto {
 
 interface SignaturesTableProps {
   signatures: readonly SignatureRow[];
+  /** `heavy` absent — signatures were never loaded, not proven absent. */
+  unavailable?: boolean;
 }
 
-export function SignaturesTable({ signatures }: SignaturesTableProps) {
+export function SignaturesTable({
+  signatures,
+  unavailable = false,
+}: SignaturesTableProps) {
+  // Signatures live only in the archive-gated `heavy` block, and every applied
+  // transaction has at least one — so "0 signatures" here would be impossible,
+  // not empty (0377 F1).
+  if (unavailable) {
+    return (
+      <SectionCard title="Signatures">
+        <HeavyUnavailable what="Signatures" />
+      </SectionCard>
+    );
+  }
+
   const count = signatures.length;
   return (
     <SectionCard

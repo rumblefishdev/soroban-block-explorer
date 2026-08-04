@@ -50,6 +50,10 @@ export default function TransactionDetailPage() {
   if (query.data == null) return null;
   const tx = query.data;
   const heavy = tx.heavy ?? null;
+  // `heavy_fields_status === 'unavailable'` iff `heavy` is null (wire contract),
+  // so the null check is the status check. Sections that live only in `heavy`
+  // must say "could not load" rather than count a `?? []` fallback (0377 F1/F2).
+  const heavyUnavailable = heavy == null;
   // The one-line story ("Swap · 4 ops") belongs to the page title — next to
   // the Success/Failed chip it read as a second STATUS (0460 #9).
   const story = classifyTx(tx);
@@ -86,7 +90,10 @@ export default function TransactionDetailPage() {
       </SectionErrorBoundary>
 
       <SectionErrorBoundary sectionName="transaction-signatures">
-        <SignaturesTable signatures={heavy?.signatures ?? []} />
+        <SignaturesTable
+          signatures={heavy?.signatures ?? []}
+          unavailable={heavyUnavailable}
+        />
       </SectionErrorBoundary>
 
       {/* One progressive view (0453): the former advanced-only sections render
@@ -96,6 +103,7 @@ export default function TransactionDetailPage() {
         <EventsSection
           contractEvents={heavy?.contract_events ?? []}
           diagnosticEvents={heavy?.diagnostic_events ?? []}
+          unavailable={heavyUnavailable}
         />
       </SectionErrorBoundary>
       <SectionErrorBoundary sectionName="transaction-raw-data">
@@ -103,6 +111,7 @@ export default function TransactionDetailPage() {
           envelopeXdr={heavy?.envelope_xdr}
           resultXdr={heavy?.result_xdr}
           resultMetaXdr={heavy?.result_meta_xdr}
+          unavailable={heavyUnavailable}
         />
       </SectionErrorBoundary>
     </Stack>
