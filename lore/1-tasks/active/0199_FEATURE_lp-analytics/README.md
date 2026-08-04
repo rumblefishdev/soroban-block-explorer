@@ -281,6 +281,31 @@ history:
       numbers validation vs Horizon AC after Oskar's pre-roll closes the
       07-21..08-03 hole. Canonical SQL 19/21 + tech-design + ADR 0053
       updated in the PR; api-types regenerated.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      GATE 1 EXECUTED — read-cost box-measured on the hottest pool
+      (a01fce81, 1.87M snapshots, yXLM/WGUARDIAN); full table in the PR
+      #380 comment + ADR 0053 body. Verdicts: 1h/7d 227ms/2.0M rows OK;
+      1d/90d 721ms/10.3M rows acceptable (+6.0M vs 442ms/4.2M baseline =
+      exactly 2x the view scan); detail 112ms/1.6M OK; **1w/104w
+      4.6s/70.7M rows/2.1GiB NOT acceptable**. Mechanism proven: the
+      views' bucket range DOES prune price_ohlcv (1.89M of 19.6M for 90d)
+      but identity CANNOT push down (computed columns) — long windows scan
+      every asset's candles x2 legs. Fix is prices-side, and their
+      views.sql SS6 pre-authorized it: "promote to a materialized table
+      only if measured read latency demands it" — demand now measured,
+      request drafted for Oskar. Interim: 1w stays correct but expensive;
+      MEDIUM cache + Cloudflare in front; NOT a merge blocker per se —
+      karolkow's call at review. TWO MORE box findings: (a)
+      current_price_usd is live (3,316 assets, updater ticking) but
+      price_usd=0 SENTINEL for native XLM itself → detail switched from
+      spot to argMax(close_usd) over price_usd_series_1h 48h lookback
+      (commit 4919ca78; ~2h max staleness, same cost, real data verified
+      on both legs, consistent with chart's last bucket) — reported to
+      Oskar, revisit when their 0039 prices native; (b) syntax + decode
+      of every new query validated against live CH in the same run.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
