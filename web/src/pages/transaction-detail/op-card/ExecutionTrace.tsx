@@ -51,7 +51,7 @@ function typedTopic(event: XdrEventDto, index: number): TypedVal | null {
     : null;
 }
 
-function symTopic(event: XdrEventDto, index: number): string | null {
+export function symTopic(event: XdrEventDto, index: number): string | null {
   const topic = typedTopic(event, index);
   return topic?.type === 'sym' && typeof topic.value === 'string'
     ? topic.value
