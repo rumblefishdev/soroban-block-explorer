@@ -306,6 +306,26 @@ history:
       on both legs, consistent with chart's last bucket) — reported to
       Oskar, revisit when their 0039 prices native; (b) syntax + decode
       of every new query validated against live CH in the same run.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SHIP DECISION (human): ship the whole Phase A including 1w; Oskar
+      draft sent by Stanisław. Gates re-verified under PROD conditions —
+      ran everything again AS api_reader (the real API user): 1d 688ms /
+      1h 272ms / detail 132ms (no profile penalty on default paths); 1w
+      completes under the read_only profile caps (2.11 GiB < 4 GiB, no
+      timeout) at 13.7s cold (3x the default-user run — thread cap bites
+      only at that scale). GATE 2 DISSOLVED: api_reader has no <grants>
+      block in services.xml, so its read_only profile already reads
+      prices.* — verified empirically; no ansible/users.d change, no
+      compose recreate needed to ship. PR #380 body corrected (the grant
+      claim was wrong), CI fully green. Remaining to done: karolkow
+      review -> merge -> manual deploy (make deploy-production-compute)
+      -> post-preroll AC validation vs Horizon -> /issues sweep closes
+      #367 at deploy. Side observation: current_price_usd began pricing
+      WGUARDIAN mid-session but still not native XLM — consistent with
+      the reported 0039 gap.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
