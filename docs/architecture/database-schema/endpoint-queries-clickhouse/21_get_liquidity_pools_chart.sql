@@ -1,64 +1,100 @@
 -- Endpoint:     GET /liquidity-pools/:id/chart
--- Purpose:      Time-bucketed series for a pool: TVL, volume, fee revenue.
+-- Purpose:      Time-bucketed series for a pool: TVL, volume, fee revenue —
+--               all USD, computed at read (task 0199, ADR 0053).
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.14
--- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
--- Data sources: DB-only.
+-- Schema:       ADR 0044 (CH pilot); prices views contract pinned in the
+--               prices repo `views.sql` header (2026-06-16).
+-- Data sources: DB + in-cluster `prices.*` views (same CH cluster, read-only).
 -- Inputs:
---   $1  :pool_id           FixedString(32)  raw 32-byte pool id
---   $2  :from_ledger       Int64            inclusive lower bound (ledger)
---   $3  :to_ledger         Int64            exclusive upper bound (ledger)
---   $4  :interval_seconds  Int              bucket size in seconds
---                                            (3600 = '1h', 86400 = '1d',
---                                             604800 = '1w'). The API maps
---                                            its '1h'|'1d'|'1w' allowlist
---                                            to this integer.
--- Indexes:      liquidity_pool_snapshots ORDER BY (pool_id, ledger_sequence, id)
---                 + PARTITION BY intDiv. The ledger range $2..$3 reduces to
---                 a partition predicate.
---               ledgers ORDER BY (sequence) — JOIN for closed_at bucket math.
--- CH Engine:    liquidity_pool_snapshots — Replacing partitioned (FINAL).
---                 ledgers — MergeTree (no FINAL).
--- CH Pattern:   GROUP BY toStartOfInterval(closed_at, INTERVAL $4 SECOND);
---                 partition prune via intDiv on ledger range;
---                 argMax over (created_at, ledger_sequence) for TVL state.
--- ADR 0044 §:   §4.5 (Replacing partitioned), §4.1 (ledgers), §5.2 (no
---                 created_at — bucket from JOIN ledgers, range parameter
---                 is ledger-based not timestamp-based for clean partition
---                 prune).
--- Notes:
---   • **Range parameter change:** PG E21 takes `from`/`to` as TIMESTAMPTZ.
---     CH-side, partition is by `intDiv(ledger_sequence, 500000)`, so we
---     pass the range as ledger sequences. The API resolves user-supplied
---     timestamps to ledger bounds via a `ledgers` lookup (cheap; one
---     `closed_at >= ?` seek per bound). This trade-off keeps the chart
---     query partition-pruned cleanly; the user-facing API contract is
---     unchanged.
---   • TVL is a state quantity: use `argMax(tvl, ledger_sequence)` per
---     bucket to project the latest within-bucket state. Volume + fee_revenue
---     are flow quantities: `sum()` over bucket.
---   • `toStartOfInterval(t, INTERVAL N SECOND)` is CH's bucket truncation
---     primitive; works for any second-multiple (3600 = 1h, 86400 = 1d).
---     For week-aligned buckets the API can also use `toStartOfWeek(t)` —
---     but a 604800-second interval starting from epoch is week-aligned
---     by construction (1970-01-04 was a Sunday; close enough for chart UX).
---   • `samples_in_bucket` = `count()` of snapshot rows that landed in the
---     bucket.
+--   $1  :pool_id      FixedString(32)  raw 32-byte pool id
+--   $2  :from_ms      Int64            inclusive lower bound (epoch millis)
+--   $3  :to_ms        Int64            exclusive upper bound (epoch millis)
+--   $4  :interval     '1h' | '1d' | '1w' (allowlist; picks bucket fn + grain)
+--   Leg identities + fee_bps come from a per-request pre-query on
+--   `liquidity_pools` (also the 404 gate): (asset_kind, asset_code,
+--   issuer_address) per leg in the prices interop forms —
+--   native = ('native','XLM',''), classic = ('credit', code, issuer).
+-- Indexes:      liquidity_pool_snapshots ORDER BY (pool_id, ledger_sequence)
+--                 — leading-PK seek bounds the scan to this pool.
+--               ledgers minmax(closed_at) — window bounds resolve to a
+--                 ledger range; both subquery bounds carry `>= from` so the
+--                 index can prune (lore-0356: `< to` alone scans history).
+-- CH Engine:    liquidity_pool_snapshots — RMT, NO FINAL: the inner
+--                 subquery collapses duplicates via `LIMIT 1 BY
+--                 ledger_sequence` (0356 / PR #318 determinism).
+--               ledgers — RMT, deduped via `LIMIT 1 BY sequence` (lore-0420).
+-- USD semantics (task 0199; Float64 arithmetic, rounded to cents — the
+-- analytics carry a 1% verification tolerance by design):
+--   • TVL — state quantity: last PRICEABLE snapshot in the bucket,
+--     `reserve_a·close_usd_a + reserve_b·close_usd_b`. NULL unless BOTH
+--     legs price (never a one-leg partial).
+--   • volume — flow quantity: `sum(gross_volume_a × close_usd_a)`, each
+--     ledger priced at its own price bucket. Any unpriceable swap in the
+--     bucket → NULL (honest hole, not a partial sum).
+--   • fee_revenue — `volume × fee_bps / 10000`.
+-- Prices join:
+--   • Grain follows the interval: '1h' → prices.price_usd_series_1h joined
+--     on toStartOfHour(closed_at); '1d'/'1w' → prices.price_usd_series on
+--     toStartOfDay(closed_at). No weekly candles exist — a 1w bucket
+--     prices at its last snapshot's day.
+--   • Identity + bucket-range predicates INSIDE the right-side subqueries:
+--     the bucket range is what the prices views push down to the
+--     `price_ohlcv_*` scan; without it the view aggregates full history.
+--   • LEFT JOIN misses are DEFAULT 0, not NULL (`join_use_nulls` rejected
+--     for the readonly user). Views filter `close_usd > 0`, so
+--     `nullIf(close_usd, 0)` is the unambiguous miss test.
+--   • NEVER join raw `prices.assets` (empty-code rows silently price
+--     native legs as an arbitrary asset) and NEVER decode `prices.*`
+--     positionally (views grow additively).
+-- Deploy gate:  the API CH user needs SELECT on the `prices` database
+--               (views + underlying `price_ohlcv_1h/_1d`, `assets`,
+--               `current_prices`) — users.d change + compose recreate.
 
 SELECT
-    toStartOfInterval(l.closed_at, INTERVAL $4 SECOND)              AS bucket,
-    argMax(lps.tvl,         lps.ledger_sequence)                    AS tvl,
-    sum(lps.volume)                                                 AS volume,
-    sum(lps.fee_revenue)                                            AS fee_revenue,
-    count()                                                         AS samples_in_bucket
-FROM liquidity_pool_snapshots lps FINAL
-JOIN ledgers l ON l.sequence = lps.ledger_sequence
-WHERE lps.pool_id = $1
-  AND lps.ledger_sequence >= $2
-  AND lps.ledger_sequence <  $3
-  -- Range is half-open `[from, to)`; the last included ledger is `$3 - 1`,
-  -- so the upper partition bound must use `intDiv($3 - 1, 500000)`. Using
-  -- `intDiv($3, 500000)` would scan one extra partition when `$3` falls
-  -- on a partition boundary. Review feedback (Copilot PR #174).
-  AND intDiv(lps.ledger_sequence, 500000) BETWEEN intDiv($2, 500000) AND intDiv($3 - 1, 500000)
-GROUP BY bucket
-ORDER BY bucket ASC;
+    bucket_ms,
+    round(argMaxIf(tvl_row, ledger_sequence, isNotNull(tvl_row)), 2)   AS tvl,
+    round(if(countIf(unpriced_swap) > 0, NULL, sum(vol_row)), 2)       AS volume,
+    round(if(countIf(unpriced_swap) > 0, NULL, sum(vol_row))
+          * {fee_factor}, 2)                                           AS fee_revenue,
+    count()                                                            AS samples_in_bucket
+FROM (
+    SELECT
+        toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms,
+        lps.ledger_sequence                              AS ledger_sequence,
+        nullIf(toFloat64(pa.close_usd), 0)               AS pa_usd,
+        nullIf(toFloat64(pb.close_usd), 0)               AS pb_usd,
+        toFloat64(lps.reserve_a) * pa_usd
+            + toFloat64(lps.reserve_b) * pb_usd          AS tvl_row,
+        toFloat64(lps.gross_volume_a) * pa_usd           AS vol_row,
+        isNotNull(lps.gross_volume_a) AND isNull(pa_usd) AS unpriced_swap
+    FROM (
+        SELECT ledger_sequence, reserve_a, reserve_b, gross_volume_a
+        FROM liquidity_pool_snapshots
+        WHERE pool_id = $1
+          AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli($2))
+          AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli($2) AND closed_at < fromUnixTimestamp64Milli($3))
+        ORDER BY ledger_sequence DESC
+        LIMIT 1 BY ledger_sequence
+    ) lps
+    JOIN (
+        SELECT sequence, closed_at, {price_bucket_fn}(closed_at) AS price_bucket
+        FROM ledgers
+        WHERE closed_at >= fromUnixTimestamp64Milli($2)
+          AND closed_at <  fromUnixTimestamp64Milli($3)
+        LIMIT 1 BY sequence
+    ) l ON l.sequence = lps.ledger_sequence
+    LEFT JOIN (
+        SELECT bucket, close_usd FROM {series_view}
+        WHERE asset_kind = {leg_a_kind} AND asset_code = {leg_a_code} AND issuer_address = {leg_a_issuer}
+          AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli($2))
+          AND bucket <  fromUnixTimestamp64Milli($3)
+    ) pa ON pa.bucket = l.price_bucket
+    LEFT JOIN (
+        SELECT bucket, close_usd FROM {series_view}
+        WHERE asset_kind = {leg_b_kind} AND asset_code = {leg_b_code} AND issuer_address = {leg_b_issuer}
+          AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli($2))
+          AND bucket <  fromUnixTimestamp64Milli($3)
+    ) pb ON pb.bucket = l.price_bucket
+)
+GROUP BY bucket_ms
+ORDER BY bucket_ms ASC;

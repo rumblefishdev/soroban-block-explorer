@@ -326,10 +326,17 @@ export type AssetTransactionItem = {
 };
 
 /**
- * One row from the chart endpoint. Shape pinned to canonical SQL
- * `21_get_liquidity_pools_chart.sql`. `tvl` is "TVL at close of bucket"
- * (last value); `volume` and `fee_revenue` are SUM (cumulative within
- * the bucket).
+ * One row from the chart endpoint. All money fields are **USD decimal
+ * strings rounded to cents**, computed at read from on-chain quantities ×
+ * the in-cluster price series (task 0199, ADR 0053):
+ * - `tvl` — "TVL at close of bucket": last priceable snapshot's
+ * `reserve_a·price_a + reserve_b·price_b`. `null` when either leg has
+ * no price at that point (untracked asset, pre-listing history, or a
+ * provider-side price gap).
+ * - `volume` — SUM over the bucket of per-ledger gross trade volume ×
+ * the leg-A price at that ledger's time. `null` for no-swap buckets and
+ * for buckets where a swap couldn't be priced (never a partial sum).
+ * - `fee_revenue` — `volume × fee_bps / 10000`.
  */
 export type ChartDataPoint = {
   bucket: string;
@@ -1462,6 +1469,10 @@ export type PaginatedPoolItem = {
      * the frontend can render directly (frontend §6.13/§6.14).
      */
     fee_percent: string;
+    /**
+     * USD, decimal string rounded to cents. **Detail endpoint only.**
+     * `volume × fee_bps / 10000` — the pool's 24h fee estimate.
+     */
     fee_revenue?: string | null;
     latest_snapshot_at?: string | null;
     latest_snapshot_ledger?: number | null;
@@ -1482,7 +1493,19 @@ export type PaginatedPoolItem = {
     reserve_a?: string | null;
     reserve_b?: string | null;
     total_shares?: string | null;
+    /**
+     * USD, decimal string rounded to cents (task 0199 compute-at-read).
+     * **Detail endpoint only** — the list returns `null` (list-side TVL is
+     * a follow-up). `tvl` = latest reserves × live spot prices
+     * (`prices.current_price_usd`); `null` unless both legs have a spot
+     * price (never a one-leg partial).
+     */
     tvl?: string | null;
+    /**
+     * USD, decimal string rounded to cents. **Detail endpoint only.**
+     * Gross trade volume over the last 24h (`gross_volume_a` sum) priced
+     * at the leg-A **current** spot; `null` when the pool is unpriceable.
+     */
     volume?: string | null;
   }>;
   page: PageInfo;
@@ -1684,6 +1707,10 @@ export type PoolItem = {
    * the frontend can render directly (frontend §6.13/§6.14).
    */
   fee_percent: string;
+  /**
+   * USD, decimal string rounded to cents. **Detail endpoint only.**
+   * `volume × fee_bps / 10000` — the pool's 24h fee estimate.
+   */
   fee_revenue?: string | null;
   latest_snapshot_at?: string | null;
   latest_snapshot_ledger?: number | null;
@@ -1704,7 +1731,19 @@ export type PoolItem = {
   reserve_a?: string | null;
   reserve_b?: string | null;
   total_shares?: string | null;
+  /**
+   * USD, decimal string rounded to cents (task 0199 compute-at-read).
+   * **Detail endpoint only** — the list returns `null` (list-side TVL is
+   * a follow-up). `tvl` = latest reserves × live spot prices
+   * (`prices.current_price_usd`); `null` unless both legs have a spot
+   * price (never a one-leg partial).
+   */
   tvl?: string | null;
+  /**
+   * USD, decimal string rounded to cents. **Detail endpoint only.**
+   * Gross trade volume over the last 24h (`gross_volume_a` sum) priced
+   * at the leg-A **current** spot; `null` when the pool is unpriceable.
+   */
   volume?: string | null;
 };
 

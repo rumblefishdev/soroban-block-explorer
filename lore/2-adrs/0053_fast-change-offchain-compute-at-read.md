@@ -53,6 +53,19 @@ history:
       2 architecture docs, tasks 0199/0261/0266/0283/0297, ADR 0043). Cloudflare
       references verified untouched. Status unchanged: still `proposed`, still
       pending the read-cost measurement + karolkow review.
+  - date: '2026-08-04'
+    status: proposed
+    who: stkrolikiewicz
+    note: >
+      IMPLEMENTED for the LP chart + detail read paths (0199 Phase A, branch
+      feat/0199_lp-analytics): chart joins price_usd_series/_1h at the
+      interval's grain, detail prices latest reserves at current_price_usd
+      spot + last-24h volume. Scope extended beyond TVL-only to
+      volume/fee_revenue (both premises of the June cut are gone —
+      gross_volume_a backfilled by 0266, prices live in-cluster). Still
+      proposed: the read-cost measurement this ADR gates on is now concrete
+      (box-measure the prices-view join on the hottest pool) + karolkow
+      review. Deploy gate recorded: API CH user needs SELECT on prices.*.
 ---
 
 # ADR 0053: Fast-change off-chain values on ClickHouse — compute-at-read via local price join
@@ -124,6 +137,15 @@ inputs).
 `fee_revenue` are deferred — they require a per-pool `gross_volume_a` extracted
 from PathPayment `claimedOffers` (on-chain), whose historical backfill (XDR
 re-parse over 273M snapshots) is tracked in task 0247.
+
+> **Update 2026-08-04 (scope re-cut + implementation).** The TVL-only cut is
+> retired: `gross_volume_a` has been live-written since 0261 and historically
+> backfilled by 0266 (261.32M rows), so `volume = Σ gross_volume_a·price_a`
+> and `fee_revenue = volume·fee_bps/10000` are the same read-time join TVL
+> needs. Implemented for the LP chart (grain-matched `price_usd_series`/`_1h`
+> join) and detail (spot `current_price_usd` + last-24h volume) in 0199
+> Phase A. Still `proposed` pending the read-cost measurement (now concrete:
+> box-measure the prices-view join on the hottest pool) + karolkow review.
 
 > **Update 2026-06-12 (contract finalized — see [S-note](../1-tasks/backlog/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)).**
 > Decision §2 is refined: there is **no local `prices` table and no sync job**.

@@ -158,8 +158,18 @@ pub struct PoolItem {
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
+    /// USD, decimal string rounded to cents (task 0199 compute-at-read).
+    /// **Detail endpoint only** — the list returns `null` (list-side TVL is
+    /// a follow-up). `tvl` = latest reserves × live spot prices
+    /// (`prices.current_price_usd`); `null` unless both legs have a spot
+    /// price (never a one-leg partial).
     pub tvl: Option<String>,
+    /// USD, decimal string rounded to cents. **Detail endpoint only.**
+    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
+    /// at the leg-A **current** spot; `null` when the pool is unpriceable.
     pub volume: Option<String>,
+    /// USD, decimal string rounded to cents. **Detail endpoint only.**
+    /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.
     pub fee_revenue: Option<String>,
     pub latest_snapshot_at: Option<DateTime<Utc>>,
 }
@@ -219,10 +229,17 @@ pub struct ChartParams {
     pub to: Option<String>,
 }
 
-/// One row from the chart endpoint. Shape pinned to canonical SQL
-/// `21_get_liquidity_pools_chart.sql`. `tvl` is "TVL at close of bucket"
-/// (last value); `volume` and `fee_revenue` are SUM (cumulative within
-/// the bucket).
+/// One row from the chart endpoint. All money fields are **USD decimal
+/// strings rounded to cents**, computed at read from on-chain quantities ×
+/// the in-cluster price series (task 0199, ADR 0053):
+/// - `tvl` — "TVL at close of bucket": last priceable snapshot's
+///   `reserve_a·price_a + reserve_b·price_b`. `null` when either leg has
+///   no price at that point (untracked asset, pre-listing history, or a
+///   provider-side price gap).
+/// - `volume` — SUM over the bucket of per-ledger gross trade volume ×
+///   the leg-A price at that ledger's time. `null` for no-swap buckets and
+///   for buckets where a swap couldn't be priced (never a partial sum).
+/// - `fee_revenue` — `volume × fee_bps / 10000`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartDataPoint {
     pub bucket: DateTime<Utc>,

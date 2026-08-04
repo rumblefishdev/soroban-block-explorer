@@ -2315,7 +2315,7 @@
       },
       "ChartDataPoint": {
         "type": "object",
-        "description": "One row from the chart endpoint. Shape pinned to canonical SQL\n`21_get_liquidity_pools_chart.sql`. `tvl` is \"TVL at close of bucket\"\n(last value); `volume` and `fee_revenue` are SUM (cumulative within\nthe bucket).",
+        "description": "One row from the chart endpoint. All money fields are **USD decimal\nstrings rounded to cents**, computed at read from on-chain quantities ×\nthe in-cluster price series (task 0199, ADR 0053):\n- `tvl` — \"TVL at close of bucket\": last priceable snapshot's\n  `reserve_a·price_a + reserve_b·price_b`. `null` when either leg has\n  no price at that point (untracked asset, pre-listing history, or a\n  provider-side price gap).\n- `volume` — SUM over the bucket of per-ledger gross trade volume ×\n  the leg-A price at that ledger's time. `null` for no-swap buckets and\n  for buckets where a swap couldn't be priced (never a partial sum).\n- `fee_revenue` — `volume × fee_bps / 10000`.",
         "required": ["bucket", "samples_in_bucket"],
         "properties": {
           "bucket": {
@@ -3916,7 +3916,8 @@
                   "description": "`fee_bps / 100` as decimal string. Conversion done server-side so\nthe frontend can render directly (frontend §6.13/§6.14)."
                 },
                 "fee_revenue": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\n`volume × fee_bps / 10000` — the pool's 24h fee estimate."
                 },
                 "latest_snapshot_at": {
                   "type": ["string", "null"],
@@ -3945,10 +3946,12 @@
                   "type": ["string", "null"]
                 },
                 "tvl": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\n**Detail endpoint only** — the list returns `null` (list-side TVL is\na follow-up). `tvl` = latest reserves × live spot prices\n(`prices.current_price_usd`); `null` unless both legs have a spot\nprice (never a one-leg partial)."
                 },
                 "volume": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A **current** spot; `null` when the pool is unpriceable."
                 }
               }
             }
@@ -4206,7 +4209,8 @@
             "description": "`fee_bps / 100` as decimal string. Conversion done server-side so\nthe frontend can render directly (frontend §6.13/§6.14)."
           },
           "fee_revenue": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\n`volume × fee_bps / 10000` — the pool's 24h fee estimate."
           },
           "latest_snapshot_at": {
             "type": ["string", "null"],
@@ -4235,10 +4239,12 @@
             "type": ["string", "null"]
           },
           "tvl": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\n**Detail endpoint only** — the list returns `null` (list-side TVL is\na follow-up). `tvl` = latest reserves × live spot prices\n(`prices.current_price_usd`); `null` unless both legs have a spot\nprice (never a one-leg partial)."
           },
           "volume": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A **current** spot; `null` when the pool is unpriceable."
           }
         }
       },

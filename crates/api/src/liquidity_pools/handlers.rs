@@ -365,7 +365,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     let fetched = queries::fetch_pool_by_id(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
-    let row = match fetched {
+    let mut row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -373,6 +373,44 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
+
+    // USD analytics (0199 compute-at-read): spot TVL + 24h volume/fee from
+    // the in-cluster `prices.*` views. Deliberately DEGRADES to NULL fields
+    // on error instead of failing the whole detail — the pool's on-chain
+    // data is still valid without prices, and the FE already renders the
+    // NULL ("stale") state. The error log is the operator signal (a missing
+    // `prices.*` SELECT grant lands here, not in a 500).
+    let ctx = queries::PoolPriceContext {
+        leg_a: queries::price_leg(
+            row.asset_a_type,
+            row.asset_a_code.as_deref(),
+            row.asset_a_issuer.as_deref(),
+        ),
+        leg_b: queries::price_leg(
+            row.asset_b_type,
+            row.asset_b_code.as_deref(),
+            row.asset_b_issuer.as_deref(),
+        ),
+        fee_bps: row.fee_bps,
+    };
+    match queries::fetch_pool_usd_analytics(
+        &state.ch(),
+        &pool_id_hex,
+        &ctx,
+        row.reserve_a.as_deref(),
+        row.reserve_b.as_deref(),
+    )
+    .await
+    {
+        Ok(analytics) => {
+            row.tvl = analytics.tvl;
+            row.volume = analytics.volume;
+            row.fee_revenue = analytics.fee_revenue;
+        }
+        Err(e) => {
+            tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");
+        }
+    }
 
     let mut resp = Json(map_pool_item(row)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -622,19 +660,18 @@ pub async fn get_pool_chart(
         );
     }
 
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    match exists {
-        Ok(true) => {}
-        Ok(false) => return errors::not_found("liquidity pool not found"),
+    // Doubles as the 404 existence gate (one row on `liquidity_pools`) and
+    // supplies the leg identities + fee_bps the USD computation joins on.
+    let ctx = match queries::fetch_pool_price_context(&state.ch(), &pool_id_hex).await {
+        Ok(Some(ctx)) => ctx,
+        Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in pool_exists({pool_id}): {e}");
+            tracing::error!("DB error in fetch_pool_price_context({pool_id}): {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
-    }
+    };
 
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
+    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
         .await
         .map_err(|e| e.to_string());
     let data_points = match fetched {
