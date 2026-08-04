@@ -15,6 +15,7 @@ import { HumanizedSentence } from '../shared/HumanizedSentence.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
+import { readResourceCounters, resourceSummary } from './resources.js';
 import { CallTree, parseOperationTree } from './CallTree.js';
 import {
   buildExecutionTrace,
@@ -107,6 +108,11 @@ export function OperationCard({
   const traceNodes = isInvoke
     ? buildExecutionTrace(diagnosticEvents, contractEvents)
     : [];
+  // Resource counters belong to the Soroban invocation, and a Soroban tx
+  // carries exactly one (protocol rule) — so per-tx equals per-op here.
+  const resourceFacts = isInvoke
+    ? resourceSummary(readResourceCounters(diagnosticEvents))
+    : [];
   const callNodes =
     isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)
@@ -177,6 +183,38 @@ export function OperationCard({
               Execution trace · {traceCallCount(traceNodes)} calls
             </Overline>
             <ExecutionTrace nodes={traceNodes} />
+          </Box>
+        )}
+
+        {resourceFacts.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            {/* What the execution COST, next to what it did. Lifted out of the
+                diagnostic stream, where nineteen identical counters were
+                rendering as nineteen event rows (task 0363 / issue #378). */}
+            <Overline mb={0.5}>Resources</Overline>
+            <Stack
+              direction="row"
+              sx={{ flexWrap: 'wrap', columnGap: 2, rowGap: 0.5 }}
+            >
+              {resourceFacts.map((fact) => (
+                <Typography
+                  key={fact.label}
+                  variant="bodySmRegular"
+                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                >
+                  {fact.label}{' '}
+                  <Box
+                    component="span"
+                    sx={(theme) => ({
+                      color: theme.palette.text.secondary,
+                      fontVariantNumeric: 'tabular-nums',
+                    })}
+                  >
+                    {fact.value}
+                  </Box>
+                </Typography>
+              ))}
+            </Stack>
           </Box>
         )}
 

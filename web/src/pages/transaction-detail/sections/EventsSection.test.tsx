@@ -65,8 +65,10 @@ describe('EventsSection (#378 — consensus stream vs debug channel)', () => {
 
     expect(screen.getByText('2 events')).toBeInTheDocument();
     expect(screen.getByText(/Show 2 events/)).toBeInTheDocument();
+    // Two, not three: the resource counter is not a diagnostic entry either,
+    // it belongs to the Resources strip on the operation card.
     expect(
-      screen.getByText(/Show execution diagnostics \(3\)/)
+      screen.getByText(/Show execution diagnostics \(2\)/)
     ).toBeInTheDocument();
   });
 
@@ -116,19 +118,24 @@ describe('EventsSection (#378 — consensus stream vs debug channel)', () => {
     expect(rowsOf(screen.getByRole('table'))[0].Type).toBe('System');
   });
 
-  it('hides the host counters inside the debug channel on demand', async () => {
+  it('never lists the resource counters — they are not events', async () => {
     const user = userEvent.setup();
     renderSection(
       [event(0, 'transfer')],
       [event(1, 'fn_call'), event(2, 'core_metrics'), event(3, 'core_metrics')]
     );
-    await user.click(screen.getByText(/Show execution diagnostics \(3\)/));
+    // The count in the label is what survives the filter, so the reader is
+    // never promised rows that are not there.
+    await user.click(screen.getByText(/Show execution diagnostics \(1\)/));
 
-    const table = screen.getByRole('table');
-    expect(rowsOf(table)).toHaveLength(3);
-
-    await user.click(screen.getByRole('button', { name: /Host counters 2/ }));
     expect(rowsOf(screen.getByRole('table')).map((r) => r['#'])).toEqual(['1']);
+  });
+
+  it('offers no diagnostics disclosure when counters were all there was', () => {
+    // A transaction whose whole debug channel is the resource meter has
+    // nothing to disclose — an empty expander would be a dead end.
+    renderSection([event(0, 'transfer')], [event(1, 'core_metrics')]);
+    expect(screen.queryByText(/execution diagnostics/)).not.toBeInTheDocument();
   });
 
   it('says nothing was emitted when the consensus stream is empty', () => {

@@ -161,12 +161,16 @@ export function EventsSection({
   // Typed/humanised event rendering is task 0363.
   const [open, setOpen] = useState(false);
   const [diagOpen, setDiagOpen] = useState(false);
-  const [hideCounters, setHideCounters] = useState(false);
 
-  const counters = diagnosticEvents.filter(isHostCounter).length;
-  const diagShown = hideCounters
-    ? diagnosticEvents.filter((e) => !isHostCounter(e))
-    : diagnosticEvents;
+  // `core_metrics` never appears here. It is the host's resource meter — the
+  // same nineteen counters on every transaction, carrying no order, no nesting
+  // and no relation to what the contract did. One record with nineteen fields,
+  // transported as nineteen events. It renders on the invoke operation card as
+  // a Resources strip instead (`op-card/resources.ts`), which is where every
+  // other explorer puts it and where `getEvents` implies it belongs — outside
+  // the event stream entirely. Dropping it takes a minimal Soroban
+  // transaction's diagnostics from 21 rows to 2.
+  const diagShown = diagnosticEvents.filter((e) => !isHostCounter(e));
 
   const total = contractEvents.length;
   const plural = (n: number, word: string) =>
@@ -197,13 +201,13 @@ export function EventsSection({
         </>
       )}
 
-      {diagnosticEvents.length > 0 && (
+      {diagShown.length > 0 && (
         <>
           <DisclosureRow
             open={diagOpen}
             onToggle={() => setDiagOpen((v) => !v)}
             label={`${diagOpen ? 'Hide' : 'Show'} execution diagnostics (${
-              diagnosticEvents.length
+              diagShown.length
             })`}
             sx={(theme) => ({
               px: 2,
@@ -217,23 +221,11 @@ export function EventsSection({
                 variant="bodySmRegular"
                 sx={(theme) => ({ color: theme.palette.text.tertiary })}
               >
-                The host's debug channel — the call trace, resource counters,
-                and a copy of each event above. Not hashed into consensus and
-                not part of the transaction's event stream.
+                The host's debug channel — the call trace, contract logs,
+                failure diagnostics, and a copy of each event above. Not hashed
+                into consensus and not part of the transaction's event stream.
               </Typography>
             </Box>
-            {counters > 0 && (
-              <Box sx={{ px: 2, pb: 1.25 }}>
-                <Chip
-                  size="sm"
-                  clickable
-                  color={hideCounters ? 'neutral' : 'accent'}
-                  aria-pressed={!hideCounters}
-                  onClick={() => setHideCounters((v) => !v)}
-                  label={`Host counters ${counters}`}
-                />
-              </Box>
-            )}
             <EventTable events={diagShown} showWhere={false} />
           </Collapse>
         </>
