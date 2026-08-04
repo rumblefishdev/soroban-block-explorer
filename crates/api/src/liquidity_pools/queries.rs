@@ -343,13 +343,23 @@ pub async fn fetch_pool_price_context(
 
 /// Detail-endpoint USD analytics (task 0199 semantics, defined here because
 /// the snapshot columns were never populated before this task):
-/// - `tvl` — latest reserves × live spot (`prices.current_price_usd`);
-///   NULL unless BOTH legs have a spot price (a one-leg TVL would silently
-///   halve the pool — no-misleading-fallbacks rule).
-/// - `volume` — last-24h `gross_volume_a` × leg-A spot. Priced at the
-///   CURRENT spot, not per-trade close (upgrade path: hourly join as in the
-///   chart, if product needs it).
+/// - `tvl` — latest reserves × last hourly close (`price_usd_series_1h`,
+///   48h lookback); NULL unless BOTH legs price (a one-leg TVL would
+///   silently halve the pool — no-misleading-fallbacks rule).
+/// - `volume` — last-24h `gross_volume_a` × the same leg-A close. One
+///   price for the whole day, not per-trade (upgrade path: hourly join as
+///   in the chart, if product needs it).
 /// - `fee_revenue` — `volume × fee_bps / 10000`.
+///
+/// Why the 1h series and NOT `prices.current_price_usd`: box-measured
+/// 2026-08-04, the spot view is live (3,316 assets, updater ticking) but
+/// `price_usd = 0` — the "unavailable" sentinel — for native XLM
+/// itself, so every XLM-leg pool (the majority) would read NULL TVL. The
+/// last 1h close is at most ~1–2h stale, costs the same (112 ms / 1.6M
+/// read rows vs 92 ms / 1.2M on the hottest pool), actually returns data,
+/// and keeps detail TVL consistent with the chart's last bucket (same
+/// source). Revisit spot when the prices-side updater (their 0039) prices
+/// native.
 #[derive(Debug, Default)]
 pub struct PoolUsdAnalytics {
     pub tvl: Option<String>,
@@ -365,8 +375,9 @@ struct UsdAnalyticsChRow {
     vol24_a_units: Option<String>,
 }
 
-/// Fetch spot prices + 24h gross volume, compute the detail USD analytics
-/// in Rust (Float64 tolerance documented on the module block above).
+/// Fetch last hourly closes + 24h gross volume, compute the detail USD
+/// analytics in Rust (Float64 tolerance documented on the module block
+/// above).
 ///
 /// The 24h snapshot sum is deduped with `LIMIT 1 BY ledger_sequence` —
 /// same idiom as the chart — because RMT duplicate versions of one
@@ -383,10 +394,12 @@ pub async fn fetch_pool_usd_analytics(
     let row = client
         .query(
             "SELECT \
-                (SELECT toString(nullIf(any(price_usd), 0)) FROM prices.current_price_usd \
-                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ?) AS spot_a, \
-                (SELECT toString(nullIf(any(price_usd), 0)) FROM prices.current_price_usd \
-                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ?) AS spot_b, \
+                (SELECT toString(nullIf(argMax(close_usd, bucket), 0)) FROM prices.price_usd_series_1h \
+                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
+                    AND bucket >= now() - INTERVAL 48 HOUR) AS spot_a, \
+                (SELECT toString(nullIf(argMax(close_usd, bucket), 0)) FROM prices.price_usd_series_1h \
+                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
+                    AND bucket >= now() - INTERVAL 48 HOUR) AS spot_b, \
                 (SELECT toString(sum(gross_volume_a)) FROM ( \
                     SELECT ledger_sequence, gross_volume_a \
                     FROM liquidity_pool_snapshots \

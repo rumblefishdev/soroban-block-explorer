@@ -59,13 +59,17 @@ history:
     note: >
       IMPLEMENTED for the LP chart + detail read paths (0199 Phase A, branch
       feat/0199_lp-analytics): chart joins price_usd_series/_1h at the
-      interval's grain, detail prices latest reserves at current_price_usd
-      spot + last-24h volume. Scope extended beyond TVL-only to
-      volume/fee_revenue (both premises of the June cut are gone —
-      gross_volume_a backfilled by 0266, prices live in-cluster). Still
-      proposed: the read-cost measurement this ADR gates on is now concrete
-      (box-measure the prices-view join on the hottest pool) + karolkow
-      review. Deploy gate recorded: API CH user needs SELECT on prices.*.
+      interval's grain, detail prices latest reserves at the last 1h close
+      (price_usd_series_1h, 48h lookback) + last-24h volume — NOT
+      current_price_usd, whose price_usd=0 sentinel covers native XLM
+      (box-verified), which would NULL every XLM-leg pool. Scope extended
+      beyond TVL-only to volume/fee_revenue (both premises of the June cut
+      are gone — gross_volume_a backfilled by 0266, prices live in-cluster).
+      READ-COST MEASURED same day on the hottest pool (see body Update):
+      1h/1d/detail acceptable; 1w/104w = 4.6s / 70.7M rows — identity does
+      not push into the views; prices-side identity-keyed materialization
+      requested (their views.sql §6 trigger). Still proposed pending
+      karolkow review. Deploy gate: API CH user needs SELECT on prices.*.
 ---
 
 # ADR 0053: Fast-change off-chain values on ClickHouse — compute-at-read via local price join
@@ -143,9 +147,19 @@ re-parse over 273M snapshots) is tracked in task 0247.
 > backfilled by 0266 (261.32M rows), so `volume = Σ gross_volume_a·price_a`
 > and `fee_revenue = volume·fee_bps/10000` are the same read-time join TVL
 > needs. Implemented for the LP chart (grain-matched `price_usd_series`/`_1h`
-> join) and detail (spot `current_price_usd` + last-24h volume) in 0199
-> Phase A. Still `proposed` pending the read-cost measurement (now concrete:
-> box-measure the prices-view join on the hottest pool) + karolkow review.
+> join) and detail (last 1h close via `price_usd_series_1h` + last-24h
+> volume — NOT `current_price_usd`, whose 0-sentinel covers native XLM as of
+> 2026-08-04) in 0199 Phase A. Read-cost box-measured 2026-08-04 on the
+> hottest pool (1.87M snapshots): 1h/7d 227 ms / 2.0M rows, 1d/90d 721 ms /
+> 10.3M rows (vs 442 ms / 4.2M pre-prices baseline), detail 112 ms / 1.6M
+> rows — acceptable; **1w/104w 4.6 s / 70.7M rows / 2.1 GiB is NOT** — the
+> views' bucket range prunes the `price_ohlcv_*` scan but the identity
+> predicate cannot (computed columns), so long windows scan every asset's
+> candles ×2 legs. Their views.sql §6 names the fix: promote the series to
+> an identity-keyed materialized table when measured latency demands it —
+> that demand is now measured; requested from the prices owner. Still
+> `proposed` pending karolkow review + the prices-side materialization for
+> the long-window path.
 
 > **Update 2026-06-12 (contract finalized — see [S-note](../1-tasks/backlog/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)).**
 > Decision §2 is refined: there is **no local `prices` table and no sync job**.

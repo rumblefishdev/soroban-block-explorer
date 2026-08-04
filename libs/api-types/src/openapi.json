@@ -3947,11 +3947,11 @@
                 },
                 "tvl": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\n**Detail endpoint only** — the list returns `null` (list-side TVL is\na follow-up). `tvl` = latest reserves × live spot prices\n(`prices.current_price_usd`); `null` unless both legs have a spot\nprice (never a one-leg partial)."
+                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\n**Detail endpoint only** — the list returns `null` (list-side TVL is\na follow-up). `tvl` = latest reserves × each leg's last hourly USD\nclose (`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless\nboth legs price (never a one-leg partial)."
                 },
                 "volume": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A **current** spot; `null` when the pool is unpriceable."
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
                 }
               }
             }
@@ -4240,11 +4240,11 @@
           },
           "tvl": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\n**Detail endpoint only** — the list returns `null` (list-side TVL is\na follow-up). `tvl` = latest reserves × live spot prices\n(`prices.current_price_usd`); `null` unless both legs have a spot\nprice (never a one-leg partial)."
+            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\n**Detail endpoint only** — the list returns `null` (list-side TVL is\na follow-up). `tvl` = latest reserves × each leg's last hourly USD\nclose (`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless\nboth legs price (never a one-leg partial)."
           },
           "volume": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A **current** spot; `null` when the pool is unpriceable."
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
           }
         }
       },

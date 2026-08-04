@@ -160,13 +160,13 @@ pub struct PoolItem {
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
     /// **Detail endpoint only** — the list returns `null` (list-side TVL is
-    /// a follow-up). `tvl` = latest reserves × live spot prices
-    /// (`prices.current_price_usd`); `null` unless both legs have a spot
-    /// price (never a one-leg partial).
+    /// a follow-up). `tvl` = latest reserves × each leg's last hourly USD
+    /// close (`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless
+    /// both legs price (never a one-leg partial).
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-    /// at the leg-A **current** spot; `null` when the pool is unpriceable.
+    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
     pub volume: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.

@@ -33,15 +33,19 @@
 --   • **task 0199:** `tvl` / `volume` / `fee_revenue` are NO LONGER read
 --     from the snapshot columns (never populated — pre-0199 design). The
 --     handler runs a second, small query and computes USD in Rust:
---       tvl         = latest reserves × live spot
---                     (`prices.current_price_usd`, per-leg identity lookup;
---                      NULL unless BOTH legs have a spot)
+--       tvl         = latest reserves × last hourly USD close
+--                     (`prices.price_usd_series_1h`, 48h lookback, per-leg
+--                      identity; NULL unless BOTH legs price)
 --       volume      = last-24h `sum(gross_volume_a)` (pool-pinned seek,
---                     `LIMIT 1 BY ledger_sequence` dedup) × leg-A spot
+--                     `LIMIT 1 BY ledger_sequence` dedup) × leg-A close
 --       fee_revenue = volume × fee_bps / 10000
---     Prices errors DEGRADE to NULL fields (error-logged), never a 500 —
---     the on-chain detail stays servable without the prices database.
---     Deploy gate: API CH user needs SELECT on `prices.*`.
+--     NOT `prices.current_price_usd`: box-measured 2026-08-04 the spot view
+--     carries the 0-sentinel for native XLM itself (their 0039 updater), so
+--     every XLM-leg pool would read NULL; the 1h close is ≤ ~2h stale, same
+--     cost (112 ms / 1.6M rows on the hottest pool), and matches the
+--     chart's last bucket. Prices errors DEGRADE to NULL fields
+--     (error-logged), never a 500. Deploy gate: API CH user needs SELECT
+--     on `prices.*`.
 
 SELECT
     lower(hex(lp.pool_id))                                                          AS pool_id_hex,

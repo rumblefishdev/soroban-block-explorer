@@ -1263,9 +1263,11 @@ prices repo `views.sql`) against the snapshot's on-chain quantities, mapping
 `volume = Σ gross_volume_a·price_a` (per-ledger pricing; `gross_volume_a` from
 PathPayment claim atoms, live since 0261 and backfilled by 0266),
 `fee_revenue = volume · fee_bps / 10000`. The chart reads the series views at
-the interval's grain; the detail endpoint prices latest reserves at the live
-spot and sums the last 24h of volume. Reading `prices.*` requires a SELECT
-grant for the API CH user (deploy gate).
+the interval's grain; the detail endpoint prices latest reserves at each leg's
+last hourly close (`price_usd_series_1h`, 48h lookback — not
+`current_price_usd`, whose 0-sentinel covers native XLM as of 2026-08) and
+sums the last 24h of volume. Reading `prices.*` requires a SELECT grant for
+the API CH user (deploy gate).
 
 ### 6.12 Partitioning and Retention
 
