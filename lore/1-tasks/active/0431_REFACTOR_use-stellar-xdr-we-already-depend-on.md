@@ -140,15 +140,45 @@ envelope shape added.
 - [ ] Survey the remaining helper modules and record which are worth adopting —
       `num256` should be handed to 0380 rather than duplicated there.
 
+## Helper-module verdict (2026-07-23)
+
+Full sweep of `stellar-xdr` 27.0.0 helper surface against our tree. Only two
+were genuine dead duplication worth deleting; the rest were already adopted,
+carry a storage/serde contract the library type lacks, or belong to another
+task. The section-A premise ("hand-rolled copies to delete") mostly did not
+hold — several "copies" are thin wrappers over a required contract.
+
+| library surface              | ours                                 | verdict                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tx_hash`                    | `tx_envelope_hash` / `inner_tx_hash` | **ADOPTED** — delegate to `TransactionEnvelope::hash` / `FeeBumpTransactionInnerTx::hash`. V0→V1 promotion + hash algo byte-identical (structural proof); wrappers kept only as `&[u8;32]`/infallible adapters.                                                                                                                                 |
+| `ledgerkey`                  | 9 per-entry `*_key` builders         | **ADOPTED** — route `(entry_type, key)` through `LedgerEntryData::to_key()` + the existing `extract_key_info`. Byte-identical for all variants (equivalence test + real-corpus); created & removed keys can no longer drift.                                                                                                                    |
+| `tx_auths::auths()`          | `op_source` auth-walk                | **SKIP — superseded by 0430** (op_source slated for deletion; `auths()` proven insufficient — factory deploys leave no auth-tree node to walk).                                                                                                                                                                                                 |
+| `OperationType`              | `domain::OperationType` mirror       | **PINNED (kept)** — drift-guard test asserts against `stellar_xdr::OperationType`. Justified NOT by dep-weight (all consumers already link stellar-xdr) but by 5 contracts the library type lacks: `Display`/`FromStr` SCREAMING_SNAKE (Horizon label — API + filter), `repr(i16)` (SMALLINT, ADR 0031), `utoipa::ToSchema`, `EnumDecodeError`. |
+| `scval_conversions`          | `scval.rs`                           | **KEEP** — bespoke tagged-JSON storage encoder (a contract); the library primitives we need (`u128::from`, `Display`) are already used inside it.                                                                                                                                                                                               |
+| `str` / `stellar_strkey`     | strkey handling                      | **ALREADY-ADOPTED** — `Display` + `stellar_strkey::*::from_string` used throughout; `is_strkey_shape` is a deliberate CRC-free validator (ADR 0037), not a codec.                                                                                                                                                                               |
+| `num256`                     | u256/i256 hex in `scval.rs`          | **DEFER → 0380** — library emits decimal, we emit hex; switching is a breaking storage-format change owned by 0380.                                                                                                                                                                                                                             |
+| `num128`                     | `decimal7_string_to_i128`            | **KEEP** — scaled 7dp fixed-point, not plain `i128`; `parse::<i128>` elsewhere is stdlib.                                                                                                                                                                                                                                                       |
+| `scval_validations`, `scmap` | —                                    | **N/A** — unused; adopting = new feature, not deletion.                                                                                                                                                                                                                                                                                         |
+
+Bonus beyond the module list: `config_setting` key rendering was folded into
+the uniform `to_key()` path (previously a hand-maintained snake_case list with
+an `"unknown"` fallback for 8 of 21 variants, inconsistent with the removed
+path). The key is dead output (never consumed or stored — traced end to end),
+flagged with a `ponytail:` comment pointing at the real fix if a
+network-config-history feature is ever built.
+
 ## Acceptance Criteria
 
 - [ ] Oracle runs in CI unconditionally and fails on a seeded mismatch
       (prove it catches something, don't just assert it passes).
 - [ ] The 0430 fee-bump case is in the corpus and passes after 0430 lands.
-- [ ] `OperationType` drift is a build/test failure, not a silent divergence.
-- [ ] A written verdict per helper module: adopt, or keep ours with a reason.
-- [ ] Docs updated — `N/A` (test infrastructure; no architecture shape change).
-- [ ] API types regenerated — `N/A`.
+- [x] `OperationType` drift is a build/test failure, not a silent divergence.
+      Test `crates/xdr-parser/tests/operation_type_drift.rs` (exhaustive match =
+      compile error on an added variant; loop catches a renumbered discriminant).
+- [x] A written verdict per helper module: adopt, or keep ours with a reason.
+      See "Helper-module verdict" above.
+- [x] Docs updated — `N/A` (test infrastructure; no architecture shape change).
+- [x] API types regenerated — `N/A`.
 
 ## Explicitly out of scope
 
