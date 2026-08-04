@@ -4,10 +4,10 @@ title: 'FEATURE: advanced tx-detail — decode ScVals to typed chips + collapse 
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0352', '0071', '0453']
+related_tasks: ['0352', '0071', '0453', '0462']
 tags:
   [frontend, transaction-detail, soroban, ux, priority-medium, effort-medium]
-links: []
+links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/378']
 history:
   - date: 2026-07-07
     status: backlog
@@ -19,6 +19,20 @@ history:
       reference, Etherscan/Solscan). Everyone decodes to typed/human; raw is
       secondary. We're the outlier. This task moves us to decoded rendering.
       Shares the ScVal decoder with 0352 (error chip) — do together.
+  - date: '2026-08-04'
+    status: backlog
+    who: karolkow
+    note: >
+      Issue #378 triaged into this task as scope item F (event taxonomy).
+      Same section, same "unreadable wall" complaint, different axis from
+      the decoder: no ScValView needed, ships independently, client-side
+      only. Two corrections during review the same day, both recorded in
+      F: (1) the reporter's grouped sub-categories were rejected — this
+      section is the chronological record and grouping destroys order, so
+      the shape is filter-plus-counts over one in-order list; (2) the
+      system-events-mislabelled-as-Contract fix must NOT re-split the
+      arrays on event_type, which would resurrect the 0182 double-count —
+      only the chip label changes.
 ---
 
 # FEATURE: decoded ScVal rendering in advanced tx detail
@@ -111,6 +125,82 @@ details" / N-more spoiler).
 - **Named params (bonus):** we ingest ABIs (`wasm_interface_metadata`) → map
   positional args to `#[contractfn]` param names (stellar.expert's ⓘ pattern).
 
+### F — event taxonomy (issue #378, added 2026-08-04)
+
+A second, independent axis on the same wall: even fully decoded, the Events
+section is **one flat undifferentiated list**. The reported transaction
+(`0a120260bb0fbe48903291b8606b3058fbfb95defd45e02e12cf0361ec6dc38e`) carries
+27 events, of which most are diagnostics, and most of those are host resource
+counters. A reader looking for what the contract actually did has to sift.
+
+**Ask:** separate contract events from diagnostic events as expandable
+sub-groups, and within diagnostics separate the protocol/core noise from the
+rest.
+
+**Everything needed is already on the client — no backend, no indexing:**
+
+| signal                         | where it already is                                                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| contract / system / diagnostic | `XdrEventDto.event_type` (`crates/api/.../stellar_archive/dto.rs:87`) — for the chip label only, NOT for splitting; see the 0182 caveat below |
+| `core_metrics` vs the rest     | `topics[0]` — `ExecutionTrace.tsx:125` already branches on exactly this                                                                       |
+| calls vs effects               | `fn_call` / `fn_return` kinds, same stream (task 0462's stack walk)                                                                           |
+| position in the record         | `XdrEventDto.event_index` — already on the wire, unused by the UI today                                                                       |
+
+**Target — filter the one chronological list, do NOT regroup it.** The first
+draft of this item said "group by kind, each group collapsible". Rejected on
+review the same day: **this section is the raw chronological record, and the
+order IS content.** Sequence tells you the balance check preceded the transfer
+which preceded the mint; three sorted boxes preserve order inside each box and
+destroy every relation between them. The decoded story lives in 0462's
+execution trace — the value of THIS section is being the faithful in-order
+dump, so a redesign that breaks order trades away the only thing it is for.
+
+So: one list, original order, untouched. What changes around it:
+
+- **Per-row index.** `event_index` is already on the wire and already unused by
+  the UI. Show it. `#3 … #7 … #12` makes a gap self-evident: the reader sees
+  both that something is hidden and how much.
+- **Counts in the header.** `27 events — 3 contract, 5 calls, 19 host counters`.
+  This one line does half the work on its own: today "27 events" conveys
+  nothing about whether there are 2 real effects in there or 25.
+- **Per-kind toggles**, `core_metrics` off by default (host counters, not part
+  of the transaction's story — 0462 excludes them from the trace for the same
+  reason).
+- **Hiding is stated, never silent** — "19 host counters hidden", with the
+  toggle next to it. A list that looks complete and is not is worse than the
+  noise it removed.
+
+Cheaper than the grouping build, too: no restructuring of the table, just a
+filter predicate plus a header line.
+
+**Bug found alongside, fix here — but mind 0182.** `heavy.contract_events`
+carries **contract _and_ system** events (`dto.rs:40`), while `EventsSection`
+chips every row from that array as `Contract` (`EventsSection.tsx:88-98`). A
+real, in-our-data example of the mislabel: `executable_update` — the host's own
+event for a contract code upgrade (CAP-0046-05, mainnet `CCABO2IQ…` at ledger 55363489) — reads on the page as an ordinary contract event, which it is not.
+
+**The naive fix is wrong.** "Read `event_type` per event instead of inferring
+the kind from the array" would undo the deliberate container-based split in
+`split_events` (`extractors.rs:256-262`): the diagnostic container holds
+byte-identical **Contract-typed copies** of the consensus events, so a
+type-based split resurrects task 0182's double-count — one transfer rendering
+as two.
+
+Correct shape: **the array split stays exactly as it is** (it encodes
+provenance — which XDR container the event came from). Only the chip label
+changes, and only for rows from the consensus array, where `event_type`
+distinguishes `Contract` from `System`. Rows from the diagnostic array stay
+labelled `Diagnostic` regardless of their inner type — that label is telling
+the truth about where they came from.
+
+**Independently shippable** — F needs no `ScValView`, no decoder, no summary
+line. It can go out before B/A/C-lite and is the cheapest single improvement to
+that section. Do not let it queue behind the decoder.
+
+**Not a duplicate of 0462:** that task's execution trace lives on the operation
+card and already drops `core_metrics` and nests calls. F is the page-level raw
+Events section further down, which nothing has touched.
+
 ## Wireframe (Events)
 
 Now:
@@ -139,11 +229,19 @@ existing `inlineScalar` logic. **New: only `ScValView`.**
 - **Pure frontend.** Data already typed via `heavy` (archive XDR) — **zero
   backend, zero indexing.**
 - Core = 1 component (`ScValView`) + wiring in `EventsSection` + `OperationJsonDetail`.
+- **F (event taxonomy)** is cheaper still and separable: a filter predicate, a
+  header count line and a chip-label fix inside `EventsSection` only — no new
+  component, no decoder, no re-layout. Ship it first.
 - **Do with 0352:** the `error` ScVal → typed chip is the same decoder as the
   fail-reason banner. `scval.rs:19` currently drops the code — fix there feeds both.
 
 ## Implementation Plan
 
+0. **F — event taxonomy** (issue #378): keep `EventsSection` one chronological
+   list; add per-row `event_index`, per-kind counts in the header, per-kind
+   toggles with `core_metrics` off by default and the hidden count stated.
+   Chip label from `event_type` for consensus-array rows only (the array split
+   itself stays — 0182). Ships alone, first: depends on nothing below it.
 1. `ScValView` — recursive `switch(value.type)` renderer (table above), with a raw fallback.
 2. Wire into `EventsSection` (topics/data) and `OperationJsonDetail` (args/return/auth); retire `inlineScalar` into `ScValView`.
 3. Collapse each event/operation (A) — `XdrRow`-style, decoded summary visible, raw one click deeper.
@@ -153,6 +251,11 @@ existing `inlineScalar` logic. **New: only `ScValView`.**
 
 ## Acceptance Criteria
 
+- [ ] Events section stays a single chronological list — event order is never reordered or split into per-kind boxes (F)
+- [ ] Header shows a count per kind; `core_metrics` rows are hidden by default and the hidden count is stated on screen next to its toggle (F)
+- [ ] Every row shows its `event_index`, so a filtered list makes its own gaps visible (F)
+- [ ] A consensus-container `system` event (e.g. `executable_update`) is chipped `System`, not `Contract` (F)
+- [ ] The `contract_events` / `diagnostic_events` split still routes on container, not `event_type` — a transaction whose diagnostic container copies its contract events still renders each effect once (0182 regression guard, F)
 - [ ] Event topics/data + operation args render as typed chips (addresses linked+truncated, amounts formatted), not raw `{type,value}` JSON
 - [ ] Events/Operations collapsed for large sets; raw JSON still reachable per node/section
 - [ ] Known events (transfer/mint/burn) show a one-line semantic summary
