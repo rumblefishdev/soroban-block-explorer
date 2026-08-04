@@ -1,9 +1,9 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
-import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 import { Box, Stack, Typography } from '@mui/material';
-import { Chip, EmptyState } from '@rumblefish/soroban-block-explorer-ui';
+import { Chip } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
+import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
 import { HighlightedJson } from './HighlightedJson.js';
@@ -106,23 +106,11 @@ function inlineScalar(value: unknown): ReactNode {
   return null;
 }
 
-function HeavyUnavailable() {
-  return (
-    <EmptyState
-      icon={<WarningAmberOutlinedIcon />}
-      variant="warning"
-      title="Raw operation details unavailable"
-      description="Heavy XDR fields could not be loaded for this transaction."
-      py={4}
-    />
-  );
-}
-
 export function OperationJsonDetail({
   light,
   heavy,
 }: OperationJsonDetailProps) {
-  if (heavy == null) return <HeavyUnavailable />;
+  if (heavy == null) return <HeavyUnavailable what="Raw operation details" />;
 
   const opType = heavy.op_type ?? light.type_name.toLowerCase();
   const details = heavy.details;
