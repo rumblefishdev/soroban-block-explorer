@@ -369,6 +369,32 @@ history:
       TVL point while reserves stayed flat. We report it faithfully and do
       NOT apply our own outlier filter (prices owns that; diverging would
       make our numbers disagree with theirs).
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      CORRECTION to the entry above: "the in-progress candle is unstable" was
+      the symptom, not the cause. Read the raw price_ohlcv_1h rows and the
+      mechanism is PARTIAL ENRICHMENT — price_usd_series volume-weights
+      close_usd across a bucket's per-source/per-quote rows but only over
+      rows passing `close_usd > 0`, and close_usd is baked by a LATER
+      enrichment pass, so a fresh bucket's average runs over an arbitrary
+      subset. On yXLM's 13:00 hour the single surviving row was a 0.764-unit
+      dust print at 1.3085 (vs ~0.170 real); by 14:13 all five rows read 0
+      and the bucket had vanished from the view entirely. The weighting is
+      sound — the same print sits in 12:00 beside 42,038 units of real
+      volume and moves the close by nothing. It is the filter, not the maths.
+      Full write-up + evidence table in
+      notes/R-prices-freeze-incident-and-current-price-usd-v13.md §3 (the
+      note is retitled: it is now the collected prices.* READ TRAPS).
+      Also captured there: current_price_usd 0-sentinels native XLM itself,
+      the concrete reason detail reads the 1h series. Sent to the prices
+      owner with two suggested fixes (hold a bucket out of the view until
+      fully enriched, or weight the unenriched rows in once they land).
+      Our stance unchanged: no outlier filter of our own — prices owns that,
+      and diverging would defeat reading their views as one source of truth.
+      Recorded in the branch too (7182b45f) since the SQL doc carried the
+      same imprecise wording.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
