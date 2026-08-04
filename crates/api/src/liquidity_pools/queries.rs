@@ -220,7 +220,31 @@ fn fee_percent_str(fee_bps: i32) -> String {
 // USD arithmetic is Float64, rounded to cents. The analytics carry a 1%
 // verification tolerance by design (task AC); Float64 keeps the SQL free
 // of Decimal128×Decimal128 scale-overflow (7+14 fractional digits).
+// **Every money value is formatted by [`usd_str`] on the Rust side** — SQL
+// returns raw Float64. CH's `toString(round(x, 2))` emits "25" / "0" /
+// "1.5" (variable decimals), which would put the chart and the detail
+// endpoint on two different wire shapes for the same field.
+//
+// **Bounded price carry-forward.** A price bucket exists only once the
+// asset trades in it, so the in-progress bucket is routinely missing for an
+// illiquid leg — an exact bucket-equality join then NULLs the newest chart
+// point, the one users read as "current". Reads therefore take the most
+// recent close at or before the wanted bucket (CH `ASOF LEFT JOIN`), but
+// only within [`MAX_PRICE_CARRY_SECONDS`]. Unbounded carry-forward would be
+// worse than a hole: it would paint the 2026-07-21..08-03 provider freeze
+// with a 12-day-old price and present it as live (box-checked — the ASOF
+// match for 07-28 is a 07-21 candle).
 // ---------------------------------------------------------------------------
+
+/// How stale a price candle may be before it stops standing in for a
+/// missing one, in seconds (48 h).
+///
+/// Covers the routine gap — the current bucket has no candle yet because
+/// the asset has not traded in it — without masking a real outage. Shared
+/// by the chart (carry-forward bound) and the detail endpoint (lookback
+/// window) so both surfaces answer "what is this pool worth" from the same
+/// staleness rule.
+const MAX_PRICE_CARRY_SECONDS: i64 = 48 * 3600;
 
 /// Natural price identity of one pool leg in the exact column forms the
 /// `prices.*` views expose. A leg that cannot be priced maps to empty
@@ -343,23 +367,29 @@ pub async fn fetch_pool_price_context(
 
 /// Detail-endpoint USD analytics (task 0199 semantics, defined here because
 /// the snapshot columns were never populated before this task):
-/// - `tvl` — latest reserves × last hourly close (`price_usd_series_1h`,
-///   48h lookback); NULL unless BOTH legs price (a one-leg TVL would
-///   silently halve the pool — no-misleading-fallbacks rule).
+/// - `tvl` — latest reserves × each leg's last hourly close
+///   (`price_usd_series_1h`, [`MAX_PRICE_CARRY_SECONDS`] lookback); NULL
+///   unless BOTH legs price (a one-leg TVL would silently halve the pool —
+///   no-misleading-fallbacks rule).
 /// - `volume` — last-24h `gross_volume_a` × the same leg-A close. One
-///   price for the whole day, not per-trade (upgrade path: hourly join as
-///   in the chart, if product needs it).
-/// - `fee_revenue` — `volume × fee_bps / 10000`.
+///   price for the whole day, not per-trade (upgrade path: per-ledger join
+///   as in the chart, if product needs it).
+/// - `fee_revenue` — [`fee_revenue_usd`].
 ///
 /// Why the 1h series and NOT `prices.current_price_usd`: box-measured
 /// 2026-08-04, the spot view is live (3,316 assets, updater ticking) but
-/// `price_usd = 0` — the "unavailable" sentinel — for native XLM
-/// itself, so every XLM-leg pool (the majority) would read NULL TVL. The
-/// last 1h close is at most ~1–2h stale, costs the same (112 ms / 1.6M
-/// read rows vs 92 ms / 1.2M on the hottest pool), actually returns data,
-/// and keeps detail TVL consistent with the chart's last bucket (same
-/// source). Revisit spot when the prices-side updater (their 0039) prices
-/// native.
+/// `price_usd = 0` — the "unavailable" sentinel — for native XLM itself,
+/// so every XLM-leg pool (the majority) would read NULL TVL. The last 1h
+/// close costs the same (112 ms / 1.6M read rows vs 92 ms / 1.2M on the
+/// hottest pool) and actually returns data. Revisit spot when the
+/// prices-side updater (their 0039) prices native.
+///
+/// This endpoint and the chart apply the SAME staleness rule
+/// ([`MAX_PRICE_CARRY_SECONDS`]) but not the same grain: detail always
+/// reads the hourly series, while the chart reads the grain its interval
+/// asks for. So the two agree on whether a pool is priceable, and may
+/// differ by up to one chart bucket on the value — a 1d bucket closes on
+/// its own daily candle, not on the latest hour.
 #[derive(Debug, Default)]
 pub struct PoolUsdAnalytics {
     pub tvl: Option<String>,
@@ -393,13 +423,14 @@ pub async fn fetch_pool_usd_analytics(
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
     let row = client
         .query(
-            "SELECT \
+            &format!(
+                "SELECT \
                 (SELECT toString(nullIf(argMax(close_usd, bucket), 0)) FROM prices.price_usd_series_1h \
                   WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
-                    AND bucket >= now() - INTERVAL 48 HOUR) AS spot_a, \
+                    AND bucket >= now() - INTERVAL {carry} SECOND) AS spot_a, \
                 (SELECT toString(nullIf(argMax(close_usd, bucket), 0)) FROM prices.price_usd_series_1h \
                   WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
-                    AND bucket >= now() - INTERVAL 48 HOUR) AS spot_b, \
+                    AND bucket >= now() - INTERVAL {carry} SECOND) AS spot_b, \
                 (SELECT toString(sum(gross_volume_a)) FROM ( \
                     SELECT ledger_sequence, gross_volume_a \
                     FROM liquidity_pool_snapshots \
@@ -410,6 +441,8 @@ pub async fn fetch_pool_usd_analytics(
                     ORDER BY ledger_sequence DESC \
                     LIMIT 1 BY ledger_sequence \
                 )) AS vol24_a_units",
+                carry = MAX_PRICE_CARRY_SECONDS,
+            ),
         )
         .bind(ctx.leg_a.kind)
         .bind(ctx.leg_a.code.as_str())
@@ -423,13 +456,13 @@ pub async fn fetch_pool_usd_analytics(
 
     let spot_a = row.spot_a.as_deref().and_then(parse_f64);
     let spot_b = row.spot_b.as_deref().and_then(parse_f64);
-    // NULL sum = no snapshot rows in the window OR no swaps among them —
-    // both genuinely mean zero 24h volume (distinct from "unpriceable").
-    let vol24_units = row
-        .vol24_a_units
-        .as_deref()
-        .and_then(parse_f64)
-        .unwrap_or(0.0);
+    // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
+    // genuine zero-volume day. A row that IS present but unparseable is NOT —
+    // it is an unknown, and must not be reported as "$0.00 traded".
+    let vol24_units = match row.vol24_a_units.as_deref() {
+        None => Some(0.0),
+        Some(raw) => parse_f64(raw),
+    };
 
     let tvl = match (
         reserve_a.and_then(parse_f64),
@@ -440,8 +473,11 @@ pub async fn fetch_pool_usd_analytics(
         (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(ra * pa + rb * pb),
         _ => None,
     };
-    let volume = spot_a.map(|pa| vol24_units * pa);
-    let fee_revenue = volume.map(|v| v * f64::from(ctx.fee_bps) / 10_000.0);
+    let volume = match (spot_a, vol24_units) {
+        (Some(pa), Some(units)) => Some(units * pa),
+        _ => None,
+    };
+    let fee_revenue = volume.map(|v| fee_revenue_usd(v, ctx.fee_bps));
 
     Ok(PoolUsdAnalytics {
         tvl: tvl.map(usd_str),
@@ -456,9 +492,18 @@ fn parse_f64(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// USD amount → wire string, rounded to cents.
+/// USD amount → wire string, rounded to cents. The single formatter for
+/// every money field on both LP surfaces — see the module note on why this
+/// is not done in SQL.
 fn usd_str(v: f64) -> String {
     format!("{:.2}", v)
+}
+
+/// `volume × fee_bps / 10000` — the pool's cut of the traded volume.
+/// `fee_bps` is basis points (30 = 0.30%), so the divisor is 10 000, not
+/// 100. Shared by chart and detail so the two cannot drift.
+fn fee_revenue_usd(volume_usd: f64, fee_bps: i32) -> f64 {
+    volume_usd * f64::from(fee_bps) / 10_000.0
 }
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -972,12 +1017,14 @@ pub async fn fetch_pool_transactions(
         .collect())
 }
 
+/// Money arrives as raw `Nullable(Float64)` and is formatted by [`usd_str`]
+/// on the Rust side; `fee_revenue` is derived from `volume` here rather
+/// than in SQL, so chart and detail run identical arithmetic.
 #[derive(Debug, Row, Deserialize)]
 struct ChartChRow {
     bucket_ms: i64,
-    tvl: Option<String>,
-    volume: Option<String>,
-    fee_revenue: Option<String>,
+    tvl: Option<f64>,
+    volume: Option<f64>,
     samples_in_bucket: u64,
 }
 
@@ -1011,20 +1058,36 @@ struct ChartChRow {
 ///   bucket lacks a leg-A price the bucket's volume is NULL (an honest
 ///   hole), never a silent partial sum. `sum()` over an all-NULL bucket
 ///   (no swaps) yields NULL (box-confirmed), matching the PG contract.
-/// - **fee_revenue** = `volume × fee_bps / 10000` (`fee_factor` bound).
+///   NOTE: the veto is all-or-nothing per bucket, so at `1w` a single
+///   unpriced ledger discards the week — deliberate for now (an unmarked
+///   partial sum reads as a real number), revisit with a coverage field.
+/// - **fee_revenue** is derived in Rust from `volume` ([`fee_revenue_usd`]).
 ///
 /// Prices join (contract: prices views.sql, pinned 2026-06-16):
 /// - Grain follows the interval: `1h` → `prices.price_usd_series_1h` on
 ///   `toStartOfHour(closed_at)`; `1d`/`1w` → `prices.price_usd_series` on
 ///   `toStartOfDay(closed_at)` (weekly candles are not provided — a 1w
 ///   bucket's TVL prices at its last snapshot's DAY).
+/// - **`ASOF LEFT JOIN` on `price.bucket <= ledger.price_bucket`**, capped
+///   at [`MAX_PRICE_CARRY_SECONDS`]: a candle exists only once the asset
+///   trades in that bucket, so exact equality left the newest point of
+///   every illiquid-leg pool NULL (box-reproduced). ASOF needs an equi-join
+///   column, hence the constant `k` on both sides — a real column, not the
+///   `ON 1 = 1` form that pins the join algorithm to `hash`. The
+///   subqueries' lower bound is widened by the same cap so the FIRST bucket
+///   can carry forward too.
+/// - The staleness cap is what keeps carry-forward honest: without it the
+///   2026-07-21..08-03 provider freeze would render as live TVL priced off
+///   a 12-day-old candle.
 /// - Identity + bucket-range predicates live INSIDE the right-side
 ///   subqueries: the bucket range is what bounds the view's scan of
 ///   `price_ohlcv_*` (their header's pushdown note); one identity per side
 ///   keeps the hash tables at ≤ one row per bucket.
-/// - A LEFT-JOIN miss yields DEFAULT 0, not NULL (`join_use_nulls` is
-///   rejected for the readonly user); the views filter `close_usd > 0`, so
-///   `nullIf(close_usd, 0)` is the unambiguous miss test.
+/// - A join miss yields DEFAULT (epoch `bucket`, `0` close), not NULL
+///   (`join_use_nulls` is rejected for the readonly user) — the staleness
+///   test rejects it, since an epoch bucket is always further back than the
+///   cap. `nullIf(close_usd, 0)` guards the priced-but-zero case; the views
+///   already filter `close_usd > 0`.
 pub async fn fetch_pool_chart(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -1051,7 +1114,6 @@ pub async fn fetch_pool_chart(
         "1d" | "1w" => ("prices.price_usd_series", "toStartOfDay"),
         _ => unreachable!("interval validated against the 1h|1d|1w allowlist above"),
     };
-    let fee_factor = f64::from(ctx.fee_bps) / 10_000.0;
 
     // `bucket_ms`: each truncated bucket is coerced to a UTC `DateTime64(3)`
     // then to epoch millis, so `millis_to_utc` round-trips it on the Rust side
@@ -1091,16 +1153,17 @@ pub async fn fetch_pool_chart(
     let sql = format!(
         "SELECT \
             bucket_ms, \
-            toString(round(argMaxIf(tvl_row, ledger_sequence, isNotNull(tvl_row)), 2)) AS tvl, \
-            toString(round(if(countIf(unpriced_swap) > 0, NULL, sum(vol_row)), 2))     AS volume, \
-            toString(round(if(countIf(unpriced_swap) > 0, NULL, sum(vol_row)) * ?, 2)) AS fee_revenue, \
-            count()                                                                    AS samples_in_bucket \
+            argMaxIf(tvl_row, ledger_sequence, isNotNull(tvl_row)) AS tvl, \
+            if(countIf(unpriced_swap) > 0, NULL, sum(vol_row))     AS volume, \
+            count()                                                AS samples_in_bucket \
          FROM ( \
              SELECT \
                 toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms, \
                 lps.ledger_sequence                              AS ledger_sequence, \
-                nullIf(toFloat64(pa.close_usd), 0)               AS pa_usd, \
-                nullIf(toFloat64(pb.close_usd), 0)               AS pb_usd, \
+                if(dateDiff('second', pa.bucket, l.price_bucket) <= {carry}, \
+                   nullIf(toFloat64(pa.close_usd), 0), NULL)      AS pa_usd, \
+                if(dateDiff('second', pb.bucket, l.price_bucket) <= {carry}, \
+                   nullIf(toFloat64(pb.close_usd), 0), NULL)      AS pb_usd, \
                 toFloat64(lps.reserve_a) * pa_usd \
                     + toFloat64(lps.reserve_b) * pb_usd          AS tvl_row, \
                 toFloat64(lps.gross_volume_a) * pa_usd           AS vol_row, \
@@ -1115,37 +1178,37 @@ pub async fn fetch_pool_chart(
                  LIMIT 1 BY ledger_sequence \
              ) lps \
              JOIN ( \
-                 SELECT sequence, closed_at, {price_bucket_fn}(closed_at) AS price_bucket \
+                 SELECT 1 AS k, sequence, closed_at, {price_bucket_fn}(closed_at) AS price_bucket \
                  FROM ledgers \
                  WHERE closed_at >= fromUnixTimestamp64Milli(?) \
                    AND closed_at <  fromUnixTimestamp64Milli(?) \
                  LIMIT 1 BY sequence \
              ) l ON l.sequence = lps.ledger_sequence \
-             LEFT JOIN ( \
-                 SELECT bucket, close_usd \
+             ASOF LEFT JOIN ( \
+                 SELECT 1 AS k, bucket, close_usd \
                  FROM {series_view} \
                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
-                   AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) \
+                   AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
                    AND bucket <  fromUnixTimestamp64Milli(?) \
-             ) pa ON pa.bucket = l.price_bucket \
-             LEFT JOIN ( \
-                 SELECT bucket, close_usd \
+             ) pa ON pa.k = l.k AND pa.bucket <= l.price_bucket \
+             ASOF LEFT JOIN ( \
+                 SELECT 1 AS k, bucket, close_usd \
                  FROM {series_view} \
                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
-                   AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) \
+                   AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
                    AND bucket <  fromUnixTimestamp64Milli(?) \
-             ) pb ON pb.bucket = l.price_bucket \
+             ) pb ON pb.k = l.k AND pb.bucket <= l.price_bucket \
          ) \
          GROUP BY bucket_ms \
          ORDER BY bucket_ms ASC",
         bucket_fn = bucket_fn,
         price_bucket_fn = price_bucket_fn,
         series_view = series_view,
+        carry = MAX_PRICE_CARRY_SECONDS,
     );
 
     let rows = client
         .query(&sql)
-        .bind(fee_factor) // fee_revenue = volume × fee_bps/10000
         .bind(pool_id_hex)
         .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
         .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
@@ -1169,9 +1232,9 @@ pub async fn fetch_pool_chart(
         .into_iter()
         .map(|r| ChartDataPoint {
             bucket: millis_to_utc(r.bucket_ms),
-            tvl: r.tvl,
-            volume: r.volume,
-            fee_revenue: r.fee_revenue,
+            tvl: r.tvl.map(usd_str),
+            volume: r.volume.map(usd_str),
+            fee_revenue: r.volume.map(|v| usd_str(fee_revenue_usd(v, ctx.fee_bps))),
             samples_in_bucket: r.samples_in_bucket as i64,
         })
         .collect())
@@ -1616,6 +1679,21 @@ mod tests {
         assert_eq!(parse_f64("inf"), None, "non-finite rejected");
         assert_eq!(usd_str(1234.5678), "1234.57");
         assert_eq!(usd_str(0.0), "0.00");
+        // Fixed 2 decimals on every path — CH's toString(round(x, 2)) would
+        // emit "25" / "1.5" / "0" here and split the wire shape between the
+        // chart and the detail endpoint.
+        assert_eq!(usd_str(25.0), "25.00");
+        assert_eq!(usd_str(1.5), "1.50");
+    }
+
+    /// `fee_bps` is basis points: 30 bps = 0.30%, so the divisor is 10 000.
+    /// A /100 or /1000 slip inflates reported LP earnings 100× / 10×.
+    #[test]
+    fn fee_revenue_math() {
+        assert_eq!(fee_revenue_usd(1_000_000.0, 30), 3_000.0);
+        assert_eq!(fee_revenue_usd(1_000.0, 100), 10.0);
+        assert_eq!(fee_revenue_usd(0.0, 30), 0.0);
+        assert_eq!(fee_revenue_usd(500.0, 0), 0.0);
     }
 }
 
@@ -1662,6 +1740,53 @@ mod decode_smoke {
             c = c.with_database(d);
         }
         Some(c)
+    }
+
+    /// `ChartChRow` reads money as `Nullable(Float64)` (task 0199 moved
+    /// formatting to Rust so chart and detail share one wire shape). That is
+    /// precisely the wire-type↔struct contract a pure-Rust test cannot check,
+    /// so assert it against a real server — including the NULL arm, which is
+    /// what an unpriced bucket returns.
+    ///
+    /// Needs no schema, so any ClickHouse will do:
+    /// `docker run -d --rm -p 8123:8123 -e CLICKHOUSE_PASSWORD=probe clickhouse/clickhouse-server:26.3`
+    #[tokio::test]
+    async fn chart_row_decodes_nullable_floats() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping chart row decode smoke");
+            return;
+        };
+
+        // The union is wrapped: ClickHouse resolves a top-level ORDER BY
+        // against the union's own scope, where the branch aliases are not
+        // visible (`Unknown expression identifier`).
+        let rows = ch
+            .query(
+                "SELECT bucket_ms, tvl, volume, samples_in_bucket FROM ( \
+                     SELECT toInt64(1700000000000)     AS bucket_ms, \
+                            CAST(?, 'Nullable(Float64)')    AS tvl, \
+                            CAST(?, 'Nullable(Float64)')    AS volume, \
+                            toUInt64(7)                AS samples_in_bucket \
+                     UNION ALL \
+                     SELECT toInt64(1700000086400000)  AS bucket_ms, \
+                            CAST(NULL, 'Nullable(Float64)') AS tvl, \
+                            CAST(NULL, 'Nullable(Float64)') AS volume, \
+                            toUInt64(0)                AS samples_in_bucket \
+                 ) ORDER BY bucket_ms",
+            )
+            .bind(25.31_f64)
+            .bind(1.985_f64)
+            .fetch_all::<ChartChRow>()
+            .await
+            .expect("ChartChRow decodes Nullable(Float64) from a real CH");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].tvl, Some(25.31));
+        assert_eq!(rows[0].volume, Some(1.985));
+        assert_eq!(rows[0].samples_in_bucket, 7);
+        // The unpriced bucket: NULL must survive as None, not decode as 0.0.
+        assert_eq!(rows[1].tvl, None);
+        assert_eq!(rows[1].volume, None);
     }
 
     /// Every LP CH row struct must decode the rows a real CH emits.
@@ -1717,9 +1842,11 @@ mod decode_smoke {
             .expect("price-context row decodes")
             .expect("bootstrapped pool exists");
 
-        // detail USD analytics — `UsdAnalyticsChRow`. Needs SELECT on
-        // `prices.*`; a CH without the prices database fails here, which is
-        // the point (the grant is a deploy gate, task 0199).
+        // detail USD analytics — `UsdAnalyticsChRow`. Reads `prices.*`, so
+        // this also proves the API user can see that database. No grant is
+        // needed on prod: `api_reader` carries no `<grants>` block in
+        // `users.d/services.xml` (unlike `prices_writer`/`prices_reader`,
+        // where grants NARROW access), verified on the box 2026-08-04.
         fetch_pool_usd_analytics(&ch, &pool, &ctx, None, None)
             .await
             .expect("usd-analytics row decodes");

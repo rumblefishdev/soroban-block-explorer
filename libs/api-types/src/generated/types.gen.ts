@@ -327,12 +327,15 @@ export type AssetTransactionItem = {
 
 /**
  * One row from the chart endpoint. All money fields are **USD decimal
- * strings rounded to cents**, computed at read from on-chain quantities ×
- * the in-cluster price series (task 0199, ADR 0053):
+ * strings with exactly two decimals**, computed at read from on-chain
+ * quantities × the in-cluster price series (task 0199, ADR 0053):
  * - `tvl` — "TVL at close of bucket": last priceable snapshot's
- * `reserve_a·price_a + reserve_b·price_b`. `null` when either leg has
- * no price at that point (untracked asset, pre-listing history, or a
- * provider-side price gap).
+ * `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its
+ * own bucket falls back to its most recent close within 48 h, so a
+ * pool whose second leg has not traded today still reports; `null`
+ * when either leg has no price within that window (untracked asset,
+ * pre-listing history, or a provider-side gap such as the
+ * 2026-07-21..08-03 freeze).
  * - `volume` — SUM over the bucket of per-ledger gross trade volume ×
  * the leg-A price at that ledger's time. `null` for no-swap buckets and
  * for buckets where a swap couldn't be priced (never a partial sum).
