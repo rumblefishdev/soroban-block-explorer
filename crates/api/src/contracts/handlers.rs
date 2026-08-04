@@ -106,6 +106,9 @@ fn map_contract_list_item(r: ContractListRow) -> ContractListItem {
         deployer: r.deployer,
         deployed_at_ledger: r.deployed_at_ledger,
         recent_invocations: r.recent_invocations,
+        // Same constant that bounds the count itself, so label and number
+        // cannot drift (queries::STATS_WINDOW_DAYS).
+        stats_window: queries::stats_window_label(),
     }
 }
 
