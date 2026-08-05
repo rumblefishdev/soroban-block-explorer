@@ -41,7 +41,13 @@ export function buildOperationEntries(
   const lightOps = tx.operations;
   const heavyOps = tx.heavy?.operations ?? [];
 
-  if (heavyOps.length === 0) {
+  // Test `heavy` itself, not the array length: `heavy == null` is "the archive
+  // fetch failed" (fall back to the folded light rows, and the section warns),
+  // whereas a present-but-empty `heavy.operations` would be a parser defect —
+  // every applied transaction has at least one operation. The old
+  // `heavyOps.length === 0` collapsed the two, so a parser bug would have been
+  // served as a normal degraded response (0377 F7).
+  if (tx.heavy == null || heavyOps.length === 0) {
     return lightOps.map((light) => ({ row: light, light, heavy: null }));
   }
 

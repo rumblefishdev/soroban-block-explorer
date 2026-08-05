@@ -1,5 +1,5 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Box, Grid } from '@mui/material';
+import { Alert, Box, Grid } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -45,11 +45,30 @@ export function OperationsSection({
     />
   );
 
+  // Without `heavy` the picker falls back to the folded light rows (shorter
+  // than `count`) and the card's execution trace, authorized calls, events and
+  // route strip all resolve empty — each vanishing with no hint, so an invoke
+  // reads as "made no sub-calls and emitted no events". One honest line beats
+  // four silent absences (0377 F7).
+  const executionDetailMissing = tx.heavy == null;
+
   return (
     <SectionCard
       title="Operations"
       meta={`${count} Operation${count === 1 ? '' : 's'}`}
     >
+      {executionDetailMissing && (
+        <Box sx={{ px: 2, pt: 2 }}>
+          <Alert severity="warning" variant="outlined">
+            Execution detail unavailable — heavy XDR fields could not be loaded,
+            so sub-calls, events and raw data are not shown
+            {entries.length < count
+              ? `, and only ${entries.length} of ${count} operations can be listed`
+              : ''}
+            .
+          </Alert>
+        </Box>
+      )}
       <Box sx={{ p: 2 }}>
         {showPicker ? (
           <Grid container spacing={2}>
