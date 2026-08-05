@@ -395,6 +395,23 @@ history:
       and diverging would defeat reading their views as one source of truth.
       Recorded in the branch too (7182b45f) since the SQL doc carried the
       same imprecise wording.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SCOPE CLARIFICATION from re-reading issue #367 (its whole body is one
+      screenshot): the reporter shows the pools LIST page (search 'usdc';
+      columns Pool / Reserves / Total shares / Participants) and asks for a
+      USD TVL estimate THERE, to compare pools at a glance. No mention of
+      charts or intervals. Two consequences: (a) the expensive 1w chart
+      window is entirely our own SCF-scope surface, not the reporter's ask
+      — the prices-side materialization can ride behind cache at its own
+      pace; (b) PR #380 (detail + chart) does NOT close #367's literal
+      request — the list TVL column is exactly the deliberately deferred
+      Phase A2. At the post-deploy /issues sweep: either keep #367 open
+      until Phase A2 lands (recommended — the literal ask is the list) or
+      close with an explicit 'detail+chart shipped, list column tracked
+      separately' comment. Do not auto-close on deploy.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
