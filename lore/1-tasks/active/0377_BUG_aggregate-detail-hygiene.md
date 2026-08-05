@@ -169,21 +169,39 @@ are consistent — both resolve the bound from `STATS_WINDOW_DAYS`
 (`queries.rs:53,269,486`) — only the wire label is missing for list consumers.
 `stats_window_label()` already exists at `queries.rs:60`.
 
-### F7 — same pattern, eight more sites outside the transaction page
+### F7 — same pattern, eight more sites — 7 fixed, 1 refuted
 
 The sweep that found the `TransactionSummary` trio also found the shape
-elsewhere. Not fixed here — listed so the next pass has the inventory.
+elsewhere. Seven were real and are fixed; the eighth was a false positive and is
+recorded as such so nobody "fixes" it again.
 
-| Sev | Site                                                             | Collapses into                                                                                                                             |
-| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| MED | `OperationsSection.tsx:41-44` → `OperationCard.tsx`              | trace / authorized-calls / events / route strip silently vanish on archive miss — the call reads as "made no sub-calls"                    |
-| MED | `operationEntries.ts:42-45`                                      | falls back to folded light rows while the card header says `operation_count`; also conflates "heavy present, zero ops" with "heavy absent" |
-| MED | `ledgers/LedgerTransactions.tsx:33-38`                           | "This ledger closed without any transactions" while the same screen shows a non-zero `transaction_count`                                   |
-| MED | `pool-detail/PoolParticipants.tsx:117-121`                       | "No participants yet" against a non-zero `participant_count` — F3 makes this a live failure mode, not hypothetical                         |
-| MED | `search/useSearchResults.ts:85-90` + `SearchResultsTabs.tsx:118` | a capped bucket renders a hard `10` that reads as a total; `10+` would be honest                                                           |
-| MED | `shared/humanizeOp.ts:110,122`                                   | asset defaults to `XLM` when `details` is absent — nothing promises `asset_code: null ⟺ native`                                            |
-| LOW | `op-card/opFacts.ts:31`                                          | `Received: —` on a successful swap reads as "received nothing"                                                                             |
-| LOW | `contracts/ContractInterface.tsx:208-216`                        | "No public interface" names a specific cause; a not-yet-parsed contract is told it is a SAC                                                |
+**Refuted — `humanizeOp.ts` asset fallback.** The sweep flagged
+`light.asset_code ?? 'XLM'` because the wire doc only says "asset code for
+classic asset operations" and never states `null ⟺ native`. The doc gap is real;
+the defect is not. Measured on prod: across 36_279_761 payment appearances in
+the last 200k ledgers, blank `asset_code` and absent `asset_issuer_id` coincide
+**exactly** — 1_456_627 both ways, and 0 rows one-sided in either direction —
+and the parser documents native as "NULL `asset_code` + NULL `issuer_id`"
+(`SacAssetIdentity::Native`). So on a payment a null code does mean native, and
+removing the fallback replaced a correct "Sent XLM to …" with a vaguer "Sent a
+payment to …". The change was written, caught by
+`OperationPicker`/`HumanizedSentence` tests, verified against prod, and
+reverted; the reasoning now lives in a comment at the call site.
+
+Same failure mode as F4: a stale/incomplete doc-comment read as evidence about
+behaviour. Second time this task — the wire docs are not a reliable oracle for
+what the data actually contains.
+
+| Sev | Site                                                             | Collapses into                                                                                                                                        |
+| --- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MED | `OperationsSection.tsx:41-44` → `OperationCard.tsx`              | trace / authorized-calls / events / route strip silently vanish on archive miss — the call reads as "made no sub-calls"                               |
+| MED | `operationEntries.ts:42-45`                                      | falls back to folded light rows while the card header says `operation_count`; also conflates "heavy present, zero ops" with "heavy absent"            |
+| MED | `ledgers/LedgerTransactions.tsx:33-38`                           | "This ledger closed without any transactions" while the same screen shows a non-zero `transaction_count`                                              |
+| MED | `pool-detail/PoolParticipants.tsx:117-121`                       | "No participants yet" against a non-zero `participant_count`. NOT via F3 — that trigger measured absent (0/6010); reachable on a failed/partial fetch |
+| MED | `search/useSearchResults.ts:85-90` + `SearchResultsTabs.tsx:118` | a capped bucket renders a hard `10` that reads as a total; `10+` would be honest                                                                      |
+| MED | `shared/humanizeOp.ts:110,122`                                   | asset defaults to `XLM` when `details` is absent — nothing promises `asset_code: null ⟺ native`                                                       |
+| LOW | `op-card/opFacts.ts:31`                                          | `Received: —` on a successful swap reads as "received nothing"                                                                                        |
+| LOW | `contracts/ContractInterface.tsx:208-216`                        | "No public interface" names a specific cause; a not-yet-parsed contract is told it is a SAC                                                           |
 
 ## Acceptance Criteria
 
@@ -193,6 +211,7 @@ elsewhere. Not fixed here — listed so the next pass has the inventory.
 - [x] F3 — trigger measured absent on prod (0/6010) and structurally unreachable; unresolved account no longer dropped silently — `tracing::error!` makes it observable. Pagination restructure and single-basis count deliberately skipped as unjustified complexity; revisit only if the log ever fires
 - [x] F4 — `network/dto.rs` docs describe the actual mechanism (deduped read-time count, accounts lag MV refresh ≤2 min); API types regenerated; frontend left unchanged
 - [ ] F5 — list and detail apply one zero-balance rule; DTO doc states it
+- [x] F7 — 7 of 8 same-class sites fixed (op-card execution detail, folded-picker note, ledger transactions, pool participants, search cap badge, strict-send Received, contract interface copy); the 8th (`humanizeOp` XLM fallback) refuted against prod and deliberately left as-is
 - [x] F6 — `ContractListItem` carries the window label; API types regenerated
 - [x] `nx run @rumblefish/api-types:generate` run and staged for every `crates/api/**` change (F4, F6 — re-run when F5 lands)
 
