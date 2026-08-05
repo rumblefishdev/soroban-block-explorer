@@ -412,6 +412,23 @@ history:
       until Phase A2 lands (recommended — the literal ask is the list) or
       close with an explicit 'detail+chart shipped, list column tracked
       separately' comment. Do not auto-close on deploy.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase A2 added to the plan (human decision, stkrolikiewicz): list-side
+      TVL column — the literal #367 ask. Checked first that no dedicated
+      task exists (#367 lives only here; 0215 is the adjacent DOCS
+      catalogue, obsolete per its own 2026-07-22 note -> archived with
+      this task when done; 0401 is unrelated lplist keyset perf). Kept
+      inside 0199 rather than a new task: 0199 owns the #367 link and all
+      the machinery A2 reuses (price_leg, MAX_PRICE_CARRY_SECONDS,
+      usd_str, prices traps), and the 0199/0279 dual-claim on #371 shows
+      what split ownership costs. Scope pinned: display-only, one batched
+      price lookup per page; min_tvl/sort-by-TVL stay out (page-membership
+      problem) until the prices-side materialization. Next: implement on a
+      branch stacked on feat/0199_lp-analytics + local FE/BE stack over
+      prod data slices to eyeball and test before shipping.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
@@ -503,6 +520,27 @@ USD denomination → off-chain prices → ADR 0043 forces all three column write
 - **Sentinel.** Permanent oracle failure writes `NULL` (not `0`) for any column whose required inputs are unavailable, and emits a WARN log carrying `pool_id`, `snapshot_id`, per-leg oracle error. NULL preserves the "fetch attempted, no value" semantics without conflating with legitimate zero-volume snapshots (a pool with no swaps in a ledger genuinely has `volume = 0`). `liquidity_pools.tvl` (latest, if column exists) is NEVER overwritten by Lambda 2 — only by indexer reserves recompute. If operational distinction between "permanent fail" and "pending" becomes valuable, surface via metrics / log filters or a future `oracle_status` enum, not via numeric sentinels.
 - Transient (price-API 5xx, network, rate limit) → `EnrichError::Transient` → SQS retry → DLQ.
 - Backfill of pre-existing snapshots (NULL because they predate this task) → owned by 0196.
+
+### Phase A2 — list-side TVL column (issue #367's literal ask)
+
+Added 2026-08-05 after re-reading #367: the report's screenshot is the pools
+LIST (raw reserves, no USD column) — the list column IS the ask; detail+chart
+(PR #380) are adjacent value. Scope:
+
+- **Display only.** `GET /liquidity-pools` populates `tvl` per row, computed
+  at read like the detail endpoint: latest reserves x each leg's last
+  `price_usd_series_1h` close (shared `MAX_PRICE_CARRY_SECONDS` rule), NULL
+  unless both legs price. One batched price lookup per PAGE (distinct leg
+  identities of <=100 pools -> one bounded 48h window scan), never per row.
+- **Out of scope, documented:** `filter[min_tvl]` semantics and sort-by-TVL.
+  Both change PAGE MEMBERSHIP, so they cannot ride a per-page computation —
+  they need TVL for ALL pools per request (the old full-scan CTE problem) or
+  the prices-side materialized table. Keep `filter[min_tvl]` returning empty
+  as today; revisit after Oskar's materialization lands.
+- **FE:** render the TVL column in the pools list (PoolItem.tvl already on
+  the wire).
+- **Cleanup:** archive 0215 (DOCS, blocked-on-0199 FE-impact catalogue) in
+  the same motion — its own 2026-07-22 note asks for exactly that.
 
 ### Phase 3 — Soroban DEX adapters
 
