@@ -457,6 +457,15 @@ history:
       libs/ui/dist + vite dep cache; fix = trash dists + nx reset + rm
       .vite caches (matches the stale-dist memory). Ship path open:
       fold A2 into PR #380 (one review) or stack a second PR.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      A2 FOLDED into PR #380 (human decision): fast-forward 769a6e2c onto
+      feat/0199_lp-analytics, stacked branch deleted, PR body rewritten
+      (now lists chart+detail+list, the local mTLS verification, and all
+      five prices-side gaps incl. the USDC quote-only finding). One review
+      cycle for karolkow. CI green post-fold.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
