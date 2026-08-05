@@ -4,7 +4,7 @@ title: 'Aggregate/detail hygiene: archive-unavailable counts assert zero, partic
 type: BUG
 status: active
 related_adr: []
-related_tasks: ['0359', '0329', '0420', '0453']
+related_tasks: ['0359', '0329', '0420', '0453', '0463']
 tags: [priority-medium, effort-medium, layer-api, layer-web, aggregates]
 links: []
 history:
@@ -153,13 +153,33 @@ understates accuracy and names a mechanism the query no longer uses.
 **Do not "fix" the frontend here** — `ChainOverview.tsx:67-92` rendering them
 as exact totals is correct. Adding a `≈` marker would introduce the defect.
 
-### F5 — accounts list vs detail disagree on what a zero balance is
+### F5 — accounts list vs detail disagree on zero balances → owned by [[0463]]
 
-List subquery `accounts/queries.rs:236-239` filters only `a.asset_type = 0`;
-detail `:422` adds `AND b.amount != 0`. An account whose native row is exactly
-zero shows `xlm_balance: "0"` in the list and has no native entry in the
-detail's `balances[]`. `accounts/dto.rs:34-43` documents `null` when no native
-row exists, without disclosing that the two endpoints disagree on "exists".
+**Do not fix here.** Same line of SQL, and 0463 decides the direction.
+
+The divergence: the list subquery `accounts/queries.rs:236-239` filters only
+`a.asset_type = 0`, while detail `:422` adds `AND b.amount != 0`. An account
+whose native row is exactly zero shows `xlm_balance: "0"` in the list and has no
+native entry in the detail's `balances[]`. `accounts/dto.rs:34-43` documents
+`null` when no native row exists, without disclosing that the two endpoints
+disagree on what "exists" means.
+
+Read alone, this admits two opposite repairs — add the zero filter to the list
+(hide zeros everywhere) or drop it from the detail (show them everywhere). 0463
+settles it with prod + Horizon evidence on a reported account: `balances` holds
+five rows, the page renders two, and the three hidden ones (AQUA, SHX, USDC) are
+**live trustlines at 0.0000000**. An established trustline at zero is a fact
+about the account — it can receive that asset — not an absence. So the detail
+filter comes OFF; adding one to the list would deepen the reported bug.
+
+Fixing 0463 dissolves this finding as a side effect: with `:422` relaxed, both
+endpoints agree that a zero row exists, and the DTO doc gets corrected there.
+F5 therefore carries no separate work — it is the API-consistency view of a
+defect 0463 owns end to end (it also adds signers/thresholds from the same RPC
+round-trip).
+
+Caution when cross-referencing: 0463 was triaged from **GitHub issue #377**,
+which is unrelated to lore task 0377 — the matching number is coincidence.
 
 ### F6 — contract list ships a windowed count with no window label
 
@@ -210,16 +230,16 @@ what the data actually contains.
 - [x] F1/F2 extension — memo, fee source and fail reason on the same page no longer collapse "not loaded" into a definite claim
 - [x] F3 — trigger measured absent on prod (0/6010) and structurally unreachable; unresolved account no longer dropped silently — `tracing::error!` makes it observable. Pagination restructure and single-basis count deliberately skipped as unjustified complexity; revisit only if the log ever fires
 - [x] F4 — `network/dto.rs` docs describe the actual mechanism (deduped read-time count, accounts lag MV refresh ≤2 min); API types regenerated; frontend left unchanged
-- [ ] F5 — list and detail apply one zero-balance rule; DTO doc states it
+- [x] F5 — no work here: same SQL line as [[0463]], which owns the fix and settles its direction (show zero trustlines). Handing it over, with the reasoning recorded, IS the outcome — fixing it independently risked the opposite repair
 - [x] F7 — 7 of 8 same-class sites fixed (op-card execution detail, folded-picker note, ledger transactions, pool participants, search cap badge, strict-send Received, contract interface copy); the 8th (`humanizeOp` XLM fallback) refuted against prod and deliberately left as-is
 - [x] F6 — `ContractListItem` carries the window label; API types regenerated
-- [x] `nx run @rumblefish/api-types:generate` run and staged for every `crates/api/**` change (F4, F6 — re-run when F5 lands)
+- [x] `nx run @rumblefish/api-types:generate` run and staged for every `crates/api/**` change (F4, F6)
 
 ## Docs updated
 
 - `docs/architecture/**` — N/A: no endpoint added/removed, no schema or pipeline
-  change. F4/F6 alter DTO doc text and add one optional wire field; F1–F3/F5 are
-  render-side and query-filter fixes.
+  change. F4/F6 alter DTO doc text and add one optional wire field; F1–F3 and F7
+  are render-side fixes; F5 ships under [[0463]], which carries its own checklist.
 
 ## Future Work
 
