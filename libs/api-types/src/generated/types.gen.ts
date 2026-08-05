@@ -1997,8 +1997,10 @@ export type XdrEventDto = {
    * CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
    * `"after_all_txs"`. The protocol's only statement of when a tx-level
    * event fired, and the reason `event_index` must not be read as a
-   * timeline: the `after_tx` fee refund is numbered ahead of the
-   * operations it refunds. `None` for per-operation, diagnostic and
+   * timeline: the fee refund is numbered ahead of the operation it
+   * refunds. Observed values on mainnet are `before_all_txs` for the charge
+   * and `after_all_txs` for the refund; `after_tx` exists in the protocol
+   * and is passed through unchanged if it appears. `None` for per-operation, diagnostic and
    * pre-Protocol-23 events, which carry no stage.
    */
   stage?: string | null;

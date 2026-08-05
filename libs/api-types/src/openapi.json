@@ -4615,7 +4615,7 @@
           },
           "stage": {
             "type": ["string", "null"],
-            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`. The protocol's only statement of when a tx-level\nevent fired, and the reason `event_index` must not be read as a\ntimeline: the `after_tx` fee refund is numbered ahead of the\noperations it refunds. `None` for per-operation, diagnostic and\npre-Protocol-23 events, which carry no stage."
+            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`. The protocol's only statement of when a tx-level\nevent fired, and the reason `event_index` must not be read as a\ntimeline: the fee refund is numbered ahead of the operation it\nrefunds. Observed values on mainnet are `before_all_txs` for the charge\nand `after_all_txs` for the refund; `after_tx` exists in the protocol\nand is passed through unchanged if it appears. `None` for per-operation, diagnostic and\npre-Protocol-23 events, which carry no stage."
           },
           "topics": {
             "type": "array",
