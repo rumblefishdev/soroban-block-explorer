@@ -313,6 +313,39 @@ B-lite — collapse needs a summary to show; (2) reject D outright. AC mapping i
 clean: "13k→scannable" ← A, "typed chips" ← B, "semantic summary" ← C-lite.
 Task is well-diagnosed and well-scoped.
 
+## Status (2026-08-04)
+
+**Shipped** — PR #379, branch `feat/0363_advanced-scval-decoded-rendering`:
+
+- **F — event taxonomy.** Landed as the two-channel split, not as the
+  grouping the issue asked for: the consensus stream (`contract` + `system`)
+  is the list and the count, the host debug channel is its own labelled
+  disclosure. On the reported transaction the header went 27 → 3, because 27
+  was counting a mirrored copy and 19 resource counters alongside 3 real
+  events. `TransactionEvent.stage` is now carried from XDR to the wire and
+  shown in a `Where` column beside the operation index — the protocol's only
+  statement of when a tx-level event fired.
+- **Resource counters** — out of the event list entirely, onto the invoke
+  operation card behind a `Resources 19` disclosure. All nineteen, in host
+  emission order, grouped numbers. They are one record with nineteen fields,
+  not nineteen events; stellarchain shows a resources panel, stellar.expert
+  shows none, and `getEvents` never returns diagnostics at all.
+
+**Already done elsewhere** — C-lite's `fn(args) → result` signature and nested
+sub-call tree shipped as the execution trace in **0462**. Do not rebuild it.
+
+**Open** — **B** (`ScValView`), **A** (collapse events/operations), and
+C-lite's remaining half: the one-line semantic summary for known events, which
+is also what fixes amounts. Note `13802682` still renders raw beside a headline
+saying `1.3802682 VELO` on the same card: `ExecutionTrace.tsx` never calls
+`formatAmount`/`scaleByDecimals`. B alone gives grouping, not the decimal
+point — scaling needs the asset, so it belongs with the semantic line.
+
+Two smaller items surfaced by review, not yet done: `EVENTS · 7` on the
+operation card and `15 events` in the section use one word for two scopes; and
+`transfer` appears in the trace both as a called function and as the event it
+raised, told apart only by a glyph.
+
 ## Notes
 
 - Related: 0071 (original advanced tx-detail), 0352 (fail-reason banner — shared decoder), 0013 (shared xdr/scval parsing).

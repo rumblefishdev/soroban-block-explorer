@@ -753,6 +753,42 @@ CREATE TABLE IF NOT EXISTS soroban_events (
     contract_id     Int64,
     transaction_id  Int64,
     ledger_sequence Int64,
+    -- OURS, NOT STELLAR'S — and deliberately so. Read this before "fixing"
+    -- it to match the protocol.
+    --
+    -- `event_index` is a flat counter we assign per transaction while walking
+    -- the event containers in order (`xdr_parser::event::extract_events`):
+    -- tx-level → per-operation → diagnostic. Stellar defines no such number.
+    -- CAP-67's V4 meta has three separate event lists and none of them carries
+    -- an index; the official identity, the one `getEvents` returns, is
+    -- TOID(ledger, tx position, operation position) + the event's position
+    -- WITHIN that operation.
+    --
+    -- Two reasons ours stays:
+    --
+    -- 1. It is part of this table's ORDER BY, so it co-defines row identity
+    --    for `ReplacingMergeTree` dedup. A deterministic per-tx counter is
+    --    exactly what replay-idempotency needs — re-processing a ledger
+    --    yields the same numbers and the merge collapses cleanly. The
+    --    official key would change what counts as the same row.
+    -- 2. The official key is NOT EXPRESSIBLE for much of this table. It needs
+    --    an operation position, and `op_index` is absent for tx-level events
+    --    (fee charge and refund, always), for every diagnostic event, and for
+    --    EVERY pre-Protocol-23 event — the V3 meta carries no per-operation
+    --    attribution at all. Adopting it would trade a total key for one that
+    --    is null-bearing across years of history.
+    --
+    -- So: ours is the better INTERNAL key, theirs is the better key for
+    -- exchanging data with the outside world. Different jobs, not a defect.
+    --
+    -- Revisit only if one of these becomes true, and budget a full rewrite of
+    -- the sort key (~10 B rows measured 2026-08-04):
+    --   * we publish our own events API and callers need stable, portable
+    --     event ids;
+    --   * we reconcile our events against an external source by id rather
+    --     than by content.
+    -- The read path does not depend on it for meaning: the transaction page
+    -- states an event's real position from `op_index` and CAP-67 `stage`.
     event_index     Int16,
     event_type      Int16,
     signature       LowCardinality(Nullable(String)),

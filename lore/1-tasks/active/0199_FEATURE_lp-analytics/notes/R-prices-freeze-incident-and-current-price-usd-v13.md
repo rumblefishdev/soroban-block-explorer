@@ -1,5 +1,5 @@
 ---
-title: 'R: prices.* coarse-OHLCV freeze 07-21→08-03 + current_price_usd 6→13 columns'
+title: 'R: prices.* read traps — OHLCV freeze, current_price_usd v13 sentinels, partial-enrichment skew'
 type: research
 status: mature
 spawned_from: ../README.md
@@ -16,11 +16,33 @@ history:
       the 2026-07-22 activation note) and the additive current_price_usd
       contract change with its sentinel semantics. Mature on arrival — this is
       the provider's own account, not our hypothesis.
+  - date: '2026-08-04'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Added §3 (partial-enrichment skew) and retitled: this file is now the
+      collected prices.* READ TRAPS, not just the freeze incident. §3 is ours,
+      diagnosed from the raw price_ohlcv_1h rows during the 0199 self-review,
+      and is a standing property rather than an incident — close_usd is baked
+      by a later pass, so the views' `close_usd > 0` filter makes a fresh
+      bucket's volume-weighted average run over an arbitrary subset of its
+      rows; on yXLM's 13:00 hour the surviving row was a 0.764-unit dust print
+      at 1.3085 vs ~0.170 real, briefly quadrupling the newest 1h TVL point.
+      Weighting is sound (the same print is a no-op against 42,038 units at
+      12:00) — it is the filter. Also recorded under §2 that
+      current_price_usd 0-sentinels native XLM itself, which is why 0199
+      detail reads the 1h series instead. Reported to the prices owner.
 ---
 
-# R: prices.\* coarse-OHLCV freeze 07-21→08-03 + current_price_usd 6→13 columns
+# R: prices.\* read traps — freeze, sentinels, partial-enrichment skew
 
-Source: message from Oskar (prices owner), received 2026-08-03. Two parts.
+Collected traps for anyone reading the `prices.*` views in-cluster.
+
+- **§1 + §2** — from the prices owner's message of 2026-08-03 (an incident
+  and a contract change; their account, not our inference).
+- **§3** — ours, diagnosed 2026-08-04 from the raw `price_ohlcv_1h` rows
+  during the 0199 self-review. Not an incident: a standing property that
+  recurs on every freshly-landed bucket.
 
 ## 1. Coarse OHLCV tables were frozen 2026-07-21 → 2026-08-03
 
@@ -106,3 +128,60 @@ touch it. It bites the moment anything reads `current_price_usd` — e.g. a
 "current TVL" column on the LP list, or any use of the new 24h/7d fields.
 Recorded now so the trap is documented before the SQL exists, like the
 `prices.assets` empty-code trap before it.
+
+**Follow-up 2026-08-04:** `current_price_usd` turned out unusable for the
+0199 detail path for a reason the table above predicts but does not spell
+out — `price_usd = 0`, the unavailable-sentinel, covers **native XLM
+itself**. Every XLM-leg pool (the majority) would have read NULL TVL. Detail
+reads the last `price_usd_series_1h` close instead. Revisit when the
+prices-side Current Price Updater (their 0039) prices native.
+
+## 3. Partial enrichment can make a dust print the whole bucket price
+
+Diagnosed 2026-08-04 while reviewing the 0199 chart. Distinct from the two
+items above and **not** an incident — it is a standing property of how the
+series views are built, so it recurs on every freshly-landed bucket.
+
+`price_usd_series` / `_1h` collapse a bucket's many rows — one per source
+and quote pair — into one number, volume-weighted:
+
+```
+sum(close_usd * volume_base) / sum(volume_base)   WHERE close_usd > 0
+```
+
+`close_usd` is **not** written when the candle lands; a separate enrichment
+pass bakes it (the design's "USD materialized write-time", ADR 0053 §2). So
+a fresh bucket is **partly enriched**, and because the view filters
+`close_usd > 0`, the weighted average is taken over an **arbitrary subset**
+of the bucket's rows.
+
+Measured on prod, yXLM (`GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55`):
+
+| time  | what the view returned            | why                                                                         |
+| ----- | --------------------------------- | --------------------------------------------------------------------------- |
+| 13:29 | `1.30853` for bucket 13:00        | the only row with `close_usd > 0` was a **0.764-unit dust print** at 1.3085 |
+| 14:13 | bucket 13:00 **absent**           | by then all five 13:00 rows read `close_usd = 0` again                      |
+| —     | ~0.170 in every neighbouring hour | the real price (yXLM tracks XLM)                                            |
+
+That 7.7× price briefly quadrupled the newest 1h TVL point (109 USD against
+~25) while the pool's reserves sat flat — so the error is entirely
+price-side.
+
+**The volume weighting itself is sound.** The identical dust print sits in
+the 12:00 bucket next to 42 038 units of real volume and moves the weighted
+close by nothing (0.16979). It is the `close_usd > 0` filter changing the
+population, not the maths.
+
+Consequences for us:
+
+- **Do not add our own outlier filter.** Prices owns that (their views
+  already claim an inter-source one), and diverging would make our numbers
+  disagree with their API — the opposite of the single-source-of-truth
+  reason we read their views in-cluster at all.
+- **The 0199 chart carry-forward does not cover this.** `ASOF` substitutes a
+  _missing_ candle, not a _wrong_ one. (Once the 13:00 bucket vanished
+  entirely, carry-forward did kick in and served the correct 12:00 close —
+  but that is luck, not protection.)
+- Reported to the prices owner 2026-08-04, with the suggestion to either
+  hold a bucket out of the view until all its rows are enriched, or include
+  the unenriched rows in the weighting once they land.
