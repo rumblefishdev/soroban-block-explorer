@@ -2543,14 +2543,14 @@
             "items": {
               "$ref": "#/components/schemas/XdrEventDto"
             },
-            "description": "Non-diagnostic Soroban events (contract + system) with full topic\narray + decoded data payload."
+            "description": "The consensus event stream: `contract` + `system` events from the\ntx-level and per-operation containers. This — and only this — is what\nCAP-67 / `getEvents` mean by \"the events of a transaction\"."
           },
           "diagnostic_events": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/XdrEventDto"
             },
-            "description": "Diagnostic events emitted during Soroban invocation."
+            "description": "The host-VM debug channel (`v4.diagnostic_events`): the `fn_call` /\n`fn_return` trace, `core_metrics` counters, and — when diagnostic mode\nis on, which is always for the archive — a byte-identical COPY of every\nconsensus event above. Not hashed into consensus, and CAP-67's own\nevent stream (`getEvents`) does not carry it at all. Presenting these\nalongside `contract_events` as one list shows the copies as extra\nevents; they are one channel about the other, not a continuation of it."
           },
           "envelope_xdr": {
             "type": ["string", "null"],
@@ -4612,6 +4612,10 @@
             "type": ["integer", "null"],
             "format": "int32",
             "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 V4 per-operation container only; `None` for tx-level,\ndiagnostic and pre-Protocol-23 events). Matches\n`XdrOperationDto.application_order - 1`."
+          },
+          "stage": {
+            "type": ["string", "null"],
+            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`. The protocol's only statement of when a tx-level\nevent fired, and the reason `event_index` must not be read as a\ntimeline: the fee refund is numbered ahead of the operation it\nrefunds. Observed values on mainnet are `before_all_txs` for the charge\nand `after_all_txs` for the refund; `after_tx` exists in the protocol\nand is passed through unchanged if it appears. `None` for per-operation, diagnostic and\npre-Protocol-23 events, which carry no stage."
           },
           "topics": {
             "type": "array",

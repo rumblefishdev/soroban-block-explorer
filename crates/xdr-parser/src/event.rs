@@ -57,7 +57,7 @@ pub fn extract_events(
         }
         TransactionMeta::V4(v4) => {
             // CAP-67 (Protocol 23+) reorganises events into three locations
-            // — tx-level (fee BeforeAllTxs / AfterTx refund / AfterAllTxs),
+            // — tx-level (fee charge and refund, carrying a `stage`),
             // per-operation (Soroban contract events emitted during
             // InvokeHostFunction execution + classic-op SAC events under
             // Protocol 23 unification), and diagnostic. `event_index` is
@@ -73,14 +73,24 @@ pub fn extract_events(
                 .iter()
                 .enumerate()
                 .map(|(i, tx_event)| {
-                    extract_single_event(
+                    // CAP-67 gives tx-level events a `stage`, and it is the
+                    // only statement of WHEN they happened. Measured on
+                    // mainnet, not inferred (`tests/tx_event_stage_real_meta`):
+                    // the fee charge is `BeforeAllTxs`, the refund
+                    // `AfterAllTxs` — settled after every transaction in the
+                    // ledger, yet numbered ahead of the operation it refunds.
+                    // Without the stage, `event_index` reads as a timeline it
+                    // is not.
+                    let mut ev = extract_single_event(
                         &tx_event.event,
                         transaction_hash,
                         ledger_sequence,
                         created_at,
                         i,
                         EventSource::TxLevel,
-                    )
+                    );
+                    ev.stage = Some(tx_event.stage);
+                    ev
                 })
                 .collect();
 
@@ -159,6 +169,8 @@ fn extract_single_event(
         data,
         event_index: u32::try_from(index).expect("event index does not fit into u32"),
         op_index: None,
+        // Only `v4.events` carries one; the tx-level arm sets it.
+        stage: None,
         ledger_sequence,
         created_at,
     }
@@ -579,6 +591,44 @@ mod tests {
         assert_eq!(events[2].data["value"], 201, "op0 event[1] third");
         assert_eq!(events[3].data["value"], 300, "op1 event[0] fourth");
         assert_eq!(events[4].data["value"], 400, "diagnostic event last");
+    }
+
+    #[test]
+    fn extract_events_v4_carries_transaction_event_stage() {
+        // CAP-67 gives ONLY tx-level events a stage, and it is the protocol's
+        // one statement of when they fired. `AfterTx` here is a synthetic
+        // value chosen to prove the field is carried verbatim — real mainnet
+        // refunds arrive as `AfterAllTxs`, pinned in
+        // `tests/tx_event_stage_real_meta.rs`. The second event is numbered 1,
+        // ahead of the operation event at 2 that it refunds —
+        // which is exactly why `event_index` must not be read as a timeline.
+        let charge = TransactionEvent {
+            stage: TransactionEventStage::BeforeAllTxs,
+            event: make_contract_event(0xAA, 10),
+        };
+        let refund = TransactionEvent {
+            stage: TransactionEventStage::AfterTx,
+            event: make_contract_event(0xAA, 3),
+        };
+        let op = OperationMetaV2 {
+            ext: ExtensionPoint::V0,
+            changes: LedgerEntryChanges::default(),
+            events: vec![make_contract_event(0xB0, 200)].try_into().unwrap(),
+        };
+        let diag = DiagnosticEvent {
+            in_successful_contract_call: true,
+            event: make_contract_event(0xDD, 400),
+        };
+        let tx_meta = make_v4_meta(vec![charge, refund], vec![op], vec![diag]);
+
+        let events = extract_events(&tx_meta, "abc", 1, 0);
+
+        assert_eq!(events[0].stage, Some(TransactionEventStage::BeforeAllTxs));
+        assert_eq!(events[1].stage, Some(TransactionEventStage::AfterTx));
+        // Per-op and diagnostic events carry no stage — nothing to invent.
+        assert_eq!(events[2].stage, None, "per-op event has no stage");
+        assert_eq!(events[2].op_index, Some(0));
+        assert_eq!(events[3].stage, None, "diagnostic event has no stage");
     }
 
     #[test]

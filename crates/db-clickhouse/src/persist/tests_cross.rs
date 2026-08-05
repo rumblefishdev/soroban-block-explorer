@@ -571,6 +571,7 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
         data: serde_json::json!({}),
         event_index: 0,
         op_index: None,
+        stage: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
@@ -634,6 +635,7 @@ fn prepare_drops_diagnostic_events_and_orphans() {
         data: serde_json::json!({}),
         event_index: 0,
         op_index: None,
+        stage: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
@@ -1271,6 +1273,7 @@ fn prepare_emits_stub_soroban_contract_rows_for_referenced_only() {
         data: serde_json::json!({}),
         event_index: 0,
         op_index: None,
+        stage: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
@@ -1329,6 +1332,7 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
         data: serde_json::json!({}),
         event_index: 0,
         op_index: None,
+        stage: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
@@ -2289,6 +2293,7 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
         data: serde_json::json!({"type":"vec","value":[]}),
         event_index: 0,
         op_index: None,
+        stage: None,
         ledger_sequence: 555,
         created_at: 1_700_000_000,
     }
