@@ -133,31 +133,6 @@ pub async fn list_participants(
 // List / Detail / Transactions / Chart (task 0052)
 // ---------------------------------------------------------------------------
 
-/// Validate `filter[min_tvl]` shape: a non-negative decimal string with
-/// at least one digit and at most one `.`.
-///
-/// `f64::parse` accepted `NaN` / `Infinity` / scientific notation /
-/// negative values that PostgreSQL `NUMERIC` either rejects later or
-/// stores in a way that breaks the `>= $X::numeric` predicate semantics
-/// (`NaN >= anything` is FALSE in PG, including `NaN >= NaN`). It also
-/// silently widened-then-narrowed `NUMERIC(28,7)` precision.
-///
-/// This validator stays at the API boundary so a confused caller gets a
-/// 400 envelope explaining the shape rule, instead of a Postgres parse
-/// error surfacing as 500 mid-query.
-fn is_valid_decimal_string(s: &str) -> bool {
-    let mut digits = 0usize;
-    let mut dots = 0usize;
-    for b in s.bytes() {
-        match b {
-            b'0'..=b'9' => digits += 1,
-            b'.' => dots += 1,
-            _ => return false,
-        }
-    }
-    digits > 0 && dots <= 1
-}
-
 /// Normalize `filter[asset_code]` for the WHERE clause: trim surrounding
 /// whitespace and uppercase the result. Empty input (e.g. `?filter[asset_code]=`)
 /// is treated as "no filter" and dropped to `None`. The DB side applies
@@ -280,14 +255,25 @@ pub async fn list_pools(
         );
     }
 
-    if let Some(min) = params.filter_min_tvl.as_deref()
-        && !is_valid_decimal_string(min)
-    {
+    // `filter[min_tvl]` is REJECTED, not ignored and not silently empty.
+    //
+    // Its SQL pre-filter reads `liquidity_pool_snapshots.tvl`, a column task
+    // 0199 established is never written (USD is computed at read, ADR 0053),
+    // so the predicate matched nothing and the endpoint answered "no pools"
+    // — while the same response now carries real per-row USD `tvl`. A filter
+    // that contradicts the rows it filters is worse than an absent one, so
+    // callers get a 400 that says why rather than a plausible empty page.
+    //
+    // Restoring it needs TVL for ALL pools per request (it changes page
+    // membership, so it cannot ride the per-page price lookup) — i.e. the
+    // prices-side identity-keyed materialization. Until then this stays a
+    // 400 and `ResolvedPoolListParams::min_tvl` stays `None`.
+    if let Some(min) = params.filter_min_tvl.as_deref() {
         return errors::bad_request_with_details(
             errors::INVALID_FILTER,
-            "filter[min_tvl] must be a non-negative decimal string \
-             (digits and at most one `.`); NaN, Infinity, exponent forms, \
-             and signed values are rejected",
+            "filter[min_tvl] is not supported: pool TVL is computed at read \
+             from off-chain prices, so it cannot filter page membership. \
+             Filter client-side on the `tvl` field of the returned rows.",
             serde_json::json!({ "filter": "min_tvl", "received": min }),
         );
     }
@@ -301,7 +287,6 @@ pub async fn list_pools(
         asset_a_issuer: params.filter_asset_a_issuer,
         asset_b_code: params.filter_asset_b_code,
         asset_b_issuer: params.filter_asset_b_issuer,
-        min_tvl: params.filter_min_tvl,
         asset_code: normalize_asset_code(params.filter_asset_code),
     };
 

@@ -6,6 +6,7 @@ import {
   ExplorerTable,
   formatAmount,
   formatCompactAmount,
+  formatCompactUsd,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -138,7 +139,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           variant="bodySmMedium"
           sx={(theme) => ({ color: theme.palette.text.primary })}
         >
-          ${formatCompactAmount(row.tvl)}
+          {formatCompactUsd(row.tvl)}
         </Typography>
       );
     },

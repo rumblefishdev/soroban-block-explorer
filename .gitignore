@@ -84,3 +84,7 @@ docker-compose.override.yaml
 .playwright-mcp/
 # local deletion graveyard (never committed)
 .trash/
+
+# Claude Code local dev-server wiring — machine-specific, pairs with the
+# gitignored web/.env.development.local. Shared .claude/skills/ stays tracked.
+.claude/launch.json

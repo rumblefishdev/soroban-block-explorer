@@ -104,8 +104,6 @@ pub struct ResolvedPoolListParams {
     pub asset_a_issuer: Option<String>,
     pub asset_b_code: Option<String>,
     pub asset_b_issuer: Option<String>,
-    /// Decimal string preserving NUMERIC(28,7) precision.
-    pub min_tvl: Option<String>,
     /// Single-asset filter (task 0246) — trimmed + uppercased at the handler
     /// boundary, matched against either leg case-insensitively. NULL = no filter.
     pub asset_code: Option<String>,
@@ -249,7 +247,10 @@ const MAX_PRICE_CARRY_SECONDS: i64 = 48 * 3600;
 /// Natural price identity of one pool leg in the exact column forms the
 /// `prices.*` views expose. A leg that cannot be priced maps to empty
 /// strings, which match no prices row → NULL analytics, never a wrong price.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Hash` so it can key the [`fetch_last_closes`] result directly — the
+/// per-row lookup on the list path then costs no allocation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PriceLeg {
     pub kind: &'static str,
     pub code: String,
@@ -399,21 +400,61 @@ pub struct PoolUsdAnalytics {
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
-struct UsdAnalyticsChRow {
-    spot_a: Option<String>,
-    spot_b: Option<String>,
+struct Vol24ChRow {
     vol24_a_units: Option<String>,
+}
+
+/// Last-24h gross trade volume for one pool, in asset-A units.
+///
+/// Deduped with `LIMIT 1 BY ledger_sequence` — same idiom as the chart —
+/// because RMT duplicate versions of one `(pool, ledger)` row would double
+/// the sum.
+///
+/// **Both ledger bounds are required, and the upper one is not redundant.**
+/// `min()`/`max()` over an empty set return the type DEFAULT (`0`), not
+/// NULL — box-verified. With only the `>=` floor, a 24h window containing
+/// no ledgers degrades to `ledger_sequence >= 0`, i.e. the pool's ENTIRE
+/// history, and the endpoint reports lifetime volume as "24h volume". That
+/// is reachable: ingestion has stalled for >16h before (galexie
+/// protocol-upgrade stall, 2026-07-08) while the independent prices service
+/// kept serving, so the spot price would still resolve and the inflated
+/// number would render as real. Pairing the bounds makes the empty window
+/// self-cancelling (`>= 0 AND <= 0` matches nothing), which is exactly why
+/// the chart's equivalent floor was safe.
+async fn fetch_pool_volume_24h(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+) -> Result<Option<String>, clickhouse::error::Error> {
+    let row = client
+        .query(
+            "SELECT toString(sum(gross_volume_a)) AS vol24_a_units FROM ( \
+                 SELECT ledger_sequence, gross_volume_a \
+                 FROM liquidity_pool_snapshots \
+                 WHERE pool_id = unhex(?) \
+                   AND ledger_sequence >= ( \
+                       SELECT min(sequence) FROM ledgers \
+                       WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                   AND ledger_sequence <= ( \
+                       SELECT max(sequence) FROM ledgers \
+                       WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                 ORDER BY ledger_sequence DESC \
+                 LIMIT 1 BY ledger_sequence \
+             )",
+        )
+        .bind(pool_id_hex)
+        .fetch_one::<Vol24ChRow>()
+        .await?;
+    Ok(row.vol24_a_units)
 }
 
 /// Fetch last hourly closes + 24h gross volume, compute the detail USD
 /// analytics in Rust (Float64 tolerance documented on the module block
 /// above).
 ///
-/// The 24h snapshot sum is deduped with `LIMIT 1 BY ledger_sequence` —
-/// same idiom as the chart — because RMT duplicate versions of one
-/// `(pool, ledger)` row would double the sum. The ledgers floor subquery
-/// carries only a lower bound: `closed_at >= now() - 24h` is the prunable
-/// direction for the minmax index (skips all of history).
+/// Prices come from the SAME [`fetch_last_closes`] primitive the list uses,
+/// so the two surfaces cannot answer "is this pool priceable" differently —
+/// and leg B stops re-scanning the window leg A already scanned. The two
+/// queries are independent, so they overlap rather than run serially.
 pub async fn fetch_pool_usd_analytics(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -421,45 +462,18 @@ pub async fn fetch_pool_usd_analytics(
     reserve_a: Option<&str>,
     reserve_b: Option<&str>,
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
-    let row = client
-        .query(
-            &format!(
-                "SELECT \
-                (SELECT toString(nullIf(argMax(close_usd, bucket), 0)) FROM prices.price_usd_series_1h \
-                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
-                    AND bucket >= now() - INTERVAL {carry} SECOND) AS spot_a, \
-                (SELECT toString(nullIf(argMax(close_usd, bucket), 0)) FROM prices.price_usd_series_1h \
-                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
-                    AND bucket >= now() - INTERVAL {carry} SECOND) AS spot_b, \
-                (SELECT toString(sum(gross_volume_a)) FROM ( \
-                    SELECT ledger_sequence, gross_volume_a \
-                    FROM liquidity_pool_snapshots \
-                    WHERE pool_id = unhex(?) \
-                      AND ledger_sequence >= ( \
-                          SELECT min(sequence) FROM ledgers \
-                          WHERE closed_at >= now() - INTERVAL 24 HOUR) \
-                    ORDER BY ledger_sequence DESC \
-                    LIMIT 1 BY ledger_sequence \
-                )) AS vol24_a_units",
-                carry = MAX_PRICE_CARRY_SECONDS,
-            ),
-        )
-        .bind(ctx.leg_a.kind)
-        .bind(ctx.leg_a.code.as_str())
-        .bind(ctx.leg_a.issuer.as_str())
-        .bind(ctx.leg_b.kind)
-        .bind(ctx.leg_b.code.as_str())
-        .bind(ctx.leg_b.issuer.as_str())
-        .bind(pool_id_hex)
-        .fetch_one::<UsdAnalyticsChRow>()
-        .await?;
-
-    let spot_a = row.spot_a.as_deref().and_then(parse_f64);
-    let spot_b = row.spot_b.as_deref().and_then(parse_f64);
+    let legs = priceable_legs(ctx);
+    let (closes, vol24_raw) = tokio::join!(
+        fetch_last_closes(client, &legs),
+        fetch_pool_volume_24h(client, pool_id_hex),
+    );
+    let closes = closes?;
+    let spot_a = closes.get(&ctx.leg_a).copied();
+    let spot_b = closes.get(&ctx.leg_b).copied();
     // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
     // genuine zero-volume day. A row that IS present but unparseable is NOT —
     // it is an unknown, and must not be reported as "$0.00 traded".
-    let vol24_units = match row.vol24_a_units.as_deref() {
+    let vol24_units = match vol24_raw?.as_deref() {
         None => Some(0.0),
         Some(raw) => parse_f64(raw),
     };
@@ -507,7 +521,7 @@ struct LastCloseChRow {
 async fn fetch_last_closes(
     client: &clickhouse::Client,
     legs: &[&PriceLeg],
-) -> Result<std::collections::HashMap<(String, String, String), f64>, clickhouse::error::Error> {
+) -> Result<std::collections::HashMap<PriceLeg, f64>, clickhouse::error::Error> {
     if legs.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
@@ -534,13 +548,30 @@ async fn fetch_last_closes(
             .bind(leg.issuer.as_str());
     }
     let rows = query.fetch_all::<LastCloseChRow>().await?;
+    // Key by the CALLER's `PriceLeg`, not by the returned strings: the leg
+    // owns the `&'static str` kind the caller will look up with, so callers
+    // get an allocation-free `closes.get(leg)`. `legs` is at most two per
+    // pool (≤ 2 × page), so the linear match back is trivial.
     Ok(rows
         .into_iter()
         .filter_map(|r| {
             let close = r.close_usd.as_deref().and_then(parse_f64)?;
-            Some(((r.asset_kind, r.asset_code, r.issuer_address), close))
+            let leg = legs.iter().find(|l| {
+                l.kind == r.asset_kind && l.code == r.asset_code && l.issuer == r.issuer_address
+            })?;
+            Some(((*leg).clone(), close))
         })
         .collect())
+}
+
+/// The two legs of a pool as a `fetch_last_closes` input, with unpriceable
+/// legs (empty `kind`) dropped — they match no prices row by construction,
+/// so asking for them is pure waste.
+fn priceable_legs(ctx: &PoolPriceContext) -> Vec<&PriceLeg> {
+    [&ctx.leg_a, &ctx.leg_b]
+        .into_iter()
+        .filter(|l| !l.kind.is_empty())
+        .collect()
 }
 
 /// Strict decimal-string → f64 (the wire strings come from CH `toString`
@@ -1346,11 +1377,14 @@ struct PoolListChRow {
 ///   The wire `created_at_ledger` field still reports the min-snapshot proxy
 ///   (parity with detail); only the *ordering* differs, and the FE does not
 ///   consume the list yet, so there is no live ordering regression.
-/// - **`min_tvl` filter** is the one case that cannot page-first (TVL is
-///   snapshot-derived, so it changes page membership): a `tvl_pools` pre-filter
-///   CTE does the full-scan `argMax(tvl)` GROUP BY (268 M rows, box-measured
-///   333 MB, no OOM) and the page CTE intersects it. Opt-in + rare; currently
-///   returns 0 pools because `tvl` is unpopulated (task 0199).
+/// - **No `min_tvl` pre-filter.** It used to exist as a `tvl_pools` CTE doing
+///   a full-scan `argMax(tvl)` over the snapshot column — a column task 0199
+///   established is never written, so it matched nothing. The parameter is
+///   now rejected with 400 at the handler rather than silently returning an
+///   empty page that contradicts the per-row `tvl` this function computes.
+///   Restoring it needs TVL for ALL pools per request (it changes page
+///   membership, so it cannot ride the per-page price lookup) — i.e. the
+///   prices-side identity-keyed materialized series.
 ///
 /// Read-cost note for the eventual flag flip: the per-page ≈ 55 M is dominated
 /// by the `accounts` id→strkey issuer resolution (14 M, non-PK reverse lookup)
@@ -1379,27 +1413,6 @@ pub async fn fetch_pool_list(
             ph = c.pool_id_hex,
         ),
         _ => String::new(),
-    };
-
-    // `min_tvl` pre-filter — full-scan `argMax(tvl)` GROUP BY (see fn doc).
-    // NO `FINAL` (0356 / PR #318): `tvl` is identical across a before/after
-    // duplicate pair, so `argMax(tvl, ledger_sequence)` is tie-safe and the dedup
-    // `FINAL` would add is pure merge overhead here.
-    // The handler already validated the decimal shape; `is_decimal_str` re-guards
-    // the inline. Invalid → filter skipped (handler guarantees it never is).
-    let (tvl_cte, tvl_pred) = match params.min_tvl.as_deref() {
-        Some(m) if is_decimal_str(m) => (
-            format!(
-                "tvl_pools AS ( \
-                    SELECT pool_id, argMax(tvl, ledger_sequence) AS latest_tvl \
-                    FROM liquidity_pool_snapshots \
-                    GROUP BY pool_id \
-                    HAVING latest_tvl >= toDecimal128('{m}', 7) \
-                 ),"
-            ),
-            " AND lp.pool_id IN (SELECT pool_id FROM tvl_pools)".to_string(),
-        ),
-        _ => (String::new(), String::new()),
     };
 
     // Asset filters are bound (untrusted free-text codes / handler-validated
@@ -1466,7 +1479,6 @@ pub async fn fetch_pool_list(
     // SAC match).
     let sql = format!(
         "WITH \
-         {tvl_cte} \
          page AS ( \
              SELECT lp.pool_id AS pool_id, lp.asset_a_type AS asset_a_type, \
                     lp.asset_a_code AS asset_a_code, lp.asset_a_issuer_id AS asset_a_issuer_id, \
@@ -1474,7 +1486,7 @@ pub async fn fetch_pool_list(
                     lp.asset_b_issuer_id AS asset_b_issuer_id, lp.fee_bps AS fee_bps, \
                     lp.last_updated_ledger AS last_updated_ledger \
              FROM liquidity_pools lp FINAL \
-             WHERE 1 = 1{tvl_pred}{filters} {keyset} \
+             WHERE 1 = 1{filters} {keyset} \
              ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
@@ -1575,8 +1587,6 @@ pub async fn fetch_pool_list(
              GROUP BY sequence \
          ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
          ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
-        tvl_cte = tvl_cte,
-        tvl_pred = tvl_pred,
         filters = filters,
         keyset = keyset,
         order = order,
@@ -1634,11 +1644,6 @@ pub async fn fetch_pool_list(
             std::collections::HashMap::new()
         }
     };
-    let close_of = |leg: &PriceLeg| {
-        closes
-            .get(&(leg.kind.to_string(), leg.code.clone(), leg.issuer.clone()))
-            .copied()
-    };
 
     Ok(rows
         .into_iter()
@@ -1647,8 +1652,8 @@ pub async fn fetch_pool_list(
             let tvl = match (
                 r.reserve_a.as_deref().and_then(parse_f64),
                 r.reserve_b.as_deref().and_then(parse_f64),
-                close_of(&leg_a),
-                close_of(&leg_b),
+                closes.get(&leg_a).copied(),
+                closes.get(&leg_b).copied(),
             ) {
                 (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(usd_str(ra * pa + rb * pb)),
                 _ => None,
@@ -1911,7 +1916,6 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
-            min_tvl: None,
             asset_code: None,
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -1945,14 +1949,30 @@ mod decode_smoke {
             .expect("price-context row decodes")
             .expect("bootstrapped pool exists");
 
-        // detail USD analytics — `UsdAnalyticsChRow`. Reads `prices.*`, so
-        // this also proves the API user can see that database. No grant is
-        // needed on prod: `api_reader` carries no `<grants>` block in
+        // The remaining two read `prices.*`, which the explorer does not own
+        // and `schema/init.sql` does not create — a CH bootstrapped from this
+        // repo alone has no such database. Probe once and skip rather than
+        // fail, so the documented local-replica run still validates every
+        // explorer-owned decode above. Against prod (or any CH with the
+        // prices tenant) the probe passes and both are exercised — which also
+        // proves the API user can read that database. No grant is needed
+        // there: `api_reader` carries no `<grants>` block in
         // `users.d/services.xml` (unlike `prices_writer`/`prices_reader`,
         // where grants NARROW access), verified on the box 2026-08-04.
+        if ch
+            .query("SELECT 1 FROM prices.price_usd_series_1h LIMIT 1")
+            .fetch_all::<u8>()
+            .await
+            .is_err()
+        {
+            eprintln!("`prices` database unreachable — skipping USD-analytics + chart decode");
+            return;
+        }
+
+        // detail USD analytics — `Vol24ChRow` + `LastCloseChRow`.
         fetch_pool_usd_analytics(&ch, &pool, &ctx, None, None)
             .await
-            .expect("usd-analytics row decodes");
+            .expect("usd-analytics rows decode");
 
         // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
         let to = chrono::Utc::now();

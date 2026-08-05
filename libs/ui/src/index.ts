@@ -29,6 +29,7 @@ export {
   AnimatedNumber,
   formatAmount,
   formatCompactAmount,
+  formatCompactUsd,
   scaleByDecimals,
   formatFee,
   formatStroops,

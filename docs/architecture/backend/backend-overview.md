@@ -464,14 +464,24 @@ task 0246), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
 `filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
 or both omitted (classic identity). The single-asset and per-leg modes coexist
 additively. Each `PoolItem` carries `participant_count` (count of active LP
-positions; task 0246) alongside the snapshot fields. Filter and projection
+positions; task 0246) alongside the snapshot fields, plus a compute-at-read
+USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
+and `fee_revenue` stay `null` on the list, they are detail-only).
+`filter[min_tvl]` is **rejected with 400**: a value computed at read cannot
+filter page membership, and the old SQL pre-filter read a snapshot column that
+is never written, so it silently returned an empty page. Filter and projection
 semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 
 **`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares,
-TVL, plus `participant_count` (task 0246). Dynamic snapshot fields come from
+TVL, plus `participant_count` (task 0246). Reserves / total shares come from
 the latest snapshot row; clients that care about freshness read
 `latest_snapshot_at` in the response. `participant_count` is independent of
-snapshot freshness — populated even on stale pools.
+snapshot freshness — populated even on stale pools. The money fields
+(`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
+computed at read from the in-cluster `prices.*` views (task 0199,
+[ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md))
+and are `null` when a leg is unpriceable. A prices-side failure degrades those
+three fields to `null` — it never fails the request.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
 pool.

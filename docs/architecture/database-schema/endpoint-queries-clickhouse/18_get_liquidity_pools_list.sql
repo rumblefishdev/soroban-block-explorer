@@ -1,6 +1,8 @@
 -- Endpoint:     GET /liquidity-pools
 -- Purpose:      Paginated list of liquidity pools with their latest
---               on-chain state. Optional filters: asset pair, minimum TVL.
+--               on-chain state + a compute-at-read USD TVL. Optional
+--               filter: asset pair. (Minimum-TVL filtering is NOT
+--               supported — see Notes.)
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.13
 -- Schema:       ADR 0044 + PR-#175 hybrid-surrogate amendment.
 -- Data sources: DB-only.
@@ -12,7 +14,7 @@
 --   $5  :asset_a_issuer_strkey          String  NULL = no filter (resolved to issuer_id)
 --   $6  :asset_b_code                   String  NULL = no filter
 --   $7  :asset_b_issuer_strkey          String  NULL = no filter
---   $8  :min_tvl                        Decimal NULL = no filter
+--   (the former $8 :min_tvl is retired — the API rejects it with 400)
 -- Indexes:      liquidity_pools ORDER BY (pool_id) — full scan + sort here;
 --                 the table is small relative to fact tables.
 --               accounts ORDER BY (account_id) — issuer joins by id.
@@ -35,6 +37,22 @@
 --   to "most recently active" ordering, which `last_updated_ledger`
 --   naturally provides).
 -- Notes:
+--   • **task 0199 — USD TVL is computed at read, not projected here.** The
+--     snapshot `tvl` / `volume` / `fee_revenue` columns are never written
+--     (ADR 0053), so this query no longer reads them. After the page rows
+--     come back, the API issues ONE batched lookup against
+--     `prices.price_usd_series_1h` for the page's distinct leg identities
+--     (last close within 48 h) and computes
+--     `tvl = reserve_a·close_a + reserve_b·close_b` per row, NULL unless
+--     BOTH legs price. `volume` / `fee_revenue` are detail-endpoint only and
+--     serialise as null on the list.
+--   • **`filter[min_tvl]` is rejected with HTTP 400.** It used to be a
+--     `tvl_pools` pre-filter CTE over the snapshot `tvl` column — which,
+--     being unwritten, matched nothing and returned an empty page while the
+--     rows themselves now carry real USD TVL. A compute-at-read value cannot
+--     filter page membership without TVL for ALL pools per request; that
+--     needs the prices-side identity-keyed materialized series. Until then
+--     the API says so explicitly rather than answering "no pools".
 --   • Cursor ordering switched from `created_at_ledger DESC` to
 --     `last_updated_ledger DESC`. UI label changes from "newest pools
 --     first" to "most recently active first" — different semantic but
@@ -58,9 +76,10 @@ SELECT
     s.reserve_a,
     s.reserve_b,
     s.total_shares,
-    s.tvl,
-    s.volume,
-    s.fee_revenue,
+    -- tvl / volume / fee_revenue are NOT projected from snapshots (task 0199):
+    -- those columns are never written. The API adds a compute-at-read USD
+    -- `tvl` per row from a batched prices lookup (see Notes); `volume` and
+    -- `fee_revenue` stay null on the list — detail-only.
     l_snap.closed_at                                                                AS latest_snapshot_at
 FROM liquidity_pools lp FINAL
 LEFT JOIN accounts iss_a FINAL ON iss_a.id = lp.asset_a_issuer_id AND lp.asset_a_issuer_id != 0
@@ -71,10 +90,7 @@ LEFT JOIN (
         max(ledger_sequence)                      AS latest_ledger_sequence,
         argMax(reserve_a,        ledger_sequence) AS reserve_a,
         argMax(reserve_b,        ledger_sequence) AS reserve_b,
-        argMax(total_shares,     ledger_sequence) AS total_shares,
-        argMax(tvl,              ledger_sequence) AS tvl,
-        argMax(volume,           ledger_sequence) AS volume,
-        argMax(fee_revenue,      ledger_sequence) AS fee_revenue
+        argMax(total_shares,     ledger_sequence) AS total_shares
     FROM liquidity_pool_snapshots FINAL
     GROUP BY pool_id
 ) s ON s.pool_id = lp.pool_id
@@ -85,6 +101,6 @@ WHERE
     AND ($5 IS NULL OR lp.asset_a_issuer_id = (SELECT id FROM accounts FINAL WHERE account_id = $5 LIMIT 1))
     AND ($6 IS NULL OR lp.asset_b_code = $6)
     AND ($7 IS NULL OR lp.asset_b_issuer_id = (SELECT id FROM accounts FINAL WHERE account_id = $7 LIMIT 1))
-    AND ($8 IS NULL OR s.tvl >= $8)
+    -- No min-TVL predicate: `filter[min_tvl]` is rejected with 400 (see Notes).
 ORDER BY lp.last_updated_ledger DESC, lp.pool_id DESC
 LIMIT $1;

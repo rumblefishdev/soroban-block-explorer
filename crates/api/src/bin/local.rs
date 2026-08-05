@@ -9,9 +9,21 @@
 //! Vite dev proxy so the browser stays same-origin).
 //!
 //! ```text
-//! LOCAL_MTLS_DIR=infra-hetzner/ca/out/$USER \
-//!   cargo run -p api --bin local
+//! # 1. API against prod CH (this binary)
+//! cargo run -p api --bin local
+//!
+//! # 2. point the SPA's dev proxy at it — web/.env.development.local
+//! #    (gitignored; DEV_API_KEY is only needed for the prod-API target)
+//! VITE_API_BASE_URL=http://localhost:4200
+//! DEV_API_PROXY_TARGET=http://localhost:9100
+//!
+//! # 3. serve the SPA
+//! npx nx run @rumblefish/soroban-block-explorer-web:dev
 //! ```
+//!
+//! The browser then only ever talks to `localhost:4200` (same-origin, no
+//! CORS) and Vite forwards `/v1` here. Both local pieces are machine-scoped
+//! and deliberately untracked — nothing to commit to run this.
 //!
 //! Env (all optional):
 //! - `LOCAL_MTLS_DIR` — dir with `<user>.crt`, `<user>.key`, `ca.crt`

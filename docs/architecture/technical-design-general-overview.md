@@ -1266,8 +1266,14 @@ PathPayment claim atoms, live since 0261 and backfilled by 0266),
 the interval's grain; the detail endpoint prices latest reserves at each leg's
 last hourly close (`price_usd_series_1h`, 48h lookback — not
 `current_price_usd`, whose 0-sentinel covers native XLM as of 2026-08) and
-sums the last 24h of volume. Reading `prices.*` requires a SELECT grant for
-the API CH user (deploy gate).
+sums the last 24h of volume. The pools **list** prices its page the same way,
+from one batched close lookup per page (task 0199 Phase A2); `filter[min_tvl]`
+is rejected with 400 because a compute-at-read value cannot filter page
+membership. No grant is needed to read `prices.*`: the API's `api_reader` CH
+user carries no `<grants>` block in `users.d/services.xml` — unlike
+`prices_writer`/`prices_reader`, where grants NARROW access — so its
+`read_only` profile already covers the database (verified on the box
+2026-08-04).
 
 ### 6.12 Partitioning and Retention
 
