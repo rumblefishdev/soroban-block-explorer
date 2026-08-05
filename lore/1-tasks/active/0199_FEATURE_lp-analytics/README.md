@@ -429,6 +429,34 @@ history:
       problem) until the prices-side materialization. Next: implement on a
       branch stacked on feat/0199_lp-analytics + local FE/BE stack over
       prod data slices to eyeball and test before shipping.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase A2 IMPLEMENTED + tested end-to-end on production data
+      (branch feat/0199_lp-list-tvl, stacked on the PR #380 branch). No
+      data import was needed: new `cargo run -p api --bin local` serves
+      the lib's register_routes over plain axum and talks mTLS to prod
+      CH with the developer cert (CN -> dev_shared, read-only by
+      construction); Vite dev proxy points at it. List TVLs render from
+      prod (XLM/GOLD $6.4K, GOLD/yXLM $2.3K, dashes for unpriceable);
+      detail $130.41 vs chart last bucket $130.38 agree (the carry-
+      forward + shared staleness rule working); charts verified on all
+      intervals incl. weekly toMonday buckets and the freeze window
+      rendering as missing points. TWO DISCOVERIES the local run caught:
+      (a) FE had a pre-0199 CHARTS_ENABLED=false kill-switch hiding the
+      whole chart card (its own comment said flip when 0199 ships) —
+      flipped + pending-oracle placeholder deleted; my earlier "FE needs
+      nothing" claim was wrong. (b) PRICES FINDING #5: canonical USDC
+      has ZERO rows in price_usd_series across ALL history — it only
+      appears as the QUOTE side of candles (10.5k quote rows in 48h) and
+      the views emit base assets only, so every USDC-leg pool reads NULL
+      TVL. Fix is prices-side (synthetic base row under their own
+      USDC=$1 peg assumption); deliberately NOT hardcoded on our side —
+      add to the Oskar report. Dev-env note: dual-React crash from stale
+      libs/ui/dist + vite dep cache; fix = trash dists + nx reset + rm
+      .vite caches (matches the stale-dist memory). Ship path open:
+      fold A2 into PR #380 (one review) or stack a second PR.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
