@@ -5,6 +5,7 @@ import {
   QueryErrorState,
   Tabs,
   TimeSeriesChart,
+  type TimeSeriesCurve,
   type TimeSeriesPoint,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo, useState } from 'react';
@@ -39,6 +40,33 @@ const USD_FULL_FORMATTER = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 });
 
+/**
+ * Sub-dollar money needs significant digits, not fixed ones. Both
+ * formatters above round to whole dollars or one compact digit, so a pool
+ * whose TVL is $0.003 rendered every axis tick AND the headline as "$0" —
+ * an axis carrying no information at all (seen on real pools; fee revenue
+ * hits it constantly, since a 0.30% cut of a small trade is fractions of
+ * a cent).
+ */
+const USD_SMALL_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumSignificantDigits: 2,
+});
+
+/**
+ * Format a USD amount, switching to significant digits below a dollar.
+ * Decided per VALUE rather than per chart, so a tick at $0.50 reads
+ * "$0.50" even on an axis that runs to thousands. Exact zero keeps the
+ * plain "$0" — it is zero, not an unreadably small number.
+ */
+function formatUsd(value: number, atOrAboveOne: Intl.NumberFormat): string {
+  const abs = Math.abs(value);
+  return abs > 0 && abs < 1
+    ? USD_SMALL_FORMATTER.format(value)
+    : atOrAboveOne.format(value);
+}
+
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -47,12 +75,43 @@ const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 
 /** Currency formatter for chart y-axis + tooltip — values are USD amounts. */
 const usdFormatter = (value: number): string =>
-  USD_COMPACT_FORMATTER.format(value);
+  formatUsd(value, USD_COMPACT_FORMATTER);
 
 const METRIC_LABELS: Record<ChartMetric, string> = {
   tvl: 'TVL',
   volume: 'Volume',
   fees: 'Fee revenue',
+};
+
+/**
+ * How each metric is drawn — decided by what the number IS, matching the
+ * way the endpoint aggregates it (see the chart query, task 0199):
+ *
+ * - **TVL is a STATE** (`argMax` — the last value in the bucket). It only
+ *   moves when a deposit / withdraw / swap lands and holds flat in
+ *   between, so a step is the honest line. Smoothing drew gentle curves
+ *   through values the pool never held.
+ * - **Volume / fees are FLOWS** (`sum` over the bucket). Independent
+ *   per-bucket totals with nothing in between to interpolate, so: bars.
+ *   This also stops the series bridging over unpriceable buckets — those
+ *   rows are dropped below, and a line joined straight across them (a
+ *   provider price gap rendered as smooth drift).
+ *
+ * TVL is a bare line, NOT a filled area, and that was measured rather than
+ * assumed: a fill is read by area, so it has to baseline at zero, and at
+ * zero this pool's real 16% slide ($155 → $130) collapsed into a ripple on
+ * top of a solid block. DefiLlama-style filled TVL works for protocols
+ * whose TVL spans orders of magnitude — there the silhouette is the story.
+ * Per-pool, the movement is the story, so the zoomed baseline a bare line
+ * permits is worth more than the fill.
+ */
+const METRIC_RENDERING: Record<
+  ChartMetric,
+  { variant: 'line' | 'area' | 'bar'; curve?: TimeSeriesCurve }
+> = {
+  tvl: { variant: 'line', curve: 'stepAfter' },
+  volume: { variant: 'bar' },
+  fees: { variant: 'bar' },
 };
 
 /**
@@ -159,7 +218,7 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
   // shows the last value + its bucket date).
   const latest =
     points.length > 0 ? points[points.length - 1] ?? undefined : undefined;
-  const headline = latest ? USD_FULL_FORMATTER.format(latest.value) : '—';
+  const headline = latest ? formatUsd(latest.value, USD_FULL_FORMATTER) : '—';
   const headlineCaption = latest
     ? `${DATE_FORMATTER.format(new Date(latest.timestamp))} · ${
         METRIC_LABELS[metric]
@@ -207,11 +266,14 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
         ) : (
           <TimeSeriesChart
             data={points}
-            // Figma node `325:24354` shows a plain line (no area fill)
-            // with hollow blue marks at each bucket. Switched away from
-            // `area` so the chart reads as the design — fill obscures
-            // the per-bucket dots on dark surface.
-            variant="line"
+            // Per-metric rendering — see METRIC_RENDERING. This departs
+            // from Figma node `325:24354` (flat line, a hollow mark on
+            // every bucket): the marks are now density-gated by the chart
+            // and the fill is a fade rather than the solid wash that made
+            // `area` unusable before, so TVL reads as a level without the
+            // fill burying anything.
+            variant={METRIC_RENDERING[metric].variant}
+            curve={METRIC_RENDERING[metric].curve}
             valueFormatter={usdFormatter}
             title={headline}
             subtitle={headlineCaption}

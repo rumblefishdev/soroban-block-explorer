@@ -580,11 +580,26 @@ fn parse_f64(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// USD amount → wire string, rounded to cents. The single formatter for
-/// every money field on both LP surfaces — see the module note on why this
-/// is not done in SQL.
+/// USD amount → wire string. The single formatter for every money field on
+/// both LP surfaces — see the module note on why this is not done in SQL.
+///
+/// Cents for anything a cent or larger, and **significant digits below
+/// that**, because a flat `{:.2}` reports a real value as `"0.00"` — a
+/// number the client cannot tell from a genuine zero and cannot recover.
+/// It is not a corner case: `fee_revenue` is 0.30% of the traded volume,
+/// so any pool trading less than a few dollars a bucket serialises its
+/// entire fee series as zeros (observed on prod — a pool with real volume
+/// rendered every chart bucket and every axis tick as `$0`).
 fn usd_str(v: f64) -> String {
-    format!("{:.2}", v)
+    let abs = v.abs();
+    if abs > 0.0 && abs < 0.01 {
+        // Two significant digits: 0.003 → "0.0030", 0.00009 → "0.000090".
+        // Capped so a denormal cannot produce an absurdly long string.
+        let places = ((-abs.log10()).ceil() as usize + 1).min(12);
+        format!("{v:.places$}")
+    } else {
+        format!("{v:.2}")
+    }
 }
 
 /// `volume × fee_bps / 10000` — the pool's cut of the traded volume.
@@ -1787,6 +1802,14 @@ mod tests {
         assert_eq!(parse_f64("inf"), None, "non-finite rejected");
         assert_eq!(usd_str(1234.5678), "1234.57");
         assert_eq!(usd_str(0.0), "0.00");
+        // Sub-cent values must not collapse to "0.00" — a client cannot
+        // tell that apart from a genuine zero (fee_revenue lives here).
+        assert_eq!(usd_str(0.003), "0.0030");
+        assert_eq!(usd_str(0.00009), "0.000090");
+        assert_eq!(usd_str(-0.003), "-0.0030");
+        // At or above a cent the plain money form still applies.
+        assert_eq!(usd_str(0.01), "0.01");
+        assert_eq!(usd_str(0.5), "0.50");
         // Fixed 2 decimals on every path — CH's toString(round(x, 2)) would
         // emit "25" / "1.5" / "0" here and split the wire shape between the
         // chart and the detail endpoint.

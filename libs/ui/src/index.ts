@@ -161,6 +161,7 @@ export type {
   UseTabUrlStateOptions,
   UseTabUrlStateResult,
   TimeSeriesChartProps,
+  TimeSeriesCurve,
   TimeSeriesPoint,
   TimeSeriesInterval,
   LazySectionProps,
