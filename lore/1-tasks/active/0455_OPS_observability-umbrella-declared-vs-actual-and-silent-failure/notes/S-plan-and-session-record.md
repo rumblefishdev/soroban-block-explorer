@@ -53,6 +53,32 @@ Three readings:
 3. **Dashboard and alarm do not correspond in any row.** Where a widget exists
    there is often no alarm, and two alarms have no widget.
 
+### Target shape of the same matrix
+
+The same grid with a repeating pattern. Not every cell filled — every cell
+decided.
+
+| Condition                 | Logs        | Metric      | Dashboard | Alarm                      |
+| ------------------------- | ----------- | ----------- | --------- | -------------------------- |
+| Galexie output stops      | ECS         | yes         | yes       | pages                      |
+| Ingest queue backs up     | —           | yes         | yes       | pages                      |
+| Indexer fails a write     | fields      | own counter | yes       | pages                      |
+| Ingest DLQ receives       | —           | yes         | yes       | pages on **growth**        |
+| Enrichment queue backs up | —           | yes         | yes       | deliberately does not page |
+| Enrichment fetch fails    | fields      | own counter | yes       | pages                      |
+| Enrichment DLQ receives   | —           | yes         | yes       | pages on **growth**        |
+| API query fails           | fields      | own counter | yes       | pages                      |
+| Database host degrades    | on the host | forwarded   | yes       | pages                      |
+| Frontend errors           | —           | —           | —         | deliberately out of scope  |
+
+Two properties distinguish it from the current state:
+
+- The logs and metric columns repeat, because each component publishes the same
+  set the same way rather than what its own task needed.
+- The alarm column carries two kinds of blank: _decided not to page_ and _out of
+  scope_. Neither means _nobody considered it_. That distinction is the only one
+  that matters for whether the grid is finished.
+
 ---
 
 ## The largest inconsistencies
@@ -106,6 +132,65 @@ is also what makes it immune to a planned consumer pause.
 
 Transient on the NFT path, permanent on the SEP-1 path. Ten `Mirrors X` doc
 comments exist across `crates/`, each an invariant maintained by hand.
+
+---
+
+## Three patterns cover the seven inconsistencies
+
+The list above is long; the shapes behind it are not. No single tool addresses
+all of it, and the two that apply are already present in this repository in some
+form.
+
+### P1 — One supported path for a cross-cutting concern
+
+Each of the three binaries initialises its own subscriber with the same line,
+copied. The copies have already diverged, because the environment set around one
+of them differs. Shared crates exist for persistence, enrichment and domain
+types; none exists for telemetry.
+
+A crate exposing `init()` and a counter-publishing helper would make the
+subscriber identical by construction rather than by convention, carry the default
+level in code rather than in stack configuration, put "publish a metric" within
+reach so components stop diverging in what they emit, and remove the need for the
+log-text filter.
+
+Covers I1, I2 and I4, and closes the route by which they recur.
+
+**On OpenTelemetry.** It is the standard form of this pattern — one SDK, one
+configuration, shared naming conventions — and it addresses the same three
+inconsistencies. For three Rust Lambdas it also introduces a collector process
+alongside them and adds to cold start, against a Rust SDK that is younger than
+its counterparts in other languages. An in-repo crate reaches the same shape
+without the additional moving part. Worth revisiting if the number of services
+grows or if a second language joins the backend.
+
+### P2 — One source of truth, with a gate
+
+Where two artifacts must agree, either one is generated from the other, or one
+references the other rather than restating it, or a check compares them. The
+repository already does the first for the API types.
+
+Covers I2 and I7, and every cross-language pair listed under "the recurring
+shape" in the companion note.
+
+### P3 — A written statement of what each surface is for
+
+I3, I5 and I6 are not technical gaps. Dashboard and alarm content, retention
+values and the choice of which layer to alarm on were each decided locally
+because no statement covers them. Four sentences would.
+
+Candidate form, to be settled rather than assumed:
+
+- Logs answer _why_, once something is known to be wrong. Variables belong in
+  fields. Detection does not read log text.
+- Metrics answer _whether_. Alarms read metrics only.
+- The dashboard answers _where_. It carries what the alarms read, plus the
+  standing conditions deliberately left unalarmed.
+- What pages is on the dashboard; what is on the dashboard comes from a metric;
+  a metric exists because some component published it deliberately.
+
+The last line is the one that forces the three sets to be compared, which is what
+has not happened so far.
 
 ---
 
