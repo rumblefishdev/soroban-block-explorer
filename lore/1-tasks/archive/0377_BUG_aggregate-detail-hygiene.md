@@ -2,7 +2,7 @@
 id: '0377'
 title: 'Aggregate/detail hygiene: archive-unavailable counts assert zero, participant list truncation, stale estimate docs'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0359', '0329', '0420', '0453', '0463']
 tags: [priority-medium, effort-medium, layer-api, layer-web, aggregates]
@@ -24,6 +24,20 @@ history:
       already-resolved — twice, 3 weeks apart, across 419 develop commits, with
       no regression. Replaced with six findings from a fresh aggregate/detail
       sweep of crates/api + web. Same theme, current defects.
+  - date: 2026-08-04
+    status: completed
+    who: karolkow
+    note: >
+      14 commits. 6 findings closed: F1/F2 widened to 6 render sites on the tx
+      page (HeavyUnavailable shared, +3 tests), F3 tripwire only (trigger
+      measured absent 0/6010 and structurally unreachable), F4 docs corrected —
+      the numbers had been exact since 0420, F6 stats_window on the list row,
+      F7 7-of-8 sites. F5 handed to 0463, which owns the same SQL line and the
+      evidence deciding its direction. 4 of 11 reported defects refuted: the 3
+      spawned items were already resolved (re-verified across 419 develop
+      commits), and F7 #8 was correct code — 36_279_761 prod payments show
+      blank asset_code and absent issuer coincide exactly, so the XLM fallback
+      stands. 208 web + 243 API tests green. No ADR.
 ---
 
 # Aggregate/detail hygiene
@@ -241,8 +255,106 @@ what the data actually contains.
   change. F4/F6 alter DTO doc text and add one optional wire field; F1–F3 and F7
   are render-side fixes; F5 ships under [[0463]], which carries its own checklist.
 
+## Implementation Notes
+
+14 commits on `fix/0377_aggregate-detail-hygiene`, cut from develop `7a99a1a9`.
+Read-side and render-side only — no schema, ingest or endpoint change.
+
+- **Render (web)** — `HeavyUnavailable` lifted from `OperationJsonDetail` into
+  `transaction-detail/shared/`, now used by 4 call sites. Signatures, events and
+  raw-data sections plus the memo / fee-source / fail-reason cells distinguish
+  "archive miss" from "none". Operations section warns and names the shortfall.
+  Ledger transactions and pool participants let the entity's own count pick the
+  copy. Search badge renders `N+` at the cap, with the cap sent explicitly.
+- **API (rust)** — `network/dto.rs` docs rewritten to the actual mechanism;
+  `ContractListItem` gained `stats_window`; `fetch_participants` logs an
+  unresolved account instead of dropping it silently.
+- **Codegen** — `api-types:generate` run for the two DTO-touching commits, each
+  regenerated in isolation so every commit is self-consistent under `git bisect`.
+- **Verification** — 208 web tests (+3 new for `SignaturesTable`), 243 API
+  tests, typecheck, lint, `fmt`, `clippy`, and `api-types:check-generated` all
+  green at HEAD.
+
+## Issues Encountered
+
+- **Doc-comments used as evidence about behaviour — twice, both times wrong.**
+  F4: docs still said "planner estimate" long after 0420 made the count exact;
+  following them would have added a `≈` marker to a correct number. F7 #8: the
+  wire doc never states `asset_code: null ⟺ native`, so the fallback looked like
+  a defect — prod says the two coincide exactly across 36_279_761 payments. Root
+  cause is the same in both: a doc describes intent at writing time, not what
+  the data now contains. Only code + prod data settled either one.
+- **Tests caught a regression I introduced.** Removing the XLM fallback broke
+  `OperationPicker` and `HumanizedSentence`. They were NOT edited to pass —
+  they were correct, and the change was reverted (see Broken/modified tests).
+- **`api-types:check-generated` fails until the regen is staged.** It is a
+  `git diff --exit-code`, so freshly regenerated-but-unstaged output reads as
+  drift. Not a real failure; staging clears it.
+- **Hooks order in `EventsSection`.** The early return for the unavailable state
+  had to go _after_ `useMemo`/`useState`, unlike the other two sections which
+  have no hooks. Rules of Hooks, not style.
+- **Worktree invisibility.** All work happened in
+  `.claude/worktrees/fix-0377-…`, while the main checkout stayed on an unrelated
+  branch. From the editor the task looked replaced by other work. Nothing leaked
+  across branches, but the worktree should be stated up front next time.
+- **Number collision.** GitHub issue #377 (which spawned 0463) is unrelated to
+  lore task 0377.
+
+**Broken/modified tests:**
+
+- `opFacts.test.ts` — assertion updated from `'—'` to `'not derivable'`.
+  Intentional copy change, not a regression.
+- `OperationPicker.test.tsx` / `HumanizedSentence.test.tsx` — failed mid-task
+  and were deliberately **left untouched**. They were asserting correct
+  behaviour; the code change under them was wrong and got reverted. Recorded
+  because a future reader may otherwise wonder why they were not "fixed".
+
+## Design Decisions
+
+### From Plan
+
+1. **Re-scope rather than re-fix.** The three spawned items were verified
+   resolved twice, 3 weeks apart, across 419 develop commits. Recorded with
+   proof in "Verified resolved" instead of being re-implemented.
+
+### Emerged
+
+2. **`heavy == null` as the status check, not `heavy_fields_status`.** The wire
+   contract makes them equivalent, the null is already in scope, and the
+   existing good pattern (`OperationJsonDetail`) tests it the same way. No new
+   state threaded through the page.
+3. **Two visual weights for "unavailable".** A full warning `EmptyState` where a
+   whole section disappears, an italic inline marker inside a summary table
+   cell — a card does not fit in a cell, and both must read differently from a
+   plain dash.
+4. **F1/F2 widened to six sites, not three.** A sweep found `TransactionSummary`
+   reading `heavy` in three more places on the same page. Shipping a page that
+   is honest about signatures but still fakes the memo was not worth the smaller
+   diff.
+5. **F3 got a tripwire, not a repair.** The trigger is measured absent
+   (0/6010) and structurally unreachable, so restructuring pagination would be
+   complexity against an impossible case. `tracing::error!` makes it observable
+   instead. Reversal of an earlier "most severe backend item" call.
+6. **F4 fixed the docs and deliberately left the frontend alone.** The numbers
+   were already correct; the caveat the original finding asked for would have
+   introduced the defect.
+7. **F7 #8 reverted after prod measurement.** Kept as a comment at the call site
+   so the next audit stops at the evidence rather than repeating the change.
+8. **F5 handed to [[0463]] rather than fixed.** Same SQL line; 0463 carries the
+   evidence that decides the direction, and the opposite repair was equally
+   available from F5's description alone.
+9. **Search cap sent explicitly instead of inherited.** The badge needs the cap
+   to render `N+`; hardcoding a copy of the server default would drift, so the
+   frontend now states the value it reasons about.
+10. **Kept as a single file at 248 lines**, past the ~200 guideline. The content
+    is one continuous record with inline evidence, not research notes needing a
+    `notes/` split; converting an archived task would be churn.
+
 ## Future Work
 
-- Search buckets are capped per group with no `has_more` flag, so a frontend
-  total derived from array lengths is a floor, not a truth. Out of scope —
-  spawn if the singleton-navigation heuristic proves wrong.
+- **Search `has_more` — mitigated, not eliminated.** Buckets are still capped
+  per group with no server-side flag, so a total derived from array lengths
+  remains a floor. The `N+` badge removes the misleading part, which was the
+  defect; the exact count stays unavailable by choice. No backlog task spawned —
+  revisit only if a consumer needs true totals, at which point it belongs with
+  whatever search work is live then.
