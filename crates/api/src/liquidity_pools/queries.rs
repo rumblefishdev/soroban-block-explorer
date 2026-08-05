@@ -1034,9 +1034,14 @@ struct ChartChRow {
 /// CH translation choices:
 /// - **Bucket truncation** maps the `1h | 1d | 1w` allowlist to
 ///   `toStartOfHour` / `toStartOfDay` / `toMonday`. `toMonday` is the
-///   Monday-start week, matching PG's ISO `date_trunc('week', …)`; the
-///   epoch-aligned `toStartOfInterval(…, INTERVAL 604800 SECOND)` from the
-///   reference SQL is Sunday-aligned and would drift a day off PG.
+///   Monday-start week, matching PG's ISO `date_trunc('week', …)` — the
+///   contract the endpoint launched with. CH's other spellings both miss
+///   it (box-verified 2026-08-05): `toStartOfWeek` defaults to SUNDAY
+///   (mode 0, one day off ISO), and the reference SQL's epoch-aligned
+///   `toStartOfInterval(…, INTERVAL 604800 SECOND)` buckets on THURSDAYS —
+///   1970-01-01 was a Thursday, so 7-day blocks from epoch all are
+///   (2026-08-04 → bucket 2026-07-30, toDayOfWeek = 4). An earlier version
+///   of this comment claimed "Sunday-aligned"; that was wrong.
 /// - **No `created_at` on CH snapshots** — the window is filtered on the
 ///   joined `ledgers.closed_at` (bijection with `ledger_sequence`), so the
 ///   `from`/`to` API contract (RFC3339 timestamps) is preserved unchanged
