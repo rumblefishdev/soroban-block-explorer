@@ -53,37 +53,75 @@ function rowsOf(table: HTMLElement): Array<Record<string, string>> {
     );
 }
 
-describe('EventsSection (#378 — consensus stream vs debug channel)', () => {
-  it('counts only the consensus stream, never the debug channel', () => {
+describe('EventsSection (#378 — the consensus stream is the event list)', () => {
+  it('lists the consensus stream on its own, copy excluded', async () => {
+    const user = userEvent.setup();
+    // Issue #378's transaction in miniature: three consensus events, and a
+    // debug channel holding the call trace, a COPY of the contract's transfer,
+    // and the resource meter. The page used to advertise all of it as events.
     renderSection(
-      [event(0, 'fee'), event(2, 'transfer')],
-      // Stellar core copies every consensus event into the diagnostic
-      // container; merging the two would advertise 5 events for a
-      // transaction that emitted 2.
-      [event(3, 'fn_call'), event(6, 'transfer'), event(7, 'core_metrics')]
+      [
+        event(0, 'fee', { stage: 'before_all_txs' }),
+        event(1, 'fee', { stage: 'after_all_txs' }),
+        event(2, 'transfer', { op_index: 0 }),
+      ],
+      [
+        event(3, 'fn_call', { event_type: 'diagnostic' }),
+        event(6, 'transfer'),
+        event(7, 'fn_return', { event_type: 'diagnostic' }),
+        event(8, 'core_metrics', { event_type: 'diagnostic' }),
+      ]
     );
 
-    expect(screen.getByText('2 events')).toBeInTheDocument();
-    expect(screen.getByText(/Show 2 events/)).toBeInTheDocument();
-    // Two, not three: the resource counter is not a diagnostic entry either,
-    // it belongs to the Resources strip on the operation card.
-    expect(
-      screen.getByText(/Show execution diagnostics \(2\)/)
-    ).toBeInTheDocument();
+    expect(screen.getByText('3 events')).toBeInTheDocument();
+    await user.click(screen.getByText(/Show 3 events/));
+
+    // The copy is not a fourth event here. It is still on the page, one
+    // disclosure down, in the debug channel it actually belongs to.
+    expect(rowsOf(screen.getByRole('table')).map((r) => r['#'])).toEqual([
+      '0',
+      '1',
+      '2',
+    ]);
   });
 
-  it('keeps the diagnostic copy of an event out of the consensus list', async () => {
+  it('keeps the copies in the debug channel — only counters move out', async () => {
     const user = userEvent.setup();
     renderSection(
-      [event(2, 'transfer')],
-      [event(6, 'transfer'), event(7, 'core_metrics')]
+      [event(2, 'transfer', { op_index: 0 })],
+      [
+        event(3, 'fn_call', { event_type: 'diagnostic' }),
+        event(4, 'transfer'), // the copy — raw record, kept as it arrived
+        event(5, 'fn_return', { event_type: 'diagnostic' }),
+        event(6, 'core_metrics', { event_type: 'diagnostic' }),
+      ]
     );
-    await user.click(screen.getByText(/Show 2 events|Show 1 event/));
+    await user.click(screen.getByText(/Show 3 diagnostic entries/));
 
-    // One table so far: the consensus one, carrying the single real transfer.
-    const rows = rowsOf(screen.getByRole('table'));
-    expect(rows).toHaveLength(1);
-    expect(rows[0]['#']).toBe('2');
+    // The counter is the only omission, and it renders in full on the
+    // operation card. Everything else stands exactly as the ledger carries it.
+    const table = screen.getAllByRole('table').at(-1) as HTMLElement;
+    expect(rowsOf(table).map((r) => r['#'])).toEqual(['3', '4', '5']);
+    // …and it states no position: `Where` belongs to the consensus stream.
+    expect(rowsOf(table)[0].Where).toBeUndefined();
+  });
+
+  it('never lets the debug channel into the event count', () => {
+    // The whole of issue #378: two records concatenated into one list and one
+    // number, so two events advertised themselves as five.
+    renderSection(
+      [event(0, 'fee'), event(2, 'transfer')],
+      [event(3, 'fn_call'), event(4, 'transfer'), event(5, 'core_metrics')]
+    );
+    expect(screen.getByText('2 events')).toBeInTheDocument();
+    expect(screen.getByText(/Show 2 diagnostic entries/)).toBeInTheDocument();
+  });
+
+  it('offers no diagnostics disclosure when counters were all there was', () => {
+    // Nothing to disclose once the meter readings render as Resources — an
+    // expander onto an empty table would be a dead end.
+    renderSection([event(0, 'transfer')], [event(1, 'core_metrics')]);
+    expect(screen.queryByText(/diagnostic entr/)).not.toBeInTheDocument();
   });
 
   it('names where a consensus event sits — operation or ledger stage', async () => {
@@ -116,26 +154,6 @@ describe('EventsSection (#378 — consensus stream vs debug channel)', () => {
     await user.click(screen.getByText(/Show 1 event/));
 
     expect(rowsOf(screen.getByRole('table'))[0].Type).toBe('System');
-  });
-
-  it('never lists the resource counters — they are not events', async () => {
-    const user = userEvent.setup();
-    renderSection(
-      [event(0, 'transfer')],
-      [event(1, 'fn_call'), event(2, 'core_metrics'), event(3, 'core_metrics')]
-    );
-    // The count in the label is what survives the filter, so the reader is
-    // never promised rows that are not there.
-    await user.click(screen.getByText(/Show execution diagnostics \(1\)/));
-
-    expect(rowsOf(screen.getByRole('table')).map((r) => r['#'])).toEqual(['1']);
-  });
-
-  it('offers no diagnostics disclosure when counters were all there was', () => {
-    // A transaction whose whole debug channel is the resource meter has
-    // nothing to disclose — an empty expander would be a dead end.
-    renderSection([event(0, 'transfer')], [event(1, 'core_metrics')]);
-    expect(screen.queryByText(/execution diagnostics/)).not.toBeInTheDocument();
   });
 
   it('says nothing was emitted when the consensus stream is empty', () => {

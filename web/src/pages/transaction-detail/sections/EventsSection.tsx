@@ -21,7 +21,7 @@ import { HighlightedJson } from '../op-card/HighlightedJson.js';
 interface EventsSectionProps {
   /** The consensus stream: `contract` + `system`, tx-level and per-operation. */
   contractEvents: XdrEventDto[];
-  /** The host's debug channel — see the diagnostics disclosure below. */
+  /** The host's debug channel, listed raw — see the section doc. */
   diagnosticEvents: XdrEventDto[];
 }
 
@@ -52,13 +52,6 @@ function eventChip(event: XdrEventDto) {
     return <Chip size="sm" color="blue" label="Contract" />;
   }
   return <Chip size="sm" color="neutral" label="Diagnostic" />;
-}
-
-/** Host resource counters (instructions, memory, ledger reads) — the bulk of
- *  the debug channel and the least of its meaning. The execution trace drops
- *  them for the same reason. */
-function isHostCounter(event: XdrEventDto): boolean {
-  return symTopic(event, 0) === 'core_metrics';
 }
 
 function EventTable({
@@ -136,21 +129,30 @@ function EventTable({
 }
 
 /**
- * The transaction's events, in the two channels the protocol actually defines.
+ * The transaction's events — two records, kept apart instead of concatenated.
  *
- * `contractEvents` is the consensus stream — `contract` + `system` events from
- * the tx-level and per-operation containers, hashed into the ledger. It is
- * what CAP-67 and `getEvents` mean by the events of a transaction, and it is
- * the count this card advertises.
+ * `contractEvents` is the consensus stream: `contract` + `system` events from
+ * the tx-level and per-operation containers, hashed into the ledger. It is what
+ * CAP-67 and `getEvents` mean by the events of a transaction, so it alone is
+ * the list and the count this card advertises.
  *
- * `diagnosticEvents` is the host's debug channel. It is not hashed, `getEvents`
- * does not return it, and with diagnostic mode on — always, for the archive we
- * read — it carries a byte-identical COPY of every consensus event alongside
- * the call trace and the resource counters. Merging the two into one list, as
- * this section used to, therefore printed the same transfer twice and inflated
- * the headline count (measured: 100 % copy rate over 394 342 V4 transactions,
- * task 0182). They are one channel about the other, not a continuation of it,
- * so they render as two.
+ * `diagnosticEvents` is the host's debug channel, shown raw under its own
+ * disclosure. Not hashed, not returned by `getEvents`, so it is not counted as
+ * events — but it is not trimmed for tidiness either. The copies stay, exactly
+ * as the ledger carries them: the execution trace on the operation card is a
+ * readable rendering of these rows (the Stellar docs say the container exists
+ * for "building the contract call stack"), and this table is the unprocessed
+ * original it is derived from.
+ *
+ * The single exception is `core_metrics`. Those render in full one card up,
+ * under Resources, and `readResourceCounters` is total — it cannot silently
+ * drop one — so nothing leaves the page by omitting them here. What it buys is
+ * that the four rows describing the execution are not buried under nineteen
+ * rows of meter readings, which is the noise the issue reported.
+ *
+ * The bug in issue #378 was never that any of it was visible. It was that the
+ * two records were CONCATENATED: one list, one count, so a transaction that
+ * emitted three events advertised twenty-seven and printed its transfer twice.
  */
 export function EventsSection({
   contractEvents,
@@ -162,17 +164,15 @@ export function EventsSection({
   const [open, setOpen] = useState(false);
   const [diagOpen, setDiagOpen] = useState(false);
 
-  // `core_metrics` never appears here. It is the host's resource meter — the
-  // same nineteen counters on every transaction, carrying no order, no nesting
-  // and no relation to what the contract did. One record with nineteen fields,
-  // transported as nineteen events. It renders on the invoke operation card as
-  // a Resources strip instead (`op-card/resources.ts`), which is where every
-  // other explorer puts it and where `getEvents` implies it belongs — outside
-  // the event stream entirely. Dropping it takes a minimal Soroban
-  // transaction's diagnostics from 21 rows to 2.
-  const diagShown = diagnosticEvents.filter((e) => !isHostCounter(e));
-
   const total = contractEvents.length;
+  // `core_metrics` is the one thing this table leaves out, and only because
+  // the Resources disclosure on the operation card renders every one of them
+  // in full (`readResourceCounters` is total — it cannot drop a counter). On
+  // a minimal Soroban transaction they are 19 of 24 rows, all saying the same
+  // kind of thing, and they would bury the four that describe the execution.
+  const diagnostics = diagnosticEvents.filter(
+    (e) => symTopic(e, 0) !== 'core_metrics'
+  );
   const plural = (n: number, word: string) =>
     `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -201,14 +201,14 @@ export function EventsSection({
         </>
       )}
 
-      {diagShown.length > 0 && (
+      {diagnostics.length > 0 && (
         <>
           <DisclosureRow
             open={diagOpen}
             onToggle={() => setDiagOpen((v) => !v)}
-            label={`${diagOpen ? 'Hide' : 'Show'} execution diagnostics (${
-              diagShown.length
-            })`}
+            label={`${diagOpen ? 'Hide' : 'Show'} ${
+              diagnostics.length
+            } diagnostic ${diagnostics.length === 1 ? 'entry' : 'entries'}`}
             sx={(theme) => ({
               px: 2,
               py: 1.25,
@@ -221,12 +221,19 @@ export function EventsSection({
                 variant="bodySmRegular"
                 sx={(theme) => ({ color: theme.palette.text.tertiary })}
               >
-                The host's debug channel — the call trace, contract logs,
-                failure diagnostics, and a copy of each event above. Not hashed
-                into consensus and not part of the transaction's event stream.
+                The host's debug channel, raw: the call trace, contract logs,
+                failure diagnostics, and byte-identical copies of the contract's
+                own events above. Not hashed into consensus and not returned by{' '}
+                <code>getEvents</code>, which is why it is kept out of the event
+                count — not out of the page. The execution trace on the
+                operation card is a readable view of these same rows; the{' '}
+                <code>core_metrics</code> counters are the one thing listed only
+                there, in full, under Resources.
               </Typography>
             </Box>
-            <EventTable events={diagShown} showWhere={false} />
+            {/* No `Where`: the debug channel states no position. What raised
+                an entry is the trace's answer, and it is one card up. */}
+            <EventTable events={diagnostics} showWhere={false} />
           </Collapse>
         </>
       )}

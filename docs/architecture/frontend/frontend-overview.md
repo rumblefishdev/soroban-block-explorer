@@ -393,6 +393,10 @@ selected operation:
   the contract events attached to the call that raised them, and — on a
   failed transaction — a truthful "stopped here" on the calls that never
   returned. `core_metrics` host counters are excluded;
+- a **Resources** disclosure carrying those `core_metrics` counters — all
+  nineteen, full integers with US grouping, on any Soroban operation
+  (footprint extend/restore are metered too and raise no `fn_call`, so the
+  counters are the only thing the host says about them);
 - when a transaction carries no diagnostic events, the card falls back to
   the **authorized-calls** tree fed by `heavy.operation_tree`. That is the
   auth-entry tree (what the transaction was signed to do), and the backend
@@ -406,10 +410,39 @@ selected operation:
 
 Consumed heavy fields: `operations[].details`, `operations[].result_code`
 (per-op result names straight from the XDR library — the fail-reason source),
-`operation_tree`, `diagnostic_events` (execution trace + raw table),
+`operation_tree`, `diagnostic_events` (execution trace + Resources counters),
 `contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
 `envelope_xdr`, `result_xdr`, `result_meta_xdr`.
 Large payload areas stay collapsible.
+
+#### Events section — one list, the consensus stream (issue #378)
+
+The transaction's **Events** card lists `heavy.contract_events` only: the
+tx-level and per-operation containers, hashed into the ledger, which is what
+CAP-67 and `getEvents` mean by the events of a transaction. Its `Where` column
+names the raising operation (`op_index`) or, for tx-level events, the CAP-67
+`stage` (`before all txs` / `after all txs`) — `event_index` follows XDR
+container order, so the fee refund is numbered ahead of the operation it
+refunds and the number alone would read as a timeline it is not.
+
+`heavy.diagnostic_events` sits under its own disclosure, **raw** — the call
+trace, contract logs, failure diagnostics, and the byte-identical copies of the
+contract's own events that the container carries when diagnostic mode is on
+(always, for the archive we read). The copies are not trimmed for tidiness: the
+execution trace on the operation card is a readable rendering of these rows,
+not a replacement for them, and the raw table stays as the record it derives
+from.
+
+`core_metrics` is the single omission, and only because `readResourceCounters`
+is **total** — it cannot silently drop a counter, whatever shape the value
+arrives in — so the Resources disclosure is a complete record of them and
+nothing leaves the page. On a minimal Soroban transaction they are 19 of 24
+rows, and listing them here would bury the four that describe the execution.
+
+The two never merge, and only the consensus stream is counted. That merge was
+the whole of issue #378: one list and one number for two different records, so
+a transaction that emitted 3 events advertised 27 and printed its transfer
+twice. Separating the records fixes it; hiding rows was never needed.
 
 ### 6.5 Ledgers (`/ledgers`)
 
