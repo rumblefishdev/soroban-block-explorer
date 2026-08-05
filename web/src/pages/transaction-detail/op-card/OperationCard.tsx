@@ -111,9 +111,13 @@ export function OperationCard({
     : [];
   // Resource counters belong to the Soroban invocation, and a Soroban tx
   // carries exactly one (protocol rule) — so per-tx equals per-op here.
-  const counters = isInvoke
+  // Gated on `soroban`, not `isInvoke`: footprint extend/restore run through
+  // the same host and are metered the same way. They raise no `fn_call`, so
+  // they get no trace — the counters are the only thing the host says about
+  // them, and the narrower gate used to swallow those silently.
+  const counters = soroban
     ? readResourceCounters(diagnosticEvents)
-    : new Map<string, number>();
+    : new Map<string, number | string>();
   const allCounters = allResourceFacts(counters);
   const callNodes =
     isInvoke && traceNodes.length === 0

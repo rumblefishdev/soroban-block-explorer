@@ -28,19 +28,32 @@ import { symTopic } from './ExecutionTrace.js';
  * same thing here.
  */
 
-/** Counter name → value, for every `core_metrics` event in the stream. */
+/** Counter name → value, for EVERY `core_metrics` event in the stream.
+ *
+ *  Total by construction. This panel is the only place the counters render —
+ *  the raw diagnostics table leaves them to it — so a counter dropped here is
+ *  a counter deleted from the page, and "18 of 19, silently" is precisely the
+ *  failure this codebase refuses. Nothing is skipped: an unexpected shape
+ *  passes through verbatim and is displayed as it arrived.
+ *
+ *  The decoder emits u64 as a JSON number, and every counter observed on
+ *  mainnet is far below 2^53, so the common path loses no precision. A value
+ *  arriving as a decimal string (a big int) is kept as that string rather than
+ *  coerced into a wrong number. */
 export function readResourceCounters(
   events: readonly XdrEventDto[]
-): Map<string, number> {
-  const out = new Map<string, number>();
+): Map<string, number | string> {
+  const out = new Map<string, number | string>();
   for (const event of events) {
     if (symTopic(event, 0) !== 'core_metrics') continue;
-    const name = symTopic(event, 1);
+    const name = symTopic(event, 1) ?? `(unnamed #${event.event_index})`;
     const raw = (event.data as { value?: unknown } | null)?.value;
-    // The decoder emits u64 as a JSON number. Every counter observed on
-    // mainnet is far below 2^53, so no precision is lost; a value that ever
-    // arrived as a string is skipped rather than coerced into a wrong number.
-    if (name != null && typeof raw === 'number') out.set(name, raw);
+    out.set(
+      name,
+      typeof raw === 'number' || typeof raw === 'string'
+        ? raw
+        : JSON.stringify(raw ?? null)
+    );
   }
   return out;
 }
@@ -58,10 +71,12 @@ export interface ResourceFact {
  * `max_rw_*` ceilings matter as much as `cpu_insn`.
  */
 export function allResourceFacts(
-  counters: Map<string, number>
+  counters: Map<string, number | string>
 ): ResourceFact[] {
   return [...counters].map(([label, value]) => ({
     label,
-    value: formatInteger(value),
+    // Grouping is for numbers we decoded. Anything else shows as it arrived —
+    // formatting an unparsed value would dress it up as something we read.
+    value: typeof value === 'number' ? formatInteger(value) : value,
   }));
 }

@@ -75,6 +75,43 @@ describe('resource counters (#378)', () => {
     expect(all.at(-1)).toEqual({ label: 'max_emit_event_byte', value: '244' });
   });
 
+  it('drops no counter, whatever shape its value arrives in', () => {
+    // Load-bearing: the raw diagnostics table omits `core_metrics` BECAUSE
+    // this panel is total. A skip here would delete a counter from the page
+    // outright, and 18-of-19-without-saying-so is the failure mode that
+    // omission would license.
+    const odd = (name: string, data: unknown): XdrEventDto =>
+      ({
+        ...counter(name, 0),
+        data,
+      } as unknown as XdrEventDto);
+
+    const all = allResourceFacts(
+      readResourceCounters([
+        counter('cpu_insn', 5063570),
+        odd('big_counter', { type: 'u64', value: '18446744073709551615' }),
+        odd('shapeless', { type: 'void', value: null }),
+      ])
+    );
+    expect(all).toEqual([
+      { label: 'cpu_insn', value: '5,063,570' },
+      // A big int stays the digits it arrived as — never rounded, never gone.
+      { label: 'big_counter', value: '18446744073709551615' },
+      { label: 'shapeless', value: 'null' },
+    ]);
+  });
+
+  it('names a counter the host left unlabelled instead of discarding it', () => {
+    const nameless = {
+      ...counter('x', 7),
+      topics: [{ type: 'sym', value: 'core_metrics' }],
+      event_index: 12,
+    } as unknown as XdrEventDto;
+    expect(allResourceFacts(readResourceCounters([nameless]))).toEqual([
+      { label: '(unnamed #12)', value: '7' },
+    ]);
+  });
+
   it('reports nothing for a classic transaction, which emits no counters', () => {
     // Classic operations emit no diagnostics at all (CAP-67), so the
     // disclosure must not render an empty shell.
