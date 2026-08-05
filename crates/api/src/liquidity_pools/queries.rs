@@ -486,6 +486,63 @@ pub async fn fetch_pool_usd_analytics(
     })
 }
 
+/// SELECT column order MUST match this struct (clickhouse positional decode).
+#[derive(Debug, Row, Deserialize)]
+struct LastCloseChRow {
+    asset_kind: String,
+    asset_code: String,
+    issuer_address: String,
+    close_usd: Option<String>,
+}
+
+/// Batched last-hourly-close lookup for a page of pools (Phase A2, list-side
+/// TVL — issue #367's literal ask). ONE query per page, never per row: the
+/// prices views cannot prune by identity anyway (computed columns), so the
+/// cost is one bounded [`MAX_PRICE_CARRY_SECONDS`] window scan regardless of
+/// how many identities the page carries; the OR-chain only trims the result
+/// set. Unpriceable legs (empty `kind`) are filtered out by the caller.
+///
+/// Returns `(kind, code, issuer) → close_usd`; identities with no priced
+/// candle in the window are simply absent.
+async fn fetch_last_closes(
+    client: &clickhouse::Client,
+    legs: &[&PriceLeg],
+) -> Result<std::collections::HashMap<(String, String, String), f64>, clickhouse::error::Error> {
+    if legs.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let identity_or = std::iter::repeat_n(
+        "(asset_kind = ? AND asset_code = ? AND issuer_address = ?)",
+        legs.len(),
+    )
+    .collect::<Vec<_>>()
+    .join(" OR ");
+    let sql = format!(
+        "SELECT asset_kind, asset_code, issuer_address, \
+                toString(nullIf(argMax(close_usd, bucket), 0)) AS close_usd \
+         FROM prices.price_usd_series_1h \
+         WHERE ({identity_or}) \
+           AND bucket >= now() - INTERVAL {carry} SECOND \
+         GROUP BY asset_kind, asset_code, issuer_address",
+        carry = MAX_PRICE_CARRY_SECONDS,
+    );
+    let mut query = client.query(&sql);
+    for leg in legs {
+        query = query
+            .bind(leg.kind)
+            .bind(leg.code.as_str())
+            .bind(leg.issuer.as_str());
+    }
+    let rows = query.fetch_all::<LastCloseChRow>().await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let close = r.close_usd.as_deref().and_then(parse_f64)?;
+            Some(((r.asset_kind, r.asset_code, r.issuer_address), close))
+        })
+        .collect())
+}
+
 /// Strict decimal-string → f64 (the wire strings come from CH `toString`
 /// over Decimal columns; anything non-parseable degrades to None, never 500).
 fn parse_f64(s: &str) -> Option<f64> {
@@ -1268,9 +1325,6 @@ struct PoolListChRow {
     reserve_a: Option<String>,
     reserve_b: Option<String>,
     total_shares: Option<String>,
-    tvl: Option<String>,
-    volume: Option<String>,
-    fee_revenue: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
 }
 
@@ -1472,9 +1526,6 @@ pub async fn fetch_pool_list(
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
              toString(s.total_shares)                        AS total_shares, \
-             toString(s.tvl)                                 AS tvl, \
-             toString(s.volume)                              AS volume, \
-             toString(s.fee_revenue)                         AS fee_revenue, \
              nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms \
          FROM page lp \
          LEFT JOIN ( \
@@ -1482,10 +1533,7 @@ pub async fn fetch_pool_list(
                 toNullable(max(ledger_sequence))                  AS latest_ledger_sequence, \
                 argMax(toNullable(reserve_a), ledger_sequence)    AS reserve_a, \
                 argMax(toNullable(reserve_b), ledger_sequence)    AS reserve_b, \
-                argMax(toNullable(total_shares), ledger_sequence) AS total_shares, \
-                argMax(tvl, ledger_sequence)                      AS tvl, \
-                argMax(volume, ledger_sequence)                   AS volume, \
-                argMax(fee_revenue, ledger_sequence)              AS fee_revenue \
+                argMax(toNullable(total_shares), ledger_sequence) AS total_shares \
              FROM liquidity_pool_snapshots \
              WHERE pool_id IN (SELECT pool_id FROM page) \
                AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
@@ -1554,41 +1602,91 @@ pub async fn fetch_pool_list(
         .collect();
     let accounts = resolve_accounts(client, issuer_ids).await?;
 
+    // Phase A2 (issue #367): per-row USD TVL, computed like the detail
+    // endpoint (latest reserves × last 1h close per leg; both legs required)
+    // from ONE batched price lookup over the page's distinct identities.
+    // `volume`/`fee_revenue` stay NULL on the list — detail-only semantics.
+    // A prices error degrades every row to NULL TVL (error-logged), it does
+    // not fail the list: same resilience contract as the detail endpoint.
+    let page_legs: Vec<(PriceLeg, PriceLeg)> = rows
+        .iter()
+        .map(|r| {
+            let issuer_a = accounts.get(&r.asset_a_issuer_id).map(String::as_str);
+            let issuer_b = accounts.get(&r.asset_b_issuer_id).map(String::as_str);
+            (
+                price_leg(r.asset_a_type, r.asset_a_code.as_deref(), issuer_a),
+                price_leg(r.asset_b_type, r.asset_b_code.as_deref(), issuer_b),
+            )
+        })
+        .collect();
+    let mut unique_legs: Vec<&PriceLeg> = page_legs
+        .iter()
+        .flat_map(|(a, b)| [a, b])
+        .filter(|l| !l.kind.is_empty())
+        .collect();
+    unique_legs
+        .sort_unstable_by(|a, b| (a.kind, &a.code, &a.issuer).cmp(&(b.kind, &b.code, &b.issuer)));
+    unique_legs.dedup();
+    let closes = match fetch_last_closes(client, &unique_legs).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("DB error in fetch_last_closes (list TVL degraded to NULL): {e}");
+            std::collections::HashMap::new()
+        }
+    };
+    let close_of = |leg: &PriceLeg| {
+        closes
+            .get(&(leg.kind.to_string(), leg.code.clone(), leg.issuer.clone()))
+            .copied()
+    };
+
     Ok(rows
         .into_iter()
-        .map(|r| PoolRow {
-            pool_id_hex: r.pool_id_hex,
-            asset_a_type: r.asset_a_type,
-            asset_a_type_name: asset_type_name(r.asset_a_type),
-            asset_a_code: r.asset_a_code,
-            asset_a_issuer: accounts
-                .get(&r.asset_a_issuer_id)
-                .cloned()
-                .filter(|s| !s.is_empty()),
-            asset_a_contract_id: r.asset_a_contract_id,
-            asset_a_icon_url: r.asset_a_icon_url,
-            asset_b_type: r.asset_b_type,
-            asset_b_type_name: asset_type_name(r.asset_b_type),
-            asset_b_code: r.asset_b_code,
-            asset_b_issuer: accounts
-                .get(&r.asset_b_issuer_id)
-                .cloned()
-                .filter(|s| !s.is_empty()),
-            asset_b_contract_id: r.asset_b_contract_id,
-            asset_b_icon_url: r.asset_b_icon_url,
-            fee_bps: r.fee_bps,
-            fee_percent: fee_percent_str(r.fee_bps),
-            created_at_ledger: r.created_at_ledger,
-            cursor_ledger: r.cursor_ledger,
-            participant_count: r.participant_count,
-            latest_snapshot_ledger: r.latest_snapshot_ledger,
-            reserve_a: r.reserve_a,
-            reserve_b: r.reserve_b,
-            total_shares: r.total_shares,
-            tvl: r.tvl,
-            volume: r.volume,
-            fee_revenue: r.fee_revenue,
-            latest_snapshot_at: r.latest_snapshot_at_ms.map(millis_to_utc),
+        .zip(page_legs)
+        .map(|(r, (leg_a, leg_b))| {
+            let tvl = match (
+                r.reserve_a.as_deref().and_then(parse_f64),
+                r.reserve_b.as_deref().and_then(parse_f64),
+                close_of(&leg_a),
+                close_of(&leg_b),
+            ) {
+                (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(usd_str(ra * pa + rb * pb)),
+                _ => None,
+            };
+            PoolRow {
+                pool_id_hex: r.pool_id_hex,
+                asset_a_type: r.asset_a_type,
+                asset_a_type_name: asset_type_name(r.asset_a_type),
+                asset_a_code: r.asset_a_code,
+                asset_a_issuer: accounts
+                    .get(&r.asset_a_issuer_id)
+                    .cloned()
+                    .filter(|s| !s.is_empty()),
+                asset_a_contract_id: r.asset_a_contract_id,
+                asset_a_icon_url: r.asset_a_icon_url,
+                asset_b_type: r.asset_b_type,
+                asset_b_type_name: asset_type_name(r.asset_b_type),
+                asset_b_code: r.asset_b_code,
+                asset_b_issuer: accounts
+                    .get(&r.asset_b_issuer_id)
+                    .cloned()
+                    .filter(|s| !s.is_empty()),
+                asset_b_contract_id: r.asset_b_contract_id,
+                asset_b_icon_url: r.asset_b_icon_url,
+                fee_bps: r.fee_bps,
+                fee_percent: fee_percent_str(r.fee_bps),
+                created_at_ledger: r.created_at_ledger,
+                cursor_ledger: r.cursor_ledger,
+                participant_count: r.participant_count,
+                latest_snapshot_ledger: r.latest_snapshot_ledger,
+                reserve_a: r.reserve_a,
+                reserve_b: r.reserve_b,
+                total_shares: r.total_shares,
+                tvl,
+                volume: None,
+                fee_revenue: None,
+                latest_snapshot_at: r.latest_snapshot_at_ms.map(millis_to_utc),
+            }
         })
         .collect())
 }

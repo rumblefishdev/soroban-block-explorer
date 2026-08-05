@@ -159,10 +159,11 @@ pub struct PoolItem {
     pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
-    /// **Detail endpoint only** — the list returns `null` (list-side TVL is
-    /// a follow-up). `tvl` = latest reserves × each leg's last hourly USD
-    /// close (`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless
-    /// both legs price (never a one-leg partial).
+    /// Populated on **both** the list (Phase A2, one batched price lookup
+    /// per page) and the detail endpoint. `tvl` = latest reserves × each
+    /// leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
+    /// stale); `null` unless both legs price (never a one-leg partial) —
+    /// untracked assets and stale pools read `null`.
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced

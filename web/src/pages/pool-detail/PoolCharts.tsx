@@ -135,28 +135,25 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
    * where the chosen metric is null so the chart doesn't render gaps as
    * zero values.
    */
-  const { points, allNull } = useMemo(() => {
-    if (!data) return { points: [], allNull: false };
+  const points = useMemo(() => {
+    if (!data) return [];
     const field: 'tvl' | 'volume' | 'fee_revenue' =
       metric === 'fees' ? 'fee_revenue' : metric;
-    let nonNullSeen = false;
     const pts: TimeSeriesPoint[] = [];
     for (const row of data.data_points) {
       const raw = row[field];
       if (raw == null) continue;
       const num = Number(raw);
       if (!Number.isFinite(num)) continue;
-      nonNullSeen = true;
       pts.push({ timestamp: row.bucket, value: num });
     }
-    return { points: pts, allNull: !nonNullSeen };
+    return pts;
   }, [data, metric]);
 
-  // Series-null overlay per 0215 §6.14. The placeholder is intentional UX
-  // until task 0199 (LP analytics, blocked-on-oracle) ships; 0250 removes
-  // it. Tabs and range pills stay live so the structure reads as the
-  // Figma chart card even when the chart body is empty.
-  const showPendingOraclePlaceholder = !isLoading && !isError && allNull;
+  // An all-null series (unpriceable pool, or a provider-side price gap)
+  // falls through to the chart's built-in empty state — the 0215-era
+  // "pending the price oracle" placeholder was deleted when 0199 shipped
+  // real values.
 
   // Latest point drives the chart heading (Figma `325:22339` headline
   // shows the last value + its bucket date).
@@ -207,21 +204,6 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
             onRetry={() => void refetch()}
             py={4}
           />
-        ) : showPendingOraclePlaceholder ? (
-          <Stack spacing={0.5} sx={{ py: 4, textAlign: 'center' }}>
-            <Typography
-              variant="bodyMedium"
-              sx={(theme) => ({ color: theme.palette.text.secondary })}
-            >
-              Chart data not yet available
-            </Typography>
-            <Typography
-              variant="bodySmMedium"
-              sx={(theme) => ({ color: theme.palette.text.tertiary })}
-            >
-              Pending the price-oracle integration (task 0199).
-            </Typography>
-          </Stack>
         ) : (
           <TimeSeriesChart
             data={points}
@@ -265,29 +247,17 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
 }
 
 /**
- * ponytail: build-time kill-switch for the whole chart card. Every metric
- * series is NULL until the price-oracle API lands (lore-0341, blocked on
- * 0199 + 0215), so we hide the card entirely rather than render a permanent
- * "pending" placeholder. Flip to `true` — and delete the pending-oracle
- * branch in `PoolChartsContent` — once the endpoint returns real data.
- */
-const CHARTS_ENABLED = false;
-
-/**
  * Chart card on the LP detail page (Figma node `325:22339`). One chart
  * with three metric tabs (TVL / Volume / Fees) and a four-preset range
  * selector (1D / 7D / 30D / 1Y). Lazy-fetched: the chart endpoint is
  * only hit when the section scrolls into view.
  *
- * Currently disabled behind `CHARTS_ENABLED` (see above): all three metric
- * series come back null until task 0199 ships the price-oracle integration,
- * so the card does not render at all. When re-enabled, the inline
- * "Chart data not yet available" placeholder (per 0215 §6.14) covers the
- * interim null-series state.
+ * The pre-0199 `CHARTS_ENABLED` kill-switch and the "pending the price
+ * oracle" placeholder are gone: the chart endpoint returns real USD
+ * series (task 0199 compute-at-read). An unpriceable pool renders the
+ * chart's built-in empty state.
  */
 export function PoolCharts({ poolId }: PoolChartsProps) {
-  if (!CHARTS_ENABLED) return null;
-
   return (
     <LazySection
       placeholder={<CardSkeleton />}
