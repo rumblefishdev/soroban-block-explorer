@@ -2,7 +2,11 @@ import { Box, Typography } from '@mui/material';
 
 import type { EntityType } from '@rumblefish/api-types';
 
-import { ENTITY_LABEL, TAB_ORDER } from './useSearchResults.js';
+import {
+  ENTITY_LABEL,
+  SEARCH_GROUP_LIMIT,
+  TAB_ORDER,
+} from './useSearchResults.js';
 
 interface SearchResultsTabsProps {
   activeTab: EntityType;
@@ -115,7 +119,7 @@ function CountBadge({ count }: { count: number }) {
           lineHeight: 1,
         })}
       >
-        {count}
+        {count >= SEARCH_GROUP_LIMIT ? `${count}+` : count}
       </Typography>
     </Box>
   );

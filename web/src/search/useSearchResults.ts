@@ -41,6 +41,13 @@ interface UseSearchResultsParams {
   q: string;
 }
 
+/**
+ * Per-entity result cap sent to `/search`. A saturated bucket means "at least
+ * this many", never "exactly this many" — the badge renders `N+` at the cap so
+ * a truncated bucket is not read as a total (0377 F7).
+ */
+export const SEARCH_GROUP_LIMIT = 10;
+
 export interface SearchResultsState {
   effectiveQuery: string;
   data: SearchResults | undefined;
@@ -63,7 +70,12 @@ export function useSearchResults({
   const enabled = effectiveQuery.length > 0;
 
   const query = useQuery({
-    ...getSearchOptions({ query: { q: effectiveQuery } }),
+    // Sent explicitly rather than relying on the server default, so the cap
+    // the badge reasons about and the cap the API applies are one value and
+    // cannot drift (0377 F7).
+    ...getSearchOptions({
+      query: { q: effectiveQuery, limit: SEARCH_GROUP_LIMIT },
+    }),
     ...searchPolicy,
     enabled,
   });
