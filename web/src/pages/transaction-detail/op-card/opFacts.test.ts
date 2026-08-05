@@ -30,7 +30,9 @@ describe('opFacts', () => {
         poolIds: ['c4f1', '9d02'],
       })
     );
-    expect(facts).toEqual([{ label: 'Received', value: '—' }]);
+    // "not derivable", not a bare dash: the swap succeeded, so an amount was
+    // delivered — we just cannot compute it from the claimed atoms (0377 F7).
+    expect(facts).toEqual([{ label: 'Received', value: 'not derivable' }]);
   });
 
   it('omits the Received slot for strict-receive (exact amount is in the headline)', () => {

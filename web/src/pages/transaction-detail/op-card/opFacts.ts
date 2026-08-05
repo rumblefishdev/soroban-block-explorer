@@ -29,7 +29,10 @@ export function opFacts(
   // no count fact needed.
   const facts: OpFact[] = [];
   if (light.type_name === 'PATH_PAYMENT_STRICT_SEND') {
-    facts.push({ label: 'Received', value: '—' });
+    // The delivered amount exists on-chain but is not derivable from the
+    // claimed atoms we hold, so it is unknown — not zero. A bare "—" on a
+    // SUCCESSFUL swap reads as "received nothing" (0377 F7).
+    facts.push({ label: 'Received', value: 'not derivable' });
   }
   return facts;
 }

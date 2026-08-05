@@ -207,11 +207,15 @@ export function ContractInterface({ contractId }: { contractId: string }) {
   // `interface_metadata` is `null` for SAC / pre-upload / stub rows.
   const parsed = data?.interface_metadata ?? null;
   if (parsed == null || parsed.functions.length === 0) {
+    // Three states collapse here — SAC, pre-upload, and "WASM not parsed yet"
+    // (stub / pre-0327 row, see ContractDetailResponse.upgradeable). Naming
+    // only the first two tells a merely-unparsed contract it is a SAC, so the
+    // copy states the fact and offers the causes (0377 F7).
     return (
       <EmptyState
         icon={<InfoOutlinedIcon fontSize="small" />}
-        title="No public interface"
-        description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
+        title="No interface metadata"
+        description="No WASM interface is recorded for this contract — it may be a Stellar Asset Contract, a pre-upload contract, or not parsed yet."
       />
     );
   }
