@@ -107,6 +107,14 @@ export function humanizeOp(
     case 'PAYMENT':
       if (light.destination_account != null) {
         const details = detailsObj(heavy);
+        // The 'XLM' fallback is CORRECT here, despite the doc only saying
+        // "asset code for classic asset operations": on a payment a null code
+        // does mean native. Verified on prod (0377 F7) — of 36_279_761 payment
+        // appearances in the last 200k ledgers, blank `asset_code` and absent
+        // `asset_issuer_id` coincide exactly (1_456_627 both ways, 0
+        // one-sided), and the parser documents native as "NULL asset_code +
+        // NULL issuer_id" (`SacAssetIdentity::Native`). Dropping the fallback
+        // would replace a correct label with a vaguer one.
         const unit = assetUnit(details?.asset, light.asset_code ?? 'XLM');
         const amount = asAmount(details?.amount);
         const target = isSelf(light, txSourceAccount)
