@@ -55,6 +55,21 @@ history:
       maintenance), and queue age alone being insufficient because failures
       draining to the DLQ make it read green. Child triage in
       notes/S-child-task-triage.md: eight genuine instances, not sixteen.
+  - date: 2026-08-05
+    status: active
+    who: karolkow
+    note: >
+      Surveyed all four surfaces — logs, metrics, dashboard, alarms — and checked
+      each statement against the account; results in
+      notes/R-deep-review-findings-2026-08-04.md. Three earlier statements did
+      not survive measurement and are recorded as refuted, including a proposed
+      enrichment regression: sampling 16 issuer domains directly found no case
+      where metadata is published and the row is blank, so the blank rows track
+      the population rather than the pipeline. The single periodic comparator is
+      set aside — the infrastructure comparison already runs and its output was
+      read twice while the delta stayed open. Widest-effect candidate is an
+      `infra/` test asserting that each filter string and metric namespace
+      appears in `crates/`, which covers the class rather than an instance.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -101,6 +116,19 @@ load-bearing results:
 - Two alarms have been latched in ALARM for 15 and 32 days. In 90 days no alarm
   in the account has changed state other than that pair and one manual test.
 
+A wider survey on the same date covered all four surfaces — logs, metrics,
+dashboard and alarms — and is recorded in
+[R — measured state](notes/R-deep-review-findings-2026-08-04.md). It carries the
+per-surface measurements, three statements that measurement refuted, and the
+candidate work ordered by breadth of effect. Two results from it change this
+task's shape:
+
+- The scope is wider than the alarm set. The three Lambdas take different
+  telemetry routes, seven dashboard widgets have no alarm and two alarms have no
+  widget, and log retention holds three different values.
+- Notification volume concentrates in one alarm: 24 of 32 transitions in a month
+  originated from 48 errors, all self-clearing within minutes.
+
 ## Defect 1 — declared vs actual, never compared
 
 | Declared in             | Actual                 | Instance                                                                   |
@@ -112,9 +140,24 @@ load-bearing results:
 | protocol tables in code | the chain              | [[0434]]                                                                   |
 | test files in repo      | what CI runs           | [[0406]] — 25 e2e files no pipeline has executed                           |
 
-Fix shape: **one periodic comparator**, many subjects. Emit the deltas, fail
-loudly. [[0312]] shows the comparison itself is rarely the hard part — `cdk diff`
-already answers it. The deliverable is the schedule and a human-visible output.
+A single periodic comparator was the first candidate and is **set aside** — see
+[R — measured state](notes/R-deep-review-findings-2026-08-04.md). For
+infrastructure the comparison already runs: `make diff-production` reports this
+delta, its output was read on 2026-06-22 and measured again on 2026-07-27, and
+the delta was still pending on 2026-08-04. Adding a schedule to a report that is
+already produced does not change that.
+
+Each row instead takes the cheapest check that sits where it can be acted on,
+and they are deliberately different mechanisms:
+
+| Instance | Check                                                                                                                             |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| [[0312]] | A confirmation step at deploy. `make deploy-production` is `--all`, so an undeployed delta ships with the next deploy of anything |
+| [[0406]] | Not a comparison — the gap is recorded since 2026-07-17. Add ClickHouse to the CI job                                             |
+| [[0400]] | A one-off reconciliation of four enumerated items; whether schema changes route through the repo is a separate question           |
+| [[0434]] | A unit test asserting the match arms cover the crate's enum                                                                       |
+| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                                  |
+| [[0454]] | Covered by an `infra/` test asserting each filter string appears in `crates/` — one check for the whole class                     |
 
 ## Defect 2 — health measured by success
 
