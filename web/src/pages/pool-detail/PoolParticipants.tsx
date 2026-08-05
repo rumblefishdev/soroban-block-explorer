@@ -10,6 +10,7 @@ import {
   QueryErrorState,
   useCursorPagination,
   formatAmount,
+  formatInteger,
   formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -74,6 +75,9 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
 
 interface PoolParticipantsProps {
   poolId: string;
+  /** The pool header's own `participant_count` — decides whether an empty page
+   *  means "none" or "we could not list them" (0377 F7). */
+  participantCount: number;
 }
 
 /**
@@ -81,7 +85,10 @@ interface PoolParticipantsProps {
  * of liquidity providers ordered by shares DESC. Fetched independently
  * of the rest of the page so failures stay scoped.
  */
-export function PoolParticipants({ poolId }: PoolParticipantsProps) {
+export function PoolParticipants({
+  poolId,
+  participantCount,
+}: PoolParticipantsProps) {
   // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
   // simultaneously, so each section needs its own URL key. `resetKey`
   // drops the cursor when the user navigates to a different pool.
@@ -113,13 +120,27 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
-    body = (
-      <EmptyState
-        icon={<GroupIcon />}
-        title="No participants yet"
-        description="This pool currently has no active liquidity providers."
-      />
-    );
+    // The pool header's own count decides which fact this is: only a zero
+    // count licenses "has no providers". A non-zero count with an empty page
+    // means we failed to list them, and saying otherwise contradicts the KPI
+    // strip on the same screen (0377 F7).
+    body =
+      participantCount === 0 ? (
+        <EmptyState
+          icon={<GroupIcon />}
+          title="No participants yet"
+          description="This pool currently has no active liquidity providers."
+        />
+      ) : (
+        <EmptyState
+          icon={<GroupIcon />}
+          variant="warning"
+          title="Participants unavailable"
+          description={`This pool has ${formatInteger(
+            participantCount
+          )} active liquidity providers, but none could be listed.`}
+        />
+      );
   } else {
     body = (
       <ExplorerTable
