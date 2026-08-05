@@ -740,6 +740,17 @@ export const overrides: Components<Theme> = {
         minHeight: 'unset',
         padding: '10px 16px',
         gap: 8,
+        // The hover fill and the focus ring need a radius of their own: a
+        // tab is a bare padded box, so without one both render as hard
+        // rectangles. TOP corners only — a tab sits ON the header's bottom
+        // border (and, when selected, on its 2px indicator), so rounding
+        // the bottom would lift the fill off that baseline and break the
+        // tab metaphor. `radius.s` matches the range pills in the same
+        // chart-card header, so one container speaks one corner language.
+        borderRadius: `${theme.shape.radius.s}px ${theme.shape.radius.s}px 0 0`,
+        transition: theme.transitions.create(['background-color', 'color'], {
+          duration: theme.transitions.duration.shorter,
+        }),
         '&.Mui-selected': {
           color: theme.palette.text.primary,
           fontWeight: 600,
@@ -747,6 +758,13 @@ export const overrides: Components<Theme> = {
         '&:hover:not(.Mui-selected):not(.Mui-disabled)': {
           color: theme.palette.text.primary,
           backgroundColor: alpha(theme.palette.surface.primaryMain, 0.15),
+        },
+        // Keyboard focus had no style at all and fell back to the browser
+        // default outline — also a hard rectangle. Same ring idiom as the
+        // interval pills.
+        '&:focus-visible': {
+          outline: `2px solid ${theme.palette.stroke.action}`,
+          outlineOffset: 2,
         },
         '&.Mui-disabled': {
           color: theme.palette.text.tertiary,
