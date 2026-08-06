@@ -1909,19 +1909,24 @@ fn tx_has_soroban_map(operations: &[(String, Vec<ExtractedOperation>)]) -> HashM
         .collect()
 }
 
-struct OpTyped {
-    destination: Option<String>,
-    contract_id: Option<String>,
-    asset_code: Option<String>,
-    asset_issuer: Option<String>,
+/// Canonical per-type projection of an operation's identity fields from its
+/// `details` JSON. Public because `audit-harness` (operations-order-diff)
+/// projects the SAME identity when diffing DB order against archive XDR —
+/// it previously kept a hand-maintained copy, which drifted (task 0455,
+/// finding 9); sharing the one implementation makes drift inexpressible.
+pub struct OpTyped {
+    pub destination: Option<String>,
+    pub contract_id: Option<String>,
+    pub asset_code: Option<String>,
+    pub asset_issuer: Option<String>,
     /// Liquidity pools touched by the op. Single-element for LP
     /// deposit/withdraw; the full crossed-pool list (from result claim
     /// atoms) for path payments; empty otherwise. Task 0261 / 0268.
-    pool_ids_hex: Vec<String>,
+    pub pool_ids_hex: Vec<String>,
 }
 
 impl OpTyped {
-    fn from_details(op_type: OperationType, details: &Value) -> Self {
+    pub fn from_details(op_type: OperationType, details: &Value) -> Self {
         let mut out = Self {
             destination: None,
             contract_id: None,
