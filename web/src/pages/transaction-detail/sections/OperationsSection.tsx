@@ -7,7 +7,7 @@ import { SectionCard } from '../../detail/SectionCard.js';
 import { buildOperationEntries } from './operationEntries.js';
 import { OperationCard } from '../op-card/OperationCard.js';
 import { OperationPicker } from './OperationPicker.js';
-import { StatusStrip } from '../shared/StatusStrip.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
@@ -46,29 +46,27 @@ export function OperationsSection({
     />
   );
 
-  // Two causes, one symptom: no heavy block at all, or a heavy block whose
-  // operations came back empty (the archive answered but this transaction's
-  // envelope was missing). Either way the picker falls back to the folded light
-  // rows — shorter than `count` — and the card's execution trace, authorized
-  // calls, events and route strip all resolve empty, each vanishing with no
-  // hint, so an invoke reads as "made no sub-calls and emitted no events".
-  // Testing the operations array rather than `heavy` catches both (0377 F7).
-  const executionDetailMissing = (tx.heavy?.operations?.length ?? 0) === 0;
+  // No archive data, no operation list. The DB's appearance index is NOT used
+  // as a stand-in: it folds same-identity operations into one row, so it would
+  // render "1" under a header that correctly says "4". The header count stays —
+  // it comes from the transaction row and is true — and the body says plainly
+  // that the operations could not be read (0377 F7).
+  if (entries.length === 0) {
+    return (
+      <SectionCard
+        title="Operations"
+        meta={`${count} Operation${count === 1 ? '' : 's'}`}
+      >
+        <UnavailableSection what="Operations" />
+      </SectionCard>
+    );
+  }
 
   return (
     <SectionCard
       title="Operations"
       meta={`${count} Operation${count === 1 ? '' : 's'}`}
     >
-      {executionDetailMissing && (
-        <StatusStrip tone="warning">
-          Execution detail unavailable — sub-calls, events and raw data could
-          not be read from the Stellar archive
-          {entries.length < count
-            ? `, and only ${entries.length} of ${count} operations can be listed`
-            : ''}
-        </StatusStrip>
-      )}
       <Box sx={{ p: 2 }}>
         {showPicker ? (
           <Grid container spacing={2}>

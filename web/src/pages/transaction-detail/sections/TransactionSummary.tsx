@@ -1,5 +1,6 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Stack, Typography } from '@mui/material';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import { Box, Stack, Typography } from '@mui/material';
 import {
   Chip,
   Dash,
@@ -15,7 +16,6 @@ import { SummaryRow } from '../../detail/SummaryRow.js';
 import { formatAbsoluteUtc } from '../../transactions/formatters.js';
 import { formatOperationType } from '../../transactions/operationTypes.js';
 import { describeMemo } from '../shared/describeMemo.js';
-import { StatusStrip } from '../shared/StatusStrip.js';
 import { UnavailableValue } from '../shared/Unavailable.js';
 
 interface TransactionSummaryProps {
@@ -113,26 +113,48 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
       }
     >
       {!tx.successful && (
-        <StatusStrip tone="error">
-          Transaction failed — no operation was applied
-          {/* The reason (task 0352). Two failure classes, one line each:
-              an operation failed → that op's result code; the transaction
-              never ran (validation) → the tx-level code, shown only when
-              it says more than the sentence already did ("TxFailed" is
-              the generic any-op-failed code, pure noise here). */}
-          {failReason != null
-            ? ` · ${failReason}`
-            : heavyUnavailable
-            ? // Without `heavy` we have neither per-op codes nor the tx-level
-              // code, and a bare sentence would read as the validation-failure
-              // class (the documented meaning of a null reason).
-              ' · reason unavailable'
-            : tx.heavy?.result_code != null &&
-              tx.heavy.result_code.length > 0 &&
-              tx.heavy.result_code !== 'TxFailed'
-            ? ` · ${tx.heavy.result_code}`
-            : ''}
-        </StatusStrip>
+        // Full-bleed status strip, not a floating alert box — the theme has
+        // no MuiAlert style, so the strip borrows the error Chip's palette
+        // (surface.error + text.error) to stay in the house style (0460 #8).
+        <Box
+          role="status"
+          sx={(theme) => ({
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 2,
+            py: 0.75,
+            backgroundColor: theme.palette.surface.error,
+            borderBottom: `1px solid ${theme.palette.stroke.error}`,
+          })}
+        >
+          <ErrorOutlineIcon
+            sx={(theme) => ({ fontSize: 16, color: theme.palette.text.error })}
+          />
+          <Typography
+            variant="bodySmRegular"
+            sx={(theme) => ({ color: theme.palette.text.error })}
+          >
+            Transaction failed — no operation was applied
+            {/* The reason (task 0352). Two failure classes, one line each:
+                an operation failed → that op's result code; the transaction
+                never ran (validation) → the tx-level code, shown only when
+                it says more than the sentence already did ("TxFailed" is
+                the generic any-op-failed code, pure noise here). */}
+            {failReason != null
+              ? ` · ${failReason}`
+              : heavyUnavailable
+              ? // Without `heavy` we have neither per-op codes nor the tx-level
+                // code, and a bare sentence would read as the validation-failure
+                // class (the documented meaning of a null reason).
+                ' · reason unavailable'
+              : tx.heavy?.result_code != null &&
+                tx.heavy.result_code.length > 0 &&
+                tx.heavy.result_code !== 'TxFailed'
+              ? ` · ${tx.heavy.result_code}`
+              : ''}
+          </Typography>
+        </Box>
       )}
       <SummaryRow
         cells={[
