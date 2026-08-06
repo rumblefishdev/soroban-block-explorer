@@ -46,7 +46,15 @@ export function SignaturesTable({ signatures }: SignaturesTableProps) {
   if (signatures.length === 0) {
     return (
       <SectionCard title="Signatures">
-        <HeavyUnavailable what="Signatures" />
+        {/* Carries its own explanation, unlike the sibling sections: those only
+            appear when the whole heavy block is absent, which also raises the
+            operations strip that explains it. Signatures can be empty while
+            operations are present (they come from tx meta, the signatures from
+            the envelope), so this can be the page's only sign of trouble. */}
+        <HeavyUnavailable
+          what="Signatures"
+          description="This transaction's envelope could not be read from the Stellar archive."
+        />
       </SectionCard>
     );
   }

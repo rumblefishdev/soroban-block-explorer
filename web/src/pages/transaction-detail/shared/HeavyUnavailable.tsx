@@ -1,5 +1,4 @@
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
-import { Button } from '@mui/material';
 import { EmptyState } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
@@ -13,30 +12,31 @@ import { EmptyState } from '@rumblefish/soroban-block-explorer-ui';
  * while an individual transaction's envelope is missing, in which case the
  * heavy block exists with empty fields.
  *
- * `onRetry` renders the house "Try again" affordance (`GenericErrorState`) —
- * the fetch is a transient S3 round-trip, so a refetch often succeeds.
+ * `description` is optional and deliberately omitted by most callers: several
+ * sections can be missing at once from the SAME cause, and repeating one
+ * sentence four times down a page reads as four failures rather than one. The
+ * operations strip carries the explanation for the page.
+ *
+ * No retry affordance here. The obvious one — refetching the whole transaction
+ * — belongs to the page, not to a section that cannot own the query, and a
+ * per-section button would fire N identical refetches. If it is ever wanted,
+ * pass `query.refetch` down from `index.tsx` rather than reintroducing a prop
+ * nothing supplies.
  */
 export function HeavyUnavailable({
   what,
-  onRetry,
+  description,
 }: {
   what: string;
-  onRetry?: () => void;
+  description?: string;
 }) {
   return (
     <EmptyState
       icon={<WarningAmberOutlinedIcon />}
       variant="warning"
       title={`${what} unavailable`}
-      description="This transaction's full data could not be read from the Stellar archive."
+      description={description}
       py={4}
-      action={
-        onRetry != null ? (
-          <Button variant="contained" onClick={onRetry}>
-            Try again
-          </Button>
-        ) : undefined
-      }
     />
   );
 }
