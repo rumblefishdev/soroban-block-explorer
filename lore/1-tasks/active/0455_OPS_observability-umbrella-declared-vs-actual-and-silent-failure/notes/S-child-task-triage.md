@@ -14,16 +14,16 @@ All sixteen were still `backlog` at the time of this triage.
 
 ## Genuine instances (8) — the umbrella retires or reshapes these
 
-| Task     | Defect | Note                                                                                                                                                   |
-| -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [[0454]] | 1 + 2  | The anchor. Alarm filter vs emitted strings, and lag emitted only on success                                                                           |
-| [[0400]] | 1      | `init.sql` vs prod schema. Carries a second comparison: architecture docs still describe a retired Postgres world                                      |
-| [[0312]] | 1      | CDK vs deployed. **The comparator already exists** — `make diff-production` reports it. Nothing schedules it                                           |
-| [[0406]] | 1      | Test files vs what CI runs. Cheapest comparator subject: gated-test count vs tests the pipeline executed                                               |
-| [[0434]] | 1      | Protocol tables vs the chain. Different mechanism — the reference is an external crate, not a repo file                                                |
-| [[0428]] | 2      | Refreshable MV reports rows from metadata; a failed refresh is indistinguishable from success                                                          |
-| [[0237]] | 2      | Reboot flag: the box knows, nothing asks. Different delivery path — not on CloudWatch                                                                  |
-| [[0382]] | 1      | Verify-range vs Horizon. **The strongest comparator in the set** and the umbrella never says so: our index is the declaration, the chain is the actual |
+| Task     | Defect | Note                                                                                                                                                         |
+| -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [[0454]] | 1 + 2  | The anchor. Alarm filter vs emitted strings, and lag emitted only on success                                                                                 |
+| [[0400]] | 1      | `init.sql` vs prod schema. Carries a second comparison: architecture docs still describe a retired Postgres world                                            |
+| [[0312]] | 1      | CDK vs deployed. **The comparator already exists** — `make diff-production` reports it. Nothing schedules it                                                 |
+| [[0406]] | 1      | **Closed 2026-08-06** — CI rust job provisions CH from compose + init.sql sidecar, runs both gates, red-verified by sabotage. First real Actions run pending |
+| [[0434]] | 1      | Protocol tables vs the chain. Different mechanism — the reference is an external crate, not a repo file                                                      |
+| [[0428]] | 2      | Refreshable MV reports rows from metadata; a failed refresh is indistinguishable from success                                                                |
+| [[0237]] | 2      | Reboot flag: the box knows, nothing asks. Different delivery path — not on CloudWatch                                                                        |
+| [[0382]] | 1      | Verify-range vs Horizon. **The strongest comparator in the set** and the umbrella never says so: our index is the declaration, the chain is the actual       |
 
 ## Cost cluster (3) — defect 3, related but its own thread
 
