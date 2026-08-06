@@ -451,18 +451,9 @@ export type ContractListItem = {
   is_sac: boolean;
   /**
    * Invocation count over the last 7 days (windowed; matches the detail
-   * `ContractStats.recent_invocations` semantics). NOT the contract's
-   * all-time total — `/contracts/{id}/invocations` pages the full history
-   * with no time bound, so this number is legitimately smaller.
+   * `ContractStats.recent_invocations` semantics).
    */
   recent_invocations: number;
-  /**
-   * Echoed window label (e.g. `"7 days"`) for `recent_invocations`, same
-   * field as on the detail's `ContractStats`. Carried on the list row too
-   * so a consumer reading only this endpoint can see the count is windowed
-   * rather than inferring an all-time total (0377 F6).
-   */
-  stats_window: string;
 };
 
 export type ContractStats = {
@@ -1275,18 +1266,9 @@ export type PaginatedContractListItem = {
     is_sac: boolean;
     /**
      * Invocation count over the last 7 days (windowed; matches the detail
-     * `ContractStats.recent_invocations` semantics). NOT the contract's
-     * all-time total — `/contracts/{id}/invocations` pages the full history
-     * with no time bound, so this number is legitimately smaller.
+     * `ContractStats.recent_invocations` semantics).
      */
     recent_invocations: number;
-    /**
-     * Echoed window label (e.g. `"7 days"`) for `recent_invocations`, same
-     * field as on the detail's `ContractStats`. Carried on the list row too
-     * so a consumer reading only this endpoint can see the count is windowed
-     * rather than inferring an all-time total (0377 F6).
-     */
-    stats_window: string;
   }>;
   page: PageInfo;
 };
