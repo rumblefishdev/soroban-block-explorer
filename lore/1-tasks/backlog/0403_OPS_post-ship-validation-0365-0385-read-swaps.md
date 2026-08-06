@@ -32,6 +32,25 @@ history:
       sorts + home_domain filter + cursor pagination), and the 0385 refresh
       memory check reads from system.query_log against the 6 GB cap. Only
       E20 (Horizon comparison) needs the e2e harness.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Read-only validation executed via chq (0455 quick-win sweep). lptxs:
+      old operations_appearances has(pool_ids) driver vs new operation_pools
+      prefix-seek, reduced to page-key equivalence (enrich path is shared) -
+      byte-identical 7/7: sparse(15 keys)/dense/mega(6.1M-row) pools, both
+      directions, plus a cursor page with each driver's own keyset form,
+      same ledger fence for both sides. acclist: ASC and ASC+home_domain
+      pages byte-identical; DESC first page and a below-watermark cursor
+      page differ ONLY by refresh skew - classified 100%: every divergent
+      account has live last_seen_ledger above the MV watermark (63826191 vs
+      live 63826200; 1/1 on the cursor page), zero row-set anomalies. 0385
+      refresh memory measured from query_log (fingerprinted by
+      written_rows/duration against view_refreshes): peak 734-744 MiB per
+      run vs the 6 GB box - no risk; cadence every 2 min reading 17.13M
+      rows/1.45 GB per run (0447's volume, confirmed live). Outstanding:
+      E20 vs Horizon (needs the e2e harness + network).
 ---
 
 # OPS: post-ship validation of the 0365 / 0385 read swaps
