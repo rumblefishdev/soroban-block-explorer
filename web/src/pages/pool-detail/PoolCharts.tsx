@@ -175,6 +175,30 @@ function IntervalPills({
   );
 }
 
+/** Two-line placeholder for an empty chart body. */
+function ChartEmptyState({ title, hint }: { title: string; hint: string }) {
+  return (
+    <Stack
+      spacing={0.5}
+      alignItems="center"
+      sx={{ py: 4, textAlign: 'center', maxWidth: 420, mx: 'auto' }}
+    >
+      <Typography
+        variant="bodyMedium"
+        sx={(theme) => ({ color: theme.palette.text.secondary })}
+      >
+        {title}
+      </Typography>
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
+        {hint}
+      </Typography>
+    </Stack>
+  );
+}
+
 interface PoolChartsProps {
   poolId: string;
 }
@@ -209,10 +233,32 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
     return pts;
   }, [data, metric]);
 
-  // An all-null series (unpriceable pool, or a provider-side price gap)
-  // falls through to the chart's built-in empty state — the 0215-era
-  // "pending the price oracle" placeholder was deleted when 0199 shipped
-  // real values.
+  /**
+   * Tell "nothing happened" apart from "we cannot price what happened".
+   *
+   * The endpoint emits a bucket row only where the pool had at least one
+   * snapshot, so rows-but-no-plottable-points means the on-chain activity
+   * IS there and only the USD conversion is missing. Saying "no activity,
+   * try a longer range" there is wrong twice over: the Recent-transactions
+   * table right below is full of trades from the same period, and no range
+   * can fix a missing price.
+   *
+   * `tvl` is the discriminator because it is unambiguous — reserves exist
+   * on every snapshot, so a null `tvl` can only mean a leg has no price. A
+   * null `volume` is ambiguous by design (it also means "no swaps in this
+   * bucket"), which is why the check does not use the selected metric.
+   *
+   * The copy says "in this period" rather than "this asset has no price
+   * feed": the same pool can price fine on one range and not another — a
+   * provider outage does exactly that (the 2026-07-21..08-03 freeze left a
+   * 12-day hole in otherwise healthy series), and so does an asset whose
+   * feed simply starts later than the window.
+   */
+  const unpriceable = useMemo(() => {
+    if (!data || data.data_points.length === 0) return false;
+    if (points.length > 0) return false;
+    return data.data_points.every((row) => row.tvl == null);
+  }, [data, points]);
 
   // Latest point drives the chart heading (Figma `325:22339` headline
   // shows the last value + its bucket date).
@@ -282,24 +328,17 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
             intervals={[]}
             loading={isLoading}
             emptyState={
-              <Stack
-                spacing={0.5}
-                alignItems="center"
-                sx={{ py: 4, textAlign: 'center' }}
-              >
-                <Typography
-                  variant="bodyMedium"
-                  sx={(theme) => ({ color: theme.palette.text.secondary })}
-                >
-                  No activity in this period
-                </Typography>
-                <Typography
-                  variant="bodySmMedium"
-                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                >
-                  Try a longer range.
-                </Typography>
-              </Stack>
+              unpriceable ? (
+                <ChartEmptyState
+                  title="USD values unavailable"
+                  hint="We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                />
+              ) : (
+                <ChartEmptyState
+                  title="No activity in this period"
+                  hint="Try a longer range."
+                />
+              )
             }
           />
         )}
@@ -316,8 +355,8 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
  *
  * The pre-0199 `CHARTS_ENABLED` kill-switch and the "pending the price
  * oracle" placeholder are gone: the chart endpoint returns real USD
- * series (task 0199 compute-at-read). An unpriceable pool renders the
- * chart's built-in empty state.
+ * series (task 0199 compute-at-read). An unpriceable pool gets its own
+ * empty state saying so — see `unpriceable`.
  */
 export function PoolCharts({ poolId }: PoolChartsProps) {
   return (
