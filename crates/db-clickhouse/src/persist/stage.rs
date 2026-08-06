@@ -2003,6 +2003,16 @@ impl OpTyped {
             // of silently projecting an empty identity (task 0455; same
             // total-function posture as 0434). Offers can still touch pools —
             // that identity arrives via the `poolIds` fallback below.
+            //
+            // Audited per-arm (2026-08-06): none of these drop data, because
+            // this struct was never the only channel. Offer selling/buying
+            // pairs and claimable-balance assets go through
+            // `xdr_parser::asset_appearances` → `operation_asset_appearances`
+            // (a single asset_code column cannot hold a two-asset op);
+            // CB claimants, inflationDest and revoke-sponsorship targets go
+            // through `xdr_parser::op_participants` (the single op-side
+            // participant source). `balanceId`/`offerId` are entity ids,
+            // consistently not identity dimensions.
             OperationType::ManageSellOffer
             | OperationType::CreatePassiveSellOffer
             | OperationType::SetOptions

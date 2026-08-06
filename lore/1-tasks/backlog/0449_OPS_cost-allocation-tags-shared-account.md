@@ -15,6 +15,19 @@ history:
       Spawned from the July cost investigation, which took several hours mostly
       because no cost figure in the account can be attributed to a project
       without reverse-engineering it from CloudWatch and the database.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Tag inventory measured on our side: all stacks emit
+      Project=soroban-block-explorer, Environment=production, ManagedBy=cdk.
+      The co-tenant project's tag status is unverified - the read-only
+      tagging-API call is outside the assistant's allowlist, needs an
+      operator run of resourcegroupstaggingapi get-resources. Activation of
+      the Project cost-allocation tag in Billing is risk-free (reporting
+      metadata only, touches no resources) and non-retroactive, so worth
+      doing immediately even before the co-tenant aligns; untagged resources
+      land in the "no tag key" bucket.
 ---
 
 # The AWS account bills two projects as one

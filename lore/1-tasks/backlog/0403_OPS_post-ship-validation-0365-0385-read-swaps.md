@@ -21,6 +21,17 @@ history:
       refresh-recompute memory check against the prod 6 GB cap — a stated prod
       risk, not a formality — never happened. Those ACs are deferred here rather
       than ticked, so the gap stays visible instead of dying with the parent tasks.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Execution note from the 0455 triage: most of this task is runnable
+      read-only by the assistant - the pre-swap SQL drivers live in git
+      history, so both old and new queries can be run via chq and diffed
+      byte-for-byte (lptxs across sparse/dense/mega pools; acclist both
+      sorts + home_domain filter + cursor pagination), and the 0385 refresh
+      memory check reads from system.query_log against the 6 GB cap. Only
+      E20 (Horizon comparison) needs the e2e harness.
 ---
 
 # OPS: post-ship validation of the 0365 / 0385 read swaps

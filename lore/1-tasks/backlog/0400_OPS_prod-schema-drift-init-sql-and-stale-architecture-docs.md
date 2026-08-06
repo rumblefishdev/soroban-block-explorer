@@ -67,6 +67,24 @@ history:
       prod today (columns, types, engines, sort keys, skip indexes, projections,
       views, dictionaries): the only structural gaps are `net_settled` and
       `idx_oaa_transaction_id`, both owned by 0419.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Re-measured all four items on prod (read-only, via 0455 work).
+      (1) assets_pre0339: GONE - dropped since July, resolved. (2)
+      transaction_hash_dict element_count=1: explained, not an anomaly - the
+      dictionary layout is ComplexKeyCache, so element_count reports entries
+      currently cached, not source size; 1 = cold cache. (3)
+      idx_oaa_transaction_id: still missing on prod - 0419 deployed the
+      net_settled column but not the index; orphaned half, needs
+      ALTER ADD INDEX + MATERIALIZE (operator). (4) net_settled: EXISTS on
+      prod now, resolved. NEW fifth item: prod carries
+      idx_oa_asset_issuer_id on operations_appearances, which init.sql
+      deliberately omits (comment says DROP frees ~97 MiB) - a decided but
+      never-executed DROP, reverse-direction drift; operator decision.
+      Structural layer closes with those two ALTERs; the docs half
+      (architecture describing the retired PG world) remains.
 ---
 
 # OPS: prod-only CH schema objects missing from init.sql + stale architecture docs
