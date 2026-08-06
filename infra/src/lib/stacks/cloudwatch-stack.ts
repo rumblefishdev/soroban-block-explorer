@@ -226,6 +226,11 @@ export class CloudWatchStack extends cdk.Stack {
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 3,
         datapointsToAlarm: 3,
+        // NOT_BREACHING is correct here (task 0455 review): Container
+        // Insights stops publishing when no task is running, so missing
+        // data means "service stopped", not "disk full" — and a stopped
+        // Galexie already pages via the lag alarm's BREACHING above.
+        // Paging here too would double-page one incident.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -260,6 +265,14 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): the ratio has
+        // no datapoint when invocations are 0, and 0 invocations is not an
+        // error-RATE problem — it is either a planned pause (must not page)
+        // or a dead input, which is the lag alarm's job (BREACHING there).
+        // Beware what this alarm can NOT see: a total stall never reaches
+        // Lambda `Errors` at all — measured 0 through every lag event of a
+        // 30-day window (0454). Absence coverage is the stall-alarm pair's
+        // job, not this alarm's.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -319,14 +332,25 @@ export class CloudWatchStack extends cdk.Stack {
           period: cdk.Duration.minutes(5),
           statistic: cloudwatch.Stats.SUM,
         }),
-        // Threshold tuned to survive a planned Caddy reload window
-        // (~30 s = up to ~10 ledger events post-retry-exhaustion).
-        // Raise further if observed false-alarms during routine
-        // operational maintenance.
+        // Threshold in DOORBELL-INVOCATION units (one failure line per
+        // failed reconcile, task 0241 — not per ledger): a sustained CH
+        // outage fails ~50-60 fresh doorbells per 5-min window (one per
+        // ledger close every ~5-6 s), far above 10, so it fires in the
+        // first window. A planned ~30 s Caddy reload is absorbed by the
+        // in-band retry envelope; worst case ≤6 failure lines < 10 = no
+        // page. Raise only on observed false-alarms during routine
+        // maintenance.
         threshold: 10,
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): this is a
+        // failure COUNTER — months of silence are its healthy steady
+        // state, and the filter's defaultValue 0 only appears in periods
+        // where the Lambda logged anything at all. Fully-missing data
+        // means "no invocations", which is a planned pause or a stall —
+        // the stall-alarm pair owns that; BREACHING here would page on
+        // every planned pause.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -352,6 +376,14 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): SQS stops
+        // publishing for a queue with ~6 h of no activity, so missing
+        // data is the healthy idle-empty state; any depth > 0 publishes.
+        // KNOWN DEFECT (0455 defect 4, fix pending): this is a LEVEL
+        // alarm — once non-empty it latches in ALARM and goes mute for
+        // every later incident (observed: 15 days latched while a lag
+        // event passed unseen). Conversion to a growth-based alarm is
+        // the umbrella's re-arm work.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -379,6 +411,9 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING + latching level-alarm: same rationale and same
+        // known defect as the ledger DLQ alarm above (observed latched 32
+        // days while its queue grew). Growth-based conversion pending.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -415,6 +450,11 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): no datapoint
+        // means 0 invocations, and for this worker that is a NORMAL
+        // state — the consumer is deliberately gated off in prod until
+        // the 0301 rollout, and even enabled it only runs when the
+        // producer publishes misses. BREACHING would page continuously.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -456,6 +496,11 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): the ratio has
+        // no datapoint only when the stage served zero requests in 5 min,
+        // and zero traffic is not a server-error condition. Reachability
+        // of the public entry point is the origin-lock canary's job
+        // (which pages BREACHING on silence).
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
