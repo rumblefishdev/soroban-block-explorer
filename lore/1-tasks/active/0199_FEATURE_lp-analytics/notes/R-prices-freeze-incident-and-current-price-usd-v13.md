@@ -62,6 +62,21 @@ history:
       distinguish tainted from clean without their authority data, and
       doing so would fork the single source of truth. Reported the
       mechanism back.
+  - date: '2026-08-06'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Reply sent to the prices owner (first draft version, unedited).
+      It answers their SS1 question (publish the stale-but-real close —
+      stale strictly beats NULL for us), reports the SS4 coverage
+      numbers (44.4% / 68.1% / 96%, +1.6pp from widening our cap) and
+      the SS6 mechanism (one asset_id under many identities, sorting
+      key suspect), confirms the interim forming-bucket guard, and asks
+      two things: expose the raw coverage share alongside the coverage
+      gate (we set our own bar), and whether tainted identities also
+      inflate volume_base (would corrupt the weighted average's
+      weights, not just the price). Ball is on their side; next input
+      expected from them.
 ---
 
 # R: prices.\* read traps — freeze, sentinels, partial-enrichment skew
