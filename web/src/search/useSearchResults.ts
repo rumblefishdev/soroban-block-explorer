@@ -45,6 +45,11 @@ interface UseSearchResultsParams {
  * Per-entity result cap sent to `/search`. A saturated bucket means "at least
  * this many", never "exactly this many" — the badge renders `N+` at the cap so
  * a truncated bucket is not read as a total (0377 F7).
+ *
+ * Applies to the four searched buckets (accounts, contracts, assets, NFTs).
+ * The transaction and pool buckets are exact-identity lookups — `WHERE hash =`
+ * / `WHERE pool_id =` with `LIMIT 1` server-side — so they ignore this value
+ * and can never saturate. Do not describe it as a cap the whole endpoint obeys.
  */
 export const SEARCH_GROUP_LIMIT = 10;
 
@@ -71,8 +76,8 @@ export function useSearchResults({
 
   const query = useQuery({
     // Sent explicitly rather than relying on the server default, so the cap
-    // the badge reasons about and the cap the API applies are one value and
-    // cannot drift (0377 F7).
+    // the badge reasons about and the cap the API applies to the searched
+    // buckets are one value and cannot drift (0377 F7).
     ...getSearchOptions({
       query: { q: effectiveQuery, limit: SEARCH_GROUP_LIMIT },
     }),
