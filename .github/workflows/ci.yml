@@ -45,6 +45,10 @@ jobs:
               - 'libs/**'
               - 'web/**'
               - 'infra/**'
+              # The infra declared-vs-emitted test (task 0455) reads Rust
+              # sources: alarm filter fields/strings must exist at a
+              # crates/ emit site. A Rust-only rename must re-run it.
+              - 'crates/**'
               - 'package.json'
               - 'package-lock.json'
               - 'tsconfig*.json'
