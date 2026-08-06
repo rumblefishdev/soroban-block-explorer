@@ -10,7 +10,6 @@ import {
   QueryErrorState,
   useCursorPagination,
   formatAmount,
-  formatInteger,
   formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -75,9 +74,6 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
 
 interface PoolParticipantsProps {
   poolId: string;
-  /** The pool header's own `participant_count` — decides whether an empty page
-   *  means "none" or "we could not list them" (0377 F7). */
-  participantCount: number;
 }
 
 /**
@@ -85,10 +81,7 @@ interface PoolParticipantsProps {
  * of liquidity providers ordered by shares DESC. Fetched independently
  * of the rest of the page so failures stay scoped.
  */
-export function PoolParticipants({
-  poolId,
-  participantCount,
-}: PoolParticipantsProps) {
+export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
   // simultaneously, so each section needs its own URL key. `resetKey`
   // drops the cursor when the user navigates to a different pool.
@@ -120,35 +113,13 @@ export function PoolParticipants({
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
-    // The pool header's own count decides which fact this is: only a zero
-    // count licenses "has no providers", since claiming that beside a non-zero
-    // KPI on the same screen contradicts it (0377 F7).
-    //
-    // The warning is additionally gated on being the FIRST page. An empty page
-    // behind a cursor is the ordinary end of the list, or a deep-linked stale
-    // cursor — `useCursorPagination` preserves a pasted `?cursor=` on mount —
-    // and neither is a failure. `participantCount` also comes from an earlier
-    // request than the rows, so it can lag a withdrawal by a moment; "reports"
-    // rather than "has" keeps the sentence true when it does.
-    body =
-      participantCount === 0 ? (
-        <EmptyState
-          icon={<GroupIcon />}
-          title="No participants yet"
-          description="This pool currently has no active liquidity providers."
-        />
-      ) : cursor != null ? (
-        <EmptyState icon={<GroupIcon />} title="No more participants" />
-      ) : (
-        <EmptyState
-          icon={<GroupIcon />}
-          variant="warning"
-          title="Participants unavailable"
-          description={`This pool reports ${formatInteger(
-            participantCount
-          )} active liquidity providers, but none could be listed.`}
-        />
-      );
+    body = (
+      <EmptyState
+        icon={<GroupIcon />}
+        title="No participants yet"
+        description="This pool currently has no active liquidity providers."
+      />
+    );
   } else {
     body = (
       <ExplorerTable
