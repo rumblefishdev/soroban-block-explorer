@@ -4,7 +4,7 @@ title: 'LP per-pool amounts: persist what the indexer already computes, un-hide 
 type: FEATURE
 status: backlog
 related_adr: ['0029']
-related_tasks: ['0274', '0247', '0199', '0261', '0365', '0393']
+related_tasks: ['0274', '0247', '0199', '0261', '0365', '0393', '0377']
 tags:
   [
     phase-future,
@@ -55,6 +55,19 @@ history:
       more than one pool, so the per-transaction `net_settled` cannot be
       attributed to a pool. Linked issue #371, which is this feature reported
       from outside.
+  - date: '2026-08-06'
+    status: backlog
+    who: karolkow
+    note: >
+      Recorded an adjacent finding from 0377 — see "Adjacent". The strict-send
+      delivered amount is a field in the operation RESULT XDR
+      (`PathPaymentStrictSendResult::Success.last.amount`) that the parser never
+      lifts, even though it already reads the surrounding result. It needs no
+      side table and no backfill, because the tx-detail heavy block is parsed at
+      request time — so it is NOT Path B and not this task's scope, only its
+      nearest owner. Unverified against mainnet; `operation.rs` is shared with
+      the indexer, so a `details` key may also change persisted JSON. 0377
+      deleted the permanently-empty `Received` row rather than reword it.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
@@ -124,6 +137,40 @@ There is a second reason not to build on that column: 0411 removed the
 `net_settled` read from list endpoints because it scanned ~26M rows per page,
 and 0417 owns the `(ledger, tx)`-leading companion that would make such a read
 affordable. Even if the attribution were right, the read is not ready.
+
+## Adjacent — the strict-send delivered amount is one field away (from 0377)
+
+**Not this task's amount, and not Path B.** Recorded here because 0279 is the
+nearest owner of "per-operation amounts" and the finding would otherwise be lost.
+
+The transaction-detail operation card carried a `Received` row for
+`PATH_PAYMENT_STRICT_SEND` that was permanently empty — the comment said the
+delivered amount "is not derivable from claimedAtoms". True, and misleading: the
+amount is not IN the atoms, it is next to them.
+`PathPaymentStrictSendResult::Success` carries
+`last: SimplePaymentResult { destination, asset, amount }`, and `last.amount` is
+the delivered amount.
+
+State of the code (checked 2026-08-06):
+
+- the parser already reads operation results — `claim_atoms`
+  (`crates/xdr-parser/src/operation.rs:186`), `tx_op_results` (`:97`);
+- `details` gets `poolIds` / `claimedAtoms` / `sendAsset` / `destAsset`
+  (`:260-261`, `:344-355`);
+- `SimplePaymentResult` appears **only in that file's test fixtures**
+  (`:1332-1353`) — never in extraction.
+
+Why it is cheaper than this task: the tx-detail `heavy` block is parsed from the
+archive at REQUEST time (runtime enrichment), so lifting `last.amount` needs no
+side table, no backfill and no schema change — unlike the LP amounts above,
+which have no result-XDR equivalent because deposits and withdrawals raise no
+claim atoms.
+
+Unverified, and the reason it was not done in 0377: `operation.rs` is shared
+between the indexer and runtime enrichment, so adding a `details` key may change
+the persisted JSON too; and it was never checked against a real mainnet
+strict-send. 0377 deleted the empty row rather than reword it — when this is
+built, the row is written fresh with a real value.
 
 ## Path decision (from 0247, re-confirmed 2026-07-30)
 
