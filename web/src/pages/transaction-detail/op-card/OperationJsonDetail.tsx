@@ -3,7 +3,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import { Chip } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
 import { HighlightedJson } from './HighlightedJson.js';
@@ -110,7 +110,7 @@ export function OperationJsonDetail({
   light,
   heavy,
 }: OperationJsonDetailProps) {
-  if (heavy == null) return <HeavyUnavailable what="Raw operation details" />;
+  if (heavy == null) return <UnavailableSection what="Raw operation details" />;
 
   const opType = heavy.op_type ?? light.type_name.toLowerCase();
   const details = heavy.details;

@@ -14,7 +14,7 @@ import { useState } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
-import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 
 import { symTopic } from '../op-card/ExecutionTrace.js';
 import { HighlightedJson } from '../op-card/HighlightedJson.js';
@@ -187,7 +187,7 @@ export function EventsSection({
   if (unavailable) {
     return (
       <SectionCard title="Events">
-        <HeavyUnavailable what="Events" />
+        <UnavailableSection what="Events" />
       </SectionCard>
     );
   }

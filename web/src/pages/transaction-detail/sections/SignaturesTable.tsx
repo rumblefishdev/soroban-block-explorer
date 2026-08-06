@@ -19,7 +19,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../../detail/SectionCard.js';
-import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 
 export interface SignatureRow extends SignatureDto {
   signer?: string | null;
@@ -51,7 +51,7 @@ export function SignaturesTable({ signatures }: SignaturesTableProps) {
             operations strip that explains it. Signatures can be empty while
             operations are present (they come from tx meta, the signatures from
             the envelope), so this can be the page's only sign of trouble. */}
-        <HeavyUnavailable
+        <UnavailableSection
           what="Signatures"
           description="This transaction's envelope could not be read from the Stellar archive."
         />

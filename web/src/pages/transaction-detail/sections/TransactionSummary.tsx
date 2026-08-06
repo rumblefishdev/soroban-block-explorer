@@ -16,6 +16,7 @@ import { SummaryRow } from '../../detail/SummaryRow.js';
 import { formatAbsoluteUtc } from '../../transactions/formatters.js';
 import { formatOperationType } from '../../transactions/operationTypes.js';
 import { describeMemo } from '../shared/describeMemo.js';
+import { UnavailableValue } from '../shared/Unavailable.js';
 
 interface TransactionSummaryProps {
   tx: E3ResponseTransactionDetailLight;
@@ -47,23 +48,6 @@ export function opFailReason(
   )}${more > 0 ? ` (+${more} more failed)` : ''}`;
 }
 
-/** Deliberately NOT `<Dash />`: these fields live only in the archive-gated
- *  `heavy` block, so their absence means "could not load", which a dash would
- *  render identically to a real "has none" (0377 F1).
- *
- *  Same type scale as a real value — `text.tertiary` alone carries "this is not
- *  a value", exactly as `Dash` does. Italic appears nowhere else in the app. */
-function Unavailable() {
-  return (
-    <Typography
-      variant="bodySmMedium"
-      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-    >
-      Not available
-    </Typography>
-  );
-}
-
 function MemoCell({
   memoType,
   memo,
@@ -75,7 +59,7 @@ function MemoCell({
 }) {
   // A memo can carry an exchange deposit id, so "no memo" is load-bearing and
   // must not stand in for "we never fetched the memo".
-  if (unavailable) return <Unavailable />;
+  if (unavailable) return <UnavailableValue />;
   const { typeLabel, content } = describeMemo(memoType, memo);
   if (typeLabel == null) return <Dash />;
   return (
@@ -252,7 +236,7 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
                   // The row is reachable via the light `inner_tx_hash` alone,
                   // and a fee-bump envelope always HAS a fee source — a dash
                   // here would assert something impossible.
-                  <Unavailable />
+                  <UnavailableValue />
                 ) : (
                   <Dash />
                 ),

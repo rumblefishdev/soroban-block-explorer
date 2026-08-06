@@ -2,7 +2,7 @@ import { Box, Typography } from '@mui/material';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 
-import { HeavyUnavailable } from '../shared/HeavyUnavailable.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 import { XdrRow } from '../shared/XdrRow.js';
 
 interface RawDataSectionProps {
@@ -34,7 +34,7 @@ export function RawDataSection({
   if (unavailable) {
     return (
       <SectionCard title="Raw data">
-        <HeavyUnavailable what="Raw data" />
+        <UnavailableSection what="Raw data" />
       </SectionCard>
     );
   }
