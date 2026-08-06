@@ -516,6 +516,18 @@ struct LastCloseChRow {
 /// how many identities the page carries; the OR-chain only trims the result
 /// set. Unpriceable legs (empty `kind`) are filtered out by the caller.
 ///
+/// **The in-progress hour is excluded on purpose.** The prices service
+/// bakes `close_usd` in a pass that trails candle ingestion, so a bucket
+/// still being formed is only partly enriched and its volume-weighted
+/// close is taken over whichever rows happen to be done — on 2026-08-05
+/// that made a 0.764-unit dust print the entire price of yXLM's 13:00
+/// hour (1.3085 against a true ~0.170) and quadrupled the pool's TVL on
+/// the page. The prices owner confirmed the mechanism, that only the
+/// forming bucket is affected, and that it repairs once the bucket
+/// closes; a coverage gate is coming, and this guard should be revisited
+/// then. Cost of the guard is up to one hour of freshness against a
+/// [`MAX_PRICE_CARRY_SECONDS`] budget — nothing.
+///
 /// Returns `(kind, code, issuer) → close_usd`; identities with no priced
 /// candle in the window are simply absent.
 async fn fetch_last_closes(
@@ -537,6 +549,7 @@ async fn fetch_last_closes(
          FROM prices.price_usd_series_1h \
          WHERE ({identity_or}) \
            AND bucket >= now() - INTERVAL {carry} SECOND \
+           AND bucket <  toStartOfHour(now()) \
          GROUP BY asset_kind, asset_code, issuer_address",
         carry = MAX_PRICE_CARRY_SECONDS,
     );
@@ -1196,6 +1209,11 @@ struct ChartChRow {
 ///   test rejects it, since an epoch bucket is always further back than the
 ///   cap. `nullIf(close_usd, 0)` guards the priced-but-zero case; the views
 ///   already filter `close_usd > 0`.
+/// - The **in-progress price bucket is excluded** (`least(to, grain(now))`).
+///   It is only partly enriched, so its weighted close can be a dust print —
+///   see [`fetch_last_closes`] for the measured case and the prices owner's
+///   confirmation. The ASOF carry then prices the newest chart bucket off
+///   the last CLOSED price bucket, which is exactly what the carry is for.
 pub async fn fetch_pool_chart(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -1297,14 +1315,14 @@ pub async fn fetch_pool_chart(
                  FROM {series_view} \
                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
                    AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
-                   AND bucket <  fromUnixTimestamp64Milli(?) \
+                   AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
              ) pa ON pa.k = l.k AND pa.bucket <= l.price_bucket \
              ASOF LEFT JOIN ( \
                  SELECT 1 AS k, bucket, close_usd \
                  FROM {series_view} \
                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
                    AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
-                   AND bucket <  fromUnixTimestamp64Milli(?) \
+                   AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
              ) pb ON pb.k = l.k AND pb.bucket <= l.price_bucket \
          ) \
          GROUP BY bucket_ms \
