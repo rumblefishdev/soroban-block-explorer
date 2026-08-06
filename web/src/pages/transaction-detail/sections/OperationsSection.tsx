@@ -1,5 +1,6 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Alert, Box, Grid } from '@mui/material';
+import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
+import { Box, Grid, Typography } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -45,12 +46,14 @@ export function OperationsSection({
     />
   );
 
-  // Without `heavy` the picker falls back to the folded light rows (shorter
-  // than `count`) and the card's execution trace, authorized calls, events and
-  // route strip all resolve empty — each vanishing with no hint, so an invoke
-  // reads as "made no sub-calls and emitted no events". One honest line beats
-  // four silent absences (0377 F7).
-  const executionDetailMissing = tx.heavy == null;
+  // Two causes, one symptom: no heavy block at all, or a heavy block whose
+  // operations came back empty (the archive answered but this transaction's
+  // envelope was missing). Either way the picker falls back to the folded light
+  // rows — shorter than `count` — and the card's execution trace, authorized
+  // calls, events and route strip all resolve empty, each vanishing with no
+  // hint, so an invoke reads as "made no sub-calls and emitted no events".
+  // Testing the operations array rather than `heavy` catches both (0377 F7).
+  const executionDetailMissing = (tx.heavy?.operations?.length ?? 0) === 0;
 
   return (
     <SectionCard
@@ -58,15 +61,38 @@ export function OperationsSection({
       meta={`${count} Operation${count === 1 ? '' : 's'}`}
     >
       {executionDetailMissing && (
-        <Box sx={{ px: 2, pt: 2 }}>
-          <Alert severity="warning" variant="outlined">
-            Execution detail unavailable — heavy XDR fields could not be loaded,
-            so sub-calls, events and raw data are not shown
+        // Full-bleed strip, not a floating alert box — same reason as the
+        // failed-transaction strip in TransactionSummary: the theme carries no
+        // MuiAlert style, so an Alert would derive its border from a fill token
+        // and vanish in light mode (0460 #8).
+        <Box
+          role="status"
+          sx={(theme) => ({
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 2,
+            py: 0.75,
+            backgroundColor: theme.palette.surface.warning,
+            borderBottom: `1px solid ${theme.palette.stroke.warning}`,
+          })}
+        >
+          <WarningAmberOutlinedIcon
+            sx={(theme) => ({
+              fontSize: 16,
+              color: theme.palette.text.warning,
+            })}
+          />
+          <Typography
+            variant="bodySmRegular"
+            sx={(theme) => ({ color: theme.palette.text.warning })}
+          >
+            Execution detail unavailable — sub-calls, events and raw data could
+            not be read from the Stellar archive
             {entries.length < count
               ? `, and only ${entries.length} of ${count} operations can be listed`
               : ''}
-            .
-          </Alert>
+          </Typography>
         </Box>
       )}
       <Box sx={{ p: 2 }}>
