@@ -1997,7 +1997,26 @@ impl OpTyped {
             OperationType::BeginSponsoringFutureReserves => {
                 out.destination = str_field(details, "sponsoredId");
             }
-            _ => {}
+            // Deliberately no identity fields beyond `source`. Exhaustive on
+            // purpose (no `_` arm): a protocol bump that adds an operation
+            // type must fail compilation here and force a decision, instead
+            // of silently projecting an empty identity (task 0455; same
+            // total-function posture as 0434). Offers can still touch pools —
+            // that identity arrives via the `poolIds` fallback below.
+            OperationType::ManageSellOffer
+            | OperationType::CreatePassiveSellOffer
+            | OperationType::SetOptions
+            | OperationType::Inflation
+            | OperationType::ManageData
+            | OperationType::BumpSequence
+            | OperationType::ManageBuyOffer
+            | OperationType::CreateClaimableBalance
+            | OperationType::ClaimClaimableBalance
+            | OperationType::EndSponsoringFutureReserves
+            | OperationType::RevokeSponsorship
+            | OperationType::ClawbackClaimableBalance
+            | OperationType::ExtendFootprintTtl
+            | OperationType::RestoreFootprint => {}
         }
         // `poolIds` (path payments + offers crossing an LP — task 0261) is
         // present on any op whose result carried claim atoms, regardless of op
