@@ -85,6 +85,21 @@ history:
       never-executed DROP, reverse-direction drift; operator decision.
       Structural layer closes with those two ALTERs; the docs half
       (architecture describing the retired PG world) remains.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Structural layer reconciled: idx_oa_asset_issuer_id dropped on prod
+      (0381's recorded decision executed), idx_oaa_transaction_id
+      added+materialized then re-audited as consumer-less (19.87 GiB for a
+      withdrawn read path - see 0419's same-day entry; resolved same day:
+      dropped on BOTH sides - prod and init.sql, with the consumer story
+      recorded at the removal site). Lesson for this task's
+      docs half: declared-vs-actual drift can sit in the DECLARATION -
+      init.sql carried an index for a read that no longer exists, so
+      reconciling prod TOWARD init.sql was reconciling toward a stale claim.
+      The comparator must flag both directions, and init.sql entries need
+      their consumer named.
 ---
 
 # OPS: prod-only CH schema objects missing from init.sql + stale architecture docs

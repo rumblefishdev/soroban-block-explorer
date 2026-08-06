@@ -711,18 +711,17 @@ CREATE TABLE IF NOT EXISTS operation_asset_appearances (
     asset_id        Int64,
     ledger_sequence Int64,
     transaction_id  Int64,
-    net_settled     Nullable(Int128),
-    -- Bloom skip index on transaction_id (task 0393 read-path). The "Net settled"
-    -- value read filters by (ledger_sequence, transaction_id), but the table is
-    -- asset_id-leading, so that filter is a partition SCAN (~26M rows/mature
-    -- partition), not a primary-key seek. A tx-list page's ~hundreds of tx_ids are
-    -- scattered across the partition's granules; this bloom lets ClickHouse skip
-    -- the granules holding none of them (~10x fewer rows read, measured shape).
-    -- Same pattern as idx_oa_contract_id / idx_acc_id; RMT-safe (skip indexes are
-    -- allowed — only projections are refused on RMT, task 0353). A full
-    -- (ledger, tx)-leading companion table is the heavier fallback if this proves
-    -- insufficient at scale.
-    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
+    net_settled     Nullable(Int128)
+    -- idx_oaa_transaction_id (bloom on transaction_id, planned for the 0393
+    -- "Net settled" per-tx read) REMOVED 2026-08-06: that read was withdrawn
+    -- from the API before it ever shipped (see common/ch.rs; [[0411]] owns
+    -- reinstating it), every live query on this table filters by asset_id
+    -- (the leading key), and the bloom measured 19.87 GiB on prod (fpp 0.001
+    -- over 11.25bn non-null near-unique values) for zero consumers. It was
+    -- briefly added+materialized on prod the same day, then dropped after the
+    -- consumer audit. 0411 decides between re-adding the bloom and the
+    -- (ledger, tx)-leading companion table (which supersedes it); name the
+    -- consumer here if it comes back.
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
