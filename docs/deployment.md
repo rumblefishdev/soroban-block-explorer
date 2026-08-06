@@ -132,7 +132,11 @@ Frontend **content** is separate: `deploy-production-web`
 
 - **`make deploy-production` deploys `--all`.** It will push every pending
   change across _every_ stack. For a single change, prefer the per-stack
-  target.
+  target. Since task 0455 the target first prints the full `cdk diff
+--strict` and requires a literal `yes` before deploying, so parked deltas
+  (the 0312 stowaway class) are seen, not shipped blind; `FORCE=1` skips the
+  prompt for non-interactive use. `--strict` matters on its own: without it
+  `cdk diff` silently hides entries containing non-ASCII characters.
 - **Per-stack `make` targets also deploy that stack's dependencies**
   (CDK default). If a dependency stack has an unrelated pending change, it
   ships too. To deploy **exactly one stack** and nothing else, run raw with

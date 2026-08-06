@@ -9,10 +9,23 @@ build:
 synth-production: build
 	npx cdk --app "$(PRODUCTION_APP)" synth
 
+# --strict: without it cdk diff silently hides entries containing
+# non-ASCII characters, so a clean-looking diff is not proof of a clean
+# diff (measured during the 0312 investigation).
 diff-production: build
-	npx cdk --app "$(PRODUCTION_APP)" diff
+	npx cdk --app "$(PRODUCTION_APP)" diff --strict
 
+# Deploying --all ships EVERY pending delta, including changes parked by
+# other tasks: 0312's undeployed CloudflareBootstrap slim-down sat in
+# production for weeks, and any unrelated `make deploy-production` would
+# have shipped it silently as a stowaway. So: show the full diff first,
+# then require a literal "yes". Non-interactive bypass: FORCE=1.
 deploy-production: build
+	npx cdk --app "$(PRODUCTION_APP)" diff --strict
+	@if [ "$(FORCE)" != "1" ]; then \
+		printf '\nThe deploy is --all: EVERY delta above ships now, parked or not.\nType yes to continue: '; \
+		read ans; [ "$$ans" = "yes" ] || { echo "aborted — nothing deployed"; exit 1; }; \
+	fi
 	npx cdk --app "$(PRODUCTION_APP)" deploy --all --require-approval broadening
 
 destroy-production: build
