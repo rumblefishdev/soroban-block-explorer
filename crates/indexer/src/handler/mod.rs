@@ -168,7 +168,14 @@ pub async fn handler(
             // Sanitised label only — never the raw `HandlerError` Display,
             // which (for a CH `BadResponse`) can echo row values into logs.
             let safe = safe_error_message(&e);
+            // `alarm` is a machine contract, not log copy: the
+            // `indexer-ch-write-failures` CloudWatch metric filter keys on
+            // `$.fields.alarm = "ch_write_failure"`. Reword the human
+            // message freely; rename this field only together with
+            // `infra/src/lib/stacks/cloudwatch-stack.ts` (the
+            // declared-vs-emitted infra test enforces the pair).
             error!(
+                alarm = "ch_write_failure",
                 message_id = %msg.message_id,
                 error = %safe,
                 "reconcile failed — will redeliver doorbell"

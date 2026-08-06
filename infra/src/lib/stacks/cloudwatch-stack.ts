@@ -286,26 +286,23 @@ export class CloudWatchStack extends cdk.Stack {
           'ProcessorLogGroupRef',
           `/aws/lambda/${processorFunction.functionName}`
         ),
-        // JSON-anchored match on `$.fields.message` — the indexer
-        // Lambda uses `tracing_subscriber::fmt().json()`, so each log
-        // line is `{"fields":{"message":"...","error":"..."},...}`.
-        // A bare substring filter would match the second message
-        // accidentally through `fields.error` (which Display-formats
-        // `HandlerError::ClickHouse` to "ClickHouse write failed: ..."),
-        // and any future variant rewording would silently break the
-        // alarm. Match on the exact event message strings emitted by
-        // `mod.rs::handler` and `main.rs` cold-start.
-        filterPattern: logs.FilterPattern.any(
-          logs.FilterPattern.stringValue(
-            '$.fields.message',
-            '=',
-            'failed to process S3 record'
-          ),
-          logs.FilterPattern.stringValue(
-            '$.fields.message',
-            '=',
-            'failed to build mTLS CH client'
-          )
+        // JSON-anchored match on `$.fields.alarm` — a dedicated
+        // machine-contract field, NOT the human `message` prose. The
+        // indexer Lambda uses `tracing_subscriber::fmt().json()`, so
+        // each log line is `{"fields":{"alarm":"...","message":...}}`.
+        // History: this filter originally matched the prose `failed to
+        // process S3 record`; the doorbell rewrite (`bee784df`)
+        // reworded the emit site and left the filter matching nothing —
+        // the metric stayed flat 0 through the 0454 outage. Prose is
+        // for operators and may be reworded freely; the `alarm` field
+        // is emitted by both hard-failure sites (`handler/mod.rs`
+        // post-retry reconcile failure, `main.rs` mTLS cold-start) and
+        // exists only for this filter. The declared-vs-emitted infra
+        // test fails CI if the pair ever splits (task 0455).
+        filterPattern: logs.FilterPattern.stringValue(
+          '$.fields.alarm',
+          '=',
+          'ch_write_failure'
         ),
         metricNamespace: 'SorobanBlockExplorer/Indexer',
         metricName: 'ChWriteFailures',

@@ -55,7 +55,11 @@ async fn main() -> Result<(), Error> {
             // makes the operator hunt for context. With this we get a
             // structured CW entry tagged with which secret / domain
             // was attempted, instrumentable via CW Logs Insights.
+            // `alarm` is a machine contract shared with the
+            // `indexer-ch-write-failures` metric filter — see the
+            // matching comment in `handler/mod.rs::handler`.
             tracing::error!(
+                alarm = "ch_write_failure",
                 env_name = %env_name,
                 ch_domain = %ch_domain,
                 mtls_secret_name = %mtls_secret_name,
