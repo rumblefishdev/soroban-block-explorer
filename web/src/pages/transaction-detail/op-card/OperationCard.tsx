@@ -24,7 +24,6 @@ import {
   ExecutionTrace,
   traceCallCount,
 } from './ExecutionTrace.js';
-import { opFacts } from './opFacts.js';
 import { OpAvatar } from './opIcon.js';
 import { buildRouteModel, RouteStrip } from './RouteStrip.js';
 
@@ -100,7 +99,6 @@ export function OperationCard({
   const label = formatOperationType(light.type_name);
   const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);
-  const facts = opFacts(light, heavy);
   // Execution trace (0462): rebuilt client-side from the diagnostic
   // fn_call/fn_return stream — the EXECUTED calls, superset of the auth
   // tree. When present it supersedes "Authorized calls"; the auth tree
@@ -294,39 +292,6 @@ export function OperationCard({
                 <IdentifierDisplay key={poolId} value={poolId} type="pool" />
               ))}
             </Stack>
-          </Box>
-        )}
-
-        {facts.length > 0 && (
-          <Box
-            component="dl"
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(96px, auto) 1fr',
-              columnGap: 2,
-              rowGap: 0.5,
-              m: 0,
-              mt: 1.25,
-            }}
-          >
-            {facts.map((fact) => (
-              <Box key={fact.label} sx={{ display: 'contents' }}>
-                <Typography
-                  component="dt"
-                  variant="bodySmRegular"
-                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                >
-                  {fact.label}
-                </Typography>
-                <Typography
-                  component="dd"
-                  variant="bodySmRegular"
-                  sx={(theme) => ({ color: theme.palette.text.primary, m: 0 })}
-                >
-                  {fact.value}
-                </Typography>
-              </Box>
-            ))}
           </Box>
         )}
       </Box>

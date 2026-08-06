@@ -14,6 +14,7 @@ import { useState } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 
 import { symTopic } from '../op-card/ExecutionTrace.js';
 import { HighlightedJson } from '../op-card/HighlightedJson.js';
@@ -23,6 +24,8 @@ interface EventsSectionProps {
   contractEvents: XdrEventDto[];
   /** The host's debug channel, listed raw — see the section doc. */
   diagnosticEvents: XdrEventDto[];
+  /** `heavy` absent — events were never loaded, not proven absent. */
+  unavailable?: boolean;
 }
 
 /** CAP-67 stage → the plain-English "when". Only tx-level events carry one. */
@@ -157,6 +160,7 @@ function EventTable({
 export function EventsSection({
   contractEvents,
   diagnosticEvents,
+  unavailable = false,
 }: EventsSectionProps) {
   // Collapsed by default since this section is on the one-and-only view now
   // (0453 wave 5) — a fully expanded raw-JSON table is a wall of pixels.
@@ -175,6 +179,18 @@ export function EventsSection({
   );
   const plural = (n: number, word: string) =>
     `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  // After the hooks: an absent `heavy` means the events were never fetched, so
+  // the count below would assert a zero nothing measured (0377 F2). Both
+  // records live in `heavy`, so neither the consensus stream nor the debug
+  // channel is knowable here.
+  if (unavailable) {
+    return (
+      <SectionCard title="Events">
+        <UnavailableSection what="Events" />
+      </SectionCard>
+    );
+  }
 
   return (
     <SectionCard title="Events" meta={plural(total, 'event')}>

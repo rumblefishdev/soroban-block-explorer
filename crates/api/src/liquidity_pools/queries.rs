@@ -499,7 +499,29 @@ pub async fn fetch_participants(
 
     // Resolve the provider StrKey by surrogate id (bloom seek) instead of a
     // whole-`accounts` `JOIN accounts acc FINAL` (task 0354). INNER-JOIN drop
-    // semantics preserved via filter_map (a position always has its account).
+    // semantics preserved via filter_map.
+    //
+    // "A position always has its account" holds today but is NOT guaranteed by
+    // construction — it is maintained by operators. Measured on prod
+    // (2026-08-04): all 6010 distinct `shares > 0` participants resolved, 0
+    // missing. No non-test Rust path deletes an `accounts` row and prod's
+    // retained mutation history has none, but two operator-driven paths can:
+    //
+    //   * `docs/runbooks/0225_backfill_crash_recovery.md` rolls back `accounts`
+    //     on `last_seen_ledger` while rolling back `lp_positions` on
+    //     `last_updated_ledger` — DIFFERENT watermarks, so an account touched
+    //     inside the crashed range can lose its row while an older position
+    //     survives. That is exactly the dangling surrogate below;
+    //   * `repair_tier1::rebuild_accounts` replaces the whole table via
+    //     `EXCHANGE TABLES` (`ch_staging::finalize`), where rows can disappear
+    //     with no DELETE at all.
+    //
+    // So the log stays, and the failure mode is not proportional to the cause:
+    // the drop happens BEFORE `finalize_page` reads the `limit + 1` sentinel,
+    // so losing the sentinel row reports "no next page" and hides the REST of
+    // the list, not one participant. Only 82 of the 26_489 pools with a live
+    // participant hold more than one page, but the largest holds 684. `error!`
+    // (not `debug!`) because the Lambda runs at `RUST_LOG=info` (0377 F3).
     let accounts = resolve_accounts(
         client,
         rows.iter().map(|r| r.account_id_surrogate).collect(),
@@ -508,7 +530,16 @@ pub async fn fetch_participants(
     Ok(rows
         .into_iter()
         .filter_map(|r| {
-            let account = accounts.get(&r.account_id_surrogate)?.clone();
+            let Some(account) = accounts.get(&r.account_id_surrogate).cloned() else {
+                tracing::error!(
+                    account_id_surrogate = r.account_id_surrogate,
+                    pool_id = pool_id_hex,
+                    "lp_positions row resolves to no accounts row: participant \
+                     dropped, so participant_count disagrees with the list and \
+                     pagination may terminate early"
+                );
+                return None;
+            };
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,

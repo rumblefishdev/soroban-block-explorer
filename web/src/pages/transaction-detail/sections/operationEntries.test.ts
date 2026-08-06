@@ -92,11 +92,15 @@ describe('buildOperationEntries', () => {
     expect(entries[0]?.row.type_name).toBe('BUMP_SEQUENCE');
   });
 
-  it('falls back to folded light rows when heavy is absent', () => {
+  // Replaces "falls back to folded light rows when heavy is absent" (task
+  // 0329). That fallback was removed deliberately, not broken: the light list
+  // is the DB's appearance index, which folds same-identity operations into one
+  // row without amount in the key, so it rendered "1" under a header correctly
+  // saying "4" — with the individual amounts gone. The section now reports the
+  // archive miss instead of standing in a shape the user reads as the truth
+  // (0377 F7).
+  it('yields nothing when heavy is absent, rather than the folded light rows', () => {
     const ops = [light({ appearance_id: 5, application_order: 1 })];
-    const entries = buildOperationEntries(tx(ops, null));
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.heavy).toBeNull();
-    expect(entries[0]?.light?.appearance_id).toBe(5);
+    expect(buildOperationEntries(tx(ops, null))).toHaveLength(0);
   });
 });

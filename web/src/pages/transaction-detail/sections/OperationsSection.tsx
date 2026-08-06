@@ -7,6 +7,7 @@ import { SectionCard } from '../../detail/SectionCard.js';
 import { buildOperationEntries } from './operationEntries.js';
 import { OperationCard } from '../op-card/OperationCard.js';
 import { OperationPicker } from './OperationPicker.js';
+import { UnavailableSection } from '../shared/Unavailable.js';
 
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
@@ -44,6 +45,22 @@ export function OperationsSection({
       diagnosticEvents={tx.heavy?.diagnostic_events ?? []}
     />
   );
+
+  // No archive data, no operation list. The DB's appearance index is NOT used
+  // as a stand-in: it folds same-identity operations into one row, so it would
+  // render "1" under a header that correctly says "4". The header count stays —
+  // it comes from the transaction row and is true — and the body says plainly
+  // that the operations could not be read (0377 F7).
+  if (entries.length === 0) {
+    return (
+      <SectionCard
+        title="Operations"
+        meta={`${count} Operation${count === 1 ? '' : 's'}`}
+      >
+        <UnavailableSection what="Operations" />
+      </SectionCard>
+    );
+  }
 
   return (
     <SectionCard
