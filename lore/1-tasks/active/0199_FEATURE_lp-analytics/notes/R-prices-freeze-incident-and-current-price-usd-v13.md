@@ -46,6 +46,22 @@ history:
       it must NOT be loosened. Both our proposed fixes for the dust print
       were rejected with measurements. Interim guard shipped: neither read
       path uses the in-progress price bucket.
+  - date: '2026-08-06'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      SS6 answered: measured our exposure to their duplicate-identity bug.
+      Found the mechanism is the reverse of what the report implies — not
+      one identity shared by many asset_ids (exactly 1 such case) but one
+      asset_id surviving FINAL under MANY identities (3,279 of them),
+      i.e. prices.assets is not sorted by asset_id alone. Proof: asset_id
+      4194 is both STW and ARBRIDGE, same 862 rows, same buckets, prices
+      identical to 14 decimals. Our exposure: 3,128 pools touch a tainted
+      identity, 1,286 are tainted AND priced (5.5% of everything we price),
+      all long tail. Decision: do NOT work around it locally — we cannot
+      distinguish tainted from clean without their authority data, and
+      doing so would fork the single source of truth. Reported the
+      mechanism back.
 ---
 
 # R: prices.\* read traps — freeze, sentinels, partial-enrichment skew
@@ -279,8 +295,59 @@ their pivot step lands; do not "fix" it by loosening the staleness rule.
 ## 6. OPEN: their duplicate-identity bug is a CORRECTNESS issue for us
 
 **548,439 daily rows are published under identities that never traded them**,
-mostly in the long tail. The owner flagged it specifically for consumers that
-key on natural identity — which is exactly what our read path does. They will
-fix it before materialising. **We have not yet checked whether any of our pool
-legs read a price from a row like this**; until we do, a long-tail pool's TVL
-could be derived from a price that asset never traded at.
+mostly in the long tail. The owner flagged it for consumers that key on natural
+identity — exactly what our read path does. They will fix it before
+materialising. Measured on our side 2026-08-06:
+
+### The mechanism is not what the description suggests
+
+Looking for identities shared by several `asset_id`s finds exactly **one**. The
+real signal is the reverse: `prices.assets FINAL` yields **204,381 identities
+from 201,146 asset_ids** — more identities than ids. A single `asset_id`
+therefore survives `FINAL` under SEVERAL identities, which means the table's
+sorting key is not `asset_id` alone. **3,279 asset_ids carry multiple
+identities** (6,564 rows), and every candle of such an id is published under
+all of them.
+
+Proof, and it is unambiguous — `asset_id 4194` is BOTH `STW` (GA2LHOPXZF…) and
+`ARBRIDGE` (GBACKRJVX7…), two different assets from different issuers. Both
+identities carry exactly 862 series rows, the same last bucket, and prices
+identical to 14 decimals:
+
+```
+2026-08-04  ARBRIDGE  0.00000027588036
+2026-08-04  STW       0.00000027588036   <- one candle, two identities
+2026-08-03  ARBRIDGE  0.00000027551363
+2026-08-03  STW       0.00000027551363
+```
+
+Same for `GESARA`/`GL1` (id 4628), `SPACEWALK`/`GIFT` (4195),
+`INSILVERMINE`/`NUTT` (4287).
+
+### Our exposure
+
+|                                        |     Pools | of all | of priced |
+| -------------------------------------- | --------: | -----: | --------: |
+| All pools                              |    52,369 |   100% |         — |
+| At least one leg on a tainted identity |     3,128 |   6.0% |         — |
+| **Tainted AND priced (we show a TVL)** | **1,286** |   2.5% |  **5.5%** |
+
+Real pools, not hypotheticals: `STW/Farsight`, `SGB/STW`, `NUTT/yXLM`,
+`INSILVERMINE/SILVERSPOT`, `GIFT/Jackoff`.
+
+Mitigating: the contaminated identity usually has its OWN rows too (`STW` also
+publishes 0.00081227265269 that day), and the view volume-weights across them,
+so the error is a contamination of the average rather than a wholesale
+substitution. Direction is still one-way — the number carries someone else's
+trades.
+
+### Decision: do NOT work around this on our side
+
+We cannot tell a tainted row from a clean one — both identities look equally
+well-formed, and distinguishing them needs their knowledge of which `asset_id`
+is authoritative. Replicating that is exactly the divergence-from-one-source-of-
+truth we avoid by reading their views in-cluster at all. Scale supports waiting:
+5.5% of priced pools, all long tail, no flagship. They fix it before
+materialising, which is the right order. Reported back with the mechanism, since
+"asset_id survives FINAL under multiple identities" points at the sorting key
+and is more actionable than the row count.
