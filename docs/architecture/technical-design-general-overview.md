@@ -461,7 +461,10 @@ Caching operates at two levels:
 
 - **Ingestion lag** — if the Galexie pipeline falls behind, the API continues serving
   data from the database with a freshness indicator showing the highest indexed ledger
-  sequence. A CloudWatch alarm fires at >60 s lag.
+  sequence. A CloudWatch alarm fires when no new ledger file lands in S3 (zero
+  doorbell messages on the ingest queue) for the configured lag window
+  (`galexieLagMinutes`, 5 min in production), with missing data treated as
+  breaching — a silent stop is an alarm state, not "no data".
 - **Lambda cold starts** — mitigated via ARM/Graviton2 runtime and provisioned concurrency
   at higher traffic tiers.
 - **Database connections** — no proxy tier. Each Lambda constructs one
@@ -661,16 +664,24 @@ to drop per-object request cost — task 0278); and TLS on public ingress.
 
 ### 3.7 Monitoring and Alerting
 
-| Alarm                       | Threshold                                        | Action               |
-| --------------------------- | ------------------------------------------------ | -------------------- |
-| Galexie ingestion lag       | S3 file timestamp >60 s behind ledger close time | SNS → Slack/email    |
-| Ledger Processor error rate | >1% of Lambda invocations in error               | SNS → Slack/email    |
-| ClickHouse CPU              | >70% sustained for 5 min                         | SNS → on-call        |
-| ClickHouse free disk        | <20% remaining on `md1`                          | SNS → expand storage |
-| API Gateway 5xx rate        | >0.5% of requests                                | SNS → Slack/email    |
+| Alarm                           | Threshold (production)                                  | Action      |
+| ------------------------------- | ------------------------------------------------------- | ----------- |
+| Galexie ingestion lag           | 0 new S3 ledger files (ingest-queue doorbells) in 5 min | SNS → Slack |
+| Galexie ephemeral storage       | >60% of task ephemeral disk, sustained 3×5 min          | SNS → Slack |
+| Ledger Processor error rate     | >1% of Lambda invocations in error                      | SNS → Slack |
+| Indexer CH write failures       | >10 post-retry hard-failure log lines in 5 min          | SNS → Slack |
+| Ledger Processor DLQ depth      | >0 messages                                             | SNS → Slack |
+| Enrichment DLQ depth            | >0 messages                                             | SNS → Slack |
+| Enrichment worker error rate    | >1% of Lambda invocations in error                      | SNS → Slack |
+| API Gateway 5xx rate            | >0.5% of requests                                       | SNS → Slack |
+| Origin-lock canary (flag-gated) | direct-origin bypass answers instead of 403             | SNS → Slack |
 
 The thresholds above are the production baseline — and, since production is the only
-environment, the only baseline.
+environment, the only baseline. The authoritative definitions (including each
+alarm's `treatMissingData` rationale) live in
+`infra/src/lib/stacks/cloudwatch-stack.ts`. ClickHouse host alarms (CPU, disk)
+were removed from CloudWatch in task 0239 — the database box is monitored on the
+box itself, outside AWS (see `infra-hetzner/`).
 
 CloudWatch dashboards expose: Galexie S3 file freshness, Ledger Processor duration and
 error rate, API latency (p50/p95/p99), and highest indexed ledger sequence vs. network

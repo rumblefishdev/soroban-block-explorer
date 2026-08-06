@@ -765,7 +765,10 @@ inconsistent results or duplicated logic across screens.
 
 - **Ingestion lag** - if the Galexie pipeline falls behind, the API continues serving
   data from the database with a freshness indicator showing the highest indexed ledger
-  sequence. A CloudWatch alarm fires at >60 s lag.
+  sequence. A CloudWatch alarm fires when no new ledger file lands in S3 for the
+  configured lag window (5 min in production); see
+  `docs/architecture/technical-design-general-overview.md` §3.7 for the full
+  alarm set.
 - **Lambda cold starts** - mitigated via Rust's fast startup on ARM/Graviton2 and provisioned concurrency
   at higher traffic tiers.
 - **Connection handling** - the `clickhouse` HTTP client reuses a hyper connection
