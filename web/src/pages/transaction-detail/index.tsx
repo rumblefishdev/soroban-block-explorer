@@ -90,10 +90,7 @@ export default function TransactionDetailPage() {
       </SectionErrorBoundary>
 
       <SectionErrorBoundary sectionName="transaction-signatures">
-        <SignaturesTable
-          signatures={heavy?.signatures ?? []}
-          unavailable={heavyUnavailable}
-        />
+        <SignaturesTable signatures={heavy?.signatures ?? []} />
       </SectionErrorBoundary>
 
       {/* One progressive view (0453): the former advanced-only sections render
