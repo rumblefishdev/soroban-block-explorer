@@ -22,6 +22,13 @@ import { EmptyState } from '@rumblefish/soroban-block-explorer-ui';
  * per-section button would fire N identical refetches. If it is ever wanted,
  * pass `query.refetch` down from `index.tsx` rather than reintroducing a prop
  * nothing supplies.
+ *
+ * Rendered in the neutral tone on purpose. One archive miss can empty four
+ * sections at once, and four amber blocks down a page read as four failures
+ * rather than one degraded fetch. The page keeps exactly one alarm-coloured
+ * element — the operations strip — and these state the same fact quietly. The
+ * warning glyph is kept so the state still reads as "attention", not "nothing
+ * here".
  */
 export function HeavyUnavailable({
   what,
@@ -33,7 +40,6 @@ export function HeavyUnavailable({
   return (
     <EmptyState
       icon={<WarningAmberOutlinedIcon />}
-      variant="warning"
       title={`${what} unavailable`}
       description={description}
       py={4}
