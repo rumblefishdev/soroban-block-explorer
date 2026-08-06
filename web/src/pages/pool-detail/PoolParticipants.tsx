@@ -121,9 +121,15 @@ export function PoolParticipants({
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     // The pool header's own count decides which fact this is: only a zero
-    // count licenses "has no providers". A non-zero count with an empty page
-    // means we failed to list them, and saying otherwise contradicts the KPI
-    // strip on the same screen (0377 F7).
+    // count licenses "has no providers", since claiming that beside a non-zero
+    // KPI on the same screen contradicts it (0377 F7).
+    //
+    // The warning is additionally gated on being the FIRST page. An empty page
+    // behind a cursor is the ordinary end of the list, or a deep-linked stale
+    // cursor — `useCursorPagination` preserves a pasted `?cursor=` on mount —
+    // and neither is a failure. `participantCount` also comes from an earlier
+    // request than the rows, so it can lag a withdrawal by a moment; "reports"
+    // rather than "has" keeps the sentence true when it does.
     body =
       participantCount === 0 ? (
         <EmptyState
@@ -131,12 +137,14 @@ export function PoolParticipants({
           title="No participants yet"
           description="This pool currently has no active liquidity providers."
         />
+      ) : cursor != null ? (
+        <EmptyState icon={<GroupIcon />} title="No more participants" />
       ) : (
         <EmptyState
           icon={<GroupIcon />}
           variant="warning"
           title="Participants unavailable"
-          description={`This pool has ${formatInteger(
+          description={`This pool reports ${formatInteger(
             participantCount
           )} active liquidity providers, but none could be listed.`}
         />
