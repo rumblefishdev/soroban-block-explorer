@@ -73,3 +73,52 @@ describe('TransactionSummary failed strip', () => {
     expect(screen.getByText(/Create Account #1 — LOW_RESERVE/)).toBeTruthy();
   });
 });
+
+/**
+ * Memo, fee source and the fail reason all live in the archive-fetched block.
+ * With it absent they must say so rather than render the same dash a real
+ * "has none" would produce, or — for the reason — fall silent, which reads as
+ * the validation-failure class rather than "we could not read it" (0377 F1).
+ */
+describe('TransactionSummary with no archive data', () => {
+  function heavyless(successful: boolean) {
+    return {
+      ...tx([], successful),
+      heavy: null,
+      inner_tx_hash: 'ab'.repeat(32),
+    } as unknown as E3ResponseTransactionDetailLight;
+  }
+
+  it('marks the memo unavailable instead of dashing it', () => {
+    render(
+      <ExplorerThemeProvider>
+        <TransactionSummary tx={heavyless(true)} />
+      </ExplorerThemeProvider>
+    );
+
+    // Two cells resolve to the marker: memo and, via inner_tx_hash, fee source.
+    expect(screen.getAllByText('Not available').length).toBeGreaterThanOrEqual(
+      2
+    );
+  });
+
+  it('says the fail reason is unavailable rather than implying a validation failure', () => {
+    render(
+      <ExplorerThemeProvider>
+        <TransactionSummary tx={heavyless(false)} />
+      </ExplorerThemeProvider>
+    );
+
+    expect(screen.getByText(/reason unavailable/)).toBeTruthy();
+  });
+
+  it('keeps a real memo-less transaction on the plain dash', () => {
+    render(
+      <ExplorerThemeProvider>
+        <TransactionSummary tx={tx([], true)} />
+      </ExplorerThemeProvider>
+    );
+
+    expect(screen.queryByText('Not available')).toBeNull();
+  });
+});
