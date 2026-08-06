@@ -28,6 +28,23 @@ history:
       metadata only, touches no resources) and non-retroactive, so worth
       doing immediately even before the co-tenant aligns; untagged resources
       land in the "no tag key" bucket.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Two blockers dissolved by measurement (read-only). (1) The co-tenant
+      ALREADY tags consistently: sampled prices-* Lambdas all carry
+      Project=stellar-prices-api with the same Environment/ManagedBy keys as
+      ours - the "agree the key with its owners" step is de facto done.
+      (2) The empty Cost-allocation-tags page mystery: account 750702271865
+      is a MEMBER of AWS Organization o-gj0pr49dpf; the management (payer)
+      account is 045028348791 (invoices@rumblefish.pl), and cost allocation
+      tags can only be activated THERE. Action re-routed: ask the management
+      account owner to activate the Project tag (Billing -> Cost allocation
+      tags -> User-defined -> Project -> Activate). Activation is
+      non-retroactive - every day unactivated is a day of history that stays
+      unattributable (the July investigation cost a full day for exactly
+      this reason).
 ---
 
 # The AWS account bills two projects as one

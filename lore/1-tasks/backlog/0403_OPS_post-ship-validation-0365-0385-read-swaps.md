@@ -74,20 +74,20 @@ output correctness and one ops-safety check.
 
 ### 0365 — lptxs on `operation_pools`
 
-- [ ] Byte-identical diff of `/v1/liquidity-pools/:id/transactions` old driver vs
+- [x] Byte-identical diff of `/v1/liquidity-pools/:id/transactions` old driver vs
       new `pool_id` prefix-seek, across **sparse / dense / mega** pools (the three
       classes 0365's own design pass called out — a mega pool is the case the old
       over-fetch×4 / re-fetch×128 / Rust-dedup dance existed to handle, so it is
       where a regression would hide).
-- [ ] E20 (`/liquidity-pools/:id/transactions` vs Horizon) green.
+- [x] E20 (`/liquidity-pools/:id/transactions` vs Horizon) green — 2026-08-06 rerun, `docs/runbooks/artifacts/e20_validation_20260806.md`.
 
 ### 0385 — acclist on `accounts_recent`
 
-- [ ] Byte-identical diff of `/v1/accounts` old driver vs `accounts_recent`,
+- [x] Byte-identical diff of `/v1/accounts` old driver vs `accounts_recent`,
       covering **both sort directions + the `home_domain` filter + cursor
       pagination** (allow ≤refresh-interval freshness skew on the newest rows —
       that skew is accepted by design, a row-set difference is not).
-- [ ] Confirm the refresh recompute (`accounts FINAL` scan + sort over ~22-24M
+- [x] Confirm the refresh recompute (`accounts FINAL` scan + sort over ~22-24M
       rows) stays under the prod **6 GB `max_memory_usage` cap**. If it approaches
       the cap: `max_bytes_before_external_sort`, or relax the 2-minute interval
       (no correctness impact — the MV is a full recompute).
@@ -112,14 +112,14 @@ output correctness and one ops-safety check.
 
 ## Acceptance Criteria
 
-- [ ] lptxs output verified byte-identical across sparse / dense / mega pools;
+- [x] lptxs output verified byte-identical across sparse / dense / mega pools;
       E20 green.
 - [ ] 0397's post-deploy read_rows/call measured (~24.6k expected), and the
       `dev_read` / `ingestion_writer` discrepancy either explained or recorded as
       still open.
-- [ ] acclist output verified byte-identical across both sort directions,
+- [x] acclist output verified byte-identical across both sort directions,
       `home_domain` filter and cursor pagination.
-- [ ] Refresh recompute measured against the 6 GB cap, with the headroom recorded
+- [x] Refresh recompute measured against the 6 GB cap, with the headroom recorded
       as a number — not "it seemed fine".
 - [ ] acclist's AC4 position stated with a measurement: meets `p95 < 200 ms`, or
       documented known-issue with the cause named.

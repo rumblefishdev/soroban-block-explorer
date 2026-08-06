@@ -130,6 +130,14 @@ Frontend **content** is separate: `deploy-production-web`
 
 ### Gotchas — read before you deploy
 
+- **Every new stack MUST tag its resources** with
+  `Project=soroban-block-explorer` (+ `Environment`, `ManagedBy`) via
+  `cdk.Tags.of(this).add(...)` — the account is shared with
+  `stellar-prices-api` and the `Project` tag is the only cost-attribution
+  dimension (task 0449; the July 2026 cost investigation took a day
+  because untagged spend cannot be attributed after the fact). Cost
+  allocation tag activation lives in the **organization management
+  account**, not here.
 - **`make deploy-production` deploys `--all`.** It will push every pending
   change across _every_ stack. For a single change, prefer the per-stack
   target. Since task 0455 the target first prints the full `cdk diff
