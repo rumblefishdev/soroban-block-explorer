@@ -350,6 +350,60 @@ Read-side and render-side only — no schema, ingest or endpoint change.
     is one continuous record with inline evidence, not research notes needing a
     `notes/` split; converting an archived task would be churn.
 
+## Review response (PR #381, three independent fresh-context reviews)
+
+Self-review was skipped as worthless here — the same reasoning that wrote the
+code would have re-approved it. Three reviewers got the diff and no rationale.
+They found one hole in the headline fix and refuted two of the evidence claims
+in this very document. Everything below is fixed on the branch.
+
+**The headline fix did not close its own defect.** `heavy == null` is the wrong
+signal: `align_envelopes` yields `None` per transaction on a hash miss, and
+`extract_e3_heavy` still returns a heavy block carrying `signatures: []`. So a
+partial archive answer walked straight past the guard and rendered "0
+signatures" — the exact impossible claim F1 exists to kill. Worse, the test
+added with F1 asserted that state as correct. `SignaturesTable` now treats ANY
+empty list as unreadable and the test pins that instead. The same widening was
+applied to the operations section, which had the same hole.
+
+**Two claims in this file were wrong.** Both survived because a search was
+scoped too narrowly and a measurement was never challenged:
+
+- _"Production never deletes an account row; the miss is structurally
+  unreachable."_ False. The grep covered `crates/` only. There are 13 DELETE
+  sites, and `docs/runbooks/0225_backfill_crash_recovery.md` deletes `accounts`
+  rows in prod — rolling back on `last_seen_ledger` while `lp_positions` rolls
+  back on `last_updated_ledger`, i.e. producing precisely the dangling surrogate
+  the tripwire catches. `repair_tier1` also swaps the whole table via
+  `EXCHANGE TABLES`. The invariant is operator-maintained, not structural. The
+  fix is unchanged and better justified; the comment was rewritten.
+- _"Blank `asset_code` and absent issuer coincide exactly, so null means
+  native."_ A tautology. `split_asset_ref` returns the pair all-or-nothing, so
+  zero one-sided rows is forced by the writer and cannot distinguish native from
+  a parse failure — the very hypothesis it was cited against. The conclusion
+  holds on other evidence (`operation_asset_appearances` resolves every
+  blank-code single-op payment to the native asset id, 11_168/11_168, plus
+  Horizon spot-checks); the comment now cites that instead.
+
+**Also fixed:** an `Alert` that violated a rule documented six lines away in a
+file this task edited (no `MuiAlert` theme style — in light mode its border
+derives from a fill token and disappears); a ledger empty state that called
+normal indexing lag a load failure, on the head ledger linked from the home
+page; a `participantCount` warning that fired on page 2 and on stale cursors; a
+dead disjunct in `operationEntries` whose comment claimed a split the code did
+not make; "not derivable" shown on FAILED path payments, where zero is a fact
+and not an unknown; an `N+` badge in a 22px circle sized for two glyphs;
+`ContractInterface` hedging across three causes when `is_sac` and `wasm_hash`
+identify the actual one; italic copy that appears nowhere else in the app;
+"Heavy XDR fields" leaking internal vocabulary to users; and the absence of a
+retry on a transient fetch. `stats_window` finally has a consumer — the
+contracts table read its hardcoded "(7d)" header off the wire field, which is
+the drift F6 added the field to prevent.
+
+**Clean under review:** Rules of Hooks, the develop merge (verified additive
+against both parents — nothing from the 0363 rework was dropped), the `let-else`
+refactor, and the `network/dto.rs` doc rewrite.
+
 ## Future Work
 
 - **Search `has_more` — mitigated, not eliminated.** Buckets are still capped
