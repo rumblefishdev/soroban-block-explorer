@@ -4,6 +4,7 @@ import AddCircleIcon from '@mui/icons-material/AddCircleOutline';
 import CodeIcon from '@mui/icons-material/CodeOutlined';
 import ImageIcon from '@mui/icons-material/ImageOutlined';
 import ListAltIcon from '@mui/icons-material/ListAlt';
+import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 import WaterDropIcon from '@mui/icons-material/WaterDropOutlined';
 import { Box, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
@@ -65,6 +66,13 @@ export interface TableEmptyStateProps {
   kind: TableEmptyKind;
   title?: string;
   description?: string;
+  /**
+   * `warning` when the empty table is NOT a benign "nothing here yet" — e.g.
+   * rows are missing while the entity's own count says otherwise. Without it
+   * such a state renders identically to a genuine empty, which is the
+   * confusion the variant exists to remove (task 0377).
+   */
+  variant?: 'default' | 'warning';
   py?: number;
 }
 
@@ -72,6 +80,7 @@ export function TableEmptyState({
   kind,
   title,
   description,
+  variant = 'default',
   py = 8,
 }: TableEmptyStateProps) {
   const preset = PRESETS[kind];
@@ -83,14 +92,24 @@ export function TableEmptyState({
             width: 40,
             height: 40,
             borderRadius: theme.shape.radius.pills,
-            backgroundColor: theme.palette.surface.grayMainAlt,
+            backgroundColor:
+              variant === 'warning'
+                ? theme.palette.surface.warning
+                : theme.palette.surface.grayMainAlt,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: theme.palette.text.secondary,
+            color:
+              variant === 'warning'
+                ? theme.palette.text.warning
+                : theme.palette.text.secondary,
           })}
         >
-          {preset.icon}
+          {variant === 'warning' ? (
+            <WarningAmberOutlinedIcon fontSize="small" />
+          ) : (
+            preset.icon
+          )}
         </Box>
         <Stack spacing={0.5} alignItems="center" sx={{ textAlign: 'center' }}>
           <Typography variant="bodyBold" color="text.primary">

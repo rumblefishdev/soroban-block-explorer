@@ -39,6 +39,7 @@ export function LedgerTransactions({
         // head ledger linked from the home page (0377 F7).
         <TableEmptyState
           kind="transactions"
+          variant={totalCount === 0 ? 'default' : 'warning'}
           title={
             totalCount === 0
               ? 'No transactions in this ledger'
