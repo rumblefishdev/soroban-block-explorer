@@ -32,6 +32,20 @@ history:
       12:00) — it is the filter. Also recorded under §2 that
       current_price_usd 0-sentinels native XLM itself, which is why 0199
       detail reads the 1h series instead. Reported to the prices owner.
+  - date: '2026-08-06'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Prices owner replied 2026-08-05 confirming all three reports as real
+      (two their bugs, one a fair request) and volunteering a fourth item
+      that changes our sizing. Added SS4 (coverage ceiling, measured on our
+      side), SS5 (three corrections to what WE got wrong) and SS6 (their
+      duplicate-identity bug is a correctness issue for us, unchecked).
+      Headline: the shipped detail+list TVL reaches 44.4% of pools, not the
+      75.3% quoted at activation, and widening our 48h cap buys +1.6pp so
+      it must NOT be loosened. Both our proposed fixes for the dust print
+      were rejected with measurements. Interim guard shipped: neither read
+      path uses the in-progress price bucket.
 ---
 
 # R: prices.\* read traps — freeze, sentinels, partial-enrichment skew
@@ -185,3 +199,88 @@ Consequences for us:
 - Reported to the prices owner 2026-08-04, with the suggestion to either
   hold a bucket out of the view until all its rows are enriched, or include
   the unenriched rows in the weighting once they land.
+
+### Owner's reply, 2026-08-05 — mechanism confirmed, BOTH our suggestions rejected
+
+Measured on their side, quoting the numbers that matter to us:
+
+- **Confirmed** — our 12:00 bucket volume (42,038) matches theirs exactly, so
+  we were reading the same rows. The 13:00 bucket that served us 1.3085 **now
+  reads 0.16931**: a closed historical bucket silently changed value.
+- **"Hold the bucket until fully enriched" cannot terminate** — some pairs can
+  never be priced at all (see §4 below).
+- **"Weight the unenriched rows in" is actively harmful** — measured at
+  0.000023 against a true ~0.170, because an unpriced row enters as a zero at
+  full weight. Do not propose this again.
+- Their fix is a **coverage gate** plus an exposed coverage share, so consumers
+  set their own bar. It measures coverage against **priceable** volume, not
+  total: ~17% of buckets sit at exactly 50% coverage permanently, because a
+  path payment books one trade against two quotes and only one is priceable.
+- **Only the forming bucket is affected**, and it repairs on close. This costs
+  the live edge, not history — which is what made our guard cheap.
+
+**Our interim guard (shipped):** both read paths stop one bucket short of the
+in-progress one. Their standing advice until the gate ships was "don't trust a
+single hour's close — use a multi-hour median or check neighbouring hours
+agree"; excluding the forming bucket is the surgical form of that, given only
+the forming bucket is implicated.
+
+## 4. Two thirds of daily candles have NO USD price, ever — and what that costs us
+
+The owner volunteered this; we had not asked. A candle is priced only when its
+**quote** asset is USDC, USDT or XLM, or has an oracle. Everything else stays
+empty, stably, for 24 months. yXLM-quoted candles are never priced even though
+yXLM itself prices fine (114,330 candles in 7 days); same for XRP. **None of
+their other fixes change this.** A second pivot step — pricing anything quoted
+in an asset they already price — is planned, and our report is what surfaced it.
+
+Measured on our side 2026-08-06, both legs priceable, all 52,369 pools:
+
+| Source the code actually reads           |  Pools |         % |
+| ---------------------------------------- | -----: | --------: |
+| `price_usd_series_1h`, 48h (detail+list) | 23,228 | **44.4%** |
+| `price_usd_series` daily, 90d (chart 1d) | 35,673 |     68.1% |
+| `price_usd_series` daily, ever           | 50,258 |     96.0% |
+
+So the shipped headline TVL reaches **fewer than half** of pools — not the
+75.3% quoted at activation (that figure was the daily view over a wide window,
+a different question from "can we price this pool right now").
+
+**Widening our 48h cap does NOT help.** Worst-leg staleness per pool:
+
+| Worst leg last priced within |  Pools |     % |
+| ---------------------------- | -----: | ----: |
+| ≤ 2 days (our cap)           | 23,399 | 44.7% |
+| ≤ 7 days                     | 24,231 | 46.3% |
+| ≤ 30 days                    | 29,910 | 57.1% |
+| ≤ 90 days                    | 35,690 | 68.1% |
+| never priced at all          |  2,111 |  4.0% |
+
+Going 2d → 7d buys **+1.6pp**. The missing pools are not slightly stale, they
+are long-tail: priced weeks ago or never. 44.4% is the honest ceiling until
+their pivot step lands; do not "fix" it by loosening the staleness rule.
+
+## 5. Corrections to earlier entries in this note
+
+- **Native XLM pricing is their task 0135, not 0039.** 0039 is finished and
+  archived, and the updater it described was never built — it became the
+  `mv_current_prices` view. Any comment of ours saying "revisit when their 0039
+  prices native" points at the wrong task.
+- **Our read-cost diagnosis was wrong in its mechanism.** We attributed the
+  1w cost to the identity predicate failing to push down, doubled by two legs.
+  Their measurement: the join costs 344 ms; **the 4.6 s is the GROUP BY and
+  weighted average**. Materialisation still fixes it, so the request stands —
+  but not for the reason we gave.
+- The `price_usd = 0` on XLM is not an updater gap but a query that fails to
+  skip not-yet-priced rows. Same bug silently drops venues from `sources` and
+  `vwap_24h`, busiest first — so `vwap_24h` is currently an average over an
+  unstated subset of venues. We read neither field today.
+
+## 6. OPEN: their duplicate-identity bug is a CORRECTNESS issue for us
+
+**548,439 daily rows are published under identities that never traded them**,
+mostly in the long tail. The owner flagged it specifically for consumers that
+key on natural identity — which is exactly what our read path does. They will
+fix it before materialising. **We have not yet checked whether any of our pool
+legs read a price from a row like this**; until we do, a long-tail pool's TVL
+could be derived from a price that asset never traded at.
