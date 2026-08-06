@@ -38,6 +38,23 @@ history:
       commits), and F7 #8 was correct code — 36_279_761 prod payments show
       blank asset_code and absent issuer coincide exactly, so the XLM fallback
       stands. 208 web + 243 API tests green. No ADR.
+  - date: 2026-08-05
+    status: completed
+    who: karolkow
+    note: >
+      Corrects the entry above, after three fresh-context reviews of PR #381.
+      Two of its claims were wrong. "F3 structurally unreachable" is false —
+      the search covered crates/ only; a prod runbook deletes accounts rows,
+      rolling accounts back on last_seen_ledger while lp_positions rolls back
+      on last_updated_ledger, which produces exactly the dangling surrogate.
+      The invariant is operator-maintained, so the tripwire is better justified,
+      not redundant. "36_279_761 payments show blank asset_code and absent
+      issuer coincide exactly" is a tautology — split_asset_ref returns the
+      pair all-or-nothing, so zero one-sided rows is forced by the writer; the
+      XLM fallback still stands, on operation_asset_appearances instead.
+      The reviews also found the headline fix incomplete: heavy == null misses
+      a heavy block whose envelope is absent, so "0 signatures" still rendered.
+      7 follow-up commits; 226 web tests (+6).
 ---
 
 # Aggregate/detail hygiene
