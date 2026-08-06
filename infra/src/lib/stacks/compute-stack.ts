@@ -44,6 +44,7 @@ export interface ComputeStackProps extends cdk.StackProps {
 export class ComputeStack extends cdk.Stack {
   readonly apiFunction: lambda.IFunction;
   readonly processorFunction: lambda.IFunction;
+  readonly ingestQueue: sqs.IQueue;
   readonly deadLetterQueue: sqs.IQueue;
   readonly enrichmentDlq: sqs.IQueue;
   readonly enrichmentWorkerFunction: lambda.IFunction;
@@ -151,6 +152,7 @@ export class ComputeStack extends cdk.Stack {
         maxReceiveCount: 10,
       },
     });
+    this.ingestQueue = ingestQueue;
 
     // ---------------------
     // Type-1 Enrichment Queue (task 0191)

@@ -5,6 +5,7 @@ import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -19,11 +20,17 @@ export interface CloudWatchStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
   readonly apiFunction: lambda.IFunction;
   readonly processorFunction: lambda.IFunction;
+  /** Ledger ingest queue — the Galexie lag alarm reads its doorbell rate. */
+  readonly ingestQueue: sqs.IQueue;
   readonly deadLetterQueue: sqs.IQueue;
   /** Type-1 enrichment DLQ (task 0191) — alarmed on depth > 0. */
   readonly enrichmentDlq: sqs.IQueue;
   /** Type-1 enrichment worker Lambda (task 0191) — error-rate alarm. */
   readonly enrichmentWorkerFunction: lambda.IFunction;
+  /** Galexie ECS cluster — ephemeral-storage alarm dimensions. */
+  readonly galexieCluster: ecs.ICluster;
+  /** Galexie live-ingest ECS service — ephemeral-storage alarm dimensions. */
+  readonly galexieService: ecs.IBaseService;
   readonly restApi: apigateway.RestApi;
   /**
    * CloudFront `*.cloudfront.net` domain of the SPA distribution, used as a
@@ -62,9 +69,12 @@ export class CloudWatchStack extends cdk.Stack {
       config,
       apiFunction,
       processorFunction,
+      ingestQueue,
       deadLetterQueue,
       enrichmentDlq,
       enrichmentWorkerFunction,
+      galexieCluster,
+      galexieService,
       restApi,
       spaDistributionDomainName,
     } = props;
@@ -156,11 +166,10 @@ export class CloudWatchStack extends cdk.Stack {
         alarmName: `${config.envName}-galexie-ingestion-lag`,
         alarmDescription:
           'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window — Galexie may have stopped writing.',
-        // Queue name is deterministic (see ComputeStack ledger-ingest queue).
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'NumberOfMessagesSent',
-          dimensionsMap: { QueueName: `${config.envName}-ledger-ingest` },
+          dimensionsMap: { QueueName: ingestQueue.queueName },
           period: cdk.Duration.minutes(config.galexieLagMinutes),
           statistic: cloudwatch.Stats.SUM,
         }),
@@ -180,16 +189,13 @@ export class CloudWatchStack extends cdk.Stack {
     // → temp never cleaned → task wedged while `pgrep stellar-core` still
     // reports healthy). Metric-math on % is robust to disk-size changes.
     // Sustained 3×5 min avoids paging on a transient merge spike.
-    // Cluster/service names are deterministic (see IngestionStack).
     // ---------------------
-    const galexieCluster = `${config.envName}-ingestion`;
-    const galexieService = `${config.envName}-galexie-live`;
     const ephemeralUsed = new cloudwatch.Metric({
       namespace: 'ECS/ContainerInsights',
       metricName: 'EphemeralStorageUtilized',
       dimensionsMap: {
-        ClusterName: galexieCluster,
-        ServiceName: galexieService,
+        ClusterName: galexieCluster.clusterName,
+        ServiceName: galexieService.serviceName,
       },
       period: cdk.Duration.minutes(5),
       statistic: cloudwatch.Stats.MAXIMUM,
@@ -198,8 +204,8 @@ export class CloudWatchStack extends cdk.Stack {
       namespace: 'ECS/ContainerInsights',
       metricName: 'EphemeralStorageReserved',
       dimensionsMap: {
-        ClusterName: galexieCluster,
-        ServiceName: galexieService,
+        ClusterName: galexieCluster.clusterName,
+        ServiceName: galexieService.serviceName,
       },
       period: cdk.Duration.minutes(5),
       statistic: cloudwatch.Stats.MAXIMUM,
