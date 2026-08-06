@@ -8,14 +8,21 @@ export interface OpFact {
 }
 
 /** Key-fact rows for the operation card — only where they ADD over the
- *  headline sentence and the RouteStrip (which owns the route chain). Today:
- *  the crossed-pool count and the deliberately empty "Received" slot (spec
- *  D9: the exact delivered amount of a strict-send swap is not derivable from
- *  claimedAtoms; the slot lights up when the net_settled read path lands). */
+ *  headline sentence and the RouteStrip (which owns the route chain). Today
+ *  just the "Received" slot for an APPLIED strict-send swap (spec D9: the exact
+ *  delivered amount is not derivable from claimedAtoms; the slot lights up when
+ *  the net_settled read path lands).
+ *
+ *  `applied` is required, not optional: on a FAILED path payment nothing was
+ *  delivered, so the amount is known to be zero rather than unknown, and
+ *  claiming "not derivable" there would assert an unknown over a fact — the
+ *  inverse of the defect this row was reworded to avoid (0377 F7). */
 export function opFacts(
   light: OperationItem,
-  heavy: XdrOperationDto | null
+  heavy: XdrOperationDto | null,
+  applied: boolean
 ): OpFact[] {
+  if (!applied) return [];
   if (
     light.type_name !== 'PATH_PAYMENT_STRICT_SEND' &&
     light.type_name !== 'PATH_PAYMENT_STRICT_RECEIVE'

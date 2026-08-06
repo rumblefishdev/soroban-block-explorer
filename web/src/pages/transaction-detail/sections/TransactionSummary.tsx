@@ -49,17 +49,17 @@ export function opFailReason(
 
 /** Deliberately NOT `<Dash />`: these fields live only in the archive-gated
  *  `heavy` block, so their absence means "could not load", which a dash would
- *  render identically to a real "has none" (0377 F1). */
+ *  render identically to a real "has none" (0377 F1).
+ *
+ *  Same type scale as a real value — `text.tertiary` alone carries "this is not
+ *  a value", exactly as `Dash` does. Italic appears nowhere else in the app. */
 function Unavailable() {
   return (
     <Typography
-      variant="bodySmRegular"
-      sx={(theme) => ({
-        color: theme.palette.text.tertiary,
-        fontStyle: 'italic',
-      })}
+      variant="bodySmMedium"
+      sx={(theme) => ({ color: theme.palette.text.tertiary })}
     >
-      unavailable
+      Not available
     </Typography>
   );
 }

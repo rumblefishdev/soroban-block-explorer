@@ -100,7 +100,7 @@ export function OperationCard({
   const label = formatOperationType(light.type_name);
   const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);
-  const facts = opFacts(light, heavy);
+  const facts = opFacts(light, heavy, applied);
   // Execution trace (0462): rebuilt client-side from the diagnostic
   // fn_call/fn_return stream — the EXECUTED calls, superset of the auth
   // tree. When present it supersedes "Authorized calls"; the auth tree

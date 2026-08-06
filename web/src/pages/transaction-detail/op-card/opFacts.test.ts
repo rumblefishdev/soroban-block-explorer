@@ -20,7 +20,7 @@ function heavy(details: Record<string, unknown>): XdrOperationDto {
 }
 
 describe('opFacts', () => {
-  it('adds the D9 Received slot for strict-send (route in RouteStrip, pools as card links)', () => {
+  it('adds the D9 Received slot for an APPLIED strict-send (route in RouteStrip, pools as card links)', () => {
     const facts = opFacts(
       light('PATH_PAYMENT_STRICT_SEND'),
       heavy({
@@ -28,23 +28,34 @@ describe('opFacts', () => {
         destAsset: 'bubba:GB',
         path: ['TF:GA'],
         poolIds: ['c4f1', '9d02'],
-      })
+      }),
+      true
     );
     // "not derivable", not a bare dash: the swap succeeded, so an amount was
     // delivered — we just cannot compute it from the claimed atoms (0377 F7).
     expect(facts).toEqual([{ label: 'Received', value: 'not derivable' }]);
   });
 
+  it('omits the slot on a FAILED strict-send — nothing was delivered, so zero is a fact', () => {
+    const facts = opFacts(
+      light('PATH_PAYMENT_STRICT_SEND'),
+      heavy({ sendAsset: 'native', destAsset: 'bubba:GB', path: [] }),
+      false
+    );
+    expect(facts).toEqual([]);
+  });
+
   it('omits the Received slot for strict-receive (exact amount is in the headline)', () => {
     const facts = opFacts(
       light('PATH_PAYMENT_STRICT_RECEIVE'),
-      heavy({ sendAsset: 'native', destAsset: 'USDC:GA', path: [] })
+      heavy({ sendAsset: 'native', destAsset: 'USDC:GA', path: [] }),
+      true
     );
     expect(facts).toEqual([]);
   });
 
   it('returns nothing for non-path-payment types and degraded responses', () => {
-    expect(opFacts(light('PAYMENT'), heavy({ amount: 1 }))).toEqual([]);
-    expect(opFacts(light('PATH_PAYMENT_STRICT_SEND'), null)).toEqual([]);
+    expect(opFacts(light('PAYMENT'), heavy({ amount: 1 }), true)).toEqual([]);
+    expect(opFacts(light('PATH_PAYMENT_STRICT_SEND'), null, true)).toEqual([]);
   });
 });
