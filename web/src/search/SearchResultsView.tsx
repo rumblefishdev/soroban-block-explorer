@@ -7,10 +7,7 @@ import {
 
 import { SearchResultRow } from './SearchResultRow.js';
 import { SearchResultsTabs } from './SearchResultsTabs.js';
-import {
-  SEARCH_GROUP_LIMIT,
-  type SearchResultsState,
-} from './useSearchResults.js';
+import { type SearchResultsState } from './useSearchResults.js';
 
 interface SearchResultsViewProps {
   state: SearchResultsState;
@@ -135,20 +132,6 @@ export function SearchResultsView({
               onClick={() => onRowClick?.(idx)}
             />
           ))}
-        {/* The badge says "10+" on a saturated bucket, but this list is not
-            paginated — without a line saying so, the badge promises rows the
-            user has no way to reach (0377 F7). */}
-        {showResults && hitsForActiveTab.length >= SEARCH_GROUP_LIMIT && (
-          <Stack alignItems="center" sx={{ px: 2, py: 1 }}>
-            <Typography
-              variant="bodyXsRegular"
-              sx={(theme) => ({ color: theme.palette.text.tertiary })}
-            >
-              Showing the first {SEARCH_GROUP_LIMIT} — refine your query to
-              narrow them down.
-            </Typography>
-          </Stack>
-        )}
       </Box>
     </Stack>
   );
