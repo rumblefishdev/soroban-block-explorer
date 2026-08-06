@@ -109,12 +109,19 @@ export function humanizeOp(
         const details = detailsObj(heavy);
         // The 'XLM' fallback is CORRECT here, despite the doc only saying
         // "asset code for classic asset operations": on a payment a null code
-        // does mean native. Verified on prod (0377 F7) — of 36_279_761 payment
-        // appearances in the last 200k ledgers, blank `asset_code` and absent
-        // `asset_issuer_id` coincide exactly (1_456_627 both ways, 0
-        // one-sided), and the parser documents native as "NULL asset_code +
-        // NULL issuer_id" (`SacAssetIdentity::Native`). Dropping the fallback
-        // would replace a correct label with a vaguer one.
+        // does mean native (0377 F7).
+        //
+        // Do NOT re-derive this from `asset_code`/`asset_issuer_id` agreeing —
+        // that proves nothing. `split_asset_ref` (persist/stage.rs) returns the
+        // pair all-or-nothing, so "0 rows one-sided" is forced by the writer
+        // and reads identically for a genuine native and for a parse failure.
+        //
+        // The discriminating evidence comes from `operation_asset_appearances`,
+        // written by a separate parser path: among single-operation payment
+        // transactions, EVERY blank-code one resolves to the native asset id
+        // and every non-blank one does not — 11_168/11_168 and 55_582/55_582 in
+        // the recent window, and the same at the oldest indexed partition.
+        // Three were spot-checked against Horizon, all `asset_type: native`.
         const unit = assetUnit(details?.asset, light.asset_code ?? 'XLM');
         const amount = asAmount(details?.amount);
         const target = isSelf(light, txSourceAccount)
