@@ -188,7 +188,15 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
  * readable accordion list. SAC and pre-upload contracts carry no WASM
  * interface metadata and show an empty state instead.
  */
-export function ContractInterface({ contractId }: { contractId: string }) {
+export function ContractInterface({
+  contractId,
+  isSac,
+}: {
+  contractId: string;
+  /** From the contract detail — lets the empty state name the actual cause
+   *  instead of listing every possible one (0377 F7). */
+  isSac?: boolean;
+}) {
   const { data, isLoading, isError, error, refetch } =
     useContractInterface(contractId);
 
@@ -207,15 +215,22 @@ export function ContractInterface({ contractId }: { contractId: string }) {
   // `interface_metadata` is `null` for SAC / pre-upload / stub rows.
   const parsed = data?.interface_metadata ?? null;
   if (parsed == null || parsed.functions.length === 0) {
-    // Three states collapse here — SAC, pre-upload, and "WASM not parsed yet"
-    // (stub / pre-0327 row, see ContractDetailResponse.upgradeable). Naming
-    // only the first two tells a merely-unparsed contract it is a SAC, so the
-    // copy states the fact and offers the causes (0377 F7).
+    // Three states reach here — a SAC (which has no WASM at all), a contract
+    // whose WASM was never uploaded, and one whose WASM simply has not been
+    // parsed yet (stub / pre-0327 row, see ContractDetailResponse.upgradeable).
+    // `is_sac` and `wasm_hash` separate all three, so name the actual one
+    // rather than listing every possibility at every contract (0377 F7).
+    const cause =
+      isSac === true
+        ? 'A Stellar Asset Contract has no WASM interface to declare.'
+        : data?.wasm_hash == null
+        ? 'No WASM has been uploaded for this contract yet.'
+        : 'This contract’s WASM has not been parsed yet — check back shortly.';
     return (
       <EmptyState
         icon={<InfoOutlinedIcon fontSize="small" />}
-        title="No interface metadata"
-        description="No WASM interface is recorded for this contract — it may be a Stellar Asset Contract, a pre-upload contract, or not parsed yet."
+        title="No public interface"
+        description={cause}
       />
     );
   }

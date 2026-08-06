@@ -103,9 +103,13 @@ function CountBadge({ count }: { count: number }) {
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 22,
+        // Pill, not a fixed circle: a saturated bucket renders "10+", three
+        // glyphs where a 22px circle only fits two. `minWidth` keeps the
+        // one- and two-digit cases perfectly round (0377 F7).
+        minWidth: 22,
         height: 22,
-        borderRadius: '50%',
+        px: 0.75,
+        borderRadius: 9999,
         backgroundColor: theme.palette.common.black,
         flexShrink: 0,
       })}

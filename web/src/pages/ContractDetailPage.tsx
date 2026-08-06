@@ -142,7 +142,10 @@ export default function ContractDetailPage() {
             sectionName={`contract-${activeKey}`}
           >
             {activeKey === 'interface' && (
-              <ContractInterface contractId={contractId} />
+              <ContractInterface
+                contractId={contractId}
+                isSac={contract.data?.is_sac}
+              />
             )}
             {activeKey === 'invocations' && (
               <ContractInvocations contractId={contractId} />

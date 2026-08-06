@@ -73,7 +73,8 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
   },
   {
     id: 'recent_invocations',
-    header: 'Invocations (7d)',
+    // Overridden per-render from the row's `stats_window` — see below.
+    header: 'Invocations',
     align: 'right',
     width: 110,
     cell: (row) => (
@@ -94,15 +95,26 @@ interface ContractsTableProps {
 }
 
 /** The contracts list table — contract id, type, deploy ledger,
- *  deployer, and a 7-day invocation count. */
+ *  deployer, and a windowed invocation count. */
 export function ContractsTable({
   rows,
   loading,
   skeletonRows,
 }: ContractsTableProps) {
+  // The window comes off the row rather than being hardcoded: `stats_window`
+  // is derived from the same constant that bounds the count server-side, so
+  // header and number cannot drift if the window ever changes. Hardcoding
+  // "(7d)" here was the exact drift the field was added to prevent (0377 F6).
+  // Falls back to the bare label while the skeleton has no rows.
+  const windowLabel = rows[0]?.stats_window;
+  const invocationsHeader =
+    windowLabel != null ? `Invocations (${windowLabel})` : 'Invocations';
+
   return (
     <ExplorerTable
-      columns={columns}
+      columns={columns.map((c) =>
+        c.id === 'recent_invocations' ? { ...c, header: invocationsHeader } : c
+      )}
       rows={rows}
       rowKey={(row) => row.contract_id}
       loading={loading}
