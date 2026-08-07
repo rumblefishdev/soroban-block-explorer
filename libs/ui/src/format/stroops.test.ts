@@ -26,11 +26,18 @@ describe('formatTokenAmount', () => {
     expect(formatTokenAmount(250_000_000, 'USDC')).toBe('25 USDC');
   });
 
-  it('accepts a string amount and keeps large values exact', () => {
+  it('accepts a string amount and keeps large values exact, US-grouped', () => {
     // 9_000_000_000_000_000_0 stroops > Number.MAX_SAFE_INTEGER — a number
-    // input would lose precision; the string path stays exact.
+    // input would lose precision; the string path stays exact, and grouping
+    // is string-based so the digits survive (task 0453 AC: US grouping).
     expect(formatTokenAmount('90071992547409910', 'XLM')).toBe(
-      '9007199254.740991 XLM'
+      '9,007,199,254.740991 XLM'
+    );
+  });
+
+  it('groups thousands in the integer part only', () => {
+    expect(formatTokenAmount(33_831_901_066_092, 'bubba')).toBe(
+      '3,383,190.1066092 bubba'
     );
   });
 

@@ -572,7 +572,7 @@ pub async fn fetch_transactions(
     );
     let (page_rows, aggregates) = tokio::join!(
         client.query(&page_sql).fetch_all::<AccountTxPageChRow>(),
-        ch::fetch_tx_list_aggregates(client, &keys, true),
+        ch::fetch_tx_list_aggregates(client, &keys),
     );
     let page_rows = page_rows?;
     let aggregates = aggregates?;

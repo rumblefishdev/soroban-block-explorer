@@ -110,9 +110,12 @@ interface PoolTransactionsProps {
 /**
  * "Recent transactions" section on the LP detail page. Columns:
  * Type (badge) / Hash / Account / Time. The Figma "Amount" column is
- * intentionally omitted in the MVP — backend per-tx LP amounts require
- * an XDR archive read-time fetch (ADR 0029) whose latency is under
- * research in task 0247. The FE add-back is task 0249.
+ * intentionally omitted in the MVP — per-tx LP amounts are not in the DB
+ * (ADR 0029: `operations_appearances.amount` is a fold count, not a
+ * transfer amount). Task 0247 researched five ways to get them and
+ * concluded 2026-06-03: **Path C, ingest-side per-op extraction from each
+ * op's own non-collapsed LedgerEntryChanges** — 100% coverage, no
+ * hot-path archive fetch. The FE add-back is task **0279**.
  */
 export function PoolTransactions({ poolId }: PoolTransactionsProps) {
   // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions

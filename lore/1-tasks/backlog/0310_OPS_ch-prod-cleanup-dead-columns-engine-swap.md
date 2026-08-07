@@ -93,6 +93,17 @@ history:
       as written and is flagged there for rewriting onto `balances` — but the two
       changes should land in a known order, criterion first, so nobody is left
       chasing a table this task removed.
+  - date: 2026-07-29
+    status: backlog
+    who: karolkow
+    note: >
+      Body corrected to match the history. The engine swap has been recorded as
+      done since 2026-06-24 and re-verified three times, but the Summary, the
+      Context bullet and Implementation §1 still read as outstanding work — a
+      reader who stopped at the body would have scheduled an ops window for a
+      migration that ran a month ago. Re-verified on prod today: `ledgers` and
+      `wasm_interface_metadata` are both `ReplacingMergeTree`; the three dead
+      `assets` columns are still present, so the remaining scope is unchanged.
 ---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
@@ -104,10 +115,15 @@ stays reversible (option A backward-compat). Two independent migrations, both
 **after** the additive 0293 rollout is live and verified in prod (rollout
 runbook: `0293/README.md` → "Deploy / Migration Runbook"):
 
-1. Drop the now-dead `assets.total_supply` / `assets.holder_count` / `icon_url` (served from
-   the `balance_aggregates` table — renamed from `asset_aggregates` by 0331/0339,
-   ADR 0051; written `None` by the indexer, read by nothing).
-2. Rebuild `ledgers` and `wasm_interface_metadata` as `ReplacingMergeTree`.
+1. **Remaining scope.** Drop the now-dead `assets.total_supply` /
+   `assets.holder_count` / `icon_url` (served from the `balance_aggregates` table
+   — renamed from `asset_aggregates` by 0331/0339, ADR 0051; written `None` by the
+   indexer, read by nothing).
+2. ~~Rebuild `ledgers` and `wasm_interface_metadata` as `ReplacingMergeTree`.~~
+   **DONE in prod 2026-06-24** (out of band, during SAC-redrain backup prep) and
+   re-verified 2026-07-07, 2026-07-22 and 2026-07-29 — both tables report
+   `ReplacingMergeTree` in `system.tables`. The runbook below is kept as the
+   record of how it was done, not as outstanding work.
 
 Neither reaches prod via `init.sql` — every statement there is `CREATE TABLE IF
 NOT EXISTS`, a no-op on an existing table; and `ALTER ... MODIFY ENGINE` does not
@@ -123,11 +139,12 @@ exist in ClickHouse, so an engine swap is a create-copy-`EXCHANGE TABLES`-drop.
   from `balance_aggregates` (keyed on the unified `asset_id`, folding SAC balances
   into the wrapped classic asset). The dead columns are kept until this task so the
   rollout is reversible.
-- **Engine swaps.** `ledgers` (commit marker, live-tail) and
-  `wasm_interface_metadata` are `MergeTree` today; 0293's `init.sql` declares them
-  `ReplacingMergeTree` so a crash / backfill re-run re-inserting the same key is
-  idempotent (last-write-wins on merge, not a duplicate row). A fresh DB gets RMT;
-  an existing prod table keeps MergeTree until rebuilt.
+- **Engine swaps — settled.** `ledgers` (commit marker, live-tail) and
+  `wasm_interface_metadata` were `MergeTree` when this task was written; 0293's
+  `init.sql` declares them `ReplacingMergeTree` so a crash / backfill re-run
+  re-inserting the same key is idempotent (last-write-wins on merge, not a
+  duplicate row). Both were rebuilt in prod on 2026-06-24 and now match
+  `init.sql`. Nothing outstanding here.
 
 ## Implementation Plan
 
@@ -138,7 +155,10 @@ exist in ClickHouse, so an engine swap is a create-copy-`EXCHANGE TABLES`-drop.
 > already live in prod. Take a prod backup (0298 quiesce-backup item) before any
 > step here. None of this is reversible.
 
-### 1. Engine swap `ledgers` and `wasm_interface_metadata` → ReplacingMergeTree
+### 1. Engine swap `ledgers` and `wasm_interface_metadata` → ReplacingMergeTree — DONE 2026-06-24
+
+> Kept as the record of the executed migration. Both tables are
+> `ReplacingMergeTree` in prod; do not re-run any of it.
 
 Per table: create-copy-`EXCHANGE`-catch-up-drop. `EXCHANGE TABLES` is an atomic
 metadata swap (Atomic db engine), so the live-tail gap is only the rows inserted

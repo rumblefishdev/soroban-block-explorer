@@ -217,9 +217,20 @@ fn claimed_cb_asset(
     changes: &[LedgerEntryChange],
     balance_id: &ClaimableBalanceId,
 ) -> Option<AssetRef> {
+    claimed_cb_asset_amount(changes, balance_id).map(|(asset, _)| asset_ref(&asset))
+}
+
+/// Same lookup for the `details` payload: the claimed/clawed balance's full
+/// XDR asset + amount (task 0453 D8 — the op body carries only the id; the
+/// same-op ledger entry is the only place the asset lives). `None` if the
+/// entry is absent — never guesses.
+pub(crate) fn claimed_cb_asset_amount(
+    changes: &[LedgerEntryChange],
+    balance_id: &ClaimableBalanceId,
+) -> Option<(Asset, i64)> {
     changes.iter().find_map(|c| match &present_entry(c)?.data {
         LedgerEntryData::ClaimableBalance(cb) if &cb.balance_id == balance_id => {
-            Some(asset_ref(&cb.asset))
+            Some((cb.asset.clone(), cb.amount))
         }
         _ => None,
     })
@@ -446,6 +457,19 @@ mod tests {
         );
         // No meta → nothing (never guesses).
         assert!(emit(&body).is_empty());
+    }
+
+    #[test]
+    fn claimed_cb_asset_amount_returns_the_full_pair_for_details() {
+        // The details-payload variant (task 0453 D8) must carry the amount too.
+        let id = ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([0x11; 32]));
+        let changes = vec![cb_state_change(xdr_credit(b"AQUA", 0x07), 0x11)];
+        let (asset, amount) = claimed_cb_asset_amount(&changes, &id).unwrap();
+        assert_eq!(amount, 500);
+        assert!(matches!(asset, Asset::CreditAlphanum4(_)));
+        // Unknown id → None, never a guess.
+        let other = ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash([0x99; 32]));
+        assert!(claimed_cb_asset_amount(&changes, &other).is_none());
     }
 
     #[test]

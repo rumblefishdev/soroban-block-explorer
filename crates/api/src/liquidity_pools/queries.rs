@@ -106,9 +106,12 @@ pub struct ResolvedPoolListParams {
     pub asset_b_issuer: Option<String>,
     /// Decimal string preserving NUMERIC(28,7) precision.
     pub min_tvl: Option<String>,
-    /// Single-asset filter (task 0246) — trimmed + uppercased at the handler
-    /// boundary, matched against either leg case-insensitively. NULL = no filter.
-    pub asset_code: Option<String>,
+    /// Free-text asset filter (task 0246, widened in 0440) — trimmed and
+    /// uppercased at the handler boundary, then split on `/` into at most two
+    /// needles. Every needle must appear on *some* leg, which makes a pair
+    /// query order-insensitive without anyone knowing Stellar's canonical leg
+    /// ordering. Empty = no filter.
+    pub asset_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -499,7 +502,29 @@ pub async fn fetch_participants(
 
     // Resolve the provider StrKey by surrogate id (bloom seek) instead of a
     // whole-`accounts` `JOIN accounts acc FINAL` (task 0354). INNER-JOIN drop
-    // semantics preserved via filter_map (a position always has its account).
+    // semantics preserved via filter_map.
+    //
+    // "A position always has its account" holds today but is NOT guaranteed by
+    // construction — it is maintained by operators. Measured on prod
+    // (2026-08-04): all 6010 distinct `shares > 0` participants resolved, 0
+    // missing. No non-test Rust path deletes an `accounts` row and prod's
+    // retained mutation history has none, but two operator-driven paths can:
+    //
+    //   * `docs/runbooks/0225_backfill_crash_recovery.md` rolls back `accounts`
+    //     on `last_seen_ledger` while rolling back `lp_positions` on
+    //     `last_updated_ledger` — DIFFERENT watermarks, so an account touched
+    //     inside the crashed range can lose its row while an older position
+    //     survives. That is exactly the dangling surrogate below;
+    //   * `repair_tier1::rebuild_accounts` replaces the whole table via
+    //     `EXCHANGE TABLES` (`ch_staging::finalize`), where rows can disappear
+    //     with no DELETE at all.
+    //
+    // So the log stays, and the failure mode is not proportional to the cause:
+    // the drop happens BEFORE `finalize_page` reads the `limit + 1` sentinel,
+    // so losing the sentinel row reports "no next page" and hides the REST of
+    // the list, not one participant. Only 82 of the 26_489 pools with a live
+    // participant hold more than one page, but the largest holds 684. `error!`
+    // (not `debug!`) because the Lambda runs at `RUST_LOG=info` (0377 F3).
     let accounts = resolve_accounts(
         client,
         rows.iter().map(|r| r.account_id_surrogate).collect(),
@@ -508,7 +533,16 @@ pub async fn fetch_participants(
     Ok(rows
         .into_iter()
         .filter_map(|r| {
-            let account = accounts.get(&r.account_id_surrogate)?.clone();
+            let Some(account) = accounts.get(&r.account_id_surrogate).cloned() else {
+                tracing::error!(
+                    account_id_surrogate = r.account_id_surrogate,
+                    pool_id = pool_id_hex,
+                    "lp_positions row resolves to no accounts row: participant \
+                     dropped, so participant_count disagrees with the list and \
+                     pagination may terminate early"
+                );
+                return None;
+            };
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,
@@ -674,7 +708,7 @@ pub async fn fetch_pool_transactions(
     // operation_types via the shared non-correlated aggregate (ops-only, PK
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let aggregates = fetch_tx_list_aggregates(client, &keys, false).await?;
+    let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
     // preserved via filter_map (a tx always has its source account).
@@ -972,10 +1006,54 @@ pub async fn fetch_pool_list(
         );
         binds.push(iss.clone());
     }
-    if let Some(code) = params.asset_code.as_ref() {
-        filters.push_str(" AND (upper(lp.asset_a_code) = ? OR upper(lp.asset_b_code) = ?)");
-        binds.push(code.clone());
-        binds.push(code.clone());
+    // Asset-code needles (0440 / issue #366).
+    //
+    // Substring, not equality: `USD` has to match the `USDC` pools the user can
+    // see on the page. `position` takes the needle literally — no LIKE wildcards
+    // and no regex to escape, so caller free-text cannot widen its own match.
+    // Case-insensitive here rather than `upper()` on the column: same result,
+    // one pass, and it keeps working if the needle ever arrives un-normalized.
+    //
+    // Native legs are stored with an empty code (`asset_type = 0`, code `''`)
+    // while every surface — this list included — renders them as `XLM`. Without
+    // the alias, `XLM` matches none of the 11.7k pools that actually hold native
+    // XLM, and instead returns ~3.7k pools of credit assets someone minted under
+    // the code `XLM` (they exist, including `XLM/XLM` pairs). That is not an
+    // empty result, it is a confident wrong one — so the predicate searches what
+    // the row displays as.
+    //
+    // A pair assigns each needle its OWN leg, in either order, rather than
+    // asking each needle independently whether it matches somewhere. The
+    // difference only shows when the needles overlap, and then it is the whole
+    // answer: `USDC/USDC` means the 72 pools with USDC on both sides, not the
+    // 2 912 with USDC anywhere. Same for a needle that is a prefix of the other
+    // (`USD/USDC`) — one asset must not satisfy both halves of the query.
+    let leg = |side: char| {
+        format!(
+            "positionCaseInsensitive(if(lp.asset_{side}_type = 0, 'XLM', lp.asset_{side}_code), ?) > 0"
+        )
+    };
+    match params.asset_codes.as_slice() {
+        [one] => {
+            filters.push_str(&format!(" AND ({} OR {})", leg('a'), leg('b')));
+            binds.push(one.clone());
+            binds.push(one.clone());
+        }
+        [first, second] => {
+            filters.push_str(&format!(
+                " AND (({a} AND {b}) OR ({a} AND {b}))",
+                a = leg('a'),
+                b = leg('b'),
+            ));
+            // Bind order follows the `?`s left to right: first/second, then the
+            // reversed assignment.
+            binds.push(first.clone());
+            binds.push(second.clone());
+            binds.push(second.clone());
+            binds.push(first.clone());
+        }
+        // `normalize_asset_codes` yields at most two needles.
+        _ => {}
     }
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
@@ -1300,7 +1378,7 @@ mod decode_smoke {
             asset_b_code: None,
             asset_b_issuer: None,
             min_tvl: None,
-            asset_code: None,
+            asset_codes: Vec::new(),
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
             .await
@@ -1333,5 +1411,170 @@ mod decode_smoke {
         fetch_pool_chart(&ch, &pool, "1d", from, to)
             .await
             .expect("chart rows decode");
+    }
+
+    /// `filter[asset_code]` is a substring of either leg, not an exact code
+    /// (0440 / issue #366). The regression this guards is the original
+    /// behaviour: `USD` returning nothing while the list is full of `USDC`
+    /// pools. Asserting the returned legs actually contain the needle also
+    /// catches the opposite failure — a predicate that stopped filtering.
+    #[tokio::test]
+    async fn asset_code_filter_matches_substring() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP asset-code substring smoke");
+            return;
+        };
+
+        let params = ResolvedPoolListParams {
+            limit: 10,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            // Deliberately a proper prefix of a real code: an exact-match
+            // predicate returns zero rows here, a substring one does not.
+            asset_codes: vec!["USD".to_string()],
+        };
+        let pools = fetch_pool_list(&ch, &params, Direction::Next)
+            .await
+            .expect("filtered list decodes");
+
+        assert!(
+            !pools.is_empty(),
+            "`USD` matched no pool — substring filter regressed to exact match"
+        );
+        for p in &pools {
+            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
+            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+            assert!(
+                a.contains("USD") || b.contains("USD"),
+                "pool {} has neither leg containing USD ({a:?} / {b:?}) — filter not applied",
+                p.pool_id_hex
+            );
+        }
+    }
+
+    /// `XLM` must reach the pools that hold *native* XLM. Native legs carry an
+    /// empty stored code, so a plain column match silently returns only the
+    /// credit assets minted under the code `XLM` — a wrong answer that looks
+    /// like a right one. Guards the `if(asset_type = 0, 'XLM', code)` alias.
+    #[tokio::test]
+    async fn asset_code_filter_finds_native_xlm() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP native-XLM smoke");
+            return;
+        };
+
+        let params = ResolvedPoolListParams {
+            limit: 25,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            asset_codes: vec!["XLM".to_string()],
+        };
+        let pools = fetch_pool_list(&ch, &params, Direction::Next)
+            .await
+            .expect("filtered list decodes");
+
+        assert!(
+            pools
+                .iter()
+                .any(|p| p.asset_a_type == 0 || p.asset_b_type == 0),
+            "`XLM` returned {} pool(s) but none holds native XLM — the native \
+             alias regressed and the filter is answering with look-alike \
+             credit assets only",
+            pools.len()
+        );
+    }
+
+    /// A pair query constrains both legs and does not care which order the user
+    /// typed, nor which leg the chain assigned. Runs the same pair twice,
+    /// reversed, and requires identical results — the cheapest way to catch a
+    /// predicate that quietly became order-sensitive.
+    #[tokio::test]
+    async fn asset_code_filter_pair_is_order_insensitive() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP pair-filter smoke");
+            return;
+        };
+
+        let pair = |a: &str, b: &str| ResolvedPoolListParams {
+            limit: 25,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            asset_codes: vec![a.to_string(), b.to_string()],
+        };
+
+        let ids = |rows: Vec<PoolRow>| {
+            let mut v: Vec<String> = rows.into_iter().map(|r| r.pool_id_hex).collect();
+            v.sort();
+            v
+        };
+
+        let forward = ids(fetch_pool_list(&ch, &pair("XLM", "USDC"), Direction::Next)
+            .await
+            .expect("forward pair decodes"));
+        let reversed = ids(fetch_pool_list(&ch, &pair("USDC", "XLM"), Direction::Next)
+            .await
+            .expect("reversed pair decodes"));
+
+        assert_eq!(forward, reversed, "pair filter is order-sensitive");
+        assert!(
+            !forward.is_empty(),
+            "`XLM/USDC` matched no pool — the AND-ed needles are over-constraining"
+        );
+
+        // Both needles must bind: a pair that shares only one leg with any pool
+        // has to come back empty, otherwise the second needle is being dropped.
+        let impossible = fetch_pool_list(&ch, &pair("USDC", "ZZZZNOPE"), Direction::Next)
+            .await
+            .expect("impossible pair decodes");
+        assert!(
+            impossible.is_empty(),
+            "pair with an unmatchable second needle returned {} pool(s) — the \
+             needles are OR-ed, not AND-ed",
+            impossible.len()
+        );
+
+        // Three codes. `normalize_asset_codes` splits `USDC/XLM/BTC` into
+        // `USDC` and the literal `XLM/BTC` (see its unit tests); a pool has two
+        // legs, so no asset code can carry that second needle and the answer is
+        // empty. Asserted here so the query side cannot start "helpfully"
+        // ignoring the remainder.
+        let three = fetch_pool_list(&ch, &pair("USDC", "XLM/BTC"), Direction::Next)
+            .await
+            .expect("three-code query decodes");
+        assert!(
+            three.is_empty(),
+            "a three-code query returned {} pool(s) — the third code is being \
+             dropped instead of narrowing to nothing",
+            three.len()
+        );
+
+        // Each needle claims its own leg. Repeating one therefore means "both
+        // legs", not "matches somewhere, twice" — a pool with USDC on one side
+        // and anything else on the other must not come back.
+        let both_legs = fetch_pool_list(&ch, &pair("USDC", "USDC"), Direction::Next)
+            .await
+            .expect("repeated needle decodes");
+        for p in &both_legs {
+            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
+            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+            assert!(
+                a.contains("USDC") && b.contains("USDC"),
+                "pool {} came back for `USDC/USDC` with legs {a:?} / {b:?} — one \
+                 asset is satisfying both needles",
+                p.pool_id_hex
+            );
+        }
     }
 }

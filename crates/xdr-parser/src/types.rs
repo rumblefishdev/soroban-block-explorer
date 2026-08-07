@@ -13,6 +13,7 @@
 //! read-time tagging).
 
 use domain::{ContractEventType, ContractType, NftEventType, OperationType, TokenAssetType};
+use stellar_xdr::TransactionEventStage;
 
 /// Underlying classic asset identity carried by a SAC deployment.
 ///
@@ -160,6 +161,20 @@ pub struct ExtractedEvent {
     pub data: serde_json::Value,
     /// Zero-based index of this event within the transaction.
     pub event_index: u32,
+    /// Zero-based envelope position of the operation that emitted this event.
+    /// Only the CAP-67 V4 per-operation container carries the attribution —
+    /// `None` for tx-level, diagnostic and V3 events (task 0453 D7).
+    pub op_index: Option<u32>,
+    /// CAP-67 `TransactionEvent.stage` — when in ledger application the event
+    /// fired. Measured on mainnet (`tests/tx_event_stage_real_meta.rs`): the
+    /// fee charge is `BeforeAllTxs` and the refund is `AfterAllTxs` — settled
+    /// after every transaction in the ledger, not after this one.
+    /// The protocol's own statement of ordering, and the only one there is:
+    /// `event_index` is our flat counter over the three containers, so an
+    /// refund is numbered ahead of the operations it refunds.
+    /// `None` for per-op, diagnostic and V3 events — only `v4.events` carries
+    /// a stage.
+    pub stage: Option<TransactionEventStage>,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds), used for monthly partitioning.

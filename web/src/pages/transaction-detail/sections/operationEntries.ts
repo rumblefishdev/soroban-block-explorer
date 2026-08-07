@@ -4,20 +4,24 @@ import type {
   XdrOperationDto,
 } from '@rumblefish/api-types';
 
-import type { EnrichedOp } from './OperationPicker.js';
-
 /**
  * One pickable operation: the row the picker renders plus the light/heavy
  * pair the detail panels read.
  *
- * `tx.operations` (light) folds same-identity envelope ops into a single row
- * (task 0163), so it under-counts multi-op transactions. `tx.heavy.operations`
- * is the XDR-decoded, unfolded 1:1 list — when present we drive the picker
- * from it so every operation shows; otherwise we fall back to the folded
- * light rows (task 0329).
+ * Driven ONLY by `tx.heavy.operations`, the XDR-decoded 1:1 list. When the
+ * archive fetch fails this returns nothing and the section says so.
+ *
+ * There used to be a fallback to `tx.operations` (task 0329). It was dropped
+ * deliberately: that list is the DB's appearance index, which folds
+ * same-identity operations into one row (task 0163) WITHOUT amount in the key,
+ * so four payments of different amounts between the same pair collapse to a
+ * single row. Rendering it as the operation list showed "1" where the header
+ * said "4", and no wording fixed that — the row is not one operation, it is a
+ * count of them with the amounts gone. Showing nothing and saying why beats
+ * showing a shape the user will read as the truth (0377 F7).
  */
 export interface OperationEntry {
-  row: EnrichedOp;
+  row: OperationItem;
   light: OperationItem | undefined;
   heavy: XdrOperationDto | null;
 }
@@ -43,10 +47,6 @@ export function buildOperationEntries(
   const lightOps = tx.operations;
   const heavyOps = tx.heavy?.operations ?? [];
 
-  if (heavyOps.length === 0) {
-    return lightOps.map((light) => ({ row: light, light, heavy: null }));
-  }
-
   return heavyOps.map((heavy) => {
     const light = matchLight(heavy, lightOps);
     const base: OperationItem = light ?? {
@@ -60,7 +60,7 @@ export function buildOperationEntries(
     // appearance_id keys the picker list; override so folded entries sharing
     // one light row still get unique, stable keys (the real appearance_id
     // lives on `light`, which the panels use).
-    const row: EnrichedOp = {
+    const row: OperationItem = {
       ...base,
       appearance_id: heavy.application_order,
       application_order: heavy.application_order,

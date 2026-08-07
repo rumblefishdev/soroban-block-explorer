@@ -14,7 +14,9 @@ tags:
     prices-api-live-2026-07-22,
   ]
 milestone: 2
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/367'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/371'
 history:
   - date: '2026-05-07'
     status: backlog
@@ -204,6 +206,266 @@ history:
       Reminder for whoever writes the SQL: key on `asset_kind`, never join raw
       `prices.assets` on `(asset_code, issuer_address)` — that silently prices
       native legs off one of its 153 empty-code rows.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Two updates. (1) Recorded Oskar's 2026-08-03 message as
+      notes/R-prices-freeze-incident-and-current-price-usd-v13.md: the
+      ~1.5-day staleness flagged at activation was an INCIDENT (coarse OHLCV
+      frozen 07-21 02:44 → recovered 08-03 09:57), not steady state — the
+      "confirm with the prices owner" gate is closed. The 07-21→08-03 hole in
+      1h/1d does not backfill itself; their pre-roll pends (they ping when
+      done) — do not run AC validation over that window until then.
+      Compute-at-read (ADR 0053) means our charts self-heal, zero recompute.
+      Also: current_price_usd goes 6→13 columns (additive) with SENTINEL
+      semantics (0 = unavailable, sources='' is invalid JSON) — named column
+      lists only, never positional; full trap table in the note.
+      (2) Verified against schema + archive: the activation note's premise
+      "volume/fee_revenue stay out — they need gross_volume_a" is STALE.
+      `liquidity_pool_snapshots.gross_volume_a` exists (init.sql, 0268 ALTER),
+      is written by live ingest (stage.rs gross_volume_a_by_pool), and was
+      historically backfilled by the 0266 re-parse (261.32M non-NULL rows,
+      verify-gates + 0267 E20 passed 2026-06). The only remaining gate for USD
+      volume/fee_revenue is the same read-time price join TVL needs, per the
+      schema comment itself. Scope re-cut (TVL-only vs TVL+volume+fee in one
+      pass) is an OPEN question for the humans, deliberately not decided here.
+      Distinct from #371: gross_volume_a is a per-(pool, ledger) SUM and
+      cannot serve per-transaction amounts — that is 0279's
+      lp_operation_amounts plan (per-atom rows + deposits/withdrawals from
+      LedgerEntryChanges + its own backfill). #371 is claimed by both this
+      task (§"Also owns", 2026-07-31) and 0279 (re-scoped 2026-07-30) —
+      ownership overlap to resolve before Phase B starts.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SCOPE RE-CUT (human decision, stkrolikiewicz): Phase A ships all three
+      columns — tvl, volume, fee_revenue — computed at read via the
+      prices.price_usd_series join (ADR 0053, no materialization). The
+      2026-06-09 TVL-only cut is retired because both of its premises are
+      gone: gross_volume_a has been backfilled since 0266 (2026-06-16,
+      261.32M rows) and the Prices API is live in-cluster. Marginal cost is
+      two expressions in the same price join (volume = gross_volume_a x
+      price_a; fee_revenue = volume x fee_bps / 10000). The plan's Phase 1/2
+      (SQS emit + Lambda 2 column writes) is OBSOLETE for these columns —
+      superseded by compute-at-read; the indexer already persists every
+      on-chain input. Phase B (#371 per-tx amounts) unchanged and still
+      pending the 0199/0279 ownership decision.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase A IMPLEMENTED — PR #380 (feat/0199_lp-analytics, Refs #367/#371).
+      Chart: per-snapshot join against price_usd_series (1d/1w) /
+      price_usd_series_1h (1h) at the interval's grain; TVL = last priceable
+      snapshot per bucket (both legs required); volume prices each ledger's
+      gross_volume_a at its own bucket, any unpriceable swap NULLs the
+      bucket (honest hole, no under-sum); fee = volume x fee_bps/10000.
+      0356 perf shape preserved. Detail: tuned #347 query untouched; second
+      small fetch (current_price_usd spot + 24h gross_volume_a sum), USD in
+      Rust, prices errors DEGRADE to NULL + error log (never 500). Emerged
+      decisions: (a) Float64 USD rounded to cents — Decimal128 scale
+      overflow avoided, 1% AC tolerance covers it; (b) nullIf(close_usd,0)
+      instead of join_use_nulls (readonly-user rejection gotcha); (c) 1w
+      interval joins the DAILY series — prices provides 1h+1d grains only;
+      (d) detail volume priced at CURRENT spot, not per-trade (upgrade
+      path: hourly join); (e) list endpoint deliberately untouched —
+      list-side TVL + min_tvl filter is its own perf problem (lplist cr
+      history). FE needs nothing: PoolCharts.tsx already renders all three
+      metrics. GATES before merge/deploy: (1) box read-cost measurement of
+      the prices-view join on the hottest pool (ADR 0053 gate — the views
+      aggregate price_ohlcv under the hood; identity predicate may not
+      push down); (2) SELECT grant on prices.* for the API CH user via
+      ansible users.d + compose recreate (prices_writer lesson); (3) E2E
+      numbers validation vs Horizon AC after Oskar's pre-roll closes the
+      07-21..08-03 hole. Canonical SQL 19/21 + tech-design + ADR 0053
+      updated in the PR; api-types regenerated.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      GATE 1 EXECUTED — read-cost box-measured on the hottest pool
+      (a01fce81, 1.87M snapshots, yXLM/WGUARDIAN); full table in the PR
+      #380 comment + ADR 0053 body. Verdicts: 1h/7d 227ms/2.0M rows OK;
+      1d/90d 721ms/10.3M rows acceptable (+6.0M vs 442ms/4.2M baseline =
+      exactly 2x the view scan); detail 112ms/1.6M OK; **1w/104w
+      4.6s/70.7M rows/2.1GiB NOT acceptable**. Mechanism proven: the
+      views' bucket range DOES prune price_ohlcv (1.89M of 19.6M for 90d)
+      but identity CANNOT push down (computed columns) — long windows scan
+      every asset's candles x2 legs. Fix is prices-side, and their
+      views.sql SS6 pre-authorized it: "promote to a materialized table
+      only if measured read latency demands it" — demand now measured,
+      request drafted for Oskar. Interim: 1w stays correct but expensive;
+      MEDIUM cache + Cloudflare in front; NOT a merge blocker per se —
+      karolkow's call at review. TWO MORE box findings: (a)
+      current_price_usd is live (3,316 assets, updater ticking) but
+      price_usd=0 SENTINEL for native XLM itself → detail switched from
+      spot to argMax(close_usd) over price_usd_series_1h 48h lookback
+      (commit 4919ca78; ~2h max staleness, same cost, real data verified
+      on both legs, consistent with chart's last bucket) — reported to
+      Oskar, revisit when their 0039 prices native; (b) syntax + decode
+      of every new query validated against live CH in the same run.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SHIP DECISION (human): ship the whole Phase A including 1w; Oskar
+      draft sent by Stanisław. Gates re-verified under PROD conditions —
+      ran everything again AS api_reader (the real API user): 1d 688ms /
+      1h 272ms / detail 132ms (no profile penalty on default paths); 1w
+      completes under the read_only profile caps (2.11 GiB < 4 GiB, no
+      timeout) at 13.7s cold (3x the default-user run — thread cap bites
+      only at that scale). GATE 2 DISSOLVED: api_reader has no <grants>
+      block in services.xml, so its read_only profile already reads
+      prices.* — verified empirically; no ansible/users.d change, no
+      compose recreate needed to ship. PR #380 body corrected (the grant
+      claim was wrong), CI fully green. Remaining to done: karolkow
+      review -> merge -> manual deploy (make deploy-production-compute)
+      -> post-preroll AC validation vs Horizon -> /issues sweep closes
+      #367 at deploy. Side observation: current_price_usd began pricing
+      WGUARDIAN mid-session but still not native XLM — consistent with
+      the reported 0039 gap.
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SELF-REVIEW of the branch found 6 issues; 5 fixed in d0efb496, CI
+      green. The one that mattered: the chart NULLed its NEWEST bucket for
+      any pool with an illiquid leg, because a price candle only exists
+      once the asset trades in that bucket and we joined on exact bucket
+      equality. Reproduced on prod (pool a01fce81 had today's yXLM candle
+      but none for WGUARDIAN) - and the detail endpoint, which uses a 48h
+      lookback, happily returned a TVL at the same moment, so the page
+      contradicted itself on its most-read number. Fix: ASOF LEFT JOIN
+      taking the last close at or before the wanted bucket, CAPPED at 48h
+      (MAX_PRICE_CARRY_SECONDS, shared with detail). The cap is the whole
+      point - uncapped carry-forward would have rendered the 07-21..08-03
+      freeze as live TVL priced off a 12-day-old candle (verified: the ASOF
+      match for 07-28 IS a 07-21 candle). ASOF needs an equi-join column
+      hence the constant k - a real column, not ON 1=1 (that pins
+      join_algorithm to hash). Post-fix on prod as api_reader: today's
+      bucket reports 25.59, freeze window stays NULL, and 1h got CHEAPER
+      (204ms/2.5M vs 272ms/2.8M - ASOF merges instead of hashing).
+      Also fixed: chart and detail emitted different wire shapes for the
+      same field (CH toString(round(x,2)) gives "25"/"1.5"/"0" vs Rust
+      "25.00") - SQL now returns raw Nullable(Float64) and one Rust helper
+      formats both, with fee_revenue derived from the volume float (removed
+      a fragile positional bind); detail reported "$0.00 traded" on a parse
+      failure (only SQL NULL means zero now); and two comments asserted
+      falsehoods (the prices grant gate, and detail/chart price
+      consistency). DELIBERATELY NOT FIXED, needs karolkow's call: the
+      per-bucket volume veto still discards a whole 1w bucket on one
+      unpriced ledger - an unmarked partial sum reads as a real number, so
+      that wants a coverage field, not a silent change.
+      DECODE: Nullable(Float64) -> Option<f64> is exactly the wire-type
+      contract decode_smoke guards, and SSH forwarding to the box is
+      administratively prohibited (AllowTcpForwarding no - do not work
+      around it), so it is now covered by a schema-free test against a
+      local CH 26.3 docker; NULL survives as None, not 0.0.
+      UPSTREAM (for Oskar, not our bug): the IN-PROGRESS candle is
+      unstable - yXLM's 13:00 hourly close read 1.3085 USD against ~0.170
+      in every neighbouring hour (7.7x), briefly quadrupling the newest 1h
+      TVL point while reserves stayed flat. We report it faithfully and do
+      NOT apply our own outlier filter (prices owns that; diverging would
+      make our numbers disagree with theirs).
+  - date: '2026-08-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      CORRECTION to the entry above: "the in-progress candle is unstable" was
+      the symptom, not the cause. Read the raw price_ohlcv_1h rows and the
+      mechanism is PARTIAL ENRICHMENT — price_usd_series volume-weights
+      close_usd across a bucket's per-source/per-quote rows but only over
+      rows passing `close_usd > 0`, and close_usd is baked by a LATER
+      enrichment pass, so a fresh bucket's average runs over an arbitrary
+      subset. On yXLM's 13:00 hour the single surviving row was a 0.764-unit
+      dust print at 1.3085 (vs ~0.170 real); by 14:13 all five rows read 0
+      and the bucket had vanished from the view entirely. The weighting is
+      sound — the same print sits in 12:00 beside 42,038 units of real
+      volume and moves the close by nothing. It is the filter, not the maths.
+      Full write-up + evidence table in
+      notes/R-prices-freeze-incident-and-current-price-usd-v13.md §3 (the
+      note is retitled: it is now the collected prices.* READ TRAPS).
+      Also captured there: current_price_usd 0-sentinels native XLM itself,
+      the concrete reason detail reads the 1h series. Sent to the prices
+      owner with two suggested fixes (hold a bucket out of the view until
+      fully enriched, or weight the unenriched rows in once they land).
+      Our stance unchanged: no outlier filter of our own — prices owns that,
+      and diverging would defeat reading their views as one source of truth.
+      Recorded in the branch too (7182b45f) since the SQL doc carried the
+      same imprecise wording.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SCOPE CLARIFICATION from re-reading issue #367 (its whole body is one
+      screenshot): the reporter shows the pools LIST page (search 'usdc';
+      columns Pool / Reserves / Total shares / Participants) and asks for a
+      USD TVL estimate THERE, to compare pools at a glance. No mention of
+      charts or intervals. Two consequences: (a) the expensive 1w chart
+      window is entirely our own SCF-scope surface, not the reporter's ask
+      — the prices-side materialization can ride behind cache at its own
+      pace; (b) PR #380 (detail + chart) does NOT close #367's literal
+      request — the list TVL column is exactly the deliberately deferred
+      Phase A2. At the post-deploy /issues sweep: either keep #367 open
+      until Phase A2 lands (recommended — the literal ask is the list) or
+      close with an explicit 'detail+chart shipped, list column tracked
+      separately' comment. Do not auto-close on deploy.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase A2 added to the plan (human decision, stkrolikiewicz): list-side
+      TVL column — the literal #367 ask. Checked first that no dedicated
+      task exists (#367 lives only here; 0215 is the adjacent DOCS
+      catalogue, obsolete per its own 2026-07-22 note -> archived with
+      this task when done; 0401 is unrelated lplist keyset perf). Kept
+      inside 0199 rather than a new task: 0199 owns the #367 link and all
+      the machinery A2 reuses (price_leg, MAX_PRICE_CARRY_SECONDS,
+      usd_str, prices traps), and the 0199/0279 dual-claim on #371 shows
+      what split ownership costs. Scope pinned: display-only, one batched
+      price lookup per page; min_tvl/sort-by-TVL stay out (page-membership
+      problem) until the prices-side materialization. Next: implement on a
+      branch stacked on feat/0199_lp-analytics + local FE/BE stack over
+      prod data slices to eyeball and test before shipping.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase A2 IMPLEMENTED + tested end-to-end on production data
+      (branch feat/0199_lp-list-tvl, stacked on the PR #380 branch). No
+      data import was needed: new `cargo run -p api --bin local` serves
+      the lib's register_routes over plain axum and talks mTLS to prod
+      CH with the developer cert (CN -> dev_shared, read-only by
+      construction); Vite dev proxy points at it. List TVLs render from
+      prod (XLM/GOLD $6.4K, GOLD/yXLM $2.3K, dashes for unpriceable);
+      detail $130.41 vs chart last bucket $130.38 agree (the carry-
+      forward + shared staleness rule working); charts verified on all
+      intervals incl. weekly toMonday buckets and the freeze window
+      rendering as missing points. TWO DISCOVERIES the local run caught:
+      (a) FE had a pre-0199 CHARTS_ENABLED=false kill-switch hiding the
+      whole chart card (its own comment said flip when 0199 ships) —
+      flipped + pending-oracle placeholder deleted; my earlier "FE needs
+      nothing" claim was wrong. (b) PRICES FINDING #5: canonical USDC
+      has ZERO rows in price_usd_series across ALL history — it only
+      appears as the QUOTE side of candles (10.5k quote rows in 48h) and
+      the views emit base assets only, so every USDC-leg pool reads NULL
+      TVL. Fix is prices-side (synthetic base row under their own
+      USDC=$1 peg assumption); deliberately NOT hardcoded on our side —
+      add to the Oskar report. Dev-env note: dual-React crash from stale
+      libs/ui/dist + vite dep cache; fix = trash dists + nx reset + rm
+      .vite caches (matches the stale-dist memory). Ship path open:
+      fold A2 into PR #380 (one review) or stack a second PR.
+  - date: '2026-08-05'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      A2 FOLDED into PR #380 (human decision): fast-forward 769a6e2c onto
+      feat/0199_lp-analytics, stacked branch deleted, PR body rewritten
+      (now lists chart+detail+list, the local mTLS verification, and all
+      five prices-side gaps incl. the USDC quote-only finding). One review
+      cycle for karolkow. CI green post-fold.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
@@ -220,6 +482,39 @@ Two concerns:
 This task **consumes** the price API; it does not build it.
 
 Subsumes 0125 (original LP analytics) and absorbs 0195 §2b (LP TVL).
+
+### Also owns: per-row trade amounts on the pool page (issue #371, triaged 2026-07-31)
+
+An external report asks the pool's "Recent transactions" table to say what
+each trade actually moved, instead of a bare `Trade` chip — stellar.expert
+shows the amounts on the same view.
+
+Verified against the live page and the schema, not assumed:
+
+- the endpoint returns `hash, source_account, operation_types, fee_charged,
+created_at` and no amounts, so the table renders what it has;
+- the Event chip is derived correctly from `operation_types` (Deposit /
+  Withdrawal / Trade) — no bug there;
+- **per-pool fill amounts are not indexed at all**: `operation_pools` is a
+  (pool, ledger, tx) index with no values, and `operations_appearances.amount`
+  is the operation's own folded amount, not the pool's side of the fill.
+
+The amounts live in the same place this task already needs them — the
+per-op `claimedAtoms` extraction (`amountSold`/`amountBought` per fill,
+`operation.rs::append_pool_claims`). That makes #371 a **presentation
+consumer of Phase 1**, not separate work: once the extraction persists
+per-fill amounts, the table gains an "Amount" column reading
+`12,059.29 XLM → 38.5M KALE`, and no second pipeline is introduced.
+
+Size: **large / needs-backfill** — it is an ingestion change plus historical
+re-parse, exactly the gating this task already carries. Nothing shippable
+from the frontend alone; a "Trade" row cannot invent the amounts it never
+received (see the no-misleading-fallbacks rule).
+
+Sequencing note: 0460 #12 found that `claim_atoms()` already returns the
+ORDER-BOOK atoms too and only `claim_lp_atoms` filters them out — emitting
+both with a `source: orderBook|pool` marker is the cheaper root fix and
+serves #371 and the route-strip labels at once.
 
 ## Per-lambda ownership
 
@@ -262,6 +557,27 @@ USD denomination → off-chain prices → ADR 0043 forces all three column write
 - **Sentinel.** Permanent oracle failure writes `NULL` (not `0`) for any column whose required inputs are unavailable, and emits a WARN log carrying `pool_id`, `snapshot_id`, per-leg oracle error. NULL preserves the "fetch attempted, no value" semantics without conflating with legitimate zero-volume snapshots (a pool with no swaps in a ledger genuinely has `volume = 0`). `liquidity_pools.tvl` (latest, if column exists) is NEVER overwritten by Lambda 2 — only by indexer reserves recompute. If operational distinction between "permanent fail" and "pending" becomes valuable, surface via metrics / log filters or a future `oracle_status` enum, not via numeric sentinels.
 - Transient (price-API 5xx, network, rate limit) → `EnrichError::Transient` → SQS retry → DLQ.
 - Backfill of pre-existing snapshots (NULL because they predate this task) → owned by 0196.
+
+### Phase A2 — list-side TVL column (issue #367's literal ask)
+
+Added 2026-08-05 after re-reading #367: the report's screenshot is the pools
+LIST (raw reserves, no USD column) — the list column IS the ask; detail+chart
+(PR #380) are adjacent value. Scope:
+
+- **Display only.** `GET /liquidity-pools` populates `tvl` per row, computed
+  at read like the detail endpoint: latest reserves x each leg's last
+  `price_usd_series_1h` close (shared `MAX_PRICE_CARRY_SECONDS` rule), NULL
+  unless both legs price. One batched price lookup per PAGE (distinct leg
+  identities of <=100 pools -> one bounded 48h window scan), never per row.
+- **Out of scope, documented:** `filter[min_tvl]` semantics and sort-by-TVL.
+  Both change PAGE MEMBERSHIP, so they cannot ride a per-page computation —
+  they need TVL for ALL pools per request (the old full-scan CTE problem) or
+  the prices-side materialized table. Keep `filter[min_tvl]` returning empty
+  as today; revisit after Oskar's materialization lands.
+- **FE:** render the TVL column in the pools list (PoolItem.tvl already on
+  the wire).
+- **Cleanup:** archive 0215 (DOCS, blocked-on-0199 FE-impact catalogue) in
+  the same motion — its own 2026-07-22 note asks for exactly that.
 
 ### Phase 3 — Soroban DEX adapters
 

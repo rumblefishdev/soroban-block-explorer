@@ -53,11 +53,9 @@ pub fn extract_operations(
             // override or tx source) is the AllowTrust issuer; it borrows
             // `source_account`, released before the move below.
             let op_source = source_account.as_deref().unwrap_or(&tx_source);
-            let asset_appearances = crate::asset_appearances::emit_asset_appearances(
-                &op.body,
-                op_source,
-                op_meta_changes(tx_meta, i),
-            );
+            let op_changes = op_meta_changes(tx_meta, i);
+            let asset_appearances =
+                crate::asset_appearances::emit_asset_appearances(&op.body, op_source, op_changes);
             // Shared by details (poolIds/claimedAtoms) and counterparties
             // (crossed-offer sellers); both read the same per-op result.
             let op_result = op_results.and_then(|rs| rs.get(i));
@@ -67,6 +65,7 @@ pub fn extract_operations(
                 &op.body,
                 return_value.as_ref(),
                 op_result,
+                op_changes,
                 ledger_sequence,
                 tx_index,
                 op_index,
@@ -103,6 +102,72 @@ pub fn tx_op_results(result: &TransactionResult) -> Option<&[OperationResult]> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Per-operation results of ANY applied transaction — success or failed.
+///
+/// Companion to [`tx_op_results`], which stays success-only because its sole
+/// consumer is claim atoms (task 0261 — rolled-back crossings must not reach
+/// `poolIds`). `TxFailed` carries the same per-op array as `TxSuccess`, and
+/// the failing operation's code IS the transaction's fail reason (task 0352),
+/// so this accessor unwraps all four applied arms. `None` only for
+/// validation-level failures (`TxBadSeq`, `TxInsufficientFee`, …), where no
+/// operation was ever attempted and no per-op array exists.
+pub fn tx_op_results_any(result: &TransactionResult) -> Option<&[OperationResult]> {
+    use TransactionResultResult::*;
+    match &result.result {
+        TxSuccess(ops) | TxFailed(ops) => Some(ops.as_slice()),
+        TxFeeBumpInnerSuccess(pair) | TxFeeBumpInnerFailed(pair) => match &pair.result.result {
+            InnerTransactionResultResult::TxSuccess(ops)
+            | InnerTransactionResultResult::TxFailed(ops) => Some(ops.as_slice()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The result code of a single operation, named by the XDR library's own
+/// variant names — no hand-rolled name table (the 0431 lesson).
+///
+/// `OpInner` unwraps to the operation-specific result variant (`"Success"`,
+/// `"LowReserve"`, `"Trapped"`, …); the operation-level rejections keep their
+/// `Op…` names (`"OpNoAccount"`, `"OpBadAuth"`, …). Task 0352: the failing
+/// operation's code is what the fail-reason banner shows.
+pub fn op_result_code(op_result: &OperationResult) -> &'static str {
+    match op_result {
+        OperationResult::OpInner(tr) => {
+            use OperationResultTr::*;
+            match tr {
+                CreateAccount(r) => r.name(),
+                Payment(r) => r.name(),
+                PathPaymentStrictReceive(r) => r.name(),
+                ManageSellOffer(r) | CreatePassiveSellOffer(r) => r.name(),
+                SetOptions(r) => r.name(),
+                ChangeTrust(r) => r.name(),
+                AllowTrust(r) => r.name(),
+                AccountMerge(r) => r.name(),
+                Inflation(r) => r.name(),
+                ManageData(r) => r.name(),
+                BumpSequence(r) => r.name(),
+                ManageBuyOffer(r) => r.name(),
+                PathPaymentStrictSend(r) => r.name(),
+                CreateClaimableBalance(r) => r.name(),
+                ClaimClaimableBalance(r) => r.name(),
+                BeginSponsoringFutureReserves(r) => r.name(),
+                EndSponsoringFutureReserves(r) => r.name(),
+                RevokeSponsorship(r) => r.name(),
+                Clawback(r) => r.name(),
+                ClawbackClaimableBalance(r) => r.name(),
+                SetTrustLineFlags(r) => r.name(),
+                LiquidityPoolDeposit(r) => r.name(),
+                LiquidityPoolWithdraw(r) => r.name(),
+                InvokeHostFunction(r) => r.name(),
+                ExtendFootprintTtl(r) => r.name(),
+                RestoreFootprint(r) => r.name(),
+            }
+        }
+        other => other.name(),
     }
 }
 
@@ -248,6 +313,7 @@ fn extract_op_details(
     body: &OperationBody,
     return_value: Option<&ScVal>,
     op_result: Option<&OperationResult>,
+    op_changes: &[LedgerEntryChange],
     _ledger_sequence: u32,
     _tx_index: usize,
     _op_index: usize,
@@ -402,14 +468,15 @@ fn extract_op_details(
             json!({
                 "asset": format_asset(&op.asset),
                 "amount": op.amount,
-                "claimants": op.claimants.len(),
+                // Task 0460 #16: the full claimant vec — the addresses are
+                // the point of the operation. One shape, no summary count
+                // beside it (derive length where needed).
+                "claimants": op.claimants.iter().map(claimant_json).collect::<Vec<_>>(),
             }),
         ),
         OperationBody::ClaimClaimableBalance(op) => (
             OperationType::ClaimClaimableBalance,
-            json!({
-                "balanceId": format_claimable_balance_id(&op.balance_id),
-            }),
+            cb_details(op_changes, &op.balance_id),
         ),
         OperationBody::BeginSponsoringFutureReserves(op) => (
             OperationType::BeginSponsoringFutureReserves,
@@ -444,9 +511,7 @@ fn extract_op_details(
         ),
         OperationBody::ClawbackClaimableBalance(op) => (
             OperationType::ClawbackClaimableBalance,
-            json!({
-                "balanceId": format_claimable_balance_id(&op.balance_id),
-            }),
+            cb_details(op_changes, &op.balance_id),
         ),
         OperationBody::SetTrustLineFlags(op) => (
             OperationType::SetTrustLineFlags,
@@ -579,6 +644,60 @@ fn format_claimable_balance_id(id: &ClaimableBalanceId) -> Value {
             json!(hex::encode(hash.0))
         }
     }
+}
+
+/// Claimant → `{destination, predicate}` (task 0460 #16).
+fn claimant_json(claimant: &Claimant) -> Value {
+    let Claimant::ClaimantTypeV0(v0) = claimant;
+    json!({
+        "destination": v0.destination.0.to_string(),
+        "predicate": claim_predicate_json(&v0.predicate),
+    })
+}
+
+/// The full recursive claim predicate as tagged JSON — no lossy summary;
+/// `and`/`or` carry up to 2 sub-predicates by XDR definition.
+fn claim_predicate_json(predicate: &ClaimPredicate) -> Value {
+    match predicate {
+        ClaimPredicate::Unconditional => json!({ "type": "unconditional" }),
+        ClaimPredicate::And(ps) => json!({
+            "type": "and",
+            "predicates": ps.iter().map(claim_predicate_json).collect::<Vec<_>>(),
+        }),
+        ClaimPredicate::Or(ps) => json!({
+            "type": "or",
+            "predicates": ps.iter().map(claim_predicate_json).collect::<Vec<_>>(),
+        }),
+        ClaimPredicate::Not(inner) => json!({
+            "type": "not",
+            "predicate": inner.as_deref().map(claim_predicate_json),
+        }),
+        ClaimPredicate::BeforeAbsoluteTime(t) => json!({
+            "type": "beforeAbsoluteTime",
+            "timePoint": t,
+        }),
+        ClaimPredicate::BeforeRelativeTime(secs) => json!({
+            "type": "beforeRelativeTime",
+            "seconds": secs,
+        }),
+    }
+}
+
+/// Details for claim/clawback-claimable-balance — shared by both arms. The
+/// body carries only the id; the asset + amount live in the same-op ledger
+/// entry (task 0453 D8). Keys are optional — absent when the meta lacks the
+/// entry, never guessed.
+fn cb_details(op_changes: &[LedgerEntryChange], balance_id: &ClaimableBalanceId) -> Value {
+    let mut d = json!({
+        "balanceId": format_claimable_balance_id(balance_id),
+    });
+    if let Some((asset, amount)) =
+        crate::asset_appearances::claimed_cb_asset_amount(op_changes, balance_id)
+    {
+        d["asset"] = json!(format_asset(&asset));
+        d["amount"] = json!(amount);
+    }
+    d
 }
 
 fn format_contract_executable(exec: &ContractExecutable) -> Value {
@@ -1072,6 +1191,50 @@ mod tests {
     }
 
     #[test]
+    fn tx_op_results_any_covers_failed_arms() {
+        // The 0352 fixture shape (7af6d0ed…): TxFailed still carries the
+        // per-op array — success op, LowReserve, op-level OpNoAccount.
+        let ops: VecM<OperationResult> = vec![
+            OperationResult::OpInner(OperationResultTr::BeginSponsoringFutureReserves(
+                BeginSponsoringFutureReservesResult::Success,
+            )),
+            OperationResult::OpInner(OperationResultTr::CreateAccount(
+                CreateAccountResult::LowReserve,
+            )),
+            OperationResult::OpNoAccount,
+        ]
+        .try_into()
+        .unwrap();
+
+        let failed = build_tx_result(TransactionResultResult::TxFailed(ops.clone()));
+        let results = tx_op_results_any(&failed).expect("failed arm carries op results");
+        assert_eq!(
+            results.iter().map(op_result_code).collect::<Vec<_>>(),
+            vec!["Success", "LowReserve", "OpNoAccount"]
+        );
+
+        let inner_fail = InnerTransactionResultPair {
+            transaction_hash: Hash([0xEE; 32]),
+            result: InnerTransactionResult {
+                fee_charged: 100,
+                result: InnerTransactionResultResult::TxFailed(ops),
+                ext: InnerTransactionResultExt::V0,
+            },
+        };
+        let fee_bump_fail =
+            build_tx_result(TransactionResultResult::TxFeeBumpInnerFailed(inner_fail));
+        assert_eq!(
+            tx_op_results_any(&fee_bump_fail).map(<[OperationResult]>::len),
+            Some(3),
+            "fee-bump failed inner unwrapped"
+        );
+
+        // Validation-level failure: no op was attempted, no array exists.
+        let validation_failed = build_tx_result(TransactionResultResult::TxBadSeq);
+        assert!(tx_op_results_any(&validation_failed).is_none());
+    }
+
+    #[test]
     fn failed_tx_drops_pool_claims_for_op_level_success() {
         // op0 = path payment that crossed pool P at the op level, but the whole
         // tx failed (a later op failed). tx_op_results returns None for the
@@ -1219,5 +1382,58 @@ mod tests {
             operations: operations.try_into().unwrap(),
             ext: TransactionExt::V0,
         }
+    }
+
+    #[test]
+    fn create_claimable_balance_lists_claimants() {
+        // Task 0460 #16: `claimants` used to be a bare count — now it IS the
+        // vec; addresses and the (recursive) predicates must survive.
+        let claimant = |byte: u8, predicate: ClaimPredicate| {
+            Claimant::ClaimantTypeV0(ClaimantV0 {
+                destination: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([byte; 32]))),
+                predicate,
+            })
+        };
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::CreateClaimableBalance(CreateClaimableBalanceOp {
+                asset: Asset::Native,
+                amount: 5_000,
+                claimants: vec![
+                    claimant(0xBB, ClaimPredicate::Unconditional),
+                    claimant(
+                        0xCC,
+                        ClaimPredicate::Not(Some(Box::new(ClaimPredicate::BeforeAbsoluteTime(
+                            1_700_000_000,
+                        )))),
+                    ),
+                ]
+                .try_into()
+                .unwrap(),
+            }),
+        };
+        let tx = build_v1_tx(vec![op]);
+        let inner = InnerTxRef::V1(&tx);
+
+        let result = extract_operations(&inner, None, None, "abcd1234", 100, 0);
+        let details = &result[0].details;
+
+        let list = details["claimants"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        let dest = list[0]["destination"].as_str().unwrap();
+        assert!(
+            dest.starts_with('G') && dest.len() == 56,
+            "destination must be a G-strkey, got {dest}"
+        );
+        assert_eq!(list[0]["predicate"]["type"], "unconditional");
+        assert_eq!(list[1]["predicate"]["type"], "not");
+        assert_eq!(
+            list[1]["predicate"]["predicate"]["type"],
+            "beforeAbsoluteTime"
+        );
+        assert_eq!(
+            list[1]["predicate"]["predicate"]["timePoint"],
+            1_700_000_000_i64
+        );
     }
 }

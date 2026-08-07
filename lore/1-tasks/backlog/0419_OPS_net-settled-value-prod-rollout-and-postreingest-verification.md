@@ -27,6 +27,27 @@ history:
       that must not live as prose in an archived task. Carries every operational
       step + an explicit post-S3-reingest verification (re-cross-validate historical
       net_settled against external sources, not just trust the re-run).
+  - date: 2026-07-29
+    status: backlog
+    who: karolkow
+    note: >
+      **Step 1 EXECUTED in prod.** `ALTER TABLE operation_asset_appearances ADD
+      COLUMN net_settled Nullable(Int128)` ran clean; `system.columns` now reports
+      it as the fourth column. Metadata-only as expected — no rewrite of the
+      table's 96.30 GiB / 11.25bn rows / 85 active parts. Ingestion unaffected:
+      lag stayed single-digit seconds (4s before, 8s after) and the ledger tip
+      advanced ~650 ledgers across the change, which also proves the
+      `operation_asset_appearances` inserts still land — they share the ledger's
+      write with `ledgers`, so a rejected insert would have stalled the tip.
+      Done ahead of the rest of the rollout deliberately: the indexer's row struct
+      declares `net_settled` (`persist/rows.rs:355`) and the CH client emits an
+      explicit column list, so until this column existed ANY indexer deploy would
+      have halted ingestion on `Code 16: No such column`. That coupling is now
+      gone — the remaining steps no longer gate an unrelated backend release.
+      Steps 2-9 untouched. Note for whoever resumes: the API-side value read was
+      REMOVED in the meantime (see [[0411]]), so step 2's deploy no longer
+      exposes anything; the read has to be written back before the column means
+      anything to a client.
 ---
 
 # OPS: net-settled value column — prod rollout + post-reingest verification
@@ -53,7 +74,8 @@ backfill — `TransactionMeta` is S3-only). This task tracks the rollout to done
 
 ## Implementation — ordered prod steps
 
-1. **Add the column (additive, before the new indexer deploys):**
+1. ~~**Add the column (additive, before the new indexer deploys):**~~ **DONE
+   2026-07-29.**
    ```sql
    ALTER TABLE operation_asset_appearances ADD COLUMN net_settled Nullable(Int128);
    ```

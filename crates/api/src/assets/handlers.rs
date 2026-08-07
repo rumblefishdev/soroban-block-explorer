@@ -85,6 +85,7 @@ fn map_item(row: AssetRow, network_id: &[u8; 32]) -> AssetItem {
         asset_type: row.asset_type,
         asset_code: row.asset_code,
         issuer: row.issuer,
+        issuer_home_domain: row.issuer_home_domain,
         contract_id: row.contract_id,
         sac_contract_id,
         sac_deployed,
