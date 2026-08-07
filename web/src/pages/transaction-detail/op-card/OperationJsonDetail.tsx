@@ -160,13 +160,16 @@ export function OperationJsonDetail({
       )}
       {argsField.present && (
         <AdvancedRow
-          label="arguments"
+          // Labels are the parser's own key names — the generic rows below
+          // are labelled that way, so a hand-written "arguments" made the
+          // same disclosure speak two vocabularies.
+          label="functionArgs"
           value={<HighlightedJson value={argsField.value} />}
         />
       )}
       {returnField.present && (
         <AdvancedRow
-          label="return_value"
+          label="returnValue"
           value={
             inlineScalar(returnField.value) ?? (
               <HighlightedJson value={returnField.value} />

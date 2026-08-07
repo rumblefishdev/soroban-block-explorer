@@ -2,14 +2,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import {
-  Box,
-  ButtonBase,
-  Collapse,
-  IconButton,
-  Stack,
-  Typography,
-} from '@mui/material';
+import { Box, ButtonBase, Collapse, Stack, Typography } from '@mui/material';
 import {
   Chip,
   useCopyToClipboard,
@@ -55,6 +48,14 @@ export function XdrRow({ label, value, xdrType }: XdrRowProps) {
         spacing={2}
         sx={{ px: 2, py: 1.5, cursor: 'pointer' }}
         onClick={() => setExpanded((v) => !v)}
+        // `role="button"` promises keyboard activation; without this the row
+        // took focus and then did nothing on Enter or Space.
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
@@ -65,21 +66,19 @@ export function XdrRow({ label, value, xdrType }: XdrRowProps) {
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <IconButton
-            size="small"
-            aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
-            sx={{ p: 0.25 }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded((v) => !v);
-            }}
+          {/* Presentational: the whole row is the control. As a nested
+              IconButton this was a second tab stop and a second `button`
+              inside a `button`, announcing one toggle twice. */}
+          <Box
+            aria-hidden
+            sx={{ display: 'inline-flex', p: 0.25, flexShrink: 0 }}
           >
             {expanded ? (
               <KeyboardArrowDownIcon fontSize="small" />
             ) : (
               <KeyboardArrowRightIcon fontSize="small" />
             )}
-          </IconButton>
+          </Box>
           <Typography
             variant="bodyMonoSmRegular"
             sx={(theme) => ({ color: theme.palette.text.primary })}
