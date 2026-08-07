@@ -2,7 +2,7 @@
 id: '0440'
 title: 'FEATURE: LP list asset filter — substring + pair syntax + native XLM reachable (explicitly not user regex)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0371']
 tags:
@@ -58,6 +58,20 @@ history:
       pools on production. Third CH-backed test (order-insensitive + both needles
       binding), mutation-checked, plus five handler unit tests for the split.
       All acceptance criteria now met.
+  - date: '2026-08-07'
+    status: completed
+    who: karolkow
+    note: >
+      Pair semantics corrected before archiving: each needle now claims its own
+      leg instead of being asked independently whether it matches somewhere.
+      `USD/USDC` had been returning the same 2 912 pools as `USDC` alone, and
+      `XLM/USDC` was letting through 18 pools whose only match was a single token
+      coded `XLMUSDC`. Now 193 and 197. Four mutation-checked CH tests, ten
+      handler unit tests, 223 api + 224 web tests green, clippy clean, docs and
+      API types current. Implementation done and pushed as PR #382; NOT yet
+      deployed, so issue #366 stays open and the fix is unproven on the real
+      request path until then. One follow-up recorded under Future Work
+      (identity-based asset filter) — still to be spawned on `develop`.
 ---
 
 # FEATURE: LP list asset filter — substring + pair syntax
@@ -150,8 +164,48 @@ second needle (`XLM/BTC`), which no asset code can equal, so the query returns
 nothing — correct, since a pool has two legs, and honest, since nothing was
 quietly discarded.
 
-**Measured, production:** `XLM/USDC` → 215 pools, against 14 935 for `XLM` alone
+**Each needle claims its own leg.** The first cut asked each needle
+independently whether it matched _somewhere_, which is wrong the moment the two
+needles overlap — one asset then satisfies both halves of the query:
+
+| Query       | needles asked independently | needle per leg |
+| ----------- | --------------------------- | -------------- |
+| `USDC/USDC` | 2 912                       | **72**         |
+| `USD/USDC`  | 2 912                       | **193**        |
+| `XLM/USDC`  | 215                         | **197**        |
+
+Row two is the clearest failure: `USD` is a substring of `USDC`, so a single
+USDC leg satisfied both needles and `USD/USDC` returned exactly what `USDC`
+returns — the pair narrowed nothing. Row three is not rounding either; the 18
+pools that drop out are pools holding one token literally coded `XLMUSDC` /
+`USDCXLM` beside something unrelated (`VLCC/XLMUSDC`, `GBPJPY/USDCXLM`). They
+contain neither XLM nor USDC, and the old predicate let them through.
+
+So a pair is `(a~x AND b~y) OR (a~y AND b~x)` — order-insensitive and
+assignment-correct. Four binds instead of two, one extra column pass in the
+worst case, unmeasurable on this table.
+
+**Measured, production:** `XLM/USDC` → 197 pools, against 14 935 for `XLM` alone
 and 2 912 for `USDC` alone. A pair with an unmatchable second code → 0.
+
+**Three codes → empty, by construction.** `USDC/XLM/BTC` splits into `USDC` and
+the literal `XLM/BTC`. No asset code contains `/`, so the second needle matches
+nothing and the query returns nothing. That is the honest answer — a pool has
+two legs, so there is no result to give — and it costs no validation code. The
+alternative, rejecting the input with a 400, would tell the user _why_ they got
+nothing; deliberately not done, because the empty state on a filter is already
+the normal way to say "no matches", and a 400 on a debounced free-text field
+fires mid-typing.
+
+**Duplicate rows are already handled upstream, and are moot here anyway.** The
+`page` CTE reads `FROM liquidity_pools lp FINAL`, so the duplicate rows the
+unmerged ReplacingMergeTree carries collapse before the filter applies — no pool
+can appear twice in a page. And they could not have changed a result regardless:
+a pool's legs never change, so its duplicates never disagree about them.
+Verified on production — **0** pool ids have more than one distinct leg tuple
+across their rows. (Note that raw row counts quoted elsewhere in this task are
+pre-`FINAL`: 72 700 rows for 52 376 pools. Pool counts here all come from
+`uniqExact(pool_id)`.)
 
 **Placeholder now closer to Figma than the interim wording.** Figma says "Filter
 by asset pair…"; the field reads "Filter by asset or pair, e.g. USDC/XLM",
@@ -197,7 +251,7 @@ Record the corrected reasoning in the reply to the reporter, not just here.
 - [x] Substring match on `asset_a_code` / `asset_b_code` — `positionCaseInsensitive`
       in `queries.rs`. Min-length guard dropped on purpose (see Scope).
 - [x] `A/B` pair syntax, order-insensitive — `splitn(2, '/')` in the handler,
-      one AND-ed predicate per needle in the query
+      one leg assigned per needle in the query (both orders OR-ed)
 - [x] Native XLM reachable by typing `XLM` — `if(asset_type = 0, 'XLM', code)`
 - [x] Placeholder text matches actual behaviour — deviates from Figma, on purpose
 - [x] Query cost measured on production; substring keeps the same plan class as
@@ -221,19 +275,22 @@ Record the corrected reasoning in the reply to the reporter, not just here.
   least one pool with a native leg. The seed deliberately includes both a native
   pool and a credit asset coded `XLM`, so the test can tell them apart.
   A third, `asset_code_filter_pair_is_order_insensitive`, runs `XLM/USDC` and
-  `USDC/XLM` and requires identical pool ids, then requires an unmatchable
-  second needle to return nothing.
-- Mutation-checked, all three predicates: restoring `upper(col) = ?` turns the
+  `USDC/XLM` and requires identical pool ids, requires an unmatchable second
+  needle to return nothing, and requires `USDC/USDC` to return only pools with
+  USDC on both legs. The seed carries a USDC/USDC pool and a native/USDC pool so
+  that last assertion can tell the two semantics apart.
+- Mutation-checked, every predicate: restoring `upper(col) = ?` turns the
   substring test red ("`USD` matched no pool"); dropping the native alias turns
-  the XLM test red ("returned 1 pool(s) but none holds native XLM"); binding
-  only the first needle turns the pair test red. None passes vacuously. All skip
-  cleanly when `CH_URL` is unset, so CI is unaffected.
+  the XLM test red ("returned 1 pool(s) but none holds native XLM"); binding only
+  the first needle turns the pair test red; and reverting the pair to two
+  independent needles turns it red on the `USDC/USDC` assertion. None passes
+  vacuously. All skip cleanly when `CH_URL` is unset, so CI is unaffected.
 - Handler-side splitting covered by plain unit tests (no CH): pair, spaces around
   the slash, half-typed `USDC/` and `/XLM`, and 5 000 slashes staying bounded.
 - Production data (read-only, `chq`): substring `USD` → 4 542 pools vs 158 for
   exact match; lowercase `usdc` → 2 912 (case-insensitivity holds); `%` → 0 and
   `.*` → 0 (metacharacters are literal); `XLM` → 14 935 vs 3 716 before, with
-  11 687 native pools now reachable; `XLM/USDC` → 215.
+  11 687 native pools now reachable; `XLM/USDC` → 197; `USDC/USDC` → 72.
 - Placeholder confirmed rendered in the running dev server.
 - Full suites green: `cargo test -p api --lib` 223 passed, `nx run web:test`
   224 passed, `cargo clippy -p api` clean.
@@ -242,3 +299,81 @@ Record the corrected reasoning in the reply to the reporter, not just here.
 Lambda and production ClickHouse is behind mTLS, so a local process cannot reach
 it — the dev server's proxy still hits the _deployed_ backend, i.e. the old
 exact-match query. First real end-to-end proof is the deploy.
+
+## Implementation notes
+
+Five files, one behavioural change each, no new modules:
+
+| File                                               | Change                                                                                  |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `crates/api/src/liquidity_pools/queries.rs`        | the predicate, `asset_codes: Vec<String>` on the resolved params, three CH-backed tests |
+| `crates/api/src/liquidity_pools/handlers.rs`       | `normalize_asset_code` → `normalize_asset_codes` (splits the pair), five unit tests     |
+| `crates/api/src/liquidity_pools/dto.rs`            | endpoint doc — feeds `openapi.json`                                                     |
+| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx` | placeholder + aria-label                                                                |
+| `docs/architecture/frontend/frontend-overview.md`  | LP-list filter semantics                                                                |
+
+No new query parameter, so the OpenAPI diff is documentation only.
+
+## Design decisions
+
+### From plan
+
+1. **Substring over exact match.** The reported defect, and the whole reason the
+   task existed.
+2. **Pair via `A/B` in the existing parameter**, not a new one. The field is
+   already free text and the FE already sends it; a second parameter would have
+   been a public API surface for something the user types into one box.
+
+### Emerged
+
+3. **`position`, not `LIKE`.** Both express substring. `LIKE` would make `%` and
+   `_` caller-controlled wildcards and hand us an escaping obligation on
+   free text; `position` treats the needle literally, so there is nothing to
+   escape and nothing to get wrong. Verified rather than assumed: `%` and `.*`
+   both return 0 pools on production.
+4. **Native alias in the predicate rather than at ingest.** Backfilling `XLM`
+   into the stored code would fix the filter and break every consumer that reads
+   the column as "credit code, empty when native" — the SAC joins in this same
+   query included. The alias is local to the one place that needs it.
+5. **No minimum-length guard**, against the original scope. See Scope: the guard
+   was there to bound a scan that does not need bounding, and its failure mode
+   (drop the filter → return everything) is worse than the wide match it
+   prevents.
+6. **`splitn(2)` rather than `split`.** Bounds the needle count on an unbounded
+   free-text field. Chosen over a validation error for a third code because the
+   empty result is already the correct answer.
+7. **Needle-per-leg rather than needle-anywhere** for pairs. Caught by asking
+   what `USDC/USDC` should do; the measurement then showed `USD/USDC` returning
+   the same 2 912 pools as `USDC` alone, i.e. the pair narrowed nothing.
+8. **Placeholder deviates from Figma.** "Filter by asset or pair, e.g. USDC/XLM"
+   — the example is the part users cannot guess, and the field genuinely takes
+   both shapes.
+
+## Issues encountered
+
+- **The task's own rejection rationale was wrong.** It claimed user regex risks
+  unbounded backtracking; ClickHouse runs RE2, which is linear. Corrected in
+  place before it could be repeated to the reporter. Lesson: a rationale written
+  from intuition survives in a task file until someone measures it.
+- **Filtering a column the UI does not display.** The native-XLM defect was
+  invisible from the code — the query looked correct, and only counting pools
+  against what the page renders exposed it. Nothing in the type system connects
+  "stored empty code" to "displayed as XLM".
+- **No local end-to-end path.** Lambda plus mTLS ClickHouse means the deployed
+  request path cannot be exercised from a laptop. Worked around by running the
+  real query functions against a local ClickHouse carrying the real schema
+  (`docker compose up clickhouse db-clickhouse-init`) — enough to prove the SQL
+  is valid and the semantics hold, not enough to prove the deployed wiring.
+
+## Future work
+
+- **Filter by asset identity, not by code.** Codes are not unique on Stellar:
+  `XLM` still returns real native pools mixed with look-alike credit tokens, and
+  the same is true of every popular code. The fix is picking a specific
+  `(code, issuer)` from a list — the `GET /v1/assets?filter[code]=` endpoint
+  already backs exactly that lookup, and `home_domain` (task 0450) is what
+  distinguishes the impostors on screen. Needs its own backlog task; **spawn it
+  on `develop`**, not on this branch.
+- **`filter[asset_code]` semantics are now three things in one box** (substring,
+  pair, native alias). If a fourth arrives, split the parameter rather than
+  growing the mini-language.
