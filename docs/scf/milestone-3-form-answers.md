@@ -46,7 +46,7 @@ Copy the text inside each field into the matching SCF form field.
 >    error rate, p95 latency, and ingestion lag per day.
 > 7. **Real-user testing since launch:** the explorer recorded **146 active
 >    users across 310 sessions** (Google Analytics, 30 days to 2026-08-07), and
->    Stellar community members raised **11 improvement reports**, of which **5
+>    Stellar community members raised **11 improvement reports**, of which **6
 >    are resolved** — including a redesign of the transaction-detail page that
 >    the reports drove. The rest are tracked as open work. Details in the
 >    evidence document § 6.

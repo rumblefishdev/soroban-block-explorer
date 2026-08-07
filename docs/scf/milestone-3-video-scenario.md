@@ -69,7 +69,7 @@ SAY:
 > Since launch the explorer has been tested by its real users. The site
 > recorded a hundred and forty-six active users across three hundred and ten
 > sessions, and the Stellar community raised eleven improvement reports, of
-> which five are already resolved. The largest is a redesign of the
+> which six are already resolved. The largest is a redesign of the
 > transaction page itself: every operation now states what it did in plain
 > language, and a failed transaction tells you why — this one names the failing
 > call, shows the exact function with its decoded arguments, and marks where
