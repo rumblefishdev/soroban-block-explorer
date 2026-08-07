@@ -165,7 +165,9 @@ export function ContractCode({ contractId }: { contractId: string }) {
             downloadSource(contractId, data.representation, data.source)
           }
         >
-          Download
+          {/* Labelled with the exact file the click produces — the active
+              representation (covers the WAT-fallback case too). */}
+          Download {data.representation === 'rust' ? '.rs' : '.wat'}
         </Button>
       </Stack>
 
