@@ -2,7 +2,7 @@
 id: '0465'
 title: 'soroban-ret decompilation: experimental Code tab on contract detail'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: ['effort-medium', 'frontend', 'api', 'cooperation-inferara']
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: claude
     note: 'Task created after the 2026-08-04 call with Inferara and two rounds of written answers (Dominik, Georgii). Design settled; refs #374.'
+  - date: 2026-08-07
+    status: active
+    who: claude
+    note: 'Activated; starting with the spike (Step 1).'
 ---
 
 # soroban-ret decompilation: experimental Code tab on contract detail
