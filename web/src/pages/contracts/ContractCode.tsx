@@ -188,31 +188,35 @@ export function ContractCode({ contractId }: { contractId: string }) {
       )}
 
       <Box sx={{ position: 'relative' }}>
-        <Box sx={{ position: 'absolute', top: 8, right: 12 }}>
+        <Box sx={{ position: 'absolute', top: 8, right: 12, zIndex: 2 }}>
           <CopyButton value={data.source} ariaLabel="Copy source" />
         </Box>
-        <Box
-          component="pre"
-          sx={(theme) => ({
-            m: 0,
-            p: 2,
-            borderRadius: `${theme.shape.radius.s}px`,
-            border: `1px solid ${theme.palette.stroke.default}`,
-            backgroundColor: theme.palette.surface.grayMainAlt,
-            overflow: 'auto',
-            maxHeight: 640,
-            fontFamily: 'monospace',
-            fontSize: 13,
-            lineHeight: 1.6,
-          })}
+        <Suspense
+          fallback={
+            <Box
+              component="pre"
+              sx={(theme) => ({
+                m: 0,
+                p: 2,
+                borderRadius: `${theme.shape.radius.s}px`,
+                border: `1px solid ${theme.palette.stroke.default}`,
+                backgroundColor: theme.palette.surface.grayMainAlt,
+                overflow: 'auto',
+                maxHeight: 640,
+                fontFamily: 'monospace',
+                fontSize: 13,
+                lineHeight: '21px',
+              })}
+            >
+              {data.source}
+            </Box>
+          }
         >
-          <Suspense fallback={<>{data.source}</>}>
-            <CodeHighlight
-              source={data.source}
-              language={isRust ? 'rust' : 'wasm'}
-            />
-          </Suspense>
-        </Box>
+          <CodeHighlight
+            source={data.source}
+            language={isRust ? 'rust' : 'wasm'}
+          />
+        </Suspense>
       </Box>
 
       <Typography
