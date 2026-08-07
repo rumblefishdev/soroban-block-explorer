@@ -17,9 +17,12 @@ import {
   CopyButton,
   QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 
 import { useContractDecompiled } from '../../api/index.js';
+
+// Prism (and its grammars) load in their own chunk on first Code-tab use.
+const CodeHighlight = lazy(() => import('./CodeHighlight.js'));
 
 const SOROBAN_RET_REPO = 'https://github.com/Inferara/soroban-ret';
 
@@ -203,7 +206,12 @@ export function ContractCode({ contractId }: { contractId: string }) {
             lineHeight: 1.6,
           })}
         >
-          {data.source}
+          <Suspense fallback={<>{data.source}</>}>
+            <CodeHighlight
+              source={data.source}
+              language={isRust ? 'rust' : 'wasm'}
+            />
+          </Suspense>
         </Box>
       </Box>
 
