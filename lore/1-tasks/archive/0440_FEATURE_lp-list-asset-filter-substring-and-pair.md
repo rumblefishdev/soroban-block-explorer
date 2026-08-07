@@ -151,11 +151,11 @@ plan class — both are the same bounded full scan over a small table.
 
 ### Pair syntax
 
-`USDC/XLM` splits into two needles that the query AND-s, each still "substring of
-_some_ leg". Order-insensitivity falls out for free — nobody has to know
-Stellar's canonical leg ordering, on either side of the wire. (Checked anyway:
-the stored order is canonical, 0 violations of type → code → issuer across
-72 598 rows. Relying on it would still have been a worse design.)
+`USDC/XLM` splits into two needles, and the query assigns each one its own leg,
+accepting both assignments. Order-insensitivity falls out for free — nobody has
+to know Stellar's canonical leg ordering, on either side of the wire. (Checked
+anyway: the stored order is canonical, 0 violations of type → code → issuer
+across 72 598 rows. Relying on it would still have been a worse design.)
 
 The split is `splitn(2, '/')`, deliberately bounded. The field is unbounded free
 text, so an unbounded split lets one request become thousands of needles, each a
@@ -214,37 +214,44 @@ users cannot guess. Still a deviation — flag it in the PR.
 
 ## Rejected: user-supplied regex
 
-The original request was for regex. Still not shipping it — but **not** for the
-reason first written here.
+The request's title asked for regex. The report itself — a screenshot — showed
+`xlm/kale` typed into the filter and answered with "No pools match your filters".
+Regex was the reporter's guess at a remedy, not the complaint. The complaint was
+that a pair query returned nothing, and that is fixed.
 
-**Correction (2026-08-07).** The original rationale said an arbitrary pattern is
-an "unbounded-backtracking risk". That is false. ClickHouse `match()` compiles to
-RE2, which is linear in the input and does not backtrack, so the classic
-catastrophic patterns are a non-event. Verified on production against this exact
-table: `match(…, '(a+)+$')` over the full 72 700-row scan returns in ~0.1 s wall,
-client start included. Anyone can refute the old reason in a minute, so it must
-not be the one we give the reporter.
+**It would not have helped.** `xlm/kale` failed for two reasons: whole-code
+comparison, and native XLM being stored without a code. No pattern matches an
+empty column, so a regex field would still have missed the native XLM/KALE pool.
 
-The reasons that do hold:
+**It cannot express the gap that remains.** What separates the real USDC from the
+56 other assets sharing that code is the _issuer_ — a column this filter never
+touches. Pattern matching over codes cannot reach it; picking a specific asset
+can. That is the direction, not a sharper pattern.
 
-- **It answers a problem nobody has.** The reported symptom is that `USD` returns
-  nothing for `USDC` pools — exact match, not missing regex. Substring plus
-  `A/B` fixes precisely that, and covers the realistic uses (`USD…`, `…BTC`,
-  `USDC/XLM`). Regex is the reporter's guess at a remedy, not the complaint.
-- **The dialect is not the one users mean.** RE2 has no backreferences and no
-  lookaround. A user typing `(?=.*USD)` gets an error, not a result, and the
-  gap between "regex" and "RE2 regex" turns into a permanent stream of
-  bug reports we would have invited.
-- **It is a permanent public API contract for a filter box.** Once a caller-supplied
-  pattern is a documented query parameter it cannot be narrowed later, and it drags
-  in a validator: a malformed pattern otherwise surfaces as a ClickHouse exception,
-  i.e. a 500 driven by free text.
+Nobody has since asked for a query that substring plus `A/B` cannot express. If
+someone does, that is the evidence to reopen this — and the case to look at
+first is anchoring (`^USD` excludes the ~1 900 pools where `USD` sits mid-code)
+and exact match, which this task removed and did not replace.
 
-Cost is not one of the reasons, in either direction. The asset filter is a full
-scan today (`upper(col) = ?` cannot seek an index) and stays one after this
-change — see the measurement in Scope.
+### Two rationales that were written here and do not survive measurement
 
-Record the corrected reasoning in the reply to the reporter, not just here.
+Recorded so they are not repeated, not because they are load-bearing.
+
+- ~~"Unbounded backtracking risk"~~ — false. ClickHouse `match()` compiles to
+  RE2, which is linear and does not backtrack. Verified against this table:
+  `match(…, '(a+)+$')` over the full scan returns in ~0.1 s wall.
+- ~~"The RE2 dialect is not the one users mean"~~ — overstated. Anchors, `.*`,
+  alternation and character classes all work; only lookaround and backreferences
+  error out, and nobody reaches for those against a 12-character asset code.
+
+One operational fact does hold, if regex is ever revisited: an uncompilable
+pattern surfaces as a ClickHouse exception, which `handlers.rs` maps to a 500.
+The field debounces, so `USD(` is a normal keystroke on the way to `USD(C|T)` —
+a regex mode would need pattern validation before the query, or it would answer
+ordinary typing with server errors.
+
+Cost is not a reason in either direction. The asset filter full-scans a 72.7k-row
+table before and after this change — see the measurement in Scope.
 
 ## Acceptance criteria
 
