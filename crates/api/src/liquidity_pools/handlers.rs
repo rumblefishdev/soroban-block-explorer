@@ -163,8 +163,10 @@ fn is_valid_decimal_string(s: &str) -> bool {
 /// `?filter[asset_code]=`) yields no needles — an empty one would otherwise
 /// match every row (`positionCaseInsensitive(…, '') = 1`).
 ///
-/// `USDC/XLM` becomes two needles that the query AND-s, so it reads as "both of
-/// these, either leg" and the typed order does not matter. The split is
+/// `USDC/XLM` becomes two needles, and the query gives each one its own leg in
+/// either order — so the typed order does not matter, and one asset cannot
+/// satisfy both halves (`USDC/USDC` means both legs, not "USDC anywhere, twice
+/// over"). The split is
 /// `splitn(2)` on purpose: this is a *pair* filter, and an unbounded split would
 /// let a caller turn one long free-text field into thousands of needles, each
 /// costing a pass over the table. A third code therefore lands inside needle two

@@ -1006,31 +1006,54 @@ pub async fn fetch_pool_list(
         );
         binds.push(iss.clone());
     }
-    // One predicate per needle, AND-ed: `USDC/XLM` means "USDC on some leg and
-    // XLM on some leg", which is the same query whichever order the user typed
-    // and whichever leg the chain assigned. A third needle simply matches
-    // nothing — a pool has two legs — so no case needs special handling.
-    for code in &params.asset_codes {
-        // Substring, not equality (0440 / issue #366): `USD` has to match the
-        // `USDC` pools the user can see on the page. `position` takes the needle
-        // literally — no LIKE wildcards and no regex to escape, so caller
-        // free-text cannot widen its own match. Case-insensitive here rather
-        // than `upper()` on the column: same result, one pass, and it keeps
-        // working if the needle ever arrives un-normalized.
-        //
-        // Native legs are stored with an empty code (`asset_type = 0`, code
-        // `''`) while every surface — this list included — renders them as
-        // `XLM`. Without the alias, `XLM` matches none of the 11.7k pools that
-        // actually hold native XLM, and instead returns ~3.7k pools of credit
-        // assets someone minted under the code `XLM` (they exist, including
-        // `XLM/XLM` pairs). That is not an empty result, it is a confident
-        // wrong one — so the predicate searches what the row displays as.
-        filters.push_str(
-            " AND (positionCaseInsensitive(if(lp.asset_a_type = 0, 'XLM', lp.asset_a_code), ?) > 0 \
-                   OR positionCaseInsensitive(if(lp.asset_b_type = 0, 'XLM', lp.asset_b_code), ?) > 0)",
-        );
-        binds.push(code.clone());
-        binds.push(code.clone());
+    // Asset-code needles (0440 / issue #366).
+    //
+    // Substring, not equality: `USD` has to match the `USDC` pools the user can
+    // see on the page. `position` takes the needle literally — no LIKE wildcards
+    // and no regex to escape, so caller free-text cannot widen its own match.
+    // Case-insensitive here rather than `upper()` on the column: same result,
+    // one pass, and it keeps working if the needle ever arrives un-normalized.
+    //
+    // Native legs are stored with an empty code (`asset_type = 0`, code `''`)
+    // while every surface — this list included — renders them as `XLM`. Without
+    // the alias, `XLM` matches none of the 11.7k pools that actually hold native
+    // XLM, and instead returns ~3.7k pools of credit assets someone minted under
+    // the code `XLM` (they exist, including `XLM/XLM` pairs). That is not an
+    // empty result, it is a confident wrong one — so the predicate searches what
+    // the row displays as.
+    //
+    // A pair assigns each needle its OWN leg, in either order, rather than
+    // asking each needle independently whether it matches somewhere. The
+    // difference only shows when the needles overlap, and then it is the whole
+    // answer: `USDC/USDC` means the 72 pools with USDC on both sides, not the
+    // 2 912 with USDC anywhere. Same for a needle that is a prefix of the other
+    // (`USD/USDC`) — one asset must not satisfy both halves of the query.
+    let leg = |side: char| {
+        format!(
+            "positionCaseInsensitive(if(lp.asset_{side}_type = 0, 'XLM', lp.asset_{side}_code), ?) > 0"
+        )
+    };
+    match params.asset_codes.as_slice() {
+        [one] => {
+            filters.push_str(&format!(" AND ({} OR {})", leg('a'), leg('b')));
+            binds.push(one.clone());
+            binds.push(one.clone());
+        }
+        [first, second] => {
+            filters.push_str(&format!(
+                " AND (({a} AND {b}) OR ({a} AND {b}))",
+                a = leg('a'),
+                b = leg('b'),
+            ));
+            // Bind order follows the `?`s left to right: first/second, then the
+            // reversed assignment.
+            binds.push(first.clone());
+            binds.push(second.clone());
+            binds.push(second.clone());
+            binds.push(first.clone());
+        }
+        // `normalize_asset_codes` yields at most two needles.
+        _ => {}
     }
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
@@ -1521,5 +1544,37 @@ mod decode_smoke {
              needles are OR-ed, not AND-ed",
             impossible.len()
         );
+
+        // Three codes. `normalize_asset_codes` splits `USDC/XLM/BTC` into
+        // `USDC` and the literal `XLM/BTC` (see its unit tests); a pool has two
+        // legs, so no asset code can carry that second needle and the answer is
+        // empty. Asserted here so the query side cannot start "helpfully"
+        // ignoring the remainder.
+        let three = fetch_pool_list(&ch, &pair("USDC", "XLM/BTC"), Direction::Next)
+            .await
+            .expect("three-code query decodes");
+        assert!(
+            three.is_empty(),
+            "a three-code query returned {} pool(s) — the third code is being \
+             dropped instead of narrowing to nothing",
+            three.len()
+        );
+
+        // Each needle claims its own leg. Repeating one therefore means "both
+        // legs", not "matches somewhere, twice" — a pool with USDC on one side
+        // and anything else on the other must not come back.
+        let both_legs = fetch_pool_list(&ch, &pair("USDC", "USDC"), Direction::Next)
+            .await
+            .expect("repeated needle decodes");
+        for p in &both_legs {
+            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
+            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+            assert!(
+                a.contains("USDC") && b.contains("USDC"),
+                "pool {} came back for `USDC/USDC` with legs {a:?} / {b:?} — one \
+                 asset is satisfying both needles",
+                p.pool_id_hex
+            );
+        }
     }
 }
