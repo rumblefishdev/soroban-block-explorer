@@ -55,9 +55,10 @@ pub struct ParticipantItem {
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools`.
 ///
 /// Two asset-filter modes coexist:
-///   * **`filter[asset_code]`** — single-asset, case-insensitive exact
-///     match against either leg. Convenience for the Figma list filter
-///     (frontend §6.13) where the user types just `USDC` / `XLM`.
+///   * **`filter[asset_code]`** — free text, case-insensitive **substring**
+///     match against either leg. Convenience for the list filter (frontend
+///     §6.13) where the user types just `USDC` / `XLM` — or `USD`, which
+///     matches every `USDC` pool, or `USDC/XLM` for a pair.
 ///   * **Per-leg `asset_a_code` / `asset_a_issuer` / `asset_b_code` /
 ///     `asset_b_issuer`** — kept for API consumers that need exact
 ///     issuer disambiguation (`code, issuer` is the classic identity).
@@ -66,10 +67,22 @@ pub struct ParticipantItem {
 /// `cursor` are read by a sibling `Pagination<PoolListCursor>` extractor.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct PoolListParams {
-    /// Single-asset filter — matches either `asset_a_code` or
-    /// `asset_b_code` case-insensitively (input is trimmed + uppercased
-    /// before the query). Intended for the Figma list's free-text
-    /// "Filter by asset pair" input.
+    /// Free-text asset filter — case-insensitive substring of either
+    /// `asset_a_code` or `asset_b_code` (input is trimmed before the
+    /// query). The needle is matched literally: `%`, `_` and regex
+    /// metacharacters have no special meaning.
+    ///
+    /// A `/` makes it a **pair** query: `USDC/XLM` requires both codes to be
+    /// present, one on each leg, and the typed order does not matter. Only the
+    /// first `/` splits, so `USDC/XLM/BTC` searches for the literal second code
+    /// `XLM/BTC` and therefore matches nothing — a pool has two legs.
+    ///
+    /// Native legs match on `XLM` even though they store an empty code, so
+    /// `XLM` returns the pools that actually hold native XLM. Note that it
+    /// *also* returns credit assets minted under the code `XLM` — asset codes
+    /// are not unique on Stellar, and this filter matches codes, not asset
+    /// identity. Callers needing one specific issuer's asset should use the
+    /// per-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.
     #[serde(rename = "filter[asset_code]")]
     pub filter_asset_code: Option<String>,
     #[serde(rename = "filter[asset_a_code]")]
