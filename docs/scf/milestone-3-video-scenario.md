@@ -170,6 +170,18 @@ SAY:
 > mutual-TLS overhead before any data is read, plus about fifteen milliseconds
 > per database round trip.
 
+SHOW: (optional) the 78.3 → 23.89 billion rows figure and the unmodified-endpoint
+improvements.
+
+SAY:
+
+> This load test was not just a measurement — it drove the optimisation. Total
+> database work per run fell by sixty-nine percent during this milestone, and
+> endpoints we did not touch at all got three to four times faster as a result,
+> which told us their earlier latency was contention, not their own cost. Each
+> request is correlated to the exact ClickHouse query it triggered, which is how
+> we could attribute every millisecond.
+
 ## Scene 6 - AC5: security posture
 
 SHOW: security checklist; ClickHouse not publicly reachable.
