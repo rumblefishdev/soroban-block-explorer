@@ -121,14 +121,17 @@ CPU differs); first-run numbers include cold-start; hole counts are marker
 strings (`todo!(`/`todo !(`/`var_N`) per the interim guidance, measuring
 completeness, not correctness.
 
-Spike artifacts (fetch + sweep scripts, per-hash `results.csv`, emitted
-Rust) in the session scratchpad; scripts are self-contained and re-runnable.
+Spike artifacts persisted in `benchmark/` (fetch + sweep scripts, per-hash
+`results.csv`); scripts are self-contained and re-runnable. Failure corpus
+(16 hashes, two error classes) shared with Inferara 2026-08-07 together
+with the full CSV.
 
 ## Open Points
 
 - Issue template contents/mechanism — pending from Dominik.
-- On-demand latency budget: acceptable p95 for first Code-tab render
-  (~0.1–3 s fetch + decompile); traffic threshold to revisit caching.
+- ~~On-demand latency budget~~ — resolved by the sweep: decompile p99 is
+  1.1 s, so a ~10 s endpoint timeout covers it 10×; the slow tail falls to
+  WAT by design. Remaining knob: traffic threshold to revisit caching.
 - Recovery-metrics source: release cut with `soroban_ret::recovery`
   requested (2026-08-07, along with GitHub Pages hosting for the benchmark
   report); if it lands before implementation, use the module — otherwise
@@ -139,7 +142,9 @@ Rust) in the session scratchpad; scripts are self-contained and re-runnable.
 - 0.0.x API churn — mitigated by pin + adapter.
 - Complex contracts mostly don't compile clean (3/24 corpus) — expect
   readable Rust with explicit `todo!()` holes; UI copy must not overpromise.
-  Hole counts measure completeness, not correctness.
+  Hole counts measure completeness, not correctness. (Sweep note:
+  display-level success is 99.5%, so this shapes hole density, not
+  availability.)
 - Every Code-tab open burns API CPU (repeat views repeat work) — timeout +
   rate limit; caching only if traffic hurts.
 - Expired/archived contract code → RPC can't serve bytes → Code tab
@@ -147,8 +152,9 @@ Rust) in the session scratchpad; scripts are self-contained and re-runnable.
 
 ## Acceptance Criteria
 
-- [ ] Spike results documented in task notes (success rate, hole density,
+- [x] Spike results documented in task notes (success rate, hole density,
       timing over top prod hashes) and failure corpus shared with Inferara.
+      (Full-mainnet sweep 2026-08-07; see Spike Results + `benchmark/`.)
 - [ ] `GET /v1/contracts/{id}/decompiled` with timeout, rate limit, pinned
       `=0.0.4` behind an adapter module; unit + integration tests
       (mocked RPC / sample wasm).
