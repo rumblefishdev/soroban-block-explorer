@@ -94,6 +94,36 @@ contracts don't get the tab. Wireframes in the team note (see Links).
 batch behavioral-equivalence job cached on `(wasm_hash, ret_version)` with
 tri-state badge; decompilation caching if real traffic justifies it.
 
+## Spike Results (2026-08-07) — full mainnet sweep
+
+All **3,326 distinct wasm hashes** on mainnet (every contract), bytes
+fetched live from RPC (`getLedgerEntries`, batches of 200 — **0 expired**),
+decompiled with `soroban-ret-cli 0.0.4`:
+
+- **Success: 3,310/3,326 hashes (99.5%); instance-weighted 99.98%** of all
+  133,841 contracts. Rust-first validated decisively.
+- **Timing: median 28 ms, p90 90 ms, p99 1.1 s**; long tail exists —
+  slowest success 104 s (102 KB wasm). Endpoint timeout ~10 s covers p99
+  with margin; the tail falls to the WAT fallback by design.
+- **16 failures**, all niche (≤7 instances each): 8 timeouts >120 s
+  (large wasms, 48–129 KB) and 8 `formatting error` cases where emitted
+  Rust doesn't parse — two clusters (3× ~52 KB, 5× ~11.5 KB, likely two
+  contract families). Hash list in spike `results.csv` — this is the
+  failure corpus to share with Inferara.
+- **Holes**: hole-free 350/3,310 (11%); `todo!()` per contract median 15,
+  mean 58, max 3,075. Confirms counts-not-percentages UI guidance.
+- Cross-check: `ae0da5a8…` (54,833 B) is Aqua Rewards from the soroban-ret
+  benchmark corpus — our pipeline reproduces their input.
+
+Methodology caveats: timings are CLI subprocess wall-time on an M-series
+laptop (upper bound — the API will call the library in-process, and prod
+CPU differs); first-run numbers include cold-start; hole counts are marker
+strings (`todo!(`/`todo !(`/`var_N`) per the interim guidance, measuring
+completeness, not correctness.
+
+Spike artifacts (fetch + sweep scripts, per-hash `results.csv`, emitted
+Rust) in the session scratchpad; scripts are self-contained and re-runnable.
+
 ## Open Points
 
 - Issue template contents/mechanism — pending from Dominik.
