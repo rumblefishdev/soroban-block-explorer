@@ -9,16 +9,18 @@ Target length: 4-6 minutes.
 
 Prepare these values and keep the tabs / consoles open:
 
-| Item                    | Value                                                                                                                                                                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Frontend (public)       | `https://sorobanscan.rumblefish.dev`                                                                                                                                                                                                           |
-| API                     | `https://api-sorobanscan.rumblefishdev.com/v1`                                                                                                                                                                                                 |
-| Swagger UI              | `https://api-sorobanscan.rumblefishdev.com/api-docs`                                                                                                                                                                                           |
-| CloudWatch dashboard    | `production-soroban-explorer` (eu-central-1) — [console link](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#dashboards/dashboard/production-soroban-explorer)                                                |
-| CloudWatch alarms       | [alarms list](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#alarmsV2:) — filter the name column to the `production-` block                                                                                   |
-| Load-test results       | `milestone-3-evidence.md` § AC4 (tier table + decomposition) — measured 2026-07-17                                                                                                                                                             |
-| Security checklist      | `milestone-3-security-checklist.md` (11 controls + OWASP Top 10 mapping, signed)                                                                                                                                                               |
-| Ledger (freshness demo) | Read the latest sequence off the explorer at record time and compare it with a neutral source — `stellar.expert/explorer/public` or `horizon.stellar.org/ledgers?order=desc&limit=1`. They should match within one or two ledgers (~5 s each). |
+| Item                     | Value                                                                                                                                                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend (public)        | `https://sorobanscan.rumblefish.dev`                                                                                                                                                                                                           |
+| API                      | `https://api-sorobanscan.rumblefishdev.com/v1`                                                                                                                                                                                                 |
+| Swagger UI               | `https://api-sorobanscan.rumblefishdev.com/api-docs`                                                                                                                                                                                           |
+| CloudWatch dashboard     | `production-soroban-explorer` (eu-central-1) — [console link](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#dashboards/dashboard/production-soroban-explorer)                                                |
+| CloudWatch alarms        | [alarms list](https://eu-central-1.console.aws.amazon.com/cloudwatch/home?region=eu-central-1#alarmsV2:) — filter the name column to the `production-` block                                                                                   |
+| Load-test results        | `milestone-3-evidence.md` § AC4 (tier table + decomposition) — measured 2026-07-17                                                                                                                                                             |
+| Security checklist       | `milestone-3-security-checklist.md` (11 controls + OWASP Top 10 mapping, signed)                                                                                                                                                               |
+| Ledger (freshness demo)  | Read the latest sequence off the explorer at record time and compare it with a neutral source — `stellar.expert/explorer/public` or `horizon.stellar.org/ledgers?order=desc&limit=1`. They should match within one or two ledgers (~5 s each). |
+| GA numbers (Scene 3b)    | The script says **146 active users / 310 sessions** — these match evidence § 6 (GA, 30 days to 2026-08-07). Say these numbers, not fresher ones: the spoken figures must match the PDF.                                                        |
+| Feedback demo (Scene 3b) | Two tabs: the repo's Issues list, and `https://sorobanscan.rumblefish.dev/transactions/de6aa93104f21a6e18f2d104c3418974edc3fecc925932feb254144d6bd5f5ce` (failed contract call, execution trace).                                              |
 
 ## Scene 1 - Intro and scope
 
@@ -29,8 +31,8 @@ SAY:
 > Hi, I am <DEV_NAME> from Rumble Fish. This video verifies Milestone 3 of the
 > Soroban Block Explorer: Mainnet Launch. The explorer is now public. I will
 > show public access with the pre-launch gate removed, live mainnet data within
-> seconds of network tip, the monitoring dashboard,
-> the load-test results, and the security posture.
+> seconds of network tip, the improvements our users drove since launch, the
+> monitoring dashboard, the load-test results, and the security posture.
 
 ## Scene 2 - AC1: public access + live data ≤30s
 
@@ -54,6 +56,25 @@ SAY:
 > `cdk deploy` reproduces the AWS side, and the Hetzner side is stood up from
 > Ansible. A few steps are out-of-band by design — ordering the Hetzner server
 > and storage box.
+
+## Scene 3b - Post-launch feedback: real users, real fixes
+
+SHOW: the repository's Issues tab (open + closed); then the transaction-detail
+page of the reporter's own transaction —
+`https://sorobanscan.rumblefish.dev/transactions/de6aa93104f21a6e18f2d104c3418974edc3fecc925932feb254144d6bd5f5ce`
+(a failed contract call with the execution trace visible).
+
+SAY:
+
+> Since launch the explorer has been tested by its real users. The site
+> recorded a hundred and forty-six active users across three hundred and ten
+> sessions, and the Stellar community raised eleven improvement reports, of
+> which five are already resolved. The largest is a redesign of the
+> transaction page itself: every operation now states what it did in plain
+> language, and a failed transaction tells you why — this one names the failing
+> call, shows the exact function with its decoded arguments, and marks where
+> execution stopped. All the reports are public on the repository's issue
+> tracker.
 
 ## Scene 4 - AC3: monitoring
 
@@ -148,18 +169,6 @@ SAY:
 > Third, every request pays about forty milliseconds of gateway, Lambda and
 > mutual-TLS overhead before any data is read, plus about fifteen milliseconds
 > per database round trip.
-
-SHOW: (optional) the 78.3 → 23.89 billion rows figure and the unmodified-endpoint
-improvements.
-
-SAY:
-
-> This load test was not just a measurement — it drove the optimisation. Total
-> database work per run fell by sixty-nine percent during this milestone, and
-> endpoints we did not touch at all got three to four times faster as a result,
-> which told us their earlier latency was contention, not their own cost. Each
-> request is correlated to the exact ClickHouse query it triggered, which is how
-> we could attribute every millisecond.
 
 ## Scene 6 - AC5: security posture
 

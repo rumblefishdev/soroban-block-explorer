@@ -279,14 +279,16 @@ Three distinct causes, in order of size:
 
 #### Why pay for those round trips at all?
 
-Because the machine that serves them costs 9.5× more inside AWS. ClickHouse
+Because of what the machine that serves them would cost inside AWS. ClickHouse
 runs on a dedicated server — 24 threads, 128 GB RAM, 1.72 TiB of local NVMe
-holding our full 929 GiB working set, plus off-box backups — for
-**\$133/month, AWS egress included**. The closest on-demand configuration in
-`eu-central-1` — 128 GiB of RAM and ≈ 1.9 TB of local NVMe — is an
-`m6gd.8xlarge` at **\$1,273/month**, backups extra. The round-trip cost in
+holding our full ≈940 GiB working set, plus off-box backups — for
+**\$133/month, billed monthly, AWS egress
+included**. The closest on-demand configuration in `eu-central-1` — 128 GiB of
+RAM and ≈ 1.9 TB of local NVMe — is an `m6gd.8xlarge` at **\$1,273/month**;
+even on a three-year all-upfront commitment the same instance is
+**\$483/month**, backups extra in both cases. The round-trip cost in
 cause 3 is the bill for that: at a mean of 3.29 ClickHouse queries, **≈ 50 ms per request**.
-(AWS list prices, 2026-07-27.)
+(AWS list prices, 2026-08-07.)
 
 **It is also not why AC4 misses.** Remove every round trip outright — a
 strictly generous assumption about what moving into the VPC would recover —
@@ -407,7 +409,28 @@ PostgreSQL-on-RDS → ClickHouse-on-Hetzner change the same way):
    metadata-enrichment queue is non-empty, and bears on no AC6 metric — ledger
    completeness is independently verified at 0 gaps on every day.
 
-## 6. Source References
+## 6. Post-launch usage and community feedback
+
+Professional user testing here took the form of community feedback: since the
+2026-07-17 launch the explorer has been exercised by Stellar community members
+on live mainnet data, as of 2026-08-07:
+
+- **146 active users across 310 sessions** (Google Analytics, 30 days to
+  2026-08-07).
+- **11 improvement reports** raised by community members, recorded on the
+  [public issue tracker](https://github.com/rumblefishdev/soroban-block-explorer/issues?q=is%3Aissue)
+  by the team on the reporters' behalf.
+- **5 resolved**; the remainder are tracked as open work.
+
+Highlights:
+
+| Report                                           | What changed                                                                                                                                                                                                                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #370 — operations unreadable in the default view | The Normal/Advanced split was replaced by a single progressive page. Every operation now states what it did in plain language — the reporter's own transaction renders "Set trustline to VELO (issuer GDM4…2M5M)" where it previously said only "Change Trust processed". |
+| #364 — "Result OK, transaction failed — why?"    | Failed transactions now lead with the verdict and the cause: a banner names the failing operation and its code (e.g. "Invoke Contract #1 — TRAPPED"), and Soroban calls render an execution trace that marks where execution stopped and surfaces the host errors.        |
+| #369 — issuer column shows only an address       | The assets list resolves the issuer's on-chain `home_domain` and shows it under the address (e.g. `stellarterm.com`), at no extra query cost.                                                                                                                             |
+
+## 7. Source References
 
 | Resource          | Link                                                                                                                                                                                                                                                              |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
