@@ -20,7 +20,8 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     ContractDetailResponse, ContractIdCursor, ContractInterfaceMetadata, ContractListItem,
-    ContractStats, ContractsListParams, EventCursor, EventItem, InterfaceResponse, InvocationItem,
+    ContractStats, ContractsListParams, DecompileDiagnostic, DecompiledParams, DecompiledResponse,
+    EventCursor, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
     self, ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
@@ -495,4 +496,134 @@ fn invocation_cursor_for(r: &InvocationAppearanceRow) -> TxListCursor {
 /// under the retired PG backend is rejected (ADR 0008 fail-clean).
 fn cursor_matches_source(cursor: &TxListCursor) -> bool {
     matches!(cursor, TxListCursor::Ch { .. })
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/contracts/{contract_id}/decompiled
+// ---------------------------------------------------------------------------
+
+/// In-handler bound on the decompilation itself. The full-mainnet sweep
+/// measured p99 at 1.1 s; the tail (minutes) is deliberately cut off — the
+/// frontend degrades to requesting `format=wat`, which is near-instant.
+const DECOMPILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Decompile the contract's WASM on demand (task 0465, refs #374).
+///
+/// No persistence: bytes are fetched from Soroban RPC and decompiled per
+/// request. The output is immutable per (`wasm_hash`, decompiler version),
+/// which justifies the `LONG` cache header even without a server-side cache.
+#[utoipa::path(
+    get,
+    path = "/contracts/{contract_id}/decompiled",
+    tag = "contracts",
+    params(
+        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
+        DecompiledParams,
+    ),
+    responses(
+        (status = 200, description = "Decompiled source (Rust, or WAT fallback)", body = DecompiledResponse),
+        (status = 400, description = "Invalid contract_id or format", body = ErrorEnvelope),
+        (status = 404, description = "Contract not found, has no WASM (SAC / pre-upload), or code no longer live", body = ErrorEnvelope),
+        (status = 500, description = "WASM fetch or decompilation failed", body = ErrorEnvelope),
+    ),
+)]
+pub async fn get_decompiled(
+    State(state): State<AppState>,
+    Path(contract_id): Path<String>,
+    Query(params): Query<DecompiledParams>,
+) -> Response {
+    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
+        return resp;
+    }
+    let want_wat = match params.format.as_deref() {
+        None | Some("rust") => false,
+        Some("wat") => true,
+        Some(other) => {
+            return errors::bad_request(
+                errors::INVALID_QUERY,
+                format!("format must be `rust` or `wat`, got `{other}`"),
+            );
+        }
+    };
+
+    let row = match fetch_interface_for_source(&state, &contract_id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return errors::not_found("contract not found"),
+        Err(e) => {
+            tracing::error!("DB error resolving wasm_hash for {contract_id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+    // SAC / pre-upload contracts have no WASM by design — the frontend
+    // hides the Code tab based on the detail response; a direct call gets
+    // an honest 404 rather than an empty 200.
+    let Some(wasm_hash) = row.wasm_hash else {
+        return errors::not_found("contract has no wasm (SAC or pre-upload)");
+    };
+
+    let wasm = match state
+        .runtime_enrichment
+        .wasm_code
+        .fetch_wasm(&wasm_hash)
+        .await
+    {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return errors::not_found("contract code is not live on the ledger"),
+        Err(e) => {
+            tracing::error!("wasm fetch failed for {contract_id} ({wasm_hash}): {e}");
+            return errors::internal_error(
+                errors::WASM_FETCH_FAILED,
+                "could not fetch contract code from Soroban RPC",
+            );
+        }
+    };
+
+    let decompiled = match tokio::time::timeout(
+        DECOMPILE_TIMEOUT,
+        crate::runtime_enrichment::wasm_code::decompile_on_blocking_pool(wasm, want_wat),
+    )
+    .await
+    {
+        Err(_elapsed) => {
+            tracing::warn!("decompilation timed out for {contract_id} ({wasm_hash})");
+            return errors::internal_error(
+                errors::DECOMPILE_FAILED,
+                "decompilation timed out — retry with format=wat",
+            );
+        }
+        Ok(Err(msg)) => {
+            tracing::error!("decompilation failed for {contract_id} ({wasm_hash}): {msg}");
+            return errors::internal_error(
+                errors::DECOMPILE_FAILED,
+                "no representation could be produced for this contract",
+            );
+        }
+        Ok(Ok(d)) => d,
+    };
+
+    let mut resp = Json(DecompiledResponse {
+        contract_id: row.contract_id,
+        wasm_hash,
+        representation: decompiled.representation.to_string(),
+        source: decompiled.source,
+        sdk_version: decompiled.sdk_version,
+        soroban_ret_version: crate::runtime_enrichment::wasm_code::SOROBAN_RET_VERSION.to_string(),
+        functions: decompiled.functions,
+        todo_holes: decompiled.todo_holes,
+        unknown_vars: decompiled.unknown_vars,
+        rust_error: decompiled.rust_error,
+        diagnostics: decompiled
+            .diagnostics
+            .into_iter()
+            .map(|d| DecompileDiagnostic {
+                category: d.category,
+                severity: d.severity,
+                message: d.message,
+                function_index: d.function_index,
+            })
+            .collect(),
+    })
+    .into_response();
+    cache_control::attach(&mut resp, cache_control::LONG);
+    resp
 }

@@ -16,6 +16,16 @@ history:
     status: active
     who: claude
     note: 'Activated; starting with the spike (Step 1).'
+  - date: 2026-08-10
+    status: active
+    who: claude
+    note: >
+      Steps 1-3 built and in review: API PR #384 (endpoint + RPC fetcher +
+      infra env), UI PR #385 stacked on it (Code tab, Prism highlighting,
+      line numbers, downloads, report-issue, diagnostics). Verified against
+      production data through a local API bound to prod ClickHouse. Two
+      review rounds folded in; `validation` diagnostics added ahead of the
+      0.0.5 release.
 ---
 
 # soroban-ret decompilation: experimental Code tab on contract detail
@@ -128,7 +138,9 @@ with the full CSV.
 
 ## Open Points
 
-- Issue template contents/mechanism — pending from Dominik.
+- Issue template contents/mechanism — pending from Dominik. The button
+  ships with a URL-prefilled body in the meantime; swapping it for an
+  issue form is a one-function change (`reportIssueUrl`).
 - ~~On-demand latency budget~~ — resolved by the sweep: decompile p99 is
   1.1 s, so a ~10 s endpoint timeout covers it 10×; the slow tail falls to
   WAT by design. Remaining knob: traffic threshold to revisit caching.
@@ -145,25 +157,131 @@ with the full CSV.
   Hole counts measure completeness, not correctness. (Sweep note:
   display-level success is 99.5%, so this shapes hole density, not
   availability.)
-- Every Code-tab open burns API CPU (repeat views repeat work) — timeout +
-  rate limit; caching only if traffic hurts.
+- Every Code-tab open burns API CPU (repeat views repeat work). Guards
+  shipped: per-request timeout + a semaphore bounding concurrent Rust
+  decompilations. NO in-process rate limiting — that lives at the infra
+  edge (Cloudflare / API Gateway); the earlier plan wording claiming a
+  route-level limiter was never implemented and is corrected here.
+  Caching only if traffic hurts.
 - Expired/archived contract code → RPC can't serve bytes → Code tab
   unavailable (Interface unaffected).
+
+## Implementation Notes (2026-08-10)
+
+Two stacked PRs, 15 commits, verified against production data throughout:
+a `local` API binary (borrowed from task 0199) bound to prod ClickHouse
+over mTLS, the SPA dev proxy pointed at it, so every case below was
+clicked on real mainnet contracts rather than fixtures.
+
+**API — [PR #384](https://github.com/rumblefishdev/soroban-block-explorer/pull/384)**
+
+- `runtime_enrichment::wasm_code`: `WasmCodeFetcher` (RPC pool, failover,
+  sha256 verification of fetched code against the requested hash) and
+  `decompile_on_blocking_pool` (soroban-ret behind a semaphore).
+- Handler: StrKey validation → wasm_hash lookup → RPC fetch → decompile
+  under a 10 s timeout; `LONG` cache header (output immutable per
+  (hash, version)); new codes `wasm_fetch_failed` / `decompile_failed`.
+- `?format=rust|wat`; Rust failures degrade to WAT _in the same response_
+  (`representation: "wat"` + `rust_error`).
+- `SOROBAN_RPC_URLS` added to the API Lambda env (same keyless pool the
+  enrichment worker uses).
+
+**UI — [PR #385](https://github.com/rumblefishdev/soroban-block-explorer/pull/385)**
+
+- Separate **Code** tab (amber dot = experimental) beside an untouched
+  Interface tab; hidden entirely for SAC / pre-upload contracts, and a
+  stale `?tab=code` falls back to Interface.
+- Prism syntax highlighting in a lazy chunk, sticky line-number gutter
+  with click-to-highlight, copy on the block, `Download .rs/.wat`,
+  prefilled report-issue link, Inferara attribution line.
+- Completeness counters (counts, never percentages) and — added ahead of
+  the 0.0.5 release — soroban-ret's own compliance diagnostics, grouped
+  by (category, message).
+
+## Issues Encountered
+
+- **NUL byte in `ContractCode.tsx`** — a stray `\x00` inside a template
+  literal made git classify the file as binary; PR #385 showed
+  `Bin 14933 -> 18549 bytes` instead of a diff for several commits.
+  Replaced with a space. Watch for `Bin` in `git show --stat` on text files.
+- **Paused queries never resolve** — with the API host unreachable
+  TanStack sets `fetchStatus: 'paused'` while `status` stays `pending`,
+  so an `isPending`-first branch spins a skeleton forever (>60 s observed,
+  no error, no retry). A paused fetch now takes the error path. Only
+  reproducible by clicking; invisible in code review.
+- **Timeout does not cancel `spawn_blocking`** — the decompilation kept
+  burning a thread after the client got its 500 (the slow tail reaches
+  100 s+). Fixed by moving a semaphore permit into the blocking closure.
+- **npm 11 vs CI npm 10 lockfile** — adding prismjs with the local npm 11
+  pruned nested entries CI requires; every job died at `npm ci`. Repaired
+  with `npx npm@10.9.4 install --package-lock-only`.
+- **`git add -A` scope leak** — swept an unrelated WIP file and the
+  untracked dev binary into a commit; rewritten before review.
+
+## Design Decisions
+
+### From Plan
+
+1. **On demand, no cache** — output is deterministic per (wasm_hash,
+   version), so a cache is a drop-in later; the sweep (p99 1.1 s) said it
+   was not needed to launch.
+2. **Counts, not percentages** — per Georgii; the sweep's own spread
+   (median 15 holes, mean 58, max 3075) is the evidence a single global
+   number would misrepresent.
+3. **Separate Code tab, Interface untouched** — reverted the earlier
+   master-detail merge idea at the user's call.
+
+### Emerged
+
+4. **Auto-fallback to WAT on `decompile_failed`** — the API already
+   advises "retry with format=wat"; the UI performs it instead of showing
+   an error wall. The user sees code plus a "WAT only" chip.
+5. **Rust toggle disabled when the contract has no Rust** — showing WAT
+   under a selected "Rust" toggle was two contradictory signals.
+6. **Failure attribution split** — soroban-ret's diagnostics are quoted
+   verbatim; our timeout is labelled as ours in both the UI and the
+   prefilled issue, so upstream reports never blame the decompiler for a
+   SorobanScan limit.
+7. **Single report CTA with one payload builder** — two buttons rendered
+   at once with different bodies, and the one users actually click was
+   missing the decompiler version.
+8. **Limits on rendering** — highlighting skipped above 400 KB, gutter
+   above 10k lines (a real mainnet WAT is 2.1 MB / 57k lines).
+9. **Empty RPC result is not proof** — every endpoint in the pool must
+   agree before returning 404 "not live"; the sweep found 0 archived
+   binaries, so one empty answer is more likely a lagging node.
+10. **SDK chip trimmed at `#`** — `contractmetav0` stores
+    `<version>#<40-char sha>`; the sha moved to a tooltip.
+
+## Future Work
+
+- `soroban_ret::recovery` (per-function statuses) once 0.0.5 ships —
+  replaces the marker-string counting and enables per-function badges.
+- SEP-41 badge: compute from our own `wasm_interface_metadata`, not from
+  the decompiler's `standard_interfaces` (available always, no RPC, works
+  on lists) — belongs on the contract header, not this tab.
+- `.wasm` download (needs a small endpoint serving raw bytes).
+- "View code" links from Interface rows into the Code tab.
+- Behavioral-equivalence badge — hosted/batch only, deliberately deferred.
 
 ## Acceptance Criteria
 
 - [x] Spike results documented in task notes (success rate, hole density,
       timing over top prod hashes) and failure corpus shared with Inferara.
       (Full-mainnet sweep 2026-08-07; see Spike Results + `benchmark/`.)
-- [ ] `GET /v1/contracts/{id}/decompiled` with timeout, rate limit, pinned
-      `=0.0.4` behind an adapter module; unit + integration tests
-      (mocked RPC / sample wasm).
-- [ ] Code tab shipped with full fallback ladder, Experimental marking,
+- [x] `GET /v1/contracts/{id}/decompiled` with timeout, pinned `=0.0.4`
+      behind an adapter module; unit tests + an `--ignored` live-RPC smoke
+      test. (PR #384. Rate limiting deliberately NOT in-process — see Risks.)
+- [x] Code tab shipped with full fallback ladder, Experimental marking,
       banner, counts, copy/download, report-issue button, attribution line.
-- [ ] **Docs updated** — `docs/architecture/**`: new endpoint + frontend
-      data contract, per ADR 0032.
-- [ ] **API types regenerated** — new endpoint DTOs surface in
-      `libs/api-types` (`npx nx run @rumblefish/api-types:generate`).
+      (PR #385, plus syntax highlighting, line numbers and diagnostics that
+      were not in the original plan.)
+- [x] **Docs updated** — `docs/architecture/backend/backend-overview.md`
+      lists the endpoint (PR #384), per ADR 0032.
+- [x] **API types regenerated** — `DecompiledResponse` +
+      `DecompileDiagnostic` in `libs/api-types` (both PRs).
+- [ ] Merged and deployed; issue #374 closed with a link to a live
+      contract page (issues close at deploy, never at merge).
 
 ## Notes
 

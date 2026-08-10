@@ -18,7 +18,10 @@ export function createPalette(mode: PaletteMode): PaletteOptions {
     },
 
     secondary: {
-      main: c.text.accent,
+      // The secondary control remains brand-yellow in both modes. Light-mode
+      // text/action accents are graphite for contrast, so do not reuse
+      // `text.accent` for this filled surface.
+      main: c.surface.primaryMain,
       light: c.surface.primaryLight,
       dark: c.surface.primaryHover,
       contrastText: c.base.black,

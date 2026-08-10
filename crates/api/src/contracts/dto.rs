@@ -184,3 +184,67 @@ pub enum EventCursor {
 pub struct ContractIdCursor {
     pub id: i64,
 }
+
+/// Query params for `GET /v1/contracts/{contract_id}/decompiled`.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct DecompiledParams {
+    /// Requested representation: `rust` (default) or `wat`. When `rust` is
+    /// requested but emission fails, the response carries the WAT fallback
+    /// with `representation: "wat"` and `rust_error` set — no second
+    /// round-trip needed.
+    pub format: Option<String>,
+}
+
+/// Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).
+///
+/// Source is reconstructed on demand by the pinned `soroban-ret` crate —
+/// experimental by nature: unrecovered values surface as explicit `todo!()`
+/// holes in the Rust text. The marker counts measure completeness, not
+/// correctness (a hole-free function can still be wrong); the frontend
+/// keeps its permanent "auto-reconstructed" notice regardless.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DecompiledResponse {
+    pub contract_id: String,
+    /// Lowercase hex hash of the decompiled binary — the response is
+    /// immutable per (`wasm_hash`, `soroban_ret_version`).
+    pub wasm_hash: String,
+    /// What `source` contains: `rust` or `wat`.
+    pub representation: String,
+    pub source: String,
+    /// Soroban SDK version from the binary's `contractmetav0`, when present.
+    pub sdk_version: Option<String>,
+    /// Decompiler version that produced `source`.
+    pub soroban_ret_version: String,
+    /// `pub fn` count in the emitted Rust; `null` for WAT.
+    pub functions: Option<u32>,
+    /// `todo!()` marker count (unrecovered values); `null` for WAT.
+    pub todo_holes: Option<u32>,
+    /// Distinct `var_N` identifiers (unrecovered names); `null` for WAT.
+    pub unknown_vars: Option<u32>,
+    /// Set when `rust` was requested but emission failed — `source` then
+    /// carries the WAT fallback.
+    pub rust_error: Option<String>,
+    /// Soroban-compliance diagnostics for this binary: constructs the
+    /// decompiler does not model well, so the reader knows *why* a
+    /// reconstruction may be thin. Empty on the WAT paths.
+    pub diagnostics: Vec<DecompileDiagnostic>,
+}
+
+/// One entry of [`DecompiledResponse::diagnostics`].
+///
+/// `severity` is soroban-ret's own (`warning` | `info`) and is deliberately
+/// passed through rather than re-graded here — with one caveat for the UI:
+/// `call_indirect` warnings are usually benign `core::fmt` vtables, so they
+/// should not be rendered as errors.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DecompileDiagnostic {
+    /// `floating_point` | `reference_types` | `multi_value` |
+    /// `multi_memory` | `call_indirect` | `unknown_instruction` |
+    /// `non_rust_sdk`, or a lowercased new variant from a later release.
+    pub category: String,
+    /// `warning` | `info`.
+    pub severity: String,
+    pub message: String,
+    /// Index of the offending function, for function-scoped checks.
+    pub function_index: Option<u32>,
+}

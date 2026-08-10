@@ -84,6 +84,15 @@ pub const DB_ERROR: &str = "db_error";
 /// caught immediately instead of silently degrading to `interface_metadata: null`.
 pub const INTERFACE_METADATA_CORRUPT: &str = "interface_metadata_corrupt";
 
+/// The contract's WASM bytes could not be fetched from Soroban RPC
+/// (transport failure or RPC-side error). Transient from the client's
+/// perspective — retrying later is reasonable.
+pub const WASM_FETCH_FAILED: &str = "wasm_fetch_failed";
+
+/// Decompilation produced no usable representation (both the Rust and the
+/// WAT paths failed) or exceeded the in-handler time budget.
+pub const DECOMPILE_FAILED: &str = "decompile_failed";
+
 /// `q` query parameter on `/v1/search` failed shape validation: missing,
 /// empty after trim, or longer than the per-endpoint byte cap
 /// (`search::handlers::MAX_Q_LEN`, currently 256). Distinct from

@@ -475,6 +475,86 @@ export type ContractStats = {
 };
 
 /**
+ * One entry of [`DecompiledResponse::diagnostics`].
+ *
+ * `severity` is soroban-ret's own (`warning` | `info`) and is deliberately
+ * passed through rather than re-graded here — with one caveat for the UI:
+ * `call_indirect` warnings are usually benign `core::fmt` vtables, so they
+ * should not be rendered as errors.
+ */
+export type DecompileDiagnostic = {
+  /**
+   * `floating_point` | `reference_types` | `multi_value` |
+   * `multi_memory` | `call_indirect` | `unknown_instruction` |
+   * `non_rust_sdk`, or a lowercased new variant from a later release.
+   */
+  category: string;
+  /**
+   * Index of the offending function, for function-scoped checks.
+   */
+  function_index?: number | null;
+  message: string;
+  /**
+   * `warning` | `info`.
+   */
+  severity: string;
+};
+
+/**
+ * Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).
+ *
+ * Source is reconstructed on demand by the pinned `soroban-ret` crate —
+ * experimental by nature: unrecovered values surface as explicit `todo!()`
+ * holes in the Rust text. The marker counts measure completeness, not
+ * correctness (a hole-free function can still be wrong); the frontend
+ * keeps its permanent "auto-reconstructed" notice regardless.
+ */
+export type DecompiledResponse = {
+  contract_id: string;
+  /**
+   * Soroban-compliance diagnostics for this binary: constructs the
+   * decompiler does not model well, so the reader knows *why* a
+   * reconstruction may be thin. Empty on the WAT paths.
+   */
+  diagnostics: Array<DecompileDiagnostic>;
+  /**
+   * `pub fn` count in the emitted Rust; `null` for WAT.
+   */
+  functions?: number | null;
+  /**
+   * What `source` contains: `rust` or `wat`.
+   */
+  representation: string;
+  /**
+   * Set when `rust` was requested but emission failed — `source` then
+   * carries the WAT fallback.
+   */
+  rust_error?: string | null;
+  /**
+   * Soroban SDK version from the binary's `contractmetav0`, when present.
+   */
+  sdk_version?: string | null;
+  /**
+   * Decompiler version that produced `source`.
+   */
+  soroban_ret_version: string;
+  source: string;
+  /**
+   * `todo!()` marker count (unrecovered values); `null` for WAT.
+   */
+  todo_holes?: number | null;
+  /**
+   * Distinct `var_N` identifiers (unrecovered names); `null` for WAT.
+   */
+  unknown_vars?: number | null;
+  /**
+   * Lowercase hex hash of the decompiled binary — the response is
+   * immutable per (`wasm_hash`, `soroban_ret_version`).
+   */
+  wasm_hash: string;
+};
+
+/**
  * E3 (`GET /transactions/:hash`) — fields sourced from XDR parse.
  *
  * Returned as the `heavy` block inside `E3Response<TransactionDetailLight>`.
@@ -2445,6 +2525,53 @@ export type GetContractResponses = {
 
 export type GetContractResponse =
   GetContractResponses[keyof GetContractResponses];
+
+export type GetDecompiledData = {
+  body?: never;
+  path: {
+    /**
+     * Contract StrKey (C…, 56 chars)
+     */
+    contract_id: string;
+  };
+  query?: {
+    /**
+     * Requested representation: `rust` (default) or `wat`. When `rust` is
+     * requested but emission fails, the response carries the WAT fallback
+     * with `representation: "wat"` and `rust_error` set — no second
+     * round-trip needed.
+     */
+    format?: string | null;
+  };
+  url: '/v1/contracts/{contract_id}/decompiled';
+};
+
+export type GetDecompiledErrors = {
+  /**
+   * Invalid contract_id or format
+   */
+  400: ErrorEnvelope;
+  /**
+   * Contract not found, has no WASM (SAC / pre-upload), or code no longer live
+   */
+  404: ErrorEnvelope;
+  /**
+   * WASM fetch or decompilation failed
+   */
+  500: ErrorEnvelope;
+};
+
+export type GetDecompiledError = GetDecompiledErrors[keyof GetDecompiledErrors];
+
+export type GetDecompiledResponses = {
+  /**
+   * Decompiled source (Rust, or WAT fallback)
+   */
+  200: DecompiledResponse;
+};
+
+export type GetDecompiledResponse =
+  GetDecompiledResponses[keyof GetDecompiledResponses];
 
 export type ListEventsData = {
   body?: never;
