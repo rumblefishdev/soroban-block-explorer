@@ -3,6 +3,7 @@ import { alpha } from '@mui/material/styles';
 import {
   AnimatedNumber,
   QueryErrorState,
+  shadows,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -131,10 +132,9 @@ export function ChainOverview() {
             theme.palette.mode === 'light'
               ? theme.palette.surface.backgroundAlt
               : alpha(theme.palette.surface.grayMainAlt, 0.8),
-          boxShadow:
-            theme.palette.mode === 'light'
-              ? '0 10px 30px rgba(26, 26, 26, 0.06)'
-              : 'none',
+          // Light mode lifts the card off the flat background; dark mode
+          // separates it with the translucent fill above instead.
+          boxShadow: theme.palette.mode === 'light' ? shadows.md : 'none',
           backdropFilter: 'blur(6px)',
           overflow: 'hidden',
         })}

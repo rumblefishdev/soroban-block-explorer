@@ -118,7 +118,12 @@ export const colorsLight = {
     warning: '#fef3c6',
     error: '#ffe2e2',
     primaryMain: '#fdda24',
-    primaryMainAlt: scales.gray[700],
+    // Hover accent for linked identifiers, NOT a page-text colour — so it
+    // keeps the amber rather than following `text.accent` to graphite. At
+    // 4.21:1 it is legible, and it is the only thing that distinguishes a
+    // hovered hash from a resting one (`text.primary`); graphite would make
+    // that shift 1.68:1, i.e. invisible.
+    primaryMainAlt: '#a36905',
     primaryHover: '#edbe05',
     primaryPressed: '#cc9302',
     primaryDisabled: '#fffcc2',
