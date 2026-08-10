@@ -78,6 +78,24 @@ history:
       Budgets with forecast alerts after ~a week of honestly-attributed
       data, and the second anomaly subscription for the co-tenant's
       channel if they want one.
+  - date: 2026-08-10
+    status: backlog
+    who: karolkow
+    note: >
+      Operator pass executed and verified the same day. (1) Both retired
+      staging-Postgres snapshots in us-east-1 deleted - describe-db-snapshots
+      now returns zero; the RDS billing line should hit 0 within ~2 days.
+      Safe by written policy: 0249 retained them as 30-day last-resort
+      insurance, expired since May/June, restore-share lists empty. (2) All
+      8 hand-provisioned secrets tagged
+      (Project/Environment/ManagedBy=manual), verified 13/15 secrets in the
+      account now carry Project - the remaining 2 are the co-tenant's
+      (prices/production/clickhouse-mtls-*), theirs to tag. Gotcha for the
+      runbook: the operator's admin session defaults to us-east-1, so
+      Secrets Manager calls need an explicit --region eu-central-1 (the
+      first tagging pass bounced off ResourceNotFound harmlessly). Durable
+      fix still owed: the 0227 provisioning path should tag at creation so
+      future hand-made secrets do not reopen the gap.
 ---
 
 # The AWS account bills two projects as one
