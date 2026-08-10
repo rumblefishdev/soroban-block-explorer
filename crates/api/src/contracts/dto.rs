@@ -206,4 +206,27 @@ pub struct DecompiledResponse {
     /// Set when `rust` was requested but emission failed — `source` then
     /// carries the WAT fallback.
     pub rust_error: Option<String>,
+    /// Soroban-compliance diagnostics for this binary: constructs the
+    /// decompiler does not model well, so the reader knows *why* a
+    /// reconstruction may be thin. Empty on the WAT paths.
+    pub diagnostics: Vec<DecompileDiagnostic>,
+}
+
+/// One entry of [`DecompiledResponse::diagnostics`].
+///
+/// `severity` is soroban-ret's own (`warning` | `info`) and is deliberately
+/// passed through rather than re-graded here — with one caveat for the UI:
+/// `call_indirect` warnings are usually benign `core::fmt` vtables, so they
+/// should not be rendered as errors.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DecompileDiagnostic {
+    /// `floating_point` | `reference_types` | `multi_value` |
+    /// `multi_memory` | `call_indirect` | `unknown_instruction` |
+    /// `non_rust_sdk`, or a lowercased new variant from a later release.
+    pub category: String,
+    /// `warning` | `info`.
+    pub severity: String,
+    pub message: String,
+    /// Index of the offending function, for function-scoped checks.
+    pub function_index: Option<u32>,
 }
