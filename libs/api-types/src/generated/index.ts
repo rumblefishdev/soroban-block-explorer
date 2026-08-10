@@ -47,6 +47,7 @@ export type {
   ContractInterfaceMetadata,
   ContractListItem,
   ContractStats,
+  DecompileDiagnostic,
   DecompiledResponse,
   E3HeavyFields,
   E3ResponseTransactionDetailLight,

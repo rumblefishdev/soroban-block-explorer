@@ -473,6 +473,32 @@ export type ContractStats = {
 };
 
 /**
+ * One entry of [`DecompiledResponse::diagnostics`].
+ *
+ * `severity` is soroban-ret's own (`warning` | `info`) and is deliberately
+ * passed through rather than re-graded here — with one caveat for the UI:
+ * `call_indirect` warnings are usually benign `core::fmt` vtables, so they
+ * should not be rendered as errors.
+ */
+export type DecompileDiagnostic = {
+  /**
+   * `floating_point` | `reference_types` | `multi_value` |
+   * `multi_memory` | `call_indirect` | `unknown_instruction` |
+   * `non_rust_sdk`, or a lowercased new variant from a later release.
+   */
+  category: string;
+  /**
+   * Index of the offending function, for function-scoped checks.
+   */
+  function_index?: number | null;
+  message: string;
+  /**
+   * `warning` | `info`.
+   */
+  severity: string;
+};
+
+/**
  * Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).
  *
  * Source is reconstructed on demand by the pinned `soroban-ret` crate —
@@ -483,6 +509,12 @@ export type ContractStats = {
  */
 export type DecompiledResponse = {
   contract_id: string;
+  /**
+   * Soroban-compliance diagnostics for this binary: constructs the
+   * decompiler does not model well, so the reader knows *why* a
+   * reconstruction may be thin. Empty on the WAT paths.
+   */
+  diagnostics: Array<DecompileDiagnostic>;
   /**
    * `pub fn` count in the emitted Rust; `null` for WAT.
    */

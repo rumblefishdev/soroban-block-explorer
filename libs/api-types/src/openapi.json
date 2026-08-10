@@ -2598,6 +2598,30 @@
           }
         }
       },
+      "DecompileDiagnostic": {
+        "type": "object",
+        "description": "One entry of [`DecompiledResponse::diagnostics`].\n\n`severity` is soroban-ret's own (`warning` | `info`) and is deliberately\npassed through rather than re-graded here — with one caveat for the UI:\n`call_indirect` warnings are usually benign `core::fmt` vtables, so they\nshould not be rendered as errors.",
+        "required": ["category", "severity", "message"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "`floating_point` | `reference_types` | `multi_value` |\n`multi_memory` | `call_indirect` | `unknown_instruction` |\n`non_rust_sdk`, or a lowercased new variant from a later release."
+          },
+          "function_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Index of the offending function, for function-scoped checks.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "description": "`warning` | `info`."
+          }
+        }
+      },
       "DecompiledResponse": {
         "type": "object",
         "description": "Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).\n\nSource is reconstructed on demand by the pinned `soroban-ret` crate —\nexperimental by nature: unrecovered values surface as explicit `todo!()`\nholes in the Rust text. The marker counts measure completeness, not\ncorrectness (a hole-free function can still be wrong); the frontend\nkeeps its permanent \"auto-reconstructed\" notice regardless.",
@@ -2606,11 +2630,19 @@
           "wasm_hash",
           "representation",
           "source",
-          "soroban_ret_version"
+          "soroban_ret_version",
+          "diagnostics"
         ],
         "properties": {
           "contract_id": {
             "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecompileDiagnostic"
+            },
+            "description": "Soroban-compliance diagnostics for this binary: constructs the\ndecompiler does not model well, so the reader knows *why* a\nreconstruction may be thin. Empty on the WAT paths."
           },
           "functions": {
             "type": ["integer", "null"],
