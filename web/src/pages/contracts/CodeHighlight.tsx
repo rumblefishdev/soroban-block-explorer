@@ -17,6 +17,14 @@ import type { Theme } from '@mui/material/styles';
  */
 const HIGHLIGHT_LIMIT = 400_000;
 
+/**
+ * Above this line count the gutter (and with it the click-to-highlight
+ * band) is skipped: each number is a DOM element, and the largest WAT
+ * outputs run to ~57k lines (measured on mainnet, task 0465) — enough to
+ * jank the tab. Every Rust output stays far below this.
+ */
+const GUTTER_LIMIT = 10_000;
+
 /** Fixed metrics so the gutter, the text and the line-highlight band stay
  *  aligned; `pre` never wraps (horizontal overflow scrolls instead). */
 const LINE_HEIGHT = 21;
@@ -82,6 +90,7 @@ export default function CodeHighlight({
   }, [source, language]);
 
   const lineCount = useMemo(() => source.split('\n').length, [source]);
+  const showGutter = lineCount <= GUTTER_LIMIT;
 
   return (
     <Box
@@ -97,38 +106,42 @@ export default function CodeHighlight({
       })}
     >
       <Box sx={{ display: 'flex', minWidth: 'max-content' }}>
-        <Box
-          aria-hidden
-          sx={(theme) => ({
-            position: 'sticky',
-            left: 0,
-            zIndex: 1,
-            flexShrink: 0,
-            userSelect: 'none',
-            textAlign: 'right',
-            py: `${PAD_Y}px`,
-            px: 1.5,
-            color: theme.palette.text.tertiary,
-            backgroundColor: theme.palette.surface.grayMainAlt,
-            borderRight: `1px solid ${theme.palette.stroke.default}`,
-          })}
-        >
-          {Array.from({ length: lineCount }, (_, i) => i + 1).map((n) => (
-            <Box
-              key={n}
-              onClick={() => setSelectedLine((prev) => (prev === n ? null : n))}
-              sx={(theme) => ({
-                cursor: 'pointer',
-                '&:hover': { color: theme.palette.text.primary },
-                ...(n === selectedLine && {
-                  color: theme.palette.text.primary,
-                }),
-              })}
-            >
-              {n}
-            </Box>
-          ))}
-        </Box>
+        {showGutter && (
+          <Box
+            aria-hidden
+            sx={(theme) => ({
+              position: 'sticky',
+              left: 0,
+              zIndex: 1,
+              flexShrink: 0,
+              userSelect: 'none',
+              textAlign: 'right',
+              py: `${PAD_Y}px`,
+              px: 1.5,
+              color: theme.palette.text.tertiary,
+              backgroundColor: theme.palette.surface.grayMainAlt,
+              borderRight: `1px solid ${theme.palette.stroke.default}`,
+            })}
+          >
+            {Array.from({ length: lineCount }, (_, i) => i + 1).map((n) => (
+              <Box
+                key={n}
+                onClick={() =>
+                  setSelectedLine((prev) => (prev === n ? null : n))
+                }
+                sx={(theme) => ({
+                  cursor: 'pointer',
+                  '&:hover': { color: theme.palette.text.primary },
+                  ...(n === selectedLine && {
+                    color: theme.palette.text.primary,
+                  }),
+                })}
+              >
+                {n}
+              </Box>
+            ))}
+          </Box>
+        )}
         <Box
           sx={{
             position: 'relative',
@@ -138,7 +151,7 @@ export default function CodeHighlight({
             pr: 2,
           }}
         >
-          {selectedLine != null && (
+          {showGutter && selectedLine != null && (
             <Box
               sx={(theme) => ({
                 position: 'absolute',

@@ -17,7 +17,7 @@ import {
   CopyButton,
   QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Suspense, lazy, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 
 import { useContractDecompiled } from '../../api/index.js';
 
@@ -27,20 +27,26 @@ const CodeHighlight = lazy(() => import('./CodeHighlight.js'));
 const SOROBAN_RET_REPO = 'https://github.com/Inferara/soroban-ret';
 
 /** Prefilled GitHub issue against the decompiler repo (task 0465; the
- *  final issue-form template is pending upstream — URL prefill until then). */
-function reportIssueUrl(
-  contractId: string,
-  wasmHash: string,
-  version: string,
-  representation: string
-): string {
-  const title = `Decompilation issue: ${contractId}`;
+ *  final issue-form template is pending upstream — URL prefill until then).
+ *  Also used from the error state, where the API error message is the most
+ *  valuable part of the report. */
+function reportIssueUrl(opts: {
+  contractId: string;
+  wasmHash: string;
+  version?: string;
+  representation?: string;
+  apiError?: string;
+}): string {
+  const title = `Decompilation issue: ${opts.contractId}`;
   const body = [
-    `- Contract: \`${contractId}\``,
-    `- WASM hash: \`${wasmHash}\``,
-    `- soroban-ret version: ${version}`,
-    `- Representation shown: ${representation}`,
-    `- Seen on: https://sorobanscan.rumblefish.dev/contracts/${contractId}?tab=code`,
+    `- Contract: \`${opts.contractId}\``,
+    `- WASM hash: \`${opts.wasmHash}\``,
+    ...(opts.version ? [`- soroban-ret version: ${opts.version}`] : []),
+    ...(opts.representation
+      ? [`- Representation shown: ${opts.representation}`]
+      : []),
+    ...(opts.apiError ? [`- API error: ${opts.apiError}`] : []),
+    `- Seen on: https://sorobanscan.rumblefish.dev/contracts/${opts.contractId}?tab=code`,
     '',
     'What looks wrong:',
     '',
@@ -67,25 +73,165 @@ function downloadSource(
 }
 
 /**
+ * Error-envelope `code` from a failed query, when the API sent one.
+ * The api-client interceptor (`web/src/api/client.ts`) re-wraps every
+ * failure into a real `Error` and preserves the ADR-0008 envelope under
+ * `.body`, so that is where `code` lives; network failures have none.
+ */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error == null) return undefined;
+  const body = (error as { body?: unknown }).body;
+  const source = typeof body === 'object' && body != null ? body : error;
+  const code = (source as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/** The interceptor adopts the envelope `message` as `Error.message`. */
+function errorMessage(error: unknown): string | undefined {
+  if (typeof error === 'object' && error != null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Code tab (task 0465, issue #374) — the contract's WASM decompiled on
  * demand by soroban-ret. Experimental by design: the banner and the
  * completeness counters stay visible whatever the fidelity, and unrecovered
  * values render as explicit `todo!()` holes in the source itself.
  *
- * Fallback ladder inside the tab: Rust → WAT-in-response fallback
- * (`representation: "wat"` + `rust_error`) → error state with retry. The
- * tab itself is only mounted for contracts with a WASM (the page hides it
- * for SAC / pre-upload), so a 404 here is unexpected and surfaces as the
- * generic error state.
+ * Fallback ladder inside the tab, in order:
+ * 1. Rust — the default request.
+ * 2. WAT delivered in-response (`representation: "wat"` + `rust_error`)
+ *    when Rust *emission* fails inside a successful call.
+ * 3. WAT re-requested automatically when the Rust call itself dies with
+ *    `decompile_failed` (timeout / no representation) — the API's own
+ *    hint is "retry with format=wat", so the UI just does it. The user
+ *    sees code plus a "WAT only" chip, not an error wall.
+ * 4. Error state with the toolbar still mounted (the Rust/WAT toggle must
+ *    not disappear with the content) and, for decompiler-side failures,
+ *    a "Report issue" action prefilled with the API error.
+ *
+ * The tab itself is only mounted for contracts with a WASM (the page hides
+ * it for SAC / pre-upload), so a 404 here is unexpected and surfaces as
+ * the generic error state.
  */
-export function ContractCode({ contractId }: { contractId: string }) {
+export function ContractCode({
+  contractId,
+  wasmHash,
+}: {
+  contractId: string;
+  wasmHash: string;
+}) {
   const [format, setFormat] = useState<'rust' | 'wat'>('rust');
-  const { data, isLoading, isError, error, refetch } = useContractDecompiled(
+  // Set when the Rust call failed hard and the UI fell back to WAT on its
+  // own; carries the API error message for the "WAT only" chip tooltip.
+  const [autoWatReason, setAutoWatReason] = useState<string | null>(null);
+  const { data, isPending, isError, error, refetch } = useContractDecompiled(
     contractId,
     format
   );
 
-  if (isLoading) {
+  const failedCode = isError ? errorCode(error) : undefined;
+
+  // Ladder step 3: a dead Rust call degrades to WAT automatically. Only for
+  // `decompile_failed` — network/API errors would fail on WAT too, so they
+  // stay in the error state instead of doubling the noise.
+  useEffect(() => {
+    if (format === 'rust' && failedCode === 'decompile_failed') {
+      setAutoWatReason(errorMessage(error) ?? 'Rust decompilation failed');
+      setFormat('wat');
+    }
+  }, [format, failedCode, error]);
+
+  const toolbar = (
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      sx={{ flexWrap: 'wrap', rowGap: 1 }}
+    >
+      <ToggleButtonGroup
+        exclusive
+        size="small"
+        value={format}
+        onChange={(_e, next: 'rust' | 'wat' | null) => {
+          if (next != null) {
+            setAutoWatReason(null);
+            setFormat(next);
+          }
+        }}
+        aria-label="Source representation"
+        sx={{ '& .MuiToggleButton-root': { textTransform: 'none' } }}
+      >
+        <ToggleButton value="rust">Rust</ToggleButton>
+        <ToggleButton value="wat">WAT</ToggleButton>
+      </ToggleButtonGroup>
+      <Chip size="sm" color="warning" label="Experimental" />
+      {data != null && (
+        <Chip
+          size="sm"
+          color="neutral"
+          label={`soroban-ret ${data.soroban_ret_version}`}
+        />
+      )}
+      {data?.sdk_version != null && (
+        <Chip size="sm" color="neutral" label={`SDK ${data.sdk_version}`} />
+      )}
+      {(autoWatReason != null ||
+        (format === 'rust' && data?.representation === 'wat')) && (
+        // Rust was requested but could not be produced — either emission
+        // failed inside a successful call (rust_error) or the call itself
+        // died and the UI re-requested WAT (autoWatReason). Same chip, the
+        // decompiler's reason in the tooltip.
+        <Chip
+          size="sm"
+          color="warning"
+          label="WAT only"
+          title={autoWatReason ?? data?.rust_error ?? undefined}
+        />
+      )}
+      <Box sx={{ flexGrow: 1 }} />
+      {data != null && (
+        <>
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<BugReportOutlinedIcon />}
+            href={reportIssueUrl({
+              contractId,
+              wasmHash: data.wasm_hash,
+              version: data.soroban_ret_version,
+              representation: data.representation,
+              apiError: autoWatReason ?? undefined,
+            })}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Report issue
+          </Button>
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<FileDownloadOutlinedIcon />}
+            onClick={() =>
+              downloadSource(contractId, data.representation, data.source)
+            }
+          >
+            {/* Labelled with the exact file the click produces — the active
+                representation (covers the WAT-fallback case too). */}
+            Download {data.representation === 'rust' ? '.rs' : '.wat'}
+          </Button>
+        </>
+      )}
+    </Stack>
+  );
+
+  // `isPending`, not `isLoading`: between retry attempts the query is
+  // pending but not fetching, and `isLoading` goes false there — which
+  // flashed the error state mid-retry on slow contracts.
+  if (isPending) {
     return (
       <Box sx={{ p: 2 }}>
         <CardSkeleton />
@@ -94,82 +240,42 @@ export function ContractCode({ contractId }: { contractId: string }) {
   }
 
   if (isError || data == null) {
-    return <QueryErrorState error={error} onRetry={() => void refetch()} />;
+    // Ladder step 4. `decompile_failed` here means even the WAT path (or a
+    // direct WAT request) failed — a genuine decompiler-side case worth a
+    // prefilled report. Other errors (network, API down, rate limit) are
+    // not soroban-ret's fault, so no report button for those.
+    return (
+      <Stack spacing={1.5} sx={{ p: 2 }}>
+        {toolbar}
+        <QueryErrorState error={error} onRetry={() => void refetch()} />
+        {failedCode === 'decompile_failed' && (
+          <Box sx={{ textAlign: 'center' }}>
+            <Button
+              size="small"
+              color="inherit"
+              startIcon={<BugReportOutlinedIcon />}
+              href={reportIssueUrl({
+                contractId,
+                wasmHash,
+                representation: format,
+                apiError: errorMessage(error),
+              })}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Report issue to soroban-ret
+            </Button>
+          </Box>
+        )}
+      </Stack>
+    );
   }
 
   const isRust = data.representation === 'rust';
-  const watFallback = format === 'rust' && data.representation === 'wat';
 
   return (
     <Stack spacing={1.5} sx={{ p: 2 }}>
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        sx={{ flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <ToggleButtonGroup
-          exclusive
-          size="small"
-          value={format}
-          onChange={(_e, next: 'rust' | 'wat' | null) => {
-            if (next != null) setFormat(next);
-          }}
-          aria-label="Source representation"
-          sx={{ '& .MuiToggleButton-root': { textTransform: 'none' } }}
-        >
-          <ToggleButton value="rust">Rust</ToggleButton>
-          <ToggleButton value="wat">WAT</ToggleButton>
-        </ToggleButtonGroup>
-        <Chip size="sm" color="warning" label="Experimental" />
-        <Chip
-          size="sm"
-          color="neutral"
-          label={`soroban-ret ${data.soroban_ret_version}`}
-        />
-        {data.sdk_version != null && (
-          <Chip size="sm" color="neutral" label={`SDK ${data.sdk_version}`} />
-        )}
-        {watFallback && (
-          // Rust was requested but emission failed — the response degraded
-          // to WAT in-place (no second round-trip). rust_error carries the
-          // decompiler's reason for the curious.
-          <Chip
-            size="sm"
-            color="warning"
-            label="WAT only"
-            title={data.rust_error ?? undefined}
-          />
-        )}
-        <Box sx={{ flexGrow: 1 }} />
-        <Button
-          size="small"
-          color="inherit"
-          startIcon={<BugReportOutlinedIcon />}
-          href={reportIssueUrl(
-            contractId,
-            data.wasm_hash,
-            data.soroban_ret_version,
-            data.representation
-          )}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Report issue
-        </Button>
-        <Button
-          size="small"
-          color="inherit"
-          startIcon={<FileDownloadOutlinedIcon />}
-          onClick={() =>
-            downloadSource(contractId, data.representation, data.source)
-          }
-        >
-          {/* Labelled with the exact file the click produces — the active
-              representation (covers the WAT-fallback case too). */}
-          Download {data.representation === 'rust' ? '.rs' : '.wat'}
-        </Button>
-      </Stack>
+      {toolbar}
 
       <Alert severity="warning" icon={<InfoOutlinedIcon fontSize="small" />}>
         Automatically reconstructed from the on-chain WASM — not verified
