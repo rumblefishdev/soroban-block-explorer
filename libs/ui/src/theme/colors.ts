@@ -99,7 +99,12 @@ export const colorsLight = {
     secondary: '#535353',
     tertiary: '#727272',
     inverted: '#fafafa',
-    accent: '#fdda24',
+    // Graphite, not the brand yellow: `#fdda24` measures 1.26:1 on
+    // `surface.background`, so it cannot carry text or a focus indicator in
+    // light mode. The yellow stays reserved for filled surfaces, glows and
+    // markers. Yellow-on-black spots (chips, button icon wells) sit on
+    // `common.black` in both modes and take `surface.primaryMain` instead.
+    accent: scales.gray[700],
     success: '#008236',
     warning: '#bb4d00',
     error: '#c10007',
@@ -113,6 +118,11 @@ export const colorsLight = {
     warning: '#fef3c6',
     error: '#ffe2e2',
     primaryMain: '#fdda24',
+    // Hover accent for linked identifiers, NOT a page-text colour — so it
+    // keeps the amber rather than following `text.accent` to graphite. At
+    // 4.21:1 it is legible, and it is the only thing that distinguishes a
+    // hovered hash from a resting one (`text.primary`); graphite would make
+    // that shift 1.68:1, i.e. invisible.
     primaryMainAlt: '#a36905',
     primaryHover: '#edbe05',
     primaryPressed: '#cc9302',
@@ -128,10 +138,13 @@ export const colorsLight = {
   },
 
   stroke: {
-    default: '#e6e6e6',
+    default: scales.gray[300],
     defaultHover: '#a3a3a3',
-    action: '#fdda24',
-    actionHover: '#fff589',
+    action: scales.gray[700],
+    // Deepens on hover, mirroring dark's #edbe05 -> #a36905. The old #fff589
+    // was the light-mode twin of the brand yellow and went near-invisible
+    // once `action` stopped being yellow here.
+    actionHover: scales.gray[900],
     success: '#00c950',
     warning: '#fe9a00',
     error: '#fb2c36',

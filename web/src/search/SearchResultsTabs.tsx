@@ -118,8 +118,12 @@ function CountBadge({ count }: { count: number }) {
         component="span"
         variant="bodyXsMedium"
         sx={(theme) => ({
+          // The pill is `common.black` in both modes — brand yellow, not
+          // `text.accent` (which darkens in light mode).
           color:
-            count > 0 ? theme.palette.text.accent : theme.palette.common.white,
+            count > 0
+              ? theme.palette.surface.primaryMain
+              : theme.palette.common.white,
           lineHeight: 1,
         })}
       >

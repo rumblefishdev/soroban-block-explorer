@@ -1,5 +1,6 @@
 import SearchIcon from '@mui/icons-material/Search';
 import { Box, Typography } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   monoFontFamily,
   searchShortcutLabel,
@@ -37,14 +38,21 @@ export function HeroSearch({
         borderRadius: `${theme.shape.radius.s}px`,
         border: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.grayMain,
-        transition: 'border-color 0.15s ease',
-        // Lighten the border on hover, accent it on focus — same
-        // affordance as the header search.
+        transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+        // Border lightens on hover and takes `stroke.action` on focus, same
+        // token as the header search. The brand-yellow focus halo on top is
+        // hero-only and deliberate: this is the landing page's primary call
+        // to action, the header field is a compact utility. The halo needs
+        // more presence against a light surface than a dark one.
         '&:hover': {
           borderColor: theme.palette.stroke.defaultHover,
         },
         '&:focus-within': {
           borderColor: theme.palette.stroke.action,
+          boxShadow: `0 0 0 3px ${alpha(
+            theme.palette.surface.primaryMain,
+            theme.palette.mode === 'light' ? 0.34 : 0.22
+          )}`,
         },
       })}
     >

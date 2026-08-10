@@ -39,7 +39,7 @@ function YellowCircle({ children }: { children: ReactNode }) {
         borderRadius: '50%',
         flexShrink: 0,
         backgroundColor: theme.palette.surface.primaryMain,
-        color: theme.palette.surface.backgroundAlt,
+        color: theme.palette.common.black,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
