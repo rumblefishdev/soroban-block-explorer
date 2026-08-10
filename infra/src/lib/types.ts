@@ -315,8 +315,6 @@ export interface EnvironmentConfig {
   readonly galexieLagMinutes: number;
   /** Error rate threshold (>0.0–1.0) for the Ledger Processor error-rate alarm. */
   readonly processorErrorRateThreshold: number;
-  /** API Gateway 5xx error rate % threshold for the 5xx alarm. */
-  readonly apiGateway5xxThreshold: number;
   /**
    * Ephemeral-storage utilization % threshold for the Galexie captive-core
    * disk alarm. Baseline is ~30% (captive-core's BucketList = current ledger
@@ -473,14 +471,6 @@ export function validateConfig(config: EnvironmentConfig): void {
   ) {
     errors.push(
       `costAnomalyAlertThresholdUsd must be > 0 and <= 1000 USD, got: ${config.costAnomalyAlertThresholdUsd}`
-    );
-  }
-  if (
-    config.apiGateway5xxThreshold <= 0 ||
-    config.apiGateway5xxThreshold > 100
-  ) {
-    errors.push(
-      `apiGateway5xxThreshold must be between 0 and 100, got: ${config.apiGateway5xxThreshold}`
     );
   }
   if (

@@ -517,47 +517,56 @@ export class CloudWatchStack extends cdk.Stack {
     );
 
     // ---------------------
-    // Alarm 6: API Gateway 5xx rate
-    // 5xxError / Count > threshold over 5-minute window.
+    // Alarm 6: any API Gateway 5xx
+    //
+    // Every 5xx is a defect, not a health indicator to tolerate (lore-0455).
+    // Measured before this rewrite: 30 days held 80 gateway 5xx, ALL of them
+    // real backend errors in three root-cause classes (CH 60/241/48), every
+    // one pre-launch or a since-fixed query — base rate at rewrite time was
+    // 0 for 24 straight days. At base 0 a single 5xx IS an event, so the
+    // alarm is a bare count: no ratio math (percent-of-a-tiny-denominator
+    // was the old alarm's noise source — 28 notifications for those 80
+    // errors), no threshold knob. If this alarm starts paging regularly,
+    // the fix is to repair the 5xx class it points at — never to widen
+    // this alarm. Investigate with Logs Insights on the API log group:
+    // filter level="ERROR", group by fields.error / fields.message.
+    //
+    // Paging shape: CloudWatch notifies on state transition, so a burst is
+    // one page (ALARM holds while errors continue) and the alarm re-arms
+    // itself after one clean window — rule 2 of ADR 0054.
+    //
+    // Caveat: gateway 5XXError also counts 502/504 the Lambda log never
+    // sees (no access logging on the stage — deliberate, add only when a
+    // silent-504 investigation actually needs it).
     // ---------------------
     const stageName = restApi.deploymentStage.stageName;
     const apiName = restApi.restApiName;
 
-    const api5xx = new cloudwatch.Metric({
-      namespace: 'AWS/ApiGateway',
-      metricName: '5XXError',
-      dimensionsMap: { ApiName: apiName, Stage: stageName },
-      period: cdk.Duration.minutes(5),
-      statistic: cloudwatch.Stats.SUM,
-    });
-    const apiCount = new cloudwatch.Metric({
-      namespace: 'AWS/ApiGateway',
-      metricName: 'Count',
-      dimensionsMap: { ApiName: apiName, Stage: stageName },
-      period: cdk.Duration.minutes(5),
-      statistic: cloudwatch.Stats.SUM,
-    });
-
     withActions(
       new cloudwatch.Alarm(this, 'ApiGateway5xxAlarm', {
-        alarmName: `${config.envName}-api-gateway-5xx-rate`,
+        // Renamed from `-api-gateway-5xx-rate`: the alarm no longer measures
+        // a rate, and a name that lies is how the next reader mistrusts the
+        // whole set. CloudFormation replaces the alarm on rename — state
+        // history restarts, accepted (same call as the DLQ growth renames).
+        alarmName: `${config.envName}-api-gateway-5xx`,
         alarmDescription:
-          'API Gateway 5xx error rate exceeded threshold — user-facing errors.',
-        metric: new cloudwatch.MathExpression({
-          expression: '(m5xx / mcount) * 100',
-          usingMetrics: { m5xx: api5xx, mcount: apiCount },
+          'An API request returned 5xx — a user saw a server error. Every 5xx is a defect: query the API log group in Logs Insights (filter level="ERROR", group by fields.error) and account for each error; do not tune this alarm.',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/ApiGateway',
+          metricName: '5XXError',
+          dimensionsMap: { ApiName: apiName, Stage: stageName },
           period: cdk.Duration.minutes(5),
-          label: '5xx Rate (%)',
+          statistic: cloudwatch.Stats.SUM,
         }),
-        threshold: config.apiGateway5xxThreshold,
+        threshold: 0,
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
-        // NOT_BREACHING is correct here (task 0455 review): the ratio has
-        // no datapoint only when the stage served zero requests in 5 min,
-        // and zero traffic is not a server-error condition. Reachability
-        // of the public entry point is the origin-lock canary's job
-        // (which pages BREACHING on silence).
+        // NOT_BREACHING is correct here (task 0455 review): no datapoint
+        // means the stage served zero requests in 5 min, and zero traffic
+        // is not a server-error condition. Reachability of the public
+        // entry point is the origin-lock canary's job (which pages
+        // BREACHING on silence).
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
