@@ -139,9 +139,13 @@ land deliberately — re-apply verbatim):**
 - **Build-SHA stamping**: bake `VITE_COMMIT_SHA` and expose it (a `<meta>` tag
   and/or `/version`). Prod state is currently unknowable — pinning the live
   commit took manual bundle-hash detective work during the incident.
-- **CI dispatch-only deploy carries the frontend too**: build+sync the SPA in
-  the workflow (env from secrets, arming guard above) so the un-armed-build
-  and wrong-`node_modules`-in-worktree failure modes cannot happen on a laptop.
+- **CI deploy carries the frontend too** — DONE in the 2026-08-10 tag-driven
+  revision: tag runs invoke `make -C infra deploy-production-web` (env from the
+  committed `production.json`, and the arming guard lands in the same target),
+  so the un-armed-build and wrong-`node_modules`-in-worktree failure modes
+  cannot happen on a laptop. Note: CI runners have no Nx cache and Nx Cloud is
+  not connected, so the stale-cache root cause does not reproduce in CI; the
+  env-input fix above still matters for laptop builds.
 - **Upload-before-delete S3 ordering**: sync new objects first, invalidate,
   then sweep deleted ones — avoids the brief window where a cached old
   `index.html` references a just-deleted chunk (404 / blank page).
