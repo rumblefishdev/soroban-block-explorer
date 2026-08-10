@@ -213,10 +213,8 @@ export function ContractCode({
   // Set when the Rust call failed hard and the UI fell back to WAT on its
   // own; carries the API error message for the "WAT only" chip tooltip.
   const [autoWatReason, setAutoWatReason] = useState<string | null>(null);
-  const { data, isPending, isError, error, refetch } = useContractDecompiled(
-    contractId,
-    format
-  );
+  const { data, isPending, isError, error, refetch, fetchStatus } =
+    useContractDecompiled(contractId, format);
 
   const failedCode = isError ? errorCode(error) : undefined;
 
@@ -361,15 +359,22 @@ export function ContractCode({
   // `isPending`, not `isLoading`: between retry attempts the query is
   // pending but not fetching, and `isLoading` goes false there — which
   // flashed the error state mid-retry on slow contracts.
-  if (isPending) {
+  // A paused fetch never resolves on its own — TanStack pauses queries when
+  // its online manager reports the app offline (observed with the API host
+  // unreachable), and the skeleton below would then spin forever. Treat it
+  // as an error state so there is always a way out.
+  const stalled = fetchStatus === 'paused';
+
+  if (isPending && !stalled) {
     return (
-      <Box sx={{ p: 2 }}>
+      <Stack spacing={1.5} sx={{ p: 2 }}>
+        {toolbar}
         <CardSkeleton />
-      </Box>
+      </Stack>
     );
   }
 
-  if (isError || data == null) {
+  if (isError || stalled || data == null) {
     // Ladder step 4. `decompile_failed` here means even the WAT path (or a
     // direct WAT request) failed — a genuine decompiler-side case worth a
     // prefilled report. Other errors (network, API down, rate limit) are
