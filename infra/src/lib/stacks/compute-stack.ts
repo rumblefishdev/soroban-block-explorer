@@ -263,6 +263,12 @@ export class ComputeStack extends cdk.Stack {
       },
       environment: {
         ...sharedEnv,
+        // Same level as the other two Lambdas (lore-0455, inconsistency I1).
+        // The API's EnvFilter::from_default_env() falls back to ERROR when
+        // RUST_LOG is unset, which silently dropped every warn!/info! —
+        // including the SEP-1/NFT enrichment-failure warns and the cold-start
+        // marker — for as long as this variable was missing.
+        RUST_LOG: 'info',
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
         // Secret re-resolution lever (task 0277). The secret env vars below are
         // CloudFormation `{{resolve:secretsmanager:...}}` dynamic references —
@@ -442,19 +448,13 @@ export class ComputeStack extends cdk.Stack {
           ...sharedEnv,
           RUST_LOG: 'info',
           MTLS_SECRET_NAME: enrichmentSecretName,
-          // Task 0311 — multi-provider Soroban RPC pool (round-robin +
-          // failover-on-transient). WITHOUT this the worker's
-          // NftTokenUriFetcher::new() falls back to the single SDF default and
-          // hits the per-second 429 wall under enrichment bursts (the bug 0311
-          // fixes). Keyless, in-sync endpoints from the 2026-06-22 box sieve.
-          // IPFS gateways intentionally left to DEFAULT_IPFS_GATEWAYS
-          // (ipfs.io + pinata) — already the good list in code.
-          SOROBAN_RPC_URLS: [
-            'https://mainnet.sorobanrpc.com',
-            'https://soroban-rpc.mainnet.stellar.gateway.fm/',
-            'https://rpc.ankr.com/stellar_soroban',
-            'https://stellar.api.onfinality.io/public',
-          ].join(','),
+          // The Soroban RPC pool (task 0311) is NOT set here anymore: the
+          // 4-endpoint list moved into code as DEFAULT_SOROBAN_RPC_URLS
+          // (lore-0455) so the worker, the API and the backfill CLI share it
+          // by construction — this env used to configure only the worker,
+          // leaving the other two consumers on the single SDF endpoint.
+          // SOROBAN_RPC_URLS remains an ad-hoc override, same as
+          // IPFS_GATEWAY_BASES.
         },
       }
     );

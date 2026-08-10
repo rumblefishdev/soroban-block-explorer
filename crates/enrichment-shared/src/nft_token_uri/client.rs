@@ -32,10 +32,21 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CACHE_CAPACITY: u64 = 1024;
 const USER_AGENT: &str = concat!("soroban-block-explorer/", env!("CARGO_PKG_VERSION"));
-/// SDF public mainnet RPC — the single default when no `SOROBAN_RPC_URLS` /
-/// `SOROBAN_RPC_URL` env is set. The fetcher rotates + fails over across the
-/// whole pool when given more (task 0311).
-pub(super) const DEFAULT_SOROBAN_RPC_URL: &str = "https://mainnet.sorobanrpc.com";
+/// Default Soroban RPC pool — round-robin + failover-on-transient across all
+/// four (task 0311; a single endpoint hits the per-IP 429 wall under
+/// enrichment bursts, and every Lambda shares one NAT egress IP). Keyless,
+/// in-sync endpoints from the 2026-06-22 box sieve. Lives in code, not env,
+/// for the same reason as [`DEFAULT_IPFS_GATEWAYS`]: one good list every
+/// consumer (worker, API, backfill CLI) gets by construction — previously
+/// only the worker's env carried the pool and the other two silently ran on
+/// the single SDF endpoint (lore-0455). `SOROBAN_RPC_URLS` env overrides for
+/// ad-hoc runs.
+pub(super) const DEFAULT_SOROBAN_RPC_URLS: &[&str] = &[
+    "https://mainnet.sorobanrpc.com",
+    "https://soroban-rpc.mainnet.stellar.gateway.fm/",
+    "https://rpc.ankr.com/stellar_soroban",
+    "https://stellar.api.onfinality.io/public",
+];
 /// Default IPFS gateways, tried in order with failover. Both serve path-style
 /// `/ipfs/<CID>` with HTTP 200 (no redirect — required by our
 /// `Policy::limited(0)` SSRF guard) and are reachable from the prod box
@@ -105,14 +116,16 @@ fn env_list(key: &str) -> Option<Vec<String>> {
 }
 
 impl NftTokenUriFetcher {
-    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (comma-sep) →
-    /// single `SOROBAN_RPC_URL` → SDF default; IPFS gateway pool from
-    /// `IPFS_GATEWAY_BASES` (comma-sep) → [`DEFAULT_IPFS_GATEWAYS`]. With no env
-    /// set, behaviour is identical to the historical single-SDF-RPC fetcher.
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (comma-sep,
+    /// ad-hoc override) → [`DEFAULT_SOROBAN_RPC_URLS`]; IPFS gateway pool from
+    /// `IPFS_GATEWAY_BASES` (comma-sep) → [`DEFAULT_IPFS_GATEWAYS`].
     pub fn new() -> Result<Self, reqwest::Error> {
-        let rpc_urls = env_list("SOROBAN_RPC_URLS")
-            .or_else(|| std::env::var("SOROBAN_RPC_URL").ok().map(|u| vec![u]))
-            .unwrap_or_else(|| vec![DEFAULT_SOROBAN_RPC_URL.to_owned()]);
+        let rpc_urls = env_list("SOROBAN_RPC_URLS").unwrap_or_else(|| {
+            DEFAULT_SOROBAN_RPC_URLS
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        });
         let ipfs_gateways = env_list("IPFS_GATEWAY_BASES").unwrap_or_else(|| {
             DEFAULT_IPFS_GATEWAYS
                 .iter()

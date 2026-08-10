@@ -203,13 +203,13 @@ because of an enrichment failure.
 
 ## 6. Operational knobs
 
-| Knob                        | Value                                         | Where                                                                                                                                |
-| --------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Worker reserved concurrency | 5                                             | CDK enrichment stack (task 0191)                                                                                                     |
-| SQS visibility timeout      | 30 s                                          | Same                                                                                                                                 |
-| Max receives → DLQ          | 3                                             | Same                                                                                                                                 |
-| DepthAlarm threshold        | inherited from 0191                           | Same                                                                                                                                 |
-| Cache TTL (both kinds)      | 24 h                                          | `Sep1Fetcher` / `NftTokenUriFetcher`                                                                                                 |
-| Cache capacity (both kinds) | 1024 entries                                  | Same                                                                                                                                 |
-| RPC URL                     | `https://mainnet.sorobanrpc.com` (SDF public) | Hardcoded constant. Switch to dedicated provider (Quicknode, Validation Cloud) by changing `DEFAULT_SOROBAN_RPC_URL` if rate-limited |
-| IPFS gateway                | `https://cloudflare-ipfs.com/ipfs/`           | Hardcoded constant. Adding a fallback chain (Pinata, dweb.link) is Future Work                                                       |
+| Knob                        | Value                                                   | Where                                                                                                                                                         |
+| --------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker reserved concurrency | 5                                                       | CDK enrichment stack (task 0191)                                                                                                                              |
+| SQS visibility timeout      | 30 s                                                    | Same                                                                                                                                                          |
+| Max receives → DLQ          | 3                                                       | Same                                                                                                                                                          |
+| DepthAlarm threshold        | inherited from 0191                                     | Same                                                                                                                                                          |
+| Cache TTL (both kinds)      | 24 h                                                    | `Sep1Fetcher` / `NftTokenUriFetcher`                                                                                                                          |
+| Cache capacity (both kinds) | 1024 entries                                            | Same                                                                                                                                                          |
+| RPC pool                    | 4 keyless endpoints (SDF, gateway.fm, Ankr, OnFinality) | `DEFAULT_SOROBAN_RPC_URLS` in code — round-robin + failover (task 0311); shared by worker, API and backfill CLI. `SOROBAN_RPC_URLS` env is an ad-hoc override |
+| IPFS gateways               | `ipfs.io` + `gateway.pinata.cloud`                      | `DEFAULT_IPFS_GATEWAYS` in code — failover pair (task 0311; the prior single `cloudflare-ipfs.com` was sunset). `IPFS_GATEWAY_BASES` env overrides            |
