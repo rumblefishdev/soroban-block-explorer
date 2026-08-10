@@ -141,7 +141,10 @@ export const colorsLight = {
     default: scales.gray[300],
     defaultHover: '#a3a3a3',
     action: scales.gray[700],
-    actionHover: '#fff589',
+    // Deepens on hover, mirroring dark's #edbe05 -> #a36905. The old #fff589
+    // was the light-mode twin of the brand yellow and went near-invisible
+    // once `action` stopped being yellow here.
+    actionHover: scales.gray[900],
     success: '#00c950',
     warning: '#fe9a00',
     error: '#fb2c36',

@@ -20,29 +20,30 @@ export function PageGridBackdrop() {
   return (
     <Box
       aria-hidden
-      sx={(theme) => ({
-        position: 'absolute',
-        inset: '0 0 auto 0',
-        height: 780,
-        zIndex: theme.zIndex.gridBackdrop,
-        pointerEvents: 'none',
-        overflow: 'hidden',
-        backgroundImage: `repeating-linear-gradient(0deg, ${alpha(
-          theme.palette.mode === 'light'
-            ? theme.palette.text.primary
-            : theme.palette.common.white,
-          theme.palette.mode === 'light' ? 0.05 : 0.11
-        )} 0 1.26px, transparent 1.26px 80.69px), repeating-linear-gradient(90deg, ${alpha(
-          theme.palette.mode === 'light'
-            ? theme.palette.text.primary
-            : theme.palette.common.white,
-          theme.palette.mode === 'light' ? 0.05 : 0.11
-        )} 0 1.26px, transparent 1.26px 80.69px)`,
-        maskImage:
-          'radial-gradient(1500px 820px at 50% 240px, #000 0%, transparent 82%)',
-        WebkitMaskImage:
-          'radial-gradient(1500px 820px at 50% 240px, #000 0%, transparent 82%)',
-      })}
+      sx={(theme) => {
+        const isLight = theme.palette.mode === 'light';
+        // Dark draws the grid in white; light has to invert it to graphite,
+        // and at less than half the opacity — dark-on-light reads far
+        // stronger than light-on-dark at the same alpha.
+        const line = alpha(
+          isLight ? theme.palette.text.primary : theme.palette.common.white,
+          isLight ? 0.05 : 0.11
+        );
+        const stripe = `0 1.26px, transparent 1.26px 80.69px`;
+        return {
+          position: 'absolute',
+          inset: '0 0 auto 0',
+          height: 780,
+          zIndex: theme.zIndex.gridBackdrop,
+          pointerEvents: 'none',
+          overflow: 'hidden',
+          backgroundImage: `repeating-linear-gradient(0deg, ${line} ${stripe}), repeating-linear-gradient(90deg, ${line} ${stripe})`,
+          maskImage:
+            'radial-gradient(1500px 820px at 50% 240px, #000 0%, transparent 82%)',
+          WebkitMaskImage:
+            'radial-gradient(1500px 820px at 50% 240px, #000 0%, transparent 82%)',
+        };
+      }}
     />
   );
 }

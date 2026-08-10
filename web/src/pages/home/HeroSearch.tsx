@@ -39,16 +39,16 @@ export function HeroSearch({
         border: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.grayMain,
         transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
-        // Lighten the border on hover, accent it on focus — same
-        // affordance as the header search.
+        // Border lightens on hover and takes `stroke.action` on focus, same
+        // token as the header search. The brand-yellow focus halo on top is
+        // hero-only and deliberate: this is the landing page's primary call
+        // to action, the header field is a compact utility. The halo needs
+        // more presence against a light surface than a dark one.
         '&:hover': {
           borderColor: theme.palette.stroke.defaultHover,
         },
         '&:focus-within': {
-          borderColor:
-            theme.palette.mode === 'light'
-              ? theme.palette.text.primary
-              : theme.palette.stroke.action,
+          borderColor: theme.palette.stroke.action,
           boxShadow: `0 0 0 3px ${alpha(
             theme.palette.surface.primaryMain,
             theme.palette.mode === 'light' ? 0.34 : 0.22

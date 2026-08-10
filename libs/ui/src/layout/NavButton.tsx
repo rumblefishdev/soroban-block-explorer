@@ -8,7 +8,6 @@ export interface NavButtonProps {
   label: string;
   active?: boolean;
   size?: NavButtonSize;
-  badge?: number;
   href?: string;
   onClick?: () => void;
 }
@@ -44,7 +43,6 @@ export function NavButton({
   label,
   active = false,
   size = 'md',
-  badge,
   href,
   onClick,
 }: NavButtonProps) {
@@ -87,47 +85,6 @@ export function NavButton({
           {label}
         </Typography>
       </Box>
-
-      {badge !== undefined && (
-        <Box
-          sx={(theme) =>
-            active
-              ? {
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  height: 20,
-                  minWidth: 20,
-                  px: 0.5,
-                  py: 0.25,
-                  borderRadius: 9999,
-                  backgroundColor: theme.palette.common.black,
-                }
-              : {
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  height: 20,
-                  minWidth: 20,
-                  px: 0.5,
-                  py: 0.25,
-                  borderRadius: 9999,
-                  backgroundColor: theme.palette.surface.grayLight,
-                }
-          }
-        >
-          <Typography
-            variant="bodyXsMedium"
-            // Active badge sits on `common.black` in both modes — brand
-            // yellow, not `text.accent` (which darkens in light mode).
-            color={active ? 'surface.primaryMain' : 'text.tertiary'}
-            noWrap
-            textAlign="center"
-          >
-            {badge}
-          </Typography>
-        </Box>
-      )}
     </Box>
   );
 }

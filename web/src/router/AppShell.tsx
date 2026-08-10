@@ -61,6 +61,13 @@ function HomeLogo({
   // same artwork remapped to ink for the light surface. Picking by brand
   // variant alone left the nav "Scan" wordmark and the whole footer lockup
   // white-on-white.
+  //
+  // The `-light` files are DERIVED, not design-authored: every opaque pixel of
+  // the dark artwork recoloured to #1a1a1a. Good enough to ship a legible
+  // lockup, but they inherit the raster's edges and carry no brand nuance —
+  // replace them with real light-background lockups (or `currentColor` SVGs,
+  // which would delete this whole selection) when design supplies them.
+  // See lore task 0467, step 1.
   const base = isSoroban ? '/soroban-logo' : '/rumblefish-logo';
   const suffix = useTheme().palette.mode === 'light' ? '-light' : '';
   return (
