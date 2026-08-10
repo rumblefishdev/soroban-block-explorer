@@ -19,9 +19,9 @@ history:
 
 ## Summary
 
-Light mode is reachable in production (`readInitialMode` follows the stored
-preference / `prefers-color-scheme`, and there is a toggle in the top nav), but
-two brand-level things were only ever designed against the dark background: the
+Light mode is reachable in production — there is a toggle in the top nav and
+`readInitialMode` restores whatever the user last chose — but two brand-level
+things were only ever designed against the dark background: the
 SorobanScan and RumbleFish logo artwork, and the accent yellow `#fdda24`. In
 light mode the nav logo's "Scan" wordmark is white-on-white, the footer
 RumbleFish lockup is a ghost, and the hero headline sits at **1.26:1** contrast.
@@ -30,9 +30,14 @@ of the theme, so they are wrong in whichever mode they were not written for.
 
 ## Status: Active
 
-**Current state:** Audited, not started. Findings below are reproduced on a
-local dev server in light mode plus a code sweep; contrast ratios are computed,
-not eyeballed.
+**Current state:** Steps 1, 2 and part of 4 are in PR #386 (open vs `develop`).
+Design settled the accent question the other way from the guess in F2: light
+mode goes **graphite** (`scales.gray[700]`), not a darker amber, and the brand
+yellow stays reserved for filled surfaces, glows and markers. Steps 3 and 5 and
+the rest of the F5 triage are untouched.
+
+Findings below are reproduced on a local dev server in light mode plus a code
+sweep; contrast ratios are computed, not eyeballed.
 
 ## Context
 
@@ -173,6 +178,14 @@ error states. Capture before/after.
 
 ## Notes
 
+- **Colour-mode resolution, for the record.** Dark is the product default
+  (`ThemeProvider.tsx`, `defaultMode = 'dark'`) and OS `prefers-color-scheme`
+  is **deliberately ignored** — only an explicit toggle, stored under
+  `soroban-explorer.color-mode`, overrides it. An earlier draft of this task
+  said `readInitialMode` follows the OS preference; that was carried over from
+  a stale 0257 note and is wrong. PR #386 additionally moved the persistence
+  out of a mount effect and onto the toggle, so a first-time visitor no longer
+  gets today's default frozen into their storage.
 - Reported from two user screenshots (nav + footer in light mode), then
   reproduced locally and extended by a code sweep.
 - Contrast numbers computed with the WCAG relative-luminance formula against
