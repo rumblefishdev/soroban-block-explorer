@@ -116,8 +116,11 @@ export const overrides: Components<Theme> = {
           color: theme.palette.text.secondary,
         },
         '& .MuiButton-startIcon, & .MuiButton-endIcon': {
+          // Sits on `common.black` in BOTH modes, so it wants the brand yellow,
+          // not `text.accent` (graphite in light mode, for legibility on the
+          // page surface).
           backgroundColor: theme.palette.common.black,
-          color: theme.palette.text.accent,
+          color: theme.palette.surface.primaryMain,
         },
         '&:active .MuiButton-startIcon, &:active .MuiButton-endIcon': {
           // Same mode-aware fix for the icon chip wrapping.

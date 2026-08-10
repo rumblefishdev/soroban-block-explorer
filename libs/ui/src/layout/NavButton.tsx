@@ -118,7 +118,9 @@ export function NavButton({
         >
           <Typography
             variant="bodyXsMedium"
-            color={active ? 'text.accent' : 'text.tertiary'}
+            // Active badge sits on `common.black` in both modes — brand
+            // yellow, not `text.accent` (which darkens in light mode).
+            color={active ? 'surface.primaryMain' : 'text.tertiary'}
             noWrap
             textAlign="center"
           >

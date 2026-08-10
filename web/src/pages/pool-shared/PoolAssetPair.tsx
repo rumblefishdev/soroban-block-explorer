@@ -27,7 +27,10 @@ export function PoolAssetPair({
         display: 'flex',
         alignItems: 'center',
         '& .MuiAvatar-root': {
-          border: `2px solid ${theme.palette.surface.grayMain}`,
+          border:
+            theme.palette.mode === 'light'
+              ? `1px solid ${theme.palette.gray[300]}`
+              : `2px solid ${theme.palette.surface.grayMain}`,
         },
         '& .MuiAvatar-root:not(:first-of-type)': { marginLeft: '-8px' },
       })}

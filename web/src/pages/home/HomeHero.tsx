@@ -1,4 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -6,6 +7,29 @@ import { routes } from '../../router/routes.js';
 import { directRouteFor } from '../../search/directRouteFor.js';
 
 import { HeroSearch } from './HeroSearch.js';
+
+const heroAccentWordSx = (theme: Theme) => ({
+  position: 'relative',
+  display: 'inline-block',
+  isolation: 'isolate',
+  zIndex: 0,
+  color:
+    theme.palette.mode === 'light'
+      ? theme.palette.text.primary
+      : theme.palette.text.accent,
+  '&::after': {
+    content: '""',
+    display: theme.palette.mode === 'light' ? 'block' : 'none',
+    position: 'absolute',
+    left: '-0.06em',
+    right: '-0.06em',
+    bottom: '0.1em',
+    height: '0.34em',
+    borderRadius: '0.08em',
+    backgroundColor: theme.palette.surface.primaryMain,
+    zIndex: -1,
+  },
+});
 
 /**
  * Home page hero — headline, tagline and a large global search input.
@@ -34,18 +58,12 @@ export function HomeHero() {
               fontSize: { xs: 32, sm: 40, md: 48 },
             }}
           >
-            <Box
-              component="span"
-              sx={(theme) => ({ color: theme.palette.text.accent })}
-            >
+            <Box component="span" sx={heroAccentWordSx}>
               Soroban
             </Box>{' '}
             - first.
             <br />
-            <Box
-              component="span"
-              sx={(theme) => ({ color: theme.palette.text.accent })}
-            >
+            <Box component="span" sx={heroAccentWordSx}>
               Stellar
             </Box>{' '}
             - complete.

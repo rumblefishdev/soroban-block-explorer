@@ -1,7 +1,7 @@
 import {
   createContext,
+  useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -51,17 +51,23 @@ export function ExplorerThemeProvider({
   defaultMode = 'dark',
   children,
 }: ExplorerThemeProviderProps) {
-  const [mode, setMode] = useState<PaletteMode>(() =>
+  const [mode, setModeState] = useState<PaletteMode>(() =>
     readInitialMode(defaultMode)
   );
 
-  useEffect(() => {
+  // Persist on the action, not on the state. A mount-time write would stamp
+  // the product default into storage for visitors who never touched the
+  // toggle, and `readInitialMode` treats a stored value as "the user chose
+  // this" — which would then pin them to today's default forever.
+  const setMode = useCallback((next: PaletteMode) => {
+    setModeState(next);
     try {
-      window.localStorage.setItem(STORAGE_KEY, mode);
+      window.localStorage.setItem(STORAGE_KEY, next);
     } catch {
-      // ignore
+      // localStorage blocked (private mode, etc.) — the choice just won't
+      // survive a reload.
     }
-  }, [mode]);
+  }, []);
 
   const theme = useMemo(() => createExplorerTheme(mode), [mode]);
 
@@ -71,7 +77,7 @@ export function ExplorerThemeProvider({
       setMode,
       toggleMode: () => setMode(mode === 'light' ? 'dark' : 'light'),
     }),
-    [mode]
+    [mode, setMode]
   );
 
   return (

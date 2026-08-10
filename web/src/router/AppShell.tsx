@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
+import { useTheme } from '@mui/material/styles';
 
 import {
   TopNav,
@@ -55,6 +56,13 @@ function HomeLogo({
   external?: boolean;
 }) {
   const isSoroban = variant === 'soroban';
+  // Both lockups are raster artwork drawn for ONE background: the default
+  // files carry light glyphs for the dark surface, the `-light` files are the
+  // same artwork remapped to ink for the light surface. Picking by brand
+  // variant alone left the nav "Scan" wordmark and the whole footer lockup
+  // white-on-white.
+  const base = isSoroban ? '/soroban-logo' : '/rumblefish-logo';
+  const suffix = useTheme().palette.mode === 'light' ? '-light' : '';
   return (
     <Box
       component="a"
@@ -68,7 +76,7 @@ function HomeLogo({
     >
       <Box
         component="img"
-        src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.webp'}
+        src={`${base}${suffix}.webp`}
         alt={isSoroban ? 'Soroban' : 'Rumblefish'}
         sx={{ height, width: 'auto', display: 'block' }}
       />

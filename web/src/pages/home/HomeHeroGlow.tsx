@@ -30,7 +30,7 @@ export function HomeHeroGlow() {
           height: 110,
           borderRadius: 999,
           backgroundColor: theme.palette.surface.primaryMain,
-          opacity: 0.28,
+          opacity: theme.palette.mode === 'light' ? 0.14 : 0.28,
           filter: 'blur(75px)',
         })}
       />
@@ -44,7 +44,7 @@ export function HomeHeroGlow() {
           height: 139,
           borderRadius: 999,
           backgroundColor: theme.palette.surface.primaryMain,
-          opacity: 0.28,
+          opacity: theme.palette.mode === 'light' ? 0.14 : 0.28,
           filter: 'blur(75px)',
         })}
       />

@@ -127,7 +127,14 @@ export function ChainOverview() {
           maxWidth: 1064,
           borderRadius: `${theme.shape.radius.lg}px`,
           border: `1px solid ${theme.palette.stroke.default}`,
-          backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),
+          backgroundColor:
+            theme.palette.mode === 'light'
+              ? theme.palette.surface.backgroundAlt
+              : alpha(theme.palette.surface.grayMainAlt, 0.8),
+          boxShadow:
+            theme.palette.mode === 'light'
+              ? '0 10px 30px rgba(26, 26, 26, 0.06)'
+              : 'none',
           backdropFilter: 'blur(6px)',
           overflow: 'hidden',
         })}
