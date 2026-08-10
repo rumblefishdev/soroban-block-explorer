@@ -171,8 +171,11 @@ export default function ContractDetailPage() {
               aria-label="Contract sections"
             />
           </Box>
+          {/* Keyed by contract AND tab: a crash on one contract must not
+              survive navigation to another (the boundary would otherwise
+              keep showing its error state on healthy data). */}
           <SectionErrorBoundary
-            key={effectiveKey}
+            key={`${contractId}-${effectiveKey}`}
             sectionName={`contract-${effectiveKey}`}
           >
             {effectiveKey === 'interface' && (
