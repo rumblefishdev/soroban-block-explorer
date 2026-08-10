@@ -135,6 +135,21 @@ export function ContractCode({
 
   const failedCode = isError ? errorCode(error) : undefined;
 
+  /**
+   * Evidence that Rust cannot be produced for THIS contract: either the
+   * call died (`autoWatReason`) or it succeeded but carried WAT instead
+   * (`rust_error`). Drives the disabled Rust toggle — a user who picks WAT
+   * on a healthy contract keeps Rust available, because `rust_error` is
+   * null there.
+   */
+  const rustUnavailable =
+    autoWatReason ??
+    (data?.representation === 'wat' ? data.rust_error ?? null : null);
+
+  /** The toggle reflects what is on screen, not what was requested — those
+   *  differ when the API answers a Rust request with the WAT fallback. */
+  const shown = data?.representation ?? format;
+
   // Ladder step 3: a dead Rust call degrades to WAT automatically. Only for
   // `decompile_failed` — network/API errors would fail on WAT too, so they
   // stay in the error state instead of doubling the noise.
@@ -155,7 +170,7 @@ export function ContractCode({
       <ToggleButtonGroup
         exclusive
         size="small"
-        value={format}
+        value={shown}
         onChange={(_e, next: 'rust' | 'wat' | null) => {
           if (next != null) {
             setAutoWatReason(null);
@@ -165,7 +180,13 @@ export function ContractCode({
         aria-label="Source representation"
         sx={{ '& .MuiToggleButton-root': { textTransform: 'none' } }}
       >
-        <ToggleButton value="rust">Rust</ToggleButton>
+        {/* Disabled when this contract has no Rust representation at all —
+            better a dead option than a Rust tab quietly showing WAT. The
+            reason lives on the "WAT only" chip, which stays hoverable
+            (a disabled button swallows mouse events). */}
+        <ToggleButton value="rust" disabled={rustUnavailable != null}>
+          Rust
+        </ToggleButton>
         <ToggleButton value="wat">WAT</ToggleButton>
       </ToggleButtonGroup>
       <Chip size="sm" color="warning" label="Experimental" />
@@ -179,17 +200,15 @@ export function ContractCode({
       {data?.sdk_version != null && (
         <Chip size="sm" color="neutral" label={`SDK ${data.sdk_version}`} />
       )}
-      {(autoWatReason != null ||
-        (format === 'rust' && data?.representation === 'wat')) && (
-        // Rust was requested but could not be produced — either emission
-        // failed inside a successful call (rust_error) or the call itself
-        // died and the UI re-requested WAT (autoWatReason). Same chip, the
-        // decompiler's reason in the tooltip.
+      {rustUnavailable != null && (
+        // Rust could not be produced for this contract — emission failed
+        // inside a successful call, or the call itself died and the UI
+        // re-requested WAT. Carries the decompiler's own reason.
         <Chip
           size="sm"
           color="warning"
           label="WAT only"
-          title={autoWatReason ?? data?.rust_error ?? undefined}
+          title={rustUnavailable}
         />
       )}
       <Box sx={{ flexGrow: 1 }} />

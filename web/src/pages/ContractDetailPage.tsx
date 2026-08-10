@@ -179,7 +179,10 @@ export default function ContractDetailPage() {
               <ContractInterface contractId={contractId} />
             )}
             {effectiveKey === 'code' && contract.data?.wasm_hash != null && (
+              // Keyed by contract: navigating between contracts must not
+              // carry over the "Rust unavailable" state of the previous one.
               <ContractCode
+                key={contractId}
                 contractId={contractId}
                 wasmHash={contract.data.wasm_hash}
               />
