@@ -17,6 +17,7 @@ export { useNftDetail } from './useNftDetail.js';
 export { useNftTransfers } from './useNftTransfers.js';
 export { useContractsList } from './useContractsList.js';
 export { useContractDetail } from './useContractDetail.js';
+export { useContractDecompiled } from './useContractDecompiled.js';
 export { useContractInterface } from './useContractInterface.js';
 export { useContractInvocations } from './useContractInvocations.js';
 export { useContractEvents } from './useContractEvents.js';
