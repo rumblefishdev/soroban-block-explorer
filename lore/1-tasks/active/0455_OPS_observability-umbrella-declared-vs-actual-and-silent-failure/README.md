@@ -150,14 +150,14 @@ already produced does not change that.
 Each row instead takes the cheapest check that sits where it can be acted on,
 and they are deliberately different mechanisms:
 
-| Instance | Check                                                                                                                             |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| [[0312]] | A confirmation step at deploy. `make deploy-production` is `--all`, so an undeployed delta ships with the next deploy of anything |
-| [[0406]] | **Done 2026-08-06** — CI provisions CH from compose, runs both gates, sabotage-verified red; 0406 archived                        |
-| [[0400]] | A one-off reconciliation of four enumerated items; whether schema changes route through the repo is a separate question           |
-| [[0434]] | A unit test asserting the match arms cover the crate's enum                                                                       |
-| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                                  |
-| [[0454]] | Covered by an `infra/` test asserting each filter string appears in `crates/` — one check for the whole class                     |
+| Instance | Check                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [[0312]] | **Done 2026-08-10** — confirmation step at deploy shipped, parked delta deployed, prod diff clean; 0312 archived        |
+| [[0406]] | **Done 2026-08-06** — CI provisions CH from compose, runs both gates, sabotage-verified red; 0406 archived              |
+| [[0400]] | A one-off reconciliation of four enumerated items; whether schema changes route through the repo is a separate question |
+| [[0434]] | A unit test asserting the match arms cover the crate's enum                                                             |
+| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                        |
+| [[0454]] | Covered by an `infra/` test asserting each filter string appears in `crates/` — one check for the whole class           |
 
 ## Defect 2 — health measured by success
 

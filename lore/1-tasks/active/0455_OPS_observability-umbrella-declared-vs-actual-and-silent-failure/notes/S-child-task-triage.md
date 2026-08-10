@@ -18,7 +18,7 @@ All sixteen were still `backlog` at the time of this triage.
 | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [[0454]] | 1 + 2  | The anchor. Alarm filter vs emitted strings, and lag emitted only on success                                                                                 |
 | [[0400]] | 1      | `init.sql` vs prod schema. Carries a second comparison: architecture docs still describe a retired Postgres world                                            |
-| [[0312]] | 1      | CDK vs deployed. **The comparator already exists** — `make diff-production` reports it. Nothing schedules it                                                 |
+| [[0312]] | 1      | **Closed 2026-08-10** — parked delta deployed, prod diff clean; the answer was a confirmation step at deploy, not a scheduler                                |
 | [[0406]] | 1      | **Closed 2026-08-06** — CI rust job provisions CH from compose + init.sql sidecar, runs both gates, red-verified by sabotage. First real Actions run pending |
 | [[0434]] | 1      | Protocol tables vs the chain. Different mechanism — the reference is an external crate, not a repo file                                                      |
 | [[0428]] | 2      | Refreshable MV reports rows from metadata; a failed refresh is indistinguishable from success                                                                |

@@ -130,6 +130,18 @@ Frontend **content** is separate: `deploy-production-web`
 
 ### Gotchas — read before you deploy
 
+- **A SPA build without the Turnstile site key takes production down for
+  users.** With `enableAuthLayer: true` the API rejects unauthenticated
+  requests; a bundle built without `VITE_TURNSTILE_SITE_KEY` ships an
+  un-armed SPA whose every API call answers 401 — the site renders and
+  shows no data. `build-production-web` bakes the key from
+  `envs/production.json`, but the **Nx build cache can serve a stale
+  no-key bundle** even when the env is correct. For any isolated/first
+  production web build, add `--skip-nx-cache`, and after `deploy-production-web`
+  verify from a clean browser that `/auth/session` answers 200 and data
+  renders. (This happened live; the outage looked like an API failure
+  while the defect was in the shipped bundle.)
+
 - **Every new stack MUST tag its resources** with
   `Project=soroban-block-explorer` (+ `Environment`, `ManagedBy`) via
   `cdk.Tags.of(this).add(...)` — the account is shared with
