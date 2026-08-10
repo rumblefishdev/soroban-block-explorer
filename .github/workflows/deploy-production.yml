@@ -1,40 +1,48 @@
 name: Deploy Production
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POST-LAUNCH TEMPLATE — deliberately NOT wired in.
+# Tag-driven production deploy.
 #
-#   • Trigger is `workflow_dispatch` ONLY (manual, deliberate). Do NOT add
-#     push/tag auto-triggers until the team has decided a release cadence.
-#   • Safety model:  build → `cdk diff` (prints) → MANUAL APPROVAL GATE
-#     (GitHub `production` environment: required reviewers) → `cdk deploy`.
-#   • Deploys the CHOSEN stack(s) from an input, NOT a blind `--all`. This
-#     mirrors the operational lesson that a full compute deploy ships unrelated
-#     drift (indexer/enrichment) as a side effect — always diff + pick a stack.
+#   • Release act = pushing a `production-YYYY.MM.DD-N` tag (same date-tag
+#     convention the retired staging pipeline used — see the four historical
+#     `staging-2026.04.*` tags). The tag IS the human decision; there is no
+#     separate approval gate by design (team decision 2026-08-10).
+#   • `workflow_dispatch` stays for surgical single-stack deploys.
+#   • Safety model:  build → `cdk diff` (printed into the log as the record of
+#     what changed) → `cdk deploy` → smoke tests.
+#   • Deploys the CHOSEN stack(s), NOT a blind `--all`. Tag runs deploy the
+#     standard release set (Compute + SPA content); dispatch runs deploy the
+#     `stacks` input. This mirrors the operational lesson that a full deploy
+#     ships unrelated drift as a side effect — always diff + pick a stack.
 #
-# Prerequisites before enabling (do these post-launch, deliberately):
-#   1. Create GitHub environment `production` with REQUIRED REVIEWERS — that is
-#      the human gate between the printed diff and the actual deploy.
-#   2. Secrets: AWS_DEPLOY_ROLE_ARN (prod deploy role), AWS_ACCOUNT_ID.
-#   3. Region is eu-central-1 (where prod lives). CloudFront ACM certs remain
+# Prerequisites (inert until these exist):
+#   1. Secrets: AWS_DEPLOY_ROLE_ARN (prod deploy role, OIDC), AWS_ACCOUNT_ID.
+#   2. Region is eu-central-1 (where prod lives). CloudFront ACM certs remain
 #      us-east-1 internally, but the stacks deploy to eu-central-1 via
 #      production.json — do not change aws-region here.
-#   4. Frontend CONTENT (SPA build → S3 sync → CloudFront invalidation) is a
-#      separate step (`make deploy-production-web`); this workflow deploys the
-#      CDK stacks, not the SPA bundle. Deploy the `Delivery` stack here, then
-#      run the web content sync separately.
+#
+# Release:
+#   git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
+  push:
+    tags:
+      - 'production-*'
   workflow_dispatch:
     inputs:
       stacks:
         description: 'Stack id(s) to deploy, space-separated. Prefer ONE stack; avoid a blind --all.'
         required: true
-        default: 'Explorer-production-ApiGateway'
+        default: 'Explorer-production-Compute'
       exclusively:
         description: 'Deploy ONLY the named stack(s), skip dependency stacks (--exclusively)'
         type: boolean
         default: true
+      deploy_web:
+        description: 'Also build + sync the SPA content (S3 + CloudFront invalidation)'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-production
@@ -44,52 +52,14 @@ permissions:
   id-token: write
   contents: read
 
-jobs:
-  diff:
-    name: Build + cdk diff (REVIEW this before approving the deploy)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        id: setup-node
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-lambda
-        run: pip3 install cargo-lambda
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: eu-central-1
-      - name: Build CDK app
-        run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
-      - name: cdk diff — what WOULD change (review before approving deploy)
-        run: |
-          cd infra && npx cdk --app "node dist/bin/production.js" \
-            diff ${{ inputs.stacks }} ${{ inputs.exclusively && '--exclusively' || '' }}
+env:
+  # Tag runs get the standard release set; dispatch runs pick their stack.
+  STACKS: ${{ inputs.stacks || 'Explorer-production-Compute' }}
 
+jobs:
   deploy:
-    name: CDK deploy (gated on manual approval)
-    needs: diff
+    name: Build + diff + deploy + smoke
     runs-on: ubuntu-latest
-    # ── The human gate: this job WAITS for a required reviewer to approve in the
-    #    GitHub UI (environment protection rule) before it runs. Configure the
-    #    `production` environment with required reviewers, or this deploys
-    #    unattended. ──
-    environment: production
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,13 +88,22 @@ jobs:
           aws-region: eu-central-1
       - name: Build CDK app
         run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
-      - name: CDK deploy (approval already granted via the environment gate)
+      - name: cdk diff — the log record of what this deploy changes
         run: |
           cd infra && npx cdk --app "node dist/bin/production.js" \
-            deploy ${{ inputs.stacks }} ${{ inputs.exclusively && '--exclusively' || '' }} \
+            diff ${{ env.STACKS }} ${{ (github.event_name == 'push' || inputs.exclusively) && '--exclusively' || '' }}
+      - name: CDK deploy
+        run: |
+          cd infra && npx cdk --app "node dist/bin/production.js" \
+            deploy ${{ env.STACKS }} ${{ (github.event_name == 'push' || inputs.exclusively) && '--exclusively' || '' }} \
             --require-approval never
         env:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+      # SPA content is part of every tag release (a release the user can't see
+      # isn't shipped); dispatch runs opt in via the deploy_web input.
+      - name: Deploy SPA content (build → S3 sync → CloudFront invalidation)
+        if: github.event_name == 'push' || inputs.deploy_web
+        run: make -C infra deploy-production-web
       - name: Smoke test — API /health (edge-lock-exempt, no secret needed)
         run: |
           API=$(aws cloudformation describe-stacks --region eu-central-1 \

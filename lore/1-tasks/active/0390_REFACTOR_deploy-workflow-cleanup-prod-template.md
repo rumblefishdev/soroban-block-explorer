@@ -1,6 +1,6 @@
 ---
 id: '0390'
-title: 'CI: retire dead staging-deploy workflow + add dispatch-only production deploy template'
+title: 'CI: retire dead staging-deploy workflow + add tag-driven production deploy'
 type: REFACTOR
 status: active
 related_adr: []
@@ -27,20 +27,34 @@ history:
       `0388_BUG_repair-tier1-soroban-contracts-name-mismatch` on develop (max id
       was 0389). Content unchanged — only id + filename moved. Earlier PR #338
       commits still reference `lore-0388` (historical, not rewritten).
+  - date: 2026-08-10
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Design change (decided while planning the 0465 release): dropped the
+      environment approval gate — pushing a `production-YYYY.MM.DD-N` tag IS
+      the human decision, same date-tag convention the staging pipeline used.
+      Workflow collapsed to one job (the two-job split only existed for the
+      gate boundary); tag runs deploy Compute + SPA content, dispatch stays
+      for surgical per-stack deploys. Also corrected the Summary: staging
+      tags WERE pushed (4× in 2026-04, before the env teardown).
 ---
 
-# CI: retire dead staging-deploy workflow + prod deploy template
+# CI: retire dead staging-deploy workflow + tag-driven prod deploy
 
 ## Summary
 
 `.github/workflows/deploy-staging.yml` targeted a **us-east-1** staging
 environment (`staging.json` / `Explorer-staging-*` / `staging.sorobanscan…` with
 basic-auth) that **no longer exists** — verified `0` `Explorer-staging-*` stacks
-in us-east-1. It was `staging-*`-tag-triggered (never pushed) → dead and
-misleading. Production actually runs in **eu-central-1** (10 `Explorer-production-*`
-stacks), deployed **manually** via `make deploy-production-*`, with no automated
-prod-deploy path. This task retires the fossil and adds a **safe, dispatch-only
-production-deploy template** — not wired in — for deliberate post-launch adoption.
+in us-east-1. It was `staging-*`-tag-triggered (last pushed 2026-04.14, before
+the env teardown) → dead and misleading. Production actually runs in
+**eu-central-1** (10 `Explorer-production-*` stacks), deployed **manually** via
+`make deploy-production-*`, with no automated prod-deploy path. This task
+retires the fossil and adds a **tag-driven production deploy**: pushing a
+`production-YYYY.MM.DD-N` tag (the convention the staging pipeline established)
+runs diff → deploy (Compute + SPA) → smoke. The tag is the human decision —
+no separate approval gate.
 
 ## Context
 
@@ -59,29 +73,26 @@ production-deploy template** — not wired in — for deliberate post-launch ado
   and its config (`infra/src/bin/staging.ts`, `infra/envs/staging.json`) were
   **already gone**, so the workflow was doubly dead — a dead trigger and a
   missing deploy target (`node dist/bin/staging.js`).
-- **Added** `deploy-production.yml` as a POST-LAUNCH TEMPLATE:
-  `workflow_dispatch` only → build → `cdk diff` (prints) → **manual approval gate**
-  (`production` environment, required reviewers) → deploy a **chosen stack** (input,
-  `--exclusively` default, not `--all`) → smoke (`/health` + public frontend).
+- **Added** `deploy-production.yml`, tag-driven (2026-08-10 revision):
+  `push: tags: production-*` (standard release set: Compute + SPA content sync
+  via `make -C infra deploy-production-web`) OR `workflow_dispatch` (surgical:
+  `stacks` input, `deploy_web` opt-in) → build → `cdk diff` (printed as the log
+  record) → `cdk deploy --exclusively` → smoke (`/health` + public frontend).
+  Single job — the earlier two-job split existed only to host an environment
+  approval gate, dropped because **the tag push is the approval**.
 
-### Open — post-launch enablement (deliberate, do NOT do pre-launch)
+### Open — enablement
 
-- Create the GitHub `production` environment with **required reviewers** (the
-  human gate between diff and deploy).
-- Provision secrets: `AWS_DEPLOY_ROLE_ARN`, `AWS_ACCOUNT_ID`.
-- Decide release cadence (drives whether auto-triggers are ever added — default:
-  keep dispatch-only).
-- Frontend SPA content sync stays a separate step (`make deploy-production-web`).
+- Provision secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC deploy role), `AWS_ACCOUNT_ID`.
+  Workflow is inert until they exist.
 
 ## Acceptance Criteria
 
 - [x] Dead `deploy-staging.yml` removed; us-east-1 staging confirmed absent (0 stacks).
-- [x] `deploy-production.yml` added — dispatch-only, diff→approval-gate→per-stack
-      deploy→smoke; header documents prerequisites.
-- [x] Template is inert (won't run until the `production` environment + secrets
-      exist and someone dispatches it).
-- [ ] Post-launch: `production` environment + reviewers + secrets provisioned;
-      first deliberate deploy via the workflow validated.
+- [x] `deploy-production.yml` added — tag-driven (`production-*`) + dispatch,
+      diff→per-stack deploy→SPA sync→smoke; header documents prerequisites.
+- [ ] Secrets provisioned; first release tag deployed via the workflow
+      validated end-to-end.
 - [ ] **Docs updated** — N/A (CI tooling; does not change the architecture's shape).
 - [ ] **API types regenerated** — N/A (no API surface change).
 
