@@ -20,8 +20,8 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     ContractDetailResponse, ContractIdCursor, ContractInterfaceMetadata, ContractListItem,
-    ContractStats, ContractsListParams, DecompiledParams, DecompiledResponse, EventCursor,
-    EventItem, InterfaceResponse, InvocationItem,
+    ContractStats, ContractsListParams, DecompileDiagnostic, DecompiledParams, DecompiledResponse,
+    EventCursor, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
     self, ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
@@ -610,6 +610,16 @@ pub async fn get_decompiled(
         todo_holes: decompiled.todo_holes,
         unknown_vars: decompiled.unknown_vars,
         rust_error: decompiled.rust_error,
+        diagnostics: decompiled
+            .diagnostics
+            .into_iter()
+            .map(|d| DecompileDiagnostic {
+                category: d.category,
+                severity: d.severity,
+                message: d.message,
+                function_index: d.function_index,
+            })
+            .collect(),
     })
     .into_response();
     cache_control::attach(&mut resp, cache_control::LONG);

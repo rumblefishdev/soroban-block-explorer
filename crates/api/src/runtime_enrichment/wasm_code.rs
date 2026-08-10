@@ -170,6 +170,22 @@ impl WasmCodeFetcher {
     }
 }
 
+/// One Soroban-compliance diagnostic, flattened for the wire.
+///
+/// `category` and `severity` are rendered from soroban-ret's own enums —
+/// both are `#[non_exhaustive]`, so a future release can add variants and
+/// we degrade to their `Debug` name rather than failing to compile.
+#[derive(Debug)]
+pub struct Diagnostic {
+    /// `floating_point` | `call_indirect` | `non_rust_sdk` | …
+    pub category: String,
+    /// `warning` | `info`.
+    pub severity: String,
+    pub message: String,
+    /// Index of the offending function, when the check is function-scoped.
+    pub function_index: Option<u32>,
+}
+
 /// Result of one decompilation run, ready to serialize at the handler.
 #[derive(Debug)]
 pub struct Decompiled {
@@ -189,6 +205,10 @@ pub struct Decompiled {
     /// Set when Rust was requested but emission failed and `source`
     /// carries the WAT fallback instead.
     pub rust_error: Option<String>,
+    /// Soroban-compliance diagnostics for this binary — constructs the
+    /// decompiler does not model well (floats, reference types, non-Rust
+    /// SDK…). Empty on the WAT-only paths, which skip the Soroban stage.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Bounds how many Rust decompilations may run at once.
@@ -262,12 +282,14 @@ pub fn decompile_blocking(wasm: &[u8], want_wat: bool) -> Result<Decompiled, Str
             todo_holes: None,
             unknown_vars: None,
             rust_error: None,
+            diagnostics: Vec::new(),
         });
     }
     let options = soroban_ret::DecompileOptions::default();
     match soroban_ret::decompile_with_options(wasm, &options) {
         Ok(result) => {
             let counts = MarkerCounts::of(&result.source);
+            let diagnostics = map_diagnostics(&result.validation);
             Ok(Decompiled {
                 representation: "rust",
                 source: result.source,
@@ -276,6 +298,7 @@ pub fn decompile_blocking(wasm: &[u8], want_wat: bool) -> Result<Decompiled, Str
                 todo_holes: Some(counts.todo_holes),
                 unknown_vars: Some(counts.unknown_vars),
                 rust_error: None,
+                diagnostics,
             })
         }
         Err(rust_err) => {
@@ -289,9 +312,42 @@ pub fn decompile_blocking(wasm: &[u8], want_wat: bool) -> Result<Decompiled, Str
                 todo_holes: None,
                 unknown_vars: None,
                 rust_error: Some(rust_err.to_string()),
+                diagnostics: Vec::new(),
             })
         }
     }
+}
+
+/// Flatten soroban-ret's validation report for the wire.
+///
+/// Both enums are `#[non_exhaustive]`; the wildcard arms fall back to the
+/// `Debug` name so a new variant in a later release surfaces as an unknown
+/// category rather than breaking the build.
+fn map_diagnostics(report: &soroban_ret::ValidationReport) -> Vec<Diagnostic> {
+    use soroban_ret::{DiagnosticCategory as C, DiagnosticSeverity as S};
+    report
+        .diagnostics
+        .iter()
+        .map(|d| Diagnostic {
+            category: match d.category {
+                C::FloatingPoint => "floating_point".to_owned(),
+                C::ReferenceTypes => "reference_types".to_owned(),
+                C::MultiValue => "multi_value".to_owned(),
+                C::MultiMemory => "multi_memory".to_owned(),
+                C::CallIndirect => "call_indirect".to_owned(),
+                C::UnknownInstruction => "unknown_instruction".to_owned(),
+                C::NonRustSdk => "non_rust_sdk".to_owned(),
+                other => format!("{other:?}").to_lowercase(),
+            },
+            severity: match d.severity {
+                S::Warning => "warning".to_owned(),
+                S::Info => "info".to_owned(),
+                other => format!("{other:?}").to_lowercase(),
+            },
+            message: d.message.clone(),
+            function_index: d.function_index,
+        })
+        .collect()
 }
 
 /// Completeness markers counted over emitted Rust. Matches the full-mainnet
