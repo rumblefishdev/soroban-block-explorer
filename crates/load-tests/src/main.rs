@@ -1,17 +1,24 @@
 //! HTTP load-test harness for the Soroban Block Explorer API (task 0338, Step 4).
 //!
-//! Spawns `--vus` concurrent virtual users that loop through every endpoint
-//! with NO think-time for `--duration`. Each request carries a unique
-//! `X-Request-Id` of the form `<endpoint-code>-<hex>` so the server stamps
-//! `system.query_log.log_comment` with it (B2 correlation): the endpoint code
-//! is the first segment, so query_log can be grouped per endpoint with no
-//! client-side join, and the full id still joins back per request.
+//! Two drivers, picked by which flag you pass:
 //!
-//! This is the BASELINE diagnostic run — it is EXPECTED to shed load (429 /
-//! 5xx; CH "Code 202 Too many simultaneous queries" surfaces as an HTTP 5xx)
-//! once a backend ceiling is hit. The value is the knee point + which
-//! endpoints are hottest / most expensive (joined with read_rows/read_bytes
-//! from query_log), which drives the caching/indexing work. See README.md.
+//! - `--rps` — **open model** (task 0357). Poisson arrivals on a schedule fixed
+//!   in advance, spawn-and-forget. The rate is an INPUT, so this is the mode
+//!   that expresses an AC4 "N req/month" target (`rps = N / 2_592_000`), and it
+//!   does not suffer coordinated omission: when the backend slows, the client
+//!   keeps arriving on schedule instead of quietly backing off.
+//! - `--vus` — **closed model**. N users sweeping every endpoint with no
+//!   think-time. The rate is an OUTPUT (whatever the server allows), so it
+//!   cannot express a req/month target. Saturation / knee-finding only: it is
+//!   EXPECTED to shed load (429 / 5xx; CH "Code 202 Too many simultaneous
+//!   queries" surfaces as an HTTP 5xx) once a backend ceiling is hit.
+//!
+//! Both drivers hit the same endpoint catalogue and emit the same rows. Each
+//! request carries a unique `X-Request-Id` of the form `<endpoint-code>-<hex>`
+//! so the server stamps `system.query_log.log_comment` with it (B2
+//! correlation): the endpoint code is the first segment, so query_log can be
+//! grouped per endpoint with no client-side join, and the full id still joins
+//! back per request. See README.md.
 //!
 //! Outputs (in `--out-dir`):
 //!   - `client.csv`         one row per request (for the per-request query_log join)
@@ -47,9 +54,21 @@ struct Args {
     /// Fallback `x-edge-secret` — only needed if Cloudflare does not inject it.
     #[arg(long, env = "EDGE_SECRET", default_value = "", hide_env_values = true)]
     edge_secret: String,
-    /// Concurrent virtual users (held alive for the whole window).
+    /// Concurrent virtual users (held alive for the whole window). Closed model:
+    /// the rate is an OUTPUT (whatever the server allows), so this cannot express
+    /// a req/month target — use `--rps` for that. Kept for saturation runs.
     #[arg(long, env = "VUS", default_value_t = 1000)]
     vus: usize,
+    /// Open-model arrival rate (req/s), Poisson. Overrides `--vus`.
+    ///
+    /// This is the mode that expresses an "N requests/month" target:
+    /// `rps = N / 2_592_000` (30d). 1M/mo = 0.386, 10M/mo = 3.858, 50M/mo = 19.29.
+    ///
+    /// Arrivals are spawn-and-forget on a schedule fixed in advance, so the offered
+    /// load does NOT back off when the server slows — that back-off is coordinated
+    /// omission, and it is why a closed-model p95 flatters a struggling backend.
+    #[arg(long, env = "RPS")]
+    rps: Option<f64>,
     /// Test duration, e.g. `1h`, `15m`, `30s`.
     #[arg(long, env = "DURATION", default_value = "1h")]
     duration: String,
@@ -291,6 +310,12 @@ fn endpoints() -> Vec<Ep> {
             build: |_| Some(format!("/search?q={}", rand_prefix())),
         },
     ]
+}
+
+/// Exp(`rate`) inter-arrival gap, seconds — the Poisson process a population of
+/// independent users produces. Mean = `1/rate`. `max()` guards `ln(0) = -inf`.
+fn arrival_gap(rate: f64) -> f64 {
+    -fastrand::f64().max(f64::MIN_POSITIVE).ln() / rate
 }
 
 fn now_ms() -> u128 {
@@ -548,6 +573,62 @@ fn write_summary(aggs: &HashMap<&'static str, EpAgg>, out_dir: &str) {
     eprintln!("\n{s}\nwrote {path}");
 }
 
+/// Issue one request against `ep` and return its sample. `None` when the
+/// endpoint's harvest pool is empty (nothing to ask for). Shared by both
+/// drivers; the caller owns the counters + the writer channel, so no `&Sender`
+/// is ever held across an await (that would make the future `!Send`).
+async fn do_request(
+    client: &reqwest::Client,
+    base: &str,
+    ep: &Ep,
+    harvest: &Harvest,
+    round: u64,
+    vu: usize,
+) -> Option<Sample> {
+    let rel = (ep.build)(harvest)?;
+    let url = format!("{base}{rel}");
+    let rid = request_id(ep.code);
+    let t0 = Instant::now();
+    let (status, ttfb_ms, dur_ms) = match client.get(&url).header("x-request-id", &rid).send().await
+    {
+        Ok(resp) => {
+            let ttfb = t0.elapsed().as_millis() as u64;
+            let st = resp.status().as_u16();
+            // Drain the body → total time + connection reuse. A body-read
+            // error (e.g. the 35s timeout fires mid-body) must NOT be logged
+            // as a successful `st` — fold it into status 0 ("conn") so a hung
+            // response surfaces instead of hiding as a slow 200.
+            let st = if resp.bytes().await.is_ok() { st } else { 0 };
+            (st, ttfb, t0.elapsed().as_millis() as u64)
+        }
+        Err(_) => {
+            let e = t0.elapsed().as_millis() as u64;
+            (0u16, e, e)
+        }
+    };
+    Some(Sample {
+        ts_ms: now_ms(),
+        round,
+        vu,
+        rid,
+        code: ep.code,
+        status,
+        class: err_class(status),
+        dur_ms,
+        ttfb_ms,
+        url,
+    })
+}
+
+/// Book a finished sample: counters + hand to the writer thread.
+fn record(s: Sample, tx: &std::sync::mpsc::Sender<Sample>, total: &AtomicU64, errors: &AtomicU64) {
+    total.fetch_add(1, Ordering::Relaxed);
+    if s.class != "ok" {
+        errors.fetch_add(1, Ordering::Relaxed);
+    }
+    tx.send(s).ok();
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -580,6 +661,8 @@ async fn main() {
         .default_headers(headers)
         // reqwest sends NO User-Agent by default; AWS WAF CommonRuleSet's
         // `NoUserAgent_HEADER` rule then 403s every request. Set one explicitly.
+        // Task 0302 dropped that WebACL, but the header is still required:
+        // Cloudflare's managed ruleset has an equivalent no-UA rule.
         .user_agent(concat!("soroban-load-tests/", env!("CARGO_PKG_VERSION")))
         .pool_max_idle_per_host(args.vus)
         // Above the CH 30s per-query cap so a hung request surfaces, not blocks forever.
@@ -654,74 +737,84 @@ async fn main() {
         }
     });
 
-    eprintln!(
-        "[run] {} VUs, no think-time, until {:?} from now",
-        args.vus, dur
-    );
     let eps = Arc::new(endpoints());
-    let mut workers = Vec::with_capacity(args.vus);
-    for vu in 0..args.vus {
-        let (client, harvest, eps, tx, base, total, errors) = (
-            client.clone(),
-            harvest.clone(),
-            eps.clone(),
-            tx.clone(),
-            args.base_url.clone(),
-            total.clone(),
-            errors.clone(),
-        );
-        workers.push(tokio::spawn(async move {
-            let mut round = 0u64;
-            while Instant::now() < deadline {
-                for ep in eps.iter() {
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    let Some(rel) = (ep.build)(&harvest) else {
-                        continue;
-                    };
-                    let url = format!("{base}{rel}");
-                    let rid = request_id(ep.code);
-                    let t0 = Instant::now();
-                    let (status, ttfb_ms, dur_ms) =
-                        match client.get(&url).header("x-request-id", &rid).send().await {
-                            Ok(resp) => {
-                                let ttfb = t0.elapsed().as_millis() as u64;
-                                let st = resp.status().as_u16();
-                                // Drain the body → total time + connection reuse. A body-read
-                                // error (e.g. the 35s timeout fires mid-body) must NOT be logged
-                                // as a successful `st` — fold it into status 0 ("conn") so a hung
-                                // response surfaces instead of hiding as a slow 200.
-                                let st = if resp.bytes().await.is_ok() { st } else { 0 };
-                                (st, ttfb, t0.elapsed().as_millis() as u64)
-                            }
-                            Err(_) => {
-                                let e = t0.elapsed().as_millis() as u64;
-                                (0u16, e, e)
-                            }
-                        };
-                    let class = err_class(status);
-                    total.fetch_add(1, Ordering::Relaxed);
-                    if class != "ok" {
-                        errors.fetch_add(1, Ordering::Relaxed);
-                    }
-                    tx.send(Sample {
-                        ts_ms: now_ms(),
-                        round,
-                        vu,
-                        rid,
-                        code: ep.code,
-                        status,
-                        class,
-                        dur_ms,
-                        ttfb_ms,
-                        url,
-                    })
-                    .ok();
+    let mut workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    match args.rps {
+        // Open model — arrivals on a Poisson schedule fixed in advance, independent
+        // of how fast the server answers. The only mode that can express a
+        // req/month target, and the only one free of coordinated omission.
+        // `--vus` is ignored here (it still sizes the connection pool).
+        Some(rps) => {
+            eprintln!(
+                "[run] open model: {rps} rps Poisson (~{:.1}M req/month), until {:?} from now",
+                rps * 2_592_000.0 / 1e6,
+                dur
+            );
+            let mut next = Instant::now();
+            let mut n = 0u64;
+            loop {
+                // Exp(rate) inter-arrival. `next` accumulates ABSOLUTELY — a late tick
+                // must not push the following arrival out, or the offered load would
+                // quietly back off exactly when the backend is struggling.
+                next += Duration::from_secs_f64(arrival_gap(rps));
+                if next >= deadline {
+                    break;
                 }
-                round += 1;
+                tokio::time::sleep_until(next.into()).await;
+                let (client, harvest, eps, tx, base, total, errors) = (
+                    client.clone(),
+                    harvest.clone(),
+                    eps.clone(),
+                    tx.clone(),
+                    args.base_url.clone(),
+                    total.clone(),
+                    errors.clone(),
+                );
+                let idx = fastrand::usize(..eps.len());
+                // Spawn-and-forget: a slow response must never delay the next arrival.
+                workers.push(tokio::spawn(async move {
+                    if let Some(s) = do_request(&client, &base, &eps[idx], &harvest, n, 0).await {
+                        record(s, &tx, &total, &errors);
+                    }
+                }));
+                n += 1;
             }
-        }));
+        }
+        // Closed model — `--vus` users sweeping every endpoint with no think-time.
+        // Saturation / knee-finding only: the rate is whatever the server allows.
+        None => {
+            eprintln!(
+                "[run] closed model: {} VUs, no think-time, until {:?} from now",
+                args.vus, dur
+            );
+            for vu in 0..args.vus {
+                let (client, harvest, eps, tx, base, total, errors) = (
+                    client.clone(),
+                    harvest.clone(),
+                    eps.clone(),
+                    tx.clone(),
+                    args.base_url.clone(),
+                    total.clone(),
+                    errors.clone(),
+                );
+                workers.push(tokio::spawn(async move {
+                    let mut round = 0u64;
+                    while Instant::now() < deadline {
+                        for ep in eps.iter() {
+                            if Instant::now() >= deadline {
+                                break;
+                            }
+                            if let Some(s) =
+                                do_request(&client, &base, ep, &harvest, round, vu).await
+                            {
+                                record(s, &tx, &total, &errors);
+                            }
+                        }
+                        round += 1;
+                    }
+                }));
+            }
+        }
     }
     drop(tx); // workers hold clones; this lets the writer thread finish once they exit
 
@@ -746,4 +839,26 @@ async fn main() {
         fmt_utc(run_start),
         fmt_utc(run_end + 90),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::arrival_gap;
+
+    /// The whole open model rests on this one line: a dropped `-` or a `* rate`
+    /// still produces plausible-looking gaps, but silently runs the wrong load.
+    #[test]
+    fn arrival_gap_mean_is_one_over_rate() {
+        for rate in [0.386_f64, 3.858, 19.29] {
+            let n = 200_000;
+            let mean = (0..n).map(|_| arrival_gap(rate)).sum::<f64>() / f64::from(n);
+            let want = 1.0 / rate;
+            // Exp has sd == mean, so the sample mean's sd is mean/sqrt(n) ≈ 0.22%;
+            // 2% is ~9 sigma — tight enough to catch real bugs, never flaky.
+            assert!(
+                (mean - want).abs() < want * 0.02,
+                "rate {rate}: mean gap {mean} != ~{want}"
+            );
+        }
+    }
 }

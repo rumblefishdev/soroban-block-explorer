@@ -28,6 +28,25 @@ history:
       Renumbered 0357 → 0360. Id 0357 was triple-claimed on 2026-07-06; PERF
       launch-readpath task retains 0357 (already on origin/develop). This task
       had no inbound references. Was still untracked when renumbered.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise confirmed, but scope it precisely — this is an *integration*
+      gap, not a "no tests" gap.** Measured 2026-07-22:
+      `crates/api/tests/` does not exist, so there are **zero** end-to-end tests
+      exercising a handler against a real ClickHouse. But **38 files under
+      `crates/api/src/` carry `#[cfg(test)]` blocks**, several with ten or more
+      test functions (`liquidity_pools/handlers.rs`, `main.rs`, `auth/mod.rs`).
+      Unit coverage is not the problem.
+      I first reported this as "zero API tests" on the strength of one
+      `ls crates/api/tests/`. That check could not distinguish "no tests" from
+      "tests somewhere else", and the difference changes what this task is worth.
+      Recording it because the same shortcut would mis-scope the work.
+      Sibling crates already show the pattern to copy: `crates/db-clickhouse/tests/`
+      has five e2e files and `crates/xdr-parser/tests/` has eight, including
+      real-corpus ones. Whatever fixture mechanism those use is the starting
+      point, not a new invention.
 ---
 
 # Rebuild API integration tests on ClickHouse fixtures

@@ -354,6 +354,34 @@ mod tests {
         }
     }
 
+    /// Failed classic tx (task 0352 / issue #364 fixture `7af6d0ed…`, ledger
+    /// 63687496): the per-op result codes must survive to the DTO —
+    /// `BEGIN_SPONSORING_FUTURE_RESERVES` succeeded, `CREATE_ACCOUNT` failed
+    /// with `LowReserve`, the third op was rejected op-level (`OpNoAccount`).
+    #[tokio::test]
+    #[ignore = "requires network access to aws-public-blockchain"]
+    async fn e3_failed_tx_ops_carry_result_codes() {
+        use super::extractors::extract_e3_heavy;
+
+        let fetcher = StellarArchiveFetcher::new(unsigned_client().await);
+        let meta = fetcher.fetch_ledger(63_687_496).await.unwrap();
+
+        let tx_hash = "7af6d0edad166f2ec276fc75e13d0613c70d9476c164db943ce64e183a44f6c5";
+        let net_id = xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE);
+        let heavy = extract_e3_heavy(&meta, tx_hash, &net_id).expect("fixture tx in ledger");
+
+        assert_eq!(heavy.result_code.as_deref(), Some("TxFailed"));
+        let codes: Vec<_> = heavy
+            .operations
+            .iter()
+            .map(|op| op.result_code.as_deref())
+            .collect();
+        assert_eq!(
+            codes,
+            vec![Some("Success"), Some("LowReserve"), Some("OpNoAccount")]
+        );
+    }
+
     /// E3 heavy extraction should return None for an unknown tx hash.
     #[tokio::test]
     #[ignore = "requires network access to aws-public-blockchain"]

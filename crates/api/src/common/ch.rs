@@ -62,6 +62,26 @@ use serde::Deserialize;
 pub struct TxListAggregates {
     /// Distinct operation type labels (e.g. `["INVOKE_HOST_FUNCTION", "PAYMENT"]`).
     pub operation_types: Vec<String>,
+    /// Net-settled "value moved" per asset the transaction touched (task 0393),
+    /// ordered native-first (`asset_type`, then `asset_id`) so `values[0]` is XLM
+    /// when the tx moved it. Raw amounts + `decimals` — the client scales
+    /// (classic/SAC = 7).
+    pub values: Vec<TxValueMoved>,
+}
+
+/// One (asset, net-settled value) the transaction moved.
+#[derive(Debug, Clone)]
+pub struct TxValueMoved {
+    /// Asset identity accepted by the asset detail endpoint's `parse_asset_id` —
+    /// `"native"` or `"CODE-ISSUER"` (G-StrKey issuer). The frontend links to it.
+    pub asset: String,
+    /// Asset code for display (`"USDC"`); `None` for native (render as XLM).
+    pub asset_code: Option<String>,
+    /// Raw net-settled value (`max(Σ+, Σ−)` — the network-flow flow value);
+    /// scale by `decimals`. Never NULL/0 here: the query drops both.
+    pub net_settled: i128,
+    /// Display decimals — `7` for classic/SAC (all assets stored in this table).
+    pub decimals: u32,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -70,12 +90,22 @@ struct OpTypeCodesRow {
     codes: Vec<i16>,
 }
 
-/// Aggregate `operation_types` for a bounded page of `(ledger_sequence,
-/// transaction_id)` keys.
+/// Aggregate `operation_types` for a bounded page of
+/// `(ledger_sequence, transaction_id)` keys.
 ///
 /// Returns a map keyed by `transaction_id`. A transaction with no operations
 /// is simply absent (the caller treats a missing entry as the empty vec).
 /// Empty `keys` short-circuits to an empty map with no query.
+///
+/// `values` (net-settled per asset, task 0393) is NOT read here: no part of
+/// 0393 is live in production — the CH column does not exist yet ([[0419]]) —
+/// and the frontend column that consumed it was withdrawn, so the read scanned
+/// ~26M rows/page of the `asset_id`-leading `operation_asset_appearances`, plus
+/// three un-pruned dimension joins, on a POLLED endpoint for a result nobody
+/// rendered (tasks 0243/0386 were quota outages in exactly this shape). Task
+/// 0411 owns reinstating it, together with the `(ledger,tx)` companion from
+/// 0417 that makes the read a seek instead of a scan. `TxListAggregates::values`
+/// stays in the response shape and serialises empty until then.
 ///
 /// Non-correlated by construction (see module docs) — CH-26-safe.
 pub async fn fetch_tx_list_aggregates(
@@ -121,8 +151,8 @@ pub async fn fetch_tx_list_aggregates(
          WHERE {key_filter} \
          GROUP BY oa.transaction_id"
     );
-    let op_rows = client.query(&op_sql).fetch_all::<OpTypeCodesRow>().await?;
 
+    let op_rows = client.query(&op_sql).fetch_all::<OpTypeCodesRow>().await?;
     let mut map: HashMap<i64, TxListAggregates> = HashMap::with_capacity(keys.len());
     for row in op_rows {
         map.entry(row.transaction_id).or_default().operation_types =

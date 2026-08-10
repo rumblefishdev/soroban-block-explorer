@@ -17,6 +17,25 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Scope extended: apply region-var + caching + tag-gating improvements from 0110 (staging pilot).'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Narrowed — 0390 covers the core, but not all of it. Verified 2026-07-22.**
+      0390 already wrote `deploy-production.yml`: dispatch-only, `cdk diff` →
+      approval gate → per-stack deploy, deliberately inert until the `production`
+      environment and secrets exist. That subsumes this task's core workflow
+      items.
+      **Not covered by it, and therefore the remaining scope here:** mirroring the
+      Galexie image to ECR with a git-SHA tag, and the post-deploy smoke test on
+      `/health`. Node-modules caching is already in 0390's template.
+      Two caveats for whoever picks this up. (1) 0390 is **not merged** — it lives
+      on `ci/deploy-workflow-cleanup` as PR #338, open since 2026-07-14,
+      MERGEABLE but unreviewed; `deploy-staging.yml` is still on develop. (2) The
+      finding inherited from the cancelled 0115: passing
+      `-c galexieImageTag=${GITHUB_SHA}` makes `cdk diff` report a change on every
+      commit, docs-only included, so any diff-based early exit is defeated unless
+      the tag is handled separately.
 ---
 
 # CI/CD: Production deployment workflow

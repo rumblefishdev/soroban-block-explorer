@@ -2,7 +2,7 @@
 id: '0214'
 title: 'CH writer: initial-snapshot mechanism for account state on backfill start'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0044']
 related_tasks: ['0119', '0194', '0204', '0205', '0207']
 tags:
@@ -124,6 +124,45 @@ history:
       accounts byte-exact MATCH vs Horizon current state; one
       genuine non-participant skeleton edge case captured + obsoleted
       at scale).
+  - date: '2026-07-22'
+    status: active
+    who: karolkow
+    note: >
+      **Provisionally moved back to `active/` — SUPERSEDED by the 2026-07-23
+      entry below, which is the one to read.** This entry's reasoning ("mechanism
+      works but the backfill was never run across full prod, so the E06 account
+      is a blocked-on-ops residual") turned out to be wrong about the cause. Kept
+      for the trail.
+  - date: '2026-07-23'
+    status: completed
+    who: karolkow
+    note: >
+      **Staying completed — 0214's deliverable shipped, and the E06 residual is
+      not a 0214 gap. Established by decoding raw XDR, not by reading our tables.**
+      0214's deliverable, per its own Summary, is the backfill-start snapshot
+      *mechanism* (bootstrap + Soroban RPC client). That shipped in PR #189. The
+      sequence-number acceptance criterion is met on prod at **91.4%**
+      (`countIf(sequence_number > 0)`, deduped).
+      The E06 account `GARDNV3Q7…` reads `seq = 0` / `home_domain` NULL today —
+      but the cause is **task 0421's clobber, not a failure of this mechanism**.
+      Traced to raw meta 2026-07-23: an account's real sequence is captured
+      correctly from `tx_changes_before` when it sources a tx (verified against
+      Soroban RPC `resultMetaXdr`, decoded with the `stellar` CLI). It is then
+      **overwritten** by the participant-path skeleton write (`seq = 0`) whenever
+      the account next appears as a participant, because the
+      `ReplacingMergeTree` version column is `last_seen_ledger`. So the snapshot
+      mechanism does its job; a later write destroys the result. That is exactly
+      0421 (`first_seen_ledger` clobber), which the raw-XDR trace has now
+      confirmed also hits `sequence_number` and `home_domain`. Fix lives in 0421
+      (engine → `SimpleAggregateFunction(max)`), not here.
+      Earlier framing "blocked on an ops backfill run" is withdrawn — running the
+      backfill again would not help, because the next participant appearance
+      re-clobbers. Only the 0421 write-path fix is durable.
+      Third criterion targeted `account_balances_current`, now a **dead** table
+      (0 rows, no writer, no live reader; the live one is `balances` at
+      89,634,237 rows) — unsatisfiable as written, flagged to 0310 for drop and
+      noted for rewrite onto `balances`. It does not block completion of the
+      mechanism this task delivered.
 ---
 
 # CH writer: initial-snapshot mechanism for account state on backfill start
@@ -201,17 +240,42 @@ Trustlines populate `account_balances_current` rows. **Once Phase 1 lands, E08/E
       Soroban RPC `getLedgerEntries`, and stages into `accounts` +
       `account_balances_current` with `last_seen_ledger =
 window_start` as the snapshot watermark.)_
-- [ ] Empirical test: re-run 64k-ledger backfill, then `SELECT countIf(sequence_number > 0) FROM accounts FINAL` is > 50% of total rows (instead of ~0% today). (ClickHouse: use `countIf` — `count() FILTER (WHERE ...)` is Postgres-only.)
-      _(Open — operational follow-up. Needs a live Soroban RPC
-      endpoint + a CH instance with backfill data. The implementation
-      is gated on `--soroban-rpc-url` so this AC can be verified by
-      re-running an already-backfilled window with the flag set.)_
-- [ ] Empirical E06 verification: account `GARDNV3Q7...` shows real `sequence_number`, `home_domain`, and at least the native XLM balance row in `account_balances_current`.
-      _(Open — same operational gate as above. Decoder is
-      unit-tested against the audit-pinned StrKey shape, but the
-      live-RPC round trip is a follow-up.)_
-- [ ] `account_balances_current` row count > 0 (today: 0 in the 64k window for most accounts).
-      _(Open — same operational gate.)_
+- [x] Empirical test: `countIf(sequence_number > 0)` over `accounts` is > 50% of
+      rows. **Measured 2026-07-22 on prod: 13,134,062 of 14,364,747 = 91.4%.**
+      Comfortably met.
+
+      > The other ~8.6% read `seq = 0`, which is **impossible on-chain** — per
+      > [CAP-0001](https://github.com/stellar/stellar-protocol/blob/master/core/cap-0001.md)
+      > the top 32 bits are seeded with the ledger sequence at creation, so any
+      > real account has a large value. Cause, confirmed against raw XDR
+      > 2026-07-23 (see the 2026-07-23 history entry): the participant-path
+      > skeleton write stamps `seq = 0` with `last_seen_ledger = current`, and the
+      > `ReplacingMergeTree(last_seen_ledger)` version makes that skeleton
+      > outrank the real sequence captured when the account sourced a tx. It is
+      > **0421's clobber**, same as `first_seen_ledger`, and the fix
+      > (`SimpleAggregateFunction(max)`) lives there — not here.
+
+- [~] Empirical E06 verification: account `GARDNV3Q7...` shows real
+  `sequence_number`, `home_domain`, native XLM balance. **Reads 0 / NULL / 0
+  today — but this is task 0421's clobber, not a failure of this mechanism,
+  so it does not keep 0214 open.** Established by decoding raw meta
+  2026-07-23 (Soroban RPC `resultMetaXdr` via the `stellar` CLI): the real
+  sequence is captured correctly from `tx_changes_before` when an account
+  sources a tx, then overwritten by the participant-path skeleton write
+  (`seq = 0`) because the RMT version column is `last_seen_ledger`. Snapshot
+  mechanism works; a later write destroys the result. Owned by
+  [0421](0421_BUG_first-seen-ledger-clobbered-on-every-account-write.md)
+  (engine → `SimpleAggregateFunction(max)`); re-running the backfill would
+  not help, the next participant appearance re-clobbers.
+- [ ] ~~`account_balances_current` row count > 0~~ — **this criterion can never
+      be met and must be rewritten.** The table is retired: **0 rows in prod**,
+      no writer (`persist/stage.rs:1648` and `writer.rs:110` both record the
+      insert being removed for the single-write design), and no live reader — the
+      only remaining mention in `crates/api` is a comment about a join that was
+      deleted. The live table is **`balances`**, which holds **89,634,237 rows**.
+      Re-point this criterion at `balances` before working the task.
+      Also flagged to 0310, which owns dropping dead ClickHouse objects: this is
+      a dead _table_, not just dead columns.
 - [x] **Docs updated** — audit doc §E06 marked resolved;
       `docs/architecture/database-schema/clickhouse-pilot.md` gains
       a §State-side ingestion paragraph.

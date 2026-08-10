@@ -3,7 +3,7 @@ id: '0261'
 title: 'BUG: parser does not tag `operations_appearances.pool_id` for path_payment ops crossing a liquidity pool'
 type: BUG
 status: completed
-related_adr: ['0033', '0044', '0047', '0048']
+related_adr: ['0033', '0044', '0047', '0053']
 related_tasks: ['0199', '0247', '0252', '0266', '0267', '0268']
 tags:
   [
@@ -56,7 +56,7 @@ history:
       yields pool_id + gross_volume_a (0247 / 0199) + the full pool list (multi-hop,
       subsumes 0268). The 0266 historical re-parse captures both in one run;
       gross_volume_a is captured now (USD volume/fee stay off until the Prices API
-      per ADR 0048) to avoid re-parsing the range twice. Linked 0199/0247/0266.
+      per ADR 0053) to avoid re-parsing the range twice. Linked 0199/0247/0266.
   - date: '2026-06-10'
     status: backlog
     who: stkrolikiewicz
@@ -119,13 +119,13 @@ Implement the fix via a **path-payment `OperationResult` claim-atom extractor**
 **Shared backfill.** The historical re-parse (0266, 3-machine S3) holds the same
 claim atoms, so it backfills `pool_id` **and** `gross_volume_a` in one run.
 Capturing `gross_volume_a` now — even though USD `volume`/`fee_revenue` stay off
-until the Prices API is live (ADR 0048 read-time join) — avoids re-parsing the
+until the Prices API is live (ADR 0053 read-time join) — avoids re-parsing the
 historical range twice. **Do not drop `gross_volume_a` from the re-parse scope.**
 
 Net: 0261 + 0247 + 0266 + 0268 + the on-chain input of 0199 collapse into one
 extractor + one backfill. USD display of volume/fee remains gated on prices (same
-blocker as TVL), independent of this capture. See ADR 0048 and
-[`0199 notes/S-ch-tvl-enrichment-and-decision.md`](../blocked/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md).
+blocker as TVL), independent of this capture. See ADR 0053 and
+[`0199 notes/S-ch-tvl-enrichment-and-decision.md`](../backlog/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md).
 
 ## Repro
 

@@ -34,6 +34,7 @@ coverage
 !.vscode/extensions.json
 .claude/worktrees
 .claude/settings.local.json
+.claude/settings.local.json.*
 .claude/scheduled_tasks.lock
 
 # logs
@@ -82,3 +83,5 @@ docker-compose.override.yaml
 # Playwright MCP runtime artefacts (snapshots + console logs from
 # browser-driven manual verification sessions)
 .playwright-mcp/
+# local deletion graveyard (never committed)
+.trash/

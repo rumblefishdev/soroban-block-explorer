@@ -353,10 +353,15 @@ async fn query_wasm_verdicts(
 }
 
 /// One `(contract_id, contract_type)` row for the live G9 verdict lookup.
+/// `contract_type` MUST stay `Option<i16>`: the column is `Nullable(Int16)`
+/// and clickhouse 0.15 RBWNAT validation rejects a bare `i16` against
+/// `Nullable(_)` — with the fail-open contract that made G9 a 100% no-op in
+/// prod (lore-0392). The `WHERE contract_type IN (…)` filter already excludes
+/// NULLs; the Option only satisfies the wire-type check.
 #[derive(clickhouse::Row, serde::Deserialize)]
 struct ContractVerdictRow {
     contract_id: String,
-    contract_type: i16,
+    contract_type: Option<i16>,
 }
 
 /// Task 0283 live G9 — resolve cross-ledger verdicts for contracts that emit
@@ -464,7 +469,9 @@ async fn query_contract_verdicts(
 
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
-        if let Ok(verdict) = ContractType::try_from(row.contract_type) {
+        if let Some(ty) = row.contract_type
+            && let Ok(verdict) = ContractType::try_from(ty)
+        {
             out.insert(row.contract_id, verdict);
         }
     }
@@ -513,10 +520,11 @@ async fn fetch_prior_contract_rows(
         .collect::<Vec<_>>()
         .join(", ");
     // Column order MUST match `rows::SorobanContractRow` field order (RowBinary is
-    // positional).
+    // positional). No `name` — dropped by task 0304 (selecting it was Code 47
+    // UNKNOWN_IDENTIFIER on prod, killing every 0320 prefetch; lore-0392).
     let sql = format!(
         "SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, \
-                deployed_at_ledger, contract_type, is_sac, name \
+                deployed_at_ledger, contract_type, is_sac \
          FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})"
     );
 

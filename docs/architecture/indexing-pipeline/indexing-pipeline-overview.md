@@ -293,6 +293,42 @@ schema on Hetzner. That write includes both:
 The full table inventory (17 + 2 quarantine + 1 dictionary = 20 schema
 objects) is in `crates/db-clickhouse/schema/init.sql`.
 
+The presence indexes `transaction_participants` and `operation_asset_appearances`
+are fed from **two** sources: classic operation bodies, and decoded Soroban token
+events. Per lore task
+[0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)
+the staging event loop decodes SEP-41 / CAP-67 `transfer` / `mint` / `burn` /
+`clawback` events (`derive_token_event`, see xdr-parsing overview §5.6) and
+registers their `from` / `to` as account participants plus — for SAC-wrapped
+classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
+`transaction_participants` stays pure presence.
+
+`operation_asset_appearances` additionally carries `net_settled` per (tx, asset)
+— the tx-list "value moved" figure (task
+[0393](../../../lore/1-tasks/active/0393_FEATURE_transaction-value-amount-column/README.md)).
+At staging the value is reduced once per transaction and joined onto the
+presence rows: classic txs (`has_soroban = 0`) from ledger-entry balance deltas,
+Soroban txs from token-event amounts (see xdr-parsing overview §4.7). It is a
+non-key column on a version-less `ReplacingMergeTree`, so staging writes the
+**final** net (never an incremental fold). `net_settled` has a **single writer** —
+`persist::stage` — run by both live ingest and the full S3 re-ingest, so live and
+historical rows for a key are computed identically and the duplicate collapses
+cleanly; the read dedups with `max(net_settled)`.
+
+There is **no CH-local value backfill.** Classic value is reduced from
+`TransactionMeta` ledger changes, which are **not stored in ClickHouse**, and the
+Soroban value rides the same re-ingest rather than a separate script — so all
+historical `net_settled` (classic + Soroban) is `NULL` (hidden by the read's
+`HAVING net_settled IS NOT NULL`) until the **full S3 re-ingest** re-runs staging
+over every ledger. The 0383 token-flow backfill stays presence-only (writes
+`net_settled: NULL`) and must not run once the column is populated.
+
+The column is `Nullable`: `Some(0)` = genuinely nothing settled net; `NULL` = not
+computable (the reducer could not represent the result, or a recognised event's
+amount was unreadable). Keeping the two apart stops an uncomputable value from
+masquerading as a real zero; both are filtered at read (`max` ignores NULL, so a
+computed value wins over a not-computed one for the same key).
+
 Per-ledger replay safety: every state table is `ReplacingMergeTree(version)`
 keyed on a column whose value monotonically reflects the latest observation
 (`last_seen_ledger`, `last_updated_ledger`, `current_owner_ledger`,
@@ -384,6 +420,16 @@ residue = TTL-archived tail + true rebasing). It reads CURRENT chain state, so t
 regardless of indexer lag; live ingest supersedes it on catch-up
 (`ReplacingMergeTree` by `last_updated_ledger`). CH-only, idempotent, `--dry-run`
 supported.
+
+The historical gap for these event-driven presence rows — the live hook only
+writes them for new ledgers, and event-derived asset presence never existed for
+any verb — was closed by the **`soroban-token-flow-backfill`** one-shot pass (task
+[0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)),
+run on prod 2026-07-16 and **removed in lore 0425**. It re-derived participant +
+asset rows from `soroban_events` with the SAME `derive_token_event` the live path
+uses (the surrogate hashing is `cityhash_102_128`, not CH SQL's `cityHash64()`, so
+the decode must run in Rust to stay bit-identical). History is closed; live ingest
+is now the only writer of these rows.
 
 ### 6.3 Backfill Scope and Execution Model
 

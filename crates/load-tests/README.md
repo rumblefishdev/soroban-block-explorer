@@ -1,10 +1,60 @@
 # load-tests — Soroban Block Explorer API load harness (task 0338)
 
-`--vus` concurrent users loop **every** endpoint with **no think-time** for
-`--duration`. Each request carries a unique `X-Request-Id` so ClickHouse
-`system.query_log` records `read_rows`/`read_bytes` per request (the "B2"
-correlation). All output lands in `crates/load-tests/out/<UTC-start>/`
-(gitignored). Each step below says which folder to run it from.
+> **The edge changed after these runs — 2026-07-27, task 0302 / ADR 0048.** Both
+> AWS WAF WebACLs were dropped. The per-IP WAF rate rule referenced below no
+> longer exists, so every "5-min WAF window" figure records the conditions the
+> tiers were **measured** under, not a limit a run hits today. What binds a run
+> now: the API Gateway throttle (`50` rps / `100` burst) against the origin, and
+> Cloudflare's own rate limiting on the Cloudflare-fronted hostname. The numbers
+> and the reasoning below are left as recorded — they are why the measurements
+> are what they are.
+
+Two drivers. **Pick by the question you are answering:**
+
+| Flag | Model | Rate is | Use for |
+|---|---|---|---|
+| `--rps` | open — Poisson arrivals, spawn-and-forget | an **input** | AC4 "N req/month" (task 0357) |
+| `--vus` | closed — N users sweep every endpoint, no think-time | an **output** | saturation / knee-finding |
+
+`--vus` **cannot express a req/month target**: it sends as fast as the server
+answers, so the same `--vus 4` produced 9,459 rps against a local stub and ~10
+rps against prod. It also suffers *coordinated omission* — when the backend
+slows, the client backs off with it, so the measured p95 flatters a struggling
+server. `--rps` fixes both: arrivals follow a schedule fixed in advance and do
+not care how slow the answers are.
+
+Each request carries a unique `X-Request-Id` so ClickHouse `system.query_log`
+records `read_rows`/`read_bytes` per request (the "B2" correlation). All output
+lands in `crates/load-tests/out/<UTC-start>/` (gitignored). Each step below says
+which folder to run it from.
+
+## AC4 tiers — req/month → rps
+
+`rps = req_per_month / 2_592_000` (30d). The harness echoes the implied
+req/month on startup, so a fat-fingered rate is obvious before the run.
+
+| Tier | req/month | `--rps` | vs prod edge limits |
+|---|---|---|---|
+| A | 1M | `0.386` | under both (116 per 5-min WAF window) |
+| B | 10M | `3.858` | under both (1,157 / 2,000 WAF window) |
+| C | 50M | `19.29` | **required `loadTesting: true`** — 5,787 per 5-min window vs the then-live 2,000 per-IP WAF rule |
+
+Two things to know before reading the numbers:
+
+- **Tier A cannot demonstrate AC4 on its own.** At 0.386 rps an hour yields
+  ~1,390 requests over 26 endpoints. Error rate <0.1% needs n ≥ 3,000 just for
+  the rule of three (0 errors in n → 95% upper bound 3/n) — below that, a single
+  error reads as a multi-percent failure. Tier B/C carry the statistical power;
+  A is the **contention control** (if its p50 matches B's, there is no queueing,
+  so B's large-n per-endpoint p95 is a valid estimate at A's rate).
+- **Latency here is dominated by per-query cost, not load** (0357: 13-25M rows
+  read per request at idle). Lowering the rate does not lower p95. If a tier
+  fails, the fix is in the query/schema, not in the capacity.
+
+Tier C's 19.29 rps is a **single-IP** artifact — real 50M/month arrives from
+thousands of IPs, which is why the per-IP WAF rule had to come off for it and
+not because the rate itself is unrealistic. The prod throttle (`50` rps) is a
+~130M req/month ceiling, so it is not the binding constraint at any tier.
 
 > Prereq (deployed once, committed CH config): `api_reader`'s quota + the
 > `log_comment` `changeable_in_readonly` constraint (`profiles.xml` +
@@ -21,11 +71,21 @@ Set `"loadTesting": true` in `infra/envs/production.json`, then deploy the two
 affected stacks (NOT `--all` — it sweeps unrelated stacks):
 
 ```bash
-AWS_PROFILE=soroban-explorer make deploy-production-apigateway
-AWS_PROFILE=soroban-explorer make deploy-production-compute
+AWS_PROFILE=sorobanscan make deploy-production-apigateway
+AWS_PROFILE=sorobanscan make deploy-production-compute
 ```
 
-- **ApiGateway** — lifts the 50 rps throttle + drops the WAF per-IP rate rule.
+Prod is account `750702271865` / **`eu-central-1`**. If the `sorobanscan` profile
+still defaults to another region, pin it once — every `aws` call below is
+regional, and a wrong region fails as a confusing `ResourceNotFoundException`
+rather than an auth error:
+
+```bash
+aws configure set region eu-central-1 --profile sorobanscan
+```
+
+- **ApiGateway** — lifts the 50 rps throttle. (It also dropped the WAF per-IP
+  rate rule while that WebACL existed; there is nothing left to drop.)
 - **Compute** — sets `LOAD_TESTING` on the API Lambda → arms the `log_comment` middleware.
 
 ## 2. Build the harness
@@ -45,7 +105,8 @@ Cloudflare edge secret from Secrets Manager:
 
 ```bash
 export API_KEY="<paid-tier key present in the server API_KEYS>"
-export EDGE_SECRET=$(AWS_PROFILE=soroban-explorer aws secretsmanager get-secret-value \
+export EDGE_SECRET=$(AWS_PROFILE=sorobanscan aws secretsmanager get-secret-value \
+  --region eu-central-1 \
   --secret-id soroban/production/cloudflare/edge-secret --query SecretString --output text)
 ```
 
@@ -67,21 +128,67 @@ process arg list (`ps aux`) during the run.
 # smoke first — expect mostly 200
 ./target/release/load-tests \
   --base-url <API_GW_ORIGIN>/v1 \
-  --vus 10 --duration 1m
+  --rps 5 --duration 1m
 
-# full run
+# AC4 tiers (see the table above) — one run each, own out/ dir per run
+./target/release/load-tests --base-url <API_GW_ORIGIN>/v1 \
+  --rps 0.386 --duration 6m  --harvest 500   # A — 1M/mo, contention control
+./target/release/load-tests --base-url <API_GW_ORIGIN>/v1 \
+  --rps 3.858 --duration 10m --harvest 500   # B — 10M/mo
+./target/release/load-tests --base-url <API_GW_ORIGIN>/v1 \
+  --rps 19.29 --duration 12m --harvest 500   # C — 50M/mo, needs loadTesting
+
+# saturation / knee-finding (NOT an AC4 number — see the model table above)
 ulimit -n 65535
 ./target/release/load-tests \
   --base-url <API_GW_ORIGIN>/v1 \
   --vus 1000 --duration 1h --harvest 500
 ```
 
+### Pre-flight: check the box is quiet, or your numbers are a lottery
+
+**The ClickHouse box is shared with `stellar-prices-api`** (CH user
+`prices_writer`). Its OHLCV batch is bursty — idle for minutes, then ~1.6bn
+rows/minute — and it is big enough to **double the API's p95 on its own**. This
+is not theoretical: on 2026-07-17 it read 14.2bn rows during a 10-minute tier
+(3x the whole load test) and turned a 568 ms p95 into 1194 ms. A re-run 33
+minutes later on a quiet box, same code and same rate, read *more* of our rows
+in 2.7x less ClickHouse time.
+
+Run this **before every tier**, and again after if a number looks surprising:
+
+```bash
+ssh deploy@<box-ip> "docker exec -i app-clickhouse-1 clickhouse-client --query \"
+SELECT toStartOfMinute(event_time) AS m, round(sum(read_rows)/1e9,2) AS prices_bn
+FROM system.query_log
+WHERE type='QueryFinish' AND user='prices_writer' AND event_time > now() - INTERVAL 5 MINUTE
+GROUP BY m ORDER BY m DESC\" --format PrettyCompact"
+```
+
+All zeros → safe to measure. Anything above ~0.1bn/min → wait; the run will be
+contaminated and there is no way to correct for it after the fact.
+
+To audit a finished run (`log_comment=''` is everything that is not the harness):
+
+```sql
+SELECT user, count() AS queries, round(sum(read_rows)/1e9,2) AS bn
+FROM system.query_log
+WHERE type='QueryFinish' AND log_comment='' AND event_time BETWEEN {start} AND {end}
+GROUP BY user ORDER BY bn DESC;
+```
+
+Run the tiers **in order and one at a time** — they contend with each other, and
+tier A's whole job is to measure an uncontended baseline. Each run writes its own
+`out/<UTC-start>/`, so tiers never mix; steps 4-5 are per-run.
+
 Output → `crates/load-tests/out/<UTC-start>/client.csv`. At the end the harness
 prints the run dir and a **ready-to-paste** `--param_start='…' --param_end='…'`
 window — copy it for step 4 (no `date -u` needed).
 
 Diagnostics if the smoke isn't 200: `401` = `x-api-key` not in `API_KEYS`;
-`403` = missing `x-edge-secret` (or WAF `NoUserAgent` — the harness sets a UA);
+`403` = missing `x-edge-secret` (or a no-User-Agent block — the harness sets a
+UA; this was AWS WAF `NoUserAgent_HEADER` before task 0302, Cloudflare's managed
+equivalent after);
 `429`/`1015` = Cloudflare rate limit (use the direct origin); `500 db_error` =
 CH rejected `log_comment` — the `profiles.xml` `changeable_in_readonly`
 constraint (+ `config.d/access-control.xml`) isn't deployed to the box.

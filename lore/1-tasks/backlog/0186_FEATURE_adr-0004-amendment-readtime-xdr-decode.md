@@ -20,6 +20,24 @@ history:
       it). This task formalizes the amendment so future contributors
       have a single source of truth. Same amendment forward-covers the
       read-time signatures path under consideration for task 0122.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise intact, but you are no longer the only task editing ADR 0004 —
+      coordinate with 0432 or you will collide.** 0432 (build-vs-adopt for the
+      ingest path) carries the acceptance criterion "ADR written or ADR 0004
+      amended", for a completely different reason: ADR 0004 is titled "Rust-only
+      XDR parsing" and its Alternatives Considered section only weighs Rust vs
+      TypeScript — i.e. *which language we write our own parser in*. Whether to
+      write one at all was never asked, and nothing in the ADR record mentions
+      `stellar-etl`, Hubble, or Horizon ingest.
+      So two amendments are queued against one ADR: this one adds read-time XDR
+      decode (a scope correction), 0432 questions the build-vs-adopt premise (a
+      decision correction). They are compatible but must not be written blind of
+      each other — whoever goes second should extend, not overwrite.
+      Cheapest sequencing: let 0432 land first, since its outcome could change
+      what ADR 0004 is *for*, and fold this amendment into that rewrite.
 ---
 
 # Docs: ADR 0004 amendment for read-time XDR decode of S3-fetched archive payloads

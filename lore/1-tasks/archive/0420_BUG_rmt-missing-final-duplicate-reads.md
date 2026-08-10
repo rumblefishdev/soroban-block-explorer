@@ -1,0 +1,454 @@
+---
+id: '0420'
+title: 'RMT reads without dedup: ledgers-list doubling + 9 same-class duplicate-row/count bugs (missing FINAL)'
+type: BUG
+status: completed
+related_adr: []
+related_tasks: ['0421', '0422', '0423', '0427', '0428']
+tags: ['area-api', 'area-clickhouse', 'bug-class-dedup', 'priority-high']
+links: []
+history:
+  - date: 2026-07-18
+    status: active
+    who: karolkow
+    note: 'Task created from Ledgers-list sort/pagination bug report; audited every API SQL query for the same RMT-missing-FINAL class (7 parallel auditors, prod-verified via chq). AUDIT ONLY — full fix set (F0,F3-F10) drafted + each prod-verified, then set aside in git stash@{0} per operator request (no implementation now). Nothing applied to the working tree.'
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      All 10 fixes (F0-F10) implemented on
+      claude/ledgers-sorting-pagination-bug-6358ce; cargo check clean, 212 api
+      unit tests pass, API-types gate green. Not committed. F1/F2 decision
+      REVERSED after operator correction: "KPIs self-correct once data is
+      deduped" was wrong — RMT regenerates duplicates continuously, so
+      system.tables.total_rows is structurally inflated (measured drift
+      +3%/+6.6% -> +4.3%/+11.6% within one session). Now counted from
+      already-deduplicated sources (accounts_recent / soroban_contracts FINAL)
+      at ~zero read cost. S1 downgraded from correctness fix to cost/hygiene.
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      Renumbered 0410 -> 0420 (0410 collided with the 0393-spawned
+      sac-event-identity-guard task, which has inbound references from 0393,
+      0391, 0414, 0415; this task had none). /devils-advocate pass: F0's FINAL
+      fix was a measured 19x read regression (25.9M rows / 1.55 GiB vs 1.35M /
+      82 MiB) on a polled endpoint - reworked to over-fetch x3 + Rust
+      dedup_consecutive, cost now identical to baseline. Measuring the rest
+      caught F6 too (CTE re-evaluated the asset scan, +65%) - reworked to a
+      GROUP BY'd join side, now cheaper than the original. All rewrites
+      measured; 214 tests (+2 dedup regression tests). Four concerns carried:
+      MV has no monitoring, S1 needs an owner, frontend row key, and
+      first_seen_ledger is rewritten on activity (separate task).
+  - date: 2026-07-21
+    status: active
+    who: karolkow
+    note: >
+      S1 closed by measurement and split into follow-ups. Corrected an
+      over-generalisation this task had recorded twice ("RMT always regenerates
+      duplicates"): true for update-heavy accounts (8.46M inserts/day for 136k
+      active accounts, ~4.3% permanent surplus), false for append-only ledgers
+      (live partition is x1.0; history is a one-time backfill artifact). Merges
+      are NOT behind - 40,524 in 7 days, none stuck; CH just never merges a
+      partition down to one part. Spawned 0421 (first_seen_ledger overwritten on
+      every account write - root cause at stage.rs:636, ~62x write
+      amplification), 0422 (one-time OPTIMIZE for ledgers only) and 0423
+      (behavioural dedup regression harness).
+  - date: 2026-07-21
+    status: completed
+    who: karolkow
+    note: >
+      Shipped as PR #356 against develop - 17 atomic commits, 7 files under
+      crates/api, BACKEND ONLY. 216 api unit tests (+2 dedup regression tests),
+      117 web + 75 UI tests, API-types gate green; every rewrite measured on
+      prod CH, none costs more than the code it replaces and two cost less (F3
+      -15% rows / -60% memory, F6 cheaper than the un-deduped original). Two
+      frontend ExplorerTable guards were built and then deliberately reverted:
+      a duplicate row key is never legitimate here, so swallowing it centrally
+      would hide the next read-path defect instead of surfacing it. All four
+      /devils-advocate concerns now have homes: MV refresh monitoring -> 0428
+      (last one, spawned at close), data cleanup -> 0422, first_seen_ledger ->
+      0421, frontend key -> resolved as won't-fix with reasoning. Engine choice
+      under research in 0427.
+---
+
+# RMT reads without dedup: ledgers-list doubling + 9 same-class bugs
+
+## Summary
+
+The Ledgers list page returned every row **twice** on ascending sort and
+appeared to "append rows infinitely" on repeated sort clicks. Root cause: the
+`ledgers` table is a **ReplacingMergeTree** whose parts are largely unmerged in
+prod (~13M of 13.07M distinct sequences carry 2 physical rows, ~98% of history),
+and `ledgers::fetch_list` read `FROM ledgers l` **without `FINAL`** — so each
+keyset page returned both copies. Because the frontend keys table rows by
+`sequence`, the duplicate rows produced **duplicate React keys**, which break
+reconciliation and pile up orphaned DOM rows on every re-sort (the "infinite
+append").
+
+A sweep of **every SQL query in `crates/api`** found the same "RMT read without
+deduplication" class in **9 more places** — 5 more firing in prod today, 4
+latent (confirmed defects currently shielded from the UI). This task tracks all
+11 fixes (F0–F10, implemented, measured and prod-verified, pending commit).
+
+## Status: Completed — shipped as PR #356 (17 commits, backend only)
+
+> **Renumbered 0410 → 0420.** `0410` collided with
+> `0410_BUG_sac-event-identity-guard-on-value-path` (spawned from 0393, merged
+> via PR #355 and referenced from the archived 0393 README, 0391 notes, 0414 and
+> 0415). This task was the one with no inbound references, so it moved.
+
+**Final state:** All **11 fixes (F0–F10) shipped** on branch
+`fix/0420_rmt-missing-final-duplicate-reads` as **17 atomic commits**, opened as
+[PR #356](https://github.com/rumblefishdev/soroban-block-explorer/pull/356)
+against `develop` (7 files under `crates/api`). Each fix is verified against prod
+ClickHouse **and measured before/after** — `cargo check` clean, **216 api unit
+tests pass** (+2 new dedup regression tests), 117 web + 75 UI tests green,
+`API types freshness` gate green.
+
+**The change set is backend-only by decision.** A frontend duplicate-row guard
+was written (two variants: key-suffixing, then drop-duplicates) and then
+deliberately **reverted** — a table that silently swallows duplicate keys hides
+the next read bug instead of surfacing it, and every read path is now deduped at
+the source. See Emerged decisions.
+
+After a `/devils-advocate` pass the F0 and F6 fixes were **reworked** — both
+were correct but more expensive than the code they replaced (see Measured cost).
+Post-rework **no fix costs more than the code it replaces; two cost less.**
+
+**All code for this task is complete.** Remaining open item is a single carried
+concern (MV refresh monitoring); the other three either landed here or became
+0421 / 0422 / 0423. S1 is closed — it was an investigation.
+
+## Measured cost (rows read per call, prod)
+
+Correctness was never the hard part; cost was. Every rewrite is measured, because
+the first attempt at F0 was correct and would have taken the site down.
+
+| Fix                | before             | after                    | note                                                                              |
+| ------------------ | ------------------ | ------------------------ | --------------------------------------------------------------------------------- |
+| F0 ledgers list    | 1,349,927 / 82 MiB | **1,349,927 / 82 MiB**   | first attempt (`FINAL`) was 25,964,595 / 1.55 GiB — **19×**, on a polled endpoint |
+| F3 contract counts | 2,710,818 / 61 MiB | **2,307,459 / 52 MiB**   | cheaper, −60% memory                                                              |
+| F5 LP chart        | 26,046,613         | 26,038,421               | unchanged                                                                         |
+| F6 asset search    | 1,151,738 / 32 MiB | **1,118,154 / 28.5 MiB** | cheaper than the un-deduped original                                              |
+| F7 LP list         | 100,668            | 100,668                  | unchanged                                                                         |
+| F1 total accounts  | 1 row (wrong)      | 1 row                    | `accounts_recent`, metadata read                                                  |
+| F2 total contracts | 1 row (wrong)      | 176,854 / 11 MiB         | 13 ms on a ~146k-row table                                                        |
+
+Two rejected-by-measurement alternatives worth remembering: `FINAL` on the
+ledgers list (19×) and `LIMIT 1 BY` on the same query (3.3×) — both defeat
+`optimize_read_in_order`. Over-fetching is free here because the read is
+granule-bound: `LIMIT 60` and `LIMIT 20` read the identical 1,349,927 rows.
+
+## Context
+
+`ledgers`, `assets`, `accounts`, `soroban_contracts`, `transactions` and most
+domain tables are ReplacingMergeTree (RMT) / AggregatingMergeTree. RMT dedup is
+best-effort background merge — a read is only correct if it deduplicates itself
+(`FINAL`, or `GROUP BY key + argMax/any`, or `LIMIT 1 BY key`, or a downstream
+Rust HashMap/`dedup` collapse). Duplicate physical rows are present right now in
+every one of these tables, so any un-deduped read/JOIN returns inflated counts or
+doubled rows **today** — regardless of how healthy merging is (it is healthy; see
+below).
+
+Prod duplication (physical rows vs deduped), measured via `chq`:
+
+| Table               | Physical | Deduped | Dup share                                        |
+| ------------------- | -------- | ------- | ------------------------------------------------ |
+| `ledgers`           | 25.96M   | 13.07M  | ~2× across ~98% of history; only ~2k head merged |
+| `assets`            | 769k     | 334k    | >2×                                              |
+| `accounts`          | 14.77M   | 14.34M  | ~432k (~3%)                                      |
+| `soroban_contracts` | 138k     | 130k    | ~8.5k (some ids ×6)                              |
+
+**Code must dedup on read regardless** — RMT never guarantees a merged read, so
+these query fixes are the durable ones no matter what the data looks like.
+
+Whether the DATA can also be cleaned up depends on the table, and the two cases
+are opposites (measured after the fact — an earlier revision of this task
+wrongly claimed duplicates always regenerate everywhere):
+
+- **Append-only (`ledgers`)** — duplication is a **one-time historical
+  artifact**: the live partition is clean (×1.0, 1 row per ledger per day) while
+  history sits at ×2.0. Merges are healthy (40,524 in 7 days), they simply never
+  merge an old partition down to one part. A single `OPTIMIZE` fixes it
+  durably → task **0422**.
+- **Update-heavy (`accounts`)** — duplication is a **steady state**: ~8.46M rows
+  are inserted per day for ~136k genuinely-active accounts, because every
+  activity rewrites the row. Merges absorb it and hold ~4.3% surplus. `OPTIMIZE`
+  is pointless here; read-time dedup is mandatory. This is what makes the F1/F2
+  KPI decision correct.
+
+## Findings
+
+All confirmed against prod via `chq`. Severity = user impact today.
+
+### Originally reported
+
+- **F0 — Ledgers list** — `ledgers/queries.rs` `fetch_list`. Doubled rows +
+  infinite-append. **Fixed by over-fetch (×3) + `dedup_consecutive` in Rust**,
+  NOT `FINAL` and NOT `LIMIT 1 BY` — both defeat `optimize_read_in_order` on
+  this seek (measured 19× and 3.3×; this endpoint is polled and the original
+  code comment explicitly warned about exactly that). Same approach-B pattern as
+  `assets::dedup_consecutive` (task 0364). Correct because `ORDER BY sequence`
+  IS the primary key, so a sequence's physical copies are contiguous and
+  byte-identical. Over-fetch ×3 covers the worst observed duplication (12.8M
+  sequences carry 2 copies, 22 carry 3); beyond that the page merely comes back
+  short — the keyset cursor still advances, so pagination never loops.
+
+### Confirmed live (wrong output in prod now)
+
+- **F1 — Total accounts KPI** — `network/queries.rs` — read
+  `system.tables.total_rows` for `accounts` = raw part rows incl. dupes.
+  **Fixed** → `count() FROM accounts_recent` (see Design Decisions #2).
+  Measured 14,975,304 shown vs 14,354,378 real (**+4.3%**).
+- **F2 — Total contracts KPI** — `network/queries.rs` — same via
+  `soroban_contracts`. **Fixed** → `count() FROM soroban_contracts FINAL`
+  (affordable: ~146k rows, not 14M). Measured 145,979 shown vs 130,817 real
+  (**+11.6%**).
+
+  Note the drift: F1/F2 were first measured at +3% / +6.6% and re-measured a few
+  hours later at +4.3% / +11.6%. The inflation **grows continuously** — see
+  Design Decisions #2.
+
+- **F3 — Contract `recent_invocations` (list + detail)** —
+  `contracts/queries.rs:~251` and `~528` — `sia FINAL INNER JOIN ledgers l`
+  inside `count()`; ledgers side not deduped → count inflated ~1.5×
+  (measured 2.36M → 3.79M on one contract). List and detail share the window so
+  they stay equal to each other, both inflated.
+- **F4 — Contract `recent_events` (detail)** — `contracts/queries.rs:~520` —
+  `soroban_events se INNER JOIN ledgers le` in `count()`; ledgers fan-out
+  (also `se` itself lacks FINAL — LOW, no self-dupes sampled).
+- **F5 — LP chart `samples_in_bucket`** — `liquidity_pools/queries.rs:~798` —
+  outer `JOIN ledgers` not deduped (0356 fix deduped snapshots, missed
+  ledgers); `count()`/`sum(volume)`/`sum(fee_revenue)` doubled. `samples` live
+  now; volume/fee double the moment they populate (task 0199).
+- **F6 — Asset search** — `search/queries.rs:~629` — `assets a FINAL LEFT JOIN
+soroban_contracts sc` — join side not deduped; ~96 assets fan out 2–6× into
+  dup hits and burn the per-group result budget. `search_nfts` already does this
+  right (uses a GROUP BY'd `sc` CTE) — the inconsistency is the tell.
+
+### Latent (confirmed defect, currently shielded from the UI)
+
+- **F7 — LP list `l_snap`** — `liquidity_pools/queries.rs:~1092` — un-deduped
+  `ledgers` LEFT JOIN in final projection, no collapse → **doubles rows + breaks
+  pagination** (proven: 20 rows for a 10-pool page on older pages). Shielded
+  only because no frontend page consumes the pool list yet.
+- **F8 — TPS 60s + latest-ledger subselect** — `network/queries.rs:~52` /
+  `~66` — `sum(transaction_count)` over `ledgers` with no FINAL (inflates if a
+  head ledger dups before merge); latest-ledger sub-select has no `LIMIT 1`
+  (→ 500 via `fetch_optional` if head ever dups). Correct today only because the
+  tip is currently merged. Weakest of the set: missing guard confirmed, wrong
+  output not reproducible until the data condition occurs.
+- **F9 — tx detail ops/invocations** — `transactions/queries.rs:~822` and
+  `~964` — `fetch_operations` / `fetch_invocation_appearances` are correct only
+  because `FINAL` on the driving table (`oa`/`sia`) _propagates_ into the joined
+  `ledgers` (undocumented CH behavior; proven: 100 rows with FINAL, 200
+  without). Doubles the instant that `FINAL` is dropped — exactly the quota
+  change already made to the transactions _list_ path.
+- **F10 — Account balances** — `accounts/queries.rs:~406` — `LEFT JOIN
+soroban_contracts sc` not deduped; only incidentally collapsed by the adjacent
+  `assets a FINAL` (isolation test: with `assets FINAL` → 1 row, without → 2).
+
+### Clean (verified, no action)
+
+nfts, transactions list, `common/ch.rs`, `common/head.rs`, most of search —
+all deliberately deduped via `FINAL` / `LIMIT 1 BY` / `GROUP BY argMax` / Rust
+HashMap collapse.
+
+## Implementation Plan
+
+Two fix patterns cover F3–F10:
+
+1. **Dedup the join side without fan-out (preferred for count/window joins):**
+   replace `INNER JOIN ledgers l ON l.sequence = x.ledger_sequence` used purely
+   as a window filter with a semi-join `AND x.ledger_sequence IN (SELECT
+sequence FROM ledgers WHERE <window>)` — `IN` matches once regardless of dup
+   rows. Where `closed_at` is projected, use a GROUP BY'd subquery
+   `(SELECT sequence, any(closed_at) closed_at FROM ledgers WHERE … GROUP BY
+sequence)`.
+2. **`FINAL` on the read (preferred for row-level list reads):** e.g. the F0
+   ledgers-list fix. Cheap on a key-filtered `LIMIT` page.
+
+3. **Count from an already-deduplicated source (for the KPIs, F1/F2):** never
+   `system.tables.total_rows` — it is the physical part-row count. Prefer a
+   source that is dedup-by-construction and cheap to count (see Design
+   Decisions #2 for the option matrix).
+
+- **F8:** add `LIMIT 1` to the latest-ledger sub-select (cheap, do regardless);
+  dedup the TPS window sum.
+
+## Acceptance Criteria
+
+All implemented and prod-verified (evidence in parens); **not yet committed**.
+
+- [x] F0 ledgers-list over-fetch ×3 + `dedup_consecutive` (20 distinct vs
+      10-doubled; cost identical to the code it replaces — see Measured cost).
+- [x] F1 total-accounts → `count() FROM accounts_recent` (14,354,378 vs
+      14,975,304 inflated; matches `accounts FINAL` ±1).
+- [x] F2 total-contracts → `count() FROM soroban_contracts FINAL` (130,817 vs
+      145,979 inflated).
+- [x] F3/F4 contract invocation + event counts (semi-join; 1.42M deduped, SQL
+      runs, stats_sql regression tests pass).
+- [x] F5 LP chart ledgers join (`LIMIT 1 BY sequence`; 1403 vs 2806).
+- [x] F6 asset-search `soroban_contracts` join (page + `sc` CTE, mirrors
+      `search_nfts`; executes).
+- [x] F7 LP list `l_snap` (`GROUP BY sequence`; 5 rows vs 10).
+- [x] F8 latest-ledger `LIMIT 1` + TPS `LIMIT 1 BY sequence` (executes).
+- [x] F9 defensive `ledgers … FINAL` on tx-detail ops + invocations joins.
+- [x] F10 explicit `soroban_contracts sc FINAL` on account-balances join.
+- [x] Build + tests: `cargo check -p api` clean, 214 api unit tests pass.
+- [x] Every rewrite measured before/after (F0, F3, F5, F6, F7) — see Measured
+      cost. F0 and F6 reworked as a direct result.
+- [x] Regression tests for the F0 dedup (`dedup_tests`): a full page collapses
+      2–3× duplicates and stays full; an under-filled page never emits a
+      duplicate.
+- [x] Frontend: collision-proof `rowKey`, applied centrally in `ExplorerTable`
+      (only a duplicate gets a suffix, so the normal case keeps its stable key
+      and normal reconciliation) + component test reproducing the original
+      symptom — rows must be REPLACED, never accumulated. Covers every table at
+      once, not just ledgers.
+- [x] Regression tests — **delegated to 0423.** The F0 Rust dedup and the
+      `ExplorerTable` key guard are unit/component tested here because they are
+      real logic. The remaining fixes are declarative SQL: a useful test must
+      seed duplicate rows and assert behaviour, which needs the `db-clickhouse`
+      e2e harness rather than assertions on SQL strings (an assertion that
+      "`FINAL` is present" would have passed the 19×-too-expensive F0 attempt).
+- [x] **Docs updated** — `N/A` — no change to system shape (schema/endpoints/
+      pipeline unchanged; SQL-internal dedup only).
+- [x] **API types regenerated** — `N/A` confirmed — fixes are SQL-internal, no
+      DTO/route/openapi change; `check-generated` verified green on the current
+      base with `crates/api/**` touched.
+
+## Open concerns (from the `/devils-advocate` pass)
+
+Two of the seven were resolved inside this task (F0 regression → fixed;
+unmeasured rewrites → measured, which is what caught F6). The rest are carried:
+
+1. ~~**The MV fails silently and nothing watches it**~~ (High) — **spawned as 0428.** `accounts_recent` is a plain MergeTree with no dedup safety net, and
+   `count()` is a metadata read — so a partial or failed refresh is reported as
+   truth. `system.view_refreshes` exposes `status` / `exception` /
+   `last_success_time`; nothing alerts on them. Both the accounts KPI and the
+   accounts list degrade quietly. F1 made this endpoint depend on the MV, which
+   is why it needed an owner rather than a paragraph.
+2. **Fixing the reads removed the pressure to fix the data** (High) —
+   **now owned by 0422.** Reads are correct regardless of merge state, so
+   nothing hurts visibly, but the duplicates still tax every query: the ledgers
+   list reads **1,349,927 rows to return 20** because of part fragmentation.
+   For `ledgers` this is genuinely fixable once (0422); for `accounts` it is
+   not, and must not be attempted.
+3. **Frontend row key is still `sequence`** — **deliberately left alone.** Two
+   central `ExplorerTable` guards were built and both were reverted (see Emerged
+   decisions): a duplicate key is now a _loud_ symptom of a read-path defect, and
+   the read paths are the thing this task fixed. Revisit only if a duplicate key
+   is ever legitimate — today it never is.
+4. ~~**`first_seen_ledger` does not mean what it says**~~ — **spawned as 0421**,
+   with the root cause located to `persist/stage.rs:636` and a recommended
+   AggregatingMergeTree design. Not fixable here: 97.7% of accounts have already
+   lost the true value, so a read-time `min()` would repair 2.3% and silently
+   leave the rest wrong.
+
+## Subtasks
+
+### S1 — investigate the merge/duplication state — **DONE, spawned 0422 + 0421**
+
+Closed by measurement. The framing this subtask started with ("merges are ~98%
+behind, needs an OPTIMIZE plus a root-cause hunt") turned out to be wrong on
+both counts:
+
+- **Merges are not behind.** 40,524 `MergeParts` in 7 days, most recent minutes
+  before the check, 0 stuck. On `accounts` they absorb ~8.46M inserted rows per
+  day and hold the surplus at ~4.3%. ClickHouse simply never promises to merge a
+  partition down to one part, so old `ledgers` partitions sit at 4–5 parts and
+  their duplicate copy survives indefinitely. That is by design, not a fault.
+- **The duplication has two different causes**, so one remedy cannot cover both:
+  append-only `ledgers` carries a one-time backfill artifact (cleanable →
+  **0422**), while update-heavy `accounts` regenerates duplicates continuously
+  by design (not cleanable, read-time dedup mandatory).
+
+The same investigation surfaced the root cause of a separate data-integrity bug
+in that write path — `first_seen_ledger` reset to the current ledger on every
+account write — spawned as **0421**.
+
+No OPS action remains in this task: the cleanup that IS worth doing lives in
+0422 (consent-gated), and nothing here is blocked on it.
+
+## Design Decisions
+
+### From Plan
+
+1. **Dedup on read, not on data.** Every fix makes the QUERY correct rather than
+   relying on the table being merged. RMT dedup is a background best-effort
+   merge, so a query that needs merged data to be right is a query that is
+   sometimes wrong.
+
+### Emerged
+
+2. **F1/F2 KPIs: reversed an earlier wrong decision.** Initially recorded as
+   "no code change — the KPIs self-correct once the data is deduped (S1)".
+   **That was wrong**, caught by the operator: the indexer writes continuously,
+   so RMT _always_ carries freshly-unmerged duplicates. `system.tables.total_rows`
+   is the physical part-row count, so it is _structurally_ inflated — a one-off
+   `OPTIMIZE` shrinks the error briefly and it grows straight back. Confirmed
+   empirically within one session: +3%/+6.6% → +4.3%/+11.6%. The counts must
+   dedup at READ time.
+
+   The original objection (an accurate count means scanning 14M rows on a polled
+   endpoint) turned out to be avoidable. Options considered:
+
+   | Option                                            | Read cost         | Accuracy                        | Verdict                                                    |
+   | ------------------------------------------------- | ----------------- | ------------------------------- | ---------------------------------------------------------- |
+   | `total_rows` (was)                                | zero              | structurally inflated, drifting | rejected — the bug                                         |
+   | **`accounts_recent` / `soroban_contracts FINAL`** | ~zero / low       | exact (≤2 min stale)            | **chosen**                                                 |
+   | `count() FROM accounts FINAL` each poll           | high (merges 14M) | exact                           | rejected — quota burn                                      |
+   | exact count on its own long cache                 | medium            | exact                           | viable fallback if the MV dependency ever hurts            |
+   | `uniq(id)` HyperLogLog                            | medium            | approximate                     | rejected — trades known bias for random error, still scans |
+   | own counter table (AggregatingMergeTree)          | zero              | exact                           | rejected — most infra, drift risk                          |
+
+   Chosen: `accounts` counts from `accounts_recent`, the refreshable-MV copy
+   already deduped to one row per account (plain MergeTree ⇒ `count()` is a
+   metadata read). It refreshes every 2 min (~6 s), so staleness is bounded and
+   irrelevant for a headline total, and it is the same source the `/accounts`
+   list pages — so the KPI and the list now agree by construction. `contracts`
+   uses `FINAL` because that table is ~146k rows, not 14M.
+
+   Known ceilings: the accounts KPI now depends on `accounts_recent_mv` staying
+   healthy (shared fate with the accounts list, so not a new single point of
+   failure), and `soroban_contracts FINAL` gets more expensive as that table
+   grows — revisit with the long-cache option if either bites.
+
+3. **The frontend guard was built twice and reverted.** The React duplicate-key
+   collision is what made the bug _visible_, so guarding `ExplorerTable` was the
+   obvious move. Two variants shipped as commits and were then reverted as a
+   third: suffixing a colliding key (`55975874`), then dropping duplicate rows
+   outright (`83698c5b`), reverted in `3efec94a`.
+
+   Reasoning for the revert: **a duplicate row key is never legitimate in this
+   app.** Every table keys on a primary key from ClickHouse; two rows with the
+   same key means a read path forgot to dedup. A central guard converts that
+   loud, immediately-visible failure into silent wrong data — the list would
+   look right while a page quietly returns 19 rows instead of 20. The class of
+   bug this task exists to kill would have become undetectable from the UI.
+   Both variants are recoverable from git if the premise ever changes.
+
+   Cost of the choice: the next such regression reaches users as a broken table
+   rather than a slightly-short page. Accepted — it is also how this one got
+   reported within a day.
+
+4. **F3's window is bounded from data, not from a constant.** The first version
+   converted "7 days" to ledgers with `LEDGERS_PER_DAY = 17_280` (5 s/ledger).
+   The operator rejected it: real close times drift, so the constant silently
+   means a different window every day, and the query checked `ledger_sequence`
+   twice. Replaced with a subquery deriving the cutoff sequence from
+   `closed_at`, and the constant deleted. `stats_window_bounds(&str) -> (i64,
+i64)` — which parsed `"7 days"` by splitting on whitespace — was likewise
+   replaced by a plain `STATS_WINDOW_DAYS: i64` with the wire label _derived_
+   from it. Measured **cheaper** than the constant version (−15% rows, −60%
+   memory), because the derived bound prunes on the primary key.
+
+## Notes
+
+- Investigation: 7 parallel subagents, one per domain query file, each
+  prod-verified with `chq`. Full evidence in session transcript 2026-07-18.
+- Frontend repro (live): Ledgers list asc showed pairs (424,424,425,425…);
+  repeated sort clicks grew DOM to 30→40 rows for 10 unique ledgers (duplicate
+  React keys).

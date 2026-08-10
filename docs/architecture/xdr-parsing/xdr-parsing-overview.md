@@ -203,7 +203,12 @@ failed transaction rolls every op back, yet an op that executed before the
 failing one still shows op-level `Success` with claim atoms — gating on tx
 success keeps those phantom crossings out of `pool_ids` and
 `gross_volume_a`. Failed (or order-book-only) ops therefore contribute no
-pool attribution. The CH writer folds `poolIds` into
+pool attribution. Its companion `tx_op_results_any` unwraps the failed arms
+too (`TxFailed` carries the same per-op array) — consumed only by the
+request-time heavy path, where `op_result_code` names each op's result with
+the XDR library's own variant names (`"LowReserve"`, `"OpNoAccount"`, …) and
+the API surfaces it as `operations[].result_code`, the fail-reason source
+for the transaction page (task 0352). Claim-atom extraction never reads it. The CH writer folds `poolIds` into
 `operations_appearances.pool_ids Array(FixedString(32))` (sorted + deduped;
 one row per op identity — task 0268); the PG store keeps the legacy scalar
 `pool_id`, where these ops remain NULL pending PG retirement.
@@ -370,6 +375,50 @@ step 14, called out here so the parser/indexer boundary stays explicit):
   NFT contract's `token_uri()` JSON by Lambda 2 (`nft_token_uri` kind,
   task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
   `current_owner_id`) tuple — see §5.1 NFT pattern.
+
+### 4.7 Transaction Value — "net settled" (task 0393)
+
+The tx-list "Net settled" column needs a single figure per (transaction, asset).
+The protocol has no per-transaction amount — value lives on operations and Soroban
+token events — so the parser derives the **net-settled value**:
+`max(Σ positive account deltas, Σ negative account deltas)` per (tx, asset),
+which nets out routing hops (a pass-through account ends at delta 0) instead of
+double-counting them. The reducer is `xdr_parser::net_settled`
+(`net_settled.rs`); its three rules — `max` of both sides (so burns / payments
+-to-issuer stay non-zero), native canonicalised to one surrogate, fee excluded —
+are covered in task 0393.
+
+This figure is the network-flow **flow value**, not a heuristic: the flow
+decomposition theorem splits any flow into source→sink **paths** plus **cycles**,
+where a path contributes its flow and a **cycle contributes exactly zero**. Hence
+`gross = Σ path + Σ cycle`, `net = Σ path`. A wash / round-trip is a pure cycle
+and therefore nets to zero **by definition** (the same zero-balance-cycle
+signature the wash-trading literature uses to detect washes), and two offsetting
+but intent-wise unrelated payments decompose into a single path — the arithmetic
+cannot see intent and does not try to. Net is preferred to gross because
+`net ≤ gross` always: net never overstates, while gross inflates every routed
+payment (3 hops of 100 read as 300), and routing is the common case. If a gross
+figure is ever needed, `cycle volume = gross − net` falls out of the theorem.
+
+A single **ledger** reader feeds it, for EVERY tx (classic and Soroban):
+
+- `xdr_parser::ledger_balance_deltas` (`ledger_value.rs`) reads the before→after
+  balance changes on `AccountEntry` / `TrustLineEntry` / `ContractData` from
+  `TransactionMeta` (via the version-safe `meta.rs` change accessor). Every value
+  flow — payment, path payment, offer/DEX fill, LP deposit/withdraw,
+  claimable-balance create/claim, clawback, **and** Soroban SAC / bespoke-token
+  transfers (which settle as `ContractData` `Balance` changes) — is an
+  account / trustline / contract balance change, so this one reader covers them
+  all and auto-nets. Token EVENTS are contract-emitted logs and are **never** used
+  for value (any contract can emit any `"transfer"` it likes); a ledger balance
+  cannot be forged. The fee is charged in the ledger's separate `feeProcessing`
+  phase, not in `TransactionMeta`, so it is excluded by construction.
+
+Surrogate resolution and the net reduction run at ingest
+(`db_clickhouse::persist::stage`), which writes the result to
+`operation_asset_appearances.net_settled` (`Nullable(Int128)`; §4.3 / schema
+doc). Values are stored RAW; the read scales by the asset's decimals (classic /
+SAC = 7).
 
 ## 5. Soroban-Specific Handling
 
@@ -557,6 +606,33 @@ the `nfts_pending` quarantine until a later WASM observation reclassifies them. 
 parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefore
 contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
 prod/RPC evidence behind these shapes.)
+
+### 5.6 Fungible Token Event Decode (`parse_token_event`)
+
+Fungible SEP-41 / CAP-67 token movements — `transfer` / `mint` / `burn` /
+`clawback` — are decoded by `parse_token_event` (`crates/xdr-parser/src/event_filters.rs`),
+the fungible counterpart to `detect_nft_events`. Where the NFT path keys on a
+`token_id`, this path reads the account operands and the asset identity (lore
+task [0383](../../../lore/1-tasks/active/0383_FEATURE_l2-soroban-event-token-flow-decode/README.md)):
+
+- **operands** — `transfer [sym, from, to, …]`, `mint [sym, to, …]`,
+  `burn`/`clawback [sym, from, …]`. Missing / non-address operands ⇒ not a token
+  event.
+- **asset** — CAP-67 "unified" SAC events carry the classic asset as a **trailing
+  SEP-11 string topic**: `"native"` → the native XLM asset, `"CODE:ISSUER"` → the
+  classic credit. A bespoke (non-SAC) token omits it, so its asset identity is the
+  emitting contract (`EventAsset::Contract`).
+- **amount** — not decoded here. The presence indexes never store it, and the
+  tx-detail page decodes amounts from archive XDR at read time (E3, ADR 0029), so
+  the flow parser only needs operands + asset (see indexing-pipeline overview §5.3).
+
+The decode lives in `db_clickhouse::persist::stage::derive_token_event`. The
+`soroban-token-flow-backfill` one-shot pass called that same fn so both emitted
+byte-identical surrogate rows; the pass was removed in lore 0425 once its history
+was closed, leaving live ingest as the only caller. NFT-shaped events (no SEP-11 asset string) still
+register their account operands as participants but are excluded from the fungible
+asset index — that identity is ambiguous and tracked separately by the NFT path
+above.
 
 ## 6. Storage Contract
 

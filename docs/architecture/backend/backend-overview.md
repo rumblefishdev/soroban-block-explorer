@@ -71,38 +71,43 @@ own ClickHouse store, which is populated by the Galexie-based ingestion pipeline
 
 The public explorer API serves anonymous read traffic. Browser clients do not carry API
 keys; abuse controls are enforced at the ingress layer through throttling, request
-validation, and AWS WAF. If API keys are introduced, they are reserved for trusted
-non-browser consumers.
+validation, and the Cloudflare edge that fronts the API hostname. There is no AWS WAF —
+both WebACLs were dropped ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+task 0302). If API keys are introduced, they are reserved for trusted non-browser
+consumers.
 
 ```
-┌──────────┐    HTTPS    ┌─────────────┐              ┌──────────────────────┐
-│  Client  │────────────>│ API Gateway │─────────────>│  Lambda (Rust/axum)  │
-└──────────┘             └─────────────┘              │                      │
-                                                      │  axum Modules:       │
-                                                      │  ├─ Network ─────────┤
-                                                      │  ├─ Transactions ────┤
-                                                      │  ├─ Ledgers ─────────┤
-                                                      │  ├─ Accounts ────────┤
-                                                      │  ├─ Assets ──────────┤
-                                                      │  ├─ Contracts ───────┤
-                                                      │  ├─ NFTs ────────────┤
-                                                      │  ├─ Liquidity Pools ─┤
-                                                      │  └─ Search ──────────┤
-                                                      └──────────┬───────────┘
-                                                                 │
-                                                                 ▼
-                                                      ┌──────────────────────┐
-                                                      │  ClickHouse (Hetzner)│
-                                                      │  (block explorer DB) │
-                                                      └──────────────────────┘
+┌──────────┐ HTTPS ┌────────────┐ +X-Edge-Secret ┌─────────────┐  ┌──────────────────────┐
+│  Client  │──────>│ Cloudflare │───────────────>│ API Gateway │─>│  Lambda (Rust/axum)  │
+└──────────┘       │ WAF · DDoS │                └─────────────┘  │                      │
+                   │ rate limit │                                 │  axum Modules:       │
+                   └────────────┘                                 │  ├─ Network ─────────┤
+                                                                  │  ├─ Transactions ────┤
+                                                                  │  ├─ Ledgers ─────────┤
+                                                                  │  ├─ Accounts ────────┤
+                                                                  │  ├─ Assets ──────────┤
+                                                                  │  ├─ Contracts ───────┤
+                                                                  │  ├─ NFTs ────────────┤
+                                                                  │  ├─ Liquidity Pools ─┤
+                                                                  │  └─ Search ──────────┤
+                                                                  └──────────┬───────────┘
+                                                                             │
+                                                                             ▼
+                                                                  ┌──────────────────────┐
+                                                                  │  ClickHouse (Hetzner)│
+                                                                  │  (block explorer DB) │
+                                                                  └──────────────────────┘
 ```
 
 ### 3.2 Request Flow
 
 The typical request path is:
 
-1. client calls a public REST endpoint through API Gateway
-2. API Gateway routes the request to the Rust/axum Lambda handler
+1. client calls a public REST endpoint on the Cloudflare-fronted hostname; Cloudflare
+   applies its managed rules, DDoS and rate limiting, and a Transform Rule stamps
+   `X-Edge-Secret` before forwarding to API Gateway
+2. API Gateway routes the request to the Rust/axum Lambda handler, which rejects
+   anything arriving without that header (`crates/api/src/common/edge_lock.rs`)
 3. the relevant module validates input and queries the explorer database
 4. backend-level normalization and enrichment are applied where needed
 5. the response is returned in a frontend-friendly form
@@ -126,7 +131,10 @@ The backend implementation direction implied by the current design is:
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
-- **AWS WAF** for managed-rule abuse protection on public ingress
+- **Cloudflare** for managed-rule abuse protection, DDoS and rate limiting on the API
+  hostname, with the AWS origin locked to it by a secret request header
+  (`crates/api/src/common/edge_lock.rs`) — replacing the AWS WAF WebACL that used to sit
+  on the API Gateway stage
 - **ClickHouse** as the only source of indexed chain data served by the API
 - **No XDR dependencies** — API serves pre-materialized data; raw XDR is passthrough only (per ADR 0004)
 
@@ -294,17 +302,17 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 ### 6.2 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                                      |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                            |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                  |
-| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                    |
-| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                          |
-| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                   |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`    |
-| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                |
+| Resource        | Endpoint(s)                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                                                                |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                                                                      |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                                                            |
+| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                                              |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
+| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
 ### 6.3 Resource Details
 
@@ -425,6 +433,18 @@ nft | fungible) and `filter[q]` (full-text over name + contract_id).
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
+
+**`GET /contracts/:contract_id/decompiled`** - On-demand decompilation of the contract's
+WASM (task 0465, issue #374). No persistence: the handler resolves `wasm_hash`, fetches
+the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`),
+and runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
+timeout. `?format=rust` (default) returns reconstructed Rust with completeness markers
+(`functions`, `todo_holes`, `unknown_vars` — counts, not percentages, per the
+soroban-ret team's guidance); when Rust emission fails the same response degrades to
+`representation: "wat"` with `rust_error` set. `?format=wat` returns the (lossless)
+WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code no
+longer live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
+responses carry the `LONG` cache header.
 
 **`GET /contracts/:contract_id/invocations`** - Paginated list of contract invocations.
 

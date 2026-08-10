@@ -101,7 +101,17 @@ CREATE TABLE IF NOT EXISTS ledgers (
     closed_at         DateTime64(3, 'UTC'),
     protocol_version  Int32,
     transaction_count Int32,
-    base_fee          Int64
+    base_fee          Int64,
+    -- `closed_at` is not the sort key (`sequence` is), so a time-bounded read —
+    -- the LP chart resolving a window's ledger range — scanned the whole ~26M-row
+    -- table. `closed_at` is monotonic with `sequence`, so a minmax skip index
+    -- prunes to the matching granule range for a few KB (minmax stores 2 values
+    -- per granule group). Measured on the 2026-07-17 50M req/month load test:
+    -- lpchart 77.9M -> 26.3M read_rows/request (-27.5bn over a 12-min run), CH
+    -- time 411 -> 106 ms. Applied to the live prod table via
+    -- ALTER ... ADD INDEX + MATERIALIZE INDEX (online, 2026-07-17); GRANULARITY 4
+    -- matches what is deployed — keep them in sync.
+    INDEX closed_at_mm closed_at TYPE minmax GRANULARITY 4
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(sequence, 500000)
@@ -135,10 +145,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     first_seen_ledger Int64,
     last_seen_ledger  Int64,
     sequence_number   Int64,
-    -- home_domain: write-once per account, very low cardinality
-    -- globally (mainnet has a handful of unique SEP-1 issuers'
-    -- domains across tens of millions of accounts; the vast majority
-    -- are NULL). LowCardinality dictionary-encodes the few unique
+    -- home_domain: MUTABLE (SET_OPTIONS rewrites it), but rare — 4 of the
+    -- 1.01M prod accounts that carry one have more than one value (measured
+    -- 2026-07-22, task 0397). Any read projecting it MUST take the latest
+    -- version (`ORDER BY last_seen_ledger DESC LIMIT 1`); the bare
+    -- `LIMIT 1 BY id` used where only `account_id` is projected is NOT safe
+    -- here. Very low cardinality globally (mainnet has a handful of unique
+    -- SEP-1 issuers' domains across tens of millions of accounts; the vast
+    -- majority are NULL). LowCardinality dictionary-encodes the few unique
     -- values per block — strong compression on top of default LZ4.
     home_domain       LowCardinality(Nullable(String)),
     -- The table is ORDER BY account_id (StrKey -> id resolves on the PK), but
@@ -152,6 +166,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- (1-(1-p)^N): at default 0.025 / 11 keys ~6M rows survived; at 0.001 ~1M.
     -- Index is ~tens of MB. Applied to the live prod table via
     -- ALTER ... ADD INDEX + MATERIALIZE INDEX (online, 2026-06-16).
+    -- CONSUMERS (check before ever dropping this as "unused"): the tx-list /
+    -- search / assets id->StrKey seeks in `crates/api`, AND the SEP-1
+    -- enrichment worker's issuer resolve (`enrich_and_persist::sep1_assets`,
+    -- task 0397) — that one is a single-key seek and reads 3 granules with the
+    -- index vs the whole table without it, silently, with no error to notice.
     INDEX idx_acc_id id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree(last_seen_ledger)
@@ -191,6 +210,19 @@ FROM accounts FINAL;
 -- `wasm_uploaded_at_ledger` is the version slot; `DEFAULT 0` is the
 -- stub-row sentinel (Pass 2 stub-rowing for referenced-but-not-deployed
 -- contracts in mid-stream backfill ranges).
+-- NAMING TRAP (task 0398) — `contract_id` means two different things:
+--   * HERE (and in `soroban_contract_metadata`) it is a `String`: the real
+--     `C…` StrKey.
+--   * EVERYWHERE ELSE (`assets`, `nfts`, `nft_ownership`, `soroban_events`,
+--     `operations_appearances`, …) it is an `Int64`: the cityhash64 surrogate
+--     OF that StrKey, i.e. the value stored in `soroban_contracts.id`.
+-- So a foreign key named `contract_id` joins `soroban_contracts.id`, NEVER
+-- `soroban_contracts.contract_id`. Same value, three column names, two types
+-- (`sac_contract_id`, `caller_contract_id` are the same surrogate too).
+-- Deliberate one shared surrogate space (`ids::{account,contract,address}_id`
+-- are byte-identical) — not redundancy. Renaming was costed and deferred to
+-- task 0418: the ALTER is metadata-only, but the call sites are 85 in
+-- `stage.rs` + 21 in `crates/api`.
 CREATE TABLE IF NOT EXISTS soroban_contracts (
     id                       Int64,
     contract_id              String,
@@ -600,22 +632,14 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     -- floor tight, same rationale as `idx_oa_pool_ids` / the 0290 `idx_acc_id`.
     -- contract_id is Nullable; `= <id>` never matches NULL rows, and granules
     -- holding only NULLs carry no value → skipped.
-    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1,
-    -- Skip index for the CLASSIC / classic-wrap-SAC arm of the asset-transactions
-    -- driver (E10 GET /assets/:id/transactions; task 0334). That driver filters
-    -- `(asset_code = ? AND asset_issuer_id = ?) OR (contract_id = ?)`. For a
-    -- classic-wrap SAC both arms are present, and the `asset_*` arm had NO index —
-    -- so the `OR` defeated `idx_oa_contract_id` entirely (a granule can only be
-    -- skipped if BOTH disjuncts can be ruled out), forcing a FULL scan
-    -- (prod-measured: ~6.2 B rows / ~115 GiB / ~7.5 s per request for `zkSync`,
-    -- still blowing `api_throttle.read_rows` after the 0333 contract-only fix).
-    -- A bloom on `asset_issuer_id` (high-cardinality Int64 surrogate; `asset_code`
-    -- is then checked only within candidate granules) makes the classic arm
-    -- prunable; CH unions it with `idx_oa_contract_id` for the OR (EXPLAIN:
-    -- "<Combined skip indexes>"). Box-measured: 13.18 M (whole table) → 114 K.
-    -- Same `bloom_filter(0.001)` rationale as `idx_oa_contract_id`; asset_issuer_id
-    -- is Nullable (NULL = non-asset op) → NULL-only granules carry no value, skipped.
-    INDEX idx_oa_asset_issuer_id asset_issuer_id TYPE bloom_filter(0.001) GRANULARITY 1
+    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1
+    -- idx_oa_asset_issuer_id (bloom on asset_issuer_id, was here for the E10
+    -- asset-tx CLASSIC arm, task 0334) DROPPED 2026-07-13: task 0359 moved the
+    -- asset-tx driver to the `operation_asset_appearances` fan-out seek, so no
+    -- query filters `operations_appearances` by `asset_issuer_id` anymore — the
+    -- bloom's sole consumer is gone (verified across api / audit-harness /
+    -- backfill). Prod is an existing DB (this file is fresh-only): reclaim the
+    -- ~97 MiB with `ALTER TABLE operations_appearances DROP INDEX idx_oa_asset_issuer_id`.
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -644,10 +668,61 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- source != issuer, or a trustline predating the ingest window). Harmless -- the
 -- read path reaches a fact row only via an existing `assets` row, so such orphans
 -- are unreachable dead weight, never wrong output.
+-- `net_settled` (task 0393): net-settled "value moved" per (transaction, asset)
+-- for the tx-list "Net settled" column. RAW `Nullable(Int128)` (scale by the
+-- asset's `decimals` at read, like balances/total_supply) — the figure
+-- `max(Σ positive account deltas, Σ negative account deltas)` over the tx's
+-- transfers, computed one-shot per (tx, asset) in Rust from the AUTHORITATIVE
+-- LEDGER balance changes (`persist::stage::ledger_deltas_net_settled` +
+-- `xdr_parser::ledger_balance_deltas` + `xdr_parser::net_settled`) — account,
+-- trustline, and ContractData balances; NEVER from token events (logs). It is the
+-- network-flow FLOW VALUE: by the flow decomposition theorem a flow splits into
+-- source→sink paths plus cycles, and a cycle contributes exactly zero — so a
+-- wash / round-trip nets to `0` BY DEFINITION, not by accident (that zero-balance
+-- cycle is also how the wash-trading literature identifies a wash). Gross would be
+-- `Σ path + Σ cycle`; if ever wanted, `cycle volume = gross − net`.
+-- NULLABLE ON PURPOSE: `NULL` = not computable (the reducer could not represent
+-- the result, or a recognised event's amount was unreadable), `0` = genuinely
+-- nothing settled net. Without the distinction a value that could not be computed
+-- would masquerade as a real zero. The read filters `IS NOT NULL AND != 0`.
+-- NON-KEY data column, version-less RMT: `net_settled` has a SINGLE writer —
+-- `stage.rs`, run by both live ingest and the full S3 re-ingest — so live and
+-- historical rows for a key are computed identically and the duplicate collapses
+-- cleanly. The read dedups with `max(net_settled)` (`max` ignores NULL, so a
+-- computed value wins over a not-computed one for the same key). There is
+-- deliberately no version column: a downward "correction" of a deterministic
+-- figure only happens when OUR reducer changes, which is a deploy event handled
+-- by re-running the re-ingest + `OPTIMIZE FINAL` over the range —
+-- not a runtime concern worth a per-row version + a full-table engine rebuild.
+-- The tx-list "+ N other assets" affordance is a read-time COUNT of asset rows
+-- per tx, not a stored column.
+-- tx-list "value" read note (task 0393): the PK is `asset_id`-leading (for the
+-- per-asset activity page), so the tx-list read filtering
+-- `(ledger_sequence, transaction_id) IN (page keys)` is NOT a prefix seek — it
+-- SCANS the pruned partition. Measured ~26M rows/page against a full partition
+-- vs ~16k for the seek-based op-types query beside it. This endpoint family is
+-- polled and previously exhausted the read quota in exactly this shape (tasks
+-- 0243/0386), so a `(ledger, tx)`-ordered companion (the `accounts_recent`
+-- pattern: plain MergeTree + refreshable MV + atomic EXCHANGE — a projection is
+-- refused on an RMT, CH Code 344) is REQUIRED before this ships at scale. Tracked
+-- as the read-path work in task 0393's Operations / follow-up section; the head
+-- partition being young hides the cost today.
 CREATE TABLE IF NOT EXISTS operation_asset_appearances (
     asset_id        Int64,
     ledger_sequence Int64,
-    transaction_id  Int64
+    transaction_id  Int64,
+    net_settled     Nullable(Int128),
+    -- Bloom skip index on transaction_id (task 0393 read-path). The "Net settled"
+    -- value read filters by (ledger_sequence, transaction_id), but the table is
+    -- asset_id-leading, so that filter is a partition SCAN (~26M rows/mature
+    -- partition), not a primary-key seek. A tx-list page's ~hundreds of tx_ids are
+    -- scattered across the partition's granules; this bloom lets ClickHouse skip
+    -- the granules holding none of them (~10x fewer rows read, measured shape).
+    -- Same pattern as idx_oa_contract_id / idx_acc_id; RMT-safe (skip indexes are
+    -- allowed — only projections are refused on RMT, task 0353). A full
+    -- (ledger, tx)-leading companion table is the heavier fallback if this proves
+    -- insufficient at scale.
+    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -678,6 +753,42 @@ CREATE TABLE IF NOT EXISTS soroban_events (
     contract_id     Int64,
     transaction_id  Int64,
     ledger_sequence Int64,
+    -- OURS, NOT STELLAR'S — and deliberately so. Read this before "fixing"
+    -- it to match the protocol.
+    --
+    -- `event_index` is a flat counter we assign per transaction while walking
+    -- the event containers in order (`xdr_parser::event::extract_events`):
+    -- tx-level → per-operation → diagnostic. Stellar defines no such number.
+    -- CAP-67's V4 meta has three separate event lists and none of them carries
+    -- an index; the official identity, the one `getEvents` returns, is
+    -- TOID(ledger, tx position, operation position) + the event's position
+    -- WITHIN that operation.
+    --
+    -- Two reasons ours stays:
+    --
+    -- 1. It is part of this table's ORDER BY, so it co-defines row identity
+    --    for `ReplacingMergeTree` dedup. A deterministic per-tx counter is
+    --    exactly what replay-idempotency needs — re-processing a ledger
+    --    yields the same numbers and the merge collapses cleanly. The
+    --    official key would change what counts as the same row.
+    -- 2. The official key is NOT EXPRESSIBLE for much of this table. It needs
+    --    an operation position, and `op_index` is absent for tx-level events
+    --    (fee charge and refund, always), for every diagnostic event, and for
+    --    EVERY pre-Protocol-23 event — the V3 meta carries no per-operation
+    --    attribution at all. Adopting it would trade a total key for one that
+    --    is null-bearing across years of history.
+    --
+    -- So: ours is the better INTERNAL key, theirs is the better key for
+    -- exchanging data with the outside world. Different jobs, not a defect.
+    --
+    -- Revisit only if one of these becomes true, and budget a full rewrite of
+    -- the sort key (~10 B rows measured 2026-08-04):
+    --   * we publish our own events API and callers need stable, portable
+    --     event ids;
+    --   * we reconcile our events against an external source by id rather
+    --     than by content.
+    -- The read path does not depend on it for meaning: the transaction page
+    -- states an event's real position from `op_index` and CAP-67 `stage`.
     event_index     Int16,
     event_type      Int16,
     signature       LowCardinality(Nullable(String)),
@@ -748,7 +859,7 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     -- Gross trade volume in asset-A units per (pool, ledger), computed from
     -- path-payment claim atoms (task 0261 extractor; written by the 0266
     -- backfill / 0247 wiring). USD volume/fee stay NULL until the Prices
-    -- API lands (ADR 0048 read-time join).
+    -- API lands (ADR 0053 read-time join).
     gross_volume_a  Nullable(Decimal128(7))
 )
 ENGINE = ReplacingMergeTree

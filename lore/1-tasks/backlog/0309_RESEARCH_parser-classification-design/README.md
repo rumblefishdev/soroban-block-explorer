@@ -67,6 +67,13 @@ Every contract/event flows down to **exactly one class or a monitored UNKNOWN**:
 - Then: decide scope (whole-pipeline vs per-domain rollout), write an ADR for the total-function +
   monitored-UNKNOWN design, and a phased migration plan. The `minted` family (bytes token_id) and
   the heterogeneous custom tail are the concrete stress-tests this design must handle.
+- **The implementation task this spawns must carry one extra criterion: delete
+  `contract-type-rebuild`** — the subcommand, its row in `docs/backfills.md`, and its entry in
+  `crates/backfill-runner/README.md`. That pass exists only because live leaves contracts the
+  classifier cannot name at `Other`; a total classifier removes its reason to exist, and a
+  maintenance pass left standing after its hole closes is how the 0425 audit found seven spent
+  ones. Per lore 0425 clause 4. If the rollout is phased and `Other` survives in some domain,
+  say which domain and why in the same PR, rather than keeping the pass by default.
 
 ## Notes
 

@@ -1,121 +1,66 @@
 # AWS CDK Infrastructure
 
-CDK stacks for the Soroban Block Explorer. Defines all AWS resources: networking, storage, compute, delivery, and monitoring.
+CDK stacks for the Soroban Block Explorer — the AWS plane (networking,
+compute, ingestion, delivery, monitoring). This file is the **stack
+reference**; for the operational "what command ships what" guide see
+**[`docs/deployment.md`](../docs/deployment.md)**.
 
-## Stack architecture
+> **Data plane note:** the production database is **Hetzner-hosted
+> ClickHouse** ([`infra-hetzner/`](../infra-hetzner/README.md)), not AWS
+> RDS. RDS and the Postgres migration/bastion stacks were removed (tasks
+> 0239 / 0241).
+
+## Stacks
+
+Production app — `src/bin/production.ts`, config `envs/production.json`:
 
 ```
-NetworkStack (VPC, subnets, security groups, VPC endpoints)
-    |
-StorageStack (RDS, RDS Proxy, S3, Secrets Manager)
-    |
-    +-- ApiStack (API Lambda, API Gateway)
-    +-- IndexerStack (Rust Ledger Processor Lambda, SQS DLQ)
-    +-- IngestionStack (ECS Fargate Galexie, ECR)
-    +-- FrontendStack (CloudFront, WAF, Route 53)
-    |
-MonitoringStack (CloudWatch, alarms, X-Ray)
+NetworkStack             minimal VPC, public subnet only (no NAT, no RDS)
+LedgerBucketStack        S3 stellar-ledger-data (Galexie → indexer)
+ComputeStack             API + Indexer + Enrichment Lambdas + SQS/DLQ
+IngestionStack           Galexie ECS Fargate + ECR
+DeliveryStack            CloudFront + SPA S3 bucket
+ApiGatewayStack          REST API Gateway (cache, throttle, mTLS lock)
+ObservabilityStack       X-Ray / logging
+CloudWatchStack          alarms + dashboards
+HetznerDnsStack          Route 53 A record → CH box IP
+CloudflareBootstrapStack TF-state bucket for infra/cloudflare/
 ```
-
-Currently implemented: **NetworkStack**.
 
 ## Prerequisites
 
-- AWS CLI with a configured profile
-- Node.js 22+
-- `export AWS_PROFILE=soroban-explorer`
+- AWS CLI with a named profile that has deploy rights (`export AWS_PROFILE=…`).
+  Region is read from `envs/production.json` (`eu-central-1`) — do not pass `--region`.
+- Node.js 22+ (`.nvmrc`), `npm ci` at the repo root.
+- Rust toolchain + `cargo-lambda` + `zig` — the API/indexer/enrichment Lambdas
+  are Rust, cross-compiled at synth time (`ComputeStack` fails to build without them).
 
 ## Commands
 
-From `infra/`:
+Production is the only environment; there is **no staging** (retired by task
+0249). From `infra/`:
 
 ```bash
-# First-time setup (once per AWS account + region)
-make bootstrap
+make bootstrap                 # first-time only, once per AWS account + region
+make deploy-cicd               # first-time only, shared OIDC/CICD roles
 
-# Staging
-make diff-staging              # Preview changes
-make deploy-staging            # Deploy all stacks
-make deploy-staging-network    # Deploy single stack
-
-# Production
-make diff-production
-make deploy-production
-make deploy-production-network
-
-# Bastion (separate CDK app, not included in deploy --all)
-make deploy-staging-bastion    # Deploy bastion host
-make destroy-staging-bastion   # Destroy bastion host
+make diff-production           # preview all stacks
+make deploy-production         # deploy ALL stacks
+make deploy-production-compute # deploy a single stack (here: API/indexer/enrichment)
 ```
 
-Or from the repository root:
+The full per-stack target list is in the [`Makefile`](Makefile). The
+operational guide (which command for which change, gotchas, verification) is
+**[`docs/deployment.md`](../docs/deployment.md)**.
 
-```bash
-npm run infra:diff:staging
-npm run infra:deploy:staging
-```
+## Database access
 
-## Connecting to RDS
-
-RDS is in a private subnet with no public access. Use SSM Session Manager port forwarding through a bastion host.
-
-### Prerequisites
-
-```bash
-brew install session-manager-plugin
-```
-
-### Setup (one-time)
-
-1. Deploy the main infrastructure (if not already done):
-
-   ```bash
-   make deploy-staging
-   ```
-
-2. Deploy the bastion host:
-
-   ```bash
-   make deploy-staging-bastion
-   ```
-
-### Open tunnel
-
-```bash
-npm run db:tunnel              # staging, localhost:15432
-npm run db:tunnel -- staging 5433  # custom local port
-```
-
-### Connect with DBeaver / psql
-
-| Field    | Value                                                            |
-| -------- | ---------------------------------------------------------------- |
-| Host     | `localhost`                                                      |
-| Port     | `15432`                                                          |
-| Database | `soroban_explorer`                                               |
-| User     | From Secrets Manager: `soroban-explorer/staging/rds-credentials` |
-| Password | From Secrets Manager: `soroban-explorer/staging/rds-credentials` |
-
-To retrieve credentials: AWS Console → Secrets Manager → `soroban-explorer/staging/rds-credentials` → "Retrieve secret value".
-
-### Teardown
-
-Destroy the bastion when not needed ($0 when stack is destroyed):
-
-```bash
-make destroy-staging-bastion
-```
-
-### How it works
-
-```
-Your laptop (localhost:15432)
-  → HTTPS (443) → AWS SSM Service
-    → SSM Agent on bastion EC2
-      → RDS (port 5432)
-```
-
-No SSH, no open ports, no VPN, no IP whitelisting required. Only valid AWS credentials with `ssm:StartSession` permission.
+The production database is **Hetzner-hosted ClickHouse**, reached over mTLS —
+not AWS RDS. RDS, the bastion host, and the SSM port-forward tunnel described
+in earlier versions of this file were removed (tasks 0239 / 0241). For CH
+access and credentials see
+[`infra-hetzner/README.md`](../infra-hetzner/README.md) and
+[`docs/architecture/security/clickhouse-rbac.md`](../docs/architecture/security/clickhouse-rbac.md).
 
 ## HetznerDnsStack — Route 53 record for the production ClickHouse box
 
@@ -136,7 +81,8 @@ aws ssm put-parameter \
     --name /soroban/production/ch-ip \
     --value <dedicated-server-ipv4> \
     --type String \
-    --region us-east-1
+    --region eu-central-1        # MUST match awsRegion — the stack resolves
+                                 # the param in its own region (hetzner-dns-stack.ts)
 ```
 
 Subsequent IP rotations (after a box replacement) use `--overwrite` on the same command — no CDK code change, no PR.
@@ -153,46 +99,44 @@ make deploy-production-hetzner-dns
 
 Each environment has its own JSON config and CDK entry point:
 
-| Environment | Config                 | Entry point             | VPC CIDR    | NAT             |
-| ----------- | ---------------------- | ----------------------- | ----------- | --------------- |
-| staging     | `envs/staging.json`    | `src/bin/staging.ts`    | 10.0.0.0/16 | Managed gateway |
-| production  | `envs/production.json` | `src/bin/production.ts` | 10.1.0.0/16 | Managed gateway |
+| Environment   | Config                 | Entry point             | Notes                                |
+| ------------- | ---------------------- | ----------------------- | ------------------------------------ |
+| production    | `envs/production.json` | `src/bin/production.ts` | the only runtime env; `eu-central-1` |
+| cicd (shared) | `envs/cicd.json`       | `src/bin/cicd.ts`       | OIDC/CICD roles; `make deploy-cicd`  |
+
+AWS-side staging was retired by task 0249 — there is no `staging.json` or
+`bin/staging.ts`.
 
 ## Project structure
 
 ```
 envs/
-  staging.json               # Staging environment config
-  production.json            # Production environment config
+  production.json          # Production environment config
+  cicd.json                # Shared CICD/OIDC config
 src/
   bin/
-    staging.ts               # Main CDK app entry point — staging
-    production.ts            # Main CDK app entry point — production
-    bastion-staging.ts       # Bastion CDK app entry point — staging
-    bastion-production.ts    # Bastion CDK app entry point — production
+    production.ts          # Main CDK app entry point — production
+    cicd.ts                # CICD app entry point (OIDC deploy roles)
   lib/
     types.ts               # EnvironmentConfig interface
     app.ts                 # Main app stack wiring (createApp)
-    bastion-app.ts         # Bastion app (createBastionApp)
+    cicd-app.ts            # CICD app wiring
     ports.ts               # Shared port constants
-    stacks/
-      network-stack.ts     # VPC, subnets, SGs, S3 VPC endpoint
-      rds-stack.ts         # RDS PostgreSQL, RDS Proxy, Secrets Manager
-      ledger-bucket-stack.ts # S3 bucket for ledger XDR files
-      migration-stack.ts   # DB migration Lambda (custom resource)
-      compute-stack.ts     # API + Indexer Lambdas
-      bastion-stack.ts     # Bastion host for SSM port forwarding
-Makefile                     # Deploy/synth/diff targets per environment
+    stacks/                # one file per stack (see "Stacks" above)
+Makefile                   # deploy/synth/diff targets — production + cicd
 ```
 
 ## NetworkStack resources
 
-- VPC with /16 CIDR in us-east-1
-- Public subnet (/20) with Internet Gateway
-- Private subnet (/20) with NAT Gateway
-- Lambda security group (outbound: RDS 5432, HTTPS 443)
-- RDS security group (inbound: Lambda + ECS on 5432)
-- ECS security group (outbound: HTTPS 443, RDS 5432, Stellar peers 11625)
-- S3 Gateway VPC endpoint on private subnet route table
+Post-task-0239 the VPC is intentionally minimal (`eu-central-1`, single AZ):
 
-Single-AZ deployment in us-east-1a. Multi-AZ expansion requires only config changes.
+- VPC with a public subnet + Internet Gateway only
+- **No NAT Gateway, no private subnet, no RDS** — Lambdas run out-of-VPC and
+  Galexie gets a per-task public IPv4 (`assignPublicIp: ENABLED`), which is
+  its only egress path
+- ECS security group for the Galexie task (egress: HTTPS 443, Stellar peers
+  11625, Hetzner CH over mTLS)
+
+AWS → Hetzner ClickHouse identity is asserted by mTLS, not VPC isolation —
+there is no AWS-side database to wall off. See
+[`docs/architecture/infrastructure/infrastructure-overview.md`](../docs/architecture/infrastructure/infrastructure-overview.md).

@@ -158,20 +158,41 @@ fn is_valid_decimal_string(s: &str) -> bool {
     digits > 0 && dots <= 1
 }
 
-/// Normalize `filter[asset_code]` for the WHERE clause: trim surrounding
-/// whitespace and uppercase the result. Empty input (e.g. `?filter[asset_code]=`)
-/// is treated as "no filter" and dropped to `None`. The DB side applies
-/// `UPPER(...)` symmetrically so a mixed-case stored code matches.
+/// Normalize `filter[asset_code]` into the needles the WHERE clause binds:
+/// trim, uppercase, then split a pair query on `/`. Empty input (e.g.
+/// `?filter[asset_code]=`) yields no needles — an empty one would otherwise
+/// match every row (`positionCaseInsensitive(…, '') = 1`).
+///
+/// `USDC/XLM` becomes two needles, and the query gives each one its own leg in
+/// either order — so the typed order does not matter, and one asset cannot
+/// satisfy both halves (`USDC/USDC` means both legs, not "USDC anywhere, twice
+/// over"). The split is
+/// `splitn(2)` on purpose: this is a *pair* filter, and an unbounded split would
+/// let a caller turn one long free-text field into thousands of needles, each
+/// costing a pass over the table. A third code therefore lands inside needle two
+/// (`XLM/BTC`), which matches nothing — correct, since a pool has two legs, and
+/// honest, since nothing was silently discarded.
+///
+/// The DB side matches each needle as a case-insensitive **substring** of either
+/// leg (0440), so the uppercasing here is belt-and-braces rather than load-bearing;
+/// the trim and the empty-needle drop are what the query depends on.
 ///
 /// Stellar protocol asset codes are case-sensitive (1–12 ASCII chars,
 /// any case), but the canonical convention is uppercase (USDC, XLM). The
-/// trim+uppercase normalization matches caller intent for the Figma
-/// "Filter by asset pair" free-text field; consumers who need exact
-/// case-sensitive issuer-disambiguated matching should use the per-leg
-/// `filter[asset_a_code]` / `filter[asset_a_issuer]` mode instead.
-fn normalize_asset_code(raw: Option<String>) -> Option<String> {
+/// trim+uppercase normalization matches caller intent for the list's free-text
+/// field; consumers who need exact case-sensitive issuer-disambiguated matching
+/// should use the per-leg `filter[asset_a_code]` / `filter[asset_a_issuer]` mode
+/// instead.
+fn normalize_asset_codes(raw: Option<String>) -> Vec<String> {
     raw.map(|s| s.trim().to_uppercase())
+        .into_iter()
+        .flat_map(|s| {
+            s.splitn(2, '/')
+                .map(|part| part.trim().to_string())
+                .collect::<Vec<_>>()
+        })
         .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn map_pool_item(row: PoolRow) -> PoolItem {
@@ -302,7 +323,7 @@ pub async fn list_pools(
         asset_b_code: params.filter_asset_b_code,
         asset_b_issuer: params.filter_asset_b_issuer,
         min_tvl: params.filter_min_tvl,
-        asset_code: normalize_asset_code(params.filter_asset_code),
+        asset_codes: normalize_asset_codes(params.filter_asset_code),
     };
 
     // The CH list keys on `last_updated_ledger` (see
@@ -659,51 +680,75 @@ pub async fn get_pool_chart(
 
 #[cfg(test)]
 mod normalize_asset_code_tests {
-    use super::normalize_asset_code;
+    use super::normalize_asset_codes;
 
     #[test]
     fn none_passes_through() {
-        assert_eq!(normalize_asset_code(None), None);
+        assert!(normalize_asset_codes(None).is_empty());
     }
 
     #[test]
     fn empty_string_becomes_none() {
-        assert_eq!(normalize_asset_code(Some(String::new())), None);
-        assert_eq!(normalize_asset_code(Some("   ".into())), None);
+        assert!(normalize_asset_codes(Some(String::new())).is_empty());
+        assert!(normalize_asset_codes(Some("   ".into())).is_empty());
     }
 
     #[test]
     fn lowercase_is_uppercased() {
-        assert_eq!(
-            normalize_asset_code(Some("usdc".into())),
-            Some("USDC".into())
-        );
+        assert_eq!(normalize_asset_codes(Some("usdc".into())), ["USDC"]);
     }
 
     #[test]
     fn mixed_case_is_uppercased() {
-        assert_eq!(
-            normalize_asset_code(Some("UsDc".into())),
-            Some("USDC".into())
-        );
+        assert_eq!(normalize_asset_codes(Some("UsDc".into())), ["USDC"]);
     }
 
     #[test]
     fn surrounding_whitespace_is_trimmed() {
+        assert_eq!(normalize_asset_codes(Some("  xlm  ".into())), ["XLM"]);
+    }
+
+    #[test]
+    fn pair_splits_into_two_needles() {
         assert_eq!(
-            normalize_asset_code(Some("  xlm  ".into())),
-            Some("XLM".into())
+            normalize_asset_codes(Some("usdc/xlm".into())),
+            ["USDC", "XLM"]
         );
+    }
+
+    #[test]
+    fn pair_tolerates_spaces_around_the_slash() {
+        assert_eq!(
+            normalize_asset_codes(Some(" usdc / xlm ".into())),
+            ["USDC", "XLM"]
+        );
+    }
+
+    #[test]
+    fn half_written_pair_keeps_the_written_half() {
+        // Mid-typing state: the field debounces and fires on `USDC/`.
+        assert_eq!(normalize_asset_codes(Some("USDC/".into())), ["USDC"]);
+        assert_eq!(normalize_asset_codes(Some("/XLM".into())), ["XLM"]);
+        assert!(normalize_asset_codes(Some("/".into())).is_empty());
+    }
+
+    #[test]
+    fn third_code_stays_inside_the_second_needle() {
+        // `splitn(2)` bounds the needle count. The remainder is not discarded —
+        // it becomes a needle no asset code can contain, so the query returns
+        // nothing rather than silently answering a narrower question.
+        assert_eq!(
+            normalize_asset_codes(Some("USDC/XLM/BTC".into())),
+            ["USDC", "XLM/BTC"]
+        );
+        assert!(normalize_asset_codes(Some("/".repeat(5_000))).len() <= 2);
     }
 
     #[test]
     fn unicode_lower_uppercases_too() {
         // Stellar codes are ASCII-only in practice, but the normalizer
         // should not panic on UTF-8 — `String::to_uppercase` handles it.
-        assert_eq!(
-            normalize_asset_code(Some("usdc🪙".into())),
-            Some("USDC🪙".into())
-        );
+        assert_eq!(normalize_asset_codes(Some("usdc🪙".into())), ["USDC🪙"]);
     }
 }
 

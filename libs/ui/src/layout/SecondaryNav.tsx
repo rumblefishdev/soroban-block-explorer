@@ -2,16 +2,61 @@ import { useState, type ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import IconButton from '@mui/material/IconButton';
+import Typography from '@mui/material/Typography';
+import ArrowOutwardIcon from '@mui/icons-material/ArrowOutward';
 import CloseIcon from '@mui/icons-material/Close';
 import MenuIcon from '@mui/icons-material/Menu';
 
 import { grid } from '../theme/grid.js';
 
-import { NavButton } from './NavButton.js';
+import { NavButton, type NavButtonSize } from './NavButton.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
 /** Below this width the inline nav collapses behind a hamburger drawer. */
 const NAV_COLLAPSE_BREAKPOINT = 'md';
+
+const REPORT_BUG_URL =
+  'https://github.com/rumblefishdev/soroban-block-explorer/issues/new';
+
+/** Feedback affordance — deliberately outside `navItems` so it reads as an
+ *  action, not a section (task 0407). Sizing mirrors {@link NavButton} so it
+ *  sits flush with the nav links inline and with the drawer items at `lg`. */
+function ReportBugLink({ size = 'md' }: { size?: NavButtonSize }) {
+  const isLg = size === 'lg';
+
+  return (
+    <Box
+      component="a"
+      href={REPORT_BUG_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      sx={(theme) => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 0.5,
+        px: 1,
+        py: isLg ? 1 : 0.5,
+        textDecoration: 'none',
+        color: theme.palette.text.tertiary,
+        transition: 'background-color 0.15s, border-radius 0.15s, color 0.15s',
+        '&:hover': {
+          backgroundColor: theme.palette.surface.background,
+          borderRadius: `${theme.shape.radius.s}px`,
+          color: theme.palette.text.secondary,
+        },
+      })}
+    >
+      <Typography
+        variant={isLg ? 'bodyMedium' : 'bodySmMedium'}
+        color="inherit"
+        noWrap
+      >
+        Report a bug
+      </Typography>
+      <ArrowOutwardIcon sx={{ fontSize: isLg ? 16 : 14 }} />
+    </Box>
+  );
+}
 
 export interface NavItem {
   label: string;
@@ -111,6 +156,26 @@ export function SecondaryNav({
             ))}
           </Box>
 
+          {/* "Report a bug" + its separator — desktop only; on mobile it
+              sits at the bottom of the drawer. */}
+          <Box
+            sx={{
+              display: { xs: 'none', [NAV_COLLAPSE_BREAKPOINT]: 'flex' },
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
+            <Box
+              sx={(theme) => ({
+                width: '1px',
+                height: '20px',
+                backgroundColor: theme.palette.stroke.default,
+                flexShrink: 0,
+              })}
+            />
+            <ReportBugLink />
+          </Box>
+
           {/* Theme switch — visible on every breakpoint (task 0351 F19). */}
           <ThemeToggle />
 
@@ -172,6 +237,16 @@ export function SecondaryNav({
               onClick={() => handleNav(item)}
             />
           ))}
+
+          <Box
+            sx={(theme) => ({
+              mt: 1,
+              pt: 1,
+              borderTop: `1px solid ${theme.palette.stroke.default}`,
+            })}
+          >
+            <ReportBugLink size="lg" />
+          </Box>
         </Box>
       </Drawer>
     </Box>

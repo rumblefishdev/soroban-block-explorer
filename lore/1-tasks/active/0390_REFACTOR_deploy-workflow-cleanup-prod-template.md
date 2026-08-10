@@ -86,6 +86,69 @@ no separate approval gate.
 - Provision secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC deploy role), `AWS_ACCOUNT_ID`.
   Workflow is inert until they exist.
 
+### Added to scope — deploy hardening (from the 0437 401 incident)
+
+The manual laptop deploy is the accepted **pre-launch** path, but it let a
+broken bundle reach prod: an isolated deploy shipped an SPA built without
+`VITE_TURNSTILE_SITE_KEY`, so it attached no session token and every API call
+401'd (backend `enableAuthLayer=true`). A bundle-hash reproduction confirmed
+the root cause; the Nx build cache does not hash env vars, so a build with the
+key reused a cached artifact built without it. Harden along these lines.
+
+**Near-term, small (drafted + tested during the incident, then reverted to
+land deliberately — re-apply verbatim):**
+
+1. **Fail-closed arming guard in `infra/Makefile`** — after the build in
+   `build-production-web`, if `enableAuthLayer=true` and a `turnstileSiteKey`
+   is set, `grep` the built bundle for the key; if absent, `exit 1` so
+   `deploy-production-web` aborts before any S3 sync. Makes an un-armed bundle
+   impossible to ship. Ready code:
+
+   ```makefile
+   	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
+   		AUTH=$$(jq -r '.enableAuthLayer // false' infra/envs/production.json); \
+   		if [ "$$AUTH" = "true" ] && [ -n "$$KEY" ]; then \
+   			if grep -rqF "$$KEY" web/dist/assets/*.js; then \
+   				echo "✓ arming check: Turnstile key present in bundle"; \
+   			else \
+   				echo "FATAL: enableAuthLayer=true but Turnstile key absent — refusing to ship"; \
+   				exit 1; \
+   			fi; \
+   		fi
+   ```
+
+2. **Env-aware build cache in `web/package.json`** — declare the two `VITE_*`
+   vars as `{ "env": … }` inputs on the `build` target so a key change busts
+   the Nx cache instead of silently reusing a differently-armed artifact:
+
+   ```json
+       "targets": {
+         "build": {
+           "inputs": [
+             "production",
+             "^production",
+             { "env": "VITE_API_BASE_URL" },
+             { "env": "VITE_TURNSTILE_SITE_KEY" }
+           ]
+         }
+       }
+   ```
+
+**Larger, folds into the CI/deploy maturity work:**
+
+- **Build-SHA stamping**: bake `VITE_COMMIT_SHA` and expose it (a `<meta>` tag
+  and/or `/version`). Prod state is currently unknowable — pinning the live
+  commit took manual bundle-hash detective work during the incident.
+- **CI dispatch-only deploy carries the frontend too**: build+sync the SPA in
+  the workflow (env from secrets, arming guard above) so the un-armed-build
+  and wrong-`node_modules`-in-worktree failure modes cannot happen on a laptop.
+- **Upload-before-delete S3 ordering**: sync new objects first, invalidate,
+  then sweep deleted ones — avoids the brief window where a cached old
+  `index.html` references a just-deleted chunk (404 / blank page).
+- **Rollback runbook**: the reliable rollback is "rebuild the known-good commit
+  **with** the prod env (Turnstile key) and deploy" — document it in
+  `docs/deployment.md` alongside the SHA stamp so it is a lookup, not a hunt.
+
 ## Acceptance Criteria
 
 - [x] Dead `deploy-staging.yml` removed; us-east-1 staging confirmed absent (0 stacks).

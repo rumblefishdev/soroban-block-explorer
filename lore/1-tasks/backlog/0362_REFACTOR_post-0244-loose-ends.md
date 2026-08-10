@@ -30,6 +30,23 @@ none blocks anything. Pick individually.
 
 ## Items
 
+> **Status 2026-07-22 — items 1 and 2 are both resolved, and both were resolved
+> differently than this task predicted. Read the two notes below before working
+> either.**
+
+### 1. ~~Stale RDS docs~~ — DONE by task 0248, and the premise here was wrong
+
+Task **0248** swept both documents on 2026-07-22. Nothing is left in item 1.
+
+But the framing below — "0239 decommissioned RDS … teardown happened" — is
+**false, in the same way the docs were false**. Per the 0249 archive, **zero
+production stacks were ever deployed** (`validateConfig` blocked on
+`hostedZoneId: "CHANGE_ME"`), so 0239's Phase 6 closed **vacuously**: there was
+no production RDS to tear down. Only a _staging_ RDS ever ran, destroyed
+2026-05-21. The prose did not describe a decommissioned deployment — it
+described a design that was never built. Left in place below as written, so the
+correction is visible rather than silently overwritten.
+
 ### 1. Stale RDS docs (0239 done → docs describe decommissioned infra)
 
 Task 0239 (AWS cutover) decommissioned RDS: Lambdas out-of-VPC, mTLS to Hetzner,
@@ -57,6 +74,34 @@ item 3) so location and status agree, and move the Phase-3 pointer to item 3 her
 
 **AC:** `- [ ]` 0214 frontmatter `status` matches its `archive/` location
 (completed), with a history note that Phase-3 is carved to this task.
+
+> **Resolved 2026-07-22 the other way — 0214 was moved back to `active/`, not
+> marked completed. This overrides the decision recorded above, so here is the
+> evidence, and reverse it if you disagree.**
+>
+> The instruction above rests on "its Phase-1/2 shipped; Phase-3 is carved out".
+> Phase-1/2 has **not** shipped to production. Measured on prod before deciding:
+>
+> - the sequence-number criterion **is** met — 91.4% (13,134,062 of 14,364,747)
+>   against a >50% bar
+> - the E06 witness account `GARDNV3Q7…` is **not** fixed: `sequence_number = 0`,
+>   `home_domain` NULL, zero balance rows
+>
+> I first suspected that account was the "one genuine non-participant skeleton
+> edge case" 0214's own history says was accepted. It is not — it has
+> **903,373,913** appearances in `transaction_participants` and spans ledgers
+> 50,457,424 → 63,600,904. It is one of the busiest accounts on the network.
+>
+> Reconciling with 0214's history, which reported all three empirical criteria
+> satisfied: that run was verified on a **512k-ledger pilot window**, where it
+> genuinely cut the skeleton rate 17.21% → 0.80%. It was never applied across
+> full production history. So 0214 is blocked on a backfill window, not carved
+> out — and marking it completed would have buried that.
+>
+> Its third criterion is separately unsatisfiable: it targets
+> `account_balances_current`, now a dead table (0 rows, no writer, no live
+> reader; the live one is `balances` at 89,634,237 rows). Flagged in 0214 for
+> rewriting, and the dead table flagged to 0310.
 
 ### 3. Phase-3 trustline pass — POINTER ONLY (design-gated, do NOT implement here)
 
@@ -98,8 +143,20 @@ independent source, OR the check is explicitly declined as not worth the effort.
 
 ## Acceptance Criteria
 
-- [ ] Item 1 — stale RDS docs rewritten to CH-on-Hetzner (no live RDS).
-- [ ] Item 2 — 0214 status/location reconciled (completed).
+- [x] Item 1 — stale RDS docs rewritten to CH-on-Hetzner. **Done by task 0248,
+      2026-07-22.** The "no live RDS" wording was itself too generous: there was
+      never a live production RDS to remove.
+- [x] Item 2 — 0214 status/location reconciled, **by moving it to `active/`, not
+      by marking it completed.** Evidence in the note under item 2; reverse it if
+      you disagree with the call.
+
+      > Credit where due: item 3 below **already recorded** that
+      > `account_balances_current` was retired by 0331 and that balances now land
+      > in `balances`. I re-derived that from prod today and briefly wrote it up
+      > as a new finding before spotting it here. It is not new — the only new
+      > part is the measurement (0 rows vs 89,634,237) and that 0214 still
+      > carries it as an acceptance criterion.
+
 - [ ] Item 3 — Phase-3 pairing decided + dedicated task spawned, OR trustline
       code dropped by decision. (Tracking only — no code here.)
 - [ ] Item 4 — galexie metadata cross-check done or explicitly declined.

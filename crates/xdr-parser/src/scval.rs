@@ -89,6 +89,35 @@ pub fn scval_to_typed_json(v: &ScVal) -> Value {
     json!({ "type": type_name, "value": value })
 }
 
+// ---------------------------------------------------------------------------
+// Readers — the inverse of the encoder above.
+//
+// These live HERE, beside the writer, on purpose: they encode knowledge of the
+// tagged-JSON shape, and a reader of a format belongs with its writer. Copies
+// living in consumer modules desync silently — a change to an arm above would
+// leave them compiling and wrong. (`nft.rs` and `event_filters.rs` each grew
+// their own `map_get` before this; task 0393.)
+// ---------------------------------------------------------------------------
+
+/// Look up `key` in a `map`-typed payload, returning the entry value iff the
+/// entry key is a Symbol equal to `key`. `None` when `data` is not a map or the
+/// key is absent. Inverse of the `ScVal::Map` arm.
+pub fn map_get<'a>(data: &'a Value, key: &str) -> Option<&'a Value> {
+    if data.get("type").and_then(Value::as_str) != Some("map") {
+        return None;
+    }
+    data.get("value")?.as_array()?.iter().find_map(|entry| {
+        let k = entry.get("key")?;
+        if k.get("type").and_then(Value::as_str) == Some("sym")
+            && k.get("value").and_then(Value::as_str) == Some(key)
+        {
+            entry.get("value")
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

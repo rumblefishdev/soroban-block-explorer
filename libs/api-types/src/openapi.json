@@ -626,6 +626,76 @@
         }
       }
     },
+    "/v1/contracts/{contract_id}/decompiled": {
+      "get": {
+        "tags": ["contracts"],
+        "summary": "Decompile the contract's WASM on demand (task 0465, refs #374).",
+        "description": "No persistence: bytes are fetched from Soroban RPC and decompiled per\nrequest. The output is immutable per (`wasm_hash`, decompiler version),\nwhich justifies the `LONG` cache header even without a server-side cache.",
+        "operationId": "get_decompiled",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Requested representation: `rust` (default) or `wat`. When `rust` is\nrequested but emission fails, the response carries the WAT fallback\nwith `representation: \"wat\"` and `rust_error` set — no second\nround-trip needed.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decompiled source (Rust, or WAT fallback)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecompiledResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id or format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found, has no WASM (SAC / pre-upload), or code no longer live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "WASM fetch or decompilation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contracts/{contract_id}/events": {
       "get": {
         "tags": ["contracts"],
@@ -1031,7 +1101,7 @@
           {
             "name": "filter[asset_code]",
             "in": "query",
-            "description": "Single-asset filter — matches either `asset_a_code` or\n`asset_b_code` case-insensitively (input is trimmed + uppercased\nbefore the query). Intended for the Figma list's free-text\n\"Filter by asset pair\" input.",
+            "description": "Free-text asset filter — case-insensitive substring of either\n`asset_a_code` or `asset_b_code` (input is trimmed before the\nquery). The needle is matched literally: `%`, `_` and regex\nmetacharacters have no special meaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent, one on each leg, and the typed order does not matter. Only the\nfirst `/` splits, so `USDC/XLM/BTC` searches for the literal second code\n`XLM/BTC` and therefore matches nothing — a pool has two legs.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity. Callers needing one specific issuer's asset should use the\nper-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -2051,6 +2121,7 @@
           "operation_count",
           "has_soroban",
           "operation_types",
+          "values",
           "created_at"
         ],
         "properties": {
@@ -2094,6 +2165,13 @@
           },
           "successful": {
             "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionValue"
+            },
+            "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
           }
         }
       },
@@ -2140,6 +2218,10 @@
               },
               "issuer": {
                 "type": ["string", "null"]
+              },
+              "issuer_home_domain": {
+                "type": ["string", "null"],
+                "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
               },
               "name": {
                 "type": ["string", "null"]
@@ -2222,6 +2304,10 @@
           },
           "issuer": {
             "type": ["string", "null"]
+          },
+          "issuer_home_domain": {
+            "type": ["string", "null"],
+            "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
           },
           "name": {
             "type": ["string", "null"]
@@ -2512,6 +2598,95 @@
           }
         }
       },
+      "DecompileDiagnostic": {
+        "type": "object",
+        "description": "One entry of [`DecompiledResponse::diagnostics`].\n\n`severity` is soroban-ret's own (`warning` | `info`) and is deliberately\npassed through rather than re-graded here — with one caveat for the UI:\n`call_indirect` warnings are usually benign `core::fmt` vtables, so they\nshould not be rendered as errors.",
+        "required": ["category", "severity", "message"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "`floating_point` | `reference_types` | `multi_value` |\n`multi_memory` | `call_indirect` | `unknown_instruction` |\n`non_rust_sdk`, or a lowercased new variant from a later release."
+          },
+          "function_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Index of the offending function, for function-scoped checks.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "description": "`warning` | `info`."
+          }
+        }
+      },
+      "DecompiledResponse": {
+        "type": "object",
+        "description": "Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).\n\nSource is reconstructed on demand by the pinned `soroban-ret` crate —\nexperimental by nature: unrecovered values surface as explicit `todo!()`\nholes in the Rust text. The marker counts measure completeness, not\ncorrectness (a hole-free function can still be wrong); the frontend\nkeeps its permanent \"auto-reconstructed\" notice regardless.",
+        "required": [
+          "contract_id",
+          "wasm_hash",
+          "representation",
+          "source",
+          "soroban_ret_version",
+          "diagnostics"
+        ],
+        "properties": {
+          "contract_id": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecompileDiagnostic"
+            },
+            "description": "Soroban-compliance diagnostics for this binary: constructs the\ndecompiler does not model well, so the reader knows *why* a\nreconstruction may be thin. Empty on the WAT paths."
+          },
+          "functions": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "`pub fn` count in the emitted Rust; `null` for WAT.",
+            "minimum": 0
+          },
+          "representation": {
+            "type": "string",
+            "description": "What `source` contains: `rust` or `wat`."
+          },
+          "rust_error": {
+            "type": ["string", "null"],
+            "description": "Set when `rust` was requested but emission failed — `source` then\ncarries the WAT fallback."
+          },
+          "sdk_version": {
+            "type": ["string", "null"],
+            "description": "Soroban SDK version from the binary's `contractmetav0`, when present."
+          },
+          "soroban_ret_version": {
+            "type": "string",
+            "description": "Decompiler version that produced `source`."
+          },
+          "source": {
+            "type": "string"
+          },
+          "todo_holes": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "`todo!()` marker count (unrecovered values); `null` for WAT.",
+            "minimum": 0
+          },
+          "unknown_vars": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Distinct `var_N` identifiers (unrecovered names); `null` for WAT.",
+            "minimum": 0
+          },
+          "wasm_hash": {
+            "type": "string",
+            "description": "Lowercase hex hash of the decompiled binary — the response is\nimmutable per (`wasm_hash`, `soroban_ret_version`)."
+          }
+        }
+      },
       "E3HeavyFields": {
         "type": "object",
         "description": "E3 (`GET /transactions/:hash`) — fields sourced from XDR parse.\n\nReturned as the `heavy` block inside `E3Response<TransactionDetailLight>`.\nOn upstream fetch failure the caller substitutes `None` and\n`merge_e3_response` sets `heavy_fields_status = \"unavailable\"`.",
@@ -2527,14 +2702,14 @@
             "items": {
               "$ref": "#/components/schemas/XdrEventDto"
             },
-            "description": "Non-diagnostic Soroban events (contract + system) with full topic\narray + decoded data payload."
+            "description": "The consensus event stream: `contract` + `system` events from the\ntx-level and per-operation containers. This — and only this — is what\nCAP-67 / `getEvents` mean by \"the events of a transaction\"."
           },
           "diagnostic_events": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/XdrEventDto"
             },
-            "description": "Diagnostic events emitted during Soroban invocation."
+            "description": "The host-VM debug channel (`v4.diagnostic_events`): the `fn_call` /\n`fn_return` trace, `core_metrics` counters, and — when diagnostic mode\nis on, which is always for the archive — a byte-identical COPY of every\nconsensus event above. Not hashed into consensus, and CAP-67's own\nevent stream (`getEvents`) does not carry it at all. Presenting these\nalongside `contract_events` as one list shows the copies as extra\nevents; they are one channel about the other, not a continuation of it."
           },
           "envelope_xdr": {
             "type": ["string", "null"],
@@ -2553,7 +2728,7 @@
             "description": "Memo type as ASCII tag (`\"text\"`, `\"id\"`, `\"hash\"`, `\"return\"`, `\"none\"`)."
           },
           "operation_tree": {
-            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time (the raw `result_meta_xdr` itself is intentionally\nnot surfaced — see 0046 spec \"result_meta_xdr is NOT returned\")."
+            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time."
           },
           "operations": {
             "type": "array",
@@ -2565,6 +2740,10 @@
           "result_code": {
             "type": ["string", "null"],
             "description": "Transaction result code (e.g. `\"txSuccess\"`, `\"txFailed\"`).\n`None` only when the transaction had a parse error."
+          },
+          "result_meta_xdr": {
+            "type": ["string", "null"],
+            "description": "Base64-encoded `TransactionMeta` — the ledger-entry changes (who held\nwhat before/after). The 0046 spec originally withheld it; reversed by\ntask 0460 #13: it is the one raw layer the page could not show, and\nthe raw-data section renders every XDR blob with a Lab deep link."
           },
           "result_xdr": {
             "type": ["string", "null"],
@@ -2947,7 +3126,7 @@
       },
       "NetworkStats": {
         "type": "object",
-        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\n`total_accounts` and `total_contracts` are planner\nestimates, not exact counts. `latest_ledger_closed_at` is `None`\nonly on a cold-bootstrap cluster where no ledger has been indexed\nyet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
+        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\n`total_accounts` and `total_contracts` are deduped read-time counts —\nsee the per-field docs for the exactness each one carries. (They were\n`system.tables.total_rows` planner estimates until 0420, which counted\nunmerged ReplacingMergeTree duplicates and over-reported; that source is\ngone.) `latest_ledger_closed_at` is `None` only on a cold-bootstrap\ncluster where no ledger has been indexed yet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
         "required": [
           "tps_60s",
           "total_accounts",
@@ -2974,12 +3153,12 @@
           "total_accounts": {
             "type": "integer",
             "format": "int64",
-            "description": "Estimated indexed account count (planner estimate, not exact)."
+            "description": "Indexed account count: `count()` over `accounts_recent`, the deduped\nMV the `/accounts` list also pages from — so this KPI and that list\nagree. Exact to ±1 vs `accounts FINAL`, modulo the ~2-minute MV\nrefresh. Safe to render as a total."
           },
           "total_contracts": {
             "type": "integer",
             "format": "int64",
-            "description": "Estimated indexed Soroban contract count (planner estimate, not exact)."
+            "description": "Indexed Soroban contract count: `count() FROM soroban_contracts FINAL`.\nExact — `FINAL` is affordable on a table this size."
           },
           "tps_60s": {
             "type": "number",
@@ -3300,6 +3479,7 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
+                "values",
                 "created_at"
               ],
               "properties": {
@@ -3343,6 +3523,13 @@
                 },
                 "successful": {
                   "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionValue"
+                  },
+                  "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
                 }
               }
             }
@@ -3400,6 +3587,10 @@
                 },
                 "issuer": {
                   "type": ["string", "null"]
+                },
+                "issuer_home_domain": {
+                  "type": ["string", "null"],
+                  "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
                 },
                 "name": {
                   "type": ["string", "null"]
@@ -4011,6 +4202,7 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
+                "values",
                 "created_at"
               ],
               "properties": {
@@ -4061,6 +4253,13 @@
                 },
                 "successful": {
                   "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionValue"
+                  },
+                  "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393):\n`max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the\nfrontend scales. Ordered native-first (`asset_type`, then `asset_id`) so\n`values[0]` is XLM when the tx moved it; empty when nothing net-settled\n(a wash / pure cycle is zero by the flow decomposition theorem) or when\nhistory has not been backfilled yet."
                 }
               }
             }
@@ -4461,6 +4660,7 @@
           "operation_count",
           "has_soroban",
           "operation_types",
+          "values",
           "created_at"
         ],
         "properties": {
@@ -4511,6 +4711,38 @@
           },
           "successful": {
             "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionValue"
+            },
+            "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393):\n`max(Σ+, Σ−)` per (transaction, asset). Raw values + `decimals` — the\nfrontend scales. Ordered native-first (`asset_type`, then `asset_id`) so\n`values[0]` is XLM when the tx moved it; empty when nothing net-settled\n(a wash / pure cycle is zero by the flow decomposition theorem) or when\nhistory has not been backfilled yet."
+          }
+        }
+      },
+      "TransactionValue": {
+        "type": "object",
+        "description": "One asset's net-settled \"value moved\" in a transaction (task 0393).",
+        "required": ["asset", "net_settled", "decimals"],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "Asset identity for the asset detail link — `\"native\"`, `\"CODE-ISSUER\"`, or a\ncontract `C…` StrKey for a bespoke type-3 Soroban token (all accepted by\n`GET /assets/{id}`)."
+          },
+          "asset_code": {
+            "type": ["string", "null"],
+            "description": "Asset code for display (e.g. `\"USDC\"`) — the on-chain token symbol for a\nbespoke type-3 token; `null` for native XLM and for a bespoke token whose\nmetadata symbol is unavailable."
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals (`7` for classic / SAC assets).",
+            "minimum": 0
+          },
+          "net_settled": {
+            "type": "string",
+            "description": "Raw net-settled value as a stringified `Int128`; scale by `decimals`."
           }
         }
       },
@@ -4535,6 +4767,15 @@
             "type": "string",
             "description": "`\"contract\"`, `\"system\"`, or `\"diagnostic\"`."
           },
+          "op_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 V4 per-operation container only; `None` for tx-level,\ndiagnostic and pre-Protocol-23 events). Matches\n`XdrOperationDto.application_order - 1`."
+          },
+          "stage": {
+            "type": ["string", "null"],
+            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`. The protocol's only statement of when a tx-level\nevent fired, and the reason `event_index` must not be read as a\ntimeline: the fee refund is numbered ahead of the operation it\nrefunds. Observed values on mainnet are `before_all_txs` for the charge\nand `after_all_txs` for the refund; `after_tx` exists in the protocol\nand is passed through unchanged if it appears. `None` for per-operation, diagnostic and\npre-Protocol-23 events, which carry no stage."
+          },
           "topics": {
             "type": "array",
             "items": {},
@@ -4558,6 +4799,10 @@
           "op_type": {
             "type": "string",
             "description": "Operation type tag (e.g. `\"payment\"`, `\"invoke_host_function\"`)."
+          },
+          "result_code": {
+            "type": ["string", "null"],
+            "description": "Per-operation result code from the transaction result XDR, using the\nXDR library's variant names: `\"Success\"`, `\"LowReserve\"`, `\"Trapped\"`,\nop-level rejections as `\"OpNoAccount\"` etc. Present on failed\ntransactions too — the failing op's code is the fail reason (task\n0352). `None` when the result XDR carried no per-op array\n(validation-level failures) or was unavailable."
           }
         }
       }

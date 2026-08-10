@@ -28,7 +28,7 @@ use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
-use crate::transactions::dto::TxListCursor;
+use crate::transactions::dto::{TransactionValue, TxListCursor};
 
 use super::dto::AccountsListCursor;
 
@@ -92,6 +92,7 @@ pub struct AccountTxRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
+    pub values: Vec<TransactionValue>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -403,7 +404,11 @@ pub async fn fetch_balances(
                 b.last_updated_ledger         AS last_updated_ledger \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
-             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+             /* sc FINAL: soroban_contracts is a ReplacingMergeTree with unmerged \
+                duplicate ids; without FINAL this join could double balance legs. \
+                It was previously dedup'd only incidentally by the adjacent \
+                `assets a FINAL` — made explicit here. lore-0420 */ \
+             LEFT JOIN soroban_contracts sc FINAL ON sc.id = a.contract_id \
              LEFT JOIN ( \
                  SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
              ) m ON m.contract_id = sc.contract_id \
@@ -590,9 +595,16 @@ pub async fn fetch_transactions(
         let Some(row) = by_id.remove(tx_id) else {
             continue;
         };
-        let operation_types = aggregates
-            .get(tx_id)
-            .map(|a| a.operation_types.clone())
+        let agg = aggregates.get(tx_id);
+        let operation_types = agg.map(|a| a.operation_types.clone()).unwrap_or_default();
+        let values = agg
+            .map(|a| {
+                a.values
+                    .iter()
+                    .cloned()
+                    .map(TransactionValue::from)
+                    .collect()
+            })
             .unwrap_or_default();
         out.push(AccountTxRow {
             id: row.id,
@@ -609,6 +621,7 @@ pub async fn fetch_transactions(
             operation_count: row.operation_count,
             has_soroban: row.has_soroban,
             operation_types,
+            values,
             created_at: millis_to_utc(row.created_at),
         });
     }

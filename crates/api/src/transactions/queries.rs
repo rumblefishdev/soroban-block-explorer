@@ -61,7 +61,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use chrono::{DateTime, Utc};
 
-use super::dto::TxListCursor;
+use super::dto::{TransactionValue, TxListCursor};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -83,6 +83,7 @@ pub struct TxListRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
+    pub values: Vec<TransactionValue>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -187,6 +188,7 @@ impl TxPageChRow {
             operation_count: self.operation_count,
             has_soroban: self.has_soroban,
             operation_types: agg.operation_types,
+            values: agg.values.into_iter().map(TransactionValue::from).collect(),
             created_at: millis_to_utc(self.created_at),
         }
     }
@@ -831,7 +833,12 @@ pub async fn fetch_operations(
                 oa.ledger_sequence, \
                 l.closed_at AS created_at \
              FROM operations_appearances oa FINAL \
-             INNER JOIN ledgers l ON l.sequence = oa.ledger_sequence \
+             /* ledgers l FINAL: ledgers is a ReplacingMergeTree with unmerged \
+                duplicate rows. This was correct only because `oa FINAL` \
+                propagates FINAL into the join — an implicit CH behavior. Made \
+                explicit so dropping `oa FINAL` can't silently double every op. \
+                Cheap: the join pins a single sequence. lore-0420 */ \
+             INNER JOIN ledgers l FINAL ON l.sequence = oa.ledger_sequence \
              WHERE oa.transaction_id = ? \
                AND oa.ledger_sequence = ? \
                AND intDiv(oa.ledger_sequence, 500000) = intDiv(?, 500000) \
@@ -968,7 +975,10 @@ pub async fn fetch_invocation_appearances(
                 sia.ledger_sequence, \
                 l.closed_at AS created_at \
              FROM soroban_invocations_appearances sia FINAL \
-             INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
+             /* ledgers l FINAL: defensive dedup — see fetch_operations. Was \
+                correct only via `sia FINAL` propagating into the join; made \
+                explicit. Single-sequence pin, so cheap. lore-0420 */ \
+             INNER JOIN ledgers l FINAL ON l.sequence = sia.ledger_sequence \
              WHERE sia.transaction_id = ? \
                AND sia.ledger_sequence = ? \
                AND intDiv(sia.ledger_sequence, 500000) = intDiv(?, 500000)",
@@ -1058,6 +1068,7 @@ mod tests {
         };
         let agg = ch::TxListAggregates {
             operation_types: vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
+            values: vec![],
         };
         let mapped = row.into_list_row(agg);
         assert_eq!(mapped.source_account, None);

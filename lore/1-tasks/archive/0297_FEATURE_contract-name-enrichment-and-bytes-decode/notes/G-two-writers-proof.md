@@ -36,7 +36,7 @@ deploy TX context. So:
 On ClickHouse (`ReplacingMergeTree`, whole-row replace) a single combined row
 therefore cannot hold both without one write clobbering the other's columns
 (the "G5" bug class). → two tables, composed at read. This is the same shape as
-the already-shipped `asset_enrichment` / `nft_enrichment` side tables (ADR 0048).
+the already-shipped `asset_enrichment` / `nft_enrichment` side tables (ADR 0050).
 
 > Nuance: a constructor deploy _can_ carry identity + metadata together. The
 > decision still holds because metadata may also arrive **separately/later**,

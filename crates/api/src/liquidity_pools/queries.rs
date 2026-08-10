@@ -106,9 +106,12 @@ pub struct ResolvedPoolListParams {
     pub asset_b_issuer: Option<String>,
     /// Decimal string preserving NUMERIC(28,7) precision.
     pub min_tvl: Option<String>,
-    /// Single-asset filter (task 0246) — trimmed + uppercased at the handler
-    /// boundary, matched against either leg case-insensitively. NULL = no filter.
-    pub asset_code: Option<String>,
+    /// Free-text asset filter (task 0246, widened in 0440) — trimmed and
+    /// uppercased at the handler boundary, then split on `/` into at most two
+    /// needles. Every needle must appear on *some* leg, which makes a pair
+    /// query order-insensitive without anyone knowing Stellar's canonical leg
+    /// ordering. Empty = no filter.
+    pub asset_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +264,17 @@ pub async fn fetch_pool_by_id(
     // `argMax`), so `reserve_a`/`reserve_b` can never tear across a stale
     // before/after pair in the pre-cleanup window. `created_at_ledger` already
     // reads without `FINAL` (`min(ledger_sequence)` is dup-invariant).
+    //
+    // **`ledgers` is SEEKED, never joined whole.** `LEFT JOIN ledgers l ON
+    // l.sequence = s.ledger_sequence` hash-built the entire 26M-row table to
+    // resolve ONE `closed_at` — 27.2M read_rows / 1.82 GiB / ~724 ms of CH per
+    // request under load (96% of this endpoint's cost, measured 2026-07-17 at
+    // 50M/mo). Restricting the right side to the single sequence the snapshot
+    // subquery points at makes it a PK point read.
+    //
+    // The `s` join is an EQUI-join on `pool_id` (not `ON 1 = 1`): a constant ON
+    // condition is only supported by `join_algorithm = 'hash'`, so the old form
+    // 500'd (Code 48) the moment the server profile carried anything else.
     let row = client
         .query(
             "WITH legs AS ( \
@@ -330,7 +344,8 @@ pub async fn fetch_pool_by_id(
                                 AND sac_b.issuer_id = lp.asset_b_issuer_id \
                                 AND lp.asset_b_code != '' \
              LEFT JOIN ( \
-                 SELECT toNullable(ledger_sequence) AS ledger_sequence, \
+                 SELECT pool_id, \
+                        toNullable(ledger_sequence) AS ledger_sequence, \
                         toNullable(reserve_a)       AS reserve_a, \
                         toNullable(reserve_b)       AS reserve_b, \
                         toNullable(total_shares)    AS total_shares, \
@@ -339,11 +354,16 @@ pub async fn fetch_pool_by_id(
                  WHERE pool_id = unhex(?) \
                  ORDER BY ledger_sequence DESC \
                  LIMIT 1 \
-             ) s ON 1 = 1 \
-             LEFT JOIN ledgers l ON l.sequence = s.ledger_sequence \
+             ) s ON s.pool_id = lp.pool_id \
+             LEFT JOIN ( \
+                 SELECT sequence, closed_at FROM ledgers \
+                 WHERE sequence = (SELECT max(ledger_sequence) FROM liquidity_pool_snapshots \
+                                    WHERE pool_id = unhex(?)) \
+             ) l ON l.sequence = s.ledger_sequence \
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
         )
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
@@ -482,7 +502,29 @@ pub async fn fetch_participants(
 
     // Resolve the provider StrKey by surrogate id (bloom seek) instead of a
     // whole-`accounts` `JOIN accounts acc FINAL` (task 0354). INNER-JOIN drop
-    // semantics preserved via filter_map (a position always has its account).
+    // semantics preserved via filter_map.
+    //
+    // "A position always has its account" holds today but is NOT guaranteed by
+    // construction — it is maintained by operators. Measured on prod
+    // (2026-08-04): all 6010 distinct `shares > 0` participants resolved, 0
+    // missing. No non-test Rust path deletes an `accounts` row and prod's
+    // retained mutation history has none, but two operator-driven paths can:
+    //
+    //   * `docs/runbooks/0225_backfill_crash_recovery.md` rolls back `accounts`
+    //     on `last_seen_ledger` while rolling back `lp_positions` on
+    //     `last_updated_ledger` — DIFFERENT watermarks, so an account touched
+    //     inside the crashed range can lose its row while an older position
+    //     survives. That is exactly the dangling surrogate below;
+    //   * `repair_tier1::rebuild_accounts` replaces the whole table via
+    //     `EXCHANGE TABLES` (`ch_staging::finalize`), where rows can disappear
+    //     with no DELETE at all.
+    //
+    // So the log stays, and the failure mode is not proportional to the cause:
+    // the drop happens BEFORE `finalize_page` reads the `limit + 1` sentinel,
+    // so losing the sentinel row reports "no next page" and hides the REST of
+    // the list, not one participant. Only 82 of the 26_489 pools with a live
+    // participant hold more than one page, but the largest holds 684. `error!`
+    // (not `debug!`) because the Lambda runs at `RUST_LOG=info` (0377 F3).
     let accounts = resolve_accounts(
         client,
         rows.iter().map(|r| r.account_id_surrogate).collect(),
@@ -491,7 +533,16 @@ pub async fn fetch_participants(
     Ok(rows
         .into_iter()
         .filter_map(|r| {
-            let account = accounts.get(&r.account_id_surrogate)?.clone();
+            let Some(account) = accounts.get(&r.account_id_surrogate).cloned() else {
+                tracing::error!(
+                    account_id_surrogate = r.account_id_surrogate,
+                    pool_id = pool_id_hex,
+                    "lp_positions row resolves to no accounts row: participant \
+                     dropped, so participant_count disagrees with the list and \
+                     pagination may terminate early"
+                );
+                return None;
+            };
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,
@@ -749,6 +800,30 @@ pub async fn fetch_pool_chart(
     // ledger (`LIMIT 1 BY ledger_sequence`) with no merge; tvl/volume/fee are
     // identical across a duplicate pair, so which row survives is irrelevant. The
     // outer bucket aggregation is then byte-identical to the old `FINAL` form.
+    //
+    // The outer `ledgers` read is ALSO deduped — via a `LIMIT 1 BY sequence`
+    // subquery, not a bare `JOIN ledgers` (lore-0420). `ledgers` is itself a
+    // ReplacingMergeTree with unmerged duplicate rows, so a bare join doubled
+    // every snapshot (measured 2806 samples vs 1403 distinct) → doubled
+    // `sum(volume)`/`sum(fee_revenue)`/`samples_in_bucket`. The join needs
+    // `l.closed_at` for the bucket key, so a pure `IN` semi-join won't do;
+    // `LIMIT 1 BY sequence` keeps one row per ledger (closed_at is identical
+    // across a dup pair, so which survives is irrelevant) — same idiom as the
+    // snapshot dedup above, and it keeps `closed_at` a plain column so the
+    // window filter can stay in the subquery WHERE and drive minmax pruning.
+    //
+    // The inner read is bounded to the window's ledger range, resolved from
+    // `[from, to]` against `ledgers.closed_at` (minmax skip index).
+    //
+    // The upper-bound subquery carries a lower bound too. That reads as
+    // redundant — it is not. A minmax index can only skip granules that
+    // *cannot* match, and `closed_at < to` alone matches all of history, so
+    // that subquery scanned the full 26M-row table to find the last ledger
+    // before `to` — 37% of the box's total read work at 50M req/month. The
+    // extra `closed_at >= from` is what gives the index something to prune
+    // (26M → ~209k). The value is unchanged either way: ledgers close every
+    // ~5 s with no gaps, so the last ledger before `to` always falls inside
+    // `[from, to)`.
     let sql = format!(
         "SELECT \
             toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms, \
@@ -760,12 +835,18 @@ pub async fn fetch_pool_chart(
              SELECT ledger_sequence, tvl, volume, fee_revenue \
              FROM liquidity_pool_snapshots \
              WHERE pool_id = unhex(?) \
+               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
              ORDER BY ledger_sequence DESC \
              LIMIT 1 BY ledger_sequence \
          ) lps \
-         JOIN ledgers l ON l.sequence = lps.ledger_sequence \
-         WHERE l.closed_at >= fromUnixTimestamp64Milli(?) \
-           AND l.closed_at <  fromUnixTimestamp64Milli(?) \
+         JOIN ( \
+             SELECT sequence, closed_at \
+             FROM ledgers \
+             WHERE closed_at >= fromUnixTimestamp64Milli(?) \
+               AND closed_at <  fromUnixTimestamp64Milli(?) \
+             LIMIT 1 BY sequence \
+         ) l ON l.sequence = lps.ledger_sequence \
          GROUP BY bucket_ms \
          ORDER BY bucket_ms ASC",
         bucket_fn = bucket_fn,
@@ -774,8 +855,11 @@ pub async fn fetch_pool_chart(
     let rows = client
         .query(&sql)
         .bind(pool_id_hex)
-        .bind(from.timestamp_millis())
-        .bind(to.timestamp_millis())
+        .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
+        .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
+        .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
+        .bind(from.timestamp_millis()) // ledgers dedup subquery: closed_at >= from
+        .bind(to.timestamp_millis()) // ledgers dedup subquery: closed_at <  to
         .fetch_all::<ChartChRow>()
         .await?;
 
@@ -922,26 +1006,84 @@ pub async fn fetch_pool_list(
         );
         binds.push(iss.clone());
     }
-    if let Some(code) = params.asset_code.as_ref() {
-        filters.push_str(" AND (upper(lp.asset_a_code) = ? OR upper(lp.asset_b_code) = ?)");
-        binds.push(code.clone());
-        binds.push(code.clone());
+    // Asset-code needles (0440 / issue #366).
+    //
+    // Substring, not equality: `USD` has to match the `USDC` pools the user can
+    // see on the page. `position` takes the needle literally — no LIKE wildcards
+    // and no regex to escape, so caller free-text cannot widen its own match.
+    // Case-insensitive here rather than `upper()` on the column: same result,
+    // one pass, and it keeps working if the needle ever arrives un-normalized.
+    //
+    // Native legs are stored with an empty code (`asset_type = 0`, code `''`)
+    // while every surface — this list included — renders them as `XLM`. Without
+    // the alias, `XLM` matches none of the 11.7k pools that actually hold native
+    // XLM, and instead returns ~3.7k pools of credit assets someone minted under
+    // the code `XLM` (they exist, including `XLM/XLM` pairs). That is not an
+    // empty result, it is a confident wrong one — so the predicate searches what
+    // the row displays as.
+    //
+    // A pair assigns each needle its OWN leg, in either order, rather than
+    // asking each needle independently whether it matches somewhere. The
+    // difference only shows when the needles overlap, and then it is the whole
+    // answer: `USDC/USDC` means the 72 pools with USDC on both sides, not the
+    // 2 912 with USDC anywhere. Same for a needle that is a prefix of the other
+    // (`USD/USDC`) — one asset must not satisfy both halves of the query.
+    let leg = |side: char| {
+        format!(
+            "positionCaseInsensitive(if(lp.asset_{side}_type = 0, 'XLM', lp.asset_{side}_code), ?) > 0"
+        )
+    };
+    match params.asset_codes.as_slice() {
+        [one] => {
+            filters.push_str(&format!(" AND ({} OR {})", leg('a'), leg('b')));
+            binds.push(one.clone());
+            binds.push(one.clone());
+        }
+        [first, second] => {
+            filters.push_str(&format!(
+                " AND (({a} AND {b}) OR ({a} AND {b}))",
+                a = leg('a'),
+                b = leg('b'),
+            ));
+            // Bind order follows the `?`s left to right: first/second, then the
+            // reversed assignment.
+            binds.push(first.clone());
+            binds.push(second.clone());
+            binds.push(second.clone());
+            binds.push(first.clone());
+        }
+        // `normalize_asset_codes` yields at most two needles.
+        _ => {}
     }
 
-    // Latest-snapshot fields — NO `FINAL` (0356 / PR #318). The `s` subquery
-    // picks the whole latest row per pool via `ORDER BY ledger_sequence DESC` +
-    // `LIMIT 1 BY pool_id` (bounded reverse-PK seek over the page's pools, no
-    // whole-table merge). Whole-row, not per-column `argMax`, so a pre-cleanup
-    // before/after duplicate can't tear `reserve_a` from `reserve_b`.
-    // `created_at_ledger` moves to its own `cr` subquery (`min(ledger_sequence)`,
-    // dup-invariant). These fields wrap in `toNullable(...)` so a no-snapshot pool
-    // yields NULL (not the 0/'' default) on the LEFT JOIN miss — `join_use_nulls`
-    // is rejected for the read-only CH user, so this is the readonly-safe NULL
-    // path. (Every current pool has ≥ 1 snapshot, so this is defensive.)
-    // `nullIf(...)` does the same for the
-    // empty-string-sentinel string columns. Native legs (asset_code = '') are
-    // excluded from the SAC join by the `lp.asset_*_code != ''` guard so they
-    // surface a NULL `contract_id`, matching PG (NULL code → no SAC match).
+    // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
+    // `ledger_sequence` band around the page's `last_updated_ledger` range (the
+    // `band` CTE, ±10k). Page pools are the most-recently-updated, so their
+    // latest snapshot sits in that band — a bounded seek (~0.5M rows / ~50ms)
+    // instead of a full per-pool history scan (30M rows, which OOMed the 4 GB
+    // read-only profile as PR #335's `LIMIT 1 BY` sort). NO `FINAL`: the band's
+    // max ledger per page pool is recent (post-0356/#318 single-image) so
+    // per-column `argMax` can't tear; only a pool whose latest snapshot predates
+    // #318 (inactive for weeks → deep pages) could, which is accepted.
+    // `created_at_ledger` = `min(ledger_sequence)` in the `cr` subquery (cheap
+    // narrow streaming scan, dup-invariant → no `FINAL`); `l_snap` seeks
+    // `ledgers` by the page's ~20 `last_updated_ledger`s (a full `ledgers` join
+    // built a 26M-row / 3.3 GB hash); `sac`/`asset_sac` prune to the page codes.
+    //
+    // Do NOT rewrite as `ORDER BY ledger_sequence DESC LIMIT 1 BY pool_id`
+    // (PR #335, reverted): `LIMIT 1 BY` is NOT a seek — it fully materialises +
+    // sorts every snapshot of the page's pools (~30M rows for the busiest 20),
+    // OOMing the 4 GB read-only CH profile. A future perf pass must keep the
+    // O(page pools) shape (e.g. `argMax` over a whole-row tuple), not a sort.
+    //
+    // Aggregates wrap in `toNullable(...)` so a no-snapshot pool yields NULL (not
+    // the 0/'' default) on the LEFT JOIN miss — `join_use_nulls` is rejected for
+    // the read-only CH user, so this is the readonly-safe NULL path. (Every
+    // current pool has ≥ 1 snapshot, so this is defensive.) `nullIf(...)` does the
+    // same for the empty-string-sentinel string columns. Native legs
+    // (asset_code = '') are excluded from the SAC join by the `lp.asset_*_code !=
+    // ''` guard so they surface a NULL `contract_id`, matching PG (NULL code → no
+    // SAC match).
     let sql = format!(
         "WITH \
          {tvl_cte} \
@@ -956,6 +1098,14 @@ pub async fn fetch_pool_list(
              ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
+         band AS ( \
+             SELECT min(last_updated_ledger) - 10000 AS lo, \
+                    max(last_updated_ledger) + 10000 AS hi FROM page \
+         ), \
+         codes AS ( \
+             SELECT asset_a_code AS c FROM page WHERE asset_a_code != '' \
+             UNION ALL SELECT asset_b_code FROM page WHERE asset_b_code != '' \
+         ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
                     max(sc.contract_id) AS contract_id, \
@@ -964,11 +1114,13 @@ pub async fn fetch_pool_list(
              LEFT JOIN ( \
                  SELECT asset_type, asset_code, issuer_id, contract_id, \
                         max(sac_contract_id) AS sac_contract_id \
-                 FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 FROM asset_sac \
+                 WHERE asset_type IN (0, 1) AND asset_code IN (SELECT c FROM codes) \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                    AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
              LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
-             WHERE a.asset_type IN (0, 1) \
+             WHERE a.asset_type IN (0, 1) AND a.asset_code IN (SELECT c FROM codes) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
                    UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \
@@ -1001,15 +1153,17 @@ pub async fn fetch_pool_list(
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
-                    toNullable(ledger_sequence) AS latest_ledger_sequence, \
-                    toNullable(reserve_a)       AS reserve_a, \
-                    toNullable(reserve_b)       AS reserve_b, \
-                    toNullable(total_shares)    AS total_shares, \
-                    tvl, volume, fee_revenue \
+                toNullable(max(ledger_sequence))                  AS latest_ledger_sequence, \
+                argMax(toNullable(reserve_a), ledger_sequence)    AS reserve_a, \
+                argMax(toNullable(reserve_b), ledger_sequence)    AS reserve_b, \
+                argMax(toNullable(total_shares), ledger_sequence) AS total_shares, \
+                argMax(tvl, ledger_sequence)                      AS tvl, \
+                argMax(volume, ledger_sequence)                   AS volume, \
+                argMax(fee_revenue, ledger_sequence)              AS fee_revenue \
              FROM liquidity_pool_snapshots \
              WHERE pool_id IN (SELECT pool_id FROM page) \
-             ORDER BY pool_id, ledger_sequence DESC \
-             LIMIT 1 BY pool_id \
+               AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
+             GROUP BY pool_id \
          ) s ON s.pool_id = lp.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, toNullable(min(ledger_sequence)) AS created_at_ledger \
@@ -1028,7 +1182,24 @@ pub async fn fetch_pool_list(
          LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                             AND sac_b.issuer_id = lp.asset_b_issuer_id \
                             AND lp.asset_b_code != '' \
-         LEFT JOIN ledgers l_snap ON l_snap.sequence = s.latest_ledger_sequence \
+         /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
+            duplicate rows): without it this LEFT JOIN doubled every page row \
+            whose latest snapshot ledger falls in the duplicated range, doubling \
+            UI rows and breaking keyset pagination. `any(closed_at)` is exact \
+            (measured: closed_at identical across every dup pair). lore-0420 \
+            \
+            The filter is `page.last_updated_ledger` while the join key is \
+            `s.latest_ledger_sequence` — these look mismatched but are the same \
+            set, because a pool's last update always writes a snapshot at that \
+            ledger: measured 52,284 of 52,284 pools with \
+            `last_updated_ledger = max(ledger_sequence)`. If that invariant ever \
+            breaks the join simply misses and `latest_snapshot_at_ms` is null — \
+            degraded, never wrong. */ \
+         LEFT JOIN ( \
+             SELECT sequence, any(closed_at) AS closed_at FROM ledgers \
+             WHERE sequence IN (SELECT last_updated_ledger FROM page) \
+             GROUP BY sequence \
+         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
          ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
         tvl_cte = tvl_cte,
         tvl_pred = tvl_pred,
@@ -1207,7 +1378,7 @@ mod decode_smoke {
             asset_b_code: None,
             asset_b_issuer: None,
             min_tvl: None,
-            asset_code: None,
+            asset_codes: Vec::new(),
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
             .await
@@ -1240,5 +1411,170 @@ mod decode_smoke {
         fetch_pool_chart(&ch, &pool, "1d", from, to)
             .await
             .expect("chart rows decode");
+    }
+
+    /// `filter[asset_code]` is a substring of either leg, not an exact code
+    /// (0440 / issue #366). The regression this guards is the original
+    /// behaviour: `USD` returning nothing while the list is full of `USDC`
+    /// pools. Asserting the returned legs actually contain the needle also
+    /// catches the opposite failure — a predicate that stopped filtering.
+    #[tokio::test]
+    async fn asset_code_filter_matches_substring() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP asset-code substring smoke");
+            return;
+        };
+
+        let params = ResolvedPoolListParams {
+            limit: 10,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            // Deliberately a proper prefix of a real code: an exact-match
+            // predicate returns zero rows here, a substring one does not.
+            asset_codes: vec!["USD".to_string()],
+        };
+        let pools = fetch_pool_list(&ch, &params, Direction::Next)
+            .await
+            .expect("filtered list decodes");
+
+        assert!(
+            !pools.is_empty(),
+            "`USD` matched no pool — substring filter regressed to exact match"
+        );
+        for p in &pools {
+            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
+            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+            assert!(
+                a.contains("USD") || b.contains("USD"),
+                "pool {} has neither leg containing USD ({a:?} / {b:?}) — filter not applied",
+                p.pool_id_hex
+            );
+        }
+    }
+
+    /// `XLM` must reach the pools that hold *native* XLM. Native legs carry an
+    /// empty stored code, so a plain column match silently returns only the
+    /// credit assets minted under the code `XLM` — a wrong answer that looks
+    /// like a right one. Guards the `if(asset_type = 0, 'XLM', code)` alias.
+    #[tokio::test]
+    async fn asset_code_filter_finds_native_xlm() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP native-XLM smoke");
+            return;
+        };
+
+        let params = ResolvedPoolListParams {
+            limit: 25,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            asset_codes: vec!["XLM".to_string()],
+        };
+        let pools = fetch_pool_list(&ch, &params, Direction::Next)
+            .await
+            .expect("filtered list decodes");
+
+        assert!(
+            pools
+                .iter()
+                .any(|p| p.asset_a_type == 0 || p.asset_b_type == 0),
+            "`XLM` returned {} pool(s) but none holds native XLM — the native \
+             alias regressed and the filter is answering with look-alike \
+             credit assets only",
+            pools.len()
+        );
+    }
+
+    /// A pair query constrains both legs and does not care which order the user
+    /// typed, nor which leg the chain assigned. Runs the same pair twice,
+    /// reversed, and requires identical results — the cheapest way to catch a
+    /// predicate that quietly became order-sensitive.
+    #[tokio::test]
+    async fn asset_code_filter_pair_is_order_insensitive() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP pair-filter smoke");
+            return;
+        };
+
+        let pair = |a: &str, b: &str| ResolvedPoolListParams {
+            limit: 25,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            asset_codes: vec![a.to_string(), b.to_string()],
+        };
+
+        let ids = |rows: Vec<PoolRow>| {
+            let mut v: Vec<String> = rows.into_iter().map(|r| r.pool_id_hex).collect();
+            v.sort();
+            v
+        };
+
+        let forward = ids(fetch_pool_list(&ch, &pair("XLM", "USDC"), Direction::Next)
+            .await
+            .expect("forward pair decodes"));
+        let reversed = ids(fetch_pool_list(&ch, &pair("USDC", "XLM"), Direction::Next)
+            .await
+            .expect("reversed pair decodes"));
+
+        assert_eq!(forward, reversed, "pair filter is order-sensitive");
+        assert!(
+            !forward.is_empty(),
+            "`XLM/USDC` matched no pool — the AND-ed needles are over-constraining"
+        );
+
+        // Both needles must bind: a pair that shares only one leg with any pool
+        // has to come back empty, otherwise the second needle is being dropped.
+        let impossible = fetch_pool_list(&ch, &pair("USDC", "ZZZZNOPE"), Direction::Next)
+            .await
+            .expect("impossible pair decodes");
+        assert!(
+            impossible.is_empty(),
+            "pair with an unmatchable second needle returned {} pool(s) — the \
+             needles are OR-ed, not AND-ed",
+            impossible.len()
+        );
+
+        // Three codes. `normalize_asset_codes` splits `USDC/XLM/BTC` into
+        // `USDC` and the literal `XLM/BTC` (see its unit tests); a pool has two
+        // legs, so no asset code can carry that second needle and the answer is
+        // empty. Asserted here so the query side cannot start "helpfully"
+        // ignoring the remainder.
+        let three = fetch_pool_list(&ch, &pair("USDC", "XLM/BTC"), Direction::Next)
+            .await
+            .expect("three-code query decodes");
+        assert!(
+            three.is_empty(),
+            "a three-code query returned {} pool(s) — the third code is being \
+             dropped instead of narrowing to nothing",
+            three.len()
+        );
+
+        // Each needle claims its own leg. Repeating one therefore means "both
+        // legs", not "matches somewhere, twice" — a pool with USDC on one side
+        // and anything else on the other must not come back.
+        let both_legs = fetch_pool_list(&ch, &pair("USDC", "USDC"), Direction::Next)
+            .await
+            .expect("repeated needle decodes");
+        for p in &both_legs {
+            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
+            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+            assert!(
+                a.contains("USDC") && b.contains("USDC"),
+                "pool {} came back for `USDC/USDC` with legs {a:?} / {b:?} — one \
+                 asset is satisfying both needles",
+                p.pool_id_hex
+            );
+        }
     }
 }

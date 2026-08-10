@@ -15,6 +15,15 @@ export interface FooterProps {
   navItems: FooterNavItem[];
 }
 
+// HubSpot's tracking code (web/index.html) exposes `_hsp`; pushing
+// `showBanner` re-opens the cookie consent banner. Declared optional and
+// created on demand so the click is a no-op if the script never loaded.
+declare global {
+  interface Window {
+    _hsp?: unknown[];
+  }
+}
+
 const RESOURCES: FooterNavItem[] = [
   {
     label: 'GitHub',
@@ -26,6 +35,21 @@ const RESOURCES: FooterNavItem[] = [
     href: 'https://developers.stellar.org/docs/build/smart-contracts',
   },
   { label: 'Stellar dashboard', href: 'https://dashboard.stellar.org/' },
+  {
+    label: 'Privacy Policy',
+    href: 'https://www.rumblefish.dev/privacy-policy/',
+  },
+  {
+    // Opens the consent banner rather than navigating anywhere. `#` +
+    // preventDefault keeps it a real anchor — focusable and hover-styled like
+    // its neighbours — which a bare onClick `<span>` would not be.
+    label: 'Cookie Settings',
+    href: '#',
+    onClick: (e) => {
+      e.preventDefault();
+      (window._hsp = window._hsp ?? []).push(['showBanner']);
+    },
+  },
 ];
 
 function FooterLink({ label, href, onClick }: FooterNavItem) {

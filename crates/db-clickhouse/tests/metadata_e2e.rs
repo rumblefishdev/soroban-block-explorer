@@ -143,8 +143,8 @@ async fn token_metadata_three_fields_end_to_end() {
     cl.query(
         "INSERT INTO soroban_contracts \
          (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, \
-          deployed_at_ledger, contract_type, is_sac, name) \
-         VALUES (?, ?, NULL, ?, NULL, ?, 3, false, NULL)",
+          deployed_at_ledger, contract_type, is_sac) \
+         VALUES (?, ?, NULL, ?, NULL, ?, 3, false)",
     )
     .bind(cid_surrogate)
     .bind(CONTRACT)
@@ -156,8 +156,8 @@ async fn token_metadata_three_fields_end_to_end() {
 
     cl.query(
         "INSERT INTO assets \
-         (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count) \
-         VALUES (3, '', 0, ?, NULL, NULL, NULL)",
+         (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count) \
+         VALUES (3, '', 0, ?, NULL, NULL)",
     )
     .bind(cid_surrogate)
     .execute()

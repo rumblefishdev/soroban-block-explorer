@@ -21,6 +21,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::list_contracts))
         .routes(routes!(handlers::get_contract))
         .routes(routes!(handlers::get_interface))
+        .routes(routes!(handlers::get_decompiled))
         .routes(routes!(handlers::list_invocations))
         .routes(routes!(handlers::list_events))
 }

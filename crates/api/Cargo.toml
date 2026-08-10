@@ -23,6 +23,10 @@ db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
 clickhouse = { workspace = true }
 enrichment-shared = { path = "../enrichment-shared" }
 xdr-parser = { path = "../xdr-parser" }
+# Exact pin (0.0.x = no compat guarantees); the adapter in
+# runtime_enrichment::wasm_code isolates churn. Bump deliberately and update
+# wasm_code::SOROBAN_RET_VERSION in lockstep (task 0465).
+soroban-ret = { version = "=0.0.4", features = ["wasmprinter"] }
 axum = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

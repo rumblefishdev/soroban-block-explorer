@@ -322,9 +322,10 @@ async fn process_s3_object(
     for ledger_meta in batch.ledger_close_metas.iter() {
         let parsed = process::parse_ledger(ledger_meta);
         let ledger_sequence = parsed.ledger.sequence;
+        let ledger_closed_at = parsed.ledger.closed_at;
 
         persist_with_retry(&state.ch_client, &parsed, &state.classification_cache).await?;
-        publish_ledger_sequence_metric(&state.cw_client, ledger_sequence).await;
+        publish_indexer_metrics(&state.cw_client, ledger_sequence, ledger_closed_at).await;
 
         // Mint = the token_uri-set event → the enrichment candidate. Non-mint
         // re-appearances (transfers) are already enriched or backfill's job.
@@ -536,33 +537,71 @@ where
     }
 }
 
-/// Best-effort CW metric publish. Failures are warn-logged and do not
-/// abort the batch — the metric is operator visibility only; the
-/// authoritative state of `LastProcessedLedgerSequence` is the
-/// `ledgers` table in CH.
-async fn publish_ledger_sequence_metric(cw_client: &CloudWatchClient, ledger_sequence: u32) {
+/// Wall-clock ingestion lag in seconds, clamped to 0. The clamp guards clock
+/// skew where a validator's ledger close time is briefly ahead of this host's
+/// clock (would otherwise report a spurious negative lag).
+fn ingestion_lag_secs(now_secs: i64, ledger_closed_at_secs: i64) -> i64 {
+    (now_secs - ledger_closed_at_secs).max(0)
+}
+
+/// Best-effort CW metric publish. Failures are warn-logged and do not abort the
+/// batch — the metrics are operator visibility only; the authoritative state of
+/// `LastProcessedLedgerSequence` is the `ledgers` table in CH.
+///
+/// Emits two datums in one call:
+/// - `LastProcessedLedgerSequence` — last ledger written.
+/// - `IngestionLagSeconds` — wall-clock seconds between ledger close and this
+///   write (end-to-end ingestion lag; feeds the D3 AC3 dashboard + AC6 report).
+async fn publish_indexer_metrics(
+    cw_client: &CloudWatchClient,
+    ledger_sequence: u32,
+    ledger_closed_at_secs: i64,
+) {
     use aws_sdk_cloudwatch::types::{Dimension, MetricDatum, StandardUnit};
 
     let env_name = std::env::var("ENV_NAME").unwrap_or_else(|_| "unknown".to_string());
-    let datum = MetricDatum::builder()
+    let dimension = Dimension::builder()
+        .name("Environment")
+        .value(&env_name)
+        .build();
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(ledger_closed_at_secs);
+    let lag_secs = ingestion_lag_secs(now_secs, ledger_closed_at_secs);
+
+    let sequence_datum = MetricDatum::builder()
         .metric_name("LastProcessedLedgerSequence")
-        .dimensions(
-            Dimension::builder()
-                .name("Environment")
-                .value(&env_name)
-                .build(),
-        )
+        .dimensions(dimension.clone())
         .value(f64::from(ledger_sequence))
         .unit(StandardUnit::None)
         .build();
+    let lag_datum = MetricDatum::builder()
+        .metric_name("IngestionLagSeconds")
+        .dimensions(dimension)
+        .value(lag_secs as f64)
+        .unit(StandardUnit::Seconds)
+        .build();
+
     let result = cw_client
         .put_metric_data()
         .namespace("SorobanBlockExplorer/Indexer")
-        .metric_data(datum)
+        .metric_data(sequence_datum)
+        .metric_data(lag_datum)
         .send()
         .await;
     if let Err(e) = result {
-        warn!(ledger_sequence, error = %e, "failed to publish LastProcessedLedgerSequence metric");
+        warn!(ledger_sequence, error = %e, "failed to publish indexer CW metrics");
+    }
+}
+
+#[cfg(test)]
+mod lag_tests {
+    #[test]
+    fn ingestion_lag_clamps_and_computes() {
+        assert_eq!(super::ingestion_lag_secs(1_000, 970), 30);
+        assert_eq!(super::ingestion_lag_secs(1_000, 1_005), 0); // clock skew → 0
     }
 }
 

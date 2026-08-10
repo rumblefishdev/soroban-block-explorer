@@ -22,7 +22,7 @@ history:
 - [Task 0075: CDK environment-specific configuration](../1-tasks/backlog/0075_FEATURE_cdk-environment-config.md)
 - [Task 0076: CI/CD pipeline](../1-tasks/backlog/0076_FEATURE_cicd-github-actions.md)
 - [Task 0078: CDK IAM roles](../1-tasks/backlog/0078_FEATURE_cdk-iam-ecr-nat.md)
-- [Task 0072: CDK CloudFront/WAF](../1-tasks/backlog/0072_FEATURE_cdk-cloudfront-waf-route53.md)
+- [Task 0035: CDK CloudFront/WAF](../1-tasks/archive/0035_FEATURE_cdk-cloudfront-waf-route53.md) (was numbered 0072 when this ADR was written)
 
 ---
 

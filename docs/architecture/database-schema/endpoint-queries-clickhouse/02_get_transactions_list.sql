@@ -20,6 +20,22 @@
 --     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates` for any new
 --     transaction-list module instead of the inline projection here.
 -- ============================================================================
+-- ⚠️  VALUE-MOVED ADDITION (task 0393) — the live response also carries
+--     `values`: the net-settled "value moved" per (transaction, asset). The
+--     same `fetch_tx_list_aggregates` helper runs a second non-correlated pass
+--     over `operation_asset_appearances` — `max(net_settled)` GROUP BY
+--     `(transaction_id, asset_id)` (version-less RMT: live + backfill reduce the
+--     same value, and `max` ignores NULL so a computed value wins over a
+--     not-computed one), HAVING `IS NOT NULL AND != 0` (Nullable: NULL = not
+--     computable, 0 = genuinely nothing settled — a wash is zero by the flow
+--     decomposition theorem), `(ledger, tx)` key filter + partition prune —
+--     joined to `assets` / `soroban_contract_metadata` for the code + decimals.
+--     NB the table is `asset_id`-leading, so that filter scans the pruned
+--     partition (not a seek). Read-path optimisation is an OPEN 0393 follow-up:
+--     no index/projection is baked in — the mechanism must come from a concrete
+--     load measurement of this endpoint. Amounts are RAW Int128 (client scales;
+--     classic/SAC = 7). Not shown in the statements below.
+-- ============================================================================
 -- ⚠️  CH READ-COST CORRECTION (task 0243) — `contract_ids` is OPS-ONLY in the
 --     live read path. The `arrayConcat`/UNION over operations_appearances +
 --     soroban_invocations_appearances + soroban_events shown in statements

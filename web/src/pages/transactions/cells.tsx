@@ -1,13 +1,18 @@
-import { Box, Typography } from '@mui/material';
+import { Box, Link, Typography } from '@mui/material';
+import type { TransactionValue } from '@rumblefish/api-types';
 import {
   Chip,
   Dash,
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
+  scaleByDecimals,
   StatusChip,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
+import { Link as RouterLink } from 'react-router-dom';
 
+import { routes } from '../../router/routes.js';
 import { formatOperationType } from './operationTypes.js';
 
 /**
@@ -20,6 +25,47 @@ export function OperationCell({ types }: { types: readonly string[] }) {
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
       <Chip size="sm" color="neutral" label={formatOperationType(first)} />
+      {rest.length > 0 && (
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
+          +{rest.length}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * "Value moved" cell (task 0393): the net-settled amount of the primary asset
+ * (scaled by its decimals) with its code linking to the asset detail page, plus
+ * a `+N` count when the transaction moved more than one asset. A single narrow
+ * column cannot list every asset, so the rest collapse into the count. `Dash`
+ * when nothing net-settled. (Per-asset breakdown on the transaction detail page
+ * is a planned follow-up — not built here.)
+ */
+export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
+  if (values.length === 0) return <Dash />;
+  const [first, ...rest] = values;
+  // `XLM` only for native; a bespoke token with no on-chain symbol has a null
+  // `asset_code` and must NOT be mislabeled as XLM (its `asset` C-StrKey still
+  // links correctly).
+  const code = first.asset === 'native' ? 'XLM' : first.asset_code ?? '';
+  return (
+    <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5 }}>
+      <Typography component="span" variant="bodySmRegular">
+        {formatAmount(scaleByDecimals(first.net_settled, first.decimals), 2)}
+      </Typography>
+      <Link
+        component={RouterLink}
+        to={routes.asset(first.asset)}
+        underline="hover"
+        variant="bodySmRegular"
+        sx={(theme) => ({ color: theme.palette.text.secondary })}
+      >
+        {code}
+      </Link>
       {rest.length > 0 && (
         <Typography
           variant="bodyXsRegular"

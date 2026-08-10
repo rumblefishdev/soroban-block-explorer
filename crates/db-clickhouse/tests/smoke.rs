@@ -70,8 +70,8 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- assets (state) — composite PK, no surrogate `id` -----
     client
         .query(
-            "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
-             VALUES (1, 'USDC', ?, 0, 'USD Coin', NULL, NULL, NULL)",
+            "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count, icon_url) \
+             VALUES (1, 'USDC', ?, 0, NULL, NULL, NULL)",
         )
         .bind(SMOKE_LEDGER)
         .execute()
@@ -133,8 +133,8 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- soroban_contracts (state) -----
     client
         .query(
-            "INSERT INTO soroban_contracts (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name) \
-             VALUES (?, 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', unhex('0000000000000000000000000000000000000000000000000000000000000002'), ?, NULL, NULL, NULL, false, NULL)",
+            "INSERT INTO soroban_contracts (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac) \
+             VALUES (?, 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', unhex('0000000000000000000000000000000000000000000000000000000000000002'), ?, NULL, NULL, NULL, false)",
         )
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -535,6 +535,9 @@ async fn cleanup(client: &clickhouse::Client) {
         "ALTER TABLE liquidity_pools DELETE WHERE hex(pool_id) = '00000000000000000000000000000000000000000000000000000000000000BB'".into(),
         format!("ALTER TABLE liquidity_pool_snapshots DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE lp_positions DELETE WHERE account_id = {l}"),
+        // `balances` was missing here — a run failing after its insert left
+        // sentinel rows that poisoned the next run's count (lore-0392).
+        format!("ALTER TABLE balances DELETE WHERE holder_id = {l}"),
     ];
     for s in stmts {
         // Ignore errors: cleanup runs on a freshly-created schema where the

@@ -15,7 +15,10 @@ pub mod event_filters;
 pub mod invocation;
 pub mod ledger;
 pub mod ledger_entry_changes;
+pub mod ledger_value;
 pub mod memo;
+pub mod meta;
+pub mod net_settled;
 pub mod nft;
 pub mod op_participants;
 pub mod op_source;
@@ -35,16 +38,18 @@ pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
 pub use event::extract_events;
-pub use event_filters::{Transfer, is_transfer_event, parse_transfer, transfer_participants};
+pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_event};
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
+pub use ledger_value::{LedgerAsset, LedgerDelta, ledger_balance_deltas};
+pub use net_settled::{AccountDelta, NetSettled, net_settled};
 pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;
-pub use operation::{extract_operations, tx_op_results};
+pub use operation::{extract_operations, op_result_code, tx_op_results, tx_op_results_any};
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id, derive_sac_strkey,
-    extract_sac_identities, network_id, passphrase_for, sac_override_from_event_topics,
+    extract_sac_identities, net_id, network_id, passphrase_for, sac_override_from_event_topics,
 };
 pub use scval::scval_to_typed_json;
 pub use state::{

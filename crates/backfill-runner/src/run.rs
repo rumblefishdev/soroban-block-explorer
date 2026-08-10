@@ -36,6 +36,7 @@ pub async fn execute(
     end: u32,
     keep_partitions: bool,
     soroban_rpc_url: Option<&str>,
+    reindex: bool,
     mp: &MultiProgress,
 ) -> Result<(), BackfillError> {
     assert!(
@@ -56,7 +57,17 @@ pub async fn execute(
         return Ok(());
     }
 
-    let completed = sink.load_completed(start, end).await?;
+    // `--reindex` bypasses the resume skip so an already-ingested range is
+    // re-parsed to populate a NEW derived table over history (task 0359
+    // `operation_asset_appearances`) — `load_completed` reads the `ledgers`
+    // table, which the original ingest already filled, so without this every
+    // partition reads as done. Empty completed-set → every ledger re-parsed;
+    // all writes are ReplacingMergeTree-idempotent.
+    let completed = if reindex {
+        std::collections::HashSet::new()
+    } else {
+        sink.load_completed(start, end).await?
+    };
 
     // Filter out partitions whose entire clamped range is already in the
     // `ledgers` table. With cleanup-after-index the local folder is gone
