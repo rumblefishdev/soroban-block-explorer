@@ -143,9 +143,25 @@ export function ContractCode({
    * on a healthy contract keeps Rust available, because `rust_error` is
    * null there.
    */
-  const rustUnavailable =
-    autoWatReason ??
-    (data?.representation === 'wat' ? data.rust_error ?? null : null);
+  const rustUnavailable: { reason: string; fromDecompiler: boolean } | null =
+    autoWatReason != null
+      ? { reason: autoWatReason, fromDecompiler: false }
+      : data?.representation === 'wat' && data.rust_error != null
+      ? { reason: data.rust_error, fromDecompiler: true }
+      : null;
+
+  /**
+   * What the prefilled issue should say. soroban-ret's own message goes in
+   * verbatim; our timeout is reported as ours, because from the
+   * decompiler's side nothing failed — it simply had not finished.
+   */
+  const reportedError =
+    rustUnavailable == null
+      ? undefined
+      : rustUnavailable.fromDecompiler
+      ? rustUnavailable.reason
+      : "exceeded SorobanScan's 10 s server-side decompilation limit " +
+        '(no soroban-ret error — the decompiler was still running)';
 
   /** The toggle reflects what is on screen, not what was requested — those
    *  differ when the API answers a Rust request with the WAT fallback. */
@@ -206,7 +222,7 @@ export function ContractCode({
         // inside a successful call, or the call itself died and the UI
         // re-requested WAT. The full reason renders in the alert below;
         // the tooltip is a shortcut for people hovering the chip.
-        <Tooltip title={rustUnavailable} arrow>
+        <Tooltip title={rustUnavailable.reason} arrow>
           <Chip size="sm" color="warning" label="WAT only" />
         </Tooltip>
       )}
@@ -222,7 +238,7 @@ export function ContractCode({
               wasmHash: data.wasm_hash,
               version: data.soroban_ret_version,
               representation: data.representation,
-              apiError: rustUnavailable ?? undefined,
+              apiError: reportedError,
             })}
             target="_blank"
             rel="noopener noreferrer"
@@ -303,8 +319,9 @@ export function ContractCode({
       </Alert>
 
       {rustUnavailable != null && (
-        // The decompiler's own reason, verbatim and in the open — a hidden
-        // tooltip undersells exactly the case worth reporting upstream.
+        // The reason in the open — a hidden tooltip undersells exactly the
+        // case worth reporting upstream. Attribution matters: a decompiler
+        // diagnostic is quoted verbatim, our own timeout is named as ours.
         <Alert
           severity="warning"
           icon={<BugReportOutlinedIcon fontSize="small" />}
@@ -316,7 +333,7 @@ export function ContractCode({
                 contractId,
                 wasmHash,
                 representation: 'rust',
-                apiError: rustUnavailable,
+                apiError: reportedError,
               })}
               target="_blank"
               rel="noopener noreferrer"
@@ -325,8 +342,18 @@ export function ContractCode({
             </Button>
           }
         >
-          Rust could not be produced for this contract:{' '}
-          <code>{rustUnavailable}</code>
+          {rustUnavailable.fromDecompiler ? (
+            <>
+              Rust could not be produced for this contract:{' '}
+              <code>{rustUnavailable.reason}</code>
+            </>
+          ) : (
+            <>
+              Rust decompilation exceeded SorobanScan&apos;s 10-second limit, so
+              WAT is shown instead — soroban-ret reported no error, it was still
+              running.
+            </>
+          )}
         </Alert>
       )}
 
