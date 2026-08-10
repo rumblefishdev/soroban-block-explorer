@@ -45,6 +45,39 @@ history:
       non-retroactive - every day unactivated is a day of history that stays
       unattributable (the July investigation cost a full day for exactly
       this reason).
+  - date: 2026-08-10
+    status: backlog
+    who: karolkow
+    note: >
+      Big day for this task. (1) Tag ACTIVATED by the management-account
+      owner, verified from CE: Cost Explorer groups by Project with real
+      values; a historical backfill was reportedly requested too (mgmt-side
+      feature; applies tags resources carried at usage time, so Galexie
+      tasks stay unattributed historically). (2) Untagged bucket broken
+      down: ~84% of account spend, of which ~74% is Galexie Fargate - ECS
+      does not propagate service tags to tasks; FIXED in CDK
+      (propagateTags: SERVICE, commit 78bcf735), forward-only. (3) Cost
+      Anomaly Detection added (commit 29dbf9a1): per-SERVICE monitor over
+      the whole account + IMMEDIATE subscription onto the alarm topic +
+      costalerts.amazonaws.com topic-policy grant; threshold in config,
+      set to 3 USD cumulative-per-anomaly after discussion. Measured
+      before adding: the account had ZERO anomaly monitors and ZERO
+      budgets. (4) Residual untagged after the fix ~0.6 USD/day:
+      inherently untaggable (public IPv4, X-Ray, CW metrics) plus
+      hand-provisioned secrets (8 ours: mtls/*, ca/key, operator/env,
+      ops/deploy-ssh-key; 2 prices') - one-time tag-resource commands for
+      the operator. (5) The "RDS" line in the untagged bucket is OURS,
+      not the co-tenant's: two manual snapshots of the retired staging
+      Postgres in us-east-1 (20+40 GB, Apr/May 2026) billing
+      ChargedBackupUsage - staging retired by 0249, PG by 0243/0244;
+      deletion commands handed to the operator (irreversible, data
+      worthless by construction). (6) Runbook docs/runbooks/costs.md
+      added: per-project view, untagged-remainder view, how to read an
+      anomaly alert, stated non-coverage (Hetzner invoice, management
+      account, slow creep until Budgets land). Remaining here: per-project
+      Budgets with forecast alerts after ~a week of honestly-attributed
+      data, and the second anomaly subscription for the co-tenant's
+      channel if they want one.
 ---
 
 # The AWS account bills two projects as one

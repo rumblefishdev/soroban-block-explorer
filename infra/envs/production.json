@@ -58,7 +58,7 @@
   "processorErrorRateThreshold": 0.01,
   "apiGateway5xxThreshold": 0.5,
   "galexieEphemeralUtilizationThreshold": 60,
-  "costAnomalyAlertThresholdUsd": 5,
+  "costAnomalyAlertThresholdUsd": 3,
   "chDomainName": "ch.sorobanscan.rumblefish.dev",
   "mtlsSecretNamePrefix": "soroban/production/mtls"
 }
