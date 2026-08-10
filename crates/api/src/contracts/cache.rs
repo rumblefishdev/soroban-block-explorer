@@ -48,6 +48,7 @@ mod tests {
             contract_type_name: None,
             contract_type: None,
             is_sac: false,
+            sac_asset: None,
             upgradeable: None,
             stats: super::super::dto::ContractStats {
                 recent_invocations: 0,

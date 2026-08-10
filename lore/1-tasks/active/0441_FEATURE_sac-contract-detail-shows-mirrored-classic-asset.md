@@ -23,6 +23,17 @@ history:
     status: active
     who: karolkow
     note: >
+      Implemented on feat/0441. One shared fetch_sac_assets (batched IN +
+      GROUP BY collapse, issuers via resolve_accounts, native by
+      asset_type=0), sac_asset field on list + detail DTOs, linked SAC·CODE
+      chip + "Mirrors asset" row. Field named sac_asset (not "mirrored") to
+      match the is_sac / asset_sac family. EXPLAIN ESTIMATE re-measured:
+      461,796 rows, plan identical for 1 vs 10 ids. All ACs checked; awaits
+      PR + deploy. Issue #368 stays open until production.
+  - date: '2026-08-10'
+    status: active
+    who: karolkow
+    note: >
       Activated. Note: the stash@{2} referenced in the 2026-07-30 entry no
       longer holds this task's implementation — stash indices shifted during
       the 2026-07-30 cleanup and a content grep over all current stashes
@@ -182,20 +193,33 @@ just that the whole cost is 8 MB.
 
 - [x] Reverse-lookup access path decided (scan / projection / detail-only) and
       recorded — **accept the scan**, 2026-07-30, see above
-- [ ] The query is issued **once per page** with every SAC id in one `IN` list —
-      a per-id form multiplies the scan and is the shape the 1.1M figure came
-      from
-- [ ] `read_rows` measured on the contract LIST page, not just the detail
-      page; bounded as the asset table grows
-- [ ] Contract detail returns the mirrored classic asset when `is_sac`
-- [ ] Reverse join collapses `asset_sac` duplicates (mirror the LP subquery)
-- [ ] `is_sac` true with no resolvable asset degrades to the current bare badge
-- [ ] Native (XLM) SAC handled — a positive surrogate, not an empty issuer
-- [ ] Frontend links the asset; StrKey of the contract stays canonical
-- [ ] **Docs updated** — contract endpoint contract under
-      `docs/architecture/**` per ADR 0032
-- [ ] **API types regenerated** — touches `crates/api/**`; run
-      `npx nx run @rumblefish/api-types:generate`
+- [x] The query is issued **once per page** with every SAC id in one `IN` list —
+      `fetch_sac_assets` is the single shared fn for list + detail; the list
+      collects the page's SAC ids into one call (2026-08-10)
+- [x] `read_rows` measured on the contract LIST page, not just the detail
+      page; bounded as the asset table grows — `EXPLAIN ESTIMATE` on prod
+      identical for 1 and 10 ids: 461,796 rows / 7 parts / 62 marks = one
+      scan per page (table 443k→462k since July, linear; 5M bloom trigger
+      stands) (2026-08-10)
+- [x] Contract detail returns the mirrored classic asset when `is_sac` —
+      `sac_asset: Option<SacAsset>` on detail + list DTOs
+- [x] Reverse join collapses `asset_sac` duplicates (mirror the LP subquery) —
+      `GROUP BY sac_contract_id` + `max()`; prod shows 1–3 facet rows per
+      contract
+- [x] `is_sac` true with no resolvable asset degrades to the current bare
+      badge — unresolvable facet omitted from the map (2 of 3,946 on prod);
+      covered by a vitest case
+- [x] Native (XLM) SAC handled — detected by `asset_type = 0` (the prod facet
+      row is `('', 0)`, so empty-issuer is NOT the signal); renders `SAC · XLM`
+      → `/asset/native`; covered by a vitest case
+- [x] Frontend links the asset; StrKey of the contract stays canonical —
+      linked chip `SAC · CODE` on the list, "Mirrors asset" row (code +
+      issuer) on the detail; 4 vitest cases in `ContractsTable.test.tsx`
+- [x] **Docs updated** — backend-overview (both contract endpoints),
+      frontend-overview §6.10, database-schema asset_sac readers note,
+      canonical SQL 11 statement C
+- [x] **API types regenerated** — `SacAsset` in
+      `libs/api-types/src/generated/`, same commit
 
 ## Notes
 

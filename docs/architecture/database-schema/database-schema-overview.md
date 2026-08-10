@@ -867,6 +867,11 @@ CREATE TABLE asset_sac (
     -- No skip-index on `sac_contract_id`: every read aggregates the whole (small,
     -- ~31k-row) table (`GROUP BY key, max(sac_contract_id)`), so a per-column index
     -- prunes nothing; the `/assets/{C…}` deep-link filters that join result.
+    -- Readers by direction: asset → SAC on the LP endpoints and /assets;
+    -- SAC → asset (reverse, task 0441) on /contracts + /contracts/:id
+    -- (`sac_asset` field), one batched whole-table aggregation per page —
+    -- accepted at the measured 7.79 MiB; bloom_filter skip index is the
+    -- named upgrade past ~5M rows.
 );
 ```
 

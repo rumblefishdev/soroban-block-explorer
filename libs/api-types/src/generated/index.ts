@@ -210,6 +210,7 @@ export type {
   PoolAssetLeg,
   PoolItem,
   PoolTransactionItem,
+  SacAsset,
   SearchGroups,
   SearchHit,
   SearchResults,

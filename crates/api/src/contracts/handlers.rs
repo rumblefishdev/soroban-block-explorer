@@ -103,6 +103,7 @@ fn map_contract_list_item(r: ContractListRow) -> ContractListItem {
         contract_type: r.contract_type,
         contract_type_name: r.contract_type_name,
         is_sac: r.is_sac,
+        sac_asset: r.sac_asset,
         deployer: r.deployer,
         deployed_at_ledger: r.deployed_at_ledger,
         recent_invocations: r.recent_invocations,
@@ -171,6 +172,7 @@ pub async fn get_contract(
         contract_type_name: contract.contract_type_name,
         contract_type: contract.contract_type,
         is_sac: contract.is_sac,
+        sac_asset: contract.sac_asset,
         // Task 0327 — mutability, 3-state (CH-only; None/Unknown on the retired PG
         // path). Resolved in `fetch_contract` from the joined WASM interface
         // metadata; no extra round-trip.

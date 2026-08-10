@@ -18,6 +18,20 @@ pub struct ContractsListParams {
     pub filter_q: Option<String>,
 }
 
+/// The classic asset a SAC contract is the contract-side facet of (ADR 0051,
+/// task 0441). `None` on non-SAC contracts — and on the rare SAC with no
+/// resolvable `asset_sac` facet row (2 of 3,946 on prod), where the frontend
+/// keeps the bare SAC badge. Native XLM is `asset_code: null, issuer: null`;
+/// a classic asset always carries both (an asset code alone is ambiguous —
+/// prod holds many issuers of "USDC").
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SacAsset {
+    /// Classic asset code (e.g. `USDC`); `null` = native XLM.
+    pub asset_code: Option<String>,
+    /// Issuer account G-strkey; `null` = native XLM.
+    pub issuer: Option<String>,
+}
+
 /// One row of `GET /v1/contracts`. Identity + classification + deploy
 /// provenance + a 7-day activity signal. All fields come straight from
 /// `soroban_contracts` (+ a deployer join and a windowed invocation count);
@@ -32,6 +46,8 @@ pub struct ContractListItem {
     pub contract_type_name: Option<String>,
     /// Stellar Asset Contract flag (stored, not derived from `contract_type`).
     pub is_sac: bool,
+    /// The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`]).
+    pub sac_asset: Option<SacAsset>,
     /// Deployer account G-strkey; `null` until the deploy op is observed.
     pub deployer: Option<String>,
     /// Ledger the deploy was observed at; `null` until then.
@@ -63,6 +79,8 @@ pub struct ContractDetailResponse {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`]).
+    pub sac_asset: Option<SacAsset>,
     /// Task 0327: contract mutability, 3-state.
     /// - `Some(true)` → **Upgradeable**: the current WASM imports
     ///   `update_current_contract_wasm` (a self-upgrade path).

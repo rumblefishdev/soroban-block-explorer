@@ -21,7 +21,7 @@ use crate::accounts::dto::{
 use crate::assets::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem};
 use crate::contracts::dto::{
     ContractDetailResponse, ContractFunctionParam, ContractFunctionSig, ContractInterfaceMetadata,
-    ContractListItem, ContractStats, EventItem, InterfaceResponse, InvocationItem,
+    ContractListItem, ContractStats, EventItem, InterfaceResponse, InvocationItem, SacAsset,
 };
 use crate::liquidity_pools::dto::{
     ChartDataPoint, ChartResponse, PoolAssetLeg, PoolItem, PoolTransactionItem,
@@ -104,6 +104,7 @@ impl Modify for SecurityAddon {
         ContractListItem,
         ContractDetailResponse,
         ContractStats,
+        SacAsset,
         InterfaceResponse,
         ContractInterfaceMetadata,
         ContractFunctionSig,

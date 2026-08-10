@@ -10,9 +10,12 @@ import {
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { Link as RouterLink } from 'react-router-dom';
+
 import { routes } from '../../router/routes.js';
 
 import { contractTypeMeta } from './contractType.js';
+import { sacAssetCode, sacAssetId } from './sacAsset.js';
 
 const columns: ExplorerTableColumn<ContractListItem>[] = [
   {
@@ -36,7 +39,24 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
       return (
         <Stack direction="row" spacing={1} alignItems="center">
           <Chip size="sm" color={meta.color} label={meta.label} />
-          {row.is_sac && <Chip size="sm" color="brown" label="SAC" />}
+          {/* Task 0441: a SAC names the asset it mirrors and links to it;
+              the rare unresolvable facet degrades to the bare badge. */}
+          {row.is_sac &&
+            (row.sac_asset ? (
+              <RouterLink
+                to={routes.asset(sacAssetId(row.sac_asset))}
+                style={{ textDecoration: 'none' }}
+              >
+                <Chip
+                  size="sm"
+                  color="brown"
+                  clickable
+                  label={`SAC · ${sacAssetCode(row.sac_asset)}`}
+                />
+              </RouterLink>
+            ) : (
+              <Chip size="sm" color="brown" label="SAC" />
+            ))}
         </Stack>
       );
     },
