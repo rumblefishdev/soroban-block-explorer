@@ -107,6 +107,7 @@ impl WasmCodeFetcher {
         });
 
         let mut last_err = String::from("no endpoints configured");
+        let mut empty_answers = 0usize;
         for url in self.rpc_urls.iter() {
             let resp = match self.client.post(url).json(&body).send().await {
                 Ok(r) => r,
@@ -126,15 +127,24 @@ impl WasmCodeFetcher {
                     continue;
                 }
             };
-            if let Some(err) = value.get("error") {
-                return Err(FetchError::RpcError(err.to_string()));
+            // `get("error")` also matches servers that always send the key
+            // with a null value — only a non-null payload is a real error.
+            if !value["error"].is_null() {
+                return Err(FetchError::RpcError(value["error"].to_string()));
             }
             let entries = value["result"]["entries"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
             let Some(entry_xdr) = entries.first().and_then(|e| e["xdr"].as_str()) else {
-                return Ok(None);
+                // An empty result means "no live entry" — but a lagging or
+                // pruned node reports the same thing for code that does
+                // exist. Ask the rest of the pool before believing it; the
+                // mainnet sweep found 0 genuinely archived binaries, so a
+                // single empty answer is more likely a bad node than truth.
+                empty_answers += 1;
+                last_err = format!("{url}: no entries for this hash");
+                continue;
             };
             let entry_bytes = BASE64
                 .decode(entry_xdr)
@@ -150,6 +160,11 @@ impl WasmCodeFetcher {
                 return Err(FetchError::RpcError("returned code hash mismatch".into()));
             }
             return Ok(Some(code_entry.code.to_vec()));
+        }
+        // Only conclude "not live" when every endpoint answered cleanly and
+        // agreed the entry is gone; a mixed bag of failures is an error.
+        if empty_answers == self.rpc_urls.len() {
+            return Ok(None);
         }
         Err(FetchError::Rpc(last_err))
     }
@@ -174,6 +189,59 @@ pub struct Decompiled {
     /// Set when Rust was requested but emission failed and `source`
     /// carries the WAT fallback instead.
     pub rust_error: Option<String>,
+}
+
+/// Bounds how many Rust decompilations may run at once.
+///
+/// `tokio::time::timeout` cancels the *await*, not the blocking work — a
+/// decompilation that overruns the handler's deadline keeps burning a
+/// blocking-pool thread after the client has been answered (the mainnet
+/// sweep found binaries needing 100 s+). The permit is moved into the
+/// blocking closure, so it is released when the work truly ends, not when
+/// the request gives up: overruns can pile up to `available_parallelism`
+/// and no further.
+static DECOMPILE_SLOTS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+fn decompile_slots() -> &'static Arc<tokio::sync::Semaphore> {
+    DECOMPILE_SLOTS.get_or_init(|| {
+        let permits = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(2)
+            .max(1);
+        Arc::new(tokio::sync::Semaphore::new(permits))
+    })
+}
+
+/// Run [`decompile_blocking`] on the blocking pool under the concurrency
+/// bound. Wrap the call in `tokio::time::timeout` for the client-facing
+/// deadline — the timeout covers waiting for a slot as well.
+///
+/// WAT is deliberately **not** gated: it is the fallback the UI reaches for
+/// when Rust fails, so it must not starve behind saturated Rust slots
+/// (measured at 0.45 s even for a 2.1 MB output).
+pub async fn decompile_on_blocking_pool(
+    wasm: Vec<u8>,
+    want_wat: bool,
+) -> Result<Decompiled, String> {
+    let permit = if want_wat {
+        None
+    } else {
+        Some(
+            Arc::clone(decompile_slots())
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("decompile slot: {e}"))?,
+        )
+    };
+    tokio::task::spawn_blocking(move || {
+        // Held for the real duration of the work, including any overrun
+        // past the handler's timeout.
+        let _permit = permit;
+        decompile_blocking(&wasm, want_wat)
+    })
+    .await
+    .map_err(|join_err| format!("decompile task join error: {join_err}"))?
 }
 
 /// Decompile `wasm`. CPU-bound and synchronous — call from

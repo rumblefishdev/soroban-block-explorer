@@ -578,9 +578,7 @@ pub async fn get_decompiled(
 
     let decompiled = match tokio::time::timeout(
         DECOMPILE_TIMEOUT,
-        tokio::task::spawn_blocking(move || {
-            crate::runtime_enrichment::wasm_code::decompile_blocking(&wasm, want_wat)
-        }),
+        crate::runtime_enrichment::wasm_code::decompile_on_blocking_pool(wasm, want_wat),
     )
     .await
     {
@@ -591,18 +589,14 @@ pub async fn get_decompiled(
                 "decompilation timed out — retry with format=wat",
             );
         }
-        Ok(Err(join_err)) => {
-            tracing::error!("decompile task join error for {contract_id}: {join_err}");
-            return errors::internal_error(errors::DECOMPILE_FAILED, "decompilation failed");
-        }
-        Ok(Ok(Err(msg))) => {
+        Ok(Err(msg)) => {
             tracing::error!("decompilation failed for {contract_id} ({wasm_hash}): {msg}");
             return errors::internal_error(
                 errors::DECOMPILE_FAILED,
                 "no representation could be produced for this contract",
             );
         }
-        Ok(Ok(Ok(d))) => d,
+        Ok(Ok(d)) => d,
     };
 
     let mut resp = Json(DecompiledResponse {
