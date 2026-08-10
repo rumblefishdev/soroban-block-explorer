@@ -302,17 +302,17 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 ### 6.2 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                                      |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                            |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                  |
-| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                    |
-| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                          |
-| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                   |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`    |
-| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                |
+| Resource        | Endpoint(s)                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                                                                |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                                                                      |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                                                            |
+| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                                              |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
+| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
 ### 6.3 Resource Details
 
@@ -433,6 +433,18 @@ nft | fungible) and `filter[q]` (full-text over name + contract_id).
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
+
+**`GET /contracts/:contract_id/decompiled`** - On-demand decompilation of the contract's
+WASM (task 0465, issue #374). No persistence: the handler resolves `wasm_hash`, fetches
+the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`),
+and runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
+timeout. `?format=rust` (default) returns reconstructed Rust with completeness markers
+(`functions`, `todo_holes`, `unknown_vars` — counts, not percentages, per the
+soroban-ret team's guidance); when Rust emission fails the same response degrades to
+`representation: "wat"` with `rust_error` set. `?format=wat` returns the (lossless)
+WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code no
+longer live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
+responses carry the `LONG` cache header.
 
 **`GET /contracts/:contract_id/invocations`** - Paginated list of contract invocations.
 
