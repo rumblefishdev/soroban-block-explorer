@@ -52,7 +52,7 @@ pub async fn current_head_opt(state: &AppState) -> Option<i64> {
     match latest_sequence_ch(&state.ch()).await {
         Ok(h) => Some(h),
         Err(e) => {
-            tracing::warn!("head read failed; serving list without ETag: {e}");
+            tracing::warn!(error = %e, "head read failed; serving list without ETag");
             None
         }
     }

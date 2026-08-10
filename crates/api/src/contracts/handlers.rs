@@ -78,7 +78,7 @@ pub async fn list_contracts(
         match fetch_contract_list_for_source(&state, &resolved, direction).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("DB error in list_contracts: {e}");
+                tracing::error!(error = %e, "DB error in list_contracts");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -149,7 +149,7 @@ pub async fn get_contract(
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching contract {contract_id}: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "DB error fetching contract");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -157,7 +157,7 @@ pub async fn get_contract(
     let stats = match fetch_stats_for_source(&state, contract.id).await {
         Ok(v) => v,
         Err(e) => {
-            tracing::error!("DB error fetching stats for {contract_id}: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "DB error fetching contract stats");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -214,7 +214,7 @@ pub async fn get_interface(
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching interface for {contract_id}: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "DB error fetching contract interface");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -232,7 +232,8 @@ pub async fn get_interface(
         Err(err) => {
             tracing::error!(
                 contract_id = %row.contract_id,
-                "interface_metadata present but failed to decode — shape drift between indexer output and the API DTO, or a legacy-shape row needing re-index: {err}"
+                error = %err,
+                "interface_metadata present but failed to decode — shape drift between indexer output and the API DTO, or a legacy-shape row needing re-index"
             );
             return errors::internal_error(
                 errors::INTERFACE_METADATA_CORRUPT,
@@ -291,7 +292,7 @@ pub async fn list_invocations(
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching contract {contract_id}: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "DB error fetching contract");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -309,7 +310,7 @@ pub async fn list_invocations(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_invocations: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "DB error in list_invocations");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -383,7 +384,7 @@ pub async fn list_events(
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching contract {contract_id}: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "DB error fetching contract");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -405,7 +406,7 @@ pub async fn list_events(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("CH error in list_events: {e}");
+            tracing::error!(contract_id = %contract_id, error = %e, "CH error in list_events");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };

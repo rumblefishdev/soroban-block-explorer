@@ -112,7 +112,7 @@ pub async fn list_ledgers(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_ledgers: {e}");
+            tracing::error!(error = %e, "DB error in list_ledgers");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -204,7 +204,7 @@ pub async fn get_ledger(
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("ledger with sequence {sequence} not found")),
         Err(e) => {
-            tracing::error!("DB error in get_ledger header: {e}");
+            tracing::error!(sequence, error = %e, "DB error in get_ledger header");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -223,7 +223,7 @@ pub async fn get_ledger(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in get_ledger transactions: {e}");
+            tracing::error!(sequence, error = %e, "DB error in get_ledger transactions");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };

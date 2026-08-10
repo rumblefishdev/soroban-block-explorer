@@ -58,7 +58,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     let head = match head {
         Ok(head) => head,
         Err(e) => {
-            tracing::error!("DB error reading head in get_network_stats: {e}");
+            tracing::error!(error = %e, "DB error reading head in get_network_stats");
             // Availability: the head read is a new hard dependency in front of
             // the cache (it did not exist under the old TTL design, where a
             // warm HIT served with no DB round-trip). A transient head-read
@@ -111,7 +111,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
     match result {
         Ok(stats) => ok_response(stats),
         Err(e) => {
-            tracing::error!("DB error in get_network_stats: {e}");
+            tracing::error!(error = %e, "DB error in get_network_stats");
             errors::internal_error(errors::DB_ERROR, "Unable to retrieve network statistics.")
         }
     }
