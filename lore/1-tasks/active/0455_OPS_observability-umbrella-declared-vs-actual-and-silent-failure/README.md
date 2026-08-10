@@ -3,7 +3,7 @@ id: '0455'
 title: 'OPS: observability umbrella — "declared vs actual, never compared" and "health measured by success"'
 type: OPS
 status: active
-related_adr: []
+related_adr: ['0054']
 related_tasks:
   [
     '0454',
@@ -70,6 +70,28 @@ history:
       read twice while the delta stayed open. Widest-effect candidate is an
       `infra/` test asserting that each filter string and metric namespace
       appears in `crates/`, which covers the class rather than an instance.
+  - date: 2026-08-10
+    status: active
+    who: karolkow
+    note: >
+      Large execution block landed. Defect-1 instances: 0406 closed (CI
+      provisions ClickHouse and runs the gated e2e suite, sabotage-verified
+      red), 0312 closed (deploy target shows the full diff and asks before
+      --all; parked delta deployed, prod diff clean), 0454's dead filter fixed
+      fundamentally (structured field alarm="ch_write_failure" plus a
+      declared-vs-emitted CI guard over a comment-stripped crates/ corpus; an
+      SSOT/codegen variant was built and reverted as overkill at 2 contracts),
+      0434 exhaustive matches, 0400 reconciled both directions with the
+      consumer-less idx_oaa_transaction_id dropped from prod and init.sql.
+      Defect-2 groundwork: treatMissingData justified on every alarm; stall
+      math IF(received>0, age, 0) measured to separate pause from failure,
+      pending merge. Cost package (0449) executed: Project tag activated from
+      the management account with historical backfill, Galexie task-tag
+      propagation, account-wide Cost Anomaly Detection to the existing SNS
+      topic, costs runbook, leftover staging-Postgres snapshots deleted,
+      hand-provisioned secrets tagged. Remaining: alarm core merge
+      (stall + DLQ-growth + re-arm), MV freshness from data recency, budgets,
+      health runbook, final deploy + verification.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -92,7 +114,18 @@ recurring defects, each with several instances:
    the target state.
 
 None of this is a monitoring-tooling gap: the data existed in every case. What is
-missing is a comparator, an inverted signal, and an alarm design that re-arms.
+missing is an inverted signal, an alarm design that re-arms, and — for defect 1 —
+a check placed where somebody can act on it. Note that last phrasing: the first
+draft of this task said "a comparator", and that turned out to be the wrong
+shape. See defect 1 below.
+
+There is also a fifth defect, one level up: **each of the sixteen tasks proposes
+its own detection AND its own notifier.** Built as written that is five
+schedulers, four delivery paths and three secrets for two people — and 0237's
+24-hour cooldown sentinel file is a hand-rolled alarm state machine in bash. No
+task is wrong; nothing existed to say "do not grow your own notifier". That
+statement is now [ADR 0054](../../../2-adrs/0054_one-alarm-engine-and-three-rules-for-alarms.md),
+and it is what stops this recurring after the umbrella closes.
 
 ## Evidence
 
@@ -150,14 +183,14 @@ already produced does not change that.
 Each row instead takes the cheapest check that sits where it can be acted on,
 and they are deliberately different mechanisms:
 
-| Instance | Check                                                                                                                   |
-| -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| [[0312]] | **Done 2026-08-10** — confirmation step at deploy shipped, parked delta deployed, prod diff clean; 0312 archived        |
-| [[0406]] | **Done 2026-08-06** — CI provisions CH from compose, runs both gates, sabotage-verified red; 0406 archived              |
-| [[0400]] | A one-off reconciliation of four enumerated items; whether schema changes route through the repo is a separate question |
-| [[0434]] | A unit test asserting the match arms cover the crate's enum                                                             |
-| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                        |
-| [[0454]] | Covered by an `infra/` test asserting each filter string appears in `crates/` — one check for the whole class           |
+| Instance | Check                                                                                                                                                                                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [[0312]] | **Done 2026-08-10** — confirmation step at deploy shipped, parked delta deployed, prod diff clean; 0312 archived                                                                                                                                                    |
+| [[0406]] | **Done 2026-08-06** — CI provisions CH from compose, runs both gates, sabotage-verified red; 0406 archived                                                                                                                                                          |
+| [[0400]] | **Measured 2026-08-06/10** — both directions reconciled; the consumer-less `idx_oaa_transaction_id` found declared-but-unused, dropped from prod and `init.sql`; docs half remains in the child task                                                                |
+| [[0434]] | **Done 2026-08-06** — `_ => {}` arms replaced with exhaustive matches (drift is now a compile error); config-setting names derived from `ConfigSettingId`; remaining gaps measured and recorded in the child task                                                   |
+| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                                                                                                                                                                    |
+| [[0454]] | **Done 2026-08-06** — filter keyed on the structured field `alarm = "ch_write_failure"`; `infra/src/lib/stacks/declared-vs-emitted.spec.ts` asserts every filter contract exists in `crates/` (comment-stripped corpus), wired into CI with Rust-aware cache inputs |
 
 ## Defect 2 — health measured by success
 
@@ -223,10 +256,16 @@ be readable.
 
 - alarm on `ApproximateAgeOfOldestMessage` for `production-ledger-ingest`,
   **paired** with a DLQ-growth alarm, **suppressed** during declared maintenance
-- `treatMissingData: BREACHING` where absence genuinely means failure — plus a
-  one-line comment on every alarm justifying its setting either way
+  — designed and measured (stall math `IF(received > 0, age, 0)` distinguishes
+  pause from failure without a suppressor), pending merge
+- **Done 2026-08-06** — every alarm's `treatMissingData` carries a one-line
+  justification comment; the write-failure threshold rewritten in doorbell
+  units
 - MV freshness measured from **data recency**, not metadata ([[0428]])
-- repair `indexer-ch-write-failures`: match a stable field, not prose
+- **Done 2026-08-06** — `indexer-ch-write-failures` keys on the structured
+  field `alarm = "ch_write_failure"` emitted at both hard-failure sites; an
+  SSOT/codegen variant was built, judged overkill at 2 contracts, and
+  reverted (return threshold recorded in the guard's commit message)
 
 ### 3. The comparator
 
@@ -234,14 +273,24 @@ One scheduled job printing deltas for every row of defect 1, publishing to the
 SNS topic that already reaches the team. Start with the two that already bit us —
 schema and CDK — then alarm filters vs emitted strings, then tests vs CI.
 
-### 4. Cost attribution and cost detection ([[0449]])
+### 4. Cost attribution and cost detection ([[0449]]) — **done 2026-08-10** (detection live after deploy)
 
-All 11 stacks already emit the `Project` tag; the missing step is activating it
-in Billing, which is not retroactive. Detection has no owner at all: the "nobody
-noticed the spend rise for three weeks" problem is proposed in [[0449]]'s prose
-and exists in no task. Fold it into [[0449]]'s acceptance criteria or spawn it —
-a per-project budget with a forecast trigger, and anomaly detection for step
-changes, both routed to the existing SNS topic.
+Attribution: the `Project` cost-allocation tag was activated from the
+organization management account, with a historical backfill requested; the
+largest untagged share (Galexie Fargate tasks — ECS bills the task, not the
+service) is fixed with `propagateTags: SERVICE` in the ingestion stack.
+Hand-provisioned secrets tagged; leftover us-east-1 snapshots of the retired
+staging Postgres deleted. Per-project cost is now one Cost Explorer view
+(runbook: `docs/runbooks/costs.md`).
+
+Detection: account-wide Cost Anomaly Detection (native, free) — a per-SERVICE
+monitor plus an IMMEDIATE SNS subscription to the existing alarm topic, so it
+covers both projects, tagged or not. Threshold in
+`infra/envs/production.json` (`costAnomalyAlertThresholdUsd`), topic policy
+grants `costalerts.amazonaws.com` publish. Committed in
+`infra/src/lib/stacks/cloudwatch-stack.ts`; live after the next CloudWatch
+deploy. Per-project budgets with forecast triggers stay in [[0449]], planned
+once tag propagation has produced a week of honestly-attributed data.
 
 ## Tooling decision — no external log platform yet
 
@@ -271,18 +320,26 @@ month is unanswerable by construction.
 - [ ] Planned pauses are machine-readable, so an absence alarm can tell
       maintenance from failure — verified by pausing and confirming no page
 - [ ] An alarm fires on ingestion stall — verified by simulating a stall
-- [ ] Every alarm's `treatMissingData` reviewed and justified in a comment
+- [x] Every alarm's `treatMissingData` reviewed and justified in a comment
+      (2026-08-06)
 - [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
       latched and mute
 - [ ] Comparator runs on a schedule and reports schema + CDK deltas; its output is
       seen by a human without anyone asking for it
-- [ ] Alarm filter strings verified against the strings the code actually emits
+- [x] Alarm filter strings verified against the strings the code actually emits
+      (2026-08-06 — `declared-vs-emitted.spec.ts`, enforced in CI)
 - [ ] Cost allocation tags active; a per-project cost answer takes minutes, and a
-      step change in spend raises an alert
+      step change in spend raises an alert (tags active + backfill, runbook
+      shipped; anomaly detection committed — checks off after deploy)
+- [ ] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
+      without widgets) — including a stated dashboard answer for the new
+      cost-anomaly alert
 - [ ] Each child task either closed by this work or explicitly re-scoped —
-      triage in [S — child triage](notes/S-child-task-triage.md)
+      triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312
+      closed and archived)
 - [ ] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
-      naming the signals and where they live
+      naming the signals and where they live (`docs/runbooks/costs.md` shipped;
+      health runbook pending)
 - [ ] **API types regenerated** — N/A, no API surface change
 
 ## Notes

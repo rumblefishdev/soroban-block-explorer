@@ -84,6 +84,11 @@ During the 15-day mute window the 2026-07-16 lag event passed with the DLQ alarm
 already red. The enrichment DLQ grew from 4 to 6 messages while latched; neither
 new failure produced a notification.
 
+Worse, the 15-day alarm did not clear because anyone acted on it. Per
+`docs/scf/milestone-3-7day-report.md`, its ~7 950 messages **aged out of the
+14-day retention limit** and the alarm returned to OK on its own. So the one
+alarm that did fire in 90 days was resolved by data expiry, not by a human.
+
 **In 90 days no alarm in this account has changed state**, except that DLQ pair
 and a manual `set-alarm-state` test on 2026-07-13 (`stateReason: "test"`, from
 the [[0367]] close-out).

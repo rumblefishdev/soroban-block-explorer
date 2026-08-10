@@ -45,12 +45,17 @@ All sixteen were still `backlog` at the time of this triage.
 
 ## What the triage changes
 
-1. The headline "sixteen instances" is inflated. Eight is the honest number, and
-   eight is still a strong argument for one comparator.
+1. The headline "sixteen instances" is inflated. Eight is the honest number.
 2. [[0382]] belongs in the defect-1 table and is currently missing from it.
-3. [[0312]] proves the comparator is not the hard part — `cdk diff` already
-   answers it. The hard part is that nothing runs on a schedule and nothing reads
-   the output. That is the actual deliverable.
+3. **Eight instances is not an argument for one comparator.** That was this
+   note's original conclusion and it does not survive contact with [[0312]]:
+   `cdk diff` already performs the comparison, a human read its output on
+   2026-06-22, another measured it again on 2026-07-27, and the drift was still
+   pending on 2026-08-04. Detection was never the missing part. Each instance
+   needs the cheapest check placed where someone can act, and those turn out to
+   be different mechanisms — see the defect-1 table in the README and the
+   withdrawal recorded in ADR 0054. The 0312 close-out proved the shape: the
+   answer was a confirmation step at deploy, not a scheduler.
 4. Nothing in the set covers **cost detection**. [[0449]] proposes AWS Budgets and
    Cost Anomaly Detection in prose, but no task owns it, so the "we did not notice
    the spend rise for three weeks" problem has no owner. Either fold it into
