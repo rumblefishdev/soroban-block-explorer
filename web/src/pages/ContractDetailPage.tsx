@@ -178,8 +178,11 @@ export default function ContractDetailPage() {
             {effectiveKey === 'interface' && (
               <ContractInterface contractId={contractId} />
             )}
-            {effectiveKey === 'code' && hasWasm && (
-              <ContractCode contractId={contractId} />
+            {effectiveKey === 'code' && contract.data?.wasm_hash != null && (
+              <ContractCode
+                contractId={contractId}
+                wasmHash={contract.data.wasm_hash}
+              />
             )}
             {effectiveKey === 'invocations' && (
               <ContractInvocations contractId={contractId} />
