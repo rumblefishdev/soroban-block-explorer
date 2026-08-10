@@ -96,6 +96,18 @@ history:
       first tagging pass bounced off ResourceNotFound harmlessly). Durable
       fix still owed: the 0227 provisioning path should tag at creation so
       future hand-made secrets do not reopen the gap.
+  - date: 2026-08-10
+    status: backlog
+    who: karolkow
+    note: >
+      Decision: per-project AWS Budgets are DROPPED, not deferred. What is
+      already in place suffices - attribution is one Cost Explorer view,
+      step changes are covered by account-wide Cost Anomaly Detection, and
+      a second alerting mechanism for two people is exactly the
+      per-component-notifier growth ADR 0054 exists to stop. The
+      slow-creep gap Budgets would have covered is accepted and named in
+      docs/runbooks/costs.md. This closes the last open scope item; the
+      task archives once the anomaly-detection deploy is verified.
 ---
 
 # The AWS account bills two projects as one
@@ -175,7 +187,9 @@ the quantity as well as the amount.
 - [ ] `ce get-cost-and-usage --group-by TAG` returns a per-project split with no
       material spend in the untagged bucket
 - [ ] `docs/deployment.md` states the requirement for new stacks
-- [ ] A per-tag budget or anomaly monitor exists and routes to the Slack topic
+- [ ] An anomaly monitor exists and routes to the Slack topic (per-tag
+      Budgets dropped 2026-08-10 — see history; anomaly detection committed,
+      checks off after deploy)
       already used by the production alarms
 - [ ] The alert is verified by a deliberate test, not assumed to work
 

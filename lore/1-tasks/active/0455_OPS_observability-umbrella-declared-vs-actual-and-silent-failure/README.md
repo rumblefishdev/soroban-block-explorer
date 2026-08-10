@@ -289,8 +289,9 @@ covers both projects, tagged or not. Threshold in
 `infra/envs/production.json` (`costAnomalyAlertThresholdUsd`), topic policy
 grants `costalerts.amazonaws.com` publish. Committed in
 `infra/src/lib/stacks/cloudwatch-stack.ts`; live after the next CloudWatch
-deploy. Per-project budgets with forecast triggers stay in [[0449]], planned
-once tag propagation has produced a week of honestly-attributed data.
+deploy. Per-project budgets are **dropped** (decision 2026-08-10, recorded in
+[[0449]]): attribution + anomaly detection suffice for two people, and the
+slow-creep gap is accepted and named in the costs runbook.
 
 ## Tooling decision — no external log platform yet
 
