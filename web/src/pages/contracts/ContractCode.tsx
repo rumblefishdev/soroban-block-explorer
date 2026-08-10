@@ -9,6 +9,7 @@ import {
   Stack,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import {
@@ -203,13 +204,11 @@ export function ContractCode({
       {rustUnavailable != null && (
         // Rust could not be produced for this contract — emission failed
         // inside a successful call, or the call itself died and the UI
-        // re-requested WAT. Carries the decompiler's own reason.
-        <Chip
-          size="sm"
-          color="warning"
-          label="WAT only"
-          title={rustUnavailable}
-        />
+        // re-requested WAT. The full reason renders in the alert below;
+        // the tooltip is a shortcut for people hovering the chip.
+        <Tooltip title={rustUnavailable} arrow>
+          <Chip size="sm" color="warning" label="WAT only" />
+        </Tooltip>
       )}
       <Box sx={{ flexGrow: 1 }} />
       {data != null && (
@@ -223,7 +222,7 @@ export function ContractCode({
               wasmHash: data.wasm_hash,
               version: data.soroban_ret_version,
               representation: data.representation,
-              apiError: autoWatReason ?? undefined,
+              apiError: rustUnavailable ?? undefined,
             })}
             target="_blank"
             rel="noopener noreferrer"
@@ -302,6 +301,34 @@ export function ContractCode({
         function bodies are inferred and may be incomplete. Unrecovered values
         appear as <code>todo!()</code>.
       </Alert>
+
+      {rustUnavailable != null && (
+        // The decompiler's own reason, verbatim and in the open — a hidden
+        // tooltip undersells exactly the case worth reporting upstream.
+        <Alert
+          severity="warning"
+          icon={<BugReportOutlinedIcon fontSize="small" />}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              href={reportIssueUrl({
+                contractId,
+                wasmHash,
+                representation: 'rust',
+                apiError: rustUnavailable,
+              })}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Report issue
+            </Button>
+          }
+        >
+          Rust could not be produced for this contract:{' '}
+          <code>{rustUnavailable}</code>
+        </Alert>
+      )}
 
       {isRust && (
         <Typography
