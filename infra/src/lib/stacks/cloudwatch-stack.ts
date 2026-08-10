@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as ce from 'aws-cdk-lib/aws-ce';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as chatbot from 'aws-cdk-lib/aws-chatbot';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
@@ -121,6 +122,62 @@ export class CloudWatchStack extends cdk.Stack {
             'CloudWatchReadOnlyAccess'
           ),
         ],
+      }),
+    });
+
+    // ---------------------
+    // Cost anomaly detection (task 0449 / 0455 defect 3)
+    // The account had ZERO cost monitoring (measured 2026-08-10: no anomaly
+    // monitor, no budget) — the July step change in one service's spend ran
+    // for three weeks before a human read a bill. This monitor learns a
+    // per-SERVICE baseline for the WHOLE account (tagged or not, current
+    // services or future ones) and alerts with the root-cause service named,
+    // so the next such step change is a same-day Slack message instead of a
+    // month-end surprise. Free of charge; alerts ride the existing topic.
+    //
+    // Per-project budgets are the complement (creep vs spikes) and are added
+    // separately once Fargate task tagging (propagateTags on the Galexie
+    // service) has produced a week of honestly-attributed data — today the
+    // Project tag sees ~9% of this project's real spend.
+    // ---------------------
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCostAnomalyDetectionPublish',
+        // Cost Anomaly Detection publishes from this service principal;
+        // without the explicit topic-policy grant, subscription delivery
+        // fails silently at deploy validation.
+        principals: [new iam.ServicePrincipal('costalerts.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+      })
+    );
+    const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
+      this,
+      'CostAnomalyMonitor',
+      {
+        monitorName: `${config.envName}-cost-anomaly-by-service`,
+        monitorType: 'DIMENSIONAL',
+        monitorDimension: 'SERVICE',
+      }
+    );
+    new ce.CfnAnomalySubscription(this, 'CostAnomalySubscription', {
+      subscriptionName: `${config.envName}-cost-anomaly-to-alarm-topic`,
+      monitorArnList: [costAnomalyMonitor.attrMonitorArn],
+      // IMMEDIATE = notify as soon as the anomaly is detected (cost data
+      // refreshes a few times a day, so "immediate" means hours, not
+      // minutes — still ~20x faster than the July discovery). SNS
+      // subscribers require IMMEDIATE; DAILY/WEEKLY are email-only.
+      frequency: 'IMMEDIATE',
+      subscribers: [{ type: 'SNS', address: alarmTopic.topicArn }],
+      // Only anomalies whose total impact reaches this many USD notify —
+      // keeps single-cent blips out of Slack while the July shape (a
+      // service's spend stepping up day after day) clears it easily.
+      thresholdExpression: JSON.stringify({
+        Dimensions: {
+          Key: 'ANOMALY_TOTAL_IMPACT_ABSOLUTE',
+          MatchOptions: ['GREATER_THAN_OR_EQUAL'],
+          Values: [String(config.costAnomalyAlertThresholdUsd)],
+        },
       }),
     });
 

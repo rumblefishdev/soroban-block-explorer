@@ -324,6 +324,14 @@ export interface EnvironmentConfig {
    * spike hits the "No space left on device" ceiling (incident 2026-07-01/02).
    */
   readonly galexieEphemeralUtilizationThreshold: number;
+  /**
+   * Minimum total impact (USD) a cost anomaly must reach before Cost Anomaly
+   * Detection notifies the alarm topic (task 0449/0455). The account's
+   * baseline is a few USD/day, so single-digit USD of unexplained daily
+   * deviation is already the July-incident shape — a step change in one
+   * service's spend that previously went unnoticed for three weeks.
+   */
+  readonly costAnomalyAlertThresholdUsd: number;
   // Slack workspace + channel IDs are NOT in env config — they are
   // deployment-specific identifiers kept out of the (public) repo and sourced
   // at deploy time from SSM Parameter Store (see CloudWatchStack).
@@ -457,6 +465,14 @@ export function validateConfig(config: EnvironmentConfig): void {
   ) {
     errors.push(
       `processorErrorRateThreshold must be > 0 and <= 1, got: ${config.processorErrorRateThreshold}`
+    );
+  }
+  if (
+    !(config.costAnomalyAlertThresholdUsd > 0) ||
+    config.costAnomalyAlertThresholdUsd > 1000
+  ) {
+    errors.push(
+      `costAnomalyAlertThresholdUsd must be > 0 and <= 1000 USD, got: ${config.costAnomalyAlertThresholdUsd}`
     );
   }
   if (
