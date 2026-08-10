@@ -2,7 +2,7 @@
 id: '0441'
 title: 'FEATURE: SAC contract detail shows the classic asset it mirrors (reverse of the join we already run)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0339']
 tags:
@@ -19,6 +19,15 @@ tags:
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-10'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Note: the stash@{2} referenced in the 2026-07-30 entry no
+      longer holds this task's implementation — stash indices shifted during
+      the 2026-07-30 cleanup and a content grep over all current stashes
+      finds no SAC→asset reverse lookup. Implementation starts fresh from
+      the LP-query pattern.
   - date: '2026-07-27'
     status: backlog
     who: karolkow
