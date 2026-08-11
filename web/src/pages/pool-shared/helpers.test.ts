@@ -16,10 +16,29 @@ function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
 }
 
 describe('legHref', () => {
-  it('returns undefined for native legs (no on-chain address)', () => {
+  // Changed in task 0472 — this case previously asserted `undefined`. Not a
+  // regression: `/assets/native` became the canonical asset token in 0243,
+  // which retired the "native has no address" rationale this rule was built
+  // on. XLM was the only leg in the app that rendered as dead text.
+  it('links native legs to the canonical /assets/native token', () => {
+    expect(legHref(makeLeg({ asset_type: 0, asset_type_name: 'native' }))).toBe(
+      '/assets/native'
+    );
+  });
+
+  it('prefers the canonical native token over an XLM SAC mirror', () => {
     expect(
-      legHref(makeLeg({ asset_type: 0, asset_type_name: 'native' }))
-    ).toBeUndefined();
+      legHref(
+        makeLeg({
+          asset_type: 0,
+          asset_type_name: 'native',
+          asset_code: null,
+          issuer: null,
+          contract_id:
+            'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+        })
+      )
+    ).toBe('/assets/native');
   });
 
   it('prefers contract_id (SAC mirror) over code/issuer', () => {

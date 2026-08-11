@@ -12,14 +12,19 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
  * classic and SAC legs resolve to the same asset row.
  *
  * Precedence:
- *   1. `asset_type === 0` (native XLM) → no link. Native has no on-chain
- *      address in classic protocol; SAC mirror for XLM is network-specific.
+ *   1. `asset_type === 0` (native XLM) → `/assets/native`. The reserved
+ *      `native` literal IS the canonical asset token (task 0243) — the older
+ *      "native has no on-chain address, so no link" rule predates it and left
+ *      XLM as the only unlinkable leg in the app, while account balances,
+ *      search and the SAC chip all route there (task 0472). Checked before
+ *      `contract_id` on purpose: a native leg may also carry the XLM SAC
+ *      mirror, and both resolve to the same row, but `native` is canonical.
  *   2. `contract_id` (SAC mirror) → `/assets/${contract_id}`.
  *   3. `asset_code` + `issuer` (classic credit) → `/assets/${code}-${issuer}`.
  *   4. Anything else (schema drift) → no link.
  */
 export function legHref(leg: PoolAssetLeg): string | undefined {
-  if (leg.asset_type === 0) return undefined;
+  if (leg.asset_type === 0) return routes.asset('native');
   if (leg.contract_id) return routes.asset(leg.contract_id);
   if (leg.asset_code && leg.issuer) {
     return routes.asset(`${leg.asset_code}-${leg.issuer}`);
