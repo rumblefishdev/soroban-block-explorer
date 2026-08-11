@@ -104,6 +104,26 @@ history:
       (targeted-write, 0266 pattern) to keep the no-repair-tier1 claim
       valid, and calibrate the 2-4h estimate with a one-partition pilot
       before quoting a completion time.
+  - date: '2026-08-11'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Schema + trade emission implemented (branch
+      feat/0279_lp-op-details-amount-column): `lp_operation_amounts` in
+      init.sql (DDL parse-checked on prod CH 26.3.10 via EXPLAIN AST),
+      `LpOperationAmountRow`, `pool_fill_amounts` in stage.rs beside the
+      `gross_volume_a_by_pool` it mirrors, writer wiring, 2 unit tests,
+      schema docs per ADR 0032. SIGN CONVENTION VERIFIED ON PROD rather
+      than read off the spec: the XDR atom is written from the offer
+      owner's side (`assetSold` is taken FROM the pool, `assetBought` sent
+      TO it), confirmed on ledger 63,904,097 of pool `41270552…` (XLM/TF)
+      — Horizon reports the pool selling XLM and that ledger's snapshot
+      moves `reserve_a` down by exactly the summed sold amount while
+      `reserve_b` rises. That same check CORRECTED the backfill gate
+      recorded here on 08-11 morning: `gross_volume_a` is gross, so the
+      cross-check is `sum(abs(amount))` over the A legs, not the positive
+      ones (see step 4). Deposits/withdrawals still pending — they carry
+      no claim atoms and come from `LedgerEntryChanges`.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
@@ -304,11 +324,19 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
    - Purely additive: no existing table touched, no EXCHANGE TABLES, no
      `repair-tier1` obligation, indexer keeps running throughout; rollback
      is `DROP TABLE`.
-   - Built-in verification: `sum(amount)` per (pool, ledger) over the
-     A-side legs must equal `liquidity_pool_snapshots.gross_volume_a`
+   - Built-in verification: **`sum(abs(amount))`** per (pool, ledger) over
+     the A-side legs must equal `liquidity_pool_snapshots.gross_volume_a`
      (both derive from the same atoms) — one SQL comparison closes the
      backfill gate. Per-row spot checks can use the E3 heavy-fields
      response as a second in-house oracle besides Horizon.
+     **ABS, corrected 2026-08-11** (an earlier revision of this line said
+     "the positive A legs"): `gross_volume_a` is a GROSS figure —
+     `append_pool_claims` takes each atom's A-side amount whichever way the
+     swap went, both non-negative — so a pool that only sold A that ledger
+     has every A leg negative here and a positives-only sum reads 0 against
+     a non-zero volume. Known legitimate mismatch: an op crossing the SAME
+     pool in BOTH directions nets out at this table's per-op grain while
+     `gross_volume_a` counts both crossings gross.
 
    **Run plan (recorded 2026-08-11, after the go decision):**
 
