@@ -100,6 +100,30 @@ describe('AssetDetailPage', () => {
     expect(screen.getByText('Native')).toBeInTheDocument();
   });
 
+  it('keeps the honest "?" avatar when nothing names the asset', () => {
+    // 527 of the 4,342 type-3 assets on prod carry neither code nor symbol
+    // (measured 2026-08-11). The title needs a string, but the avatar must
+    // not invent a letter — an "A" from the word "Asset" reads as a ticker.
+    mockOk(
+      makeAsset({
+        id: SAC_CONTRACT,
+        asset_type: 3,
+        asset_type_name: 'soroban',
+        symbol: null,
+      })
+    );
+
+    renderWithProviders(<AssetDetailPage />, {
+      initialEntries: [`/assets/${SAC_CONTRACT}`],
+      routePath: '/assets/:id',
+    });
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Asset' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('?')).toBeInTheDocument();
+  });
+
   it('falls back to the SEP-41 symbol for a Soroban token with no code (0304)', () => {
     mockOk(
       makeAsset({

@@ -49,7 +49,13 @@ export default function AssetDetailPage() {
   const data = asset.data;
   // Native XLM and Soroban tokens both lack a classic asset_code — the shared
   // rule names them (`XLM` / SEP-41 symbol) before the generic label (0472).
-  const code = (data ? assetDisplayCode(data) : null) ?? 'Asset';
+  // The two consumers differ on the empty case: the title needs SOME string,
+  // the avatar must NOT invent one. 527 type-3 assets on prod carry neither
+  // code nor symbol (measured 2026-08-11); feeding "Asset" to the avatar
+  // would render a confident "A" that looks like a real ticker initial, so
+  // it keeps the null and shows its honest "?" placeholder.
+  const displayCode = data ? assetDisplayCode(data) : null;
+  const code = displayCode ?? 'Asset';
   const typeMeta = data ? assetTypeMeta(data.asset_type_name) : null;
 
   let summary: ReactNode = null;
@@ -76,7 +82,9 @@ export default function AssetDetailPage() {
           items={[{ label: 'Assets', to: routes.assets }, { label: code }]}
         />
         <Stack direction="row" spacing={1.5} alignItems="center">
-          {data && <AssetIcon code={code} iconUrl={data.icon_url} size={40} />}
+          {data && (
+            <AssetIcon code={displayCode} iconUrl={data.icon_url} size={40} />
+          )}
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
               <Typography variant="heading5SemiBold" component="h1">
