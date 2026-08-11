@@ -2,7 +2,7 @@
 id: '0403'
 title: 'OPS: post-ship validation of the 0365 (lptxs) + 0385 (acclist) read swaps — byte-identical diffs, E20, refresh memory cap'
 type: OPS
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0365', '0385', '0357', '0397']
 tags: [priority-high, effort-medium, layer-clickhouse, validation]
@@ -51,6 +51,22 @@ history:
       run vs the 6 GB box - no risk; cadence every 2 min reading 17.13M
       rows/1.45 GB per run (0447's volume, confirmed live). Outstanding:
       E20 vs Horizon (needs the e2e harness + network).
+  - date: 2026-08-11
+    status: completed
+    who: karolkow
+    note: >
+      Archived under the 0455 umbrella. Everything runnable without a
+      deploy is done and evidenced: lptxs byte-identical 7/7 incl. the
+      mega pool, E20 green (docs/runbooks/artifacts/
+      e20_validation_20260806.md), acclist byte-identical with all
+      divergence classified 100% as refresh skew, refresh memory 734-744
+      MiB vs the 6 GB cap. The two leftovers move instead of pretending:
+      the 0397 post-deploy read_rows measurement (needs the imminent 0455
+      deploy + a drain) is now an explicit 0455 acceptance criterion, and
+      acclist's p95 position resolves by the option this task itself
+      offered - folded into 0357's documented known-issue framing (the
+      measured ~60-90 ms per-request floor predates any query; CH-side is
+      19-52 ms).
 ---
 
 # OPS: post-ship validation of the 0365 / 0385 read swaps
@@ -116,13 +132,15 @@ output correctness and one ops-safety check.
       E20 green.
 - [ ] 0397's post-deploy read_rows/call measured (~24.6k expected), and the
       `dev_read` / `ingestion_writer` discrepancy either explained or recorded as
-      still open.
+      still open. **(Deferred to 0455's post-deploy verification — recorded
+      there as an acceptance criterion, 2026-08-11.)**
 - [x] acclist output verified byte-identical across both sort directions,
       `home_domain` filter and cursor pagination.
 - [x] Refresh recompute measured against the 6 GB cap, with the headroom recorded
       as a number — not "it seemed fine".
-- [ ] acclist's AC4 position stated with a measurement: meets `p95 < 200 ms`, or
-      documented known-issue with the cause named.
-- [ ] Docs updated — mark each `docs/architecture/**` file updated or
-      `N/A — reason` (likely N/A: validation only, no shape change).
-- [ ] API types regenerated — N/A unless a diff turns up a response-shape bug.
+- [x] acclist's AC4 position stated with a measurement: documented known-issue
+      per 0357's framing — the ~60-90 ms per-request floor exists before any
+      query runs (CH-side measured 19-52 ms), so the literal `p95 < 200 ms`
+      is traffic-dependent; cause named, number on record (2026-08-11).
+- [x] Docs updated — N/A: validation only, no shape change.
+- [x] API types regenerated — N/A: no response-shape bug surfaced by the diffs.

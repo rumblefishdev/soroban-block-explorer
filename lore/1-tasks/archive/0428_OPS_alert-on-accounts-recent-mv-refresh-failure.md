@@ -2,7 +2,7 @@
 id: '0428'
 title: 'OPS: alert on `accounts_recent` MV refresh failure — a stale MV now reports as truth'
 type: OPS
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0420']
 tags: ['area-clickhouse', 'area-ops', 'effort-small', 'priority-high']
@@ -36,6 +36,16 @@ history:
       now()-last_success_time as a metric from the indexer's existing CW
       publish call, bare threshold 3x interval, NOT_BREACHING (absence =
       indexer paused, already alarmed) - recorded in 0455.
+  - date: 2026-08-11
+    status: completed
+    who: karolkow
+    note: >
+      Archived: closed by decision, not by deferral. The measurement above
+      IS the resolution - the alarm is deliberately not built, the
+      diagnosis query ships in the health runbook, and this file carries
+      the ready design plus the two return conditions. 0447 references
+      this task and will re-open the question if it changes the refresh
+      interval.
 ---
 
 # Alert on `accounts_recent` MV refresh failure

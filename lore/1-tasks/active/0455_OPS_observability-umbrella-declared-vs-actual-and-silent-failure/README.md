@@ -354,6 +354,10 @@ month is unanswerable by construction.
       seen by a human without anyone asking for it
 - [x] Alarm filter strings verified against the strings the code actually emits
       (2026-08-06 — `declared-vs-emitted.spec.ts`, enforced in CI)
+- [ ] 0403's deferred measurement executed after the next deploy + a drain:
+      the sep1 issuer resolve reads ~24.6k rows/call in `system.query_log`
+      (not ~24.9M), and the `dev_read` vs `ingestion_writer` read-count
+      discrepancy explained or recorded as still open
 - [ ] Cost allocation tags active; a per-project cost answer takes minutes, and a
       step change in spend raises an alert (tags active + backfill, runbook
       shipped; anomaly detection committed — checks off after deploy)
