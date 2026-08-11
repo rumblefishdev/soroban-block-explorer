@@ -16,7 +16,12 @@ name: Deploy Production
 #     ships unrelated drift as a side effect — always diff + pick a stack.
 #
 # Prerequisites (inert until these exist):
-#   1. Secrets: AWS_DEPLOY_ROLE_ARN (prod deploy role, OIDC), AWS_ACCOUNT_ID.
+#   1. GitHub environment `production` holding secrets AWS_DEPLOY_ROLE_ARN
+#      (OIDC deploy role — the same one the legacy `staging` environment holds,
+#      if it still has eu-central-1 CDK permissions) and AWS_ACCOUNT_ID, with
+#      deployment policies allowing tag `production-*` and branch `master`.
+#      Deliberately NO required reviewers — the tag is the approval; the
+#      environment exists only to scope the secrets.
 #   2. Region is eu-central-1 (where prod lives). CloudFront ACM certs remain
 #      us-east-1 internally, but the stacks deploy to eu-central-1 via
 #      production.json — do not change aws-region here.
@@ -60,6 +65,9 @@ jobs:
   deploy:
     name: Build + diff + deploy + smoke
     runs-on: ubuntu-latest
+    # Secret scoping only — the environment has no required reviewers, so this
+    # does NOT reintroduce an approval gate (the tag push is the approval).
+    environment: production
     steps:
       - uses: actions/checkout@v4
         with:
