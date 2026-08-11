@@ -2,7 +2,7 @@
 id: '0279'
 title: 'LP per-pool amounts: persist what the indexer already computes, un-hide the Amount column'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0029']
 related_tasks: ['0274', '0247', '0199', '0261', '0365', '0393', '0377']
 tags:
@@ -89,6 +89,21 @@ history:
       ~2-4h wall vs ~8-10h full sweep (0359 measured). Bumped effort-medium
       to effort-large per the 0199 triage (needs-backfill). Ownership overlap
       with 0199 Phase B still unresolved.
+  - date: '2026-08-11'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated — go decision recorded. Ownership resolved: #371 belongs wholly
+      to this task; 0199 §"Also owns" now just points here. Design pinned
+      without further team round-trips: row per (op, pool, asset), `amount`
+      Int64 raw stroops SIGNED from the pool's perspective (see step 1 for
+      the type rationale), pre-summed per op. Run plan recorded in step 4:
+      reproduce the 0359 setup (s5cmd pre-fetch + ~6 external runner
+      processes on disjoint ranges — the runner has no --workers flag and
+      >6 was measured no-faster on the 24-core box), write ONLY this table
+      (targeted-write, 0266 pattern) to keep the no-repair-tier1 claim
+      valid, and calibrate the 2-4h estimate with a one-partition pilot
+      before quoting a completion time.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
