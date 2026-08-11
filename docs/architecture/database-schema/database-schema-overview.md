@@ -120,6 +120,12 @@ Backbone timeline:
   `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
   `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
   hash — the same value `operations_appearances.pool_ids` stores per crossing)
+- `lp_operation_amounts` — per-(operation, pool, asset) amounts behind that
+  endpoint's "Amount" column (task 0279 / issue #371; the value twin of
+  `operation_pools`, same pool-leading prefix). `amount` is raw stroops in a
+  signed `Int64`, positive when the asset entered the pool — so the sign pattern
+  names the event (trade `+/-`, deposit `+/+`, withdrawal `-/-`) without a type
+  column. Rows are per-op sums of the op's claim atoms, never per atom
 
 Soroban activity model (per ADRs 0033/0034 these are pure appearance indexes — parsed
 contract-event and invocation-tree payloads are fetched at read time from the public
@@ -163,6 +169,7 @@ ledgers
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
        ├─ operation_pools (partitioned)
+       ├─ lp_operation_amounts (partitioned)
        ├─ soroban_events_appearances (partitioned)
        └─ soroban_invocations_appearances (partitioned)
 
@@ -588,6 +595,58 @@ Purpose / design notes:
   already in ClickHouse, so history is backfilled by a plain CH re-key
   (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id
 FROM operations_appearances`) — no XDR re-parse.
+
+### 4.5.3 LP Operation Amounts (task 0279)
+
+ClickHouse-only. The **value twin of `operation_pools`** — what each operation
+actually moved through a pool, so `/liquidity-pools/:id/transactions` can render
+an "Amount" column (`12,059.29 XLM → 38.5M KALE`) instead of a bare event chip
+(issue #371). `operation_pools` remains the paging driver; this table is the
+value lookup for the page's `(ledger, tx)` set.
+
+```sql
+CREATE TABLE lp_operation_amounts (
+    pool_id           FixedString(32),  -- raw 32-byte pool hash (no surrogate)
+    ledger_sequence   Int64,
+    transaction_id    Int64,
+    application_order Int16,            -- op position within the tx
+    asset_id          Int64,            -- ids::asset_id surrogate (native first-class)
+    amount            Int64             -- raw stroops, SIGNED from the pool's side
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id);
+```
+
+Purpose / design notes:
+
+- **Row grain is (operation, pool, asset)** — the op's claim atoms are summed in
+  Rust before the insert, NOT written per atom. One op can take the same pool
+  several times (CAP-38 interleaved order-book/AMM matching) and every such atom
+  carries the identical ORDER BY tuple, so per-atom rows would have the RMT keep
+  one and silently drop the rest of the fill. A per-op sum is deterministic on
+  replay, so live ingest and the historical re-parse emit identical rows.
+- **Sign carries the semantics**: positive = the asset entered the pool, negative
+  = it left. Trade `+/-`, deposit `+/+`, withdrawal `-/-`; the two rows of one
+  (op, pool) are its two legs. No event-type column, no unsigned + direction pair.
+- **`Int64` raw stroops**, scaled by 7 at read like `balances` / `net_settled`:
+  classic AMM pools are 7-decimal by definition, the XDR sources are `int64`, and
+  a per-op sum is bounded by the pool's own `int64` reserve. Not `Int128` (that
+  width serves Soroban i128 token amounts, unreachable for a classic pool) and
+  not `Decimal128(7)` (the read-model choice in `liquidity_pool_snapshots`).
+- **Two producers, one shape**: trades from the claim atoms
+  `persist::stage::gross_volume_a_by_pool` already walks (it sums `amountA` away —
+  this table keeps that value), deposits/withdrawals from the op's own
+  `LedgerEntryChanges` (they carry no claim atoms; the op body holds the caller's
+  max/min bounds, not what actually moved).
+- **Backfill**: a targeted XDR re-parse — the per-pool amounts were never
+  persisted, so unlike `operation_pools` there is no CH-side re-key. Scope is the
+  ~13.15M ledgers with pool activity (`SELECT DISTINCT ledger_sequence FROM
+operation_pools`), ~20.6% of history. Additive: no existing table is touched, the
+  indexer keeps running, rollback is `DROP TABLE`. Validation gate: `sum(amount)`
+  over the positive asset-A legs per (pool, ledger) must equal
+  `liquidity_pool_snapshots.gross_volume_a` — both derive from the same atoms.
+- No skip index: every read is a `pool_id` PK-prefix seek.
 
 ### 4.6 Soroban Contracts
 

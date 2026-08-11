@@ -746,6 +746,63 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence, transaction_id);
 
+-- lp_operation_amounts: what each operation actually moved through a pool
+-- (task 0279, issue #371) — the value twin of `operation_pools`, same
+-- pool-leading key prefix. `operation_pools` stays the paging driver; this is
+-- the value lookup for the page's (ledger, tx) set.
+--
+-- ROW GRAIN = (operation, pool, asset), with the op's claim atoms PRE-SUMMED
+-- in Rust before the insert. NOT one row per atom: a single op can take the
+-- same pool several times (CAP-38 interleaved order-book/AMM matching) and
+-- every such atom carries the IDENTICAL ORDER BY tuple, so the RMT would keep
+-- one and silently drop the rest of the fill. A per-op sum is deterministic on
+-- replay, so live ingest and the historical re-parse emit byte-identical rows
+-- for a key and the duplicate collapses cleanly (the single-writer argument
+-- of `operation_asset_appearances.net_settled`, same reducer both paths).
+--
+-- `amount` is SIGNED FROM THE POOL'S PERSPECTIVE: positive = the asset entered
+-- the pool, negative = it left. The sign pattern therefore names the event
+-- with no type column — trade `+/-`, deposit `+/+`, withdrawal `-/-` — and the
+-- two rows of one (op, pool) are its two legs. RAW STROOPS in `Int64`, scaled
+-- by 7 at read like every other amount here: classic AMM pools are 7-decimal
+-- by definition, the XDR sources (`ClaimLiquidityAtom.amount_{sold,bought}`,
+-- trustline balance deltas) ARE `int64`, and a per-op sum is bounded by the
+-- pool's own `int64` reserve, so no overflow is reachable. Deliberately not
+-- `Int128` (that width exists in `net_settled` for Soroban i128 token amounts,
+-- which a classic pool cannot carry) and not `Decimal128(7)` (the read-model
+-- choice in `liquidity_pool_snapshots` for the Lambda's USD math — fact tables
+-- store raw ints, and the cross-check below is one cast away).
+--
+-- `asset_id` = the `ids::asset_id` surrogate shared with
+-- `operation_asset_appearances` / `balances`; native XLM is the first-class
+-- `NATIVE_ASSET_ID`, never an empty sentinel. A pool's rows are always its two
+-- legs, so the read renders against the pool definition it already holds.
+--
+-- Two producers, one shape, both in `stage.rs`: trades from the claim atoms
+-- `gross_volume_a_by_pool` already walks (it sums `amountA` away — this table
+-- is that value KEPT), deposits/withdrawals from the op's own
+-- `LedgerEntryChanges` (they carry no claim atoms; the op body holds the
+-- caller's max/min bounds, not what actually moved).
+--
+-- Backfill gate (task 0279): `sum(amount)` over the positive asset-A legs per
+-- (pool, ledger) must equal `liquidity_pool_snapshots.gross_volume_a` for that
+-- key — both derive from the same atoms, so one query validates the re-parse.
+--
+-- No skip index: every read is a `pool_id` PK-prefix seek. This file is
+-- FRESH-ONLY (prod is an existing DB), so the table must be CREATEd on prod
+-- BEFORE the parser deploy — otherwise live ingest writes into nothing.
+CREATE TABLE IF NOT EXISTS lp_operation_amounts (
+    pool_id           FixedString(32),
+    ledger_sequence   Int64,
+    transaction_id    Int64,
+    application_order Int16,
+    asset_id          Int64,
+    amount            Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id);
+
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
 -- first-topic Symbol, lifted for cheap `WHERE signature = 'transfer'`.
