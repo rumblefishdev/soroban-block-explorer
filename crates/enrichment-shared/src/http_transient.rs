@@ -10,66 +10,29 @@
 //! (malformed input, blocked redirects, oversized bodies) stay classified
 //! in their own modules.
 
-use std::error::Error as StdError;
-
 /// Transient = a retry may succeed. Permanent = deterministic for this URL.
 ///
 /// - **HTTP status present**: 5xx and 429 are transient (server-side /
 ///   load-shedding); every other status is permanent — the origin answered
 ///   and will answer the same way again.
-/// - **No HTTP status**: transport-layer failure (connect, TLS, reset,
-///   timeout, truncated body) — transient, EXCEPT a DNS-resolution failure
-///   (NXDOMAIN / dead domain), which no same-host retry resolves
-///   (task 0335).
-///
-/// The SQS redrive policy bounds retries, so erring transient on an
-/// ambiguous transport fault costs a few redeliveries; erring permanent
-/// writes a sentinel that only an operator `--retry-sentinels` run repairs.
+/// - **No HTTP status, connect-level** (DNS failure, connection
+///   refused/unreachable, TLS handshake): **permanent** — the signature of a
+///   dead issuer domain. Measured before this rule (2026-08-11, lore-0455):
+///   30 days of worker "transient" retries were 100% this class across 6
+///   keys and 0% genuine blips (zero 429/5xx/timeouts), including one dead
+///   domain retried 668 times in 83 minutes. A retry against a dead host
+///   buys nothing; the `''` sentinel closes the case and an operator
+///   `--retry-sentinels` run repairs the rare host that comes back.
+///   (Supersedes the narrower DNS-only carve-out from task 0335.)
+/// - **No HTTP status, past connect** (timeout mid-request, reset, truncated
+///   body): transient — the host exists and was answering; measured zero
+///   occurrences, kept retryable because these ARE plausible one-off blips.
+///   If timeouts ever show up as a dead-host signature, move them across.
 pub fn is_transient_reqwest(err: &reqwest::Error) -> bool {
-    if is_dns_failure(err) {
-        return false;
-    }
     match err.status() {
         Some(s) => s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS,
-        None => true,
+        None => !err.is_connect(),
     }
-}
-
-/// True when a `reqwest` error's source chain indicates DNS resolution failed
-/// (NXDOMAIN / host does not resolve). Such a failure is **permanent** — the
-/// domain is gone, no retry resolves it — so [`is_transient_reqwest`]
-/// classifies it permanent and the enrich fns write the `''` sentinel instead
-/// of 3×-retrying to the DLQ (task 0335).
-///
-/// Deliberately NOT consulted by `nft_token_uri::errors::is_endpoint_fault`:
-/// a dead host in the RPC/IPFS pool should still fail over to a different
-/// provider (a different host may resolve).
-pub(crate) fn is_dns_failure(err: &reqwest::Error) -> bool {
-    let mut src: Option<&(dyn StdError + 'static)> = Some(err);
-    while let Some(e) = src {
-        if is_dns_marker(&e.to_string()) {
-            return true;
-        }
-        src = e.source();
-    }
-    false
-}
-
-/// Resolver-error text markers for a DNS NXDOMAIN / no-such-host failure.
-/// Split from [`is_dns_failure`] so it is unit-testable without constructing a
-/// `reqwest::Error` (which has no public constructor). Matching is
-/// case-insensitive.
-///
-/// ponytail: string-match on resolver text — Linux `getaddrinfo` wording
-/// covers prod (Lambda AL2 + Hetzner box); upgrade to an explicit
-/// `tokio::net::lookup_host` pre-check if a resolver/platform changes phrasing.
-fn is_dns_marker(msg: &str) -> bool {
-    let m = msg.to_ascii_lowercase();
-    m.contains("failed to lookup address")        // glibc getaddrinfo (Linux)
-        || m.contains("name or service not known") // EAI_NONAME (Linux)
-        || m.contains("no such host")               // common cross-platform
-        || m.contains("nodename nor servname")      // macOS EAI_NONAME (dev)
-        || m.contains("dns error") // hickory/trust-dns wrapper
 }
 
 #[cfg(test)]
@@ -119,54 +82,72 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dns_marker_flags_nxdomain_phrasings() {
-        for s in [
-            "error sending request for url (https://dead.example/): error trying to connect: \
-             dns error: failed to lookup address information: Name or service not known",
-            "failed to lookup address information",
-            "No such host is known. (os error 11001)",
-            "nodename nor servname provided, or not known",
-        ] {
-            assert!(is_dns_marker(s), "should flag DNS failure: {s}");
-        }
-    }
-
-    #[test]
-    fn dns_marker_ignores_transient_phrasings() {
-        for s in [
-            "connection refused (os error 111)",
-            "operation timed out",
-            "error trying to connect: tls handshake eof",
-            "503 Service Unavailable",
-        ] {
-            assert!(!is_dns_marker(s), "should NOT flag (transient): {s}");
-        }
-    }
-
-    /// Empirical guard: the DNS carve-out hinges on `is_dns_marker` matching
-    /// the text reqwest actually emits for an unresolvable host AND on that
-    /// text being reachable via the error's `source()` chain. `.invalid`
-    /// (RFC 6761) never resolves → guaranteed NXDOMAIN, no real network
-    /// egress. `#[ignore]` (needs a working resolver). Run:
-    /// `cargo test -p enrichment-shared is_dns_failure_matches_real -- --ignored --nocapture`
+    /// The 2026-08-11 rule: a real connection-refused error (no HTTP
+    /// response) must classify PERMANENT — this is the dead-issuer-domain
+    /// signature that used to cycle 3× into the DLQ. Port 9 (discard) on
+    /// loopback refuses instantly; no network egress.
     #[tokio::test]
-    #[ignore = "needs a resolver; verifies is_dns_failure vs reqwest's real NXDOMAIN error"]
-    async fn is_dns_failure_matches_real_reqwest_nxdomain() {
+    async fn connect_failure_is_permanent() {
+        let err = reqwest::Client::new()
+            .get("http://127.0.0.1:9/.well-known/stellar.toml")
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        assert!(err.is_connect(), "precondition: a connect-level error");
+        assert!(
+            !is_transient_reqwest(&err),
+            "connect failure must be permanent (dead-domain signature)"
+        );
+    }
+
+    /// A timeout PAST connect stays transient: the host exists and was
+    /// answering (wiremock accepted the connection); only the response was
+    /// slow. Distinguishes the kept-retryable class from the connect rule
+    /// above.
+    #[tokio::test]
+    async fn slow_response_timeout_is_transient() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_millis(200)),
+            )
+            .mount(&server)
+            .await;
+        let err = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(20))
+            .build()
+            .expect("client")
+            .get(server.uri())
+            .send()
+            .await
+            .expect_err("20 ms budget vs 200 ms delay must time out");
+        assert!(err.is_timeout(), "precondition: a timeout error");
+        assert!(!err.is_connect(), "precondition: connect succeeded");
+        assert!(
+            is_transient_reqwest(&err),
+            "post-connect timeout must stay transient"
+        );
+    }
+
+    /// A dead-but-DNS-resolving domain and an NXDOMAIN both surface as
+    /// connect-level errors in reqwest, so the single `is_connect` rule
+    /// subsumes the old DNS-marker string-matching (task 0335) — this test
+    /// pins the NXDOMAIN half. `.invalid` (RFC 6761) never resolves; no real
+    /// egress. `#[ignore]` (needs a working resolver). Run:
+    /// `cargo test -p enrichment-shared nxdomain -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a resolver; verifies NXDOMAIN classifies permanent via is_connect"]
+    async fn nxdomain_is_permanent_via_connect_rule() {
         let err = reqwest::Client::new()
             .get("https://nonexistent-host-0335.invalid/.well-known/stellar.toml")
             .send()
             .await
             .expect_err("an unresolvable host must error");
         eprintln!("top-level: {err}");
-        let mut s: Option<&(dyn StdError + 'static)> = Some(&err);
-        while let Some(e) = s {
-            eprintln!("  source: {e}");
-            s = e.source();
-        }
         assert!(
-            is_dns_failure(&err),
-            "is_dns_failure must fire for a real NXDOMAIN reqwest error"
+            !is_transient_reqwest(&err),
+            "NXDOMAIN must classify permanent"
         );
     }
 }

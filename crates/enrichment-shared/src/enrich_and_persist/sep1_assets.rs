@@ -229,7 +229,8 @@ fn find_currency<'a>(
 /// writes the empty sentinel. Transport-error judgement is delegated to
 /// [`crate::http_transient::is_transient_reqwest`] — the single rule shared
 /// with the NFT-metadata path (5xx and 429 transient, other statuses
-/// permanent, network-layer transient except DNS resolution, task 0335).
+/// permanent; connect-level failures — the dead-issuer-domain signature —
+/// permanent since 2026-08-11, see `http_transient.rs`).
 /// `pub` so the ClickHouse paths classify fetch errors with the same rule as
 /// the PG worker.
 pub fn is_transient(err: &Sep1Error) -> bool {
