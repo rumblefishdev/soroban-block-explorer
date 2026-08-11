@@ -124,6 +124,26 @@ history:
       cross-check is `sum(abs(amount))` over the A legs, not the positive
       ones (see step 4). Deposits/withdrawals still pending — they carry
       no claim atoms and come from `LedgerEntryChanges`.
+  - date: '2026-08-11'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Deposits/withdrawals done — the write side is complete, both event
+      kinds, one row shape. `pool_delta_details` (operation.rs) subtracts the
+      pool entry's before/after images from the op's OWN meta, which yields
+      the pool-side sign for free (deposit `+/+`, withdrawal `-/-`) and
+      handles both boundaries by construction (created = no pre-image,
+      Removed = no post-image). It rides `extract_operations`, which already
+      hands every op its own changes — the `cb_details` precedent — so NO new
+      StageInputs field, NO indexer/backfill wiring, and the amounts surface
+      on the tx-detail page for free (untyped `details` JSON, so no OpenAPI
+      codegen either). Verified on prod: deposit 274467346725453825 in ledger
+      63,904,409 of pool `52d16f5b…` — Horizon reports 0.0529699 XLM +
+      37.6376180 SSLX deposited and the snapshots move `reserve_a`/`reserve_b`
+      by exactly those figures (that ledger's `gross_volume_a` is NULL,
+      confirming deposits stay out of trade volume). 348 xdr-parser + 90
+      db-clickhouse tests green, clippy clean. Next: API read + FE column,
+      then the targeted backfill.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
