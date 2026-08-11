@@ -2459,6 +2459,17 @@
           "is_sac": {
             "type": "boolean"
           },
+          "sac_asset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SacAsset",
+                "description": "The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`])."
+              }
+            ]
+          },
           "stats": {
             "$ref": "#/components/schemas/ContractStats"
           },
@@ -2567,6 +2578,17 @@
             "type": "integer",
             "format": "int64",
             "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
+          },
+          "sac_asset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SacAsset",
+                "description": "The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`])."
+              }
+            ]
           }
         }
       },
@@ -3726,6 +3748,17 @@
                   "type": "integer",
                   "format": "int64",
                   "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
+                },
+                "sac_asset": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SacAsset",
+                      "description": "The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`])."
+                    }
+                  ]
                 }
               }
             }
@@ -4451,6 +4484,20 @@
           },
           "successful": {
             "type": "boolean"
+          }
+        }
+      },
+      "SacAsset": {
+        "type": "object",
+        "description": "The classic asset a SAC contract is the contract-side facet of (ADR 0051,\ntask 0441). `None` on non-SAC contracts — and on the rare SAC with no\nresolvable `asset_sac` facet row (2 of 3,946 on prod), where the frontend\nkeeps the bare SAC badge. Native XLM is `asset_code: null, issuer: null`;\na classic asset always carries both (an asset code alone is ambiguous —\nprod holds many issuers of \"USDC\").",
+        "properties": {
+          "asset_code": {
+            "type": ["string", "null"],
+            "description": "Classic asset code (e.g. `USDC`); `null` = native XLM."
+          },
+          "issuer": {
+            "type": ["string", "null"],
+            "description": "Issuer account G-strkey; `null` = native XLM."
           }
         }
       },

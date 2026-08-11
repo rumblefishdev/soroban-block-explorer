@@ -7,9 +7,12 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routes } from '../../router/routes.js';
 import { KpiCell } from '../detail/KpiCell.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
+
+import { sacAssetCode, sacAssetId } from './sacAsset.js';
 
 /**
  * Contract summary block — windowed stat tiles plus the metadata card
@@ -76,6 +79,39 @@ export function ContractSummary({
             },
           ]}
         />
+        {/* Task 0441: which classic asset this SAC mirrors, linked to its
+            asset page. Row only renders for a SAC; an unresolvable facet
+            (2 of ~3.9k on prod) falls back to a dash. The issuer rides
+            along because an asset code alone is ambiguous — prod carries
+            many issuers of e.g. "USDC". */}
+        {contract.is_sac && (
+          <SummaryRow
+            cells={[
+              {
+                label: 'Mirrors asset',
+                value: contract.sac_asset ? (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <IdentifierDisplay
+                      value={sacAssetCode(contract.sac_asset)}
+                      type="asset"
+                      truncate={false}
+                      href={routes.asset(sacAssetId(contract.sac_asset))}
+                    />
+                    {contract.sac_asset.issuer && (
+                      <IdentifierDisplay
+                        value={contract.sac_asset.issuer}
+                        type="account"
+                        href={routes.account(contract.sac_asset.issuer)}
+                      />
+                    )}
+                  </Stack>
+                ) : (
+                  <Dash />
+                ),
+              },
+            ]}
+          />
+        )}
         <SummaryRow
           cells={[
             {

@@ -17,9 +17,10 @@
 --               soroban_invocations_appearances — Replacing partitioned (FINAL).
 --               accounts — Replacing (FINAL).
 --               ledgers — MergeTree (no FINAL).
--- CH Pattern:   2 statements; B uses uniqExact for distinct-caller count;
+-- CH Pattern:   3 statements; B uses uniqExact for distinct-caller count;
 --               window filter applied via JOIN to ledgers (§5.2 closed_at
---               not on appearances table) + intDiv partition prune.
+--               not on appearances table) + intDiv partition prune. C fires
+--               only when A.is_sac (task 0441).
 -- ADR 0044 §:   §4.2/§4.3 (Replacing partitioned), §4.5 (Replacing state),
 --               §5.2 (closed_at via ledgers JOIN).
 -- Notes:
@@ -90,3 +91,27 @@ FROM soroban_invocations_appearances sia FINAL
 JOIN ledgers l ON l.sequence = sia.ledger_sequence
 WHERE sia.contract_id = $1
   AND l.closed_at >= now64() - INTERVAL $2 DAY;
+
+-- @@ split @@
+
+-- ============================================================================
+-- C. Mirrored asset (task 0441) — fires ONLY when A.is_sac.
+--    Input: $3 = one or more soroban_contracts.id values (the contracts LIST
+--    endpoint batches its whole page into one IN list; the plan is identical
+--    for 1 and 50 ids, so a page costs ONE scan, never one per row).
+--    `asset_sac` is ORDER BY the ASSET side and carries no index on
+--    `sac_contract_id`, so this reads the whole table — accepted by
+--    measurement (7.79 MiB / ~0.10 s on prod, 2026-07-30; the named upgrade
+--    is a bloom_filter skip index past ~5M rows). GROUP BY collapses the
+--    AggregatingMergeTree's multi-row facet (up to 7 rows per contract).
+--    Native XLM is `asset_type = 0`; the classic issuer surrogate resolves
+--    via the same `accounts` key-seek as the deployer in A.
+-- ============================================================================
+SELECT
+    sac_contract_id  AS sac_contract_id,
+    max(asset_type)  AS asset_type,
+    max(asset_code)  AS asset_code,
+    max(issuer_id)   AS issuer_id
+FROM asset_sac
+WHERE sac_contract_id IN ($3)
+GROUP BY sac_contract_id;

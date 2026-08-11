@@ -361,6 +361,7 @@ export type ContractDetailResponse = {
   deployed_at_ledger?: number | null;
   deployer?: string | null;
   is_sac: boolean;
+  sac_asset?: null | SacAsset;
   stats: ContractStats;
   /**
    * Task 0327: contract mutability, 3-state.
@@ -454,6 +455,7 @@ export type ContractListItem = {
    * `ContractStats.recent_invocations` semantics).
    */
   recent_invocations: number;
+  sac_asset?: null | SacAsset;
 };
 
 export type ContractStats = {
@@ -1349,6 +1351,7 @@ export type PaginatedContractListItem = {
      * `ContractStats.recent_invocations` semantics).
      */
     recent_invocations: number;
+    sac_asset?: null | SacAsset;
   }>;
   page: PageInfo;
 };
@@ -1824,6 +1827,25 @@ export type PoolTransactionItem = {
   operation_types: Array<string>;
   source_account: string;
   successful: boolean;
+};
+
+/**
+ * The classic asset a SAC contract is the contract-side facet of (ADR 0051,
+ * task 0441). `None` on non-SAC contracts — and on the rare SAC with no
+ * resolvable `asset_sac` facet row (2 of 3,946 on prod), where the frontend
+ * keeps the bare SAC badge. Native XLM is `asset_code: null, issuer: null`;
+ * a classic asset always carries both (an asset code alone is ambiguous —
+ * prod holds many issuers of "USDC").
+ */
+export type SacAsset = {
+  /**
+   * Classic asset code (e.g. `USDC`); `null` = native XLM.
+   */
+  asset_code?: string | null;
+  /**
+   * Issuer account G-strkey; `null` = native XLM.
+   */
+  issuer?: string | null;
 };
 
 /**

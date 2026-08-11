@@ -40,7 +40,7 @@ use crate::transactions::dto::TxListCursor;
 use chrono::{DateTime, Utc};
 
 use super::dto::ContractIdCursor;
-use super::dto::{ContractStats, EventCursor, EventItem};
+use super::dto::{ContractStats, EventCursor, EventItem, SacAsset};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -72,6 +72,8 @@ pub struct ContractRow {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// Task 0441 — the asset this SAC mirrors; `None` unless `is_sac`.
+    pub sac_asset: Option<SacAsset>,
     /// Task 0327 — contract mutability, 3-state (`None` = Unknown).
     pub upgradeable: Option<bool>,
 }
@@ -83,6 +85,8 @@ pub struct ContractListRow {
     pub contract_type: Option<i16>,
     pub contract_type_name: Option<String>,
     pub is_sac: bool,
+    /// Task 0441 — the asset this SAC mirrors; `None` unless `is_sac`.
+    pub sac_asset: Option<SacAsset>,
     pub deployer: Option<String>,
     pub deployed_at_ledger: Option<i64>,
     pub recent_invocations: i64,
@@ -156,6 +160,97 @@ struct InvocationCountChRow {
 struct ContractDeployerRow {
     id: i64,
     account_id: String,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct SacAssetChRow {
+    sac_contract_id: i64,
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+}
+
+/// Reverse SAC lookup (task 0441): the page's SAC contract surrogates → the
+/// classic asset each one mirrors, shared by the list and the detail so both
+/// resolve identically.
+///
+/// ONE batched aggregation per page, never per row — `asset_sac` is sorted by
+/// the ASSET side, so any lookup by `sac_contract_id` reads the whole table
+/// (7.79 MiB / ~0.1 s measured on prod, decision recorded in the task; a
+/// `bloom_filter` skip index is the named upgrade past ~5M rows). The
+/// `GROUP BY` collapses the AggregatingMergeTree's multi-row facet (up to 7
+/// rows per contract, identity-constant so `max` is safe); `FINAL` is not
+/// used on Aggregating engines in this codebase — every reader collapses via
+/// GROUP BY (mirrors the LP `sac` subquery).
+///
+/// Native XLM is `asset_type = 0` — NOT an empty code or zero issuer, which
+/// classic rows can never carry but which are not the native *signal* (two
+/// competing native conventions exist in this codebase). Classic issuers
+/// resolve via the same bloom key-seek as the deployer column; a SAC whose
+/// code or issuer cannot be resolved is omitted from the map, so the caller
+/// falls back to the bare `is_sac` badge rather than a half-identity.
+async fn fetch_sac_assets(
+    client: &clickhouse::Client,
+    sac_ids: &[i64],
+) -> Result<HashMap<i64, SacAsset>, clickhouse::error::Error> {
+    if sac_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_list = sac_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let rows = client
+        .query(&format!(
+            "SELECT \
+                sac_contract_id  AS sac_contract_id, \
+                max(asset_type)  AS asset_type, \
+                max(asset_code)  AS asset_code, \
+                max(issuer_id)   AS issuer_id \
+             FROM asset_sac \
+             WHERE sac_contract_id IN ({in_list}) \
+             GROUP BY sac_contract_id"
+        ))
+        .fetch_all::<SacAssetChRow>()
+        .await?;
+
+    let issuers = resolve_accounts(
+        client,
+        rows.iter()
+            .filter(|r| r.asset_type != 0 && r.issuer_id != 0)
+            .map(|r| r.issuer_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    )
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            if r.asset_type == 0 {
+                return Some((
+                    r.sac_contract_id,
+                    SacAsset {
+                        asset_code: None,
+                        issuer: None,
+                    },
+                ));
+            }
+            let issuer = issuers.get(&r.issuer_id).filter(|s| !s.is_empty())?;
+            if r.asset_code.is_empty() {
+                return None;
+            }
+            Some((
+                r.sac_contract_id,
+                SacAsset {
+                    asset_code: Some(r.asset_code),
+                    issuer: Some(issuer.clone()),
+                },
+            ))
+        })
+        .collect())
 }
 
 /// CH equivalent of the PG `queries::fetch_contract_list` (task 0275). Same
@@ -322,6 +417,19 @@ pub async fn fetch_contract_list(
         }
     };
 
+    // Step 4 (task 0441): resolve the page's SAC contracts → mirrored assets.
+    // Skipped entirely on a SAC-free page (the common case — SACs are ~2.9%
+    // of contracts and the default newest-50 page holds none).
+    let sac_assets = fetch_sac_assets(
+        client,
+        &list_rows
+            .iter()
+            .filter(|r| r.is_sac)
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+
     Ok(list_rows
         .into_iter()
         .map(|r| ContractListRow {
@@ -332,6 +440,7 @@ pub async fn fetch_contract_list(
                 .and_then(|d| deployers.get(&d))
                 .filter(|s| !s.is_empty())
                 .cloned(),
+            sac_asset: sac_assets.get(&r.id).cloned(),
             id: r.id,
             contract_id: r.contract_id,
             contract_type: r.contract_type,
@@ -402,7 +511,14 @@ pub async fn fetch_contract(
     // Resolve the deployer StrKey by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … ON deployer.id = sc.deployer_id` (task 0345).
     let accounts = resolve_accounts(client, r.deployer_id.into_iter().collect()).await?;
+    // Task 0441 — the mirrored asset; the fetch only fires for a SAC.
+    let sac_asset = if r.is_sac {
+        fetch_sac_assets(client, &[r.id]).await?.remove(&r.id)
+    } else {
+        None
+    };
     Ok(Some(ContractRow {
+        sac_asset,
         upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable),
         id: r.id,
         contract_id: r.contract_id,
