@@ -56,6 +56,22 @@ history:
       stall, planned pause and forgotten-disable with one alarm and no
       suppression logic. Measurements retained — they now set the bare
       threshold (120 s, bimodal distribution, no false-page cost).
+  - date: 2026-08-11
+    status: proposed
+    who: karolkow
+    note: >
+      Defect-4 resolution converged after two operator challenges in one
+      day. DIFF growth alarms withdrawn (the latch was a missing drain
+      procedure, not a wrong alarm shape); the replacement
+      last-chance-sentinel plug also withdrawn (memory machinery for a
+      memoryless problem). Final shape, operator-proposed and
+      measurement-endorsed (30 d: 100% of "transient" retries were
+      connect-level dead domains, 0% genuine blips): connect-level fetch
+      failures classify PERMANENT and sentinel immediately, so the DLQ
+      receives only DB incidents and poison pills; level alarms stay under
+      rule 2's new carve-out with re-arm answers in comments;
+      docs/runbooks/dlq.md carries the drain procedure;
+      --retry-sentinels repairs any host that returns from the dead.
 ---
 
 # ADR 0054: One alarm engine for AWS signals, and three rules an alarm must satisfy
@@ -128,11 +144,12 @@ the AWS-documented shape for the DLQ case: `NumberOfMessagesSent` does not
 count redrive moves, so AWS guidance is a RATE/DIFF over
 `ApproximateNumberOfMessagesVisible` — growth, not level.
 
-Implementation caveat, found before it bit: SQS stops publishing metrics for a
-queue idle for hours, and `DIFF` over a series with gaps may swallow the first
-failure after a drain. The growth alarms must be verified against an emptied,
-idle queue (gate below), and `FILL(depth, 0)` considered if the gap behaviour
-proves lossy.
+The rule has one named carve-out: **a level alarm is correct where policy
+forces the steady state to zero** (the DLQs, the 5xx count). There the level
+cannot latch-and-mute, because standing content is never accepted — the alarm
+fires, the runbook drains/fixes, the alarm clears and is re-armed. The
+latching observed in production was a missing drain procedure, not a wrong
+alarm shape. Every level alarm still states its re-arm answer in a comment.
 
 **3. Absence is `BREACHING` only where nothing else witnesses the same
 absence.** Paging twice for one fault is how alarms get muted. Every alarm
@@ -206,6 +223,30 @@ now justify the bare alarm's threshold instead. Rule 4 was rewritten from
 before, enable after). Rejected: it depends on human memory in both directions,
 and the forget-to-re-enable case creates a permanently mute alarm — the exact
 defect class this ADR exists to remove.
+
+**`DIFF(depth)` growth alarms for the DLQs** — proposed to solve the
+latch-and-mute defect, withdrawn 2026-08-11 after the DLQ contents were
+actually investigated. The 4 stuck messages were "forever-transient"
+outside-world facts (dead-but-resolving issuer domains); the latch was a
+missing drain procedure, not a wrong alarm shape. A plain level alarm works
+under rule 2's carve-out — no metric math, no `FILL` gap caveat (a level
+alarm needs one datapoint after an idle gap, not two consecutive), with the
+drain procedure in docs/runbooks/dlq.md.
+
+**A last-chance-sentinel intake plug for the enrichment worker** — built the
+same day and withdrawn hours later at the operator's overengineering
+challenge. It threaded a `last_attempt` flag through two crates plus an
+env↔queue-policy contract to keep dead-end fetches out of the DLQ by adding
+MEMORY (the SQS receive count) to a memoryless classifier. Superseded by a
+simpler, memoryless answer the operator proposed and measurement endorsed:
+30 days of "transient" retries were 100% connect-level dead domains (6 keys,
+~1000 retries, one retried 668× in 83 minutes) and 0% genuine blips — so
+connect-level failures now classify PERMANENT outright
+(`http_transient.rs`), sentinel immediately, and the retry-budget memory is
+unnecessary. 429/5xx/post-connect timeouts stay transient (the true blip
+classes; measured zero occurrences). The rare returned-from-the-dead host is
+repaired by `--retry-sentinels`. Return threshold: if sentinels start
+landing on domains that provably recover within minutes, revisit the split.
 
 **Periodic re-notification for alarms stuck in ALARM** (EventBridge schedule +
 Lambda re-publishing to SNS). CloudWatch has no native re-notify; this bolt-on
@@ -321,9 +362,9 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
 - [ ] The ingest-backlog-age alarm verified by simulating a stall against the
       deployed alarm, not by reading the config — and one planned pause
       confirmed to produce exactly one knowing page
-- [ ] The DLQ-growth alarms verified against an EMPTIED, idle queue — a test
-      message into a drained DLQ must page, or the `DIFF`-over-metric-gaps
-      caveat in rule 2 is real and `FILL` is required
+- [ ] The DLQ level alarms verified against an EMPTIED, idle queue — a test
+      message into a drained DLQ must page (metric resumes with one
+      datapoint)
 - [ ] One alarm landed under each of rules 2, 3 and 4, so they are demonstrated
       rather than asserted
 - [ ] Our alarm set cross-checked against CloudWatch's out-of-the-box

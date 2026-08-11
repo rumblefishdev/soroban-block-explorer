@@ -298,6 +298,10 @@ export class CloudWatchStack extends cdk.Stack {
     // → temp never cleaned → task wedged while `pgrep stellar-core` still
     // reports healthy). Metric-math on % is robust to disk-size changes.
     // Sustained 3×5 min avoids paging on a transient merge spike.
+    // Re-arm answer (rule 2, ADR 0054): a level alarm is correct here — the
+    // condition is "act before the ceiling", and acting (disk bump / temp
+    // cleanup, see the 0367 runbook trail) drops utilization below 60%,
+    // which clears and re-arms the alarm. Standing >60% is never accepted.
     // ---------------------
     const ephemeralUsed = new cloudwatch.Metric({
       namespace: 'ECS/ContainerInsights',
@@ -466,13 +470,24 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // Alarm 3: DLQ depth
-    // Any message landing in the DLQ means a ledger permanently failed processing.
+    //
+    // A LEVEL alarm on purpose — the zero-tolerance shape (lore-0455, same
+    // philosophy as the 5xx alarm): the DLQ's steady state is EMPTY, so any
+    // content is an event. What lands here is only "our side failed" —
+    // doorbells that failed reconcile maxReceiveCount times during a CH/S3
+    // incident. Re-arm answer (rule 2, ADR 0054): drain per
+    // docs/runbooks/dlq.md — doorbells carry no data (the indexer reconciles
+    // from the durable cursor), so after the incident PURGE the queue and
+    // the alarm returns to OK, re-armed. Standing content is never
+    // accepted; the historical 15-day latch was a missing drain procedure,
+    // not a detection failure. A DIFF()-growth variant was considered and
+    // withdrawn — see ADR 0054.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
         alarmName: `${config.envName}-ledger-processor-dlq-depth`,
         alarmDescription:
-          'Ledger Processor DLQ has messages — one or more ledgers permanently failed processing.',
+          'Ledger Processor DLQ has messages — reconcile failed repeatedly during an incident. Runbook: docs/runbooks/dlq.md (inspect, fix cause, then purge — doorbells carry no data).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -487,27 +502,29 @@ export class CloudWatchStack extends cdk.Stack {
         evaluationPeriods: 1,
         // NOT_BREACHING is correct here (task 0455 review): SQS stops
         // publishing for a queue with ~6 h of no activity, so missing
-        // data is the healthy idle-empty state; any depth > 0 publishes.
-        // KNOWN DEFECT (0455 defect 4, fix pending): this is a LEVEL
-        // alarm — once non-empty it latches in ALARM and goes mute for
-        // every later incident (observed: 15 days latched while a lag
-        // event passed unseen). Conversion to a growth-based alarm is
-        // the umbrella's re-arm work.
+        // data is the healthy idle-empty state; any depth > 0 resumes
+        // publishing and trips the alarm on a single datapoint.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
 
     // ---------------------
     // Alarm 5b: Type-1 enrichment DLQ depth (task 0191)
-    // Any message landing in the enrichment DLQ means an asset
-    // permanently failed enrichment after maxReceiveCount=3 retries.
-    // Same shape as Alarm 5.
+    //
+    // Same zero-tolerance level shape as Alarm 3. What lands here: DB-write
+    // failures during a CH incident (redrive material) and worker
+    // crash/timeout poison pills (reproduction evidence). Dead issuer
+    // domains — historically 100% of this queue's traffic (measured 30
+    // days: 6 keys, ~1000 retries, zero genuine blips) — no longer arrive:
+    // connect-level fetch failures classify permanent and sentinel
+    // immediately (enrichment-shared http_transient.rs, 2026-08-11).
+    // Re-arm answer: fix the cause, then REDRIVE per docs/runbooks/dlq.md.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(this, 'EnrichmentDlqDepthAlarm', {
         alarmName: `${config.envName}-enrichment-dlq-depth`,
         alarmDescription:
-          'Enrichment worker DLQ has messages — one or more assets permanently failed enrichment.',
+          'Enrichment worker DLQ has messages — a DB incident or a poison-pill message (dead-domain fetches sentinel instead of landing here). Runbook: docs/runbooks/dlq.md (inspect, fix cause, then redrive).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -520,9 +537,7 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
-        // NOT_BREACHING + latching level-alarm: same rationale and same
-        // known defect as the ledger DLQ alarm above (observed latched 32
-        // days while its queue grew). Growth-based conversion pending.
+        // NOT_BREACHING — same idle-empty rationale as Alarm 3.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );

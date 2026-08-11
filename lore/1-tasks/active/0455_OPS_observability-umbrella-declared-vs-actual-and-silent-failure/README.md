@@ -231,14 +231,28 @@ Two live instances: one DLQ alarm sat in ALARM for 15 days — a lag event passe
 inside that window with the alarm already red — and another has been in ALARM for
 32 days while its queue grew, with neither growth event producing a notification.
 
-Fix shape: alarm on **change**, not on level. A non-empty DLQ is a condition to
-clear, not a page to repeat; a DLQ that _grew_ is an event. Every level-triggered
-alarm needs a stated answer to "what re-arms it".
+Resolved 2026-08-11 after two withdrawals in one day (both recorded with
+return conditions in ADR 0054). Inspecting the actual DLQ contents showed
+the stuck messages were dead-issuer-domain fetches, and the 15/32-day
+latches were a **missing drain procedure**, not a wrong alarm shape. Final
+shape, operator-proposed and measurement-endorsed (30 d of worker logs:
+100% of "transient" retries were connect-level dead domains — 6 keys,
+~1000 wasted retries, one key retried 668× in 83 min — and 0% genuine
+blips): **connect-level fetch failures classify permanent** and write the
+sentinel immediately (`http_transient.rs`; 429/5xx/post-connect timeouts
+stay transient; `--retry-sentinels` repairs any host that comes back). The
+DLQ therefore receives only DB incidents and poison pills; the LEVEL
+alarms stay (ADR 0054 rule 2 carve-out — level is correct where policy
+forces zero steady state); `docs/runbooks/dlq.md` carries the drain
+procedure (doorbells: purge; enrichment: redrive after the fix); every
+level alarm states its re-arm answer in a comment. Withdrawn: `DIFF`
+growth alarms, and a last-chance-sentinel intake plug (memory machinery
+for a memoryless problem).
 
-Related: queue age alone is insufficient. When failures drain to the DLQ the main
-queue empties, so the age metric reads green while ingestion is still dead
-(measured 2026-07-10: 125 consecutive hours of DLQ growth). The signal must be a
-pair.
+Related: queue age alone is insufficient. When failures drain to the DLQ the
+main queue empties, so the age metric reads green while ingestion is still
+dead (measured 2026-07-10: 125 consecutive hours of DLQ growth). The
+backlog-age alarm and the DLQ level alarms are that pair.
 
 ## Implementation — ordered by return
 
@@ -327,8 +341,11 @@ month is unanswerable by construction.
       stall against the deployed alarm
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
-- [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
-      latched and mute
+- [x] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
+      latched and mute (2026-08-11 — DLQs: drain per `docs/runbooks/dlq.md`,
+      standing content never accepted; Galexie disk: act-before-ceiling
+      comment; latch-proofing verified at deploy by the drained-DLQ
+      test-message gate)
 - [ ] Comparator runs on a schedule and reports schema + CDK deltas; its output is
       seen by a human without anyone asking for it
 - [x] Alarm filter strings verified against the strings the code actually emits
