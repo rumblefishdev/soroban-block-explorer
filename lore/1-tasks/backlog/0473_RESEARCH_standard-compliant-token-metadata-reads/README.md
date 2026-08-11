@@ -23,10 +23,11 @@ history:
     who: karolkow
     note: >
       Spawned from 0472 finding 11b after the standard-compliance question
-      unravelled it. The parser fix for the third storage layout is already
-      shipped on the 0472 branch (chain-verified regression test); everything
-      beyond it — the drain, the negative marker, the compliance policy —
-      moved here.
+      unravelled it. The parser fix for the third storage layout was
+      implemented and chain-verified on the 0472 branch, then pulled off it
+      and parked here as patches/ — nothing ships ahead of the policy
+      decision. The drain, the negative marker and the compliance policy all
+      live here.
 ---
 
 # RESEARCH: how should the explorer read token metadata, by the standard?
@@ -69,13 +70,23 @@ missed?
 - **RPC-in-enrichment precedent exists:** 0340 `nft-collection-name` drain
   in `backfill-enrichment-runner`; `WasmCodeFetcher` in the API.
 
-## Already shipped (0472 branch)
+## Prepared, not shipped — `patches/`
 
-Parser accepts the third layout — `extract_token_metadata` folds sibling
-`Name`/`Symbol`/`Decimals` entries, packed struct stays authoritative;
-regression test decodes the actual `CDQLKMI4…GPXT` instance XDR. Forward
-path only: a dormant contract is recovered on its next instance write,
-which may be never. That is exactly the remainder this task designs for.
+The parser change for the third layout was implemented, tested and then
+PULLED OFF the 0472 branch (decision: nothing ships ahead of the policy
+call in this task). It sits here as git patches, ready for `git am` once
+decision 1 lands on "freeze-plus-drain":
+
+- `patches/0001-…third-on-chain-token-metadata.patch` —
+  `extract_token_metadata` folds sibling `Name`/`Symbol`/`Decimals`
+  entries, packed struct stays authoritative; regression test decodes the
+  actual `CDQLKMI4…GPXT` instance XDR; 348 xdr-parser tests green.
+- `patches/0002-…document-the-third-metadata-layout.patch` — module-header
+  docs.
+
+Even applied, the parser is forward-path only: a dormant contract is
+recovered on its next instance write, which may be never. That remainder —
+plus the already-missed 527 — is what the drain design covers.
 
 ## To decide
 
