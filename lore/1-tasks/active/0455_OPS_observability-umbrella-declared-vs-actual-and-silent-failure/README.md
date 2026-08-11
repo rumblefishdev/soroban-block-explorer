@@ -367,9 +367,12 @@ month is unanswerable by construction.
 - [ ] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312
       closed and archived)
-- [ ] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
-      naming the signals and where they live (`docs/runbooks/costs.md` shipped;
-      health runbook pending)
+- [x] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
+      naming the signals and where they live (2026-08-11:
+      `docs/runbooks/health.md` — the four-sentence convention, the coverage
+      matrix with every cell decided, symptom→first-move paths, an escape
+      hatch, and the feedback rule; plus `api-5xx.md`, `dlq.md`, `costs.md`
+      shipped earlier)
 - [ ] **API types regenerated** — N/A, no API surface change
 
 ## Notes
