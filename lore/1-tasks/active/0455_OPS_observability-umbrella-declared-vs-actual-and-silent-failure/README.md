@@ -275,7 +275,11 @@ be readable.
 - **Done 2026-08-06** — every alarm's `treatMissingData` carries a one-line
   justification comment; the write-failure threshold rewritten in doorbell
   units
-- MV freshness measured from **data recency**, not metadata ([[0428]])
+- **Resolved 2026-08-11 by measurement** — [[0428]] re-scoped: the refresh
+  wrote in every hour of the view's 29-day life (694/693, incl. the 0454
+  outage), heavy causes already page via ch-write-failures/backlog-age, the
+  residual class measured zero. Diagnosis query goes into the health
+  runbook; the alarm design is recorded in 0428 with return conditions
 - **Done 2026-08-06** — `indexer-ch-write-failures` keys on the structured
   field `alarm = "ch_write_failure"` emitted at both hard-failure sites; an
   SSOT/codegen variant was built, judged overkill at 2 contracts, and

@@ -16,6 +16,26 @@ history:
       concerns without an owner. 0420 (F1) made the accounts KPI read from
       accounts_recent, so a silent refresh failure now degrades the headline
       total as well as the accounts list.
+  - date: 2026-08-11
+    status: backlog
+    who: karolkow
+    note: >
+      Re-scoped under the 0455 umbrella - alarm DEFERRED, diagnosis query
+      ships in the health runbook instead. Measured against production:
+      part_log shows the refresh wrote in EVERY hour of the view's 29-day
+      life (694/693 hours incl. the 2026-07-29 outage and a co-tenant
+      hammering the box all day), view_refreshes shows zero exceptions and
+      retry=0 across all 8 refreshable views. The heavy causes of a stale
+      view (box down, disk full) break indexer writes to the same DB and
+      page ch-write-failures + backlog-age within minutes; the residual
+      class (refresh fails while inserts work - OOM on the FINAL recompute,
+      forgotten SYSTEM STOP VIEW, scheduler bug) measured zero occurrences.
+      Return conditions for the alarm: (a) a real silent refresh failure is
+      observed, or (b) 0447 raises REFRESH EVERY and changes the risk
+      profile. The design when it returns: publish
+      now()-last_success_time as a metric from the indexer's existing CW
+      publish call, bare threshold 3x interval, NOT_BREACHING (absence =
+      indexer paused, already alarmed) - recorded in 0455.
 ---
 
 # Alert on `accounts_recent` MV refresh failure
