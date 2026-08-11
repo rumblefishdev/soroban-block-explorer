@@ -2,7 +2,7 @@
 id: '0465'
 title: 'soroban-ret decompilation: experimental Code tab on contract detail'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['effort-medium', 'frontend', 'api', 'cooperation-inferara']
@@ -26,6 +26,23 @@ history:
       production data through a local API bound to prod ClickHouse. Two
       review rounds folded in; `validation` diagnostics added ahead of the
       0.0.5 release.
+  - date: 2026-08-11
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      DEPLOYED and verified on production. API merged via #384; the UI
+      ultimately landed via #388 (a #385 merge mishap sent the UI commits
+      into the API branch instead of develop — rebased onto develop and
+      re-opened). Release develop→master as PR #389 (Refs #374 #368),
+      deployed 2026-08-11 ~08:00 UTC: Compute (44.8 s, three Lambdas +
+      SOROBAN_RPC_URLS env) + SPA sync, bundle grep-verified armed.
+      Prod verification: Code tab renders real decompiled Rust on
+      CDU5…HD7G ("12 functions · 13 unresolved holes · 1 unknown value",
+      SDK 22.0.7 chip), SAC contracts correctly get no tab; /health 200,
+      indexer at head, DLQ 0. Issue #374 closed with a live link;
+      Inferara notified. Future work stays recorded in README (recovery
+      API on 0.0.5, SEP-41 badge, .wasm download, view-code links,
+      behavioral equivalence) — backlog tasks to be spawned when picked up.
 ---
 
 # soroban-ret decompilation: experimental Code tab on contract detail
@@ -280,8 +297,10 @@ clicked on real mainnet contracts rather than fixtures.
       lists the endpoint (PR #384), per ADR 0032.
 - [x] **API types regenerated** — `DecompiledResponse` +
       `DecompileDiagnostic` in `libs/api-types` (both PRs).
-- [ ] Merged and deployed; issue #374 closed with a link to a live
+- [x] Merged and deployed; issue #374 closed with a link to a live
       contract page (issues close at deploy, never at merge).
+      (Release PR #389 → master, deployed + prod-verified 2026-08-11;
+      #374 closed the same day.)
 
 ## Notes
 
