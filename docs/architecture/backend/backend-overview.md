@@ -302,17 +302,17 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 ### 6.2 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                                      |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                            |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                  |
-| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                    |
-| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                          |
-| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                   |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`    |
-| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                |
+| Resource        | Endpoint(s)                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                                                                |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                                                                      |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                                                            |
+| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                                              |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
+| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
 ### 6.3 Resource Details
 
@@ -425,14 +425,34 @@ Soroban-native assets while still serving all through a unified explorer API.
 
 **`GET /contracts`** - Paginated list of Soroban contracts, newest-deployed first
 (`id DESC`, no user sort). Each row: `contract_id`, `contract_type` (+ decoded name),
-`is_sac`, `deployer`, `deployed_at_ledger`, and `recent_invocations` (a 7-day count over
+`is_sac`, `sac_asset`, `deployer`, `deployed_at_ledger`, and `recent_invocations` (a 7-day count over
 the same window as the contract-detail stats). Filters: `filter[type]` (token | other |
 nft | fungible) and `filter[q]` (full-text over name + contract_id).
+`sac_asset` (task 0441) is the classic asset a SAC mirrors —
+`{asset_code, issuer}`, both `null` for native XLM — resolved by the reverse
+`asset_sac` lookup: ONE whole-table aggregation per page batching every SAC id
+in a single `IN` list (the table is ordered by the asset side, so the lookup
+scans; accepted at 7.79 MiB measured, bloom_filter skip index is the named
+upgrade past ~5M rows), skipped entirely when the page holds no SAC. `null`
+on non-SAC rows and on the rare SAC with no resolvable facet row (frontend
+keeps the bare badge).
 
-**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with a typed `name` column, historically consumed by the search query; the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts). Post-0243 (CH cutover complete, PG retired) it has **no reader**: the CH global search resolves contract names from `soroban_contract_metadata` (`22_get_search.sql`), and task 0304 dropped the last reader — the contracts-LIST name-search fallback on `sc.name`. The dead column is pending `DROP COLUMN` (task 0310).
+**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`, `sac_asset` — the mirrored classic asset per the list-endpoint semantics above, task 0441), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with a typed `name` column, historically consumed by the search query; the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts). Post-0243 (CH cutover complete, PG retired) it has **no reader**: the CH global search resolves contract names from `soroban_contract_metadata` (`22_get_search.sql`), and task 0304 dropped the last reader — the contracts-LIST name-search fallback on `sc.name`. The dead column is pending `DROP COLUMN` (task 0310).
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
+
+**`GET /contracts/:contract_id/decompiled`** - On-demand decompilation of the contract's
+WASM (task 0465, issue #374). No persistence: the handler resolves `wasm_hash`, fetches
+the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`),
+and runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
+timeout. `?format=rust` (default) returns reconstructed Rust with completeness markers
+(`functions`, `todo_holes`, `unknown_vars` — counts, not percentages, per the
+soroban-ret team's guidance); when Rust emission fails the same response degrades to
+`representation: "wat"` with `rust_error` set. `?format=wat` returns the (lossless)
+WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code no
+longer live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
+responses carry the `LONG` cache header.
 
 **`GET /contracts/:contract_id/invocations`** - Paginated list of contract invocations.
 

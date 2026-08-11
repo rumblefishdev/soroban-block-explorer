@@ -72,6 +72,20 @@ history:
       deployed, so issue #366 stays open and the fix is unproven on the real
       request path until then. One follow-up recorded under Future Work
       (identity-based asset filter) — still to be spawned on `develop`.
+  - date: '2026-08-07'
+    status: completed
+    who: karolkow
+    note: >
+      DEPLOYED and verified on the real request path — the gap the entry above
+      flagged is closed. `Compute` at 12:21 UTC: three Lambdas replaced (sizes
+      changed, so it is genuinely new code), indexer resumed at a 7s lag with an
+      empty processor DLQ, SPA synced and confirmed armed (the shipped bundle
+      carries the Turnstile site key, so the Nx-cache trap did not bite).
+      Live numbers match the pre-deploy measurements exactly: the reporter's own
+      `xlm/kale` returns 7 pools with the native XLM/KALE one first, and
+      `USDC/USDC` returns 72 rather than the 2 912 the pre-fix semantics gave.
+      The follow-up became task 0466 (strkey forms rendered as accounts), which
+      also carries the identity-filter direction. #366 closes on this.
 ---
 
 # FEATURE: LP list asset filter — substring + pair syntax

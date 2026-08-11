@@ -12,6 +12,7 @@ import {
   getAccount,
   getAsset,
   getContract,
+  getDecompiled,
   getInterface,
   getLedger,
   getNetworkStats,
@@ -47,6 +48,9 @@ import type {
   GetContractData,
   GetContractError,
   GetContractResponse,
+  GetDecompiledData,
+  GetDecompiledError,
+  GetDecompiledResponse,
   GetInterfaceData,
   GetInterfaceError,
   GetInterfaceResponse,
@@ -668,6 +672,35 @@ export const getContractOptions = (options: Options<GetContractData>) =>
       return data;
     },
     queryKey: getContractQueryKey(options),
+  });
+
+export const getDecompiledQueryKey = (options: Options<GetDecompiledData>) =>
+  createQueryKey('getDecompiled', options);
+
+/**
+ * Decompile the contract's WASM on demand (task 0465, refs #374).
+ *
+ * No persistence: bytes are fetched from Soroban RPC and decompiled per
+ * request. The output is immutable per (`wasm_hash`, decompiler version),
+ * which justifies the `LONG` cache header even without a server-side cache.
+ */
+export const getDecompiledOptions = (options: Options<GetDecompiledData>) =>
+  queryOptions<
+    GetDecompiledResponse,
+    GetDecompiledError,
+    GetDecompiledResponse,
+    ReturnType<typeof getDecompiledQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await getDecompiled({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: getDecompiledQueryKey(options),
   });
 
 export const listEventsQueryKey = (options: Options<ListEventsData>) =>

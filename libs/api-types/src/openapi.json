@@ -626,6 +626,76 @@
         }
       }
     },
+    "/v1/contracts/{contract_id}/decompiled": {
+      "get": {
+        "tags": ["contracts"],
+        "summary": "Decompile the contract's WASM on demand (task 0465, refs #374).",
+        "description": "No persistence: bytes are fetched from Soroban RPC and decompiled per\nrequest. The output is immutable per (`wasm_hash`, decompiler version),\nwhich justifies the `LONG` cache header even without a server-side cache.",
+        "operationId": "get_decompiled",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Requested representation: `rust` (default) or `wat`. When `rust` is\nrequested but emission fails, the response carries the WAT fallback\nwith `representation: \"wat\"` and `rust_error` set — no second\nround-trip needed.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decompiled source (Rust, or WAT fallback)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecompiledResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id or format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found, has no WASM (SAC / pre-upload), or code no longer live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "WASM fetch or decompilation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contracts/{contract_id}/events": {
       "get": {
         "tags": ["contracts"],
@@ -2389,6 +2459,17 @@
           "is_sac": {
             "type": "boolean"
           },
+          "sac_asset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SacAsset",
+                "description": "The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`])."
+              }
+            ]
+          },
           "stats": {
             "$ref": "#/components/schemas/ContractStats"
           },
@@ -2497,6 +2578,17 @@
             "type": "integer",
             "format": "int64",
             "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
+          },
+          "sac_asset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SacAsset",
+                "description": "The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`])."
+              }
+            ]
           }
         }
       },
@@ -2525,6 +2617,95 @@
           "stats_window": {
             "type": "string",
             "description": "Echoed window label (e.g. `\"7 days\"`) so the UI can label \"last N days\"."
+          }
+        }
+      },
+      "DecompileDiagnostic": {
+        "type": "object",
+        "description": "One entry of [`DecompiledResponse::diagnostics`].\n\n`severity` is soroban-ret's own (`warning` | `info`) and is deliberately\npassed through rather than re-graded here — with one caveat for the UI:\n`call_indirect` warnings are usually benign `core::fmt` vtables, so they\nshould not be rendered as errors.",
+        "required": ["category", "severity", "message"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "`floating_point` | `reference_types` | `multi_value` |\n`multi_memory` | `call_indirect` | `unknown_instruction` |\n`non_rust_sdk`, or a lowercased new variant from a later release."
+          },
+          "function_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Index of the offending function, for function-scoped checks.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "description": "`warning` | `info`."
+          }
+        }
+      },
+      "DecompiledResponse": {
+        "type": "object",
+        "description": "Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).\n\nSource is reconstructed on demand by the pinned `soroban-ret` crate —\nexperimental by nature: unrecovered values surface as explicit `todo!()`\nholes in the Rust text. The marker counts measure completeness, not\ncorrectness (a hole-free function can still be wrong); the frontend\nkeeps its permanent \"auto-reconstructed\" notice regardless.",
+        "required": [
+          "contract_id",
+          "wasm_hash",
+          "representation",
+          "source",
+          "soroban_ret_version",
+          "diagnostics"
+        ],
+        "properties": {
+          "contract_id": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecompileDiagnostic"
+            },
+            "description": "Soroban-compliance diagnostics for this binary: constructs the\ndecompiler does not model well, so the reader knows *why* a\nreconstruction may be thin. Empty on the WAT paths."
+          },
+          "functions": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "`pub fn` count in the emitted Rust; `null` for WAT.",
+            "minimum": 0
+          },
+          "representation": {
+            "type": "string",
+            "description": "What `source` contains: `rust` or `wat`."
+          },
+          "rust_error": {
+            "type": ["string", "null"],
+            "description": "Set when `rust` was requested but emission failed — `source` then\ncarries the WAT fallback."
+          },
+          "sdk_version": {
+            "type": ["string", "null"],
+            "description": "Soroban SDK version from the binary's `contractmetav0`, when present."
+          },
+          "soroban_ret_version": {
+            "type": "string",
+            "description": "Decompiler version that produced `source`."
+          },
+          "source": {
+            "type": "string"
+          },
+          "todo_holes": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "`todo!()` marker count (unrecovered values); `null` for WAT.",
+            "minimum": 0
+          },
+          "unknown_vars": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Distinct `var_N` identifiers (unrecovered names); `null` for WAT.",
+            "minimum": 0
+          },
+          "wasm_hash": {
+            "type": "string",
+            "description": "Lowercase hex hash of the decompiled binary — the response is\nimmutable per (`wasm_hash`, `soroban_ret_version`)."
           }
         }
       },
@@ -3567,6 +3748,17 @@
                   "type": "integer",
                   "format": "int64",
                   "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
+                },
+                "sac_asset": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SacAsset",
+                      "description": "The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`])."
+                    }
+                  ]
                 }
               }
             }
@@ -4292,6 +4484,20 @@
           },
           "successful": {
             "type": "boolean"
+          }
+        }
+      },
+      "SacAsset": {
+        "type": "object",
+        "description": "The classic asset a SAC contract is the contract-side facet of (ADR 0051,\ntask 0441). `None` on non-SAC contracts — and on the rare SAC with no\nresolvable `asset_sac` facet row (2 of 3,946 on prod), where the frontend\nkeeps the bare SAC badge. Native XLM is `asset_code: null, issuer: null`;\na classic asset always carries both (an asset code alone is ambiguous —\nprod holds many issuers of \"USDC\").",
+        "properties": {
+          "asset_code": {
+            "type": ["string", "null"],
+            "description": "Classic asset code (e.g. `USDC`); `null` = native XLM."
+          },
+          "issuer": {
+            "type": ["string", "null"],
+            "description": "Issuer account G-strkey; `null` = native XLM."
           }
         }
       },
