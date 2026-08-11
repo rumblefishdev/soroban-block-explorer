@@ -647,6 +647,11 @@ Expanded behavior:
 - Rows should emphasize the pool pair and current scale at a glance.
 - Formatting for reserves and TVL-like values should remain consistent across the app.
 - Filters should support both quick pair lookup and broader discovery of larger pools.
+- **Every leg links to its asset** (`legHref`, list + detail): native →
+  `/assets/native` (the canonical token since task 0243 — the older "native has
+  no on-chain address" carve-out left XLM as the app's only dead leg, fixed in
+  task 0472), SAC mirror → `/assets/{C…}`, classic → `/assets/{CODE-ISSUER}`.
+  Only genuine schema drift (no type, no code/issuer) renders unlinked text.
 
 ### 6.14 Liquidity Pool (`/liquidity-pools/:id`)
 
