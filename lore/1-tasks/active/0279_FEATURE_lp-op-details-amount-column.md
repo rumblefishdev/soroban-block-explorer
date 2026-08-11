@@ -269,6 +269,16 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
      `+` (asset entering the pool) one leg `-` (leaving); deposit = both
      `+`; withdraw = both `-`. One shape covers all three event kinds and
      the sign disambiguates direction without an extra column.
+   - **Type: `Int64`, raw stroops, not Nullable** (decided 2026-08-11).
+     Source fields are XDR `int64` (claim atoms, trustline balances) and a
+     per-op sum is bounded by the pool's reserve (itself `int64`), so no
+     overflow is reachable; AMM pools are classic-only → always 7 decimals,
+     scaled at read like `net_settled`/balances. Rejected: `Int128` (only
+     needed for Soroban i128 token amounts, which classic pools cannot
+     carry — doubles the heaviest column for an impossible case) and
+     `Decimal128(7)` (matches `gross_volume_a` in snapshots, but that is a
+     read-model choice for Lambda USD math; fact tables store raw ints,
+     and the verification query is one `toDecimal128(...)/1e7` cast away).
 2. **Trades** — emit rows from the atoms `gross_volume_a_by_pool` already
    walks, instead of only summing them. Both legs: the function reads
    `amountA` only, so the asset-B side needs adding. Keep the extractor
@@ -283,6 +293,7 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
 4. **Backfill** — historical rows; reuse the 0266 backfill worker, which
    already shares `gross_volume_a_by_pool` with live ingest so both paths stay
    identical. Re-scoped 2026-08-11 to a **targeted** re-parse:
+
    - Feed the runner `SELECT DISTINCT ledger_sequence FROM operation_pools`
      (13.15M ledgers, 20.6% of history) instead of a full sweep — est.
      **~2-4h wall** on the box (0359 full-history baseline: ~8-10h with
@@ -298,6 +309,34 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
      (both derive from the same atoms) — one SQL comparison closes the
      backfill gate. Per-row spot checks can use the E3 heavy-fields
      response as a second in-house oracle besides Horizon.
+
+   **Run plan (recorded 2026-08-11, after the go decision):**
+
+   - **Parallelism = the 0359 setup**: s5cmd pre-fetch of the S3 files +
+     K external runner processes on disjoint `--start/--end` ranges — the
+     runner itself has NO `--workers` flag (docs/backfills.md §2). Use
+     K=6: measured 2026-07 on the 24-core box, more than 6 was no faster
+     (disk-bound). The 2-4h estimate ASSUMES this setup; single-process
+     would be >10h.
+   - **Targeting**: the runner is range-based, it cannot take a ledger
+     list today. Two options, in order of preference: (a) list-driven
+     s5cmd pre-fetch of only the 13.15M pool-active files + verify how
+     the range loop behaves on a missing file (or add a small
+     --ledger-list mode); (b) fallback with zero runner changes — ranges
+     from the first pool-active ledger (AMMs exist since protocol 18,
+     ~Nov 2021) to tip, ~40% of history instead of 20.6%, est. 3-5h.
+   - **Write ONLY `lp_operation_amounts`** (targeted-write, the proven
+     0266 pattern) — NOT a full `--reindex`. This is the condition that
+     keeps the "no repair-tier1" claim valid: the parallel-run Tier-1
+     MIN-corruption trap applies to tables the run writes, and this run
+     writes one table with no MIN-semantics columns. A full reindex on
+     the side would silently re-arm that obligation.
+   - **Pilot before quoting a time**: run one recent (densest) 500k
+     partition first, extrapolate by the partition's share of the target
+     set — same calibration as 0304 tiling. Check whether the 0359 raw
+     ledger files still sit on the box disk (fast-path skips the fetch
+     entirely if they do).
+
 5. **API** — LP-tx rows gain the amounts. No `?expand=` parameter: that was a
    Path A artefact, and with the data in the DB the amounts are just part of
    the row.

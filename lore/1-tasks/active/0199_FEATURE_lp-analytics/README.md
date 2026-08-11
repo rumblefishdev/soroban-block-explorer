@@ -483,7 +483,12 @@ This task **consumes** the price API; it does not build it.
 
 Subsumes 0125 (original LP analytics) and absorbs 0195 §2b (LP TVL).
 
-### Also owns: per-row trade amounts on the pool page (issue #371, triaged 2026-07-31)
+### ~~Also owns~~ → moved to 0279: per-row trade amounts on the pool page (issue #371, triaged 2026-07-31)
+
+> **Ownership resolved 2026-08-11**: #371 belongs wholly to task 0279
+> (activated same day, with measured sizing, pinned row shape and a run
+> plan). The section below is kept as the original triage record; 0279
+> supersedes it as the plan of record.
 
 An external report asks the pool's "Recent transactions" table to say what
 each trade actually moved, instead of a bare `Trade` chip — stellar.expert
