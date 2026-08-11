@@ -256,6 +256,42 @@ search, not just native.
 All / Classic / Soroban), so the native row is reachable only by paging. The
 API accepts `filter[type]=native` and returns it.
 
+**15b. Re-decided (2026-08-11): no `Native` chip. Two other fixes instead.**
+Measured while designing it (prod + API, dev proxy):
+
+| Question                           | Answer                                                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Does native have a SAC?            | **Yes** — `asset_sac` cross-tab: type 0 → 1 row, `sac_deployed` (contract `CAS3J7GY…OWMA`)                      |
+| Is native part of `Classic`?       | **No** — distinct `asset_type` (0 vs 1); `filter[type]=classic_credit` returns only credit assets               |
+| Do Soroban tokens ever have a SAC? | **No** — 0 of 4,342, and structurally impossible (a SAC wraps a classic asset; a Soroban token IS the contract) |
+
+Three consequences:
+
+1. **A chip that always returns exactly one row is a tab pretending to be a
+   filter.** Dropped.
+2. **"Show native first" is not a display tweak.** The list is a keyset walk
+   over the `assets` PK (4-tuple + `id`) with a cursor — there is no
+   relevance ordering to pin a row into. Pinning outside the keyset either
+   duplicates the row on the page where it naturally falls or needs a
+   special-cased first page the rest of the pagination does not know about.
+   Backend cursor work, not frontend.
+3. **The real discovery path for XLM is search — which is broken (finding
+   14).** Fixing the ranking makes `q=XLM` return XLM first and serves every
+   asset, not just native. Finding 14 therefore absorbs this and moves up
+   the order.
+
+What replaces 15: **guard the impossible filter combination.** `Has SAC` +
+`Soroban` can never match (measured zero, true by definition), yet the UI
+offers it and answers with "no results" — which reads as "nothing found"
+rather than "this question has no answer". Disable the SAC toggle while the
+Soroban type chip is active (or vice versa). `Has SAC` on its own stays
+valid: it returns classic + native SACs.
+
+Open naming question, deliberately not folded in: the `Classic` chip filters
+`classic_credit` only, but the label reads like "everything that is not
+Soroban". `Classic credit` would be accurate. One word, no logic change, but
+it is user-visible wording — needs a call, not a drive-by edit.
+
 **16. Total supply wraps mid-number** on `/assets/native`:
 `105,410,0 / 95,815.54 / 27811`. Caused by `overflowWrap: 'anywhere'` in
 `AssetSummary` — a deliberate earlier fix (F4) to stop the longest supply in
@@ -283,8 +319,13 @@ supply row or breaking only at group separators.
 - [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
 - [ ] Pool legs link native to `/assets/native` (finding 13); vitest case
 - [ ] Asset search ranks exact matches first so `q=XLM` returns XLM
-      (finding 14) — backend `ORDER BY`, API params unchanged
-- [ ] Assets list offers a `Native` type chip (finding 15)
+      (finding 14) — backend `ORDER BY`, API params unchanged. This is ALSO
+      the answer to "how is native discoverable" (finding 15b)
+- [x] `Native` type chip — decided AGAINST (finding 15b): one-row filter,
+      pinning fights the keyset cursor, search is the real path
+- [ ] The impossible `Has SAC` + `Soroban` filter pair is not offered
+      (finding 15b); vitest case
+- [ ] `Classic` vs `Classic credit` chip label — decision recorded either way
 - [ ] Total supply stops breaking mid-number (finding 16)
 - [ ] `asset_code` / `symbol` both kept — measured disjoint, documented
       (finding 10)
