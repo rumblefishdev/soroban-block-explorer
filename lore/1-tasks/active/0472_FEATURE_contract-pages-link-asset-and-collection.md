@@ -126,6 +126,143 @@ Found on the post-deploy production pass (2026-08-11):
    `AssetIcon`; check the assets LIST cell (`AssetsTable` passes raw
    `row.asset_code`) for the same gap.
 
+## Findings from the native-naming pass (2026-08-11)
+
+Scope 8 turned out to be one symptom of a wider inconsistency. Everything
+below was measured on production data; all of it is fixed IN THIS TASK.
+
+**9. Four separate rules encode "native is called XLM"** — on four different
+input types, with four different empty-case behaviours:
+
+| Site                                           | Input                       | On schema drift |
+| ---------------------------------------------- | --------------------------- | --------------- |
+| `pool-shared/helpers.ts` `assetLegLabel`       | `PoolAssetLeg`              | throws          |
+| `assets/assetType.ts` `assetDisplayCode` (new) | asset row                   | returns `null`  |
+| `transactions/cells.tsx`                       | operation `'native'` string | empty string    |
+| `transaction-detail/shared/humanizeOp.ts`      | operation `'native'` string | —               |
+
+Plus `AccountBalances.tsx` hard-coding `'XLM'`. The new helper collapsed
+three asset-page call sites into one rule, but the project still carries
+four. Unifying needs one constant + per-shape adapters (the inputs are not
+interchangeable) — worth doing, low risk, no behaviour change.
+
+**10. `asset_code` and `symbol` are NOT redundant** — they are disjoint.
+Measured on prod (`assets` × `soroban_contract_metadata`, 2026-08-11):
+
+| `asset_type`     | rows    | with `asset_code` | with `symbol` | with both |
+| ---------------- | ------- | ----------------- | ------------- | --------- |
+| 0 native         | 1       | 0                 | 0             | 0         |
+| 1 classic credit | 339,454 | 339,454           | 0             | 0         |
+| 3 soroban        | 4,342   | 0                 | 3,815         | **0**     |
+
+`asset_code` is the classic ledger field (XDR alphanum4/12); `symbol` is the
+on-chain SEP-41 `METADATA` symbol from `soroban_contract_metadata` (0297).
+No row has both, so `asset_code ?? symbol` is a UNION of two populations, not
+a fallback chain. Keep both fields.
+
+**11. 527 type-3 assets carry neither code nor symbol** (4,342 − 3,815) and
+render as "Asset" / "—". Whatever the cause, the display must stay honest:
+the letter avatar keeps `?` rather than taking the first letter of the word
+"Asset" (a confident "A" reads as a real ticker).
+
+**11b. Two DIFFERENT causes hide behind those 527** — chain-verified with
+the `stellar` CLI against mainnet RPC, 5 contracts sampled (2026-08-11):
+
+| Contract        | `symbol()` on chain | our DB | verdict    |
+| --------------- | ------------------- | ------ | ---------- |
+| `CAKJ4KXW…HLRO` | no such function    | no row | honest     |
+| `CCZ5NLMX…IUCL` | no such function    | no row | honest     |
+| `CDIFFGCJ…BQPD` | no such function    | no row | honest     |
+| `CDQLKMI4…GPXT` | **`"ALPHASH"`**     | no row | **missed** |
+| `CBNMAFRH…A4MY` | **`"AVXO"`**        | no row | **missed** |
+
+Three are genuine partial SEP-41 implementations — they expose
+`balance`/`transfer` (hence the Fungible classification) but never
+implement the metadata half, so there is nothing to display and `?` is the
+correct, honest answer.
+
+The other two DO publish a name and symbol, and we drop them. Root cause,
+read off the chain: `ALPHASH` keeps its metadata as SEPARATE instance-storage
+entries — `Vec[Symbol("Name")]`, `Vec[Symbol("Symbol")]`,
+`Vec[Symbol("Decimals")]` — while `is_metadata_key`
+(`crates/xdr-parser/src/token_metadata.rs:115`) matches only two shapes:
+`Symbol("METADATA")` (soroban-token-sdk / SAC) and `Vec[Symbol("Metadata")]`
+(OZ NFT). A third shape exists on chain and is silently skipped. Same class
+of bug as the OZ-NFT shape that comment already documents.
+
+Sanity check on the pipeline: `CBR6BXBR…BVKL`, which we DO have metadata
+for, returns `symbol()` = `"VTAPI0"` — matching our row. The extractor is
+right about the shapes it knows; it just does not know all of them.
+
+Scale: 2 of 5 sampled → **order of 200 assets** (extrapolation, not a
+measurement — the raw instance storage is not in ClickHouse, so the shape
+cannot be counted without re-reading the chain).
+
+**Re-decided (2026-08-11, later): split to [[0473]].** The first call was
+"fix in this task — parser + re-parse", but the standard-compliance check
+unravelled it: SEP-41 defines metadata as an INTERFACE (`name()` /
+`symbol()` / `decimals()`), not a storage shape, so ALL THREE storage
+layouts we read are per-library conventions and the layout list is
+unbounded. The parser fix for the third layout was implemented and
+chain-verified here, then PULLED OFF this branch and parked as
+`git am`-ready patches in 0473's `patches/` — nothing ships ahead of that
+task's policy decision. The drain, the negative marker and the policy all
+live in 0473; this task is frontend-only again.
+
+Task 0340 already ran this exact play for OZ NFT collection names, and its
+two halves are the template here:
+
+1. **Parser.** `is_metadata_key` learns the third shape. Note it is not just
+   another key to match: the first two shapes hold ALL fields in one `Map`
+   under one key, while this one spreads `Name` / `Symbol` / `Decimals`
+   across THREE sibling entries — so `extract_token_metadata` has to fold
+   several entries into one `TokenMetadata`, not just `find()` one. Unit
+   tests use the shapes read off mainnet (`ALPHASH` below).
+2. **Backfill.** A parser fix alone recovers a contract only on its NEXT
+   instance write, which for a dormant token may be never. 0340 solved the
+   same remainder with an RPC drain subcommand in `backfill-enrichment-runner`
+   (`nft-collection-name`); the analogue here drains type-3 assets that have
+   no `soroban_contract_metadata` row, calling `symbol()` / `name()` /
+   `decimals()`. It doubles as the measurement: the exact split between
+   "shape we missed" and "genuinely nameless" cannot be counted in ClickHouse
+   (no raw instance storage is stored — `soroban_contracts` keeps 8 columns,
+   none of them the storage map).
+
+Watch out on the drain: roughly three fifths of the candidates have no such
+functions at all, and the 0340-style predicate ("still missing a name") would
+re-hammer RPC for them on every run. Needs a negative marker, not just
+`--force-retry`.
+
+**12. The supply unit dropped native.** `AssetSummary` and the `AssetsTable`
+supply column both computed the ticker as `asset_code ?? symbol`, so native
+showed a bare number with no unit. Same rule, two more call sites.
+
+**13. Pool legs do not link native.** `legHref` returns `undefined` for
+`asset_type === 0`, with the rationale "Native has no on-chain address in
+classic protocol". That predates task 0243 — `/assets/native` is now the
+canonical token and every other surface links it. Verified on pool
+`LD537AFE6YVN3UKBL43XX6OPLLEDWBSDSNETZADJRKCCLL357OIGAMSH`: "XLM" appears
+twice as plain text, zero links.
+
+**14. Searching "XLM" does not return XLM.** `search_assets` ends in
+`LIMIT {per_group_limit}` with **no `ORDER BY`**, so the ten returned rows
+are whichever the scan reached first. The native special-case in the WHERE
+clause fires, but the row loses to `SEVXLM` / `ISHXLM` / `SFKEXLM`… Measured:
+`q=XLM` → 10 hits, native absent; `q=native` → native first. There is no
+relevance ranking at all — an exact match does not win. Affects every asset
+search, not just native.
+
+**15. The assets list has no `Native` type chip** (`ASSET_TYPE_FILTERS` =
+All / Classic / Soroban), so the native row is reachable only by paging. The
+API accepts `filter[type]=native` and returns it.
+
+**16. Total supply wraps mid-number** on `/assets/native`:
+`105,410,0 / 95,815.54 / 27811`. Caused by `overflowWrap: 'anywhere'` in
+`AssetSummary` — a deliberate earlier fix (F4) to stop the longest supply in
+the system from overflowing into the adjacent "Holders" cell. XLM has both
+the longest value (22 chars) and a half-width cell. Needs either a full-width
+supply row or breaking only at group separators.
+
 ## Acceptance criteria
 
 - [ ] Fungible contract detail links its asset page; vitest case
@@ -138,11 +275,25 @@ Found on the post-deploy production pass (2026-08-11):
 - [ ] SAC rows show a single chip (`SAC · CODE`, no `Token` chip); filter
       label reads `SAC`; API params untouched
 - [ ] Linked SAC chip carries an issuer tooltip / aria-label
-- [ ] `/assets/native` titles itself `XLM` with an XLM avatar, via the
-      existing native rule (`assetLegLabel`); assets list checked for the
-      same gap; vitest case
-- [ ] No API surface change (frontend-only; no api-types regen)
-- [ ] Docs: frontend-overview §6.10 updated
+- [x] `/assets/native` titles itself `XLM` with an XLM avatar, via one shared
+      rule (`assetDisplayCode`); assets list cell + avatar fixed; vitest cases
+- [ ] One native→XLM rule, not four (finding 9) — `cells.tsx`, `humanizeOp`,
+      `AccountBalances` fold onto the shared rule; no behaviour change
+- [x] Supply unit shows `XLM` for native — detail + list columns (finding 12)
+- [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
+- [ ] Pool legs link native to `/assets/native` (finding 13); vitest case
+- [ ] Asset search ranks exact matches first so `q=XLM` returns XLM
+      (finding 14) — backend `ORDER BY`, API params unchanged
+- [ ] Assets list offers a `Native` type chip (finding 15)
+- [ ] Total supply stops breaking mid-number (finding 16)
+- [ ] `asset_code` / `symbol` both kept — measured disjoint, documented
+      (finding 10)
+- [ ] Finding 11b in full — parser third layout (parked as patches), RPC
+      drain, negative marker, split measurement, compliance policy
+      (deferred to 0473 — see the re-decision under finding 11b)
+- [ ] No API surface change (frontend-only; no api-types regen) — EXCEPT the
+      search ordering fix, which changes result order, not the schema
+- [ ] Docs: frontend-overview §6.8 + §6.10 updated
 
 ## Notes
 
