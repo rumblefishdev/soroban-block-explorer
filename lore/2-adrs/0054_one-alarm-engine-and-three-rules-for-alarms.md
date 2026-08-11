@@ -367,9 +367,12 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
       datapoint)
 - [ ] One alarm landed under each of rules 2, 3 and 4, so they are demonstrated
       rather than asserted
-- [ ] Our alarm set cross-checked against CloudWatch's out-of-the-box
-      recommended alarms for AWS/SQS, AWS/Lambda and AWS/ECS — anything they
-      recommend that we lack gets a deliberate yes/no
+- [x] Our alarm set cross-checked against CloudWatch's out-of-the-box
+      recommended alarms (2026-08-11, SQS/Lambda/ECS/APIGW/SNS/CloudFront/S3)
+      — every recommendation has a deliberate verdict; no gaps adopted, two
+      forward pointers (C7 dashboard candidates, D2 synthetics question).
+      Record: task 0455
+      `notes/R-aws-recommended-alarms-crosscheck-2026-08-11.md`
 
 ---
 
