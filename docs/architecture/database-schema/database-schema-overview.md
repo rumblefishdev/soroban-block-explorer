@@ -643,9 +643,13 @@ Purpose / design notes:
   persisted, so unlike `operation_pools` there is no CH-side re-key. Scope is the
   ~13.15M ledgers with pool activity (`SELECT DISTINCT ledger_sequence FROM
 operation_pools`), ~20.6% of history. Additive: no existing table is touched, the
-  indexer keeps running, rollback is `DROP TABLE`. Validation gate: `sum(amount)`
-  over the positive asset-A legs per (pool, ledger) must equal
+  indexer keeps running, rollback is `DROP TABLE`. Validation gate:
+  `sum(abs(amount))` over the asset-A legs per (pool, ledger) must equal
   `liquidity_pool_snapshots.gross_volume_a` — both derive from the same atoms.
+  ABS because `gross_volume_a` is gross: it counts each atom's A-side amount
+  whichever way the swap went, so a ledger where the pool only sold A has every
+  A leg negative here. An op crossing one pool in both directions nets out at
+  this table's per-op grain and is a known, legitimate mismatch.
 - No skip index: every read is a `pool_id` PK-prefix seek.
 
 ### 4.6 Soroban Contracts

@@ -784,9 +784,17 @@ ORDER BY (pool_id, ledger_sequence, transaction_id);
 -- `LedgerEntryChanges` (they carry no claim atoms; the op body holds the
 -- caller's max/min bounds, not what actually moved).
 --
--- Backfill gate (task 0279): `sum(amount)` over the positive asset-A legs per
+-- Backfill gate (task 0279): `sum(abs(amount))` over the asset-A legs per
 -- (pool, ledger) must equal `liquidity_pool_snapshots.gross_volume_a` for that
 -- key — both derive from the same atoms, so one query validates the re-parse.
+-- ABS, not the positive legs only: `gross_volume_a` is a GROSS figure, summing
+-- each atom's A-side amount whichever way the swap went (`append_pool_claims`
+-- takes `amount_sold` or `amount_bought` by canonical asset order, both
+-- non-negative). A pool that only sold A that ledger has every A leg negative
+-- here, and a positives-only sum would read 0 against a non-zero volume.
+-- Known exception: an op crossing the SAME pool in BOTH directions nets out in
+-- this table by construction (per-op grain) while `gross_volume_a` counts both
+-- crossings gross, so such an op is a legitimate mismatch, not a bug.
 --
 -- No skip index: every read is a `pool_id` PK-prefix seek. This file is
 -- FRESH-ONLY (prod is an existing DB), so the table must be CREATEd on prod
