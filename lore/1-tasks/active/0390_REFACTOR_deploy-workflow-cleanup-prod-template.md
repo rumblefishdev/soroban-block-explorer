@@ -83,8 +83,26 @@ no separate approval gate.
 
 ### Open — enablement
 
-- Provision secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC deploy role), `AWS_ACCOUNT_ID`.
-  Workflow is inert until they exist.
+Discovery (2026-08-10): the legacy `staging` GitHub environment still holds
+`AWS_DEPLOY_ROLE_ARN` + `AWS_ACCOUNT_ID` (the April 2026 tag deploys used
+them via OIDC), with deployment policies `develop` + `staging-*`. Env-scoped
+secrets are invisible without an `environment:` line, so the job now binds
+`environment: production` (secret scoping only — no required reviewers).
+
+Remaining, operator-side:
+
+1. AWS: find the deploy role in IAM (`aws sso login --profile sorobanscan`),
+   verify its trust policy covers this repo and its permissions cover
+   **eu-central-1** (April's runs deployed us-east-1 staging — the CDK
+   bootstrap roles it may be scoped to are per-region) + SPA bucket sync +
+   CloudFront invalidation + `cloudformation:DescribeStacks`.
+2. GitHub: create environment `production` with policies (tag `production-*`,
+   branch `master`) and set the two secrets there.
+3. Merge #338 → develop; the workflow must reach **master** before the first
+   tag — tag-push runs execute the workflow file at the tagged commit.
+4. Validate end-to-end with the first `production-YYYY.MM.DD-N` tag (a
+   quiet-day tag is a fine test: empty cdk diff, no-op deploy, SPA re-sync).
+5. After validation: delete the legacy `staging` environment.
 
 ### Added to scope — deploy hardening (from the 0437 401 incident)
 
