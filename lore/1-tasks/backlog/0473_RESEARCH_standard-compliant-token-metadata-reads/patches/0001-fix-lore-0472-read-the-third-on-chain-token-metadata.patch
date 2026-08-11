@@ -1,0 +1,202 @@
+From ad369c174dade5056a5d0c4ede13c8f669750703 Mon Sep 17 00:00:00 2001
+From: Karol <bolekbolek909@gmail.com>
+Date: Tue, 11 Aug 2026 13:23:56 +0200
+Subject: [PATCH 1/2] fix(lore-0472): read the third on-chain token-metadata
+ layout
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Some mainnet tokens keep name/symbol/decimals as three sibling instance-
+storage entries under Vec([Symbol("Name")]) / ("Symbol") / ("Decimals")
+keys — the hand-rolled DataKey enum shape — instead of one METADATA struct.
+The extractor matched only the two packed layouts, so those contracts got no
+soroban_contract_metadata row and their assets rendered as 'Asset' with a
+'?' avatar while answering symbol() on chain.
+
+Chain-verified on mainnet 2026-08-11 with the stellar CLI: CDQLKMI4…GPXT
+returns 'ALPHASH' and CBNMAFRH…A4MY returns 'AVXO', neither carries a
+METADATA key. The regression test decodes CDQLKMI4's actual instance XDR.
+
+The packed struct stays the authority where both exist; siblings only fill
+the fields it omits. Note has_metadata_key stays packed-only by design — it
+probes for a present-but-undecodable struct, and the write path calls the
+extractor first, so the new layout needs no caller change.
+
+Refs #368
+---
+ crates/xdr-parser/src/token_metadata.rs | 137 +++++++++++++++++++++---
+ 1 file changed, 121 insertions(+), 16 deletions(-)
+
+diff --git a/crates/xdr-parser/src/token_metadata.rs b/crates/xdr-parser/src/token_metadata.rs
+index d80ce45a..d82f9595 100644
+--- a/crates/xdr-parser/src/token_metadata.rs
++++ b/crates/xdr-parser/src/token_metadata.rs
+@@ -39,31 +39,45 @@ pub struct TokenMetadata {
+     pub decimals: Option<u32>,
+ }
+ 
+-/// Extract the `METADATA` struct from a contract instance value.
++/// Extract token metadata from a contract instance value.
+ ///
+-/// Returns `None` when `val` is not an `ScVal::ContractInstance`, the instance
+-/// has no storage, there is no `Symbol("METADATA")` key, or the struct yields
+-/// no usable field.
++/// Handles both on-chain layouts (see [`is_metadata_key`] for the packed one
++/// and [`split_field_name`] for the spread one). Returns `None` when `val` is
++/// not an `ScVal::ContractInstance`, the instance has no storage, or neither
++/// layout yields a usable field.
+ pub fn extract_token_metadata(val: &ScVal) -> Option<TokenMetadata> {
+     let ScVal::ContractInstance(inst) = val else {
+         return None;
+     };
+     let storage = inst.storage.as_ref()?;
+-    let metadata = storage
++
++    let mut md = TokenMetadata::default();
++
++    // Packed layout: every field in one Map under a single metadata key.
++    if let Some(ScVal::Map(Some(fields))) = storage
+         .iter()
+         .find(|e| is_metadata_key(&e.key))
+-        .map(|e| &e.val)?;
+-    let ScVal::Map(Some(fields)) = metadata else {
+-        return None;
+-    };
++        .map(|e| &e.val)
++    {
++        for ScMapEntry { key, val } in fields.iter() {
++            match symbol_text(key).as_deref() {
++                Some("name") => md.name = scval_text(val),
++                Some("symbol") => md.symbol = scval_text(val),
++                // SEP-41/OZ tokens use the singular `decimal`; accept `decimals` too.
++                Some("decimal") | Some("decimals") => md.decimals = scval_u32(val),
++                _ => {}
++            }
++        }
++    }
+ 
+-    let mut md = TokenMetadata::default();
+-    for ScMapEntry { key, val } in fields.iter() {
+-        match symbol_text(key).as_deref() {
+-            Some("name") => md.name = scval_text(val),
+-            Some("symbol") => md.symbol = scval_text(val),
+-            // SEP-41/OZ tokens use the singular `decimal`; accept `decimals` too.
+-            Some("decimal") | Some("decimals") => md.decimals = scval_u32(val),
++    // Spread layout: one storage entry per field. Only fills what the packed
++    // layout left empty, so a contract carrying both keeps the struct as the
++    // authority.
++    for ScMapEntry { key, val } in storage.iter() {
++        match split_field_name(key) {
++            Some("Name") => md.name = md.name.or_else(|| scval_text(val)),
++            Some("Symbol") => md.symbol = md.symbol.or_else(|| scval_text(val)),
++            Some("Decimals") => md.decimals = md.decimals.or_else(|| scval_u32(val)),
+             _ => {}
+         }
+     }
+@@ -117,6 +131,28 @@ fn is_metadata_key(v: &ScVal) -> bool {
+         || matches!(v, ScVal::Vec(Some(vec)) if vec.len() == 1 && symbol_is(&vec[0], "Metadata"))
+ }
+ 
++/// The field name behind a SPREAD-layout storage key, i.e. a contract that
++/// keeps `name` / `symbol` / `decimals` as three sibling instance entries
++/// (`Vec([Symbol("Name")])`, …) instead of one `METADATA` struct. This is the
++/// hand-rolled `#[contracttype] enum DataKey { Name, Symbol, Decimals, … }`
++/// shape — the same `Vec([Symbol(variant)])` encoding as the OZ NFT key, just
++/// one variant per field.
++///
++/// Chain-verified on mainnet 2026-08-11: `CDQLKMI4…GPXT` ("Alpha Vault Share"
++/// / `ALPHASH` / 7) and `CBNMAFRH…A4MY` (`AVXO`) both answer `symbol()` yet
++/// carry no `METADATA` key, so matching only the packed layouts dropped them.
++fn split_field_name(v: &ScVal) -> Option<&'static str> {
++    let ScVal::Vec(Some(vec)) = v else {
++        return None;
++    };
++    if vec.len() != 1 {
++        return None;
++    }
++    ["Name", "Symbol", "Decimals"]
++        .into_iter()
++        .find(|want| symbol_is(&vec[0], want))
++}
++
+ /// `Symbol` → its UTF-8 text (used for struct keys).
+ fn symbol_text(v: &ScVal) -> Option<String> {
+     match v {
+@@ -317,4 +353,73 @@ mod tests {
+         assert_eq!(m.symbol.as_deref(), Some("SUSHI-V3-POS"));
+         assert_eq!(m.decimals, None); // NFT: no decimals
+     }
++
++    #[test]
++    fn extracts_real_mainnet_spread_layout_instance_from_ledger() {
++        // Ground-truth regression for the THIRD on-chain layout (task 0472).
++        // The ACTUAL ContractInstance ScVal of mainnet CDQLKMI4…GPXT ("Alpha
++        // Vault Share" / ALPHASH), read 2026-08-11 via `stellar contract read`.
++        // It keeps no METADATA struct at all — Name / Symbol / Decimals are
++        // three sibling entries under Vec([Symbol(variant)]) keys, alongside
++        // Admin / TotalSupply / TransfersEnabled. Pre-fix the contract answered
++        // symbol() on chain while our metadata table had no row for it, so the
++        // asset rendered as "Asset" with a "?" avatar.
++        use stellar_xdr::{Limits, ReadXdr};
++        const INSTANCE_HEX: &str = "000000130000000006b44635985d124cf794ed687469c845c18ab0b6244766f85c7b55ab1290d4ea00000001000000060000001000000001000000010000000f0000000541646d696e000000000000120000000162f8d72dcee1ec35f5545b702c35a852b624c48d974e91345295a24da1f3e7e30000001000000001000000010000000f00000008446563696d616c7300000003000000070000001000000001000000010000000f000000044e616d650000000e00000011416c706861205661756c742053686172650000000000001000000001000000010000000f0000000653796d626f6c00000000000e00000007414c5048415348000000001000000001000000010000000f0000000b546f74616c537570706c79000000000a000000000000000000000000000000000000001000000001000000010000000f000000105472616e7366657273456e61626c65640000000000000000";
++        let bytes = hex::decode(INSTANCE_HEX).unwrap();
++        let val =
++            ScVal::from_xdr(bytes, Limits::none()).expect("real CDQLKMI4 instance XDR decodes");
++
++        // No packed metadata key anywhere — this layout is invisible to the
++        // has_metadata_key probe, which is exactly why it went unnoticed.
++        assert!(!has_metadata_key(&val));
++
++        let m = extract_token_metadata(&val).expect("spread-layout metadata present");
++        assert_eq!(m.name.as_deref(), Some("Alpha Vault Share"));
++        assert_eq!(m.symbol.as_deref(), Some("ALPHASH"));
++        assert_eq!(m.decimals, Some(7));
++    }
++
++    #[test]
++    fn packed_metadata_wins_over_spread_siblings() {
++        // A contract carrying both layouts: the METADATA struct is the
++        // authority, siblings only fill what it omits (here: decimals).
++        let inst = wasm_instance(vec![
++            (
++                ScVal::Vec(Some(ScVec::try_from(vec![sym("Decimals")]).unwrap())),
++                ScVal::U32(2),
++            ),
++            (
++                ScVal::Vec(Some(ScVec::try_from(vec![sym("Symbol")]).unwrap())),
++                sstr("SPREAD"),
++            ),
++            (
++                sym("METADATA"),
++                ScVal::Map(Some(scmap(vec![
++                    (sym("name"), sstr("Packed Token")),
++                    (sym("symbol"), sstr("PACKED")),
++                ]))),
++            ),
++        ]);
++
++        let m = extract_token_metadata(&inst).expect("metadata present");
++        assert_eq!(m.name.as_deref(), Some("Packed Token"));
++        assert_eq!(m.symbol.as_deref(), Some("PACKED"));
++        assert_eq!(m.decimals, Some(2));
++    }
++
++    #[test]
++    fn ignores_lookalike_spread_keys() {
++        // Only the exact variant names count. A same-shaped key with another
++        // name (or the bare Symbol without the Vec wrapper) must not match,
++        // or every enum-keyed contract would look like a token.
++        let inst = wasm_instance(vec![
++            (
++                ScVal::Vec(Some(ScVec::try_from(vec![sym("Nickname")]).unwrap())),
++                sstr("nope"),
++            ),
++            (sym("Symbol"), sstr("bare, not wrapped")),
++        ]);
++        assert_eq!(extract_token_metadata(&inst), None);
++    }
+ }
+-- 
+2.50.1 (Apple Git-155)
+
