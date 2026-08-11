@@ -35,12 +35,14 @@
 --     handler runs a second, small query and computes USD in Rust:
 --       tvl         = latest reserves × last hourly USD close
 --                     (`prices.price_usd_series_1h`, 48h lookback, per-leg
---                      identity; NULL unless BOTH legs price)
+--                      identity, `close_usd > 0` only — non-positive rows
+--                      are the prices-side 0171 sentinel, treated as
+--                      absent; NULL unless BOTH legs price)
 --       volume      = last-24h `sum(gross_volume_a)` (pool-pinned seek,
 --                     `LIMIT 1 BY ledger_sequence` dedup) × leg-A close
 --       fee_revenue = volume × fee_bps / 10000
 --     NOT `prices.current_price_usd`: box-measured 2026-08-04 the spot view
---     carries the 0-sentinel for native XLM itself (their 0039 updater), so
+--     carries the 0-sentinel for native XLM itself (their task 0135), so
 --     every XLM-leg pool would read NULL; the 1h close is ≤ ~2h stale, same
 --     cost (112 ms / 1.6M rows on the hottest pool), and matches the
 --     chart's last bucket. Prices errors DEGRADE to NULL fields

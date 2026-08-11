@@ -211,9 +211,16 @@ fn fee_percent_str(fee_bps: i32) -> String {
 //   views grow additively (current_price_usd went 6 → 13 columns).
 //
 // LEFT JOIN misses surface as DEFAULT values, not NULL (`join_use_nulls`
-// is rejected for the readonly API user — CH gotcha list). The series
-// views filter `close_usd > 0`, so 0 unambiguously means "no price row"
-// → every read wraps the price in `nullIf(price, 0)`.
+// is rejected for the readonly API user — CH gotcha list), so every read
+// wraps the price in `nullIf(price, 0)`.
+//
+// The views do NOT guarantee `close_usd > 0`: a bucket whose only candles
+// carry zero volume can publish `Decimal128::MIN` (≈ -1.7e24) instead of
+// omitting the row (prices-side 0171, confirmed by the owner 2026-08-11).
+// A negative close would print a -1e24-scale TVL and, through the chart's
+// ASOF carry-forward, smear it over every later bucket — so every
+// `close_usd` read here filters `close_usd > 0` itself and treats
+// non-positive rows as absent.
 //
 // USD arithmetic is Float64, rounded to cents. The analytics carry a 1%
 // verification tolerance by design (task AC); Float64 keeps the SQL free
@@ -545,7 +552,7 @@ async fn fetch_last_closes(
     .join(" OR ");
     let sql = format!(
         "SELECT asset_kind, asset_code, issuer_address, \
-                toString(nullIf(argMax(close_usd, bucket), 0)) AS close_usd \
+                toString(nullIf(argMaxIf(close_usd, bucket, close_usd > 0), 0)) AS close_usd \
          FROM prices.price_usd_series_1h \
          WHERE ({identity_or}) \
            AND bucket >= now() - INTERVAL {carry} SECOND \
@@ -1316,6 +1323,7 @@ pub async fn fetch_pool_chart(
                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
                    AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
                    AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
+                   AND close_usd > 0 \
              ) pa ON pa.k = l.k AND pa.bucket <= l.price_bucket \
              ASOF LEFT JOIN ( \
                  SELECT 1 AS k, bucket, close_usd \
@@ -1323,6 +1331,7 @@ pub async fn fetch_pool_chart(
                  WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
                    AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
                    AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
+                   AND close_usd > 0 \
              ) pb ON pb.k = l.k AND pb.bucket <= l.price_bucket \
          ) \
          GROUP BY bucket_ms \

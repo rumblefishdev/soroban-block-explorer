@@ -81,6 +81,12 @@
 --   prices owns that, and diverging would make our numbers disagree with
 --   theirs. NOTE the carry-forward above does not help here — it stands in
 --   for a MISSING candle, not a WRONG one.
+-- Upstream caveat — `close_usd` can be NEGATIVE (prices-side 0171). A
+--   bucket whose only candles carry zero volume can publish
+--   `Decimal128::MIN` (≈ -1.7e24) instead of omitting the row. Both price
+--   subqueries therefore filter `close_usd > 0` — a negative close entering
+--   the ASOF join would carry forward over every later bucket until the
+--   next good close. Non-positive rows are treated as absent.
 -- Access:       no grant needed — `api_reader` has no <grants> block in
 --               users.d/services.xml, so its read_only profile already
 --               reads `prices.*` (verified on the box 2026-08-04).
@@ -123,13 +129,15 @@ FROM (
         SELECT 1 AS k, bucket, close_usd FROM {series_view}
         WHERE asset_kind = {leg_a_kind} AND asset_code = {leg_a_code} AND issuer_address = {leg_a_issuer}
           AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli($2)) - INTERVAL {carry} SECOND
-          AND bucket <  fromUnixTimestamp64Milli($3)
+          AND bucket <  least(fromUnixTimestamp64Milli($3), {price_bucket_fn}(now()))
+          AND close_usd > 0
     ) pa ON pa.k = l.k AND pa.bucket <= l.price_bucket
     ASOF LEFT JOIN (
         SELECT 1 AS k, bucket, close_usd FROM {series_view}
         WHERE asset_kind = {leg_b_kind} AND asset_code = {leg_b_code} AND issuer_address = {leg_b_issuer}
           AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli($2)) - INTERVAL {carry} SECOND
-          AND bucket <  fromUnixTimestamp64Milli($3)
+          AND bucket <  least(fromUnixTimestamp64Milli($3), {price_bucket_fn}(now()))
+          AND close_usd > 0
     ) pb ON pb.k = l.k AND pb.bucket <= l.price_bucket
 )
 GROUP BY bucket_ms

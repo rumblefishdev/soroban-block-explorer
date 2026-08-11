@@ -42,7 +42,9 @@
 --     (ADR 0053), so this query no longer reads them. After the page rows
 --     come back, the API issues ONE batched lookup against
 --     `prices.price_usd_series_1h` for the page's distinct leg identities
---     (last close within 48 h) and computes
+--     (last close with `close_usd > 0` within 48 h, in-progress hour
+--     excluded — non-positive rows are the prices-side 0171 sentinel and
+--     are treated as absent) and computes
 --     `tvl = reserve_a·close_a + reserve_b·close_b` per row, NULL unless
 --     BOTH legs price. `volume` / `fee_revenue` are detail-endpoint only and
 --     serialise as null on the list.
