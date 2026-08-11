@@ -10,6 +10,8 @@ import {
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 
+import { assetDisplayCode } from './assetType.js';
+
 function SupplyValue({
   supply,
   decimals,
@@ -151,10 +153,10 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
               <SupplyValue
                 supply={asset.total_supply}
                 decimals={asset.decimals}
-                // Soroban-native tokens have no classic `asset_code`; fall back
-                // to the on-chain SEP-41 `symbol` so supply reads e.g. "1.5 USDC"
-                // instead of an unlabelled number (task 0304).
-                code={asset.asset_code ?? asset.symbol}
+                // The shared display rule (0472) — so supply reads "1.5 USDC"
+                // for a classic asset, the SEP-41 symbol for a Soroban token
+                // (0304), and "XLM" for native, never an unlabelled number.
+                code={assetDisplayCode(asset)}
               />
             ),
           },
