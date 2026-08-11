@@ -123,9 +123,9 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     align: 'right',
     width: 150,
     cell: (row) => {
-      // Supply unit: classic asset_code, else the Soroban SEP-41 symbol so
-      // the amount reads e.g. "1.5 USDC" instead of bare (task 0304).
-      const unit = row.asset_code ?? row.symbol;
+      // Supply unit — same display rule as the token cell (0304 + 0472), so
+      // the amount reads "1.5 USDC" / "… XLM" instead of bare.
+      const unit = assetDisplayCode(row);
       return (
         <Stack sx={{ alignItems: 'flex-end' }}>
           <Typography variant="bodySmRegular">
