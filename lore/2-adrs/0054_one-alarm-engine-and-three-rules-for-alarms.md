@@ -45,6 +45,17 @@ history:
       indistinguishable from a planned pause (rule 4 now requires a slow
       backstop). Delivery-chain single-witness recorded; alternatives expanded
       with the natively-offered mechanisms deliberately not taken.
+  - date: 2026-08-10
+    status: proposed
+    who: karolkow
+    note: >
+      Rule 4 rewritten after operator review: the pause discriminator
+      (IF(received > 0, age, 0)) and its backstop are withdrawn as
+      overcomplication. Decision: one knowing page per planned pause is the
+      accepted cost; the bare ApproximateAgeOfOldestMessage threshold covers
+      stall, planned pause and forgotten-disable with one alarm and no
+      suppression logic. Measurements retained — they now set the bare
+      threshold (120 s, bimodal distribution, no false-page cost).
 ---
 
 # ADR 0054: One alarm engine for AWS signals, and three rules an alarm must satisfy
@@ -127,22 +138,15 @@ proves lossy.
 absence.** Paging twice for one fault is how alarms get muted. Every alarm
 states in a comment what covers its silence.
 
-**4. An alarm that cannot tell planned work from failure does not ship.**
-Maintenance is routine here. The discrimination is a precondition, not a later
-refinement — and the first place to look for it is a signal already present in
-the data, before reaching for a suppression mechanism. The worked example: a
-disabled event-source-mapping polls nothing, so `NumberOfMessagesReceived` is
-exactly 0 during a pause and high during a failure. That turned an undeployable
-alarm into a deployable one with no new signal and no new infrastructure.
-
-The discriminator has a known blind spot: it reads "nobody is polling" as
-"planned pause", and an ACCIDENTALLY disabled event source looks exactly the
-same — queue growing, nothing polling, both the stall alarm and the producer
-alarm silent, forever. So an alarm relying on such a discriminator ships with a
-**slow backstop**: a second alarm on the bare signal with a threshold measured
-in hours, which pages even during a planned pause. That is correct behaviour —
-a pause outliving the backstop threshold deserves a "did you forget me" ping,
-and it bounds the silent-failure window instead of leaving it open-ended.
+**4. A page caused by planned work the operator just performed is cheap;
+suppression logic is expensive. Do not build it.** Maintenance is routine
+here, and the operator who paused the indexer knows exactly why the backlog
+alarm paged — one knowing page per pause is the accepted cost. What that page
+buys is real: it also bounds the forgot-to-re-enable case, which any
+pause-aware discriminator hides by construction (an accidentally disabled
+event source is indistinguishable from a declared pause — queue growing,
+nothing polling, silence forever). Prefer the bare signal. Revisit only if
+knowing pages become genuinely noisy — with a count, not a feeling.
 
 ---
 
@@ -177,17 +181,26 @@ CloudWatch → Slack chain. Not adopted here; noted for 0237.
 
 **Making hard failures throw so Lambda `Errors` increments** (and the two
 existing `Errors`-based alarms start working untouched). Withdrawn as redundant:
-the stall alarm catches a dead consumer from the queue side and the structured
+the backlog-age alarm catches a dead consumer from the queue side and the structured
 write-failure filter catches the failure itself, while throwing would change
 SQS retry semantics for no additional coverage.
 
 **Composite alarm with an actions suppressor** — the AWS-native mechanism built
 exactly for maintenance suppression, and the original proposal in the umbrella
-task. Not taken because the suppressor needs a "maintenance is declared" alarm
-to read, and no such signal exists — it would have to be published by new
-scheduled infrastructure, whereas the `IF(received > 0, age, 0)` discriminator
-uses a signal already in the data. Revisit if pauses ever get a first-class
-declaration.
+task. Not taken: the suppressor needs a "maintenance is declared" alarm to
+read, and no such signal exists — it would have to be published by new
+scheduled infrastructure.
+
+**The `IF(received > 0, age, 0)` pause discriminator** — designed, measured
+(pause windows show `NumberOfMessagesReceived` exactly 0, failure windows
+53-54/5 min) and withdrawn 2026-08-10 as overcomplication. Two strikes: the
+operator judged one knowing page per pause cheaper than logic that must be
+understood, guarded and trusted later; and the discriminator manufactures its
+own blind spot (accidental disable reads as pause → unbounded silence), which
+then demands a second backstop alarm to patch — two alarms and a guard test
+where one bare threshold does the whole job. The measurements stay valid and
+now justify the bare alarm's threshold instead. Rule 4 was rewritten from
+"discrimination is a precondition" to its current form as a result.
 
 **Disabling alarm actions during the pause procedure** (`disable-alarm-actions`
 before, enable after). Rejected: it depends on human memory in both directions,
@@ -305,8 +318,9 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
 
 ## Open / Pending (gates proposed → accepted)
 
-- [ ] The ingestion-stall alarm verified by simulating a stall against the
-      deployed alarm, not by reading the config
+- [ ] The ingest-backlog-age alarm verified by simulating a stall against the
+      deployed alarm, not by reading the config — and one planned pause
+      confirmed to produce exactly one knowing page
 - [ ] The DLQ-growth alarms verified against an EMPTIED, idle queue — a test
       message into a drained DLQ must page, or the `DIFF`-over-metric-gaps
       caveat in rule 2 is real and `FILL` is required

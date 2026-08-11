@@ -57,6 +57,7 @@
   "galexieLagMinutes": 5,
   "processorErrorRateThreshold": 0.01,
   "galexieEphemeralUtilizationThreshold": 60,
+  "ingestionBacklogAgeSeconds": 120,
   "costAnomalyAlertThresholdUsd": 3,
   "chDomainName": "ch.sorobanscan.rumblefish.dev",
   "mtlsSecretNamePrefix": "soroban/production/mtls"

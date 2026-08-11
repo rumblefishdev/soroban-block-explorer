@@ -238,6 +238,58 @@ export class CloudWatchStack extends cdk.Stack {
     );
 
     // ---------------------
+    // Alarm 1a: ingest backlog age — the consumer-side counterpart to Alarm 1
+    //
+    // Alarm 1 watches the PRODUCER (are ledgers landing in S3). This one
+    // watches whether they are being CONSUMED: the age of the oldest queued
+    // doorbell. The 2026-07-29 outage (lore-0454) sat exactly in that gap —
+    // Galexie kept delivering, the indexer persisted nothing for 19 minutes,
+    // all seven alarms stayed green, and this metric tracked it perfectly
+    // (0 → 1421 s) with nothing reading it.
+    //
+    // Deliberately a BARE threshold — no pause/failure discrimination. A
+    // planned indexer pause (event-source-mapping disabled) WILL page once
+    // when the backlog crosses the threshold; the operator who just paused it
+    // knows exactly why, and that one knowing page also bounds the
+    // forgot-to-re-enable case, which a discriminator would hide forever. An
+    // `IF(received > 0, age, 0)` discriminator was designed, measured and
+    // withdrawn as overcomplication — see ADR 0054, "Considered and
+    // withdrawn".
+    //
+    // Threshold and window are measured, not guessed (732 h to 2026-08-04):
+    // the hourly max age had median 0 s / p90 1 s, and every hour above 60 s
+    // is the same set as above 600 s — known incidents and declared pauses,
+    // nothing in between. So any threshold in that band produces the same
+    // page count; 120 s buys the earliest detection (0454 replay: pages
+    // 09:43 vs 09:54 at 600 s, self-heal was 09:58). Three consecutive
+    // minutes so a single stray datapoint cannot page anyone.
+    //
+    // NOT_BREACHING: an empty idle queue publishes no datapoint, and silence
+    // of the producer is Alarm 1's job (BREACHING there) — paging both for
+    // one fault is how alarms get muted (ADR 0054 rule 3).
+    // ---------------------
+    withActions(
+      new cloudwatch.Alarm(this, 'IngestBacklogAgeAlarm', {
+        alarmName: `${config.envName}-ingestion-backlog-age`,
+        alarmDescription:
+          'Queued ledgers are not being consumed — oldest doorbell exceeded the age threshold. Real stall (lore-0454 shape) OR a paused/forgotten event-source mapping; if you just paused the indexer on purpose, this page is expected. Runbook: docs/deployment.md (pause procedure) + docs/runbooks/live-tail-cutover.md.',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateAgeOfOldestMessage',
+          dimensionsMap: { QueueName: ingestQueue.queueName },
+          period: cdk.Duration.minutes(1),
+          statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: config.ingestionBacklogAgeSeconds,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    // ---------------------
     // Alarm 1b: Galexie ephemeral storage utilization (%)
     // captive-core's BucketList (current ledger state) + catchup temp live on
     // the task's ephemeral disk. Baseline ~30%; >60% sustained = plan a disk
@@ -328,8 +380,8 @@ export class CloudWatchStack extends cdk.Stack {
         // or a dead input, which is the lag alarm's job (BREACHING there).
         // Beware what this alarm can NOT see: a total stall never reaches
         // Lambda `Errors` at all — measured 0 through every lag event of a
-        // 30-day window (0454). Absence coverage is the stall-alarm pair's
-        // job, not this alarm's.
+        // 30-day window (0454). Absence coverage is the backlog-age alarm's
+        // job (Alarm 1a), not this alarm's.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -406,8 +458,8 @@ export class CloudWatchStack extends cdk.Stack {
         // state, and the filter's defaultValue 0 only appears in periods
         // where the Lambda logged anything at all. Fully-missing data
         // means "no invocations", which is a planned pause or a stall —
-        // the stall-alarm pair owns that; BREACHING here would page on
-        // every planned pause.
+        // the backlog-age alarm (Alarm 1a) owns that; BREACHING here
+        // would page on every planned pause.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );

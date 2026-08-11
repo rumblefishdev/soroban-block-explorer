@@ -210,22 +210,20 @@ disabling the SQS event-source-mapping (`docs/deployment.md:202`). Three of the
 seven lag events above 10 minutes in the last 30 days were exactly that.
 
 So an absence-based alarm — queue age, or the co-tenant's `Invocations < 1`
-pattern — would have paged three times in one month for planned work. An alarm
-that cries wolf monthly gets muted, and a muted alarm is the failure this whole
-task exists to fix. **The system has no machine-readable notion of "planned
-pause", and any absence alarm is undeployable until it does.**
+pattern — pages during planned work. The first draft of this task treated that
+as a blocker ("any absence alarm is undeployable until pauses are
+machine-readable") and designed a discriminator: `IF(received > 0, age, 0)`,
+measured to cleanly separate pause (received = 0) from failure (received
+53-54/5 min).
 
-Candidate answers, cheapest first:
-
-- CloudWatch **composite alarm with an actions suppressor** — a native feature,
-  no code: the suppressor is a second alarm that is ALARM while maintenance is
-  declared.
-- Make the pause its own declaration: the event-source-mapping's `State` is
-  already the ground truth, so a small scheduled check can publish a "paused"
-  metric for the suppressor to read.
-
-Do not solve this by widening the threshold. That trades one silent hour for
-another and is exactly the plaster this task exists to avoid.
+**Resolved 2026-08-10 the other way — operator decision.** One knowing page
+per planned pause is cheap: the person who just paused the indexer knows why
+the page arrived. The discriminator was withdrawn as overcomplication with its
+own blind spot (an ACCIDENTALLY disabled event source reads as "pause" →
+unbounded silence, which then needs a second backstop alarm to patch). The
+bare `ApproximateAgeOfOldestMessage` threshold covers stall, planned pause and
+forgotten-disable with one alarm and no suppression logic. Full reasoning in
+ADR 0054 (rule 4 rewritten + "Considered and withdrawn").
 
 ## Defect 4 — a latched alarm is a mute alarm
 
@@ -254,10 +252,12 @@ be readable.
 
 ### 2. Invert the signals, with the pause constraint solved first
 
-- alarm on `ApproximateAgeOfOldestMessage` for `production-ledger-ingest`,
-  **paired** with a DLQ-growth alarm, **suppressed** during declared maintenance
-  — designed and measured (stall math `IF(received > 0, age, 0)` distinguishes
-  pause from failure without a suppressor), pending merge
+- **In code 2026-08-10** — bare-threshold alarm on
+  `ApproximateAgeOfOldestMessage` for the ingest queue (120 s × 3 min, from
+  the measured bimodal distribution); the `IF(received > 0, age, 0)`
+  discriminator withdrawn per rewritten ADR 0054 rule 4 — one knowing page
+  per planned pause is the accepted cost. DLQ-growth pair still pending
+  (R3)
 - **Done 2026-08-06** — every alarm's `treatMissingData` carries a one-line
   justification comment; the write-failure threshold rewritten in doorbell
   units
@@ -318,9 +318,13 @@ month is unanswerable by construction.
 ## Acceptance Criteria
 
 - [x] Read-only AWS principal exists and is usable from the assistant workspace
-- [ ] Planned pauses are machine-readable, so an absence alarm can tell
-      maintenance from failure — verified by pausing and confirming no page
-- [ ] An alarm fires on ingestion stall — verified by simulating a stall
+- [x] The planned-pause constraint has a stated answer — resolved 2026-08-10
+      the opposite way from the first draft: pauses are NOT machine-readable;
+      one knowing page per pause is the accepted design (ADR 0054 rule 4).
+      Verified at deploy by pausing and confirming exactly one page
+- [ ] An alarm fires on ingestion stall — in code
+      (`production-ingestion-backlog-age`); AC checks off after a simulated
+      stall against the deployed alarm
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
 - [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit

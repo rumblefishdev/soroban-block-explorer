@@ -316,6 +316,20 @@ export interface EnvironmentConfig {
   /** Error rate threshold (>0.0–1.0) for the Ledger Processor error-rate alarm. */
   readonly processorErrorRateThreshold: number;
   /**
+   * Age (seconds) of the oldest queued ledger doorbell above which the
+   * ingest-backlog alarm pages. A bare threshold on purpose: a planned
+   * indexer pause pages once, knowingly — see the `IngestBacklogAgeAlarm`
+   * comment and ADR 0054 for why the pause/failure discriminator was
+   * withdrawn.
+   *
+   * Derived from the measured distribution (732 h to 2026-08-04): hourly max
+   * age is bimodal — median 0 s, p90 1 s, and every hour above 60 s is the
+   * same set as above 600 s (known incidents + declared pauses). Any value in
+   * that band costs the same false-page count; 120 s buys the earliest
+   * detection (the 2026-07-29 outage pages 11 minutes earlier than at 600 s).
+   */
+  readonly ingestionBacklogAgeSeconds: number;
+  /**
    * Ephemeral-storage utilization % threshold for the Galexie captive-core
    * disk alarm. Baseline is ~30% (captive-core's BucketList = current ledger
    * state); 60 gives long lead time to plan a disk bump before a merge/catchup
@@ -471,6 +485,17 @@ export function validateConfig(config: EnvironmentConfig): void {
   ) {
     errors.push(
       `costAnomalyAlertThresholdUsd must be > 0 and <= 1000 USD, got: ${config.costAnomalyAlertThresholdUsd}`
+    );
+  }
+  // Upper bound guards against a threshold so high the alarm can never fire:
+  // the worst stall on record peaked at 1421 s.
+  if (
+    !Number.isInteger(config.ingestionBacklogAgeSeconds) ||
+    config.ingestionBacklogAgeSeconds < 60 ||
+    config.ingestionBacklogAgeSeconds > 1200
+  ) {
+    errors.push(
+      `ingestionBacklogAgeSeconds must be an integer between 60 and 1200, got: ${config.ingestionBacklogAgeSeconds}`
     );
   }
   if (
