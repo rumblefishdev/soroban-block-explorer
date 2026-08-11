@@ -522,25 +522,31 @@ fn extract_op_details(
                 "setFlags": op.set_flags,
             }),
         ),
-        OperationBody::LiquidityPoolDeposit(op) => (
-            OperationType::LiquidityPoolDeposit,
-            json!({
+        OperationBody::LiquidityPoolDeposit(op) => {
+            let mut details = json!({
                 "liquidityPoolId": hex::encode(op.liquidity_pool_id.0.as_slice()),
                 "maxAmountA": op.max_amount_a,
                 "maxAmountB": op.max_amount_b,
                 "minPrice": format_price(&op.min_price),
                 "maxPrice": format_price(&op.max_price),
-            }),
-        ),
-        OperationBody::LiquidityPoolWithdraw(op) => (
-            OperationType::LiquidityPoolWithdraw,
-            json!({
+            });
+            if let Some(delta) = pool_delta_details(op_changes, &op.liquidity_pool_id) {
+                details["poolDelta"] = delta;
+            }
+            (OperationType::LiquidityPoolDeposit, details)
+        }
+        OperationBody::LiquidityPoolWithdraw(op) => {
+            let mut details = json!({
                 "liquidityPoolId": hex::encode(op.liquidity_pool_id.0.as_slice()),
                 "amount": op.amount,
                 "minAmountA": op.min_amount_a,
                 "minAmountB": op.min_amount_b,
-            }),
-        ),
+            });
+            if let Some(delta) = pool_delta_details(op_changes, &op.liquidity_pool_id) {
+                details["poolDelta"] = delta;
+            }
+            (OperationType::LiquidityPoolWithdraw, details)
+        }
         OperationBody::InvokeHostFunction(op) => {
             let details = extract_invoke_host_function(op, return_value);
             (OperationType::InvokeHostFunction, details)
@@ -700,6 +706,82 @@ fn cb_details(op_changes: &[LedgerEntryChange], balance_id: &ClaimableBalanceId)
     d
 }
 
+/// The constant-product body of `entry`, when it is the pool `pool_id`.
+/// Matching on the id (not the first pool entry) mirrors `lp_pool_assets`.
+fn pool_constant_product<'a>(
+    entry: &'a LedgerEntry,
+    pool_id: &PoolId,
+) -> Option<&'a LiquidityPoolEntryConstantProduct> {
+    match &entry.data {
+        LedgerEntryData::LiquidityPool(lp) if &lp.liquidity_pool_id == pool_id => {
+            let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
+            Some(cp)
+        }
+        _ => None,
+    }
+}
+
+/// What an LP deposit / withdraw actually moved, read from the operation's OWN
+/// ledger changes (task 0279).
+///
+/// The body carries only the caller's bounds — `maxAmountA`/`maxAmountB` on a
+/// deposit, `amount` + `minAmountA`/`minAmountB` on a withdrawal — never what
+/// executed. The pool entry's before/after images are the only record of that,
+/// which is why these ops have no claim atoms to read instead. Same contract as
+/// [`cb_details`]: `None` when the meta lacks the entry, never guessed.
+///
+/// `amountA` / `amountB` are AFTER MINUS BEFORE, i.e. **signed from the pool's
+/// side** — a deposit reads `+/+`, a withdrawal `-/-` — which is the sign the
+/// claim-atom consumers already use for trades, so one downstream shape covers
+/// all three event kinds (`lp_operation_amounts`). The boundary cases fall out
+/// of the same subtraction: a pool created by its first deposit has no `state`
+/// pre-image (before = 0) and one emptied by its last withdrawal is `Removed`
+/// with no post-image (after = 0).
+///
+/// Coverage follows [`op_meta_changes`]: V0–V2 metas yield no changes, so this
+/// is silent on pre-Protocol-20 ledgers — outside the ingest window, which
+/// starts at the Soroban go-live.
+fn pool_delta_details(op_changes: &[LedgerEntryChange], pool_id: &PoolId) -> Option<Value> {
+    let mut before = None;
+    let mut after = None;
+    let mut removed = false;
+    for change in op_changes {
+        match change {
+            LedgerEntryChange::State(e) => before = pool_constant_product(e, pool_id).or(before),
+            LedgerEntryChange::Created(e)
+            | LedgerEntryChange::Updated(e)
+            | LedgerEntryChange::Restored(e) => after = pool_constant_product(e, pool_id).or(after),
+            LedgerEntryChange::Removed(LedgerKey::LiquidityPool(k)) => {
+                removed |= &k.liquidity_pool_id == pool_id;
+            }
+            LedgerEntryChange::Removed(_) => {}
+        }
+    }
+
+    // Either image identifies the pool's two assets; they never change.
+    let params = &after.or(before)?.params;
+    let (before_a, before_b) = before.map_or((0, 0), |cp| (cp.reserve_a, cp.reserve_b));
+    let (after_a, after_b) = match (removed, after) {
+        (true, _) => (0, 0),
+        (false, Some(cp)) => (cp.reserve_a, cp.reserve_b),
+        // A pre-image with nothing after it means this op did not move the
+        // pool (a `state`-only read). Nothing to report.
+        (false, None) => return None,
+    };
+
+    let (delta_a, delta_b) = (after_a - before_a, after_b - before_b);
+    if delta_a == 0 && delta_b == 0 {
+        return None;
+    }
+    Some(json!({
+        "poolId": hex::encode(pool_id.0.as_slice()),
+        "assetA": format_asset(&params.asset_a),
+        "amountA": delta_a,
+        "assetB": format_asset(&params.asset_b),
+        "amountB": delta_b,
+    }))
+}
+
 fn format_contract_executable(exec: &ContractExecutable) -> Value {
     match exec {
         ContractExecutable::Wasm(hash) => json!({ "type": "wasm", "hash": hex::encode(hash.0) }),
@@ -710,6 +792,90 @@ fn format_contract_executable(exec: &ContractExecutable) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pool_entry(reserve_a: i64, reserve_b: i64) -> LedgerEntry {
+        LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::LiquidityPool(LiquidityPoolEntry {
+                liquidity_pool_id: PoolId(Hash([0x44; 32])),
+                body: LiquidityPoolEntryBody::LiquidityPoolConstantProduct(
+                    LiquidityPoolEntryConstantProduct {
+                        params: LiquidityPoolConstantProductParameters {
+                            asset_a: Asset::Native,
+                            asset_b: Asset::CreditAlphanum4(AlphaNum4 {
+                                asset_code: AssetCode4(*b"USDC"),
+                                issuer: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+                                    [0x05; 32],
+                                ))),
+                            }),
+                            fee: 30,
+                        },
+                        reserve_a,
+                        reserve_b,
+                        total_pool_shares: 500,
+                        pool_shares_trust_line_count: 3,
+                    },
+                ),
+            }),
+            ext: LedgerEntryExt::V0,
+        }
+    }
+
+    /// A deposit adds to both reserves and a withdrawal takes from both, so the
+    /// after-minus-before deltas must come out `+/+` and `-/-` — the sign
+    /// convention the trade path already uses.
+    #[test]
+    fn pool_delta_signs_deposits_positive_and_withdrawals_negative() {
+        let pool_id = PoolId(Hash([0x44; 32]));
+        let deposit = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Updated(pool_entry(1_500, 3_000)),
+        ];
+        let delta = pool_delta_details(&deposit, &pool_id).expect("deposit delta");
+        assert_eq!(delta["amountA"], json!(500));
+        assert_eq!(delta["amountB"], json!(1_000));
+        assert_eq!(delta["assetA"], json!("native"));
+
+        let withdraw = vec![
+            LedgerEntryChange::State(pool_entry(1_500, 3_000)),
+            LedgerEntryChange::Updated(pool_entry(1_000, 2_000)),
+        ];
+        let delta = pool_delta_details(&withdraw, &pool_id).expect("withdraw delta");
+        assert_eq!(delta["amountA"], json!(-500));
+        assert_eq!(delta["amountB"], json!(-1_000));
+    }
+
+    /// The two boundaries where an image is missing: a pool created by its
+    /// first deposit has no pre-image, and one emptied by its last withdrawal
+    /// is `Removed` with no post-image.
+    #[test]
+    fn pool_delta_handles_pool_creation_and_removal() {
+        let pool_id = PoolId(Hash([0x44; 32]));
+        let created = vec![LedgerEntryChange::Created(pool_entry(1_000, 2_000))];
+        let delta = pool_delta_details(&created, &pool_id).expect("created delta");
+        assert_eq!(delta["amountA"], json!(1_000));
+        assert_eq!(delta["amountB"], json!(2_000));
+
+        let emptied = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Removed(LedgerKey::LiquidityPool(LedgerKeyLiquidityPool {
+                liquidity_pool_id: pool_id.clone(),
+            })),
+        ];
+        let delta = pool_delta_details(&emptied, &pool_id).expect("removed delta");
+        assert_eq!(delta["amountA"], json!(-1_000));
+        assert_eq!(delta["amountB"], json!(-2_000));
+    }
+
+    /// Another pool's entry in the same op must not be read as this pool's.
+    #[test]
+    fn pool_delta_ignores_a_different_pool() {
+        let changes = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Updated(pool_entry(1_500, 3_000)),
+        ];
+        assert!(pool_delta_details(&changes, &PoolId(Hash([0x99; 32]))).is_none());
+    }
 
     #[test]
     fn extract_payment_operation() {
