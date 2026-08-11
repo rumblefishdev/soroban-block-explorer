@@ -22,13 +22,19 @@ export function contractTypeMeta(typeName?: string | null): ContractTypeMeta {
   return meta ?? { label: typeName ?? 'Unknown', color: 'neutral' };
 }
 
-/** Type-filter chips for the contracts list. Values match `filter[type]`. */
+/**
+ * Type-filter chips for the contracts list. Values match `filter[type]` —
+ * UI labels only, the API params are untouched. The `token` bucket is
+ * labelled `SAC` (task 0472): on prod every type-0 contract IS a SAC
+ * (cross-tab 3,946/3,946) and its rows now carry `SAC · CODE` chips, so a
+ * `Token` filter label would name a category the table never shows.
+ */
 export const CONTRACT_TYPE_FILTERS: readonly {
   label: string;
   value: string;
 }[] = [
   { label: 'All types', value: '' },
-  { label: 'Token', value: 'token' },
+  { label: 'SAC', value: 'token' },
   { label: 'NFT', value: 'nft' },
   { label: 'Fungible', value: 'fungible' },
   { label: 'Other', value: 'other' },
