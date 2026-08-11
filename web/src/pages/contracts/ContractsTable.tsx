@@ -1,4 +1,4 @@
-import { Stack, Typography } from '@mui/material';
+import { Tooltip, Typography } from '@mui/material';
 import type { ContractListItem } from '@rumblefish/api-types';
 import {
   Chip,
@@ -15,7 +15,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import { routes } from '../../router/routes.js';
 
 import { contractTypeMeta } from './contractType.js';
-import { sacAssetCode, sacAssetId } from './sacAsset.js';
+import { sacAssetCode, sacAssetId, sacAssetLabel } from './sacAsset.js';
 
 const columns: ExplorerTableColumn<ContractListItem>[] = [
   {
@@ -35,30 +35,36 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     header: 'Type',
     width: 120,
     cell: (row) => {
+      // Task 0441: a SAC names the asset it mirrors and links to it; the
+      // rare unresolvable facet degrades to the bare badge. The `Token`
+      // type chip is dropped on SAC rows (task 0472) — prod cross-tab shows
+      // Token ⟺ is_sac exactly (3,946/3,946), so the pair carried zero
+      // information. The issuer rides in the tooltip/aria-label: the bare
+      // code is ambiguous (many issuers of e.g. "USDC" on prod).
+      if (row.is_sac) {
+        return row.sac_asset ? (
+          <Tooltip title={sacAssetLabel(row.sac_asset)}>
+            <RouterLink
+              to={routes.asset(sacAssetId(row.sac_asset))}
+              style={{ textDecoration: 'none' }}
+            >
+              <Chip
+                size="sm"
+                color="brown"
+                clickable
+                label={`SAC · ${sacAssetCode(row.sac_asset)}`}
+                aria-label={`SAC · ${sacAssetCode(
+                  row.sac_asset
+                )} — ${sacAssetLabel(row.sac_asset)}`}
+              />
+            </RouterLink>
+          </Tooltip>
+        ) : (
+          <Chip size="sm" color="brown" label="SAC" />
+        );
+      }
       const meta = contractTypeMeta(row.contract_type_name);
-      return (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Chip size="sm" color={meta.color} label={meta.label} />
-          {/* Task 0441: a SAC names the asset it mirrors and links to it;
-              the rare unresolvable facet degrades to the bare badge. */}
-          {row.is_sac &&
-            (row.sac_asset ? (
-              <RouterLink
-                to={routes.asset(sacAssetId(row.sac_asset))}
-                style={{ textDecoration: 'none' }}
-              >
-                <Chip
-                  size="sm"
-                  color="brown"
-                  clickable
-                  label={`SAC · ${sacAssetCode(row.sac_asset)}`}
-                />
-              </RouterLink>
-            ) : (
-              <Chip size="sm" color="brown" label="SAC" />
-            ))}
-        </Stack>
-      );
+      return <Chip size="sm" color={meta.color} label={meta.label} />;
     },
   },
   {
