@@ -16,7 +16,7 @@ import {
 import { routes } from '../../router/routes.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetTypeMeta, SAC_TAG } from './assetType.js';
+import { assetDisplayCode, assetTypeMeta, SAC_TAG } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
@@ -25,9 +25,10 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     width: 240,
     cell: (row) => {
       const typeMeta = assetTypeMeta(row.asset_type_name);
-      // Soroban-native tokens have no classic asset_code; fall back to the
-      // on-chain SEP-41 symbol as the token label (task 0304).
-      const label = row.asset_code ?? row.symbol;
+      // Native XLM and Soroban tokens carry no classic asset_code — the shared
+      // rule names them (`XLM` / SEP-41 symbol, tasks 0304 + 0472). The avatar
+      // takes the same label, so its letter matches the name beside it.
+      const label = assetDisplayCode(row);
       return (
         <Stack
           direction="row"
@@ -35,7 +36,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
+          <AssetIcon code={label} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
               {label ? (

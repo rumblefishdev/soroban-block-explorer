@@ -27,6 +27,25 @@ export function assetTypeMeta(typeName?: string | null): AssetTypeMeta {
 }
 
 /**
+ * The label an asset is shown under — title, breadcrumb, table cell, avatar
+ * letter. Native XLM carries `asset_code = null` (it has no code on the
+ * ledger), so it needs the same rule the pool legs already use
+ * (`assetLegLabel`): the type, not the code, names it. Soroban tokens have no
+ * classic code either and fall back to the on-chain SEP-41 symbol (task 0304).
+ *
+ * Returns `null` when nothing names the asset, so each caller picks its own
+ * empty rendering (a dash in a table, a generic title on a page).
+ */
+export function assetDisplayCode(asset: {
+  asset_type_name?: string | null;
+  asset_code?: string | null;
+  symbol?: string | null;
+}): string | null {
+  if (asset.asset_type_name === 'native') return 'XLM';
+  return asset.asset_code ?? asset.symbol ?? null;
+}
+
+/**
  * The "SAC" property tag (ADR 0051), rendered IN ADDITION to the type badge on
  * an asset that carries a DEPLOYED Stellar Asset Contract facet (`sac_deployed`).
  * A reserved (un-deployed) SAC address gets no tag — it is not a live contract.

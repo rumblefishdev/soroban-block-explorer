@@ -34,7 +34,10 @@ function makeAsset(
 ): AssetDetailResponse {
   return {
     id: 'native',
-    asset_code: 'XLM',
+    // Native carries NO asset_code on the ledger — the API returns null, and
+    // the display rule (`assetDisplayCode`) is what names it XLM (0472). The
+    // fixture used to hand it 'XLM', which hid the real gap from the tests.
+    asset_code: null,
     asset_type: 0,
     asset_type_name: 'native',
     decimals: 7,
@@ -78,8 +81,10 @@ afterEach(() => {
 });
 
 describe('AssetDetailPage', () => {
-  it('renders the heading and the "Native" badge for native XLM', () => {
-    mockOk(makeAsset({ asset_code: 'XLM', asset_type_name: 'native' }));
+  it('names native XLM by its type, not its (absent) code — title and avatar', () => {
+    // The real /assets/native payload: asset_type_name 'native', no code and
+    // no symbol. Before 0472 this rendered the title "Asset" and a "?" avatar.
+    mockOk(makeAsset({ asset_type_name: 'native' }));
 
     renderWithProviders(<AssetDetailPage />, {
       initialEntries: ['/assets/native'],
@@ -89,7 +94,31 @@ describe('AssetDetailPage', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'XLM' })
     ).toBeInTheDocument();
+    // The letter avatar takes the same label, so it reads "X", never "?".
+    expect(screen.getByText('X')).toBeInTheDocument();
+    expect(screen.queryByText('?')).toBeNull();
     expect(screen.getByText('Native')).toBeInTheDocument();
+  });
+
+  it('falls back to the SEP-41 symbol for a Soroban token with no code (0304)', () => {
+    mockOk(
+      makeAsset({
+        id: SAC_CONTRACT,
+        asset_type: 3,
+        asset_type_name: 'soroban',
+        symbol: 'SMOL',
+      })
+    );
+
+    renderWithProviders(<AssetDetailPage />, {
+      initialEntries: [`/assets/${SAC_CONTRACT}`],
+      routePath: '/assets/:id',
+    });
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'SMOL' })
+    ).toBeInTheDocument();
+    expect(screen.getByText('S')).toBeInTheDocument();
   });
 
   it.each([

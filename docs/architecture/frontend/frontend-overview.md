@@ -494,6 +494,14 @@ List of all known assets (native XLM, classic credit assets, SACs, and Soroban-n
 
 - Asset table - asset code, issuer / contract ID, type badge (+ a separate "SAC"
   tag when the asset carries a deployed SAC), total supply, holder count
+- **What names an asset** (`assetDisplayCode`, task 0472). Only classic credit
+  assets carry an `asset_code`; native XLM and Soroban tokens return `null` and
+  need the rest of the row to name them. One shared rule serves the list cell,
+  the detail title/breadcrumb and the letter avatar: `asset_type_name === 'native'`
+  → `XLM`, else `asset_code`, else the on-chain SEP-41 `symbol` (task 0304), else
+  nothing (a dash in the table, "Asset" as a page title). It mirrors the pool-leg
+  rule (`assetLegLabel`); the avatar takes the SAME label, so its letter always
+  matches the name beside it instead of falling back to `?`
 - Filters - type chips (All types, Classic, Soroban) + a separate "Has SAC"
   property toggle, asset code search
 - Cursor-based pagination controls
@@ -558,14 +566,15 @@ consistent with the "tolerate partial availability" expectation above.
 Contract details and interface.
 
 - Contract summary - contract ID (full, copyable), deployer account (link), deployed at
-  ledger (link), WASM hash, SAC badge if applicable. A SAC additionally shows a
-  "Mirrors asset" row (task 0441) — the mirrored classic asset's code linked to
-  its asset page plus the issuer account (native XLM renders as `XLM` →
-  `/assets/native`); on the contracts LIST the same data turns the `SAC` chip
-  into a linked `SAC · CODE` chip. Both come from the `sac_asset` API field.
-  A non-SAC contract renders no SAC chip and no asset row at all; a SAC whose
-  `sac_asset` is `null` (unresolvable facet) keeps the bare, unlinked `SAC`
-  badge
+  ledger (link), WASM hash, SAC badge if applicable. A SAC additionally shows the
+  asset it mirrors (tasks 0441 + 0472) as two SEPARATE labelled cells in one row —
+  `Asset` (code, linked to its asset page) and `Issuer` (account, linked) — the same
+  two-cell shape as the `Deployer` / `Deployed at ledger` row above it. Native XLM
+  renders the `Asset` cell only (`XLM` → `/assets/native`); it has no issuer. On the
+  contracts LIST the same data turns the `SAC` chip into a linked `SAC · CODE` chip.
+  Both come from the `sac_asset` API field. A non-SAC contract renders no SAC chip
+  and no asset row at all; a SAC whose `sac_asset` is `null` (unresolvable facet)
+  keeps the bare, unlinked `SAC` badge
 - Contract interface - list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state

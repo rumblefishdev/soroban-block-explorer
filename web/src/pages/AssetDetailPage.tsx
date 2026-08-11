@@ -17,7 +17,11 @@ import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta, SAC_TAG } from './assets/assetType.js';
+import {
+  assetDisplayCode,
+  assetTypeMeta,
+  SAC_TAG,
+} from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -43,9 +47,9 @@ export default function AssetDetailPage() {
   }
 
   const data = asset.data;
-  // Soroban-native tokens have no classic asset_code; fall back to the on-chain
-  // SEP-41 symbol for the title + breadcrumb before the generic label (0304).
-  const code = data?.asset_code ?? data?.symbol ?? 'Asset';
+  // Native XLM and Soroban tokens both lack a classic asset_code — the shared
+  // rule names them (`XLM` / SEP-41 symbol) before the generic label (0472).
+  const code = (data ? assetDisplayCode(data) : null) ?? 'Asset';
   const typeMeta = data ? assetTypeMeta(data.asset_type_name) : null;
 
   let summary: ReactNode = null;
@@ -72,13 +76,7 @@ export default function AssetDetailPage() {
           items={[{ label: 'Assets', to: routes.assets }, { label: code }]}
         />
         <Stack direction="row" spacing={1.5} alignItems="center">
-          {data && (
-            <AssetIcon
-              code={data.asset_code}
-              iconUrl={data.icon_url}
-              size={40}
-            />
-          )}
+          {data && <AssetIcon code={code} iconUrl={data.icon_url} size={40} />}
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
               <Typography variant="heading5SemiBold" component="h1">
