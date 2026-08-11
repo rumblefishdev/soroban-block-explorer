@@ -211,7 +211,7 @@ just that the whole cost is 8 MB.
       covered by a vitest case
 - [x] Native (XLM) SAC handled — detected by `asset_type = 0` (the prod facet
       row is `('', 0)`, so empty-issuer is NOT the signal); renders `SAC · XLM`
-      → `/asset/native`; covered by a vitest case
+      → `/assets/native`; covered by a vitest case
 - [x] Frontend links the asset; StrKey of the contract stays canonical —
       linked chip `SAC · CODE` on the list, "Mirrors asset" row (code +
       issuer) on the detail; 4 vitest cases in `ContractsTable.test.tsx`

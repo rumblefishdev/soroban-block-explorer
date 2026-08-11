@@ -24,7 +24,8 @@
 -- ADR 0044 §:   §4.2/§4.3 (Replacing partitioned), §4.5 (Replacing state),
 --               §5.2 (closed_at via ledgers JOIN).
 -- Notes:
---   • Two statements, mirroring PG E11.
+--   • Three statements: A + B mirror PG E11; C is the SAC reverse lookup
+--     (task 0441), issued only for SAC contracts.
 --   • Statement A: same shape as PG, minus the legacy `metadata JSONB`
 --     (gone post-ADR-0042/0156) and the typed `name` column — `sc.name` has no
 --     writer since task 0297 and is not surfaced by contract detail. On-chain
