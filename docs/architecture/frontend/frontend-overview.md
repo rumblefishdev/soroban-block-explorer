@@ -571,10 +571,13 @@ Contract details and interface.
   `Asset` (code, linked to its asset page) and `Issuer` (account, linked) — the same
   two-cell shape as the `Deployer` / `Deployed at ledger` row above it. Native XLM
   renders the `Asset` cell only (`XLM` → `/assets/native`); it has no issuer. On the
-  contracts LIST the same data turns the `SAC` chip into a linked `SAC · CODE` chip.
-  Both come from the `sac_asset` API field. A non-SAC contract renders no SAC chip
-  and no asset row at all; a SAC whose `sac_asset` is `null` (unresolvable facet)
-  keeps the bare, unlinked `SAC` badge
+  contracts LIST the same data renders a linked `SAC · CODE` chip that REPLACES the
+  `Token` type chip on SAC rows (task 0472 — on prod Token ⟺ SAC exactly, so the
+  pair was redundant), with the issuer in a tooltip/aria-label; the type-filter
+  chip for that bucket is labelled `SAC` (UI label only — the API still takes
+  `filter[type]=token`). Both come from the `sac_asset` API field. A non-SAC
+  contract renders its plain type chip and no asset row; a SAC whose `sac_asset`
+  is `null` (unresolvable facet) keeps the bare, unlinked `SAC` badge
 - Contract interface - list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
