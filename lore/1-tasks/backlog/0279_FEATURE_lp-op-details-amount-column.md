@@ -8,7 +8,7 @@ related_tasks: ['0274', '0247', '0199', '0261', '0365', '0393', '0377']
 tags:
   [
     phase-future,
-    effort-medium,
+    effort-large,
     priority-medium,
     layer-indexer,
     layer-api,
@@ -68,6 +68,27 @@ history:
       nearest owner. Unverified against mainnet; `operation.rs` is shared with
       the indexer, so a `details` key may also change persisted JSON. 0377
       deleted the permanently-empty `Received` row rather than reword it.
+  - date: '2026-08-11'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Sized against prod (full history to ledger 63,827,054) — see "Measured
+      on prod". Three corrections: (1) the "single-digit MB" size claim was
+      off by three orders of magnitude — the table is ~860M rows / ~18 GB
+      compressed (still fine as the ADR-0029 exception, but the real number
+      must carry the argument); (2) the proposed ORDER BY silently loses
+      amounts when one op takes the same pool twice (CAP-38 interleaved
+      matching) — rows must be pre-summed per (op, pool, asset) before
+      insert, and the amount should be SIGNED from the pool's perspective so
+      one shape covers trade/deposit/withdraw; (3) offers (types 3/4/12)
+      have ZERO pool crossings in all history AND in 82M ops from the last
+      ~7 weeks, corroborated by a Horizon sample (19/19 recent LP trades are
+      path payments) — keep the extractor generic, but tests/validation
+      should target path payments. Backfill re-scoped to a TARGETED re-parse:
+      only 13.15M distinct pool-active ledgers (20.6% of history), est.
+      ~2-4h wall vs ~8-10h full sweep (0359 measured). Bumped effort-medium
+      to effort-large per the 0199 triage (needs-backfill). Ownership overlap
+      with 0199 Phase B still unresolved.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
@@ -184,8 +205,38 @@ built, the row is written fresh with a real value.
 
 Path B reads each op's own non-collapsed `LedgerEntryChanges` at ingest →
 100% per-op, no collision, no hot-path S3. Needs a narrow side table plus an
-ADR-0029 clarification: LP-only amounts are single-digit MB, not the multi-TB
-corpus ADR 0029 rejected.
+ADR-0029 clarification: LP-only amounts are ~18 GB compressed (~2.6% of the
+DB — see "Measured on prod"), not the multi-TB corpus ADR 0029 rejected.
+(An earlier revision said "single-digit MB"; that was wrong by three orders
+of magnitude and is corrected by the 2026-08-11 measurement.)
+
+## Measured on prod — 2026-08-11 (full history to ledger 63,827,054)
+
+Pool crossings per op type (`sum(length(pool_ids))` over
+`operations_appearances`, fold-count upper bound in parens):
+
+| op type                          |    ops |        crossings |
+| -------------------------------- | -----: | ---------------: |
+| path_payment_strict_send (13)    | 113.2M |  265.6M (280.0M) |
+| path_payment_strict_receive (2)  |  53.7M |  157.8M (158.0M) |
+| manage/passive offers (3, 4, 12) |      — |      **0, ever** |
+| LP deposit (22) / withdraw (23)  |  1.21M | 1.21M (no atoms) |
+
+- **Rows**: trades 423.4-438.0M crossings x 2 asset legs + d/w 1.21M x 2
+  ≈ **~850-880M rows**.
+- **Bytes/row**: the identical `(pool_id, ledger, tx)` prefix costs
+  **11.68 B/row** compressed on `operation_pools` (system.parts, 619M rows).
+  Adding `application_order` (~0.5 B), `asset_id` (2 distinct per pool run,
+  ~1 B) and a high-entropy `amount` Int64 (~8 B) → **~21 B/row**, ~66 B raw.
+- **Size**: ~860M x 21 B ≈ **17-19 GB compressed** (~57 GB uncompressed);
+  DB is ~690 GB → **~2.6%**.
+- **Backfill scope**: `uniq(ledger_sequence)` over `operation_pools` =
+  **13,145,401 ledgers** (20.6% of history) — the re-parse can skip 4 of 5
+  ledgers.
+- Offers cross pools **never**: zero in all history, zero in 82M ops over
+  the last ~7 weeks, and 19/19 recent Horizon `trade_type=liquidity_pool`
+  trades are path payments. Multi-hop is the norm: strict-send averages
+  2.35 pools per op.
 
 ## Implementation
 
@@ -193,10 +244,22 @@ corpus ADR 0029 rejected.
 transaction_id, application_order, asset_id, amount)`, ReplacingMergeTree,
    `ORDER BY (pool_id, ledger_sequence, transaction_id, application_order,
 asset_id)`. Pool-leading so the pool page seeks rather than scans, and
-   partitioned like its siblings.
+   partitioned like its siblings. Two constraints the first draft missed:
+   - **Pre-sum atoms per (op, pool, asset) before insert.** One op can take
+     the same pool multiple times (CAP-38 interleaved matching); raw
+     per-atom rows share the full ORDER BY key and the RMT would silently
+     collapse distinct fills. Summing per op is deterministic on replay
+     (live/backfill dedup stays correct) and is all the Amount column needs.
+   - **`amount` is SIGNED, from the pool's perspective**: trade = one leg
+     `+` (asset entering the pool) one leg `-` (leaving); deposit = both
+     `+`; withdraw = both `-`. One shape covers all three event kinds and
+     the sign disambiguates direction without an extra column.
 2. **Trades** — emit rows from the atoms `gross_volume_a_by_pool` already
    walks, instead of only summing them. Both legs: the function reads
-   `amountA` only, so the asset-B side needs adding.
+   `amountA` only, so the asset-B side needs adding. Keep the extractor
+   covering offers (free via `claim_atoms`), but validation effort goes to
+   path payments — offers have zero pool crossings ever (see "Measured on
+   prod").
 3. **Deposits and withdrawals** — **not** covered by step 2. The comment on
    `gross_volume_a_by_pool` says it: LP deposits and withdrawals carry no
    claim atoms. The op body holds only the caller's `max`/`min` bounds, so the
@@ -204,13 +267,33 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
    genuinely new extraction and the bulk of the remaining work.
 4. **Backfill** — historical rows; reuse the 0266 backfill worker, which
    already shares `gross_volume_a_by_pool` with live ingest so both paths stay
-   identical.
+   identical. Re-scoped 2026-08-11 to a **targeted** re-parse:
+   - Feed the runner `SELECT DISTINCT ledger_sequence FROM operation_pools`
+     (13.15M ledgers, 20.6% of history) instead of a full sweep — est.
+     **~2-4h wall** on the box (0359 full-history baseline: ~8-10h with
+     s5cmd fan-out; scales with fetch volume).
+   - **Pre-create the table on prod before deploying the parser** (the
+     `accounts_recent` 500 lesson) — live ingest starts writing the moment
+     the indexer restarts.
+   - Purely additive: no existing table touched, no EXCHANGE TABLES, no
+     `repair-tier1` obligation, indexer keeps running throughout; rollback
+     is `DROP TABLE`.
+   - Built-in verification: `sum(amount)` per (pool, ledger) over the
+     A-side legs must equal `liquidity_pool_snapshots.gross_volume_a`
+     (both derive from the same atoms) — one SQL comparison closes the
+     backfill gate. Per-row spot checks can use the E3 heavy-fields
+     response as a second in-house oracle besides Horizon.
 5. **API** — LP-tx rows gain the amounts. No `?expand=` parameter: that was a
    Path A artefact, and with the data in the DB the amounts are just part of
    the row.
 6. **Frontend** — un-hide the "Amount" column in `PoolTransactions.tsx` and
    render the deposit / withdraw / trade shapes.
 7. **ADR 0029** — record the LP-only exception with the measured size.
+
+Adjacent cleanup, deliberately NOT in scope: once `lp_operation_amounts`
+exists, `operation_pools` becomes a value-less projection of the same key
+prefix — a retirement candidate, but only after the read path has migrated
+and soaked. Note it, don't do it here.
 
 ## Acceptance criteria
 
