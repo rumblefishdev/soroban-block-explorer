@@ -32,7 +32,7 @@ use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_account
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{ChartDataPoint, PoolListCursor, SharesCursor};
+use super::dto::{ChartDataPoint, PoolListCursor, PoolOperationAmount, SharesCursor};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -128,16 +128,10 @@ pub struct PoolTxRow {
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
-    /// What this transaction moved through the pool, per canonical leg, in raw
-    /// stroops SIGNED from the pool's side — positive = the asset entered the
-    /// pool (task 0279). A trade reads `+/-`, a deposit `+/+`, a withdrawal
-    /// `-/-`.
-    ///
-    /// `None` = NOT KNOWN, never a zero: `lp_operation_amounts` starts at the
-    /// deploy and fills backwards with the re-parse, so older rows legitimately
-    /// have no amounts and must render blank rather than as "0".
-    pub amount_a: Option<i64>,
-    pub amount_b: Option<i64>,
+    /// What this transaction moved through the pool, ONE ENTRY PER OPERATION
+    /// in application order (task 0279). Empty when the amounts are not
+    /// indexed that far back yet — never a zero.
+    pub amounts: Vec<PoolOperationAmount>,
 }
 
 /// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
@@ -481,48 +475,40 @@ pub async fn fetch_pool_asset_ids(
 #[derive(Debug, Row, Deserialize)]
 struct PoolAmountChRow {
     tid: i64,
+    ord: i16,
     asset_id: i64,
     amount: i64,
-    /// How many of the transaction's operations moved this asset through this
-    /// pool. `> 1` makes the summed figure un-labelable — see
-    /// [`fetch_pool_tx_amounts`].
-    ops: u64,
 }
 
-/// Per-transaction amounts this pool moved, for the page's `(ledger, tx)` keys
-/// (task 0279 → the "Amount" column). Signed from the pool's side: positive =
-/// the asset entered the pool.
+/// What each operation moved through this pool, for the page's `(ledger, tx)`
+/// keys (task 0279 → the "Amount" column), grouped per transaction and ordered
+/// by `application_order`. Signed from the pool's side: positive = the asset
+/// entered the pool.
 ///
 /// `lp_operation_amounts` is pool-leading like its `operation_pools` twin, so
 /// this is a PK-prefix seek bounded to the page, with the same partition prune
 /// as STEP 2.
 ///
-/// **Dedup before summing, without `FINAL`.** The table is a
-/// ReplacingMergeTree, so un-merged duplicates of one key can be present, and a
-/// naive `sum()` would double-count them. The inner `GROUP BY` collapses each
-/// full ORDER BY key first — `any(amount)` is exact here because duplicate rows
-/// for a key are byte-identical by construction (one reducer, shared by live
-/// ingest and the re-parse, deterministic per op), which is the same argument
+/// **Per operation, never summed per transaction.** 8.2% of (pool, transaction)
+/// pairs run more than one operation against the same pool (measured on prod
+/// 2026-08-12 over 8.49M pairs), and a sum across a bundled deposit + path
+/// payment describes neither of them: it is smaller than the deposit, and where
+/// the trade leg dominates an asset the signs come out `+/-` and read as a swap.
+/// At 1 row in 12 that is far too common to hide or to fudge, so each operation
+/// keeps its own figure and the frontend renders one line each.
+///
+/// **Dedup without `FINAL`.** The table is a ReplacingMergeTree, so un-merged
+/// duplicates of one key can be present. The `GROUP BY` collapses each full
+/// ORDER BY key — `any(amount)` is exact because duplicate rows for a key are
+/// byte-identical by construction (one reducer, shared by live ingest and the
+/// re-parse, deterministic per op), the same argument
 /// `operation_asset_appearances.net_settled` relies on. `FINAL` would merge
 /// whole parts to answer a bounded seek.
-///
-/// **A transaction with MORE THAN ONE operation on this pool reports nothing.**
-/// The list's row is a transaction and its Event chip names ONE category —
-/// `classifyLpTx` resolves a bundled deposit + path payment to "Deposit" by
-/// policy — so a figure summed across both operations would sit under a label
-/// that does not describe it: smaller than the deposit it is captioned with,
-/// and if the trade leg dominates one asset the signs come out `+/-` and the
-/// frontend renders a swap arrow beneath a Deposit chip. Two opposite trades in
-/// one transaction net the same way in reverse. Such rows therefore return no
-/// amount at all rather than an un-labelable one; the frontend renders them
-/// blank, exactly as it does for history the backfill has not reached.
-/// Per-operation rows exist (`application_order` is in the key), so a future
-/// per-operation surface can show them properly.
 async fn fetch_pool_tx_amounts(
     client: &clickhouse::Client,
     pool_id_hex: &str,
     keys: &[(i64, i64)],
-) -> Result<HashMap<i64, Vec<(i64, i64)>>, clickhouse::error::Error> {
+) -> Result<HashMap<i64, Vec<PoolAmountChRow>>, clickhouse::error::Error> {
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
@@ -540,14 +526,13 @@ async fn fetch_pool_tx_amounts(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT tid, asset_id, sum(amount) AS amount, uniqExact(application_order) AS ops FROM ( \
-            SELECT transaction_id AS tid, application_order, asset_id, any(amount) AS amount \
-            FROM lp_operation_amounts \
-            WHERE pool_id = toFixedString(unhex(?), 32) \
-              AND (ledger_sequence, transaction_id) IN ({in_tuples}) \
-              AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
-            GROUP BY tid, application_order, asset_id \
-         ) GROUP BY tid, asset_id"
+        "SELECT transaction_id AS tid, application_order AS ord, asset_id, \
+                any(amount) AS amount \
+         FROM lp_operation_amounts \
+         WHERE pool_id = toFixedString(unhex(?), 32) \
+           AND (ledger_sequence, transaction_id) IN ({in_tuples}) \
+           AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+         GROUP BY tid, ord, asset_id"
     );
     let rows = client
         .query(&sql)
@@ -555,26 +540,41 @@ async fn fetch_pool_tx_amounts(
         .fetch_all::<PoolAmountChRow>()
         .await?;
 
-    Ok(group_amounts_by_tx(rows))
+    let mut by_tx: HashMap<i64, Vec<PoolAmountChRow>> = HashMap::new();
+    for r in rows {
+        by_tx.entry(r.tid).or_default().push(r);
+    }
+    Ok(by_tx)
 }
 
-/// Fold the amount rows into per-transaction legs, dropping any transaction a
-/// single Event chip cannot caption (see [`fetch_pool_tx_amounts`]).
+/// Fold one transaction's amount rows into the wire shape: one entry per
+/// operation, each carrying the two canonical legs, ordered by
+/// `application_order` (task 0279).
 ///
-/// The whole transaction goes, not just the offending leg: dropping one leg
-/// would render a half-row — one asset with no counterpart — which reads as if
-/// only that asset moved.
-fn group_amounts_by_tx(rows: Vec<PoolAmountChRow>) -> HashMap<i64, Vec<(i64, i64)>> {
-    let ambiguous: std::collections::HashSet<i64> =
-        rows.iter().filter(|r| r.ops > 1).map(|r| r.tid).collect();
-    let mut by_tx: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
-    for r in rows {
-        if ambiguous.contains(&r.tid) {
-            continue;
-        }
-        by_tx.entry(r.tid).or_default().push((r.asset_id, r.amount));
-    }
-    by_tx
+/// An operation contributes at most two rows — the pool's two assets — so the
+/// leg lookup is a scan over a 2-element slice, not a map.
+fn pool_amounts_for_tx(
+    rows: &[PoolAmountChRow],
+    (asset_a_id, asset_b_id): (i64, i64),
+) -> Vec<PoolOperationAmount> {
+    let mut orders: Vec<i16> = rows.iter().map(|r| r.ord).collect();
+    orders.sort_unstable();
+    orders.dedup();
+    orders
+        .into_iter()
+        .map(|ord| {
+            let leg = |want: i64| {
+                rows.iter()
+                    .find(|r| r.ord == ord && r.asset_id == want)
+                    .map(|r| r.amount.to_string())
+            };
+            PoolOperationAmount {
+                application_order: ord,
+                amount_a: leg(asset_a_id),
+                amount_b: leg(asset_b_id),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -881,8 +881,6 @@ pub async fn fetch_pool_transactions(
             HashMap::new()
         }
     };
-    let (asset_a_id, asset_b_id) = asset_ids;
-
     Ok(page
         .into_iter()
         .filter_map(|r| {
@@ -891,14 +889,10 @@ pub async fn fetch_pool_transactions(
                 .get(&r.id)
                 .map(|a| a.operation_types.clone())
                 .unwrap_or_default();
-            let legs = amounts.get(&r.id);
-            let leg = |want: i64| {
-                legs.and_then(|v| {
-                    v.iter()
-                        .find(|(asset_id, _)| *asset_id == want)
-                        .map(|(_, amount)| *amount)
-                })
-            };
+            let amounts = amounts
+                .get(&r.id)
+                .map(|rows| pool_amounts_for_tx(rows, asset_ids))
+                .unwrap_or_default();
             Some(PoolTxRow {
                 id: r.id,
                 hash: r.hash,
@@ -910,8 +904,7 @@ pub async fn fetch_pool_transactions(
                 has_soroban: r.has_soroban,
                 operation_types,
                 created_at: millis_to_utc(r.created_at_ms),
-                amount_a: leg(asset_a_id),
-                amount_b: leg(asset_b_id),
+                amounts,
             })
         })
         .collect())
@@ -1482,33 +1475,56 @@ mod tests {
         );
     }
 
-    /// A transaction that ran two operations against the pool must surface NO
-    /// amount: the row carries one Event chip, and a sum across a bundled
-    /// deposit + path payment would sit under a caption that does not describe
-    /// it. Both of its legs go — a half-row reads as "only this asset moved".
+    /// A transaction that ran several operations against the pool keeps each
+    /// one's figure — 8.2% of pool transactions do, and summing them would
+    /// describe none of them. Entries come out in application order, with each
+    /// leg on the pool's canonical side.
     #[test]
-    fn multi_operation_transactions_report_no_amount() {
-        let row = |tid, asset_id, amount, ops| PoolAmountChRow {
-            tid,
+    fn amounts_stay_per_operation_and_in_order() {
+        const A: i64 = 10;
+        const B: i64 = 20;
+        let row = |ord, asset_id, amount| PoolAmountChRow {
+            tid: 1,
+            ord,
             asset_id,
             amount,
-            ops,
         };
-        let got = group_amounts_by_tx(vec![
-            // tx 1 — one op, both legs: kept.
-            row(1, 10, 100, 1),
-            row(1, 20, -40, 1),
-            // tx 2 — a deposit and a trade on the same pool: dropped whole,
-            // including the leg that itself only moved once.
-            row(2, 10, 500, 2),
-            row(2, 20, 900, 1),
-        ]);
+        // Deliberately out of order, and op 3 before op 1, to prove the sort.
+        let got = pool_amounts_for_tx(
+            &[
+                row(3, B, -40),
+                row(1, A, 5_000),
+                row(3, A, 100),
+                row(1, B, 2_000),
+            ],
+            (A, B),
+        );
 
-        assert_eq!(got.len(), 1, "only the single-op transaction survives");
-        let legs = got.get(&1).expect("tx 1 kept");
-        assert!(legs.contains(&(10, 100)));
-        assert!(legs.contains(&(20, -40)));
-        assert!(!got.contains_key(&2), "bundled transaction reports nothing");
+        assert_eq!(got.len(), 2, "one entry per operation, not per row");
+        assert_eq!(got[0].application_order, 1);
+        assert_eq!(got[0].amount_a.as_deref(), Some("5000"));
+        assert_eq!(got[0].amount_b.as_deref(), Some("2000"));
+        assert_eq!(got[1].application_order, 3);
+        assert_eq!(got[1].amount_a.as_deref(), Some("100"));
+        assert_eq!(got[1].amount_b.as_deref(), Some("-40"));
+    }
+
+    /// An operation that moved only one of the two assets reports the other as
+    /// absent, not as zero.
+    #[test]
+    fn a_one_legged_operation_leaves_the_other_leg_null() {
+        let got = pool_amounts_for_tx(
+            &[PoolAmountChRow {
+                tid: 1,
+                ord: 1,
+                asset_id: 10,
+                amount: 7,
+            }],
+            (10, 20),
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].amount_a.as_deref(), Some("7"));
+        assert_eq!(got[0].amount_b, None);
     }
 
     #[test]

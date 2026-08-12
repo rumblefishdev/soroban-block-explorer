@@ -13,30 +13,30 @@
 --     bounded step after the page keys, so each row can carry what it moved
 --     through THIS pool. Not expressible in the single statement below:
 --
---       SELECT tid, asset_id, sum(amount) FROM (
---         SELECT transaction_id AS tid, application_order, asset_id,
---                any(amount) AS amount
---         FROM lp_operation_amounts
---         WHERE pool_id = $1
---           AND (ledger_sequence, transaction_id) IN (<page keys>)
---           AND intDiv(ledger_sequence, 500000) IN (<page partitions>)
---         GROUP BY tid, application_order, asset_id
---       ) GROUP BY tid, asset_id
+--       SELECT transaction_id AS tid, application_order AS ord, asset_id,
+--              any(amount) AS amount
+--       FROM lp_operation_amounts
+--       WHERE pool_id = $1
+--         AND (ledger_sequence, transaction_id) IN (<page keys>)
+--         AND intDiv(ledger_sequence, 500000) IN (<page partitions>)
+--       GROUP BY tid, ord, asset_id
 --
---     The inner GROUP BY dedups the ReplacingMergeTree by its full ORDER BY
---     key before summing — `any()` is exact because duplicates of a key are
---     byte-identical by construction (one reducer, shared by live ingest and
---     the re-parse). `FINAL` would merge whole parts to answer a bounded seek.
+--     One row PER OPERATION, never summed per transaction: 8.2% of (pool, tx)
+--     pairs run more than one operation against the same pool (measured on
+--     prod 2026-08-12 over 8.49M pairs), and a sum across a bundled deposit +
+--     path payment describes neither — it is smaller than the deposit and can
+--     flip the sign shape, landing under an Event chip that does not match it.
+--     The handler groups the rows per transaction; the frontend renders one
+--     line each.
+--     The GROUP BY dedups the ReplacingMergeTree by its full ORDER BY key —
+--     `any()` is exact because duplicates of a key are byte-identical by
+--     construction (one reducer, shared by live ingest and the re-parse).
+--     `FINAL` would merge whole parts to answer a bounded seek.
 --     `asset_id` maps onto the pool's two legs via `ids::asset_id` over
 --     `liquidity_pools.asset_{a,b}_{type,code,issuer_id}` — resolved in Rust,
 --     since CH's builtin `cityHash64` is NOT the surrogate's algorithm.
---     Absent rows stay NULL on the wire — the frontend renders blank, never
---     `0`. Two causes: history the backfill has not reached, and a transaction
---     with MORE THAN ONE operation on this pool (the outer select carries
---     `uniqExact(application_order) AS ops`; the handler drops the whole
---     transaction when any leg reports `ops > 1`). The row is labelled by one
---     Event chip, so a sum across a bundled deposit + path payment would sit
---     under a caption that does not describe it.
+--     A transaction with no rows sends an empty list — the frontend renders
+--     blank, never `0` — for history the backfill has not reached.
 -- ============================================================================
 -- Endpoint:     GET /liquidity-pools/:id/transactions
 -- Purpose:      Paginated transactions touching a given pool — deposits,

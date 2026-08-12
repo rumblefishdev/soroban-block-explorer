@@ -85,33 +85,88 @@ describe('PoolTransactions table', () => {
     asset_b: { asset_type_name: 'credit_alphanum4', asset_code: 'USDC' },
   } as PoolItem;
 
-  const row = {
-    hash: 'a'.repeat(64),
-    ledger_sequence: 63_904_097,
-    source_account: 'G'.repeat(56),
-    fee_charged: 100,
-    successful: true,
-    operation_count: 1,
-    has_soroban: false,
-    operation_types: ['PATH_PAYMENT_STRICT_SEND'],
-    created_at: '2026-08-11T14:26:36Z',
-    amount_a: '1000000000',
-    amount_b: '-400000000',
-  } as PoolTransactionItem;
+  const makeRow = (
+    amounts: PoolTransactionItem['amounts'],
+    operationTypes = ['PATH_PAYMENT_STRICT_SEND']
+  ) =>
+    ({
+      hash: 'a'.repeat(64),
+      ledger_sequence: 63_904_097,
+      source_account: 'G'.repeat(56),
+      fee_charged: 100,
+      successful: true,
+      operation_count: amounts.length,
+      has_soroban: false,
+      operation_types: operationTypes,
+      created_at: '2026-08-11T14:26:36Z',
+      amounts,
+    } as PoolTransactionItem);
 
-  it('shows the Amount column and the row’s swap', () => {
+  function mockRows(rows: PoolTransactionItem[]) {
     hookMock.usePoolTransactions.mockReturnValue({
-      data: { data: [row], page: { limit: 20 } },
+      data: { data: rows, page: { limit: 20 } },
       isLoading: false,
       isPlaceholderData: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
     });
+  }
+
+  it('shows the Amount column and the row’s swap', () => {
+    mockRows([
+      makeRow([
+        {
+          application_order: 1,
+          amount_a: '1000000000',
+          amount_b: '-400000000',
+        },
+      ]),
+    ]);
 
     renderWithProviders(<PoolTransactions poolId="LBSU" pool={poolItem} />);
 
     expect(screen.getByText('Amount')).toBeInTheDocument();
     expect(screen.getByText('100 XLM → 40 USDC')).toBeInTheDocument();
+  });
+
+  /// A bundled deposit + trade is 8.2% of pool transactions. Each operation
+  /// keeps its own line — summing them would print a figure that matches
+  /// neither, under a chip naming only one of them.
+  it('gives every operation of a bundled transaction its own line', () => {
+    mockRows([
+      makeRow(
+        [
+          {
+            application_order: 1,
+            amount_a: '50000000000',
+            amount_b: '20000000000',
+          },
+          {
+            application_order: 2,
+            amount_a: '1000000000',
+            amount_b: '-400000000',
+          },
+        ],
+        ['LIQUIDITY_POOL_DEPOSIT', 'PATH_PAYMENT_STRICT_SEND']
+      ),
+    ]);
+
+    renderWithProviders(<PoolTransactions poolId="LBSU" pool={poolItem} />);
+
+    expect(screen.getByText('5,000 XLM + 2,000 USDC')).toBeInTheDocument();
+    expect(screen.getByText('100 XLM → 40 USDC')).toBeInTheDocument();
+    // The chip still names one category — which is exactly why the amounts
+    // are not merged into it.
+    expect(screen.getByText('Deposit')).toBeInTheDocument();
+  });
+
+  it('renders no amount line for history the index has not reached', () => {
+    mockRows([makeRow([])]);
+
+    renderWithProviders(<PoolTransactions poolId="LBSU" pool={poolItem} />);
+
+    expect(screen.getByText('Amount')).toBeInTheDocument();
+    expect(screen.queryByText(/XLM/)).not.toBeInTheDocument();
   });
 });

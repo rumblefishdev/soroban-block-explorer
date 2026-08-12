@@ -494,17 +494,21 @@ the latest snapshot row; clients that care about freshness read
 snapshot freshness — populated even on stale pools.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
-pool. Each row carries `amount_a` / `amount_b` (task 0279): what that
-transaction moved through THIS pool, per canonical leg, as a raw-stroop decimal
-**string** (same reason as `reserve_a` — a JSON number is a browser double and
-a big leg would lose digits), **signed from the pool's side** — positive = the
-asset entered the pool. A trade reads
-`+/-`, a deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the
-direction and no event-type field is needed. `null` means no figure for that
-row, never zero, and renders blank — either the amounts are not indexed that
-far back yet, or the transaction ran more than one operation against the pool,
-in which case a sum across them would not match the single Event label the row
-carries and is withheld instead.
+pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
+application order, each with `amount_a` / `amount_b` for the pool's canonical
+legs as raw-stroop decimal **strings** (same reason as `reserve_a` — a JSON
+number is a browser double and a big leg would lose digits), **signed from the
+pool's side** — positive = the asset entered the pool. A trade reads `+/-`, a
+deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the direction and no
+event-type field is needed.
+
+Per operation rather than summed per transaction because **8.2% of (pool,
+transaction) pairs run more than one operation against the same pool** (measured
+on prod 2026-08-12 over 8.49M pairs): a sum across a bundled deposit + path
+payment is smaller than the deposit and can even flip sign shape, so it would
+sit under an Event chip that does not describe it. An empty list means no
+figures — never zero — for history the backfill has not reached; the frontend
+renders those rows blank.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,

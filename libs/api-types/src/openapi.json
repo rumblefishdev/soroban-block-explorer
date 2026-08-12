@@ -4169,16 +4169,16 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
-                "created_at"
+                "created_at",
+                "amounts"
               ],
               "properties": {
-                "amount_a": {
-                  "type": ["string", "null"],
-                  "description": "What this transaction moved through THIS pool, on the pool's canonical\nasset-A leg — raw stroops (classic pools are always 7 decimals),\n**signed from the pool's side**: positive = the asset entered the pool,\nnegative = it left. So a trade reads `+/-` across the two legs, a\ndeposit `+/+`, a withdrawal `-/-`, and the sign alone tells the\nfrontend the direction (task 0279 / issue #371).\n\n`null` = NO FIGURE FOR THIS ROW, never zero — two causes, both meaning\n\"render blank\":\n\n1. Per-pool amounts are indexed from their deploy onwards and filled\n   backwards by a re-parse, so older rows have none yet.\n2. The transaction ran MORE THAN ONE operation against this pool (a\n   bundled deposit + path payment, say). The row carries one Event\n   label, so a figure summed across both operations would not describe\n   what that label names — it is withheld rather than mislabeled.\n\nA STRING, like every other on-chain amount here (`reserve_a`,\n`total_supply`): a JSON number is a double in the browser, so a pool\nleg above 2^53 stroops (~900M units) would silently lose digits."
-                },
-                "amount_b": {
-                  "type": ["string", "null"],
-                  "description": "The asset-B leg of the same figure. See [`Self::amount_a`]."
+                "amounts": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PoolOperationAmount"
+                  },
+                  "description": "What this transaction moved through THIS pool, **one entry per\noperation**, in application order (task 0279 / issue #371).\n\nPer operation, not summed per transaction: 8.2% of (pool, transaction)\npairs on mainnet run more than one operation against the same pool\n(measured 2026-08-12 over 8.49M pairs), and a sum across a bundled\ndeposit + path payment describes neither. One entry each keeps every\nfigure true on its own; the common single-operation row is a\none-element list.\n\n**Empty** = no figures for this row, which is NOT the same as zero:\nper-pool amounts are indexed from their deploy onwards and filled\nbackwards by a re-parse, so older rows carry none yet and must render\nblank rather than as `0`."
                 },
                 "created_at": {
                   "type": "string",
@@ -4442,6 +4442,24 @@
           }
         }
       },
+      "PoolOperationAmount": {
+        "type": "object",
+        "description": "What ONE operation moved through the pool being viewed, per canonical leg\n(task 0279). Both legs are **signed from the pool's side**: positive = the\nasset entered the pool, negative = it left. So a trade reads `+/-`, a\ndeposit `+/+` and a withdrawal `-/-` — the sign alone gives the direction,\nwith no event-type field.\n\nRaw stroops as STRINGS, like every other on-chain amount here (`reserve_a`,\n`total_supply`): a JSON number is a double in the browser, so a leg above\n2^53 stroops (~900M units) would silently lose digits.\n\nA leg is `null` when this operation did not move that asset — never `0`.",
+        "required": ["application_order"],
+        "properties": {
+          "amount_a": {
+            "type": ["string", "null"]
+          },
+          "amount_b": {
+            "type": ["string", "null"]
+          },
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), so the list is stably ordered and each entry is\ntraceable to an operation on the transaction detail page."
+          }
+        }
+      },
       "PoolTransactionItem": {
         "type": "object",
         "description": "One row from `/liquidity-pools/:id/transactions`. Shape pinned to\ncanonical SQL `20_get_liquidity_pools_transactions.sql`.",
@@ -4454,16 +4472,16 @@
           "operation_count",
           "has_soroban",
           "operation_types",
-          "created_at"
+          "created_at",
+          "amounts"
         ],
         "properties": {
-          "amount_a": {
-            "type": ["string", "null"],
-            "description": "What this transaction moved through THIS pool, on the pool's canonical\nasset-A leg — raw stroops (classic pools are always 7 decimals),\n**signed from the pool's side**: positive = the asset entered the pool,\nnegative = it left. So a trade reads `+/-` across the two legs, a\ndeposit `+/+`, a withdrawal `-/-`, and the sign alone tells the\nfrontend the direction (task 0279 / issue #371).\n\n`null` = NO FIGURE FOR THIS ROW, never zero — two causes, both meaning\n\"render blank\":\n\n1. Per-pool amounts are indexed from their deploy onwards and filled\n   backwards by a re-parse, so older rows have none yet.\n2. The transaction ran MORE THAN ONE operation against this pool (a\n   bundled deposit + path payment, say). The row carries one Event\n   label, so a figure summed across both operations would not describe\n   what that label names — it is withheld rather than mislabeled.\n\nA STRING, like every other on-chain amount here (`reserve_a`,\n`total_supply`): a JSON number is a double in the browser, so a pool\nleg above 2^53 stroops (~900M units) would silently lose digits."
-          },
-          "amount_b": {
-            "type": ["string", "null"],
-            "description": "The asset-B leg of the same figure. See [`Self::amount_a`]."
+          "amounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolOperationAmount"
+            },
+            "description": "What this transaction moved through THIS pool, **one entry per\noperation**, in application order (task 0279 / issue #371).\n\nPer operation, not summed per transaction: 8.2% of (pool, transaction)\npairs on mainnet run more than one operation against the same pool\n(measured 2026-08-12 over 8.49M pairs), and a sum across a bundled\ndeposit + path payment describes neither. One entry each keeps every\nfigure true on its own; the common single-operation row is a\none-element list.\n\n**Empty** = no figures for this row, which is NOT the same as zero:\nper-pool amounts are indexed from their deploy onwards and filled\nbackwards by a re-parse, so older rows carry none yet and must render\nblank rather than as `0`."
           },
           "created_at": {
             "type": "string",
