@@ -9,6 +9,8 @@
 //! on the CH path: unlike PostgreSQL's `BIGSERIAL`, CH `transactions.id`
 //! is a deterministic hash surrogate and must not define in-ledger order.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
@@ -34,6 +36,7 @@ pub struct LedgerDetailRow {
     pub closed_at: DateTime<Utc>,
     pub protocol_version: i32,
     pub transaction_count: i32,
+    pub successful_transaction_count: Option<i32>,
     pub base_fee: i64,
     pub prev_sequence: Option<i64>,
     pub next_sequence: Option<i64>,
@@ -100,9 +103,19 @@ impl From<LedgerListRow> for LedgerListItem {
             closed_at: millis_to_utc(row.closed_at),
             protocol_version: row.protocol_version,
             transaction_count: row.transaction_count,
+            // Filled by `attach_successful_counts` once the page is deduped —
+            // it is not a column on `ledgers`.
+            successful_transaction_count: None,
             base_fee: row.base_fee,
         }
     }
+}
+
+/// One `(ledger, successful count)` pair from [`fetch_successful_counts`].
+#[derive(Debug, Row, Deserialize)]
+struct LedgerSuccessRow {
+    ledger_sequence: i64,
+    successful_count: u64,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -125,6 +138,7 @@ impl From<LedgerDetailChRow> for LedgerDetailRow {
             closed_at: millis_to_utc(row.closed_at),
             protocol_version: row.protocol_version,
             transaction_count: row.transaction_count,
+            successful_transaction_count: None,
             base_fee: row.base_fee,
             prev_sequence: row.prev_sequence,
             next_sequence: row.next_sequence,
@@ -245,10 +259,81 @@ pub async fn fetch_list(
         .fetch_all::<LedgerListRow>()
         .await?;
 
-    Ok(dedup_consecutive(rows, limit as usize)
+    let mut items: Vec<LedgerListItem> = dedup_consecutive(rows, limit as usize)
         .into_iter()
         .map(Into::into)
+        .collect();
+    attach_successful_counts(client, &mut items).await?;
+    Ok(items)
+}
+
+/// Per-ledger successful-transaction counts for a contiguous sequence range.
+///
+/// A SECOND query rather than a JOIN or subquery inside [`fetch_list`]: that
+/// read is tuned for `optimize_read_in_order` (over-fetch + collapse — see the
+/// measurements in its comment), and hanging an aggregate off it puts that plan
+/// at risk. Same two-step shape as `ch::fetch_tx_list_aggregates`.
+///
+/// Cheap because `transactions` is `ORDER BY (ledger_sequence, ...)`, so the
+/// range is a PK-prefix seek: measured 16,384 read_rows / 176 KiB / 5 ms for a
+/// 10-ledger page on production (2026-08-12). The read is granule-bound, so a
+/// wider page costs the same.
+///
+/// `uniqExactIf` rather than `countIf` because `transactions` is a
+/// `ReplacingMergeTree`. `FINAL` is not an option (0420 measured 19x read
+/// amplification on a comparable read). Sampling 7,000 ledgers found no
+/// duplicate rows in `transactions` today — unlike `ledgers` — so this is
+/// defensive, not a fix for an observed defect.
+async fn fetch_successful_counts(
+    client: &clickhouse::Client,
+    min_sequence: i64,
+    max_sequence: i64,
+) -> Result<HashMap<i64, i32>, clickhouse::error::Error> {
+    let rows = client
+        .query(
+            "SELECT \
+                ledger_sequence AS ledger_sequence, \
+                uniqExactIf(application_order, successful) AS successful_count \
+            FROM transactions \
+            WHERE ledger_sequence BETWEEN ? AND ? \
+            GROUP BY ledger_sequence",
+        )
+        .bind(min_sequence)
+        .bind(max_sequence)
+        .fetch_all::<LedgerSuccessRow>()
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.ledger_sequence,
+                i32::try_from(r.successful_count).unwrap_or(i32::MAX),
+            )
+        })
         .collect())
+}
+
+/// Fill `successful_transaction_count` on an already-deduped page, in place.
+///
+/// A ledger with no aggregate row keeps `None`. That is deliberate: rendering a
+/// missing aggregate as `0` would claim every transaction in the ledger failed.
+async fn attach_successful_counts(
+    client: &clickhouse::Client,
+    items: &mut [LedgerListItem],
+) -> Result<(), clickhouse::error::Error> {
+    let (Some(min), Some(max)) = (
+        items.iter().map(|i| i.sequence).min(),
+        items.iter().map(|i| i.sequence).max(),
+    ) else {
+        return Ok(());
+    };
+
+    let counts = fetch_successful_counts(client, min, max).await?;
+    for item in items.iter_mut() {
+        item.successful_transaction_count = counts.get(&item.sequence).copied();
+    }
+    Ok(())
 }
 
 /// Over-fetch factor for [`fetch_list`]. Prod carries at most 3 physical rows
@@ -317,7 +402,21 @@ pub async fn fetch_by_sequence(
         .fetch_optional::<LedgerDetailChRow>()
         .await?;
 
-    Ok(row.map(Into::into))
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    // Same aggregate as the list path, one ledger wide. A second round trip
+    // rather than a scalar subquery on the header read: a subquery returns 0
+    // for a ledger with no `transactions` rows, which is indistinguishable
+    // from "all of them failed".
+    let mut detail: LedgerDetailRow = row.into();
+    detail.successful_transaction_count = fetch_successful_counts(client, sequence, sequence)
+        .await?
+        .get(&sequence)
+        .copied();
+
+    Ok(Some(detail))
 }
 
 pub async fn fetch_transactions(

@@ -806,6 +806,11 @@ export type LedgerDetailResponse = {
   prev_sequence?: number | null;
   protocol_version: number;
   sequence: number;
+  /**
+   * Successful transactions in this ledger — same semantics (and same
+   * `null` case) as [`LedgerListItem::successful_transaction_count`].
+   */
+  successful_transaction_count?: number | null;
   transaction_count: number;
   /**
    * Paginated linked transactions, DB-only `TransactionListItem` rows.
@@ -826,6 +831,18 @@ export type LedgerListItem = {
   hash: string;
   protocol_version: number;
   sequence: number;
+  /**
+   * Successful transactions in this ledger; the failed count is
+   * `transaction_count - successful_transaction_count` (verified equal on
+   * 3,003 sampled ledgers, and the shape Horizon itself uses — it carries
+   * no total field, only the two counts).
+   *
+   * `null` when the ledger has no `transactions` rows to aggregate. That is
+   * distinct from `0`, which means every transaction in the ledger failed —
+   * rendering a missing aggregate as `0 successful` would claim a total
+   * failure that did not happen.
+   */
+  successful_transaction_count?: number | null;
   transaction_count: number;
 };
 
@@ -1418,6 +1435,18 @@ export type PaginatedLedgerListItem = {
     hash: string;
     protocol_version: number;
     sequence: number;
+    /**
+     * Successful transactions in this ledger; the failed count is
+     * `transaction_count - successful_transaction_count` (verified equal on
+     * 3,003 sampled ledgers, and the shape Horizon itself uses — it carries
+     * no total field, only the two counts).
+     *
+     * `null` when the ledger has no `transactions` rows to aggregate. That is
+     * distinct from `0`, which means every transaction in the ledger failed —
+     * rendering a missing aggregate as `0 successful` would claim a total
+     * failure that did not happen.
+     */
+    successful_transaction_count?: number | null;
     transaction_count: number;
   }>;
   page: PageInfo;

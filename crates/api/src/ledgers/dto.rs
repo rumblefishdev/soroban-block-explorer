@@ -26,6 +26,16 @@ pub struct LedgerListItem {
     pub closed_at: DateTime<Utc>,
     pub protocol_version: i32,
     pub transaction_count: i32,
+    /// Successful transactions in this ledger; the failed count is
+    /// `transaction_count - successful_transaction_count` (verified equal on
+    /// 3,003 sampled ledgers, and the shape Horizon itself uses — it carries
+    /// no total field, only the two counts).
+    ///
+    /// `null` when the ledger has no `transactions` rows to aggregate. That is
+    /// distinct from `0`, which means every transaction in the ledger failed —
+    /// rendering a missing aggregate as `0 successful` would claim a total
+    /// failure that did not happen.
+    pub successful_transaction_count: Option<i32>,
     pub base_fee: i64,
 }
 
@@ -47,6 +57,9 @@ pub struct LedgerDetailResponse {
     pub closed_at: DateTime<Utc>,
     pub protocol_version: i32,
     pub transaction_count: i32,
+    /// Successful transactions in this ledger — same semantics (and same
+    /// `null` case) as [`LedgerListItem::successful_transaction_count`].
+    pub successful_transaction_count: Option<i32>,
     pub base_fee: i64,
     /// Sequence number of the ledger that closed immediately before this
     /// one. `null` at the chain tail (no earlier ledger persisted).
