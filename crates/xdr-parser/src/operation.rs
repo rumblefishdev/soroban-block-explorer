@@ -747,7 +747,14 @@ fn pool_delta_details(op_changes: &[LedgerEntryChange], pool_id: &PoolId) -> Opt
     let mut removed = false;
     for change in op_changes {
         match change {
-            LedgerEntryChange::State(e) => before = pool_constant_product(e, pool_id).or(before),
+            // FIRST match wins for the pre-image (`before.or(new)`), LAST for
+            // the post-image (`new.or(after)`) — the two ends of the op. The
+            // asymmetry only shows when one op touches a pool repeatedly, as a
+            // path payment does under CAP-38 interleaved matching (a
+            // State/Updated pair per fill): taking the last `State` there would
+            // measure the final fill instead of the whole operation. Deposits
+            // and withdrawals touch it once, so today both readings agree.
+            LedgerEntryChange::State(e) => before = before.or(pool_constant_product(e, pool_id)),
             LedgerEntryChange::Created(e)
             | LedgerEntryChange::Updated(e)
             | LedgerEntryChange::Restored(e) => after = pool_constant_product(e, pool_id).or(after),
@@ -865,6 +872,27 @@ mod tests {
         let delta = pool_delta_details(&emptied, &pool_id).expect("removed delta");
         assert_eq!(delta["amountA"], json!(-1_000));
         assert_eq!(delta["amountB"], json!(-2_000));
+    }
+
+    /// An op that touches one pool repeatedly must be measured end to end —
+    /// first pre-image to last post-image — not just its final touch. No
+    /// current caller emits this shape (deposits and withdrawals touch a pool
+    /// once), but a path payment would: CAP-38 interleaved matching writes a
+    /// State/Updated pair per fill, and reading the LAST `State` would report
+    /// only the last fill.
+    #[test]
+    fn pool_delta_spans_every_touch_of_one_op() {
+        let pool_id = PoolId(Hash([0x44; 32]));
+        let two_fills = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Updated(pool_entry(1_400, 1_500)),
+            LedgerEntryChange::State(pool_entry(1_400, 1_500)),
+            LedgerEntryChange::Updated(pool_entry(1_900, 900)),
+        ];
+        let delta = pool_delta_details(&two_fills, &pool_id).expect("delta");
+        // 1_900 - 1_000 and 900 - 2_000, not the second fill's 500 / -600.
+        assert_eq!(delta["amountA"], json!(900));
+        assert_eq!(delta["amountB"], json!(-1_100));
     }
 
     /// Another pool's entry in the same op must not be read as this pool's.

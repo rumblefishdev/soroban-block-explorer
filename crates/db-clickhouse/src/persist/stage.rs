@@ -1214,7 +1214,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // from the op's own reserve delta.
             {
                 let tx_id = tx_id_by_hash[tx_hash];
-                let order = i16::try_from(op.operation_index).unwrap_or(i16::MAX);
+                // Fail the ledger rather than clamp, matching the
+                // `transactions.application_order` conversion above: this
+                // column is part of the ORDER BY, so two operations squeezed
+                // onto one saturated value would share a key and the RMT would
+                // drop a fill silently — the loss the per-op summing exists to
+                // prevent. Unreachable while Stellar caps ops per tx at 100.
+                let order = i16::try_from(op.operation_index)
+                    .map_err(|_| staging_err("lp_operation_amounts application_order (>i16)"))?;
                 for (pool_id, asset_id, amount) in pool_fill_amounts(&op.details) {
                     out.lp_amount_rows.push(LpOperationAmountRow {
                         pool_id,
