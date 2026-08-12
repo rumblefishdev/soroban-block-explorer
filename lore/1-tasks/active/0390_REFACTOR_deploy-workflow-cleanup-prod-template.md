@@ -113,17 +113,32 @@ them via OIDC), with deployment policies `develop` + `staging-*`. Env-scoped
 secrets are invisible without an `environment:` line, so the job now binds
 `environment: production` (secret scoping only — no required reviewers).
 
+Correction (2026-08-12): account 750702271865 holds **no OIDC provider and no
+`soroban-explorer-*-deploy` role**, and `Explorer-Cicd` exists in neither
+eu-central-1 nor us-east-1 — so the `staging` env's April secrets point at
+infrastructure that is not in this account. There is nothing to audit or patch:
+the role is already defined in code (`infra/src/lib/stacks/cicd-stack.ts`, with
+`envName = 'production'` hardcoded since the 0239 eu-central-1 cutover), and
+`make -C infra diff-cicd` shows a clean 5-resource create. The synthesized
+trust condition is `sub = repo:rumblefishdev/soroban-block-explorer:environment:production`,
+which is exactly the subject the job's `environment: production` presents.
+
 Remaining, operator-side:
 
-1. AWS: find the deploy role in IAM (`aws sso login --profile sorobanscan`),
-   verify its trust policy covers this repo and its permissions cover
-   **eu-central-1** (April's runs deployed us-east-1 staging — the CDK
-   bootstrap roles it may be scoped to are per-region) + SPA bucket sync +
-   CloudFront invalidation + `cloudformation:DescribeStacks`.
+1. AWS: deploy the CICD stack — `AWS_PROFILE=soroban-admin make -C infra deploy-cicd`
+   (prompts, `--require-approval broadening`). It creates the GitHub OIDC
+   provider and `soroban-explorer-production-deploy`, scoped to `sts:AssumeRole`
+   on the **eu-central-1** CDK bootstrap roles plus SPA bucket sync, CloudFront
+   invalidation, ECR `production-galexie`, SSM and `cloudformation:DescribeStacks`.
+   Take the `ProductionDeployRoleArn` output for the secret below. Note the SSO
+   profiles are now `soroban-admin` / `soroban-readonly`
+   (`aws sso login --sso-session rumblefish`); the old `sorobanscan` profile is
+   static-key + us-east-1 and no longer applies.
 2. GitHub: create environment `production` with policies (tag `production-*`,
    branch `master`) and set the two secrets there.
-3. Merge #338 → develop; the workflow must reach **master** before the first
-   tag — tag-push runs execute the workflow file at the tagged commit.
+3. ~~Merge #338 → develop~~ — done: #338 merged to master, and the back-merge
+   in #397 brought it to develop. The workflow must reach **master** before the
+   first tag — tag-push runs execute the workflow file at the tagged commit.
 4. Validate end-to-end with the first `production-YYYY.MM.DD-N` tag (a
    quiet-day tag is a fine test: empty cdk diff, no-op deploy, SPA re-sync).
 5. After validation: delete the legacy `staging` environment.
@@ -211,6 +226,11 @@ land deliberately — re-apply verbatim):**
 
 ## Notes
 
+- **Spawned:** [0475](../backlog/0475_FEATURE_release-skill-collect-what-ships.md)
+  — a `/release` skill that assembles what a tag actually ships (PRs, task ids,
+  issue refs) and drafts the tag command. Explicitly **not** stack selection:
+  `cdk diff` already answers that exactly. Held until after the first real
+  `production-*` tag.
 - **Leftover staging references** (deliberately NOT removed here):
   - `lore/2-adrs/0009_staging-deploy-trigger-strategy.md` — kept as historical
     record (ADR convention); now **superseded** by this task.

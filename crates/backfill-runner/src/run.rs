@@ -63,7 +63,11 @@ pub async fn execute(
     // table, which the original ingest already filled, so without this every
     // partition reads as done. Empty completed-set → every ledger re-parsed;
     // all writes are ReplacingMergeTree-idempotent.
-    let completed = if reindex {
+    // `--lp-amounts-only` implies the same bypass: its whole purpose is to
+    // re-parse an ALREADY-ingested range for one new derived table, and it
+    // writes no `ledgers` marker of its own, so the resume filter would skip
+    // every ledger and the run would do nothing (task 0279).
+    let completed = if reindex || sink.lp_amounts_only() {
         std::collections::HashSet::new()
     } else {
         sink.load_completed(start, end).await?

@@ -7,11 +7,11 @@ Deep-dives live in the per-layer READMEs (linked below). This file does
 **not** duplicate them — it ties them together and is the source of truth
 for _which_ command ships _what_.
 
-> **Important — there is no staging environment, and the CI deploy path is
-> not armed yet.** Production is the only environment. A tag-driven CI deploy
-> exists (`.github/workflows/deploy-production.yml`) but is **inert until the
-> GitHub `production` environment holds the AWS deploy secrets** — until then
-> every deploy is run **manually from an operator laptop**. See
+> **Important — there is no staging environment.** Production is the only one.
+> A release is a `production-*` tag, which runs the CI deploy
+> (`.github/workflows/deploy-production.yml`); the same ships can also be run
+> **manually from an operator laptop**, which is the path for surgical,
+> single-stack work. See
 > [§ Releases and the CI deploy path](#releases-and-the-ci-deploy-path), and
 > [§ No staging](#no-staging) before trusting any `staging` command you find
 > elsewhere in the repo.
@@ -76,9 +76,9 @@ If you find a `staging` command in an old README or your shell history, it is
 stale. A real pre-mainnet tier is proposed as the **testnet** environment
 (ADR 0052) — not as a revived `staging`.
 
-> The GitHub **environment** named `staging` is a different thing and still
-> exists: it holds the OIDC deploy secrets used by the April 2026 tag deploys.
-> It goes away once the `production` environment takes over (below).
+> The GitHub **environment** named `staging` is a different thing. It is a
+> leftover from April 2026, superseded by `production` (below), and nothing
+> reads it.
 
 ---
 
@@ -112,12 +112,11 @@ second release on the same day.
   cutting a new tag, not re-running the old one.
 - **Issues close at deploy, not at merge** — run `/issues` after a release.
 
-> ⚠️ **Not armed yet.** The job binds `environment: production`, which does not
-> exist in the repo. Until it is created and holds `AWS_DEPLOY_ROLE_ARN`
-> (+ `AWS_ACCOUNT_ID`), and the deploy role is confirmed to cover
-> `eu-central-1`, the SPA bucket sync and the CloudFront invalidation, a tag run
-> dies at credential configuration and ships nothing. The manual path below is
-> the working one. Tracked in task 0390.
+The job binds `environment: production`, so its OIDC subject is
+`repo:<org>/<repo>:environment:production` — that string is what the deploy
+role's trust policy matches, and it is why the environment binding is not
+optional. The role itself is defined in
+`infra/src/lib/stacks/cicd-stack.ts` and created by `make -C infra deploy-cicd`.
 
 ---
 

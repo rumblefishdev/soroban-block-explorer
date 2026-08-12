@@ -88,9 +88,8 @@ A release is a git tag: pushing `production-YYYY.MM.DD-N` to `master` runs
 git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
 ```
 
-> ⚠️ The CI path is **not armed yet** — it needs the GitHub `production`
-> environment holding the AWS deploy secrets (task 0390). Until then every
-> deploy is manual from a laptop:
+> The manual laptop path stays available, and is the one to use for surgical,
+> single-stack deploys:
 
 ```bash
 make -C infra diff-production              # preview

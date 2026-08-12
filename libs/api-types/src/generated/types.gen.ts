@@ -1622,6 +1622,23 @@ export type PaginatedPoolItem = {
  */
 export type PaginatedPoolTransactionItem = {
   data: Array<{
+    /**
+     * What this transaction moved through THIS pool, **one entry per
+     * operation**, in application order (task 0279 / issue #371).
+     *
+     * Per operation, not summed per transaction: 8.2% of (pool, transaction)
+     * pairs on mainnet run more than one operation against the same pool
+     * (measured 2026-08-12 over 8.49M pairs), and a sum across a bundled
+     * deposit + path payment describes neither. One entry each keeps every
+     * figure true on its own; the common single-operation row is a
+     * one-element list.
+     *
+     * **Empty** = no figures for this row, which is NOT the same as zero:
+     * per-pool amounts are indexed from their deploy onwards and filled
+     * backwards by a re-parse, so older rows carry none yet and must render
+     * blank rather than as `0`.
+     */
+    amounts: Array<PoolOperationAmount>;
     created_at: string;
     /**
      * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
@@ -1850,10 +1867,51 @@ export type PoolItem = {
 };
 
 /**
+ * What ONE operation moved through the pool being viewed, per canonical leg
+ * (task 0279). Both legs are **signed from the pool's side**: positive = the
+ * asset entered the pool, negative = it left. So a trade reads `+/-`, a
+ * deposit `+/+` and a withdrawal `-/-` — the sign alone gives the direction,
+ * with no event-type field.
+ *
+ * Raw stroops as STRINGS, like every other on-chain amount here (`reserve_a`,
+ * `total_supply`): a JSON number is a double in the browser, so a leg above
+ * 2^53 stroops (~900M units) would silently lose digits.
+ *
+ * A leg is `null` when this operation did not move that asset — never `0`.
+ */
+export type PoolOperationAmount = {
+  amount_a?: string | null;
+  amount_b?: string | null;
+  /**
+   * The operation's 1-based position in its transaction (Horizon's
+   * `application_order`), so the list is stably ordered and each entry is
+   * traceable to an operation on the transaction detail page.
+   */
+  application_order: number;
+};
+
+/**
  * One row from `/liquidity-pools/:id/transactions`. Shape pinned to
  * canonical SQL `20_get_liquidity_pools_transactions.sql`.
  */
 export type PoolTransactionItem = {
+  /**
+   * What this transaction moved through THIS pool, **one entry per
+   * operation**, in application order (task 0279 / issue #371).
+   *
+   * Per operation, not summed per transaction: 8.2% of (pool, transaction)
+   * pairs on mainnet run more than one operation against the same pool
+   * (measured 2026-08-12 over 8.49M pairs), and a sum across a bundled
+   * deposit + path payment describes neither. One entry each keeps every
+   * figure true on its own; the common single-operation row is a
+   * one-element list.
+   *
+   * **Empty** = no figures for this row, which is NOT the same as zero:
+   * per-pool amounts are indexed from their deploy onwards and filled
+   * backwards by a re-parse, so older rows carry none yet and must render
+   * blank rather than as `0`.
+   */
+  amounts: Array<PoolOperationAmount>;
   created_at: string;
   /**
    * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
