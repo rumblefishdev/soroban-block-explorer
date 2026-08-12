@@ -217,12 +217,21 @@ pub fn client_with_mtls(
             // half-dead sockets that surface as `connection closed` on the next
             // request after a quiet period.
             .pool_idle_timeout(Duration::from_secs(8))
-            // The indexer writes ledger-by-ledger but the Lambda is sized for
-            // reservedConcurrentExecutions ≤ a handful. Two pooled connections
-            // per host is plenty for serial writes; bumping this hides
-            // connection-error symptoms but uses more SM Extension warm-cert
-            // memory across reuse.
-            .pool_max_idle_per_host(2)
+            // Must cover the WIDEST concurrent read a single request makes, not
+            // just the indexer's serial writes this was originally sized for
+            // (task 0446). The API fans a request out over `tokio::join!`; the
+            // widest is 3 (`transactions::get_transaction`,
+            // `contracts::fetch_contract_list`). At a cap of 2 the third
+            // connection is opened per request and then evicted, so every such
+            // request pays a fresh TCP + TLS 1.3 + mTLS handshake to Hetzner on
+            // a 256 MB Lambda — which can cost more than the round trip the
+            // concurrency saves. `enable_http1()` only, so there is no h2
+            // multiplexing to absorb it.
+            //
+            // 4 leaves one spare. A Lambda instance serves one request at a
+            // time, so this bounds retained idle sockets per instance, not
+            // in-flight ones; the indexer never has more than one anyway.
+            .pool_max_idle_per_host(4)
             .build(https);
 
     let url = format!("https://{domain}");
