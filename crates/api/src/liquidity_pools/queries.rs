@@ -718,11 +718,16 @@ pub async fn fetch_pool_transactions(
     // operation_types via the shared non-correlated aggregate (ops-only, PK
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
-    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // Source StrKeys resolve by surrogate id (bloom seek) instead of a
     // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
     // preserved via filter_map (a tx always has its source account).
-    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
+    // Both read off `page` alone — one wave, not two (task 0446).
+    let (aggregates, accounts) = tokio::join!(
+        fetch_tx_list_aggregates(client, &keys),
+        resolve_accounts(client, page.iter().map(|r| r.source_id).collect()),
+    );
+    let aggregates = aggregates?;
+    let accounts = accounts?;
 
     Ok(page
         .into_iter()
