@@ -136,10 +136,11 @@ pub struct PoolAssetLeg {
     /// `sac_contract_id` facet). `None` for native legs and for classic credit
     /// legs without a deployed SAC.
     pub contract_id: Option<String>,
-    /// Asset icon URL, mirrored from the leg's `assets.icon_url` row so
-    /// pool avatars render the same icon as the assets list. `None` for
-    /// native legs and assets without an enriched icon — the FE falls back
-    /// to the asset-code initial.
+    /// Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool
+    /// avatars render the same icon as the assets list. Until task 0310 this
+    /// read the dead `assets.icon_url` column, which was never populated —
+    /// every leg icon came back `None`. Still `None` for assets without an
+    /// enriched icon — the FE falls back to the asset-code initial.
     pub icon_url: Option<String>,
 }
 
