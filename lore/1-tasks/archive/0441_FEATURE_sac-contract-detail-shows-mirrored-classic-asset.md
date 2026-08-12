@@ -2,9 +2,9 @@
 id: '0441'
 title: 'FEATURE: SAC contract detail shows the classic asset it mirrors (reverse of the join we already run)'
 type: FEATURE
-status: active
-related_adr: []
-related_tasks: ['0339']
+status: completed
+related_adr: ['0051']
+related_tasks: ['0339', '0472']
 tags:
   [
     backend,
@@ -19,6 +19,18 @@ tags:
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-10'
+    status: completed
+    who: karolkow
+    note: >
+      Merged in PR #387 (1c29dd43); review corrections in 0004eb75. 17 files,
+      +448/-23, 4 new vitest cases (32 FE test files green), 228 Rust tests
+      green, all 6 CI checks green including API types freshness. Measured on
+      prod query_log: a whole list page is 13 ms / 461,849 rows / 6.83 MiB,
+      a single detail 6 ms / 1.36 MiB. Three CodeRabbit doc findings fixed,
+      all real, none in code. Follow-up 0472 spawned and extended with three
+      accepted /ux-expert findings. NOT yet deployed — issue #368 stays open
+      until production, per the repo convention that issues close at deploy.
   - date: '2026-08-10'
     status: active
     who: karolkow
@@ -220,6 +232,119 @@ just that the whole cost is 8 MB.
       canonical SQL 11 statement C
 - [x] **API types regenerated** — `SacAsset` in
       `libs/api-types/src/generated/`, same commit
+
+## Implementation Notes
+
+Shipped in PR #387 (merged 2026-08-10, `1c29dd43`); doc corrections follow in
+`0004eb75`. 17 files, +448/−23.
+
+- **`fetch_sac_assets`** (`crates/api/src/contracts/queries.rs`) — the single
+  reverse-lookup fn, shared by list and detail so both can never drift. One
+  batched `IN` list per page, `GROUP BY sac_contract_id` + `max()`, issuers
+  resolved through the existing `resolve_accounts` bloom seek. Returns
+  `HashMap<i64, SacAsset>`; an unresolvable facet is simply absent from the
+  map, so the caller degrades rather than emitting half an identity.
+- **List** collects the page's `is_sac` ids and skips the call entirely when
+  the page holds none. **Detail** calls it only when `is_sac`.
+- **DTO** — `sac_asset: Option<SacAsset { asset_code, issuer }>` on both
+  `ContractListItem` and `ContractDetailResponse`; `is_sac` kept for callers
+  that only need the flag.
+- **Frontend** — linked `SAC · CODE` chip on the list, "Mirrors asset" row
+  (code + issuer) on the detail, both fed by `web/src/pages/contracts/
+sacAsset.ts` (code + canonical `CODE-ISSUER | native` route token).
+- **Tests** — 4 vitest cases in `ContractsTable.test.tsx`: classic link,
+  native → `/assets/native`, unresolvable → bare unlinked badge, non-SAC →
+  no chip.
+
+### Measured on production (2026-08-10)
+
+Real `system.query_log`, not `EXPLAIN`:
+
+| Shape                    | duration | read_rows | read_bytes |
+| ------------------------ | -------- | --------- | ---------- |
+| 1 SAC id (detail)        | 6 ms     | 120,881   | 1.36 MiB   |
+| 20 SAC ids (a list page) | 13 ms    | 461,849   | 6.83 MiB   |
+
+The 20-id case reads the whole table — that is the ceiling, and a page costs
+the same as a single contract. Well under the ~0.10 s the access-path decision
+assumed.
+
+## Issues Encountered
+
+- **`stash@{2}` did not hold the implementation.** The 2026-07-30 history
+  entry pointed there; stash indices had shifted during that day's cleanup and
+  a content grep over all 25 stashes found no SAC→asset lookup anywhere.
+  Started from the LP-query pattern instead. (Lesson: reference stashes by
+  content, not index.)
+- **Worktree package resolution.** `node_modules` symlinks to the main
+  checkout, so `@rumblefish/api-types` resolved to develop's build and the FE
+  typecheck reported `sac_asset` as non-existent. Fixed with a worktree-local
+  shadow symlink; CI (fresh branch checkout) was never affected.
+- **Merge conflict with 0465.** Both branches extended the same
+  `contracts::dto` import list in `openapi/mod.rs` (`SacAsset` vs
+  `DecompiledResponse`/`DecompileDiagnostic`). Resolved by keeping all three;
+  the `components(schemas(...))` registration had merged cleanly on its own.
+  `libs/api-types` was **regenerated** after the merge rather than trusted as
+  a text merge of generated files — the regen produced no diff.
+- **Pre-commit blocked on a foreign missing dep.** `prismjs` (0465's syntax
+  highlighter) was declared in `package.json` but absent from the shared
+  `node_modules`. Fixed with `npm install`, not `--no-verify`.
+- **Three doc defects found in review**, all real: the canonical SQL
+  contradicted itself on statement count; frontend-overview implied a NON-SAC
+  contract shows a bare SAC badge (it shows no chip); and the asset route was
+  written `/asset/native` when `routeSegments.asset` is `assets`. Docs-only —
+  the code builds URLs through `routes.asset()`, never a literal.
+
+## Design Decisions
+
+### From Plan
+
+1. **Accept the scan** (2026-07-30, see above) — no projection, no
+   detail-only scoping. Upgrade path named: `bloom_filter` skip index past
+   ~5M rows.
+2. **One batched query per page**, never per row — the property that makes
+   the scan affordable.
+3. **Keep `is_sac`** beside the new object rather than replacing it.
+
+### Emerged
+
+4. **Named `sac_asset`, not `mirrored_asset`.** "Mirrored" was invented
+   vocabulary; `sac_asset` matches the existing `is_sac` / `asset_sac`
+   family. Decided with Karol during implementation.
+5. **`max()` is a collapse of identical values, not a "newest" pick.**
+   Questioned during review — correctly, since `asset_sac` has no version or
+   time column. A SAC's address is derived deterministically from the asset
+   identity, so one `sac_contract_id` can only ever map to one asset;
+   measured **zero** contracts with more than one distinct
+   `(asset_type, asset_code, issuer_id)`. The duplicate rows differ only in
+   the carrier `contract_id` / `sac_deployed`. `max()` over equal values is
+   `any()`, but deterministic if an ingest bug ever produced a second
+   identity.
+6. **Native detected by `asset_type = 0`**, not by an empty issuer. The prod
+   facet row for the XLM SAC is literally `('', 0)`, so the empty-string form
+   IS present here — it just is not the signal. Guards the trap in Notes.
+7. **Issuer shown beside the code on the detail.** An asset code alone is
+   ambiguous: prod carries many distinct issuers of "USDC". The list chip
+   shows the code only (column width) and links to the fully-qualified asset.
+8. **Type chips stay unlinked** (/ux-expert, 2026-08-10). A linked chip
+   points at a different entity; a category label linking to the row's own
+   asset would read as a filter. Recorded in [[0472]].
+
+## Future Work
+
+Spawned as **[[0472]]** — contract pages link + name what they represent:
+Fungible → its asset page, NFT → its collection view, plus three accepted
+/ux-expert findings on this task's UI (header chip names the asset, row label
+"Asset", and the redundant `Token`+`SAC` chip pair collapsed to one).
+
+That last one rests on a measurement worth keeping: on prod **`contract_type =
+Token` ⟺ `is_sac`, exactly** (3,946 of 3,946; zero non-SAC type-0 contracts).
+Soroban-native fungible tokens classify as `Fungible`, so the `Token` bucket
+holds nothing but SACs and the double chip carries no information.
+
+Also corrected here: "the query usually does not fire at all" is true of the
+DEFAULT list page (newest 50 hold zero SACs) but **false of the `Token`
+filter**, where every row is a SAC and the lookup runs on every page.
 
 ## Notes
 

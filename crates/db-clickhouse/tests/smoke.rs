@@ -70,8 +70,8 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- assets (state) — composite PK, no surrogate `id` -----
     client
         .query(
-            "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count, icon_url) \
-             VALUES (1, 'USDC', ?, 0, NULL, NULL, NULL)",
+            "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id) \
+             VALUES (1, 'USDC', ?, 0)",
         )
         .bind(SMOKE_LEDGER)
         .execute()

@@ -289,8 +289,8 @@ pub async fn fetch_pool_by_id(
              ), \
              sac AS ( \
                  SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
-                        max(sc.contract_id) AS contract_id, \
-                        max(a.icon_url)     AS icon_url \
+                        max(sc.contract_id)      AS contract_id, \
+                        nullIf(max(ae.icon_url), '') AS icon_url \
                  FROM assets a \
                  LEFT JOIN ( \
                      SELECT asset_type, asset_code, issuer_id, contract_id, \
@@ -299,6 +299,16 @@ pub async fn fetch_pool_by_id(
                  ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                        AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
                  LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+                 LEFT JOIN ( \
+                     SELECT asset_type, asset_code, issuer_id, contract_id, \
+                            argMax(icon_url, version) AS icon_url \
+                     FROM asset_enrichment \
+                     WHERE asset_type IN (0, 1) AND asset_code IN ( \
+                         SELECT asset_a_code FROM legs WHERE asset_a_code != '' \
+                         UNION ALL SELECT asset_b_code FROM legs WHERE asset_b_code != '') \
+                     GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
+                     AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
                  WHERE a.asset_type IN (0, 1) \
                    AND (a.asset_code, a.issuer_id) IN ( \
                        SELECT asset_a_code, asset_a_issuer_id FROM legs WHERE asset_a_code != '' \
@@ -1108,8 +1118,8 @@ pub async fn fetch_pool_list(
          ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
-                    max(sc.contract_id) AS contract_id, \
-                    max(a.icon_url)     AS icon_url \
+                    max(sc.contract_id)      AS contract_id, \
+                    nullIf(max(ae.icon_url), '') AS icon_url \
              FROM assets a \
              LEFT JOIN ( \
                  SELECT asset_type, asset_code, issuer_id, contract_id, \
@@ -1120,6 +1130,14 @@ pub async fn fetch_pool_list(
              ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                    AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
              LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        argMax(icon_url, version) AS icon_url \
+                 FROM asset_enrichment \
+                 WHERE asset_type IN (0, 1) AND asset_code IN (SELECT c FROM codes) \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
+                 AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
              WHERE a.asset_type IN (0, 1) AND a.asset_code IN (SELECT c FROM codes) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \

@@ -2,13 +2,25 @@
 id: '0472'
 title: 'FEATURE: contract pages link + name what they represent (fungible/NFT links, SAC polish from /ux-expert)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0051']
 related_tasks: ['0441']
 tags: [frontend, contracts, assets, nfts, priority-low, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-11'
+    status: active
+    who: karolkow
+    note: >
+      Activated. 0441 is deployed and verified on production (list chips
+      `SAC · CODE` with `/assets/CODE-ISSUER` hrefs, detail row, native
+      `XLM` → `/assets/native`, non-SAC clean, no console errors). The
+      production pass surfaced two more items, both added to scope: the
+      SAC summary row packs asset + issuer into ONE cell so it reads as
+      two unlabelled buttons (scope 7), and `/assets/native` titles itself
+      "Asset" with a `?` avatar (scope 8) — newly visible because the SAC
+      link now leads there.
   - date: '2026-08-10'
     status: backlog
     who: karolkow
@@ -63,8 +75,12 @@ Cross-links (original scope):
 
 1. Contract detail (Fungible): an "Asset" summary row linking to
    `routes.asset(contract_id)` — same row shape as 0441's mirrored-asset row.
-2. Contract detail (NFT): a "Collection" link to
-   `/nfts?filter[contract_id]={C…}`.
+2. Contract detail (NFT): a "Collection" link to the NFTs list filtered by
+   this contract. **The frontend URL is `/nfts?contract={C…}`**, not
+   `filter[contract_id]` — `NftsListPage` registers the filter under the key
+   `contract` (`useCursorPagination({ filterKeys: ['collection', 'contract'] })`)
+   and maps it to the `filter[contract_id]` API param itself, after an
+   `isContractId` guard. No `routes` helper builds that URL yet.
 3. Contracts list: **decided** (/ux-expert, 2026-08-10) — Type chips stay
    unlinked. A linked chip points at a DIFFERENT entity (the 0441
    `SAC · CODE` case); "Fungible"/"NFT" are category labels, and a link from
@@ -88,6 +104,28 @@ SAC polish (accepted /ux-expert findings on the shipped 0441 UI):
      Add `aria-label`/tooltip with the issuer on the linked chip while there —
      the bare code is ambiguous (many issuers of "USDC" on prod).
 
+Found on the post-deploy production pass (2026-08-11):
+
+7. **The SAC summary row packs two links into one cell.** It renders
+   `Mirrors asset | POYE GCBP…FJTB` — code and issuer side by side, neither
+   labelled, so they read as two anonymous buttons. The row directly above
+   already does it right: `SummaryRow` takes an ARRAY of cells and renders
+   `Deployer | GBJW…THEN` next to `Deployed at ledger | 54,571,433`. Split
+   the SAC row the same way — `Asset | POYE` + `Issuer | GCBP…FJTB` — which
+   also delivers scope 5 (the label becomes plain "Asset") and scope 6's
+   disambiguation, as a visible labelled field rather than a hover-only
+   tooltip. Native XLM drops the second cell; it has no issuer.
+8. **`/assets/native` does not name itself XLM.** The page titles itself
+   "Asset" with a `?` letter avatar, because native carries
+   `asset_code = null` and `AssetDetailPage` falls back
+   `asset_code ?? symbol ?? 'Asset'`. Pre-existing, but the SAC link from
+   scope 4/7 now leads there, so it is on the path this task builds. The
+   correct rule already exists in the pool code — `assetLegLabel` maps
+   `asset_type_name === 'native' → 'XLM'` and hard-fails on schema drift
+   rather than rendering a `?`. Reuse that rule for the asset title and its
+   `AssetIcon`; check the assets LIST cell (`AssetsTable` passes raw
+   `row.asset_code`) for the same gap.
+
 ## Acceptance criteria
 
 - [ ] Fungible contract detail links its asset page; vitest case
@@ -95,10 +133,14 @@ SAC polish (accepted /ux-expert findings on the shipped 0441 UI):
 - [x] /ux-expert pass on the chip-vs-row question for the list; decision
       recorded — rows only, Type chips stay unlinked (2026-08-10, see Scope 3)
 - [ ] Detail header chip names + links the mirrored asset (`… · CODE`)
-- [ ] Summary row relabelled "Asset"; frontend-overview updated
+- [ ] SAC summary row split into two labelled cells (`Asset` + `Issuer`),
+      native rendering the asset cell only; vitest case
 - [ ] SAC rows show a single chip (`SAC · CODE`, no `Token` chip); filter
       label reads `SAC`; API params untouched
 - [ ] Linked SAC chip carries an issuer tooltip / aria-label
+- [ ] `/assets/native` titles itself `XLM` with an XLM avatar, via the
+      existing native rule (`assetLegLabel`); assets list checked for the
+      same gap; vitest case
 - [ ] No API surface change (frontend-only; no api-types regen)
 - [ ] Docs: frontend-overview §6.10 updated
 

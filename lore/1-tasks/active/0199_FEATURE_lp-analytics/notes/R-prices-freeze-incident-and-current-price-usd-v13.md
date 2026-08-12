@@ -77,6 +77,74 @@ history:
       inflate volume_base (would corrupt the weighted average's
       weights, not just the price). Ball is on their side; next input
       expected from them.
+  - date: '2026-08-06'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Pre-roll ETA received: the run was accidentally interrupted, to be
+      resumed; ~4.3 days of run time remaining, finish 2026-08-10 evening
+      UTC (realistic 08-10 17:00Z to 08-11 06:00Z). Same-day measurement:
+      window still empty on every level (15m/1h/1d/series).
+  - date: '2026-08-07'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Their volume_base answer: three surfaces. The series views we read
+      GROUP BY identity, so duplicated rows land in separate groups —
+      misattribution, never inflation; our weighted averages are correct.
+      Summing across identities double-counts (we verified we do this
+      nowhere — only equality lookups per leg), and current_price_usd
+      genuinely inflates volume_24h_usd (no group-by; we don't read it).
+      Their wording correction: the direction was one asset_id to many
+      identities all along. Answered both their asks: no cross-identity
+      aggregation on our side, and delivered pool-price-coverage CSV
+      (52,373 pools) with activity — 7,004 of 27,287 ever-not-48h pools
+      still trade in 30d; coverage among active pools 69.3 percent,
+      ceiling ~96 percent post pivot step. Flagged TF/USDC-class pools
+      (hyper-active, base leg never priced) as a possible LP-only
+      ingestion gap. Reply sent.
+  - date: '2026-08-11'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      TF/USDC-class report resolved by them (their 0165, live): the view
+      emitted one row per BASE asset per bucket, and USDC as top-preference
+      quote was never a base — structurally zero USDC candles ever. Fix is
+      a zero-weight peg fill; both series views gained a final `method`
+      column (traded/peg/oracle; peg = $1 placeholder, ~0.1 percent error
+      until their 0168 swaps in the oracle rate). Re-measured at their
+      request: canonical-USDC cohort 1,436 pools flipped 0 to 99.6 percent
+      ever / 873 p48; never-priced pools 2,113 to 682 (-67.7 percent,
+      their 67.8 prediction). Headline p48 21,313 vs 22,975 decomposed:
+      +873 from the fix, -2,854 ordinary staleness drift in 5 days — the
+      48h number breathes 2-3pp weekly. USDT non-regression FAILS but via
+      their 0172: canonical USDT publishes traded closes 0.129-0.143
+      (its own identity, not just the pair), newest bucket peg $1.
+      Our exposure checked: explicit column lists everywhere (method
+      append harmless); close_usd>0 guard added to #380 against the 0171
+      Decimal128::MIN sentinel (zero occurrences in our windows today —
+      insurance). 0171 input given: omit the row, misses-are-absent is
+      the contract. Pre-roll ETA window PASSED with the hole still empty
+      — asked whether it slipped or lands as an atomic ATTACH. Reply sent.
+  - date: '2026-08-12'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Owner's wrap-up: their 0165 closed on the -67.7 vs 67.8 match. The
+      pre-roll LANDED 08-11 ~16:31Z (6.1s, plain INSERTs) — the missed ETA
+      was a different job (pre-Soroban SDEX backfill) crossed with the gap
+      pre-roll; our still-empty reading was accurate when taken. Verified
+      filled on our side 08-12: all 13 days, pre-freeze densities — the
+      DEPLOY GATE for PR #380 is open and AC validation over the window is
+      unblocked. USDT re-framed on our evidence (their top priority):
+      clarified that peg $1 is the CORRECT value and traded 0.14 the
+      defect, so canonical USDT reads closest to truth as $1 until 0172.
+      Our omit-the-row input on 0171 accepted (row count changes when it
+      ships, values don't). NEW from their audit: the USDC hole spanned
+      three surfaces and only the series views are fixed — /assets/ohlcv
+      (their 0170) and /price / current_price_usd still cannot return
+      canonical USDC; we read neither. Coverage snapshots will be
+      date-stamped on both sides from now on.
 ---
 
 # R: prices.\* read traps — freeze, sentinels, partial-enrichment skew
@@ -108,6 +176,18 @@ MV status — the gap that let it run silently for ten days).
 **The 07-21 → 08-03 window does NOT backfill itself.** Coarse tables are
 current from 08-03 forward; the ~12-day hole is being closed by an
 incremental pre-roll on their side — they will ping when done.
+
+**Pre-roll status: LANDED — the deploy gate is open.** Ran 2026-08-11
+~16:31Z (7.5h after our still-empty measurement, which was accurate when
+taken), runtime 6.1 s, plain INSERTs into the RMT tiers — not an atomic
+ATTACH. Verified on our side 08-12: all 13 days present in the daily series
+at pre-freeze-normal densities (3.3–5.2k identities/day; 07-21 completed
+1,234 → 3,269). The ETA confusion was two jobs crossed on their side: the
+08-10/08-11 window belonged to a pre-Soroban SDEX backfill (history through
+2024-02-20), a different job that never touched the July hole. Their caveat:
+read the raw `price_ohlcv_*` tiers with FINAL — 07-21 carries duplicate
+versions pending a merge (the series views are unaffected). AC validation
+over the window is unblocked.
 
 Consequences for 0199:
 
@@ -366,3 +446,58 @@ truth we avoid by reading their views in-cluster at all. Scale supports waiting:
 materialising, which is the right order. Reported back with the mechanism, since
 "asset_id survives FINAL under multiple identities" points at the sorting key
 and is more actionable than the row count.
+
+## 7. Peg fill, the `method` column, and the Decimal128::MIN sentinel
+
+From their 2026-08-11 message (their tasks 0165 / 0168 / 0171 / 0172), after
+our TF/USDC-class report. Three durable read rules fall out of it.
+
+**Peg fill (their 0165, live).** `price_usd_series` emitted one row per BASE
+asset per bucket; canonicalisation makes USDC the quote on essentially every
+pair it touches, so the one asset everything is priced against had zero
+candles in all of history. Both series views now emit a `$1` peg row for a peg
+asset in every bucket where it appears as a quote leg. Confirmed on our side:
+canonical-USDC cohort 1,436 pools went 0 → 99.6% priceable-ever.
+
+**`method` column — appended LAST to both views.** Values: `traded` (real
+volume-weighted aggregate), `peg` (the $1 placeholder, ~0.1% systematic error
+until their 0168 swaps in the oracle depeg rate), `oracle` (reserved). Their
+append rule protects column ORDER, not arity — positional decodes break.
+We are safe (every read pins an explicit column list; the §2 rule), and the $1
+error is well inside our documented 1% tolerance, so we consume peg rows as-is
+and deliberately do not branch on `method`.
+
+**`close_usd` can be NEGATIVE (their 0171).** In a bucket where an asset's
+only candles carry zero volume, the views can publish `Decimal128::MIN`
+(≈ -1.7e24) instead of omitting the row. Pre-existing, any asset, not
+peg-specific. Our `nullIf(x, 0)` guards do NOT catch it — a negative close
+would have printed a -1e24-scale TVL, and via the chart's ASOF carry-forward
+smeared it across every later bucket until the next good close. **Rule: every
+`close_usd` read filters `close_usd > 0`** — shipped in #380 (`argMaxIf` on
+the last-closes path, `AND close_usd > 0` in both chart price subqueries).
+Zero occurrences in our read windows at patch time; this is insurance.
+Our 0171 input to them: omit the row — misses-are-absent is the contract.
+
+**Known-bad data while their 0172 is open:** canonical USDT (GCQTGZQQ…)
+publishes `traded` daily closes of 0.129–0.143 — its own identity price, ~7×
+understated, flapping to peg $1 on buckets with no base trades. Owner
+clarification (08-12): **the $1 is the correct value and the 0.14 is the
+defect** — the peg fill fires only where USDT didn't trade as a base, so it
+put a correct value beside a wrong one and made a uniformly-wrong column
+visibly broken. They keep it as a diagnostic (no rollback). Until 0172
+lands, canonical-USDT-leg TVL is wrong on traded buckets; do not attribute
+it to the peg fill, and do not "fix" it locally.
+
+**The USDC hole spanned THREE surfaces; one is fixed (08-12 status).**
+`price_usd_series` / `_1h` — fixed (the peg fill above, re-measured by us).
+`GET /assets/{USDC}/ohlcv` — still an empty 200 (their 0170;
+`base_currency=USD` resolves the quote to USDC and asks for a USDC/USDC
+self-pair). `GET /price` / `current_price_usd` — still cannot return
+canonical USDC (the underlying MV groups on the base leg only; fix needs an
+MV rebuild, slower than the view swap). We read neither broken surface —
+but "USDC prices now" is true only of the views.
+
+**0171 resolution:** our omit-the-row input accepted — misses stay absent,
+no sentinel. Consumer-visible change is ROW COUNT, not any value; eyeball
+that when it ships. The `close_usd > 0` guard stays regardless (their
+recommendation too).

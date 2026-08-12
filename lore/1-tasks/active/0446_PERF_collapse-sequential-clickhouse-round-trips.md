@@ -2,7 +2,7 @@
 id: '0446'
 title: 'PERF: collapse sequential ClickHouse round trips across the API query layer'
 type: PERF
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0338', '0359']
 tags:
@@ -17,6 +17,16 @@ history:
       awaited one at a time in 19 loops across 7 query modules, while 9 sites in
       the same crate already use `tokio::join!`. Measured cost of an avoidable
       round trip is 14.2 ms.
+  - date: '2026-08-12'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Re-checked against the code first: both named sites are
+      unchanged — the two independent keyset arms in `assets::fetch_transactions`
+      still run in a sequential loop, and `liquidity_pools` still has no
+      concurrent site at all (its aggregate and account lookups are awaited one
+      after the other though neither consumes the other's result). First slice is
+      the assets keyset arms.
 ---
 
 # Collapse sequential ClickHouse round trips across the API query layer

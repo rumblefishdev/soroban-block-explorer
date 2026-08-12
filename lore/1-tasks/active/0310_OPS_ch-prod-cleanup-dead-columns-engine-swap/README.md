@@ -2,7 +2,7 @@
 id: '0310'
 title: 'CH prod cleanup — drop dead assets aggregate columns + MergeTree→ReplacingMergeTree engine swap (wasm_interface_metadata, ledgers)'
 type: OPS
-status: backlog
+status: active
 related_adr: ['0044']
 related_tasks: ['0293', '0232', '0298', '0244']
 tags:
@@ -104,6 +104,29 @@ history:
       migration that ran a month ago. Re-verified on prod today: `ledgers` and
       `wasm_interface_metadata` are both `ReplacingMergeTree`; the three dead
       `assets` columns are still present, so the remaining scope is unchanged.
+  - date: '2026-08-11'
+    status: active
+    who: karolkow
+    note: >
+      Activated for the code-strip half; the prod `ALTER`s stay with the operator.
+      Pre-flight re-verified on prod (chq) — full evidence in
+      `notes/G-prod-preflight-drop-evidence.md`. Four things the body did not say:
+      (1) **`name` is already gone from prod `assets`** (8 columns: identity
+      4-tuple + the 3 dead + `id`), so the "DROP COLUMN name batches here" note
+      carried in `init.sql` / `rows.rs` was stale — struck.
+      (2) **None of the three is in the sorting/primary key**
+      (`asset_type, asset_code, issuer_id, contract_id`), so each DROP is a cheap
+      metadata op with no re-sort.
+      (3) **Two live API readers of `assets.icon_url` existed** — the LP detail and
+      LP list queries (`max(a.icon_url)` feeding `asset_{a,b}_icon_url`). They read
+      a column that is 0/411,654 populated in prod, i.e. every LP leg icon has
+      always been NULL. Re-pointed to `asset_enrichment` (ADR 0050 — the source the
+      assets endpoints already use, 11,977 icons), which both unblocks the DROP and
+      fixes the silently-empty field.
+      (4) **The 40 surviving `total_supply`/`holder_count` rows are pre-0293
+      leftovers in the OLD scale** — `assets` held display units,
+      `balance_aggregates` holds raw (e.g. APFC 6,500,450,000 vs
+      65,004,500,000,000,000). Nothing reads them; not a second source of truth.
 ---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
@@ -118,7 +141,9 @@ runbook: `0293/README.md` → "Deploy / Migration Runbook"):
 1. **Remaining scope.** Drop the now-dead `assets.total_supply` /
    `assets.holder_count` / `icon_url` (served from the `balance_aggregates` table
    — renamed from `asset_aggregates` by 0331/0339, ADR 0051; written `None` by the
-   indexer, read by nothing).
+   indexer, read by nothing). **Code half done 2026-08-11** — nothing writes or
+   reads the three columns any more; what is left is the operator's deploy +
+   three `ALTER TABLE assets DROP COLUMN` statements (§2).
 2. ~~Rebuild `ledgers` and `wasm_interface_metadata` as `ReplacingMergeTree`.~~
    **DONE in prod 2026-06-24** (out of band, during SAC-redrain backup prep) and
    re-verified 2026-07-07, 2026-07-22 and 2026-07-29 — both tables report
@@ -194,26 +219,25 @@ DROP TABLE ledgers_rmt;
 - Optional `OPTIMIZE TABLE ... FINAL` after the swap forces the dedup merge so
   non-`FINAL` reads are clean sooner.
 
-### 2. Stop the indexer writing the dead columns, then drop them
+### 2. Stop the code writing/reading the dead columns, then drop them
 
 Order matters — the ClickHouse client names every struct field in the INSERT
 column list, so dropping a column the indexer still INSERTs → `INSERT` fails
-(`No such column`).
+(`No such column`). The reverse is safe: code that stops naming a column the
+table still has just leaves it on its NULL default.
 
-1. Code: remove `total_supply` / `holder_count` from `AssetRow`
-   (`crates/db-clickhouse/src/persist/rows.rs`) and the three construction sites
-   in `crates/db-clickhouse/src/persist/stage.rs` (they currently write `None`).
-2. Deploy the indexer; let old Lambda versions drain.
-3. Drop the columns (cheap metadata op):
+1. **Code — DONE (2026-08-11).** See "Implementation Notes" below: `AssetRow` +
+   the parser's `ExtractedAsset` stripped, both `INSERT INTO assets` column
+   lists shortened, the two LP queries re-pointed off `assets.icon_url`,
+   `init.sql` / `lib.rs` / docs updated.
+2. **Deploy the indexer + API; let old Lambda versions drain.** (operator)
+3. **Drop the columns** — cheap metadata op, none is in the sorting key: (operator)
 
 ```sql
 ALTER TABLE assets DROP COLUMN total_supply;
 ALTER TABLE assets DROP COLUMN holder_count;
+ALTER TABLE assets DROP COLUMN icon_url;
 ```
-
-4. Remove `total_supply` / `holder_count` from `init.sql`'s `assets` DDL and from
-   the `crates/db-clickhouse/src/lib.rs` statement-count comment (count unchanged
-   — still 22 — but the dead-column note goes).
 
 ### 3. Monitor the `balance_aggregates` refresh (lore-0293 follow-up)
 
@@ -256,13 +280,84 @@ Alert if `exception != ''` OR `now() - last_success_time > ~10 min` (a few misse
       3760->3720 (40 byte-identical dups collapsed), ledgers 12,582,889 unchanged
       (no dup sequences); create-copy-`EXCHANGE`-`OPTIMIZE FINAL`-drop with a
       `uniqExact` distinct-key gate; snapshot_d backup taken first.
-- [ ] Indexer no longer references `assets.total_supply` / `holder_count`;
-      `ALTER ... DROP COLUMN` applied; `init.sql` + `lib.rs` updated.
-- [ ] **Docs updated** — `docs/architecture/database-schema/**` reflects the three
-      RMT engines and the dropped `assets` columns (matches prod state).
-- [ ] **API types regenerated** — N/A (no API DTO/handler change; the `AssetRow`
-      DTO keeps `total_supply`/`holder_count`, now sourced from `balance_aggregates`).
-      Re-confirm at execution time if the diff touches `crates/api/**`.
+- [x] No code references `assets.total_supply` / `holder_count` / `icon_url`
+      any more — writers, readers and `init.sql` all stripped (2026-08-11);
+      `lib.rs` note updated. The only surviving mentions are Postgres-era
+      (`audit-harness`), dead since 0244.
+- [ ] `ALTER … DROP COLUMN` applied in prod — **operator step, after the
+      indexer + API deploy has drained.**
+- [x] **Docs updated** — `database-schema-overview.md` (assets DDL + icon
+      paragraph), `endpoint-queries-clickhouse/README.md` (engine table),
+      `indexing-pipeline-overview.md`, `enrichment.md`,
+      `xdr-parsing-overview.md`. `technical-design-general-overview.md` left
+      alone: it is the original PG-dialect design spec (still lists `sac`,
+      `description`, `home_page`), already historical rather than evergreen.
+- [x] **API types regenerated** — ran
+      `npx nx run @rumblefish/api-types:generate`; the only diff is the
+      `PoolAssetLeg.icon_url` doc comment. No DTO shape change: the leg still
+      exposes `icon_url`, and `AssetRow` keeps `total_supply`/`holder_count`
+      sourced from `balance_aggregates`.
+
+## Implementation Notes (code half, 2026-08-11)
+
+Pre-flight evidence: `notes/G-prod-preflight-drop-evidence.md`.
+
+**Writers** — `AssetRow` (`persist/rows.rs`) lost the three fields, so the
+generated INSERT column list shortens; every build site already went through
+`AssetRow::staged()`, so no call site changed. Two hand-written
+`INSERT INTO assets (…)` lists shortened as well:
+`backfill-runner/src/contract_type_rebuild.rs` (type-3 rebuild) and a
+`backfill-enrichment-runner` test seed, plus the `db-clickhouse` smoke /
+metadata E2E seeds and the `column_order_assets` drift test.
+
+**Parser** — `ExtractedAsset.total_supply` / `.holder_count` were `None` at
+every one of their construction sites (they only ever fed the dead columns), so
+they went too, along with the doc comments promising a future
+`recompute_asset_aggregates` write-back that 0244 deleted.
+
+**Readers** — the LP detail and LP list queries were the only live consumers of
+`assets.icon_url`. Re-pointed to `asset_enrichment`
+(`argMax(icon_url, version)`, same key 4-tuple, same predicate as the
+surrounding `asset_sac` join) — the source the assets endpoints already use.
+
+**Verification** — `cargo check --workspace --all-targets`, `cargo clippy`
+(clean), `cargo test -p db-clickhouse -p xdr-parser -p api` (all green), and the
+re-written LP icon CTE executed against **prod** for pool
+`41c3e3d9…` : leg `XRPBANK` now returns `https://xrpb.global/xrpbank.png` where
+the old `max(a.icon_url)` returned NULL. Confirms both that ClickHouse accepts
+the CTE-inside-join-subquery shape and that the new source has data.
+
+## Design Decisions
+
+### From Plan
+
+1. **Code first, `ALTER` second.** The INSERT column list is explicit, so the
+   drop can only follow a fully drained deploy.
+
+### Emerged
+
+2. **Re-point the LP icons instead of nulling them out.** The DROP had to break
+   the tie: either delete the field from the LP DTO (an API contract change) or
+   move it to the table that actually holds icons. Chose the move — same field,
+   no contract change, and it turns a permanently-NULL field into a populated
+   one. The alternative (hardcoding NULL) would have been a misleading
+   fallback.
+3. **Strip the parser's two dead fields as well.** Not in the original scope,
+   which stopped at the CH columns — but with the columns gone, `ExtractedAsset`
+   would have carried two fields that no producer sets and no consumer reads.
+   Removing them keeps producer and schema telling the same story.
+4. **Left the Postgres-era `audit-harness` references alone** — `10_assets.sql`
+   (psql `\echo`, PG constraints) and `horizon-diff.rs` (`sqlx::PgPool`) still
+   name the columns, but PG was retired by 0244 and neither can run.
+5. **Left `technical-design-general-overview.md` alone** — see the docs AC.
+
+## Future Work
+
+- `domain::Asset` (`crates/domain/src/asset.rs`) has no references anywhere in
+  the workspace — a PG-era struct (`id: i32`, `NUMERIC(28,7)` doc) carrying the
+  same dead fields. Deletion candidate, but out of this task's blast radius.
+- `account_balances_current` (0 rows, no writer/reader) still waits on task
+  0214's acceptance criterion being rewritten onto `balances` first.
 
 ## Notes
 

@@ -823,10 +823,12 @@ CREATE TABLE assets (
     asset_code      VARCHAR(12),
     issuer_id       BIGINT        REFERENCES accounts(id),           -- ADR 0026
     contract_id     BIGINT        REFERENCES soroban_contracts(id),  -- ADR 0030; soroban identity only
-    name            VARCHAR(256),
-    total_supply    NUMERIC(28,7),                                   -- indexer recompute per ledger (ADR 0043 / task 0194 §1b)
-    holder_count    INTEGER,                                         -- indexer recompute per ledger (ADR 0043 / task 0194 §1c)
-    icon_url        VARCHAR(1024),                                   -- list-level thumbnail (ADR 0037 / task 0164)
+    -- IDENTITY ONLY. `name` (task 0304), `total_supply` / `holder_count` /
+    -- `icon_url` (task 0310) were dropped: this row is re-written whole every
+    -- ledger, so any mutable non-key column gets clobbered. Supply/holders are
+    -- aggregated from `balances` into `balance_aggregates` (task 0293/0331);
+    -- name/icon live in `asset_enrichment` (ADR 0050) coalesced over
+    -- `soroban_contract_metadata` (task 0297).
     CONSTRAINT ck_assets_asset_type_range CHECK (asset_type BETWEEN 0 AND 15),
     -- ADR 0051: a SAC is a FACET of its classic_credit / native asset, not a
     -- separate type. `assets` holds only the asset's IDENTITY; the SAC handle
@@ -937,20 +939,22 @@ Design notes:
   - `3 = Soroban` → `xdr_parser::detect_assets` for non-SAC deployments
     whose WASM interface classifies as `Fungible` via
     `xdr_parser::classify_contract_from_wasm_spec`.
-- `icon_url` is the only SEP-1 enrichment field on the DB row — it serves the
-  list-page thumbnail (per-row), and is populated by the **type-1 enrichment
-  worker Lambda** (`crates/enrichment-worker`, task 0191): the indexer Lambda
-  emits one SQS message per newly inserted asset, the worker consumes the
-  queue, fetches the issuer's `https://{home_domain}/.well-known/stellar.toml`
-  via the shared `enrichment-shared::sep1` fetcher, extracts the matching
+- `icon_url` serves the list-page thumbnail (per-row) and lives in the
+  `asset_enrichment` side table (ADR 0050 / task 0231), never on the `assets`
+  row itself — the `assets.icon_url` column was dropped in task 0310 after
+  measuring 0 populated rows in prod. It is populated by the **type-1
+  enrichment worker Lambda** (`crates/enrichment-worker`, task 0191): the
+  indexer Lambda emits one SQS message per newly inserted asset, the worker
+  consumes the queue, fetches the issuer's
+  `https://{home_domain}/.well-known/stellar.toml` via the shared
+  `enrichment-shared::sep1` fetcher, extracts the matching
   `CURRENCIES[].image`, and writes back. Worker writes are unconditional —
   duplicate or refresh messages overwrite, which keeps the worker stateless.
   Permanent fetch failures (missing `home_domain`, 4xx, malformed TOML, no
   matching `CURRENCIES[]` row, URL exceeding the column length) write an
-  empty-string sentinel `''`. Because `''` is NOT NULL, the indexer's
-  un-enriched-asset producer query (`WHERE a.icon_url IS NULL`) excludes
-  these rows on subsequent ledgers — they are not re-emitted to the
-  enrichment queue. Distinct from **type-2 runtime enrichment** in
+  empty-string sentinel `''`, which the un-enriched-asset producer query
+  treats as "already tried" — those rows are not re-emitted to the enrichment
+  queue. Distinct from **type-2 runtime enrichment** in
   `crates/api/src/runtime_enrichment` (task 0188), which fetches per-request
   for `description` / `home_page` and never writes to the DB.
 - asset-detail SEP-1 fields (`description`, `home_page`, `conditions`,
