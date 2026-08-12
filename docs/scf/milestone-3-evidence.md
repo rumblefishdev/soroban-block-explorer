@@ -420,7 +420,7 @@ on live mainnet data, as of 2026-08-07:
 - **11 improvement reports** raised by community members, recorded on the
   [public issue tracker](https://github.com/rumblefishdev/soroban-block-explorer/issues?q=is%3Aissue)
   by the team on the reporters' behalf.
-- **5 resolved**; the remainder are tracked as open work.
+- **6 resolved**; the remainder are tracked as open work.
 
 Highlights:
 

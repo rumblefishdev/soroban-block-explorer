@@ -69,7 +69,7 @@ SAY:
 > Since launch the explorer has been tested by its real users. The site
 > recorded a hundred and forty-six active users across three hundred and ten
 > sessions, and the Stellar community raised eleven improvement reports, of
-> which five are already resolved. The largest is a redesign of the
+> which six are already resolved. The largest is a redesign of the
 > transaction page itself: every operation now states what it did in plain
 > language, and a failed transaction tells you why — this one names the failing
 > call, shows the exact function with its decoded arguments, and marks where
@@ -169,6 +169,18 @@ SAY:
 > Third, every request pays about forty milliseconds of gateway, Lambda and
 > mutual-TLS overhead before any data is read, plus about fifteen milliseconds
 > per database round trip.
+
+SHOW: (optional) the 78.3 → 23.89 billion rows figure and the unmodified-endpoint
+improvements.
+
+SAY:
+
+> This load test was not just a measurement — it drove the optimisation. Total
+> database work per run fell by sixty-nine percent during this milestone, and
+> endpoints we did not touch at all got three to four times faster as a result,
+> which told us their earlier latency was contention, not their own cost. Each
+> request is correlated to the exact ClickHouse query it triggered, which is how
+> we could attribute every millisecond.
 
 ## Scene 6 - AC5: security posture
 
