@@ -3,15 +3,14 @@ import {
   Chip,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
-  formatInteger,
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
   type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Typography } from '@mui/material';
-
 import { TransactionTime } from '../transactions/TransactionTime.js';
+
+import { TransactionCounts } from './TransactionCounts.js';
 
 interface LedgersTableProps {
   rows: readonly LedgerListItem[];
@@ -68,13 +67,14 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
     },
     {
       id: 'tx_count',
-      header: 'TX Count',
+      header: 'Transactions',
       align: 'right',
       width: 110,
       cell: (row) => (
-        <Typography component="span" variant="bodySmRegular">
-          {formatInteger(row.transaction_count)}
-        </Typography>
+        <TransactionCounts
+          total={row.transaction_count}
+          successful={row.successful_transaction_count}
+        />
       ),
     },
   ];
