@@ -1005,7 +1005,7 @@ pub async fn fetch_transactions(
     //      activity (F-F). `None` → arm A only.
     // Same seek both arms: leading-PK range behind the `max(sequence)` fence,
     // `LIMIT 1 BY` per tx. The union's top-`limit` (sort + dedup + truncate) is the
-    // global page; `dedup` drops a tx returned by both arms.
+    // global page; the outer `LIMIT 1 BY` drops a tx returned by both arms.
     let seek = |table: &str, key_col: &str, key: i64| {
         format!(
             "SELECT ledger_sequence, transaction_id FROM {table} \
@@ -1026,29 +1026,13 @@ pub async fn fetch_transactions(
         ));
     }
 
-    let mut keys: Vec<(i64, i64)> = Vec::new();
-    for sql in &sqls {
-        keys.extend(
-            client
-                .query(sql)
-                .fetch_all::<AssetTxKeyChRow>()
-                .await?
-                .iter()
-                .map(|r| (r.ledger_sequence, r.transaction_id)),
-        );
-    }
-
-    // Merge the arms into the global keyset page: sort in the page direction
-    // (`Next` = newest-first DESC, `Prev` = ASC — matching each arm's SQL `order`,
-    // derived from the typed `direction`, not the SQL string), dedup a tx returned
-    // by both arms, keep the first `limit`.
-    if matches!(direction, Direction::Next) {
-        keys.sort_unstable_by(|a, b| b.cmp(a));
-    } else {
-        keys.sort_unstable();
-    }
-    keys.dedup();
-    keys.truncate(limit as usize);
+    let keys: Vec<(i64, i64)> = client
+        .query(&merge_keyset_arms(&sqls, order, limit))
+        .fetch_all::<AssetTxKeyChRow>()
+        .await?
+        .iter()
+        .map(|r| (r.ledger_sequence, r.transaction_id))
+        .collect();
 
     if keys.is_empty() {
         return Ok(Vec::new());
@@ -1131,9 +1115,58 @@ pub async fn fetch_transactions(
     Ok(out)
 }
 
+/// Fold the keyset arms into ONE statement (task 0446).
+///
+/// The arms read different tables and neither consumes the other's output, so
+/// they used to be awaited one at a time and merged in Rust — two serial round
+/// trips to a ClickHouse that sits outside the AWS network (measured 14.2 ms
+/// each). ClickHouse does the same merge itself: the outer `ORDER BY` is the
+/// page direction, the outer `LIMIT 1 BY` drops a transaction both arms
+/// returned, and the outer `LIMIT` truncates to the page. Each arm keeps its own
+/// `ORDER BY`/`LIMIT` so it still returns at most `limit` rows to the union.
+///
+/// A single arm is already the whole page — returned as-is, no wrapper.
+fn merge_keyset_arms(arms: &[String], order: &str, limit: i64) -> String {
+    let [only] = arms else {
+        let union = arms
+            .iter()
+            .map(|arm| format!("({arm})"))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        return format!(
+            "SELECT ledger_sequence, transaction_id FROM ({union}) \
+             ORDER BY ledger_sequence {order}, transaction_id {order} \
+             LIMIT 1 BY ledger_sequence, transaction_id \
+             LIMIT {limit}"
+        );
+    };
+    only.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_keyset_arms_unions_both_arms_into_one_statement() {
+        // task 0446: the two arms are independent reads; they must cost ONE round
+        // trip, with the merge (order, cross-arm dedup, truncate) pushed into CH.
+        let arms = vec!["SELECT a".to_string(), "SELECT b".to_string()];
+        let sql = merge_keyset_arms(&arms, "DESC", 21);
+        assert!(sql.contains("(SELECT a) UNION ALL (SELECT b)"));
+        assert!(sql.contains("ORDER BY ledger_sequence DESC, transaction_id DESC"));
+        // Drops a transaction returned by BOTH arms — the old Rust `keys.dedup()`.
+        assert!(sql.contains("LIMIT 1 BY ledger_sequence, transaction_id"));
+        assert!(sql.ends_with("LIMIT 21"));
+    }
+
+    #[test]
+    fn merge_keyset_arms_leaves_a_lone_arm_untouched() {
+        // One arm already is the page (own ORDER BY / LIMIT 1 BY / LIMIT) — a
+        // wrapper would only re-sort what CH already ordered.
+        let arms = vec!["SELECT a LIMIT 21".to_string()];
+        assert_eq!(merge_keyset_arms(&arms, "ASC", 21), "SELECT a LIMIT 21");
+    }
 
     #[test]
     fn asset_key_tuples_inlines_type_code_issuer_contract() {
