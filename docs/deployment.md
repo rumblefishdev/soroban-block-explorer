@@ -33,6 +33,24 @@ for _which_ command ships _what_.
 
 Always preview first: `make -C infra diff-production`.
 
+**Every successful `deploy-production*` writes itself into the deploy
+ledger** — the SSM parameter `/production/deploy/git-sha` (value:
+`<full-sha>[-dirty] <scope>`), whose built-in version history is the
+"which commit was live when" record. Read it any time:
+
+```bash
+aws ssm get-parameter-history --region eu-central-1 --name /production/deploy/git-sha --query 'Parameters[].[LastModifiedDate,Value]' --output table
+```
+
+A `-dirty` suffix means the deploy shipped uncommitted changes — the sha
+alone does not reproduce it, so avoid deploying from a dirty tree. The
+record is the last recipe line, so a failed deploy records nothing — with
+two caveats: a failed `deploy-production` (--all) may have shipped some
+stacks before failing (CloudFormation events are the truth for partials),
+and a failed ledger write does not fail make — it prints the manual
+command to run instead. SSM keeps the last **100** versions, so the
+ledger's horizon is the last hundred deploys.
+
 ---
 
 ## The three deploy planes
