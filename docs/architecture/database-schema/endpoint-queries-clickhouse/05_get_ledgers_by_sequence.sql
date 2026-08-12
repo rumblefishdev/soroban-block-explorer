@@ -110,17 +110,22 @@ LIMIT $4;
 
 -- =====================================================================
 -- Statement C — successful-transaction count for this ledger (task 0445)
---   • Same aggregate as the ledgers-list step 2 (see 04), one ledger wide.
+--   • Same statement as 04's Statement B, called with a one-element list.
 --   • A round trip rather than a scalar subquery on Statement A: a subquery
 --     returns 0 for a ledger with no `transactions` rows, which is
 --     indistinguishable from "all of them failed". Absent here → NULL on
 --     the wire → the UI renders the plain total instead of a split.
---   • uniqExactIf, not countIf — ReplacingMergeTree; no FINAL (0420).
+--   • Rationale in full: `fetch_successful_counts`, crates/api/src/ledgers/queries.rs
 -- =====================================================================
 
 SELECT
     ledger_sequence,
-    uniqExactIf(application_order, successful) AS successful_count
-FROM transactions
-WHERE ledger_sequence = $1
+    countIf(successful) AS successful_count
+FROM (
+    SELECT ledger_sequence, application_order, successful
+    FROM transactions
+    WHERE ledger_sequence IN ($1)
+      AND intDiv(ledger_sequence, 500000) IN ($2)
+    LIMIT 1 BY ledger_sequence, application_order
+)
 GROUP BY ledger_sequence;

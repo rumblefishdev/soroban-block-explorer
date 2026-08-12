@@ -41,30 +41,34 @@ WHERE $2 IS NULL
 ORDER BY l.closed_at DESC, l.sequence DESC
 LIMIT $1;
 
--- Step 2 (task 0445): per-ledger successful-transaction count for the page.
---
--- A separate round trip, not a JOIN or subquery on the read above: that read is
--- tuned for optimize_read_in_order, and hanging an aggregate off it risks the
--- plan. Runs after the page rows are deduped, bounded by their min/max sequence.
---
--- Cheap because transactions is ORDER BY (ledger_sequence, application_order),
--- so the range is a PK-prefix seek — measured 16,384 read_rows / 176 KiB / 5 ms
--- for a 10-ledger page (2026-08-12). Granule-bound, so a wider page costs the
--- same.
---
--- uniqExactIf, not countIf: transactions is a ReplacingMergeTree. FINAL is not
--- an option (0420 measured 19x read amplification on a comparable read).
---
--- A ledger absent from this result keeps a NULL successful count on the wire —
--- distinct from 0, which would assert that every transaction in it failed.
---
+-- @@ split @@
+
+-- =====================================================================
+-- Statement B — per-ledger successful-transaction count (task 0445)
+--   • Separate round trip, not a JOIN on Statement A: that read is tuned
+--     for optimize_read_in_order and an attached aggregate risks the plan.
+--   • Key list + partition prune are the load-bearing read guard, same as
+--     `ch::fetch_tx_list_aggregates`. A BETWEEN span would sweep orphan
+--     transaction rows left by an aborted partition (writer.rs commits
+--     `transactions` before the `ledgers` marker) — 0243/0386 were quota
+--     outages in that shape.
+--   • LIMIT 1 BY then countIf is the house RMT dedup idiom; no FINAL (0420),
+--     no uniqExact (per-group hash set, OOM measured in contracts queries).
+--   • Absent ledger → NULL on the wire, distinct from 0 ("all failed").
+--   • Rationale in full: `fetch_successful_counts`, crates/api/src/ledgers/queries.rs
 -- Inputs:
---   $1  :min_sequence  Int64   lowest sequence on the deduped page
---   $2  :max_sequence  Int64   highest sequence on the deduped page
+--   $1  :sequences   Int64 list   the deduped page's sequences
+--   $2  :partitions  Int64 list   intDiv(sequence, 500000) of those
+-- =====================================================================
 
 SELECT
     ledger_sequence,
-    uniqExactIf(application_order, successful) AS successful_count
-FROM transactions
-WHERE ledger_sequence BETWEEN $1 AND $2
+    countIf(successful) AS successful_count
+FROM (
+    SELECT ledger_sequence, application_order, successful
+    FROM transactions
+    WHERE ledger_sequence IN ($1)
+      AND intDiv(ledger_sequence, 500000) IN ($2)
+    LIMIT 1 BY ledger_sequence, application_order
+)
 GROUP BY ledger_sequence;

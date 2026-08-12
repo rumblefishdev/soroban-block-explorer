@@ -69,7 +69,11 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
       id: 'tx_count',
       header: 'Transactions',
       align: 'right',
-      width: 110,
+      // 120, not the old 110: the second line (`22.6% failed`, ~61px, worst
+      // case ~66px) has to clear the cell's 32px horizontal padding at the
+      // 720px table floor, where `tableLayout: fixed` pins columns to their
+      // declared width and overflow is clipped rather than ellipsised.
+      width: 120,
       cell: (row) => (
         <TransactionCounts
           total={row.transaction_count}

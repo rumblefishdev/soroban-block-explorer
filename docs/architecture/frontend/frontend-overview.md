@@ -448,7 +448,7 @@ twice. Separating the records fixes it; hiding rows was never needed.
 
 Paginated table of all ledgers. Default sort: most recent first.
 
-- Ledger table - sequence, hash (truncated), closed_at, protocol version, transaction count
+- Ledger table - sequence, hash (truncated), closed_at, protocol version, transaction count with its successful/failed split (task 0445; the split is nullable — the plain total renders when the API has no split to report)
 - Cursor-based pagination controls
 
 Expanded behavior:
@@ -460,7 +460,7 @@ Expanded behavior:
 
 ### 6.6 Ledger (`/ledgers/:sequence`)
 
-- Ledger summary - sequence, hash, closed_at, protocol version, transaction count, base fee
+- Ledger summary - sequence, hash, closed_at, protocol version, transaction count with its successful/failed split (task 0445), base fee
 - Transactions in ledger - paginated table of all transactions in this ledger
 - Previous / next ledger navigation
 

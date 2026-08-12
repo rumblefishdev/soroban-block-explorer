@@ -9,7 +9,7 @@
 //! on the CH path: unlike PostgreSQL's `BIGSERIAL`, CH `transactions.id`
 //! is a deterministic hash surrogate and must not define in-ledger order.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
@@ -263,54 +263,88 @@ pub async fn fetch_list(
         .into_iter()
         .map(Into::into)
         .collect();
-    attach_successful_counts(client, &mut items).await?;
+    attach_successful_counts(client, &mut items).await;
     Ok(items)
 }
 
-/// Per-ledger successful-transaction counts for a contiguous sequence range.
+/// Per-ledger successful-transaction counts for the sequences on one page.
 ///
 /// A SECOND query rather than a JOIN or subquery inside [`fetch_list`]: that
 /// read is tuned for `optimize_read_in_order` (over-fetch + collapse — see the
 /// measurements in its comment), and hanging an aggregate off it puts that plan
-/// at risk. Same two-step shape as `ch::fetch_tx_list_aggregates`.
+/// at risk. Same two-step shape as `ch::fetch_tx_list_aggregates`, and — the
+/// part that matters — the same read guard: an explicit key list plus a
+/// partition prune.
 ///
-/// Cheap because `transactions` is `ORDER BY (ledger_sequence, ...)`, so the
-/// range is a PK-prefix seek: measured 16,384 read_rows / 176 KiB / 5 ms for a
-/// 10-ledger page on production (2026-08-12). The read is granule-bound, so a
-/// wider page costs the same.
+/// A `BETWEEN min AND max` span looks equivalent on a contiguous page and is
+/// not. `persist::writer` commits `transactions` BEFORE the `ledgers` marker,
+/// so an aborted partition leaves orphan transaction rows with no ledger row;
+/// a page straddling that hole would sweep every one of them. Tasks 0243/0386
+/// were quota outages in exactly this shape.
 ///
-/// `uniqExactIf` rather than `countIf` because `transactions` is a
-/// `ReplacingMergeTree`. `FINAL` is not an option (0420 measured 19x read
-/// amplification on a comparable read). Sampling 7,000 ledgers found no
-/// duplicate rows in `transactions` today — unlike `ledgers` — so this is
-/// defensive, not a fix for an observed defect.
+/// Measured on production 2026-08-12, `index_granularity` 8192:
+///
+/// | page         | read_rows | bytes   | ms |
+/// |--------------|-----------|---------|----|
+/// | 10 ledgers   | 16,384    | 160 KiB | 6  |
+/// | 101 (`MAX_LIMIT` + peek) | 49,152 | 480 KiB | 19 |
+///
+/// So it is flat only while the page fits two granules; the widest supported
+/// page is 3x that, not "the same". At the polled home widget's ~5.5s cadence
+/// (~654 requests/hour) 10 ledgers is ~10.7M read_rows/hour per open tab —
+/// the binding quota is `read_rows` (2e9/h), not bytes, giving roughly 190
+/// concurrent tabs of headroom for this query alone.
+///
+/// `LIMIT 1 BY` then `countIf` is the house dedup idiom for a
+/// `ReplacingMergeTree` — the TPS query in `network::queries` collapses the same
+/// way. Not `FINAL` (0420: 19x read amplification), and not `uniqExact`, which
+/// builds a per-group hash set (`contracts::queries` measured an OOM at
+/// 3.73 GiB on a wide window).
 async fn fetch_successful_counts(
     client: &clickhouse::Client,
-    min_sequence: i64,
-    max_sequence: i64,
+    sequences: &[i64],
 ) -> Result<HashMap<i64, i32>, clickhouse::error::Error> {
-    let rows = client
-        .query(
-            "SELECT \
-                ledger_sequence AS ledger_sequence, \
-                uniqExactIf(application_order, successful) AS successful_count \
-            FROM transactions \
-            WHERE ledger_sequence BETWEEN ? AND ? \
-            GROUP BY ledger_sequence",
-        )
-        .bind(min_sequence)
-        .bind(max_sequence)
-        .fetch_all::<LedgerSuccessRow>()
-        .await?;
+    if sequences.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // Both lists are `i64` inlined directly — integers carry no injection risk,
+    // mirroring `ch::fetch_tx_list_aggregates`.
+    let seq_list = sequences
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = sequences
+        .iter()
+        .map(|s| s / 500_000)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let sql = format!(
+        "SELECT ledger_sequence AS ledger_sequence, \
+                countIf(successful) AS successful_count \
+         FROM ( \
+             SELECT ledger_sequence, application_order, successful \
+             FROM transactions \
+             WHERE ledger_sequence IN ({seq_list}) \
+               AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+             LIMIT 1 BY ledger_sequence, application_order \
+         ) \
+         GROUP BY ledger_sequence"
+    );
+
+    let rows = client.query(&sql).fetch_all::<LedgerSuccessRow>().await?;
 
     Ok(rows
         .into_iter()
-        .map(|r| {
-            (
-                r.ledger_sequence,
-                i32::try_from(r.successful_count).unwrap_or(i32::MAX),
-            )
-        })
+        // `application_order` is `Int16`, so a per-ledger count cannot exceed
+        // 65,536 — the cast is exact. Same convention as the other CH `u64`
+        // aggregates in this crate.
+        .map(|r| (r.ledger_sequence, r.successful_count as i32))
         .collect())
 }
 
@@ -318,22 +352,25 @@ async fn fetch_successful_counts(
 ///
 /// A ledger with no aggregate row keeps `None`. That is deliberate: rendering a
 /// missing aggregate as `0` would claim every transaction in the ledger failed.
-async fn attach_successful_counts(
-    client: &clickhouse::Client,
-    items: &mut [LedgerListItem],
-) -> Result<(), clickhouse::error::Error> {
-    let (Some(min), Some(max)) = (
-        items.iter().map(|i| i.sequence).min(),
-        items.iter().map(|i| i.sequence).max(),
-    ) else {
-        return Ok(());
-    };
+///
+/// A FAILED aggregate degrades to `None` rather than failing the request. The
+/// split is an addition to a page that rendered without it until now, the wire
+/// type is already nullable, and the frontend already has a tested branch for
+/// "no split available" — losing the whole ledgers list, and with it the polled
+/// home widget, over a decorative aggregate would be the wrong trade.
+async fn attach_successful_counts(client: &clickhouse::Client, items: &mut [LedgerListItem]) {
+    let sequences: Vec<i64> = items.iter().map(|i| i.sequence).collect();
 
-    let counts = fetch_successful_counts(client, min, max).await?;
-    for item in items.iter_mut() {
-        item.successful_transaction_count = counts.get(&item.sequence).copied();
+    match fetch_successful_counts(client, &sequences).await {
+        Ok(counts) => {
+            for item in items.iter_mut() {
+                item.successful_transaction_count = counts.get(&item.sequence).copied();
+            }
+        }
+        Err(e) => {
+            tracing::warn!("successful-count aggregate failed, serving totals only: {e}");
+        }
     }
-    Ok(())
 }
 
 /// Over-fetch factor for [`fetch_list`]. Prod carries at most 3 physical rows
@@ -409,12 +446,16 @@ pub async fn fetch_by_sequence(
     // Same aggregate as the list path, one ledger wide. A second round trip
     // rather than a scalar subquery on the header read: a subquery returns 0
     // for a ledger with no `transactions` rows, which is indistinguishable
-    // from "all of them failed".
+    // from "all of them failed". Degrades to `None` on failure, as the list
+    // path does — the ledger itself is still worth serving.
     let mut detail: LedgerDetailRow = row.into();
-    detail.successful_transaction_count = fetch_successful_counts(client, sequence, sequence)
-        .await?
-        .get(&sequence)
-        .copied();
+    detail.successful_transaction_count = match fetch_successful_counts(client, &[sequence]).await {
+        Ok(counts) => counts.get(&sequence).copied(),
+        Err(e) => {
+            tracing::warn!("successful-count aggregate failed for ledger {sequence}: {e}");
+            None
+        }
+    };
 
     Ok(Some(detail))
 }
