@@ -323,7 +323,6 @@ pub async fn fetch_by_sequence(
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
     ledger_sequence: i64,
-    _closed_at: DateTime<Utc>,
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: Direction,

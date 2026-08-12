@@ -199,8 +199,23 @@ pub async fn get_ledger(
         Err(resp) => return resp,
     };
 
-    // Phase 1 — DB header.
-    let header_row = match fetch_by_sequence_for_source(&state, sequence).await {
+    // Header and embedded transactions both key off the path `sequence` — the
+    // tx read never consumed anything from the header row — so they go out
+    // together (task 0446). The header is still what decides the 404 and is
+    // still checked first, so responses are unchanged; the cost is one wasted
+    // tx read when the ledger does not exist.
+    let (header, transactions) = tokio::join!(
+        fetch_by_sequence_for_source(&state, sequence),
+        fetch_transactions_for_source(
+            &state,
+            sequence,
+            pagination.cursor.as_ref(),
+            pagination.fetch_limit(),
+            pagination.direction,
+        ),
+    );
+
+    let header_row = match header {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("ledger with sequence {sequence} not found")),
         Err(e) => {
@@ -209,18 +224,7 @@ pub async fn get_ledger(
         }
     };
 
-    // Phase 2 — DB embedded transactions, keyset-paginated by
-    // `?limit=` / `?cursor=` query params validated above.
-    let mut tx_rows: Vec<LedgerTxRow> = match fetch_transactions_for_source(
-        &state,
-        header_row.sequence,
-        header_row.closed_at,
-        pagination.cursor.as_ref(),
-        pagination.fetch_limit(),
-        pagination.direction,
-    )
-    .await
-    {
+    let mut tx_rows: Vec<LedgerTxRow> = match transactions {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in get_ledger transactions: {e}");
@@ -290,20 +294,11 @@ async fn fetch_by_sequence_for_source(
 async fn fetch_transactions_for_source(
     state: &AppState,
     ledger_sequence: i64,
-    closed_at: chrono::DateTime<chrono::Utc>,
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: crate::common::cursor::Direction,
 ) -> Result<Vec<LedgerTxRow>, clickhouse::error::Error> {
-    queries::fetch_transactions(
-        &state.ch(),
-        ledger_sequence,
-        closed_at,
-        cursor,
-        limit,
-        direction,
-    )
-    .await
+    queries::fetch_transactions(&state.ch(), ledger_sequence, cursor, limit, direction).await
 }
 
 #[cfg(test)]
