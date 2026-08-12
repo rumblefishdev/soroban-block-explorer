@@ -20,7 +20,9 @@ use db_clickhouse::persist::stage::{self, StageInputs};
 use xdr_parser::{decompress_zstd, deserialize_batch};
 
 fn main() {
-    let dir = std::env::args().nth(1).expect("usage: pilot_lp_amounts <DIR>");
+    let dir = std::env::args()
+        .nth(1)
+        .expect("usage: pilot_lp_amounts <DIR>");
     let mut files: Vec<_> = std::fs::read_dir(&dir)
         .expect("read dir")
         .filter_map(Result::ok)

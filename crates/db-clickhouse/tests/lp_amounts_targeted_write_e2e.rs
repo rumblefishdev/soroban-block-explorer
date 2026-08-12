@@ -38,13 +38,19 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
     apply_init_sql(&ch).await.expect("apply init.sql");
 
     for table in ["lp_operation_amounts", "ledgers"] {
-        ch.query(&format!("ALTER TABLE {table} DELETE WHERE {} = ?",
-            if table == "ledgers" { "sequence" } else { "ledger_sequence" }))
-            .bind(TEST_LEDGER)
-            .with_setting("mutations_sync", "1")
-            .execute()
-            .await
-            .expect("cleanup");
+        ch.query(&format!(
+            "ALTER TABLE {table} DELETE WHERE {} = ?",
+            if table == "ledgers" {
+                "sequence"
+            } else {
+                "ledger_sequence"
+            }
+        ))
+        .bind(TEST_LEDGER)
+        .with_setting("mutations_sync", "1")
+        .execute()
+        .await
+        .expect("cleanup");
     }
 
     // A staged ledger carrying BOTH kinds of row: the amounts we want and a
@@ -101,8 +107,14 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
 
     for table in ["lp_operation_amounts", "ledgers"] {
         let _ = ch
-            .query(&format!("ALTER TABLE {table} DELETE WHERE {} = ?",
-                if table == "ledgers" { "sequence" } else { "ledger_sequence" }))
+            .query(&format!(
+                "ALTER TABLE {table} DELETE WHERE {} = ?",
+                if table == "ledgers" {
+                    "sequence"
+                } else {
+                    "ledger_sequence"
+                }
+            ))
             .bind(TEST_LEDGER)
             .with_setting("mutations_sync", "1")
             .execute()
