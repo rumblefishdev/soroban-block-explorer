@@ -504,7 +504,21 @@ and are `null` when a leg is unpriceable. A prices-side failure degrades those
 three fields to `null` — it never fails the request.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
-pool.
+pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
+application order, each with `amount_a` / `amount_b` for the pool's canonical
+legs as raw-stroop decimal **strings** (same reason as `reserve_a` — a JSON
+number is a browser double and a big leg would lose digits), **signed from the
+pool's side** — positive = the asset entered the pool. A trade reads `+/-`, a
+deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the direction and no
+event-type field is needed.
+
+Per operation rather than summed per transaction because **8.2% of (pool,
+transaction) pairs run more than one operation against the same pool** (measured
+on prod 2026-08-12 over 8.49M pairs): a sum across a bundled deposit + path
+payment is smaller than the deposit and can even flip sign shape, so it would
+sit under an Event chip that does not describe it. An empty list means no
+figures — never zero — for history the backfill has not reached; the frontend
+renders those rows blank.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,

@@ -217,6 +217,7 @@ export type {
   ParticipantItem,
   PoolAssetLeg,
   PoolItem,
+  PoolOperationAmount,
   PoolTransactionItem,
   SacAsset,
   SearchGroups,
