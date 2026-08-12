@@ -17,6 +17,15 @@ history:
       R-prices-freeze note). Their new freshness alarm measures data,
       not MV exit status; these two read grants let it also catch the
       precursor signal — pending mutations sat undone for 13 days.
+  - date: '2026-08-12'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      APPLIED on sorban-prod without a container recreate: in-place
+      overwrite kept inode 16777410, ClickHouse hot-reloaded users.d,
+      and SHOW GRANTS FOR prices_writer now lists both new grants.
+      Remaining: prices-owner verification under their credentials +
+      merge of PR #399 (byte-identical mirror).
 ---
 
 # prices_writer monitoring grants: system.mutations + system.view_refreshes
