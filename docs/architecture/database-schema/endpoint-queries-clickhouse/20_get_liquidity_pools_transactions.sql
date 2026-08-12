@@ -9,6 +9,29 @@
 --     aggregate per `(ledger_sequence, transaction_id) IN (…)` with
 --     `GROUP BY transaction_id`. Reuse the shared Rust helper
 --     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates`.
+-- ⚠️  AMOUNTS (task 0279 / issue #371) — the shipped module runs one more
+--     bounded step after the page keys, so each row can carry what it moved
+--     through THIS pool. Not expressible in the single statement below:
+--
+--       SELECT tid, asset_id, sum(amount) FROM (
+--         SELECT transaction_id AS tid, application_order, asset_id,
+--                any(amount) AS amount
+--         FROM lp_operation_amounts
+--         WHERE pool_id = $1
+--           AND (ledger_sequence, transaction_id) IN (<page keys>)
+--           AND intDiv(ledger_sequence, 500000) IN (<page partitions>)
+--         GROUP BY tid, application_order, asset_id
+--       ) GROUP BY tid, asset_id
+--
+--     The inner GROUP BY dedups the ReplacingMergeTree by its full ORDER BY
+--     key before summing — `any()` is exact because duplicates of a key are
+--     byte-identical by construction (one reducer, shared by live ingest and
+--     the re-parse). `FINAL` would merge whole parts to answer a bounded seek.
+--     `asset_id` maps onto the pool's two legs via `ids::asset_id` over
+--     `liquidity_pools.asset_{a,b}_{type,code,issuer_id}` — resolved in Rust,
+--     since CH's builtin `cityHash64` is NOT the surrogate's algorithm.
+--     Absent rows stay NULL on the wire (older history, pre-backfill) — the
+--     frontend renders blank, never `0`.
 -- ============================================================================
 -- Endpoint:     GET /liquidity-pools/:id/transactions
 -- Purpose:      Paginated transactions touching a given pool — deposits,

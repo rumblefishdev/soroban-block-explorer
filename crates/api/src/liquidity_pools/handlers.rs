@@ -455,21 +455,26 @@ pub async fn list_pool_transactions(
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
+    // The pool's two leg surrogates, which double as this path's existence
+    // check (task 0279): the rows' `asset_id` maps onto them, so the response
+    // can carry `amount_a` / `amount_b` aligned with the legs the page already
+    // renders — one seek instead of a separate `pool_exists`.
+    let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
-    match exists {
-        Ok(true) => {}
-        Ok(false) => return errors::not_found("liquidity pool not found"),
+    let asset_ids = match legs {
+        Ok(Some(ids)) => ids,
+        Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in pool_exists({pool_id}): {e}");
+            tracing::error!("DB error in fetch_pool_asset_ids({pool_id}): {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
-    }
+    };
 
     let fetched = queries::fetch_pool_transactions(
         &state.ch(),
         &pool_id_hex,
+        asset_ids,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
@@ -505,6 +510,8 @@ pub async fn list_pool_transactions(
             has_soroban: r.has_soroban,
             operation_types: r.operation_types,
             created_at: r.created_at,
+            amount_a: r.amount_a,
+            amount_b: r.amount_b,
         })
         .collect();
 

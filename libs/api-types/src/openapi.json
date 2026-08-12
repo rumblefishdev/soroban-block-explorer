@@ -4172,6 +4172,16 @@
                 "created_at"
               ],
               "properties": {
+                "amount_a": {
+                  "type": ["integer", "null"],
+                  "format": "int64",
+                  "description": "What this transaction moved through THIS pool, on the pool's canonical\nasset-A leg — raw stroops (classic pools are always 7 decimals),\n**signed from the pool's side**: positive = the asset entered the pool,\nnegative = it left. So a trade reads `+/-` across the two legs, a\ndeposit `+/+`, a withdrawal `-/-`, and the sign alone tells the\nfrontend the direction (task 0279 / issue #371).\n\n`null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the\ndeploy onwards and filled backwards by a re-parse, so older rows\nlegitimately have none and must render blank rather than as `0`."
+                },
+                "amount_b": {
+                  "type": ["integer", "null"],
+                  "format": "int64",
+                  "description": "The asset-B leg of the same figure. See [`Self::amount_a`]."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
@@ -4449,6 +4459,16 @@
           "created_at"
         ],
         "properties": {
+          "amount_a": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "What this transaction moved through THIS pool, on the pool's canonical\nasset-A leg — raw stroops (classic pools are always 7 decimals),\n**signed from the pool's side**: positive = the asset entered the pool,\nnegative = it left. So a trade reads `+/-` across the two legs, a\ndeposit `+/+`, a withdrawal `-/-`, and the sign alone tells the\nfrontend the direction (task 0279 / issue #371).\n\n`null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the\ndeploy onwards and filled backwards by a re-parse, so older rows\nlegitimately have none and must render blank rather than as `0`."
+          },
+          "amount_b": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "The asset-B leg of the same figure. See [`Self::amount_a`]."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"

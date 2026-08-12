@@ -24,7 +24,9 @@
 
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
+use db_clickhouse::persist::ids;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
@@ -126,6 +128,16 @@ pub struct PoolTxRow {
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
+    /// What this transaction moved through the pool, per canonical leg, in raw
+    /// stroops SIGNED from the pool's side — positive = the asset entered the
+    /// pool (task 0279). A trade reads `+/-`, a deposit `+/+`, a withdrawal
+    /// `-/-`.
+    ///
+    /// `None` = NOT KNOWN, never a zero: `lp_operation_amounts` starts at the
+    /// deploy and fills backwards with the re-parse, so older rows legitimately
+    /// have no amounts and must render blank rather than as "0".
+    pub amount_a: Option<i64>,
+    pub amount_b: Option<i64>,
 }
 
 /// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
@@ -426,6 +438,113 @@ pub async fn pool_exists(
 }
 
 #[derive(Debug, Row, Deserialize)]
+struct PoolLegsChRow {
+    asset_a_type: i16,
+    asset_a_code: String,
+    asset_a_issuer_id: i64,
+    asset_b_type: i16,
+    asset_b_code: String,
+    asset_b_issuer_id: i64,
+}
+
+/// The pool's two legs as `ids::asset_id` surrogates — the key
+/// `lp_operation_amounts.asset_id` is written with (task 0279), so a row's
+/// asset maps onto the A/B legs the page already renders. `None` when the pool
+/// does not exist, which is also this seek's existence check (it replaces a
+/// separate [`pool_exists`] round-trip on that path).
+///
+/// Resolved in Rust, not SQL: the surrogate is `cityhash_102_128`'s lower half
+/// and CH's builtin `cityHash64` is a DIFFERENT algorithm (see the schema
+/// header), so the writer's helper is the only way to reproduce the key.
+pub async fn fetch_pool_asset_ids(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+) -> Result<Option<(i64, i64)>, clickhouse::error::Error> {
+    let rows = client
+        .query(
+            "SELECT asset_a_type, asset_a_code, asset_a_issuer_id, \
+                    asset_b_type, asset_b_code, asset_b_issuer_id \
+             FROM liquidity_pools WHERE pool_id = unhex(?) \
+             ORDER BY last_updated_ledger DESC LIMIT 1",
+        )
+        .bind(pool_id_hex)
+        .fetch_all::<PoolLegsChRow>()
+        .await?;
+    Ok(rows.first().map(|r| {
+        (
+            ids::asset_id(r.asset_a_type, &r.asset_a_code, r.asset_a_issuer_id, 0),
+            ids::asset_id(r.asset_b_type, &r.asset_b_code, r.asset_b_issuer_id, 0),
+        )
+    }))
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct PoolAmountChRow {
+    tid: i64,
+    asset_id: i64,
+    amount: i64,
+}
+
+/// Per-transaction amounts this pool moved, for the page's `(ledger, tx)` keys
+/// (task 0279 → the "Amount" column). Signed from the pool's side: positive =
+/// the asset entered the pool.
+///
+/// `lp_operation_amounts` is pool-leading like its `operation_pools` twin, so
+/// this is a PK-prefix seek bounded to the page, with the same partition prune
+/// as STEP 2.
+///
+/// **Dedup before summing, without `FINAL`.** The table is a
+/// ReplacingMergeTree, so un-merged duplicates of one key can be present, and a
+/// naive `sum()` would double-count them. The inner `GROUP BY` collapses each
+/// full ORDER BY key first — `any(amount)` is exact here because duplicate rows
+/// for a key are byte-identical by construction (one reducer, shared by live
+/// ingest and the re-parse, deterministic per op), which is the same argument
+/// `operation_asset_appearances.net_settled` relies on. `FINAL` would merge
+/// whole parts to answer a bounded seek.
+async fn fetch_pool_tx_amounts(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    keys: &[(i64, i64)],
+) -> Result<HashMap<i64, Vec<(i64, i64)>>, clickhouse::error::Error> {
+    if keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_tuples = keys
+        .iter()
+        .map(|(ls, tid)| format!("({ls},{tid})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = keys
+        .iter()
+        .map(|(ls, _)| ls / 500_000)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT tid, asset_id, sum(amount) AS amount FROM ( \
+            SELECT transaction_id AS tid, application_order, asset_id, any(amount) AS amount \
+            FROM lp_operation_amounts \
+            WHERE pool_id = toFixedString(unhex(?), 32) \
+              AND (ledger_sequence, transaction_id) IN ({in_tuples}) \
+              AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+            GROUP BY tid, application_order, asset_id \
+         ) GROUP BY tid, asset_id"
+    );
+    let rows = client
+        .query(&sql)
+        .bind(pool_id_hex)
+        .fetch_all::<PoolAmountChRow>()
+        .await?;
+    let mut by_tx: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
+    for r in rows {
+        by_tx.entry(r.tid).or_default().push((r.asset_id, r.amount));
+    }
+    Ok(by_tx)
+}
+
+#[derive(Debug, Row, Deserialize)]
 struct ParticipantChRow {
     account_id_surrogate: i64,
     shares: String,
@@ -602,6 +721,7 @@ struct DriverKeyRow {
 pub async fn fetch_pool_transactions(
     client: &clickhouse::Client,
     pool_id_hex: &str,
+    asset_ids: (i64, i64),
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
@@ -713,6 +833,10 @@ pub async fn fetch_pool_transactions(
     // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
     // preserved via filter_map (a tx always has its source account).
     let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
+    // Amounts for the same bounded key set (task 0279). A tx with no rows keeps
+    // `None` on both legs — the honest "not known" the pre-backfill history has.
+    let amounts = fetch_pool_tx_amounts(client, pool_id_hex, &keys).await?;
+    let (asset_a_id, asset_b_id) = asset_ids;
 
     Ok(page
         .into_iter()
@@ -722,6 +846,14 @@ pub async fn fetch_pool_transactions(
                 .get(&r.id)
                 .map(|a| a.operation_types.clone())
                 .unwrap_or_default();
+            let legs = amounts.get(&r.id);
+            let leg = |want: i64| {
+                legs.and_then(|v| {
+                    v.iter()
+                        .find(|(asset_id, _)| *asset_id == want)
+                        .map(|(_, amount)| *amount)
+                })
+            };
             Some(PoolTxRow {
                 id: r.id,
                 hash: r.hash,
@@ -733,6 +865,8 @@ pub async fn fetch_pool_transactions(
                 has_soroban: r.has_soroban,
                 operation_types,
                 created_at: millis_to_utc(r.created_at_ms),
+                amount_a: leg(asset_a_id),
+                amount_b: leg(asset_b_id),
             })
         })
         .collect())
@@ -1280,6 +1414,27 @@ mod tests {
         assert!(!is_hex_pool_id(&"A".repeat(64)), "uppercase rejected");
         assert!(!is_hex_pool_id("xyz"));
         assert!(!is_hex_pool_id(&"'; DROP--".repeat(8)));
+    }
+
+    /// The pool-leg surrogates this module computes from `liquidity_pools`
+    /// columns MUST equal the ones the indexer writes into
+    /// `lp_operation_amounts.asset_id` from a claim atom's asset string
+    /// (`stage.rs::claim_atom_asset_id` → `ids::credit_asset_id` /
+    /// `NATIVE_ASSET_ID`). They meet only through this equality: if it breaks,
+    /// no row ever matches a leg and the Amount column silently goes blank
+    /// instead of failing. The bridge is `asset_a_issuer_id`, which the writer
+    /// fills with `ids::account_id(issuer_strkey)`.
+    #[test]
+    fn pool_leg_surrogates_match_the_written_asset_ids() {
+        const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
+        // Native leg: type 0, empty code, issuer_id 0.
+        assert_eq!(ids::asset_id(0, "", 0, 0), ids::NATIVE_ASSET_ID);
+        // Credit leg: the 4-arg form over stored columns == the 2-arg helper
+        // over the StrKey the atom carries.
+        assert_eq!(
+            ids::asset_id(1, "TF", ids::account_id(ISSUER), 0),
+            ids::credit_asset_id("TF", ISSUER),
+        );
     }
 
     #[test]

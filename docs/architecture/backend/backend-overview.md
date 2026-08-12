@@ -494,7 +494,13 @@ the latest snapshot row; clients that care about freshness read
 snapshot freshness — populated even on stale pools.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
-pool.
+pool. Each row carries `amount_a` / `amount_b` (task 0279): what that
+transaction moved through THIS pool, per canonical leg, in raw stroops **signed
+from the pool's side** — positive = the asset entered the pool. A trade reads
+`+/-`, a deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the
+direction and no event-type field is needed. `null` means NOT KNOWN, never
+zero: the amounts are indexed from their deploy and filled backwards by a
+re-parse, so older rows legitimately have none and must render blank.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,

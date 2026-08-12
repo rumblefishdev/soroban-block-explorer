@@ -1595,6 +1595,23 @@ export type PaginatedPoolItem = {
  */
 export type PaginatedPoolTransactionItem = {
   data: Array<{
+    /**
+     * What this transaction moved through THIS pool, on the pool's canonical
+     * asset-A leg — raw stroops (classic pools are always 7 decimals),
+     * **signed from the pool's side**: positive = the asset entered the pool,
+     * negative = it left. So a trade reads `+/-` across the two legs, a
+     * deposit `+/+`, a withdrawal `-/-`, and the sign alone tells the
+     * frontend the direction (task 0279 / issue #371).
+     *
+     * `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
+     * deploy onwards and filled backwards by a re-parse, so older rows
+     * legitimately have none and must render blank rather than as `0`.
+     */
+    amount_a?: number | null;
+    /**
+     * The asset-B leg of the same figure. See [`Self::amount_a`].
+     */
+    amount_b?: number | null;
     created_at: string;
     /**
      * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
@@ -1809,6 +1826,23 @@ export type PoolItem = {
  * canonical SQL `20_get_liquidity_pools_transactions.sql`.
  */
 export type PoolTransactionItem = {
+  /**
+   * What this transaction moved through THIS pool, on the pool's canonical
+   * asset-A leg — raw stroops (classic pools are always 7 decimals),
+   * **signed from the pool's side**: positive = the asset entered the pool,
+   * negative = it left. So a trade reads `+/-` across the two legs, a
+   * deposit `+/+`, a withdrawal `-/-`, and the sign alone tells the
+   * frontend the direction (task 0279 / issue #371).
+   *
+   * `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
+   * deploy onwards and filled backwards by a re-parse, so older rows
+   * legitimately have none and must render blank rather than as `0`.
+   */
+  amount_a?: number | null;
+  /**
+   * The asset-B leg of the same figure. See [`Self::amount_a`].
+   */
+  amount_b?: number | null;
   created_at: string;
   /**
    * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so

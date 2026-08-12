@@ -195,6 +195,19 @@ pub struct PoolTransactionItem {
     /// list (policy lives client-side, not in SQL).
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
+    /// What this transaction moved through THIS pool, on the pool's canonical
+    /// asset-A leg — raw stroops (classic pools are always 7 decimals),
+    /// **signed from the pool's side**: positive = the asset entered the pool,
+    /// negative = it left. So a trade reads `+/-` across the two legs, a
+    /// deposit `+/+`, a withdrawal `-/-`, and the sign alone tells the
+    /// frontend the direction (task 0279 / issue #371).
+    ///
+    /// `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
+    /// deploy onwards and filled backwards by a re-parse, so older rows
+    /// legitimately have none and must render blank rather than as `0`.
+    pub amount_a: Option<i64>,
+    /// The asset-B leg of the same figure. See [`Self::amount_a`].
+    pub amount_b: Option<i64>,
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools` paginated by
