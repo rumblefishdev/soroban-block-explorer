@@ -3,7 +3,7 @@ id: '0390'
 title: 'CI: retire dead staging-deploy workflow + add tag-driven production deploy'
 type: REFACTOR
 status: active
-related_adr: []
+related_adr: ['0009', '0052']
 related_tasks: []
 tags: [priority-low, effort-small, layer-infra, milestone-3, phase-launch]
 milestone: 3
@@ -38,6 +38,20 @@ history:
       gate boundary); tag runs deploy Compute + SPA content, dispatch stays
       for surgical per-stack deploys. Also corrected the Summary: staging
       tags WERE pushed (4× in 2026-04, before the env teardown).
+  - date: 2026-08-12
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Docs pass landed in the same PR. The original "Docs updated — N/A" was
+      right about `docs/architecture/**` (this is CI process, not the shape of
+      the system) but wrong about the *operational* guide: `docs/deployment.md`
+      and `README.md` both asserted "no CI-driven deploy" and listed the files
+      this PR deletes, so merging without them would have left a durable rule
+      that is a lie. ADR 0009 flipped to `superseded` — no new ADR needed, ADR
+      0052 (testnet as the pre-mainnet tier) already names itself the successor
+      and cites lore-0390. Skipped `.claude/skills/issues/SKILL.md`: its Step 4
+      already carries a forward-looking note keyed to the trigger actually
+      changing, and the tag path is still inert.
 ---
 
 # CI: retire dead staging-deploy workflow + tag-driven prod deploy
@@ -80,6 +94,16 @@ no separate approval gate.
   record) → `cdk deploy --exclusively` → smoke (`/health` + public frontend).
   Single job — the earlier two-job split existed only to host an environment
   approval gate, dropped because **the tag push is the approval**.
+- **Docs brought in line** (2026-08-12) — `README.md` § Deploying and
+  `docs/deployment.md` both claimed "no CI-driven deploy" and enumerated the
+  files this PR removes. Rewrote the banner, the deploy-planes intro, § No
+  staging (was "No staging, no CI"), the `GALEXIE_IMAGE_DIGEST` note (its only
+  reader is gone), rollback and config-vs-secrets; added § Releases and the CI
+  deploy path, which documents the tag convention **and** that the path is
+  inert until the `production` environment exists. Also documented the SPA
+  arming guard + the Nx env-input fix under the Frontend recipe, since that
+  hardening ships here and was otherwise undocumented. ADR 0009 →
+  `superseded` (`by: ['0052']`).
 
 ### Open — enablement
 
@@ -178,7 +202,11 @@ land deliberately — re-apply verbatim):**
       diff→per-stack deploy→SPA sync→smoke; header documents prerequisites.
 - [ ] Secrets provisioned; first release tag deployed via the workflow
       validated end-to-end.
-- [ ] **Docs updated** — N/A (CI tooling; does not change the architecture's shape).
+- [x] **Docs updated** — `docs/architecture/**` genuinely N/A (CI process, not
+      the shape of the system), but the **operational** docs were not: `README.md`
+      § Deploying, `docs/deployment.md` (banner, deploy planes, § No staging,
+      new § Releases and the CI deploy path, `GALEXIE_IMAGE_DIGEST` note, SPA
+      arming guard, rollback, config vs secrets) and ADR 0009 → `superseded`.
 - [ ] **API types regenerated** — N/A (no API surface change).
 
 ## Notes
