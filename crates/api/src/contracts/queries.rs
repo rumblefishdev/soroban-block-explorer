@@ -970,13 +970,9 @@ struct EventTxRow {
     /// Already `lower(hex())` in the query.
     hash: String,
     successful: bool,
-}
-
-/// Step-2 resolve row: `ledgers.sequence` → `closed_at` (millis).
-#[derive(Debug, Row, Deserialize)]
-struct EventLedgerRow {
-    sequence: i64,
-    closed_at: i64,
+    /// Parent ledger `closed_at`, joined in — CH has no
+    /// `transactions.created_at` (ADR 0044 §5.2).
+    created_at: i64,
 }
 
 /// A decoded event row + its `event_index` (the cursor tie-break, which is not
@@ -1093,12 +1089,15 @@ pub async fn fetch_events(
     }
 
     // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
-    // with PK-prefix key-seeks instead of full-table hash joins (mirrors
+    // with a PK-prefix key-seek instead of full-table hash joins (mirrors
     // `transactions::queries::resolve_source_and_closed_at`, task 0290).
     // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
     // the handful of ledgers on this page, then filters `id IN (...)`; no
     // `FINAL` (a transaction is immutable, so a dup version is identical).
-    // `ledgers WHERE sequence IN (...)` is a plain PK seek.
+    //
+    // `closed_at` rides along on the `ledgers` join rather than costing its own
+    // statement (task 0446) — the same shape `fetch_invocation_appearances`
+    // uses 150 lines up, so one round trip covers both.
     let in_list = |vals: &[i64]| {
         vals.iter()
             .map(i64::to_string)
@@ -1114,43 +1113,30 @@ pub async fn fetch_events(
     let ledger_seqs = dedup(|r| r.ledger_sequence);
     let tx_ids = dedup(|r| r.transaction_id);
 
-    // Both seeks key off `raw` alone, so they go out together (task 0446).
-    let (tx_rows, ledger_rows) = tokio::join!(
-        client
-            .query(&format!(
-                "SELECT id AS id, lower(hex(hash)) AS hash, successful AS successful \
-                 FROM transactions WHERE ledger_sequence IN ({}) AND id IN ({}) LIMIT 1 BY id",
-                in_list(&ledger_seqs),
-                in_list(&tx_ids),
-            ))
-            .fetch_all::<EventTxRow>(),
-        client
-            .query(&format!(
-                "SELECT sequence AS sequence, closed_at AS closed_at FROM ledgers WHERE sequence IN ({})",
-                in_list(&ledger_seqs),
-            ))
-            .fetch_all::<EventLedgerRow>(),
-    );
-
-    let txs: std::collections::HashMap<i64, (String, bool)> = tx_rows?
+    let txs: std::collections::HashMap<i64, (String, bool, i64)> = client
+        .query(&format!(
+            "SELECT t.id AS id, lower(hex(t.hash)) AS hash, t.successful AS successful, \
+                    l.closed_at AS created_at \
+             FROM transactions t \
+             INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+             WHERE t.ledger_sequence IN ({}) AND t.id IN ({}) LIMIT 1 BY t.id",
+            in_list(&ledger_seqs),
+            in_list(&tx_ids),
+        ))
+        .fetch_all::<EventTxRow>()
+        .await?
         .into_iter()
-        .map(|r| (r.id, (r.hash, r.successful)))
+        .map(|r| (r.id, (r.hash, r.successful, r.created_at)))
         .collect();
 
-    let closed_ats: std::collections::HashMap<i64, i64> = ledger_rows?
-        .into_iter()
-        .map(|r| (r.sequence, r.closed_at))
-        .collect();
-
-    // Rebuild full event rows in page order, then map. A missing tx/ledger
-    // lookup defaults rather than drops the row, so the page count (and the
-    // peek `+1` next-page detection) is preserved.
+    // Rebuild full event rows in page order, then map. A missing tx lookup
+    // defaults rather than drops the row, so the page count (and the peek `+1`
+    // next-page detection) is preserved.
     Ok(raw
         .into_iter()
         .map(|r| {
-            let (transaction_hash, successful) =
+            let (transaction_hash, successful, created_at) =
                 txs.get(&r.transaction_id).cloned().unwrap_or_default();
-            let created_at = closed_ats.get(&r.ledger_sequence).copied().unwrap_or(0);
             map_event_row(EventChRow {
                 ledger_sequence: r.ledger_sequence,
                 transaction_id: r.transaction_id,
