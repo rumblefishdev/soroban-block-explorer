@@ -264,27 +264,31 @@ async fn resolve_source_and_closed_at(
     let source_ids = dedup_keys(|r| r.source_id);
     let ledger_seqs = dedup_keys(|r| r.ledger_sequence);
 
-    // accounts: id -> account_id. `LIMIT 1 BY id` collapses ReplacingMergeTree
-    // versions (account_id is immutable across versions, so no FINAL needed).
-    let accounts: std::collections::HashMap<i64, String> = client
-        .query(&format!(
-            "SELECT id, account_id FROM accounts WHERE id IN ({}) LIMIT 1 BY id",
-            in_list(&source_ids),
-        ))
-        .fetch_all::<PageAccountRow>()
-        .await?
+    // Both seeks key off `raw` alone, so they go out together (task 0446).
+    //   accounts: id -> account_id. `LIMIT 1 BY id` collapses ReplacingMergeTree
+    //   versions (account_id is immutable across versions, so no FINAL needed).
+    //   ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
+    let (account_rows, ledger_rows) = tokio::join!(
+        client
+            .query(&format!(
+                "SELECT id, account_id FROM accounts WHERE id IN ({}) LIMIT 1 BY id",
+                in_list(&source_ids),
+            ))
+            .fetch_all::<PageAccountRow>(),
+        client
+            .query(&format!(
+                "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
+                in_list(&ledger_seqs),
+            ))
+            .fetch_all::<LedgerClosedAtRow>(),
+    );
+
+    let accounts: std::collections::HashMap<i64, String> = account_rows?
         .into_iter()
         .map(|r| (r.id, r.account_id))
         .collect();
 
-    // ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
-    let closed_ats: std::collections::HashMap<i64, i64> = client
-        .query(&format!(
-            "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
-            in_list(&ledger_seqs),
-        ))
-        .fetch_all::<LedgerClosedAtRow>()
-        .await?
+    let closed_ats: std::collections::HashMap<i64, i64> = ledger_rows?
         .into_iter()
         .map(|r| (r.sequence, r.closed_at))
         .collect();
@@ -856,8 +860,13 @@ pub async fn fetch_operations(
         .flatten()
         .collect();
     let contract_ids = raw.iter().filter_map(|r| r.contract_id).collect();
-    let accounts = resolve_accounts(client, account_ids).await?;
-    let contracts = resolve_contracts(client, contract_ids).await?;
+    // Both resolve off `raw` alone — one wave, not two (task 0446).
+    let (accounts, contracts) = tokio::join!(
+        resolve_accounts(client, account_ids),
+        resolve_contracts(client, contract_ids),
+    );
+    let accounts = accounts?;
+    let contracts = contracts?;
 
     Ok(raw
         .into_iter()
@@ -988,10 +997,13 @@ pub async fn fetch_invocation_appearances(
         .bind(ledger_sequence)
         .fetch_all::<InvocationAppearanceRawRow>()
         .await?;
-    let contracts =
-        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()).await?;
-    let accounts =
-        resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()).await?;
+    // Both resolve off `raw` alone — one wave, not two (task 0446).
+    let (contracts, accounts) = tokio::join!(
+        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()),
+        resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()),
+    );
+    let contracts = contracts?;
+    let accounts = accounts?;
     let mut out: Vec<InvocationAppearanceRow> = raw
         .into_iter()
         .map(|r| InvocationAppearanceRow {
