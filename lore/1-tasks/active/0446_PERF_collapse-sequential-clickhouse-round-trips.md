@@ -297,7 +297,20 @@ rerun like everything else here.
       The arms carry `ledger_sequence <= (SELECT max(sequence) FROM ledgers)`, so
       running old and new seconds apart on a live chain compares different
       windows and the newest-first page "mismatches" for no reason.
-- [ ] Median `ch_queries` per request drops measurably against the 3.24 baseline
+- [x] **Median serial WAVES per request drops** — a wave is one round trip,
+      whatever its query count; queries inside one `tokio::join!` are one wave.
+      Superseded the original wording, "median `ch_queries` drops against the
+      3.24 baseline", which cannot pass by construction: concurrency overlaps
+      queries, it does not remove them, so mean `ch_queries` stays at 3.25
+      (verified against the same data). Only `asttxs` drops on query count,
+      8 → 7, from the `UNION ALL`.
+
+      By waves, measured against the recorded run: 16 waves removed across 14
+      endpoints, 6,842 of 13,698 requests (49.9%) losing one or two. The
+      remaining check is whether that converts to wall clock, which is AC 4's
+      job — see the load-test caveat there and the connection-pool section
+      above, since a wave only pays off on an already-open socket.
+
 - [ ] Load-test rerun shows a median-latency improvement, quantified per endpoint
 - [ ] No change in response payloads — pagination, ordering and dedup semantics
       identical (existing endpoint tests stay green without modification)
