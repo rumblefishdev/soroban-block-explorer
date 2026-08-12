@@ -7,10 +7,14 @@ Deep-dives live in the per-layer READMEs (linked below). This file does
 **not** duplicate them — it ties them together and is the source of truth
 for _which_ command ships _what_.
 
-> **Important — there is no staging environment and no CI-driven deploy.**
-> Production is the only environment, and every deploy is run **manually
-> from an operator laptop**. See [§ No staging, no CI](#no-staging-no-ci)
-> before trusting any `staging` command you find elsewhere in the repo.
+> **Important — there is no staging environment, and the CI deploy path is
+> not armed yet.** Production is the only environment. A tag-driven CI deploy
+> exists (`.github/workflows/deploy-production.yml`) but is **inert until the
+> GitHub `production` environment holds the AWS deploy secrets** — until then
+> every deploy is run **manually from an operator laptop**. See
+> [§ Releases and the CI deploy path](#releases-and-the-ci-deploy-path), and
+> [§ No staging](#no-staging) before trusting any `staging` command you find
+> elsewhere in the repo.
 
 ---
 
@@ -33,12 +37,16 @@ for _which_ command ships _what_.
 
 Always preview first: `make -C infra diff-production`.
 
+Shipping a **release** — Compute + SPA together, as one act — is a different
+thing from the per-change table above: see
+[§ Releases and the CI deploy path](#releases-and-the-ci-deploy-path).
+
 ---
 
 ## The three deploy planes
 
-Production is deployed across **three independent planes**, all driven
-from a laptop. Nothing is wired to CI.
+Production is deployed across **three independent planes**. Planes 2 and 3 are
+laptop-only; plane 1 additionally has a tag-driven CI path (§ Releases).
 
 1. **AWS (CDK)** — the bulk: Lambdas (API / indexer / enrichment), Galexie
    (ECS), CloudFront + SPA, API Gateway, alarms, DNS. Driven by
@@ -54,21 +62,62 @@ change touches only plane 2; they are shipped separately.
 
 ---
 
-## No staging, no CI
+## No staging
 
 AWS-side staging was **retired by task 0249** — production is the only AWS
-environment (`eu-central-1`). The following are **dead** and must not be
-used or resurrected without first re-introducing a staging env:
+environment (`eu-central-1`). Its leftovers were removed by task 0390:
+`.github/workflows/deploy-staging.yml` (it pointed at `bin/staging.js` and
+`envs/staging.json`, both long gone) and `scripts/staging-deploy.sh` with the
+`staging-*` git-tag trigger behind it (ADR 0009, now superseded).
+`npm run infra:{deploy,diff,synth}:staging` and any `make deploy-staging*`
+target **do not exist** and error immediately.
 
-- `.github/workflows/deploy-staging.yml` — references `bin/staging.js` and
-  `envs/staging.json`, which **no longer exist**. Last successful run:
-  April 2026. It will fail.
-- `scripts/staging-deploy.sh` and the `staging-*` git-tag trigger (ADR 0009).
-- `npm run infra:{deploy,diff,synth}:staging` and any `make deploy-staging*`
-  target — **no such Make targets exist**; they error immediately.
+If you find a `staging` command in an old README or your shell history, it is
+stale. A real pre-mainnet tier is proposed as the **testnet** environment
+(ADR 0052) — not as a revived `staging`.
 
-If you find a `staging` command in an old README or your shell history,
-it is stale. The real path is `make -C infra deploy-production-*`, below.
+> The GitHub **environment** named `staging` is a different thing and still
+> exists: it holds the OIDC deploy secrets used by the April 2026 tag deploys.
+> It goes away once the `production` environment takes over (below).
+
+---
+
+## Releases and the CI deploy path
+
+**A release is a git tag.** Pushing `production-YYYY.MM.DD-N` to `master` runs
+[`.github/workflows/deploy-production.yml`](../.github/workflows/deploy-production.yml):
+
+```
+build → cdk diff → cdk deploy Explorer-production-Compute --exclusively
+      → make -C infra deploy-production-web → smoke (API /health + frontend 200)
+```
+
+```bash
+git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
+```
+
+The tag **is** the release decision — there is no separate approval gate,
+because a tag is deliberate in a way a merge is not. `-N` increments for a
+second release on the same day.
+
+- **The standard release set is Compute + SPA content.** A release users cannot
+  see is not shipped, so the SPA sync runs on every tag.
+- **Surgical deploys stay on `workflow_dispatch`** — name the stack(s) in the
+  `stacks` input (`--exclusively` on by default, `deploy_web` opt-in). Never a
+  blind `--all`, for the same reason as the per-stack rule below.
+- **`cdk diff` runs before every deploy and is printed into the job log** — that
+  log is the record of what the release changed.
+- **Tag runs execute the workflow file _at the tagged commit_.** The workflow
+  has to be on `master` before the first tag, and fixing the workflow means
+  cutting a new tag, not re-running the old one.
+- **Issues close at deploy, not at merge** — run `/issues` after a release.
+
+> ⚠️ **Not armed yet.** The job binds `environment: production`, which does not
+> exist in the repo. Until it is created and holds `AWS_DEPLOY_ROLE_ARN`
+> (+ `AWS_ACCOUNT_ID`), and the deploy role is confirmed to cover
+> `eu-central-1`, the SPA bucket sync and the CloudFront invalidation, a tag run
+> dies at credential configuration and ships nothing. The manual path below is
+> the working one. Tracked in task 0390.
 
 ---
 
@@ -269,11 +318,10 @@ Bump procedure — **pull → tag → push → sha**:
 4. **Verify:** ECS service healthy + the Galexie ingestion-lag alarm quiet
    (a stalled Galexie = an ingestion outage; the lag alarm is your signal).
 
-> **`GALEXIE_IMAGE_DIGEST` (GitHub `staging` Environment) is not part of this.**
-> It is read **only** by `.github/workflows/deploy-staging.yml`, which is dead
-> (see [§ No staging, no CI](#no-staging-no-ci)) — so updating it has **no effect
-> on a manual deploy**. `production.json` is the pin. Task 0367 updated the
-> variable as bookkeeping; treat it as a record, not a lever.
+> **`GALEXIE_IMAGE_DIGEST` (GitHub `staging` Environment) is not part of this.** > **Nothing reads it any more** — its only consumer, `deploy-staging.yml`, was
+> removed by task 0390 (see [§ No staging](#no-staging)), and the release
+> workflow does not look at it. `production.json` is the pin. Task 0367 updated
+> the variable as bookkeeping; treat it as a record, not a lever.
 
 > Do **not** flip `assignPublicIp` on the Galexie task — it is the only
 > egress path (no NAT GW post-0239). There is a CODEOWNERS-flagged inline
@@ -282,13 +330,22 @@ Bump procedure — **pull → tag → push → sha**:
 ### Frontend SPA — Delivery stack + `deploy-production-web`
 
 `Delivery` provisions the CloudFront distribution and the SPA bucket. The
-**content** is a separate step that builds the SPA (baking
-`VITE_API_BASE_URL` from `cloudflareApiDomainName`), syncs to S3, and
-invalidates CloudFront:
+**content** is a separate step that builds the SPA (baking `VITE_API_BASE_URL`
+from `cloudflareApiDomainName` and `VITE_TURNSTILE_SITE_KEY` from
+`turnstileSiteKey`, both read out of `production.json` — no shell env needed),
+syncs to S3, and invalidates CloudFront:
 
 ```bash
 make -C infra deploy-production-web
 ```
+
+> **Arming guard.** With `enableAuthLayer: true`, the build step greps the
+> emitted bundle for the Turnstile site key and **aborts before any S3 sync** if
+> it is missing. This is the fix for the 0437 incident: an SPA built without the
+> key attaches no session token, so every API call 401s. The Nx build cache does
+> not hash env vars, which is why a build "with" the key could silently reuse a
+> cached bundle built without it — `web/package.json` now declares both `VITE_*`
+> vars as build inputs so a key change busts the cache.
 
 ### CloudWatch alarms / API Gateway / DNS
 
@@ -360,7 +417,12 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
   redeploy the affected stack. CDK has no app-level rollback; a _failed_
   deploy auto-rolls-back at the CloudFormation layer, but a _successful_
   bad deploy is undone by redeploying the previous code.
-- **Frontend:** `make -C infra deploy-production-web` from the good commit.
+- **Via CI:** `workflow_dispatch` the release workflow from the last-good ref —
+  it checks that ref out and redeploys the stack you name. There is no "re-tag"
+  rollback: rolling back is always deploying the previous code forward.
+- **Frontend:** `make -C infra deploy-production-web` from the good commit — the
+  rebuild picks the Turnstile key up from `production.json`, and the arming
+  guard refuses to sync a bundle that is missing it.
 - **Galexie:** set `galexieImageTag` back to the previous digest +
   `deploy-production-ingestion`.
 - **Machine:** `ansible-playbook … --tags app` from a good checkout; data
@@ -376,3 +438,8 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
 - **Secrets** — AWS Secrets Manager (per-service mTLS bundles) + the team
   password manager (box env). **Never** in the repo, CDK context, or
   workflow YAML.
+- **CI deploy secrets** — the GitHub `production` environment carries only
+  `AWS_DEPLOY_ROLE_ARN` (+ `AWS_ACCOUNT_ID`) for OIDC role assumption. No
+  application secret and no `VITE_*` value belongs there: the SPA build reads
+  the API domain and the (public) Turnstile **site** key out of
+  `production.json`.
