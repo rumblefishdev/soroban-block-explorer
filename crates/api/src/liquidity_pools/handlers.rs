@@ -649,14 +649,21 @@ pub async fn get_pool_chart(
         );
     }
 
-    // Existence gate and chart read both derive from the path — see
-    // `list_participants` for why they go out together (task 0446).
-    let ch = state.ch();
-    let (exists, fetched) = tokio::join!(
-        queries::pool_exists(&ch, &pool_id_hex),
-        queries::fetch_pool_chart(&ch, &pool_id_hex, &interval, from, to),
-    );
-    match exists.map_err(|e| e.to_string()) {
+    // This gate stays SERIAL, unlike its siblings in `list_participants` /
+    // `list_pool_transactions` (task 0446). Measured on prod for a pool that
+    // does not exist, their guarded reads cost 25k rows / 113 ms and 561k rows
+    // / 11 ms — cheap enough to waste on a 404. The chart is not: its
+    // `JOIN (SELECT … FROM ledgers WHERE closed_at …)` build side is
+    // materialised even when the left side is empty, and `MAX_CHART_BUCKETS`
+    // admits a ~19-year window. Measured on prod for a pool that does not
+    // exist: 43.7M rows / 4.66 s, against 16.5k rows / 3.6 ms for the gate.
+    // Pool ids are user-supplied strkeys and trivially generated, so running
+    // the chart before knowing the pool exists hands out a 4-second read to
+    // anyone who asks. One wave is worth less than that.
+    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
+        .await
+        .map_err(|e| e.to_string());
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -665,7 +672,10 @@ pub async fn get_pool_chart(
         }
     }
 
-    let data_points = match fetched.map_err(|e| e.to_string()) {
+    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
+        .await
+        .map_err(|e| e.to_string());
+    let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_chart({pool_id}): {e}");
