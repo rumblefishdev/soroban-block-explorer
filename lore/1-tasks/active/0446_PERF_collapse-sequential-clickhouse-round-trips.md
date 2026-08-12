@@ -112,11 +112,86 @@ is a query loop, and some are genuinely dependent. Each needs reading.
 - Re-run the load-test harness (`crates/load-tests`, task 0338) before and after
   and compare `ch_queries` per endpoint plus median latency.
 
+## Audit — verdict per site (2026-08-12)
+
+Every one of the 28 endpoints read end to end (handler → query fn → helper). The
+unit below is a **wave**: one serial step, whatever its query count. Two queries
+in one `tokio::join!` are one wave; `A.await` then `B.await` are two.
+
+### Parallelisable — independent, awaited one at a time
+
+| Site                                         | Endpoint(s)                         | What is serial today                                                                                        | Waves |
+| -------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----: |
+| `contracts::fetch_contract_list`             | `GET /contracts`                    | recent-invocation counts, deployer StrKeys and SAC assets — all three read only `list_rows`                 | 4 → 2 |
+| `contracts::fetch_events`                    | `/contracts/:id/events`             | tx headers then ledger `closed_at` — also **mergeable** (`INNER JOIN ledgers`, the shape used 200 lines up) | 3 → 2 |
+| `contracts::fetch_invocation_appearances`    | `/contracts/:id/invocations`        | caller StrKeys then tx headers, both off `key_rows`                                                         | 3 → 2 |
+| `contracts::fetch_contract`                  | `/contracts/:id`                    | deployer StrKey then SAC asset (SAC-only, ~2.9% of contracts)                                               | 3 → 2 |
+| `transactions::resolve_source_and_closed_at` | `GET /transactions`                 | source accounts then ledger `closed_at`; on 2 of the 3 statement paths                                      |    −1 |
+| `transactions::fetch_operations`             | `/transactions/:hash`               | `resolve_accounts` then `resolve_contracts`                                                                 |    −1 |
+| `transactions::fetch_invocation_appearances` | `/transactions/:hash`               | `resolve_contracts` then `resolve_accounts`                                                                 |    −1 |
+| `ledgers::fetch_transactions`                | `/ledgers/:seq`                     | `resolve_accounts` then tx-list aggregates                                                                  | 3 → 2 |
+| `liquidity_pools::fetch_pool_transactions`   | `/liquidity-pools/:id/transactions` | page and aggregates both need only the keys                                                                 | 4 → 3 |
+| `accounts::get_account`                      | `/accounts/:id`                     | balances then deleted-status, both off `header.id`                                                          | 3 → 2 |
+
+### Parallelisable, but it is an existence gate
+
+Second query never consumes the first's output — it re-derives everything from
+the path. Concurrency wins a wave on the happy path and wastes one query on the 404. 404s are rare; the trade looks right, but it IS a behaviour change on the
+error path and should be decided, not slipped in.
+
+| Site                                                                           | Endpoint(s)                        | Gate                                                                                      |
+| ------------------------------------------------------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| `liquidity_pools::{list_participants, list_pool_transactions, get_pool_chart}` | 3 endpoints                        | `pool_exists`                                                                             |
+| `nfts::list_nft_transfers`                                                     | `/nfts/:contract/:token/transfers` | `nft_exists`                                                                              |
+| `ledgers::get_ledger`                                                          | `/ledgers/:seq`                    | header fetch — its `closed_at` is passed to the tx query as `_closed_at`, i.e. **unused** |
+
+### Mergeable into one statement
+
+- `assets::fetch_transactions` keyset arms — **done**, `UNION ALL`.
+- `contracts::fetch_events` — see above.
+- `search::search_contracts` — prefix scan then name lookup could be a subquery,
+  but the Rust-side duplicate collapse between the phases has to move into CH
+  with it. Lower value: the six search buckets already run under `try_join!`.
+
+### Genuinely dependent — leave alone
+
+Surrogate-id resolution (`fetch_account` → transactions, `fetch_contract` →
+stats / invocations / events, asset row → transactions, `lookup_hash_ledger` →
+`fetch_detail`): the second query's WHERE clause IS the first's output.
+Post-page resolution (`fetch_balances`, `fetch_pool_list`, `fetch_participants`,
+`fetch_detail`, `fetch_participants`, `fetch_event_appearances`, NFT owner,
+`search_assets` issuers): the id set exists only after the page returns.
+`head::current_head_opt` before the list queries is a 304 gate that **skips** the
+heavy query — serial on purpose.
+
+Already concurrent: `search::fetch_search` (6 buckets, `try_join!`),
+`transactions::get_transaction` (2 × `tokio::join!`),
+`assets::fetch_transactions` and `accounts::fetch_transactions` (page ∥
+aggregates).
+
+No opportunity: `network/stats`, `/ledgers`, `/assets`, `/accounts`, `/nfts`,
+`/liquidity-pools` (list), `/contracts/:id/interface`, `/search`.
+
+**Total: ~16 waves removable across 13 endpoints.** At the measured 14.2 ms per
+round trip that is ~14 ms off a typical detail request — the median case the task
+was opened for, not the p95 tail.
+
 ## Acceptance Criteria
 
-- [ ] Every `.await`-in-loop site in `crates/api/src/**/queries.rs` classified as
+- [x] Every `.await`-in-loop site in `crates/api/src/**/queries.rs` classified as
       dependent / parallelisable / mergeable, with the verdict recorded
-- [ ] `assets::fetch_transactions` keyset arms no longer sequential
+- [x] `assets::fetch_transactions` keyset arms no longer sequential — folded into
+      one `UNION ALL` statement (not two concurrent queries): 2 round trips → 1,
+      and CH runs the arms in parallel server-side (measured `elapsed`: arm A
+      0.211 s, arm B 0.036 s, union 0.230 s ≈ the slower arm, not the sum).
+      Differential-checked against prod CH on Circle USDC in both page
+      directions, including a limit where the arms overlap so the cross-arm
+      dedup is exercised: identical key sets. Read cost 62.4 M rows vs 60.9 M for
+      the two arms — granule noise, no pruning regression.
+      Gotcha for whoever re-verifies: pin the ledger fence to a literal first.
+      The arms carry `ledger_sequence <= (SELECT max(sequence) FROM ledgers)`, so
+      running old and new seconds apart on a live chain compares different
+      windows and the newest-first page "mismatches" for no reason.
 - [ ] Median `ch_queries` per request drops measurably against the 3.24 baseline
 - [ ] Load-test rerun shows a median-latency improvement, quantified per endpoint
 - [ ] No change in response payloads — pagination, ordering and dedup semantics
