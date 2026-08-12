@@ -26,6 +26,13 @@ history:
       and SHOW GRANTS FOR prices_writer now lists both new grants.
       Remaining: prices-owner verification under their credentials +
       merge of PR #399 (byte-identical mirror).
+  - date: '2026-08-12'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Prices owner verified from their side: SELECT count() FROM
+      system.mutations returns (34 rows visible) under their
+      credentials. Only the merge of PR #399 remains before archiving.
 ---
 
 # prices_writer monitoring grants: system.mutations + system.view_refreshes
@@ -75,7 +82,9 @@ Applied WITHOUT a container recreate, by keeping the inode:
 
 ## Acceptance Criteria
 
-- [ ] Both grants live on prod, verified by the prices owner from their side.
+- [x] Both grants live on prod, verified by the prices owner from their side
+      (2026-08-12: their `SELECT count() FROM system.mutations` returned 34
+      under prices_writer credentials).
 - [ ] Repo (`services.xml`) matches the box file byte-for-byte after merge.
 - [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
       (prices_writer row); other architecture docs N/A (no shape change
