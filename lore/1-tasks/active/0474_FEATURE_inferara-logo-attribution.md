@@ -28,24 +28,29 @@ Requested by Inferara after the 0465 deploy; copy unchanged.
 
 ## Context
 
-The mark: Inferara's own favicon / app icon (512px, alpha) is a plain red
-dot, `#DD2E44` (sampled from their `android-chrome-512x512.png`) — the same
-asset Dominik sent. Their full GitHub-avatar mark (navy maze + dot) is a
-different, larger lockup; the dot alone is the sanctioned tiny form.
-Their wordmark SVG (`inference-logo-outlined.svg`) is a different brand
-("Inference") — not usable here.
+The mark is the full Inferara glyph (maze + red dot), vectored in their own
+`inferara.com/assets/images/logo.svg`. The asset Inferara sent was the WHITE
+variant of that glyph — on a white background only the red dot shows, which
+sent the first implementation down a wrong path (a lone red dot; their
+favicon happens to be just the dot too). Their wordmark SVG
+(`inference-logo-outlined.svg`) is a different brand ("Inference") — not
+usable here.
 
 ## Implementation
 
-Inline SVG circle (`<circle r=5 fill="#DD2E44">`, ~10px, `aria-hidden`)
-before the attribution text in `ContractCode.tsx`. No raster asset: the
-PNG has a baked white background (glows in dark mode), while an inline
-vector is crisp at any scale and adds nothing to the bundle.
+`InferaraMark` component (`web/src/pages/contracts/InferaraMark.tsx`): the
+14 paths from their logo.svg with the maze switched to `currentColor` (the
+same trick their own wordmark SVG uses) so it follows the attribution text
+colour in both themes; the dot keeps the brand red `#810F0C`. Rendered
+15×15 px, `vertical-align: text-bottom`, at the END of the attribution
+line after the `inferara.com` link (a leading mark read as a list bullet).
+No raster asset: their PNG has a baked white background (glows in dark
+mode), while the inline vector is crisp at any scale.
 
 ## Acceptance Criteria
 
-- [ ] Red-dot logo renders before the attribution line, vertically centered,
-      correct in both light and dark mode.
+- [ ] Full Inferara mark renders at the end of the attribution line,
+      bottom-aligned, correct in both light and dark mode.
 - [ ] Copy and links unchanged.
 - [ ] **Docs updated** — N/A (no architecture-shape change).
 - [ ] **API types regenerated** — N/A (frontend only).
