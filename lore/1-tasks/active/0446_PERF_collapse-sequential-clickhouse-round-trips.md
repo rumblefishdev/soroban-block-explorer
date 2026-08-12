@@ -133,11 +133,18 @@ in one `tokio::join!` are one wave; `A.await` then `B.await` are two.
 | `liquidity_pools::fetch_pool_transactions`   | `/liquidity-pools/:id/transactions` | page and aggregates both need only the keys                                                                 | 4 → 3 |
 | `accounts::get_account`                      | `/accounts/:id`                     | balances then deleted-status, both off `header.id`                                                          | 3 → 2 |
 
-### Parallelisable, but it is an existence gate
+### Parallelisable, but it is an existence gate — DONE
 
 Second query never consumes the first's output — it re-derives everything from
-the path. Concurrency wins a wave on the happy path and wastes one query on the 404. 404s are rare; the trade looks right, but it IS a behaviour change on the
-error path and should be decided, not slipped in.
+the path. Concurrency wins a wave on the happy path and wastes one query on the 404. 404s are rare; the trade was taken deliberately (karolkow, 2026-08-12).
+
+Responses are unchanged: the existence answer is still checked FIRST, so a
+missing entity still yields 404 even when the page read failed too. Only what
+the 404 path costs changes.
+
+`ledgers::get_ledger` needed one cleanup before it could pair — the tx query
+took a `closed_at` argument it never read (`_closed_at`), which made the
+dependency look real. Parameter dropped.
 
 | Site                                                                           | Endpoint(s)                        | Gate                                                                                      |
 | ------------------------------------------------------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------- |
