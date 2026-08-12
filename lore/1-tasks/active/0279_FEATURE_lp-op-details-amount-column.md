@@ -453,6 +453,45 @@ exists, `operation_pools` becomes a value-less projection of the same key
 prefix — a retirement candidate, but only after the read path has migrated
 and soaked. Note it, don't do it here.
 
+## Wire shape: per operation, not per transaction — decided 2026-08-12
+
+The row on the pool page is a TRANSACTION, so the first cut summed the
+amounts across every operation that transaction ran against the pool. Review
+caught that the sum sits under an Event chip naming ONE category
+(`classifyLpTx` resolves a bundled deposit + path payment to "Deposit"), so
+the figure read smaller than the deposit it was captioned with, and where the
+trade leg dominated an asset the signs came out `+/-` and rendered as a swap
+arrow beneath a Deposit chip.
+
+First fix withheld the amount for such transactions, on this file's own
+assumption that bundling is rare. **Measured instead — it is 8.2%**:
+
+```sql
+SELECT count() AS pairs, countIf(ops > 1) AS multi
+FROM (SELECT transaction_id, arrayJoin(pool_ids) AS pool, sum(amount) AS ops
+      FROM operations_appearances
+      WHERE notEmpty(pool_ids) AND ledger_sequence > 63700000
+      GROUP BY transaction_id, pool)
+-- 8,491,737 pairs / 697,529 multi-op = 8.214%
+```
+
+One row in twelve. Hiding that many leaves a permanent hole indistinguishable
+from "backfill hasn't reached here", and recreates the click-through #371 was
+raised about. So the wire carries `amounts: [{application_order, amount_a,
+amount_b}]` — one entry per operation — and the FE renders a line each. 92% of
+rows are one-element lists and look unchanged.
+
+Two consequences worth keeping:
+
+- The read query got SIMPLER, not harder: no outer aggregation, no
+  `uniqExact` ops counter, no suppression branch. One `GROUP BY` that exists
+  only to dedup the RMT.
+- The "rare bundling" comment in `classifyLpTx` was the source of the wrong
+  assumption; it now carries the measured number instead.
+
+Storage is unaffected — the table was always keyed per operation, since the
+RMT key demands it. Only the read path changed.
+
 ## Acceptance criteria
 
 - [x] 0247 path decision recorded — Path B, re-confirmed against prod 2026-07-30
@@ -463,7 +502,8 @@ and soaked. Note it, don't do it here.
 - [ ] Backfill run; live and backfill paths produce identical rows for a
       replayed range
 - [ ] Pool-page read seeks on `pool_id`; `read_rows` measured and recorded
-- [ ] FE "Amount" column un-hidden, rendering deposit / withdraw / trade
+- [ ] FE "Amount" column un-hidden, rendering deposit / withdraw / trade,
+      one line per operation (see the 8.2% measurement above)
 - [ ] The stale comment in `PoolTransactions.tsx` is corrected — it currently
       points at task **0249**, which is about destroying AWS infrastructure
 - [ ] **Docs updated** — `docs/architecture/**` schema + endpoint contract per

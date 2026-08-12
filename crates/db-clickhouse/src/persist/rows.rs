@@ -360,6 +360,28 @@ pub struct OperationPoolRow {
     pub transaction_id: i64,
 }
 
+/// `lp_operation_amounts` — fact, what one operation moved through one pool
+/// (task 0279). The value twin of [`OperationPoolRow`]: same pool-leading key,
+/// plus `application_order` / `asset_id` / `amount`.
+///
+/// One row per (operation, pool, asset) — the op's claim atoms are SUMMED into
+/// it, never written per atom: an op can take the same pool several times
+/// (CAP-38 interleaved matching) and those atoms share the whole ORDER BY
+/// tuple, so per-atom rows would have the RMT keep one and drop the rest.
+///
+/// `amount` is raw stroops SIGNED FROM THE POOL'S SIDE — positive = the asset
+/// entered the pool, negative = it left. So one shape says trade (`+/-`),
+/// deposit (`+/+`) and withdrawal (`-/-`) without an event-type column.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct LpOperationAmountRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+    pub application_order: i16,
+    pub asset_id: i64,
+    pub amount: i64,
+}
+
 /// `soroban_events` — fact, full-content per-event row (ADR 0044
 /// §4a unfold). `signature` is the lifted first-topic Symbol.
 #[derive(Debug, Clone, Row, Serialize)]
