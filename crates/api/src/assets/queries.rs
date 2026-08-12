@@ -1017,17 +1017,24 @@ pub async fn fetch_transactions(
         )
     };
 
-    let mut sqls = vec![seek("operation_asset_appearances", "asset_id", asset_id)];
-    if let Some(contract_id) = contract_surrogate {
-        sqls.push(seek(
-            "soroban_invocations_appearances",
-            "contract_id",
-            contract_id,
-        ));
-    }
+    let arm_a = seek("operation_asset_appearances", "asset_id", asset_id);
+    let sql = match contract_surrogate {
+        // Arm A alone already IS the page — no wrapper to add.
+        None => arm_a,
+        Some(contract_id) => union_keyset_arms(
+            &arm_a,
+            &seek(
+                "soroban_invocations_appearances",
+                "contract_id",
+                contract_id,
+            ),
+            order,
+            limit,
+        ),
+    };
 
     let keys: Vec<(i64, i64)> = client
-        .query(&merge_keyset_arms(&sqls, order, limit))
+        .query(&sql)
         .fetch_all::<AssetTxKeyChRow>()
         .await?
         .iter()
@@ -1125,22 +1132,18 @@ pub async fn fetch_transactions(
 /// returned, and the outer `LIMIT` truncates to the page. Each arm keeps its own
 /// `ORDER BY`/`LIMIT` so it still returns at most `limit` rows to the union.
 ///
-/// A single arm is already the whole page — returned as-is, no wrapper.
-fn merge_keyset_arms(arms: &[String], order: &str, limit: i64) -> String {
-    let [only] = arms else {
-        let union = arms
-            .iter()
-            .map(|arm| format!("({arm})"))
-            .collect::<Vec<_>>()
-            .join(" UNION ALL ");
-        return format!(
-            "SELECT ledger_sequence, transaction_id FROM ({union}) \
-             ORDER BY ledger_sequence {order}, transaction_id {order} \
-             LIMIT 1 BY ledger_sequence, transaction_id \
-             LIMIT {limit}"
-        );
-    };
-    only.clone()
+/// Takes the two arms directly rather than a slice: there are exactly one or
+/// two, and a slice would model that as "zero or more" — an empty one would
+/// build `FROM ()`, invalid SQL no type checks. The lone-arm case is the
+/// caller's `None`, which needs no wrapper at all (`seek` already emits its own
+/// `ORDER BY` / `LIMIT 1 BY` / `LIMIT`).
+fn union_keyset_arms(arm_a: &str, arm_b: &str, order: &str, limit: i64) -> String {
+    format!(
+        "SELECT ledger_sequence, transaction_id FROM (({arm_a}) UNION ALL ({arm_b})) \
+         ORDER BY ledger_sequence {order}, transaction_id {order} \
+         LIMIT 1 BY ledger_sequence, transaction_id \
+         LIMIT {limit}"
+    )
 }
 
 #[cfg(test)]
@@ -1148,24 +1151,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merge_keyset_arms_unions_both_arms_into_one_statement() {
+    fn union_keyset_arms_merges_both_arms_in_one_statement() {
         // task 0446: the two arms are independent reads; they must cost ONE round
         // trip, with the merge (order, cross-arm dedup, truncate) pushed into CH.
-        let arms = vec!["SELECT a".to_string(), "SELECT b".to_string()];
-        let sql = merge_keyset_arms(&arms, "DESC", 21);
+        let sql = union_keyset_arms("SELECT a", "SELECT b", "DESC", 21);
         assert!(sql.contains("(SELECT a) UNION ALL (SELECT b)"));
         assert!(sql.contains("ORDER BY ledger_sequence DESC, transaction_id DESC"));
         // Drops a transaction returned by BOTH arms — the old Rust `keys.dedup()`.
         assert!(sql.contains("LIMIT 1 BY ledger_sequence, transaction_id"));
         assert!(sql.ends_with("LIMIT 21"));
-    }
-
-    #[test]
-    fn merge_keyset_arms_leaves_a_lone_arm_untouched() {
-        // One arm already is the page (own ORDER BY / LIMIT 1 BY / LIMIT) — a
-        // wrapper would only re-sort what CH already ordered.
-        let arms = vec!["SELECT a LIMIT 21".to_string()];
-        assert_eq!(merge_keyset_arms(&arms, "ASC", 21), "SELECT a LIMIT 21");
     }
 
     #[test]
