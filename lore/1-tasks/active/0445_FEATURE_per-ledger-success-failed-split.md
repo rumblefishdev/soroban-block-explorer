@@ -2,7 +2,7 @@
 id: '0445'
 title: 'FEATURE: per-ledger success/failed split in the ledgers table (read-time, no schema change)'
 type: FEATURE
-status: completed
+status: active
 related_adr: []
 related_tasks: ['0171', '0420']
 tags:
@@ -63,6 +63,17 @@ history:
       colour alone while dropping the total the report asked for — plus a
       broken Tier-1 SQL gate. The display was redesigned to total + failure
       rate; see `## Rejected`. Tests 4 → 9. Details in Issues Encountered.
+  - date: '2026-08-12'
+    status: active
+    who: karolkow
+    note: >
+      Back to `active`, reversing the premature archive. The work is finished
+      and the two `completed` entries above stand as the record of it, but the
+      repo archives at DEPLOY, not at merge, and status-only moves belong
+      straight on `develop` rather than riding a feature branch — this one was
+      about to arrive as an `active/` → `archive/` rename inside PR 392 and
+      collide with whatever `develop` does with the same file. Archive it after
+      the deploy, on `develop`, together with the #365 close.
 ---
 
 # FEATURE: per-ledger success/failed split in the ledgers table
