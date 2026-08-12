@@ -136,21 +136,41 @@ in one `tokio::join!` are one wave; `A.await` then `B.await` are two.
 ### Parallelisable, but it is an existence gate — DONE
 
 Second query never consumes the first's output — it re-derives everything from
-the path. Concurrency wins a wave on the happy path and wastes one query on the 404. 404s are rare; the trade was taken deliberately (karolkow, 2026-08-12).
+the path. Concurrency wins a wave on the happy path and wastes one query on the 404.
 
-Responses are unchanged: the existence answer is still checked FIRST, so a
-missing entity still yields 404 even when the page read failed too. Only what
-the 404 path costs changes.
+**"404s are rare" is the wrong test, and taking it on frequency alone was a
+mistake caught in review.** What matters is what a single 404 costs, because
+the ids are user-supplied and trivially generated. Measured on prod for an
+entity that does not exist:
+
+| Guarded read                     |      rows read | time       | paired? |
+| -------------------------------- | -------------: | ---------- | ------- |
+| ledger transactions              |              0 | 4 ms       | yes     |
+| pool transactions                |        560,960 | 11 ms      | yes     |
+| pool participants                |         25,496 | 113 ms     | yes     |
+| **pool chart**                   | **43,738,676** | **4.66 s** | **NO**  |
+| (the gate itself, `pool_exists`) |         16,569 | 3.6 ms     | —       |
+
+`get_pool_chart` stays SERIAL. Its `JOIN (SELECT … FROM ledgers WHERE closed_at
+…)` build side is materialised even when the left side is empty, and
+`MAX_CHART_BUCKETS = 1_000` admits a ~19-year window — so pairing it would hand
+a 4-second, 43M-row read to anyone who asks for a pool id that does not exist.
+That is 1,300× the gate it would have skipped. The other four are paired.
+
+Responses are unchanged in every case: the existence answer is still checked
+FIRST, so a missing entity still yields 404 even when the page read failed too.
+Only what the 404 path costs changes.
 
 `ledgers::get_ledger` needed one cleanup before it could pair — the tx query
 took a `closed_at` argument it never read (`_closed_at`), which made the
 dependency look real. Parameter dropped.
 
-| Site                                                                           | Endpoint(s)                        | Gate                                                                                      |
-| ------------------------------------------------------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------- |
-| `liquidity_pools::{list_participants, list_pool_transactions, get_pool_chart}` | 3 endpoints                        | `pool_exists`                                                                             |
-| `nfts::list_nft_transfers`                                                     | `/nfts/:contract/:token/transfers` | `nft_exists`                                                                              |
-| `ledgers::get_ledger`                                                          | `/ledgers/:seq`                    | header fetch — its `closed_at` is passed to the tx query as `_closed_at`, i.e. **unused** |
+| Site                                                           | Endpoint(s)                        | Gate          | Paired             |
+| -------------------------------------------------------------- | ---------------------------------- | ------------- | ------------------ |
+| `liquidity_pools::{list_participants, list_pool_transactions}` | 2 endpoints                        | `pool_exists` | yes                |
+| `liquidity_pools::get_pool_chart`                              | `/liquidity-pools/:id/chart`       | `pool_exists` | **no — see above** |
+| `nfts::list_nft_transfers`                                     | `/nfts/:contract/:token/transfers` | `nft_exists`  | yes                |
+| `ledgers::get_ledger`                                          | `/ledgers/:seq`                    | header fetch  | yes                |
 
 ### Mergeable into one statement
 
@@ -183,6 +203,46 @@ No opportunity: `network/stats`, `/ledgers`, `/assets`, `/accounts`, `/nfts`,
 round trip that is ~14 ms off a typical detail request — the median case the task
 was opened for, not the p95 tail.
 
+## Predicted gain, from the recorded run (2026-08-12)
+
+Not a measurement — an extrapolation over the 2026-07-17 per-request data
+(`docs/scf/load-tests/40x-49.3M-per-month/results.csv`, 13,698 successful
+requests). Each endpoint's measured median wall clock, minus 14.2 ms per wave
+this branch removes:
+
+| Endpoint    | n   | waves removed | median | est. after | est. |
+| ----------- | --- | ------------: | -----: | ---------: | ---: |
+| `ctrlist`   | 537 |             2 | 122 ms |      94 ms |  23% |
+| `ctrfilter` | 497 |             2 | 125 ms |      97 ms |  23% |
+| `ldgdetail` | 529 |             2 | 145 ms |     117 ms |  20% |
+| `lptxs`     | 540 |             2 | 173 ms |     145 ms |  16% |
+| `lpparts`   | 538 |             1 |  97 ms |      83 ms |  15% |
+| `txfilter`  | 542 |             1 | 108 ms |      94 ms |  13% |
+| `lpchart`   | 519 |             0 | 137 ms |     137 ms |   0% |
+| `ctrevents` | 524 |             1 | 137 ms |     123 ms |  10% |
+| `txlist`    | 492 |             1 | 138 ms |     124 ms |  10% |
+| `ctrdetail` | 484 |             1 | 149 ms |     135 ms |  10% |
+| `ctrinvoc`  | 507 |             1 | 170 ms |     156 ms |   8% |
+| `asttxs`    | 546 |             1 | 195 ms |     181 ms |   7% |
+| `accdetail` | 543 |             1 | 213 ms |     199 ms |   7% |
+| `txdetail`  | 563 |             2 | 414 ms |     386 ms |   7% |
+
+6,842 of 13,698 requests touch a changed path. Weighted mean wall clock
+169.8 ms → **est. 159.9 ms (−5.8%)**. (`lpchart` contributes nothing — its gate
+stayed serial on purpose, see above. Including it the figures would have been
+7,361 requests and 159.4 ms / −6.1%.)
+
+Treat the per-endpoint percentages as an upper bound: the 14.2 ms slope was
+fitted against **query count**, and is applied here per **removed wave**. That is
+the right reading of what the slope measures (the round trip itself), but it is
+still an extrapolation and assumes ClickHouse absorbs the now-concurrent queries
+without queueing.
+
+**AC 3 as written cannot pass, and the AC is what is wrong, not the work.**
+Concurrency does not reduce the number of queries — it overlaps them. Mean
+`ch_queries` stays at 3.25 (verified against the same data); only `asttxs` drops,
+8 → 7, from the `UNION ALL`. The criterion should read _waves_, not queries.
+
 ## Acceptance Criteria
 
 - [x] Every `.await`-in-loop site in `crates/api/src/**/queries.rs` classified as
@@ -203,6 +263,12 @@ was opened for, not the p95 tail.
 - [ ] Load-test rerun shows a median-latency improvement, quantified per endpoint
 - [ ] No change in response payloads — pagination, ordering and dedup semantics
       identical (existing endpoint tests stay green without modification)
+- [x] **Docs updated** — `N/A — no described architecture affected`. Same
+      endpoints, same DTOs, same tables; only the order in which existing
+      queries are issued changed. Evidence: `extract_openapi` output is
+      byte-identical to the committed `libs/api-types/src/openapi.json`.
+- [x] **API types regenerated** — ran `npx nx run @rumblefish/api-types:generate`;
+      no diff produced, and `check-generated` passes. Nothing to commit.
 
 ## What this does NOT fix
 
