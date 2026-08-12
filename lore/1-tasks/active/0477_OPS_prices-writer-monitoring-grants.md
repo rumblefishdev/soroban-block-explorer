@@ -61,15 +61,15 @@ does (SQL `GRANT` is impossible: `users_xml` storage is read-only).
 Applied WITHOUT a container recreate, by keeping the inode:
 
 1. Repo change (this branch): the two `<query>` grants in `services.xml`
-   + `docs/architecture/security/clickhouse-rbac.md` row updated.
+   - `docs/architecture/security/clickhouse-rbac.md` row updated.
 2. Box (`sorban-prod`): overwrite the mounted file IN PLACE
    (`cat new > services.xml` — truncate+write preserves the inode; NOT
    `sed -i` / `scp` / editors, which write-and-rename). CH hot-reloads
    `users.d` on content change; the container sees it because the inode
    never changed.
 3. Verification: config-reload line in the CH log + `SHOW GRANTS FOR
-   prices_writer` + prices owner confirms a live `SELECT count() FROM
-   system.mutations` under their credentials.
+prices_writer` + prices owner confirms a live `SELECT count() FROM
+system.mutations` under their credentials.
 4. The merged repo state then matches the box byte-for-byte, so the next
    `--tags app` deploy rsyncs nothing and the inode stays put.
 
