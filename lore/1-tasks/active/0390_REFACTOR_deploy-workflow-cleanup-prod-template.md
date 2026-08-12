@@ -211,6 +211,11 @@ land deliberately — re-apply verbatim):**
 
 ## Notes
 
+- **Spawned:** [0475](../backlog/0475_FEATURE_release-skill-collect-what-ships.md)
+  — a `/release` skill that assembles what a tag actually ships (PRs, task ids,
+  issue refs) and drafts the tag command. Explicitly **not** stack selection:
+  `cdk diff` already answers that exactly. Held until after the first real
+  `production-*` tag.
 - **Leftover staging references** (deliberately NOT removed here):
   - `lore/2-adrs/0009_staging-deploy-trigger-strategy.md` — kept as historical
     record (ADR convention); now **superseded** by this task.
