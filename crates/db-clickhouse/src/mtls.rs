@@ -219,19 +219,25 @@ pub fn client_with_mtls(
             .pool_idle_timeout(Duration::from_secs(8))
             // Must cover the WIDEST concurrent read a single request makes, not
             // just the indexer's serial writes this was originally sized for
-            // (task 0446). The API fans a request out over `tokio::join!`; the
-            // widest is 3 (`transactions::get_transaction`,
-            // `contracts::fetch_contract_list`). At a cap of 2 the third
-            // connection is opened per request and then evicted, so every such
-            // request pays a fresh TCP + TLS 1.3 + mTLS handshake to Hetzner on
-            // a 256 MB Lambda — which can cost more than the round trip the
-            // concurrency saves. `enable_http1()` only, so there is no h2
-            // multiplexing to absorb it.
+            // (task 0446). Below the cap, the surplus connection is opened per
+            // request and then evicted, so every such request pays a fresh
+            // TCP + TLS 1.3 + mTLS handshake to Hetzner on a 256 MB Lambda —
+            // which can cost more than the round trip the concurrency saves.
+            // `enable_http1()` only, so there is no h2 multiplexing to absorb it.
             //
-            // 4 leaves one spare. A Lambda instance serves one request at a
-            // time, so this bounds retained idle sockets per instance, not
-            // in-flight ones; the indexer never has more than one anyway.
-            .pool_max_idle_per_host(4)
+            // **Count nesting, not arms.** A `join!` inside a joined future
+            // multiplies:
+            //   * `search::fetch_search` — `try_join!` over 6 arms → 6.
+            //   * `transactions::get_transaction` — 3 arms, one of which is
+            //     `fetch_invocation_appearances`, itself a 2-arm join → 4. That
+            //     is the archive-degraded path, so the pool is tightest exactly
+            //     when the request is already struggling.
+            //
+            // 8 covers the widest (6) with spare. A Lambda instance serves one
+            // request at a time, so this bounds retained idle sockets per
+            // instance, not in-flight ones; the indexer never holds more than
+            // one either way.
+            .pool_max_idle_per_host(8)
             .build(https);
 
     let url = format!("https://{domain}");
