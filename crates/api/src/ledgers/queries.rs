@@ -377,8 +377,13 @@ pub async fn fetch_transactions(
         .collect();
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … FINAL ON src.id = t.source_id` (task 0354).
-    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
-    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
+    // Both read off `page` alone — one wave, not two (task 0446).
+    let (accounts, aggregates) = tokio::join!(
+        resolve_accounts(client, page.iter().map(|r| r.source_id).collect()),
+        ch::fetch_tx_list_aggregates(client, &keys),
+    );
+    let accounts = accounts?;
+    let mut aggregates = aggregates?;
     Ok(page
         .into_iter()
         .map(|r| {
