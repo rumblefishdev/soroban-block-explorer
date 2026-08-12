@@ -126,6 +126,25 @@ history:
       insurance). 0171 input given: omit the row, misses-are-absent is
       the contract. Pre-roll ETA window PASSED with the hole still empty
       — asked whether it slipped or lands as an atomic ATTACH. Reply sent.
+  - date: '2026-08-12'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      Owner's wrap-up: their 0165 closed on the -67.7 vs 67.8 match. The
+      pre-roll LANDED 08-11 ~16:31Z (6.1s, plain INSERTs) — the missed ETA
+      was a different job (pre-Soroban SDEX backfill) crossed with the gap
+      pre-roll; our still-empty reading was accurate when taken. Verified
+      filled on our side 08-12: all 13 days, pre-freeze densities — the
+      DEPLOY GATE for PR #380 is open and AC validation over the window is
+      unblocked. USDT re-framed on our evidence (their top priority):
+      clarified that peg $1 is the CORRECT value and traded 0.14 the
+      defect, so canonical USDT reads closest to truth as $1 until 0172.
+      Our omit-the-row input on 0171 accepted (row count changes when it
+      ships, values don't). NEW from their audit: the USDC hole spanned
+      three surfaces and only the series views are fixed — /assets/ohlcv
+      (their 0170) and /price / current_price_usd still cannot return
+      canonical USDC; we read neither. Coverage snapshots will be
+      date-stamped on both sides from now on.
 ---
 
 # R: prices.\* read traps — freeze, sentinels, partial-enrichment skew
@@ -158,13 +177,17 @@ MV status — the gap that let it run silently for ten days).
 current from 08-03 forward; the ~12-day hole is being closed by an
 incremental pre-roll on their side — they will ping when done.
 
-**Pre-roll status:** accidentally interrupted; declared resumed ~08-06 with
-finish ETA 08-10 17:00Z → 08-11 06:00Z. Measured 08-11 09:20Z: the window is
-STILL empty on every visible level (15m / 1h / 1d / daily series — only the
-pre-freeze morning of 07-21). Either it lands as an atomic ATTACH at the end
-(their recovery style) and progress is invisible by design, or the resume
-slipped — asked them which. This is the last gate before deploying #380;
-verify the fill before deploy and before any AC validation.
+**Pre-roll status: LANDED — the deploy gate is open.** Ran 2026-08-11
+~16:31Z (7.5h after our still-empty measurement, which was accurate when
+taken), runtime 6.1 s, plain INSERTs into the RMT tiers — not an atomic
+ATTACH. Verified on our side 08-12: all 13 days present in the daily series
+at pre-freeze-normal densities (3.3–5.2k identities/day; 07-21 completed
+1,234 → 3,269). The ETA confusion was two jobs crossed on their side: the
+08-10/08-11 window belonged to a pre-Soroban SDEX backfill (history through
+2024-02-20), a different job that never touched the July hole. Their caveat:
+read the raw `price_ohlcv_*` tiers with FINAL — 07-21 carries duplicate
+versions pending a merge (the series views are unaffected). AC validation
+over the window is unblocked.
 
 Consequences for 0199:
 
@@ -457,6 +480,24 @@ Our 0171 input to them: omit the row — misses-are-absent is the contract.
 
 **Known-bad data while their 0172 is open:** canonical USDT (GCQTGZQQ…)
 publishes `traded` daily closes of 0.129–0.143 — its own identity price, ~7×
-understated, flapping to peg $1 on buckets with no base trades. Any
-USDT-canonical-leg TVL is wrong until 0172 lands; do not attribute it to the
-peg fill, and do not "fix" it locally.
+understated, flapping to peg $1 on buckets with no base trades. Owner
+clarification (08-12): **the $1 is the correct value and the 0.14 is the
+defect** — the peg fill fires only where USDT didn't trade as a base, so it
+put a correct value beside a wrong one and made a uniformly-wrong column
+visibly broken. They keep it as a diagnostic (no rollback). Until 0172
+lands, canonical-USDT-leg TVL is wrong on traded buckets; do not attribute
+it to the peg fill, and do not "fix" it locally.
+
+**The USDC hole spanned THREE surfaces; one is fixed (08-12 status).**
+`price_usd_series` / `_1h` — fixed (the peg fill above, re-measured by us).
+`GET /assets/{USDC}/ohlcv` — still an empty 200 (their 0170;
+`base_currency=USD` resolves the quote to USDC and asks for a USDC/USDC
+self-pair). `GET /price` / `current_price_usd` — still cannot return
+canonical USDC (the underlying MV groups on the base leg only; fix needs an
+MV rebuild, slower than the view swap). We read neither broken surface —
+but "USDC prices now" is true only of the views.
+
+**0171 resolution:** our omit-the-row input accepted — misses stay absent,
+no sentinel. Consumer-visible change is ROW COUNT, not any value; eyeball
+that when it ships. The `close_usd > 0` guard stays regardless (their
+recommendation too).

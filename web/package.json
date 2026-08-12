@@ -12,6 +12,20 @@
     "tags": [
       "type:app",
       "scope:web"
-    ]
+    ],
+    "targets": {
+      "build": {
+        "inputs": [
+          "production",
+          "^production",
+          {
+            "env": "VITE_API_BASE_URL"
+          },
+          {
+            "env": "VITE_TURNSTILE_SITE_KEY"
+          }
+        ]
+      }
+    }
   }
 }

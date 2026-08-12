@@ -5,6 +5,7 @@ import {
   QueryErrorState,
   Tabs,
   TimeSeriesChart,
+  type TimeSeriesCurve,
   type TimeSeriesPoint,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo, useState } from 'react';
@@ -39,6 +40,33 @@ const USD_FULL_FORMATTER = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 });
 
+/**
+ * Sub-dollar money needs significant digits, not fixed ones. Both
+ * formatters above round to whole dollars or one compact digit, so a pool
+ * whose TVL is $0.003 rendered every axis tick AND the headline as "$0" —
+ * an axis carrying no information at all (seen on real pools; fee revenue
+ * hits it constantly, since a 0.30% cut of a small trade is fractions of
+ * a cent).
+ */
+const USD_SMALL_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumSignificantDigits: 2,
+});
+
+/**
+ * Format a USD amount, switching to significant digits below a dollar.
+ * Decided per VALUE rather than per chart, so a tick at $0.50 reads
+ * "$0.50" even on an axis that runs to thousands. Exact zero keeps the
+ * plain "$0" — it is zero, not an unreadably small number.
+ */
+function formatUsd(value: number, atOrAboveOne: Intl.NumberFormat): string {
+  const abs = Math.abs(value);
+  return abs > 0 && abs < 1
+    ? USD_SMALL_FORMATTER.format(value)
+    : atOrAboveOne.format(value);
+}
+
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -47,12 +75,43 @@ const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 
 /** Currency formatter for chart y-axis + tooltip — values are USD amounts. */
 const usdFormatter = (value: number): string =>
-  USD_COMPACT_FORMATTER.format(value);
+  formatUsd(value, USD_COMPACT_FORMATTER);
 
 const METRIC_LABELS: Record<ChartMetric, string> = {
   tvl: 'TVL',
   volume: 'Volume',
   fees: 'Fee revenue',
+};
+
+/**
+ * How each metric is drawn — decided by what the number IS, matching the
+ * way the endpoint aggregates it (see the chart query, task 0199):
+ *
+ * - **TVL is a STATE** (`argMax` — the last value in the bucket). It only
+ *   moves when a deposit / withdraw / swap lands and holds flat in
+ *   between, so a step is the honest line. Smoothing drew gentle curves
+ *   through values the pool never held.
+ * - **Volume / fees are FLOWS** (`sum` over the bucket). Independent
+ *   per-bucket totals with nothing in between to interpolate, so: bars.
+ *   This also stops the series bridging over unpriceable buckets — those
+ *   rows are dropped below, and a line joined straight across them (a
+ *   provider price gap rendered as smooth drift).
+ *
+ * TVL is a bare line, NOT a filled area, and that was measured rather than
+ * assumed: a fill is read by area, so it has to baseline at zero, and at
+ * zero this pool's real 16% slide ($155 → $130) collapsed into a ripple on
+ * top of a solid block. DefiLlama-style filled TVL works for protocols
+ * whose TVL spans orders of magnitude — there the silhouette is the story.
+ * Per-pool, the movement is the story, so the zoomed baseline a bare line
+ * permits is worth more than the fill.
+ */
+const METRIC_RENDERING: Record<
+  ChartMetric,
+  { variant: 'line' | 'area' | 'bar'; curve?: TimeSeriesCurve }
+> = {
+  tvl: { variant: 'line', curve: 'stepAfter' },
+  volume: { variant: 'bar' },
+  fees: { variant: 'bar' },
 };
 
 /**
@@ -116,6 +175,30 @@ function IntervalPills({
   );
 }
 
+/** Two-line placeholder for an empty chart body. */
+function ChartEmptyState({ title, hint }: { title: string; hint: string }) {
+  return (
+    <Stack
+      spacing={0.5}
+      alignItems="center"
+      sx={{ py: 4, textAlign: 'center', maxWidth: 420, mx: 'auto' }}
+    >
+      <Typography
+        variant="bodyMedium"
+        sx={(theme) => ({ color: theme.palette.text.secondary })}
+      >
+        {title}
+      </Typography>
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
+        {hint}
+      </Typography>
+    </Stack>
+  );
+}
+
 interface PoolChartsProps {
   poolId: string;
 }
@@ -135,34 +218,53 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
    * where the chosen metric is null so the chart doesn't render gaps as
    * zero values.
    */
-  const { points, allNull } = useMemo(() => {
-    if (!data) return { points: [], allNull: false };
+  const points = useMemo(() => {
+    if (!data) return [];
     const field: 'tvl' | 'volume' | 'fee_revenue' =
       metric === 'fees' ? 'fee_revenue' : metric;
-    let nonNullSeen = false;
     const pts: TimeSeriesPoint[] = [];
     for (const row of data.data_points) {
       const raw = row[field];
       if (raw == null) continue;
       const num = Number(raw);
       if (!Number.isFinite(num)) continue;
-      nonNullSeen = true;
       pts.push({ timestamp: row.bucket, value: num });
     }
-    return { points: pts, allNull: !nonNullSeen };
+    return pts;
   }, [data, metric]);
 
-  // Series-null overlay per 0215 §6.14. The placeholder is intentional UX
-  // until task 0199 (LP analytics, blocked-on-oracle) ships; 0250 removes
-  // it. Tabs and range pills stay live so the structure reads as the
-  // Figma chart card even when the chart body is empty.
-  const showPendingOraclePlaceholder = !isLoading && !isError && allNull;
+  /**
+   * Tell "nothing happened" apart from "we cannot price what happened".
+   *
+   * The endpoint emits a bucket row only where the pool had at least one
+   * snapshot, so rows-but-no-plottable-points means the on-chain activity
+   * IS there and only the USD conversion is missing. Saying "no activity,
+   * try a longer range" there is wrong twice over: the Recent-transactions
+   * table right below is full of trades from the same period, and no range
+   * can fix a missing price.
+   *
+   * `tvl` is the discriminator because it is unambiguous — reserves exist
+   * on every snapshot, so a null `tvl` can only mean a leg has no price. A
+   * null `volume` is ambiguous by design (it also means "no swaps in this
+   * bucket"), which is why the check does not use the selected metric.
+   *
+   * The copy says "in this period" rather than "this asset has no price
+   * feed": the same pool can price fine on one range and not another — a
+   * provider outage does exactly that (the 2026-07-21..08-03 freeze left a
+   * 12-day hole in otherwise healthy series), and so does an asset whose
+   * feed simply starts later than the window.
+   */
+  const unpriceable = useMemo(() => {
+    if (!data || data.data_points.length === 0) return false;
+    if (points.length > 0) return false;
+    return data.data_points.every((row) => row.tvl == null);
+  }, [data, points]);
 
   // Latest point drives the chart heading (Figma `325:22339` headline
   // shows the last value + its bucket date).
   const latest =
     points.length > 0 ? points[points.length - 1] ?? undefined : undefined;
-  const headline = latest ? USD_FULL_FORMATTER.format(latest.value) : '—';
+  const headline = latest ? formatUsd(latest.value, USD_FULL_FORMATTER) : '—';
   const headlineCaption = latest
     ? `${DATE_FORMATTER.format(new Date(latest.timestamp))} · ${
         METRIC_LABELS[metric]
@@ -207,29 +309,17 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
             onRetry={() => void refetch()}
             py={4}
           />
-        ) : showPendingOraclePlaceholder ? (
-          <Stack spacing={0.5} sx={{ py: 4, textAlign: 'center' }}>
-            <Typography
-              variant="bodyMedium"
-              sx={(theme) => ({ color: theme.palette.text.secondary })}
-            >
-              Chart data not yet available
-            </Typography>
-            <Typography
-              variant="bodySmMedium"
-              sx={(theme) => ({ color: theme.palette.text.tertiary })}
-            >
-              Pending the price-oracle integration (task 0199).
-            </Typography>
-          </Stack>
         ) : (
           <TimeSeriesChart
             data={points}
-            // Figma node `325:24354` shows a plain line (no area fill)
-            // with hollow blue marks at each bucket. Switched away from
-            // `area` so the chart reads as the design — fill obscures
-            // the per-bucket dots on dark surface.
-            variant="line"
+            // Per-metric rendering — see METRIC_RENDERING. This departs
+            // from Figma node `325:24354` (flat line, a hollow mark on
+            // every bucket): the marks are now density-gated by the chart
+            // and the fill is a fade rather than the solid wash that made
+            // `area` unusable before, so TVL reads as a level without the
+            // fill burying anything.
+            variant={METRIC_RENDERING[metric].variant}
+            curve={METRIC_RENDERING[metric].curve}
             valueFormatter={usdFormatter}
             title={headline}
             subtitle={headlineCaption}
@@ -238,24 +328,17 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
             intervals={[]}
             loading={isLoading}
             emptyState={
-              <Stack
-                spacing={0.5}
-                alignItems="center"
-                sx={{ py: 4, textAlign: 'center' }}
-              >
-                <Typography
-                  variant="bodyMedium"
-                  sx={(theme) => ({ color: theme.palette.text.secondary })}
-                >
-                  No activity in this period
-                </Typography>
-                <Typography
-                  variant="bodySmMedium"
-                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                >
-                  Try a longer range.
-                </Typography>
-              </Stack>
+              unpriceable ? (
+                <ChartEmptyState
+                  title="USD values unavailable"
+                  hint="We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                />
+              ) : (
+                <ChartEmptyState
+                  title="No activity in this period"
+                  hint="Try a longer range."
+                />
+              )
             }
           />
         )}
@@ -265,29 +348,17 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
 }
 
 /**
- * ponytail: build-time kill-switch for the whole chart card. Every metric
- * series is NULL until the price-oracle API lands (lore-0341, blocked on
- * 0199 + 0215), so we hide the card entirely rather than render a permanent
- * "pending" placeholder. Flip to `true` — and delete the pending-oracle
- * branch in `PoolChartsContent` — once the endpoint returns real data.
- */
-const CHARTS_ENABLED = false;
-
-/**
  * Chart card on the LP detail page (Figma node `325:22339`). One chart
  * with three metric tabs (TVL / Volume / Fees) and a four-preset range
  * selector (1D / 7D / 30D / 1Y). Lazy-fetched: the chart endpoint is
  * only hit when the section scrolls into view.
  *
- * Currently disabled behind `CHARTS_ENABLED` (see above): all three metric
- * series come back null until task 0199 ships the price-oracle integration,
- * so the card does not render at all. When re-enabled, the inline
- * "Chart data not yet available" placeholder (per 0215 §6.14) covers the
- * interim null-series state.
+ * The pre-0199 `CHARTS_ENABLED` kill-switch and the "pending the price
+ * oracle" placeholder are gone: the chart endpoint returns real USD
+ * series (task 0199 compute-at-read). An unpriceable pool gets its own
+ * empty state saying so — see `unpriceable`.
  */
 export function PoolCharts({ poolId }: PoolChartsProps) {
-  if (!CHARTS_ENABLED) return null;
-
   return (
     <LazySection
       placeholder={<CardSkeleton />}

@@ -1,7 +1,8 @@
 import { Box, Skeleton, Stack, Typography } from '@mui/material';
+import { BarChart } from '@mui/x-charts/BarChart';
 import { LineChart } from '@mui/x-charts/LineChart';
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 
 import { scales } from '../theme/colors.js';
 
@@ -9,6 +10,26 @@ export interface TimeSeriesPoint {
   timestamp: number | string | Date;
   value: number;
 }
+
+/**
+ * Interpolation between points — a deliberately narrow subset of the
+ * `@mui/x-charts` curve list, one per shape of data we actually plot:
+ *
+ * - `stepAfter` — a STATE that holds until the next event (TVL: it only
+ *   moves on a deposit / withdraw / swap and is flat in between).
+ * - `linear` — a measurement that genuinely varies continuously.
+ * - `monotoneX` — smoothed. Pretty, but it invents intermediate values,
+ *   so it belongs only on data where the in-between really is a curve.
+ */
+export type TimeSeriesCurve = 'linear' | 'monotoneX' | 'stepAfter';
+
+/**
+ * Y-axis gutter. Sized for the longest label a money formatter realistically
+ * produces — sub-cent amounts need significant digits ("$0.000090"), and at
+ * the previous 64px those ticks were ellipsised to "$0.000…", i.e. an axis
+ * that showed nothing.
+ */
+const Y_AXIS_WIDTH = 78;
 
 export interface TimeSeriesInterval {
   /** Stable key passed back to `onIntervalChange`. */
@@ -30,8 +51,20 @@ export const DEFAULT_TIME_SERIES_INTERVALS: readonly TimeSeriesInterval[] = [
 
 export interface TimeSeriesChartProps {
   data: readonly TimeSeriesPoint[];
-  /** Line or filled-area rendering. Defaults to 'line'. */
-  variant?: 'line' | 'area';
+  /**
+   * How to draw the series. Defaults to `'line'`.
+   *
+   * Pick by what the numbers ARE, not by looks: `line`/`area` for a state
+   * sampled over time, **`bar` for a flow** — a per-bucket sum such as
+   * volume or fees. A line between two independent sums implies the value
+   * passed through the points in between, which is meaningless, and it
+   * also bridges straight over gaps the caller dropped, hiding them.
+   * Bars just leave the gap empty.
+   */
+  variant?: 'line' | 'area' | 'bar';
+  /** Interpolation for `line` / `area`; ignored by `bar`. See
+   *  [`TimeSeriesCurve`]. Defaults to the chart library's smoothing. */
+  curve?: TimeSeriesCurve;
   /** Headline value, e.g. "$2,400,000". */
   title?: ReactNode;
   /** Secondary line under the title, e.g. "Apr 13, 2026 · TVL". */
@@ -111,6 +144,7 @@ function IntervalSelector({
 export function TimeSeriesChart({
   data,
   variant = 'line',
+  curve,
   title,
   subtitle,
   height = 300,
@@ -133,13 +167,23 @@ export function TimeSeriesChart({
   const yData = useMemo(() => data.map((point) => point.value), [data]);
   const isEmpty = data.length === 0;
 
+  const isBar = variant === 'bar';
+  // Anything with a FILL is read by area, so its baseline must be zero:
+  // from a cropped baseline the fill of a $130 value next to a $570 one
+  // looks like a sliver next to a wall, when the real ratio is 4×. A bare
+  // line makes no such claim, so it keeps the zoomed range that keeps
+  // small movements legible — that is the trade the caller picks by
+  // choosing `line` over `area`.
+  const isFilled = variant === 'bar' || variant === 'area';
+  // Unique per instance — two charts on one page must not share a <defs> id.
+  const areaGradientId = `${useId()}-area-fill`;
   const { yMin, yMax } = useMemo(() => {
     if (yData.length === 0) return { yMin: undefined, yMax: undefined };
     const min = Math.min(...yData);
     const max = Math.max(...yData);
     const pad = Math.max((max - min) * 0.1, max * 0.001);
-    return { yMin: min - pad, yMax: max + pad };
-  }, [yData]);
+    return { yMin: isFilled ? 0 : min - pad, yMax: max + pad };
+  }, [yData, isFilled]);
 
   const xSpanMs =
     xData.length > 1
@@ -163,6 +207,13 @@ export function TimeSeriesChart({
       year: '2-digit',
     });
   };
+  const formatXTooltip = (date: Date): string =>
+    date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
 
   return (
     <Stack spacing={2}>
@@ -211,6 +262,43 @@ export function TimeSeriesChart({
             </Typography>
           )}
         </Box>
+      ) : isBar ? (
+        // A bar axis is BAND, not time: each bucket owns a slot of equal
+        // width. That is the point — a bucket with no bar is a visible hole
+        // rather than a segment drawn straight over it.
+        <BarChart
+          height={height}
+          hideLegend
+          grid={{ horizontal: true }}
+          margin={{ left: 56, right: 16, top: 8, bottom: 8 }}
+          borderRadius={4}
+          xAxis={[
+            {
+              data: xData,
+              scaleType: 'band',
+              valueFormatter: (date: Date, ctx) =>
+                ctx.location === 'tick'
+                  ? formatXTick(date)
+                  : formatXTooltip(date),
+            },
+          ]}
+          yAxis={[
+            {
+              valueFormatter: (value: number) => formatValue(value),
+              min: yMin,
+              max: yMax,
+              domainLimit: 'nice',
+              width: Y_AXIS_WIDTH,
+            },
+          ]}
+          series={[
+            {
+              data: yData,
+              color: scales.blue[400],
+              valueFormatter: formatValue,
+            },
+          ]}
+        />
       ) : (
         <LineChart
           height={height}
@@ -223,15 +311,10 @@ export function TimeSeriesChart({
               scaleType: 'time',
 
               tickNumber: 6,
-              valueFormatter: (date: Date, ctx) => {
-                if (ctx.location === 'tick') return formatXTick(date);
-                return date.toLocaleString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: 'numeric',
-                  minute: '2-digit',
-                });
-              },
+              valueFormatter: (date: Date, ctx) =>
+                ctx.location === 'tick'
+                  ? formatXTick(date)
+                  : formatXTooltip(date),
             },
           ]}
           yAxis={[
@@ -242,7 +325,7 @@ export function TimeSeriesChart({
               max: yMax,
               domainLimit: 'nice',
 
-              width: 64,
+              width: Y_AXIS_WIDTH,
             },
           ]}
           series={[
@@ -250,6 +333,7 @@ export function TimeSeriesChart({
               data: yData,
               area: variant === 'area',
               showMark: true,
+              ...(curve ? { curve } : {}),
               color: scales.blue[400],
               valueFormatter: formatValue,
             },
@@ -258,15 +342,47 @@ export function TimeSeriesChart({
             '&& .MuiLineChart-line': {
               strokeWidth: 2,
             },
+            // Fade the fill out toward the baseline: a flat wash reads as a
+            // solid block and buries the gridlines, while a gradient keeps
+            // the line the subject and the fill a magnitude cue.
+            '&& .MuiAreaElement-root': {
+              fill: `url(#${areaGradientId})`,
+            },
+            // Marks stay on at EVERY density — a threshold that hid them
+            // past N points made the same range render differently on two
+            // pools (measured: a 7-day window is 25 points on one pool and
+            // 41 on another), which reads as two different chart types.
+            //
+            // What actually caused the beading was their size, not the
+            // count: r:3 with a 6px halo is ~12px across, and 52 weekly
+            // points on a ~570px plot sit ~11px apart, so they could not
+            // help but touch. At ~4px they stay separate at that density
+            // and still mark where a real sample is on a flat series.
             '&& .MuiLineChart-mark': {
               fill: scales.blue[100],
-
               stroke: `${scales.blue[400]}aa`,
-              strokeWidth: 6,
-              r: 3,
+              strokeWidth: 2,
+              r: 2,
             },
           }}
-        />
+        >
+          {variant === 'area' && (
+            <defs>
+              <linearGradient id={areaGradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop
+                  offset="0%"
+                  stopColor={scales.blue[400]}
+                  stopOpacity={0.32}
+                />
+                <stop
+                  offset="100%"
+                  stopColor={scales.blue[400]}
+                  stopOpacity={0}
+                />
+              </linearGradient>
+            </defs>
+          )}
+        </LineChart>
       )}
     </Stack>
   );

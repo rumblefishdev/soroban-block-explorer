@@ -136,10 +136,11 @@ pub struct PoolAssetLeg {
     /// `sac_contract_id` facet). `None` for native legs and for classic credit
     /// legs without a deployed SAC.
     pub contract_id: Option<String>,
-    /// Asset icon URL, mirrored from the leg's `assets.icon_url` row so
-    /// pool avatars render the same icon as the assets list. `None` for
-    /// native legs and assets without an enriched icon — the FE falls back
-    /// to the asset-code initial.
+    /// Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool
+    /// avatars render the same icon as the assets list. Until task 0310 this
+    /// read the dead `assets.icon_url` column, which was never populated —
+    /// every leg icon came back `None`. Still `None` for assets without an
+    /// enriched icon — the FE falls back to the asset-code initial.
     pub icon_url: Option<String>,
 }
 
@@ -171,8 +172,19 @@ pub struct PoolItem {
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
+    /// USD, decimal string rounded to cents (task 0199 compute-at-read).
+    /// Populated on **both** the list (Phase A2, one batched price lookup
+    /// per page) and the detail endpoint. `tvl` = latest reserves × each
+    /// leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
+    /// stale); `null` unless both legs price (never a one-leg partial) —
+    /// untracked assets and stale pools read `null`.
     pub tvl: Option<String>,
+    /// USD, decimal string rounded to cents. **Detail endpoint only.**
+    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
+    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
     pub volume: Option<String>,
+    /// USD, decimal string rounded to cents. **Detail endpoint only.**
+    /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.
     pub fee_revenue: Option<String>,
     pub latest_snapshot_at: Option<DateTime<Utc>>,
 }
@@ -268,10 +280,20 @@ pub struct ChartParams {
     pub to: Option<String>,
 }
 
-/// One row from the chart endpoint. Shape pinned to canonical SQL
-/// `21_get_liquidity_pools_chart.sql`. `tvl` is "TVL at close of bucket"
-/// (last value); `volume` and `fee_revenue` are SUM (cumulative within
-/// the bucket).
+/// One row from the chart endpoint. All money fields are **USD decimal
+/// strings with exactly two decimals**, computed at read from on-chain
+/// quantities × the in-cluster price series (task 0199, ADR 0053):
+/// - `tvl` — "TVL at close of bucket": last priceable snapshot's
+///   `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its
+///   own bucket falls back to its most recent close within 48 h, so a
+///   pool whose second leg has not traded today still reports; `null`
+///   when either leg has no price within that window (untracked asset,
+///   pre-listing history, or a provider-side gap such as the
+///   2026-07-21..08-03 freeze).
+/// - `volume` — SUM over the bucket of per-ledger gross trade volume ×
+///   the leg-A price at that ledger's time. `null` for no-swap buckets and
+///   for buckets where a swap couldn't be priced (never a partial sum).
+/// - `fee_revenue` — `volume × fee_bps / 10000`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartDataPoint {
     pub bucket: DateTime<Utc>,

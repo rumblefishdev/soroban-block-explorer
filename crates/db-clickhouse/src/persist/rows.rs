@@ -73,22 +73,19 @@ pub struct AccountRow {
 
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
-/// `total_supply`, `holder_count`, `icon_url` are DEAD columns — the
-/// indexer writes them `None` and NO read touches them: supply/holders come from
-/// `balance_aggregates` (lore-0293), display name/icon from `asset_enrichment`
-/// coalesced over `soroban_contract_metadata`. `total_supply`/`holder_count`
-/// `ALTER … DROP COLUMN` batched in task 0310. The dead `name` column was
-/// removed from this struct + `init.sql` in task 0304 (empty in prod, reader-less);
-/// the prod `DROP COLUMN name` runs in 0310's `assets` deploy-drain window.
+/// The dead `total_supply` / `holder_count` / `icon_url` columns were removed
+/// from this struct + `init.sql` in task 0310 (nothing read them: supply/holders
+/// come from `balance_aggregates` (lore-0293), display name/icon from
+/// `asset_enrichment` coalesced over `soroban_contract_metadata`). Dropping the
+/// fields here shortens the INSERT column list, so it is safe against a prod
+/// table that still has them — they keep taking their NULL default until the
+/// operator's `ALTER … DROP COLUMN` runs. `name` went the same way in 0304.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,
     pub asset_code: String,
     pub issuer_id: i64,
     pub contract_id: i64,
-    pub total_supply: Option<i128>,
-    pub holder_count: Option<i32>,
-    pub icon_url: Option<String>,
     /// lore-0331 surrogate (`ids::asset_id`) — single-column asset key for
     /// `balances.asset_id`. Column order MUST match `assets` schema (id last).
     pub id: i64,
@@ -97,8 +94,6 @@ pub struct AssetRow {
 impl AssetRow {
     /// Build a staging `AssetRow` from its identity, computing the `id`
     /// surrogate ONCE from the identity so no build site can forget it or diverge.
-    /// The aggregate columns are dead at write time (lore-0293 → `balance_aggregates`)
-    /// so they are always `None` here.
     pub fn staged(asset_type: i16, asset_code: String, issuer_id: i64, contract_id: i64) -> Self {
         Self {
             id: super::ids::asset_id(asset_type, &asset_code, issuer_id, contract_id),
@@ -106,9 +101,6 @@ impl AssetRow {
             asset_code,
             issuer_id,
             contract_id,
-            total_supply: None,
-            holder_count: None,
-            icon_url: None,
         }
     }
 }

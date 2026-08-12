@@ -104,6 +104,75 @@ history:
       (targeted-write, 0266 pattern) to keep the no-repair-tier1 claim
       valid, and calibrate the 2-4h estimate with a one-partition pilot
       before quoting a completion time.
+  - date: '2026-08-11'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Schema + trade emission implemented (branch
+      feat/0279_lp-op-details-amount-column): `lp_operation_amounts` in
+      init.sql (DDL parse-checked on prod CH 26.3.10 via EXPLAIN AST),
+      `LpOperationAmountRow`, `pool_fill_amounts` in stage.rs beside the
+      `gross_volume_a_by_pool` it mirrors, writer wiring, 2 unit tests,
+      schema docs per ADR 0032. SIGN CONVENTION VERIFIED ON PROD rather
+      than read off the spec: the XDR atom is written from the offer
+      owner's side (`assetSold` is taken FROM the pool, `assetBought` sent
+      TO it), confirmed on ledger 63,904,097 of pool `41270552…` (XLM/TF)
+      — Horizon reports the pool selling XLM and that ledger's snapshot
+      moves `reserve_a` down by exactly the summed sold amount while
+      `reserve_b` rises. That same check CORRECTED the backfill gate
+      recorded here on 08-11 morning: `gross_volume_a` is gross, so the
+      cross-check is `sum(abs(amount))` over the A legs, not the positive
+      ones (see step 4). Deposits/withdrawals still pending — they carry
+      no claim atoms and come from `LedgerEntryChanges`.
+  - date: '2026-08-11'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Deposits/withdrawals done — the write side is complete, both event
+      kinds, one row shape. `pool_delta_details` (operation.rs) subtracts the
+      pool entry's before/after images from the op's OWN meta, which yields
+      the pool-side sign for free (deposit `+/+`, withdrawal `-/-`) and
+      handles both boundaries by construction (created = no pre-image,
+      Removed = no post-image). It rides `extract_operations`, which already
+      hands every op its own changes — the `cb_details` precedent — so NO new
+      StageInputs field, NO indexer/backfill wiring, and the amounts surface
+      on the tx-detail page for free (untyped `details` JSON, so no OpenAPI
+      codegen either). Verified on prod: deposit 274467346725453825 in ledger
+      63,904,409 of pool `52d16f5b…` — Horizon reports 0.0529699 XLM +
+      37.6376180 SSLX deposited and the snapshots move `reserve_a`/`reserve_b`
+      by exactly those figures (that ledger's `gross_volume_a` is NULL,
+      confirming deposits stay out of trade volume). 348 xdr-parser + 90
+      db-clickhouse tests green, clippy clean. Next: API read + FE column,
+      then the targeted backfill.
+  - date: '2026-08-11'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      API + FE done, and the BACKFILL PILOT RAN — locally, no prod writes
+      (`backfill-runner/examples/pilot_lp_amounts.rs`, 120 real mainnet
+      ledgers through the real `parse_ledger` + `stage::prepare`). It
+      overturned two things this task asserted. (1) SCOPE: "20.6% of
+      history, skip 4 of 5 ledgers" divided by the CHAIN tip, but our
+      ingest starts at 50,457,424 — the pool-active set is 13.16M of the
+      14.55M ledgers we hold, i.e. 90.5%, and 100% at the tip. Targeting
+      saves ~10%, not ~80%. (2) TIME: measured 17.3 / 45.1 / 39.5
+      ledgers/sec/core at ledgers 63.8M / 57.0M / 51.0M → ~128 core-hours →
+      **~20h at 6 workers (band 13-35h)**, not 2-4h; the old figure scaled
+      0359's ~8-10h by ledger COUNT, which assumes uniform per-ledger cost
+      and treated an estimate as a measurement. Cost is not monotonic in
+      time — the mid-2025 sample is the cheapest and half the bytes. Row
+      estimate UNCHANGED (~850-880M): that one comes from complete-table
+      aggregates and the pilot's ~65 rows/ledger agrees. Also found a
+      BLOCKER: the runner has no targeted-write mode (0266 used a bespoke
+      harness), so one must be built or the run writes every table and
+      re-arms the repair-tier1 obligation. API/FE detail: rows carry
+      `amount_a`/`amount_b` as SIGNED raw-stroop STRINGS (a JSON number is
+      a browser double — a leg above 2^53 stroops would lose digits, and
+      `reserve_a`/`total_supply` already set that precedent), the read
+      degrades to blank instead of 500 when the table is absent (deploy
+      order), and the FE renders `in → out` for swaps, `X + Y` for
+      deposits/withdrawals, blank for unknown. Remaining: targeted-write
+      mode, then deploy (table pre-create FIRST) and the run.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
@@ -246,8 +315,14 @@ Pool crossings per op type (`sum(length(pool_ids))` over
 - **Size**: ~860M x 21 B ≈ **17-19 GB compressed** (~57 GB uncompressed);
   DB is ~690 GB → **~2.6%**.
 - **Backfill scope**: `uniq(ledger_sequence)` over `operation_pools` =
-  **13,145,401 ledgers** (20.6% of history) — the re-parse can skip 4 of 5
-  ledgers.
+  **13.16M ledgers**. An earlier revision called that "20.6% of history —
+  the re-parse can skip 4 of 5 ledgers"; **that was wrong** (corrected
+  2026-08-11 by the pilot). It divided by the CHAIN tip (63.8M), but our
+  ingest starts at the Soroban go-live: `ledgers` holds
+  **50,457,424 → 63,915,942 = 14.55M rows**, so the pool-active set is
+  **90.5% of what we actually have** — and 100% of recent history (40
+  consecutive tip ledgers sampled, every one pool-active). Targeting saves
+  ~10%, not ~80%.
 - Offers cross pools **never**: zero in all history, zero in 82M ops over
   the last ~7 weeks, and 19/19 recent Horizon `trade_type=liquidity_pool`
   trades are path payments. Multi-hop is the norm: strict-send averages
@@ -295,20 +370,39 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
    identical. Re-scoped 2026-08-11 to a **targeted** re-parse:
 
    - Feed the runner `SELECT DISTINCT ledger_sequence FROM operation_pools`
-     (13.15M ledgers, 20.6% of history) instead of a full sweep — est.
-     **~2-4h wall** on the box (0359 full-history baseline: ~8-10h with
-     s5cmd fan-out; scales with fetch volume).
+     (13.16M ledgers) instead of a full sweep. **The saving is ~10%, not
+     ~80%** — see the scope correction above — so targeting is a nicety,
+     not the plan's load-bearing idea.
+   - **Wall estimate: ~20h at 6 workers, band 13-35h** (pilot, 2026-08-11;
+     supersedes the "~2-4h" this line used to carry). That number came
+     from scaling 0359's ~8-10h by ledger COUNT, which assumes every
+     ledger costs the same AND treated 0359's figure as measured when it
+     was itself an estimate. The pilot measures the real inner loop:
+     **17.3 / 45.1 / 39.5 ledgers per second per core** at ledgers 63.8M /
+     57.0M / 51.0M — cost tracks ledger density and is NOT monotonic in
+     time (the mid-2025 sample is the cheapest and half the bytes). Mean
+     ~0.035 s/ledger → ~128 core-hours → ~21h across 6 workers. Excludes
+     the S3 fetch and the CH insert; measured on a laptop, so the box may
+     differ. Harness: `backfill-runner/examples/pilot_lp_amounts.rs`.
    - **Pre-create the table on prod before deploying the parser** (the
      `accounts_recent` 500 lesson) — live ingest starts writing the moment
      the indexer restarts.
    - Purely additive: no existing table touched, no EXCHANGE TABLES, no
      `repair-tier1` obligation, indexer keeps running throughout; rollback
      is `DROP TABLE`.
-   - Built-in verification: `sum(amount)` per (pool, ledger) over the
-     A-side legs must equal `liquidity_pool_snapshots.gross_volume_a`
+   - Built-in verification: **`sum(abs(amount))`** per (pool, ledger) over
+     the A-side legs must equal `liquidity_pool_snapshots.gross_volume_a`
      (both derive from the same atoms) — one SQL comparison closes the
      backfill gate. Per-row spot checks can use the E3 heavy-fields
      response as a second in-house oracle besides Horizon.
+     **ABS, corrected 2026-08-11** (an earlier revision of this line said
+     "the positive A legs"): `gross_volume_a` is a GROSS figure —
+     `append_pool_claims` takes each atom's A-side amount whichever way the
+     swap went, both non-negative — so a pool that only sold A that ledger
+     has every A leg negative here and a positives-only sum reads 0 against
+     a non-zero volume. Known legitimate mismatch: an op crossing the SAME
+     pool in BOTH directions nets out at this table's per-op grain while
+     `gross_volume_a` counts both crossings gross.
 
    **Run plan (recorded 2026-08-11, after the go decision):**
 
@@ -324,7 +418,17 @@ asset_id)`. Pool-leading so the pool page seeks rather than scans, and
      the range loop behaves on a missing file (or add a small
      --ledger-list mode); (b) fallback with zero runner changes — ranges
      from the first pool-active ledger (AMMs exist since protocol 18,
-     ~Nov 2021) to tip, ~40% of history instead of 20.6%, est. 3-5h.
+     ~Nov 2021) to tip. With the scope correction above this fallback
+     costs ~10% more than the targeted form, not 2x — our range starts at
+     50.46M anyway, so both shapes parse almost the same ledgers.
+   - **BLOCKER, found 2026-08-11: the runner has no targeted-write mode.**
+     `run --reindex` puts every ledger through the full staging pipeline
+     and writes every table. 0266 did NOT use a runner flag for this — it
+     ran a bespoke harness ("Targeted write only — do NOT run the full
+     persist pipeline") and INSERTed the rows it wanted. So a
+     write-only-this-table mode has to be built before the run starts;
+     without it the "no repair-tier1" claim below is void, because a full
+     reindex re-arms the Tier-1 MIN-corruption trap.
    - **Write ONLY `lp_operation_amounts`** (targeted-write, the proven
      0266 pattern) — NOT a full `--reindex`. This is the condition that
      keeps the "no repair-tier1" claim valid: the parallel-run Tier-1
