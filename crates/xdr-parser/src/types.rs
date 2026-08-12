@@ -462,8 +462,9 @@ pub struct ExtractedAsset {
     /// `true` from a SAC deploy sighting; `false` for an un-deployed SAC seen
     /// only via events. Meaningless (and `false`) when `sac_contract_id` is `None`.
     pub sac_deployed: bool,
-    pub total_supply: Option<String>,
-    pub holder_count: Option<i32>,
+    // No `total_supply` / `holder_count`: the parser never had a value for
+    // either (always `None`), and the columns they fed were dropped in 0310 —
+    // supply/holders are computed from `balances` into `balance_aggregates`.
 }
 
 /// Detected NFT from events and ledger entry changes.

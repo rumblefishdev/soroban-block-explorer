@@ -4359,7 +4359,7 @@
           },
           "icon_url": {
             "type": ["string", "null"],
-            "description": "Asset icon URL, mirrored from the leg's `assets.icon_url` row so\npool avatars render the same icon as the assets list. `None` for\nnative legs and assets without an enriched icon — the FE falls back\nto the asset-code initial."
+            "description": "Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool\navatars render the same icon as the assets list. Until task 0310 this\nread the dead `assets.icon_url` column, which was never populated —\nevery leg icon came back `None`. Still `None` for assets without an\nenriched icon — the FE falls back to the asset-code initial."
           },
           "issuer": {
             "type": ["string", "null"]
