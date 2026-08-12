@@ -7,11 +7,12 @@ Deep-dives live in the per-layer READMEs (linked below). This file does
 **not** duplicate them — it ties them together and is the source of truth
 for _which_ command ships _what_.
 
-> **Important — there is no staging environment, and the CI deploy path is
-> not armed yet.** Production is the only environment. A tag-driven CI deploy
-> exists (`.github/workflows/deploy-production.yml`) but is **inert until the
-> GitHub `production` environment holds the AWS deploy secrets** — until then
-> every deploy is run **manually from an operator laptop**. See
+> **Important — there is no staging environment, and the CI deploy path has
+> never been exercised.** Production is the only environment. A tag-driven CI
+> deploy exists (`.github/workflows/deploy-production.yml`) and is **armed as of
+> 2026-08-12** — the GitHub `production` environment, the OIDC deploy role and
+> its secrets are in place — but **no tag has run through it yet**, so the
+> manual **operator-laptop** path below is still the proven one. See
 > [§ Releases and the CI deploy path](#releases-and-the-ci-deploy-path), and
 > [§ No staging](#no-staging) before trusting any `staging` command you find
 > elsewhere in the repo.
@@ -77,8 +78,10 @@ stale. A real pre-mainnet tier is proposed as the **testnet** environment
 (ADR 0052) — not as a revived `staging`.
 
 > The GitHub **environment** named `staging` is a different thing and still
-> exists: it holds the OIDC deploy secrets used by the April 2026 tag deploys.
-> It goes away once the `production` environment takes over (below).
+> exists, holding April 2026 secrets that point at a deploy role this AWS
+> account never had — it has no OIDC provider and no `soroban-explorer-*-deploy`
+> role. Superseded by `production` (below); delete it once the first tag run is
+> green.
 
 ---
 
@@ -112,12 +115,16 @@ second release on the same day.
   cutting a new tag, not re-running the old one.
 - **Issues close at deploy, not at merge** — run `/issues` after a release.
 
-> ⚠️ **Not armed yet.** The job binds `environment: production`, which does not
-> exist in the repo. Until it is created and holds `AWS_DEPLOY_ROLE_ARN`
-> (+ `AWS_ACCOUNT_ID`), and the deploy role is confirmed to cover
-> `eu-central-1`, the SPA bucket sync and the CloudFront invalidation, a tag run
-> dies at credential configuration and ships nothing. The manual path below is
-> the working one. Tracked in task 0390.
+> ⚠️ **Armed 2026-08-12, not yet exercised.** The `production` environment
+> exists with deployment policies (tag `production-*`, branch `master`) and
+> holds `AWS_DEPLOY_ROLE_ARN` + `AWS_ACCOUNT_ID`. The role
+> `soroban-explorer-production-deploy` comes from
+> `infra/src/lib/stacks/cicd-stack.ts` (`make -C infra deploy-cicd`) and is
+> scoped to the **eu-central-1** CDK bootstrap roles, the SPA bucket sync and
+> the CloudFront invalidation; its OIDC trust condition is
+> `sub = repo:rumblefishdev/soroban-block-explorer:environment:production`,
+> which is what the job's `environment: production` presents. What is missing is
+> a run — the first tag validates the path end to end. Tracked in task 0390.
 
 ---
 

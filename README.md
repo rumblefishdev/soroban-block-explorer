@@ -88,9 +88,10 @@ A release is a git tag: pushing `production-YYYY.MM.DD-N` to `master` runs
 git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
 ```
 
-> ⚠️ The CI path is **not armed yet** — it needs the GitHub `production`
-> environment holding the AWS deploy secrets (task 0390). Until then every
-> deploy is manual from a laptop:
+> ⚠️ The CI path is **armed but not yet exercised** — the GitHub `production`
+> environment, the OIDC deploy role and its secrets were provisioned
+> 2026-08-12, but no tag has run through it (task 0390). The first release is
+> also its validation. The manual laptop path stays available:
 
 ```bash
 make -C infra diff-production              # preview
