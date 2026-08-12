@@ -32,7 +32,9 @@ describe('TransactionCounts', () => {
   });
 
   it('treats undefined like null — the generated type omits the field', () => {
-    renderWithProviders(<TransactionCounts total={365} successful={undefined} />);
+    renderWithProviders(
+      <TransactionCounts total={365} successful={undefined} />
+    );
 
     expect(screen.getByText('split unavailable')).toBeInTheDocument();
   });
@@ -68,9 +70,7 @@ describe('TransactionCounts', () => {
     const calm = renderWithProviders(
       <TransactionCounts total={100} successful={70} />
     );
-    const calmColour = getComputedStyle(
-      screen.getByText('30.0% failed')
-    ).color;
+    const calmColour = getComputedStyle(screen.getByText('30.0% failed')).color;
     calm.unmount();
 
     renderWithProviders(<TransactionCounts total={100} successful={30} />);

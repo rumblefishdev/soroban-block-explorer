@@ -46,7 +46,10 @@ export function TransactionCounts({
   const failureRate = hasSplit && total > 0 ? failed / total : 0;
 
   return (
-    <Stack spacing={0.25} aria-label={describe(total, hasSplit ? failed : null)}>
+    <Stack
+      spacing={0.25}
+      aria-label={describe(total, hasSplit ? failed : null)}
+    >
       <Typography
         component="span"
         variant="bodySmMedium"
@@ -85,5 +88,7 @@ function describe(total: number, failed: number | null): string {
   if (failed === null) {
     return `${transactions}, success split unavailable`;
   }
-  return `${transactions}, ${formatInteger(total - failed)} succeeded, ${formatInteger(failed)} failed`;
+  return `${transactions}, ${formatInteger(
+    total - failed
+  )} succeeded, ${formatInteger(failed)} failed`;
 }
