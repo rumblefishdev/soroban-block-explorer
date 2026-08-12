@@ -105,3 +105,22 @@ WHERE t.ledger_sequence = $1
   AND ($2 IS NULL OR (t.ledger_sequence, t.id) < ($2, $3))
 ORDER BY t.ledger_sequence DESC, t.id DESC
 LIMIT $4;
+
+-- @@ split @@
+
+-- =====================================================================
+-- Statement C — successful-transaction count for this ledger (task 0445)
+--   • Same aggregate as the ledgers-list step 2 (see 04), one ledger wide.
+--   • A round trip rather than a scalar subquery on Statement A: a subquery
+--     returns 0 for a ledger with no `transactions` rows, which is
+--     indistinguishable from "all of them failed". Absent here → NULL on
+--     the wire → the UI renders the plain total instead of a split.
+--   • uniqExactIf, not countIf — ReplacingMergeTree; no FINAL (0420).
+-- =====================================================================
+
+SELECT
+    ledger_sequence,
+    uniqExactIf(application_order, successful) AS successful_count
+FROM transactions
+WHERE ledger_sequence = $1
+GROUP BY ledger_sequence;
