@@ -147,6 +147,7 @@ entity that does not exist:
 | -------------------------------- | -------------: | ---------- | ------- |
 | ledger transactions              |              0 | 4 ms       | yes     |
 | pool transactions                |        560,960 | 11 ms      | yes     |
+| nft transfers                    |         24,583 | 6.7 ms     | yes     |
 | pool participants                |         25,496 | 113 ms     | yes     |
 | **pool chart**                   | **43,738,676** | **4.66 s** | **NO**  |
 | (the gate itself, `pool_exists`) |         16,569 | 3.6 ms     | —       |
@@ -227,10 +228,17 @@ this branch removes:
 | `accdetail` | 543 |             1 | 213 ms |     199 ms |   7% |
 | `txdetail`  | 563 |             2 | 414 ms |     386 ms |   7% |
 
-6,842 of 13,698 requests touch a changed path. Weighted mean wall clock
-169.8 ms → **est. 159.9 ms (−5.8%)**. (`lpchart` contributes nothing — its gate
-stayed serial on purpose, see above. Including it the figures would have been
-7,361 requests and 159.4 ms / −6.1%.)
+**State it per request, not as a percentage of an aggregate.** Of the 13,698
+requests, **6,842 (49.9%) save something and 6,856 (50.1%) save nothing**: 4,176
+save one wave (14.2 ms), 2,666 save two (28.4 ms). The run's actual mean is
+227.6 ms and its actual median 151 ms, so a request that benefits gains roughly
+9–19% of a median request and the rest gain zero.
+
+The aggregate form — n-weighted mean of per-endpoint medians, 169.8 ms →
+159.9 ms (−5.8%) — is the number the AC asks for, but it describes a statistic
+no user experiences. `lpchart` contributes nothing (its gate stayed serial on
+purpose, see above); including it the figures would have been 7,361 requests and
+159.4 ms / −6.1%.
 
 Treat the per-endpoint percentages as an upper bound: the 14.2 ms slope was
 fitted against **query count**, and is applied here per **removed wave**. That is
@@ -242,6 +250,28 @@ without queueing.
 Concurrency does not reduce the number of queries — it overlaps them. Mean
 `ch_queries` stays at 3.25 (verified against the same data); only `asttxs` drops,
 8 → 7, from the `UNION ALL`. The criterion should read _waves_, not queries.
+
+## The connection pool had to move with it
+
+Concurrency only pays if the sockets are already open. `db_clickhouse::mtls`
+built its hyper client with `pool_max_idle_per_host(2)` — sized, per its own
+comment, for the indexer's **serial** writes. HTTP/1 only, so there is no h2
+multiplexing to fall back on.
+
+A Lambda instance serves one request at a time, so a 2-way `tokio::join!` is
+exactly covered and reuses both sockets. A **3-way** one is not: the third
+connection is opened per request and then evicted, and the next request pays a
+fresh TCP + TLS 1.3 + mTLS handshake to Hetzner on a 256 MB Lambda — plausibly
+more than the round trip the concurrency just saved.
+
+Two sites fan out 3 ways: `transactions::get_transaction` (pre-existing on
+`develop` — so this trap was already live for `txdetail`, not introduced here)
+and `contracts::fetch_contract_list` (added by this task). Cap raised to 4. It
+bounds _retained idle_ sockets, not in-flight ones, so nothing else changes and
+the indexer — which never holds more than one — is unaffected.
+
+Not measured end to end: the handshake-vs-round-trip balance needs the load-test
+rerun like everything else here.
 
 ## Acceptance Criteria
 
