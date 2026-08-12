@@ -138,31 +138,6 @@ pub async fn list_participants(
 // List / Detail / Transactions / Chart (task 0052)
 // ---------------------------------------------------------------------------
 
-/// Validate `filter[min_tvl]` shape: a non-negative decimal string with
-/// at least one digit and at most one `.`.
-///
-/// `f64::parse` accepted `NaN` / `Infinity` / scientific notation /
-/// negative values that PostgreSQL `NUMERIC` either rejects later or
-/// stores in a way that breaks the `>= $X::numeric` predicate semantics
-/// (`NaN >= anything` is FALSE in PG, including `NaN >= NaN`). It also
-/// silently widened-then-narrowed `NUMERIC(28,7)` precision.
-///
-/// This validator stays at the API boundary so a confused caller gets a
-/// 400 envelope explaining the shape rule, instead of a Postgres parse
-/// error surfacing as 500 mid-query.
-fn is_valid_decimal_string(s: &str) -> bool {
-    let mut digits = 0usize;
-    let mut dots = 0usize;
-    for b in s.bytes() {
-        match b {
-            b'0'..=b'9' => digits += 1,
-            b'.' => dots += 1,
-            _ => return false,
-        }
-    }
-    digits > 0 && dots <= 1
-}
-
 /// Normalize `filter[asset_code]` into the needles the WHERE clause binds:
 /// trim, uppercase, then split a pair query on `/`. Empty input (e.g.
 /// `?filter[asset_code]=`) yields no needles — an empty one would otherwise
@@ -306,14 +281,25 @@ pub async fn list_pools(
         );
     }
 
-    if let Some(min) = params.filter_min_tvl.as_deref()
-        && !is_valid_decimal_string(min)
-    {
+    // `filter[min_tvl]` is REJECTED, not ignored and not silently empty.
+    //
+    // Its SQL pre-filter reads `liquidity_pool_snapshots.tvl`, a column task
+    // 0199 established is never written (USD is computed at read, ADR 0053),
+    // so the predicate matched nothing and the endpoint answered "no pools"
+    // — while the same response now carries real per-row USD `tvl`. A filter
+    // that contradicts the rows it filters is worse than an absent one, so
+    // callers get a 400 that says why rather than a plausible empty page.
+    //
+    // Restoring it needs TVL for ALL pools per request (it changes page
+    // membership, so it cannot ride the per-page price lookup) — i.e. the
+    // prices-side identity-keyed materialization. Until then this stays a
+    // 400 and `ResolvedPoolListParams::min_tvl` stays `None`.
+    if let Some(min) = params.filter_min_tvl.as_deref() {
         return errors::bad_request_with_details(
             errors::INVALID_FILTER,
-            "filter[min_tvl] must be a non-negative decimal string \
-             (digits and at most one `.`); NaN, Infinity, exponent forms, \
-             and signed values are rejected",
+            "filter[min_tvl] is not supported: pool TVL is computed at read \
+             from off-chain prices, so it cannot filter page membership. \
+             Filter client-side on the `tvl` field of the returned rows.",
             serde_json::json!({ "filter": "min_tvl", "received": min }),
         );
     }
@@ -327,7 +313,6 @@ pub async fn list_pools(
         asset_a_issuer: params.filter_asset_a_issuer,
         asset_b_code: params.filter_asset_b_code,
         asset_b_issuer: params.filter_asset_b_issuer,
-        min_tvl: params.filter_min_tvl,
         asset_codes: normalize_asset_codes(params.filter_asset_code),
     };
 
@@ -391,7 +376,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     let fetched = queries::fetch_pool_by_id(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
-    let row = match fetched {
+    let mut row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -399,6 +384,44 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
+
+    // USD analytics (0199 compute-at-read): spot TVL + 24h volume/fee from
+    // the in-cluster `prices.*` views. Deliberately DEGRADES to NULL fields
+    // on error instead of failing the whole detail — the pool's on-chain
+    // data is still valid without prices, and the FE already renders the
+    // NULL ("stale") state. The error log is the operator signal (a missing
+    // `prices.*` SELECT grant lands here, not in a 500).
+    let ctx = queries::PoolPriceContext {
+        leg_a: queries::price_leg(
+            row.asset_a_type,
+            row.asset_a_code.as_deref(),
+            row.asset_a_issuer.as_deref(),
+        ),
+        leg_b: queries::price_leg(
+            row.asset_b_type,
+            row.asset_b_code.as_deref(),
+            row.asset_b_issuer.as_deref(),
+        ),
+        fee_bps: row.fee_bps,
+    };
+    match queries::fetch_pool_usd_analytics(
+        &state.ch(),
+        &pool_id_hex,
+        &ctx,
+        row.reserve_a.as_deref(),
+        row.reserve_b.as_deref(),
+    )
+    .await
+    {
+        Ok(analytics) => {
+            row.tvl = analytics.tvl;
+            row.volume = analytics.volume;
+            row.fee_revenue = analytics.fee_revenue;
+        }
+        Err(e) => {
+            tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");
+        }
+    }
 
     let mut resp = Json(map_pool_item(row)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -649,30 +672,29 @@ pub async fn get_pool_chart(
         );
     }
 
-    // This gate stays SERIAL, unlike its siblings in `list_participants` /
-    // `list_pool_transactions` (task 0446). Measured on prod for a pool that
-    // does not exist, their guarded reads cost 25k rows / 113 ms and 561k rows
-    // / 11 ms — cheap enough to waste on a 404. The chart is not: its
+    // Doubles as the 404 existence gate (one row on `liquidity_pools`) and
+    // supplies the leg identities + fee_bps the USD computation joins on.
+    //
+    // Stays SERIAL, unlike the gates in `list_participants` /
+    // `list_pool_transactions` (task 0446), and for two independent reasons.
+    // The chart read now CONSUMES `ctx`, so it is genuinely dependent — nothing
+    // to overlap. It also could not have been paired even before that: its
     // `JOIN (SELECT … FROM ledgers WHERE closed_at …)` build side is
     // materialised even when the left side is empty, and `MAX_CHART_BUCKETS`
-    // admits a ~19-year window. Measured on prod for a pool that does not
-    // exist: 43.7M rows / 4.66 s, against 16.5k rows / 3.6 ms for the gate.
-    // Pool ids are user-supplied strkeys and trivially generated, so running
-    // the chart before knowing the pool exists hands out a 4-second read to
-    // anyone who asks. One wave is worth less than that.
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    match exists {
-        Ok(true) => {}
-        Ok(false) => return errors::not_found("liquidity pool not found"),
+    // admits a ~19-year window, so speculatively running it cost a measured
+    // 43.7M rows / 4.66 s for a pool that does not exist, against 16.5k rows /
+    // 3.6 ms for the gate. Pool ids are user-supplied strkeys. If a future
+    // change breaks the data dependency, that measurement still stands.
+    let ctx = match queries::fetch_pool_price_context(&state.ch(), &pool_id_hex).await {
+        Ok(Some(ctx)) => ctx,
+        Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in pool_exists({pool_id}): {e}");
+            tracing::error!("DB error in fetch_pool_price_context({pool_id}): {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
-    }
+    };
 
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
+    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
         .await
         .map_err(|e| e.to_string());
     let data_points = match fetched {

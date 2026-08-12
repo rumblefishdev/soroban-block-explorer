@@ -65,16 +65,16 @@ Caddy does not know the password to forge Basic Auth.
 
 ## Per-service user matrix
 
-| CH user            | Profile         | Quota          | Permitted operations                                            | Consumer                                               |
-| ------------------ | --------------- | -------------- | --------------------------------------------------------------- | ------------------------------------------------------ |
-| `default`          | `default`       | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)     | `db-clickhouse-init` sidecar + backup script + SSH ops |
-| `dev_shared`       | `admin`         | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks) | Dev laptops (one shared cert-gated user)               |
-| `galexie`          | `write_no_ddl`  | `high_write`   | INSERT only on ingestion tables                                 | Galexie ECS task                                       |
-| `api_reader`       | `read_only`     | `api_throttle` | SELECT on `default.*`                                           | Lambda API (read-heavy)                                |
-| `ingestion_writer` | `write_no_ddl`  | `high_write`   | INSERT on tables Galexie does not touch                         | Lambda Ingestion                                       |
-| `prices_writer`    | `write_no_ddl`  | `prices_write` | SELECT, INSERT, OPTIMIZE on `prices.*` only (inline `<grants>`) | prices-api ingestion (separate service, task 0063)     |
-| `prices_reader`    | `read_only`     | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                   | prices-api / BE LP-analytics `price_usd_series` JOIN   |
-| `dict_reader`      | `read_only_lan` | n/a (loopback) | SELECT inside container (loopback only)                         | Dictionary SOURCE clause                               |
+| CH user            | Profile         | Quota          | Permitted operations                                                                                                                                                            | Consumer                                               |
+| ------------------ | --------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `default`          | `default`       | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                                                                                                                     | `db-clickhouse-init` sidecar + backup script + SSH ops |
+| `dev_shared`       | `admin`         | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks)                                                                                                                 | Dev laptops (one shared cert-gated user)               |
+| `galexie`          | `write_no_ddl`  | `high_write`   | INSERT only on ingestion tables                                                                                                                                                 | Galexie ECS task                                       |
+| `api_reader`       | `read_only`     | `api_throttle` | SELECT on `default.*`                                                                                                                                                           | Lambda API (read-heavy)                                |
+| `ingestion_writer` | `write_no_ddl`  | `high_write`   | INSERT on tables Galexie does not touch                                                                                                                                         | Lambda Ingestion                                       |
+| `prices_writer`    | `write_no_ddl`  | `prices_write` | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` (inline `<grants>`; 0314 + 0477 self-monitoring) | prices-api ingestion (separate service, task 0063)     |
+| `prices_reader`    | `read_only`     | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                   | prices-api / BE LP-analytics `price_usd_series` JOIN   |
+| `dict_reader`      | `read_only_lan` | n/a (loopback) | SELECT inside container (loopback only)                                                                                                                                         | Dictionary SOURCE clause                               |
 
 > `migration_admin` + `partition_admin` were removed in task 0241 (from
 > `crates/db-clickhouse/users.d/services.xml`) together with the PG-era

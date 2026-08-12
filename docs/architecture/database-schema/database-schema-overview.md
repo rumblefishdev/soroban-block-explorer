@@ -1286,8 +1286,21 @@ Design notes:
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
   the schema's balance / amount handling
-- `volume` and `fee_revenue` are NOT populated yet — both columns stay NULL until **task 0199** lands. The indexer cannot derive them correctly from snapshot reserves alone (reserve delta nets opposite swaps inside one ledger and lacks USD denomination). Task 0199 implements per-op extraction from PathPayment `claimedOffers[].amount_sold` plus USD denomination via the price oracle infrastructure of task 0195 §2b. Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), the per-op extraction half is on-chain → indexer, and the USD denomination half is off-chain → Lambda 2.
-- `tvl` is populated by **Lambda 2 enrichment** (off-chain USD oracle, task 0195 §2b — Reflector / StellarExpert) — not by the indexer
+- `tvl`, `volume` and `fee_revenue` are **permanently unwritten** — no writer
+  populates them, and none is planned. Task 0199 landed the analytics as
+  **compute-at-read** instead ([ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)):
+  the API multiplies the on-chain quantities in these rows (`reserve_a/b`, and
+  `gross_volume_a`) by USD closes read at query time from the prices service's
+  in-cluster `prices.*` views. The earlier plan — a Lambda 2 write-back per
+  ADR 0043 — was rejected because `liquidity_pool_snapshots` is a
+  `ReplacingMergeTree` with no version column, so a per-row write-back is a
+  racy read-modify-write that a later plain insert can silently erase. Keeping
+  the columns unwritten is what keeps this table single-writer (indexer only).
+  They are retained rather than dropped so an eventual materialization has a
+  home; anything reading them today gets NULL by design.
+- `gross_volume_a` (asset-A-unit gross trade volume per `(pool, ledger)`, from
+  PathPayment claim atoms) IS populated — live since task 0261 and backfilled
+  by 0266 — and is the on-chain input the read-time USD `volume` multiplies.
 - `created_at` drives interval queries and monthly partition management
 
 ### 4.16 LP Positions

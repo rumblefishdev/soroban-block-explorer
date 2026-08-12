@@ -22,6 +22,8 @@ import { Suspense, lazy, useEffect, useState } from 'react';
 
 import { useContractDecompiled } from '../../api/index.js';
 
+import { InferaraMark } from './InferaraMark.js';
+
 import type { DecompileDiagnostic } from '@rumblefish/api-types';
 
 // Prism (and its grammars) load in their own chunk on first Code-tab use.
@@ -578,6 +580,7 @@ export function ContractCode({
         >
           inferara.com
         </Link>
+        <InferaraMark />
       </Typography>
     </Stack>
   );

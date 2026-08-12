@@ -30,6 +30,24 @@
 --   • `created_at_ledger_derived` = first-ever snapshot of this pool.
 --     One pool-pinned `MIN(ledger_sequence)` over snapshots is cheap.
 --   • Sentinel `asset_*_issuer_id = 0` for native: LEFT JOIN gated by `!= 0`.
+--   • **task 0199:** `tvl` / `volume` / `fee_revenue` are NO LONGER read
+--     from the snapshot columns (never populated — pre-0199 design). The
+--     handler runs a second, small query and computes USD in Rust:
+--       tvl         = latest reserves × last hourly USD close
+--                     (`prices.price_usd_series_1h`, 48h lookback, per-leg
+--                      identity, `close_usd > 0` only — non-positive rows
+--                      are the prices-side 0171 sentinel, treated as
+--                      absent; NULL unless BOTH legs price)
+--       volume      = last-24h `sum(gross_volume_a)` (pool-pinned seek,
+--                     `LIMIT 1 BY ledger_sequence` dedup) × leg-A close
+--       fee_revenue = volume × fee_bps / 10000
+--     NOT `prices.current_price_usd`: box-measured 2026-08-04 the spot view
+--     carries the 0-sentinel for native XLM itself (their task 0135), so
+--     every XLM-leg pool would read NULL; the 1h close is ≤ ~2h stale, same
+--     cost (112 ms / 1.6M rows on the hottest pool), and matches the
+--     chart's last bucket. Prices errors DEGRADE to NULL fields
+--     (error-logged), never a 500. Deploy gate: API CH user needs SELECT
+--     on `prices.*`.
 
 SELECT
     lower(hex(lp.pool_id))                                                          AS pool_id_hex,
@@ -47,9 +65,8 @@ SELECT
     s.reserve_a,
     s.reserve_b,
     s.total_shares,
-    s.tvl,
-    s.volume,
-    s.fee_revenue,
+    -- s.tvl / s.volume / s.fee_revenue: not read (task 0199 — see Notes;
+    -- USD analytics come from the separate compute-at-read query)
     l_snap.closed_at                                                                AS latest_snapshot_at
 FROM liquidity_pools lp FINAL
 LEFT JOIN accounts iss_a FINAL ON iss_a.id = lp.asset_a_issuer_id AND lp.asset_a_issuer_id != 0
@@ -59,10 +76,7 @@ LEFT JOIN (
         max(ledger_sequence)                      AS latest_ledger_sequence,
         argMax(reserve_a,        ledger_sequence) AS reserve_a,
         argMax(reserve_b,        ledger_sequence) AS reserve_b,
-        argMax(total_shares,     ledger_sequence) AS total_shares,
-        argMax(tvl,              ledger_sequence) AS tvl,
-        argMax(volume,           ledger_sequence) AS volume,
-        argMax(fee_revenue,      ledger_sequence) AS fee_revenue
+        argMax(total_shares,     ledger_sequence) AS total_shares
     FROM liquidity_pool_snapshots FINAL
     WHERE pool_id = $1
 ) s ON 1=1

@@ -1,13 +1,13 @@
 ---
 id: '0009'
 title: 'Staging deploys triggered by git tags, not by push to develop'
-status: accepted
+status: superseded
 deciders: [stkrolikiewicz, fmazur]
-related_tasks: ['0110']
-related_adrs: []
+related_tasks: ['0110', '0390']
+related_adrs: ['0052']
 tags: [ci, cd, staging, process]
 links:
-  - .github/workflows/deploy-staging.yml
+  - .github/workflows/deploy-production.yml
 history:
   - date: '2026-04-08'
     status: proposed
@@ -17,13 +17,31 @@ history:
     status: accepted
     who: stkrolikiewicz
     note: 'Accepted. Date-based tags staging-YYYY.MM.DD-N confirmed.'
+  - date: '2026-08-12'
+    status: superseded
+    who: stkrolikiewicz
+    by: ['0052']
+    note: >
+      The environment this ADR governed is gone: us-east-1 staging was torn down
+      (task 0249), and lore-0390 removed the workflow and the `staging-*` tag
+      trigger that implemented the decision. ADR 0052 names testnet as the
+      replacement pre-mainnet tier. The *mechanism* was not rejected — it was
+      promoted: production now deploys off `production-YYYY.MM.DD-N` tags via
+      `.github/workflows/deploy-production.yml`, same date-tag convention, with
+      the tag itself as the release decision (no approval gate). Four historical
+      `staging-2026.04.*` tags remain as the record of this ADR in service.
 ---
 
 # ADR 0009: Staging deploys triggered by git tags, not by push to develop
 
+> **Superseded (2026-08-12).** The staging environment this ADR targeted no
+> longer exists; see the history note above. The date-tag trigger it introduced
+> lives on for production — [`docs/deployment.md` § Releases](../../docs/deployment.md#releases-and-the-ci-deploy-path).
+
 **Related:**
 
 - [Task 0110: CI staging deploy optimization](../1-tasks/active/0110_FEATURE_ci-staging-deploy-optimization/README.md)
+- [Task 0390: retire the staging fossil, add the production tag deploy](../1-tasks/active/0390_REFACTOR_deploy-workflow-cleanup-prod-template.md)
 
 ---
 

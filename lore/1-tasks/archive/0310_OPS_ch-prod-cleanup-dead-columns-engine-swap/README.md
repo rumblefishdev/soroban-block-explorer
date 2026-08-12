@@ -5,7 +5,7 @@ title: 'CH prod cleanup — drop dead assets aggregate columns + MergeTree→Rep
 type: OPS
 status: completed
 related_adr: ['0044']
-related_tasks: ['0293', '0232', '0298', '0244', '0474']
+related_tasks: ['0293', '0232', '0298', '0244', '0476']
 tags:
 [
 'phase-future',
@@ -146,7 +146,7 @@ history:
   config-touch recycled them. Recovery: DROPs + container recycle; reconcile
   re-drained the S3 backlog, 157/157 ledgers verified, no gap. Full
   post-mortem under "Issues Encountered". Refresh-monitoring AC confirmed
-  NOT owned by 0331/0339 (manual runbook check only) — spawned to 0474.
+  NOT owned by 0331/0339 (manual runbook check only) — spawned to 0476.
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
 
@@ -293,7 +293,7 @@ Alert if `exception != ''` OR `now() - last_success_time > ~10 min` (a few misse
 - [x] 0293 rollout confirmed live + verified in prod (prerequisite) — prod serves
       supply/holders from `balance_aggregates` (0331/0339 successor of the 0293
       `asset_aggregates`); assets read path is all-CH.
-- [ ] `balance_aggregates` refresh monitored — **spawned to task 0474**
+- [ ] `balance_aggregates` refresh monitored — **spawned to task 0476**
       (confirmed 2026-08-12: 0331/0339 carry only a manual runbook check,
       nothing wired in `infra/`; an alert is CDK/CloudWatch work, out of this
       task's scope).

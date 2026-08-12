@@ -1,5 +1,5 @@
 ---
-id: '0474'
+id: '0476'
 title: 'OPS: alert on a stalled balance_aggregates_mv refresh (system.view_refreshes)'
 type: OPS
 status: backlog
@@ -17,6 +17,17 @@ history:
       carry only a MANUAL check (`0331_…/ops-runbook.md` queries
       `system.view_refreshes`), and nothing in `infra/` wires an alert — so
       this is not a duplicate.
+  - date: '2026-08-12'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Renumbered 0474 → 0476: id 0474 collided with
+      `0474_FEATURE_inferara-logo-attribution`, created the same day on the
+      other side of the develop/master split (PR #394) and invisible from here
+      until the back-merge in PR #397 put both on one branch. This backlog task
+      is the cheaper side to move — the FEATURE one is already referenced by
+      merged commits. 0475 was taken meanwhile, hence 0476. Content unchanged:
+      only the id, the filename and the three references from 0310 moved.
 ---
 
 # OPS: alert on a stalled `balance_aggregates_mv` refresh
