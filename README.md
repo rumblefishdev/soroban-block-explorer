@@ -88,10 +88,8 @@ A release is a git tag: pushing `production-YYYY.MM.DD-N` to `master` runs
 git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
 ```
 
-> ⚠️ The CI path is **armed but not yet exercised** — the GitHub `production`
-> environment, the OIDC deploy role and its secrets were provisioned
-> 2026-08-12, but no tag has run through it (task 0390). The first release is
-> also its validation. The manual laptop path stays available:
+> The manual laptop path stays available, and is the one to use for surgical,
+> single-stack deploys:
 
 ```bash
 make -C infra diff-production              # preview
