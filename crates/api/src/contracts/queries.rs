@@ -481,11 +481,10 @@ pub async fn fetch_contract(
     // Task 0441 — the mirrored asset; `fetch_sac_assets` returns empty for a
     // non-SAC, so the pair goes out together rather than one after the other
     // (task 0446).
-    let sac_id = [r.id];
-    let sac_ids: &[i64] = if r.is_sac { &sac_id } else { &[] };
+    let sac_ids: Vec<i64> = r.is_sac.then_some(r.id).into_iter().collect();
     let (accounts, sac_assets) = tokio::join!(
         resolve_accounts(client, r.deployer_id.into_iter().collect()),
-        fetch_sac_assets(client, sac_ids),
+        fetch_sac_assets(client, &sac_ids),
     );
     let accounts = accounts?;
     let sac_asset = sac_assets?.remove(&r.id);
