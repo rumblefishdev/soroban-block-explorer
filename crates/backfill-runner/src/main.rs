@@ -89,6 +89,24 @@ struct Cli {
     #[arg(long)]
     keep_partitions: bool,
 
+    /// Persist ONLY `lp_operation_amounts` — the targeted write a historical
+    /// re-parse for one new derived table needs (task 0279, pattern from
+    /// 0266).
+    ///
+    /// Without it, `run --reindex` re-emits EVERY table, which rewrites the 12
+    /// Tier-1 columns that cannot survive parallel `ReplacingMergeTree`
+    /// collapse and so owes a `repair-tier1` pass afterwards
+    /// (`docs/backfills.md` §3). With it the run is additive: one table, no
+    /// MIN-semantics column, indexer untouched, rollback is `DROP TABLE`.
+    ///
+    /// Implies `--reindex` (the range is already ingested, so the resume
+    /// filter would otherwise skip every ledger). No `ledgers` commit marker
+    /// is written, so a crashed run resumes by narrowing `--start` — re-running
+    /// a range is a no-op, the rows are deterministic and the RMT collapses
+    /// them.
+    #[arg(long)]
+    lp_amounts_only: bool,
+
     /// Enable per-ledger and per-partition progress logs. Without this
     /// flag only warnings are shown during the run; the final summary
     /// (and the `status` table) prints either way.
@@ -249,7 +267,8 @@ async fn main() {
         cli.ch_cert.as_deref(),
         cli.ch_key.as_deref(),
         cli.ch_ca.as_deref(),
-    );
+    )
+    .with_lp_amounts_only(cli.lp_amounts_only);
 
     match cli.command {
         Command::Run {

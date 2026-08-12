@@ -141,6 +141,35 @@ impl PartitionWriter {
     /// crate chunk-sends them over HTTP transparently when the buffer
     /// fills. `ledgers` rows are **not** sent during this call;
     /// they're buffered as the partition's commit marker.
+    /// Stream ONLY this ledger's `lp_operation_amounts` rows — the targeted
+    /// write the 0279 backfill runs (task 0266 established the pattern: a
+    /// historical re-parse that needs one new derived table must not re-emit
+    /// every other one).
+    ///
+    /// Two things this deliberately does NOT do, both load-bearing:
+    ///
+    /// - **No other table** — a full re-emission would rewrite the 12 Tier-1
+    ///   columns that cannot survive parallel `ReplacingMergeTree` collapse
+    ///   (`docs/backfills.md` §3), turning an additive backfill into one that
+    ///   owes a `repair-tier1` pass.
+    /// - **No `ledgers` commit marker** — the marker means "fully ingested",
+    ///   which a targeted pass has not done. The cost is that resume cannot
+    ///   read progress from the DB: a crashed targeted run resumes by
+    ///   narrowing `--start`, and re-running a range is a no-op (the rows are
+    ///   deterministic and the RMT collapses them).
+    pub async fn write_lp_amounts_only(
+        &mut self,
+        staged: &StagedLedger,
+    ) -> Result<(), SchemaError> {
+        write_rows(
+            &self.client,
+            &mut self.inserts.lp_amounts,
+            "lp_operation_amounts",
+            &staged.lp_amount_rows,
+        )
+        .await
+    }
+
     pub async fn write_ledger(&mut self, mut staged: StagedLedger) -> Result<(), SchemaError> {
         // Hold the ledger row(s) back as commit marker.
         self.ledger_rows.append(&mut staged.ledger_rows);
