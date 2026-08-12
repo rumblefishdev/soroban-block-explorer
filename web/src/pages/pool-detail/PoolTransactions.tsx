@@ -83,8 +83,10 @@ function classifyLpTx(operationTypes: readonly string[]): {
  * Amounts stay STRINGS end to end — `formatTokenAmount` consumes them exactly,
  * while a leg above 2^53 stroops would lose digits as a number.
  *
- * `null` in means NOT KNOWN, never zero: rows older than the amount index have
- * no value and must render blank rather than as `0`.
+ * `null` in means NO FIGURE FOR THIS ROW, never zero — either the amount index
+ * has not reached that history yet, or the transaction ran more than one
+ * operation against this pool and the API withholds a sum that this row's
+ * single Event chip could not honestly caption. Both render blank.
  */
 export function formatPoolAmount(
   row: Pick<PoolTransactionItem, 'amount_a' | 'amount_b'>,

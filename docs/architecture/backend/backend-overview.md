@@ -500,9 +500,11 @@ transaction moved through THIS pool, per canonical leg, as a raw-stroop decimal
 a big leg would lose digits), **signed from the pool's side** — positive = the
 asset entered the pool. A trade reads
 `+/-`, a deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the
-direction and no event-type field is needed. `null` means NOT KNOWN, never
-zero: the amounts are indexed from their deploy and filled backwards by a
-re-parse, so older rows legitimately have none and must render blank.
+direction and no event-type field is needed. `null` means no figure for that
+row, never zero, and renders blank — either the amounts are not indexed that
+far back yet, or the transaction ran more than one operation against the pool,
+in which case a sum across them would not match the single Event label the row
+carries and is withheld instead.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,

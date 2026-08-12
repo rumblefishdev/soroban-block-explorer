@@ -1603,9 +1603,15 @@ export type PaginatedPoolTransactionItem = {
      * deposit `+/+`, a withdrawal `-/-`, and the sign alone tells the
      * frontend the direction (task 0279 / issue #371).
      *
-     * `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
-     * deploy onwards and filled backwards by a re-parse, so older rows
-     * legitimately have none and must render blank rather than as `0`.
+     * `null` = NO FIGURE FOR THIS ROW, never zero — two causes, both meaning
+     * "render blank":
+     *
+     * 1. Per-pool amounts are indexed from their deploy onwards and filled
+     * backwards by a re-parse, so older rows have none yet.
+     * 2. The transaction ran MORE THAN ONE operation against this pool (a
+     * bundled deposit + path payment, say). The row carries one Event
+     * label, so a figure summed across both operations would not describe
+     * what that label names — it is withheld rather than mislabeled.
      *
      * A STRING, like every other on-chain amount here (`reserve_a`,
      * `total_supply`): a JSON number is a double in the browser, so a pool
@@ -1838,9 +1844,15 @@ export type PoolTransactionItem = {
    * deposit `+/+`, a withdrawal `-/-`, and the sign alone tells the
    * frontend the direction (task 0279 / issue #371).
    *
-   * `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
-   * deploy onwards and filled backwards by a re-parse, so older rows
-   * legitimately have none and must render blank rather than as `0`.
+   * `null` = NO FIGURE FOR THIS ROW, never zero — two causes, both meaning
+   * "render blank":
+   *
+   * 1. Per-pool amounts are indexed from their deploy onwards and filled
+   * backwards by a re-parse, so older rows have none yet.
+   * 2. The transaction ran MORE THAN ONE operation against this pool (a
+   * bundled deposit + path payment, say). The row carries one Event
+   * label, so a figure summed across both operations would not describe
+   * what that label names — it is withheld rather than mislabeled.
    *
    * A STRING, like every other on-chain amount here (`reserve_a`,
    * `total_supply`): a JSON number is a double in the browser, so a pool

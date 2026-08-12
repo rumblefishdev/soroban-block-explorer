@@ -483,6 +483,10 @@ struct PoolAmountChRow {
     tid: i64,
     asset_id: i64,
     amount: i64,
+    /// How many of the transaction's operations moved this asset through this
+    /// pool. `> 1` makes the summed figure un-labelable — see
+    /// [`fetch_pool_tx_amounts`].
+    ops: u64,
 }
 
 /// Per-transaction amounts this pool moved, for the page's `(ledger, tx)` keys
@@ -501,6 +505,19 @@ struct PoolAmountChRow {
 /// ingest and the re-parse, deterministic per op), which is the same argument
 /// `operation_asset_appearances.net_settled` relies on. `FINAL` would merge
 /// whole parts to answer a bounded seek.
+///
+/// **A transaction with MORE THAN ONE operation on this pool reports nothing.**
+/// The list's row is a transaction and its Event chip names ONE category —
+/// `classifyLpTx` resolves a bundled deposit + path payment to "Deposit" by
+/// policy — so a figure summed across both operations would sit under a label
+/// that does not describe it: smaller than the deposit it is captioned with,
+/// and if the trade leg dominates one asset the signs come out `+/-` and the
+/// frontend renders a swap arrow beneath a Deposit chip. Two opposite trades in
+/// one transaction net the same way in reverse. Such rows therefore return no
+/// amount at all rather than an un-labelable one; the frontend renders them
+/// blank, exactly as it does for history the backfill has not reached.
+/// Per-operation rows exist (`application_order` is in the key), so a future
+/// per-operation surface can show them properly.
 async fn fetch_pool_tx_amounts(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -523,7 +540,7 @@ async fn fetch_pool_tx_amounts(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT tid, asset_id, sum(amount) AS amount FROM ( \
+        "SELECT tid, asset_id, sum(amount) AS amount, uniqExact(application_order) AS ops FROM ( \
             SELECT transaction_id AS tid, application_order, asset_id, any(amount) AS amount \
             FROM lp_operation_amounts \
             WHERE pool_id = toFixedString(unhex(?), 32) \
@@ -537,11 +554,27 @@ async fn fetch_pool_tx_amounts(
         .bind(pool_id_hex)
         .fetch_all::<PoolAmountChRow>()
         .await?;
+
+    Ok(group_amounts_by_tx(rows))
+}
+
+/// Fold the amount rows into per-transaction legs, dropping any transaction a
+/// single Event chip cannot caption (see [`fetch_pool_tx_amounts`]).
+///
+/// The whole transaction goes, not just the offending leg: dropping one leg
+/// would render a half-row — one asset with no counterpart — which reads as if
+/// only that asset moved.
+fn group_amounts_by_tx(rows: Vec<PoolAmountChRow>) -> HashMap<i64, Vec<(i64, i64)>> {
+    let ambiguous: std::collections::HashSet<i64> =
+        rows.iter().filter(|r| r.ops > 1).map(|r| r.tid).collect();
     let mut by_tx: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
     for r in rows {
+        if ambiguous.contains(&r.tid) {
+            continue;
+        }
         by_tx.entry(r.tid).or_default().push((r.asset_id, r.amount));
     }
-    Ok(by_tx)
+    by_tx
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -1447,6 +1480,35 @@ mod tests {
             ids::asset_id(1, "TF", ids::account_id(ISSUER), 0),
             ids::credit_asset_id("TF", ISSUER),
         );
+    }
+
+    /// A transaction that ran two operations against the pool must surface NO
+    /// amount: the row carries one Event chip, and a sum across a bundled
+    /// deposit + path payment would sit under a caption that does not describe
+    /// it. Both of its legs go — a half-row reads as "only this asset moved".
+    #[test]
+    fn multi_operation_transactions_report_no_amount() {
+        let row = |tid, asset_id, amount, ops| PoolAmountChRow {
+            tid,
+            asset_id,
+            amount,
+            ops,
+        };
+        let got = group_amounts_by_tx(vec![
+            // tx 1 — one op, both legs: kept.
+            row(1, 10, 100, 1),
+            row(1, 20, -40, 1),
+            // tx 2 — a deposit and a trade on the same pool: dropped whole,
+            // including the leg that itself only moved once.
+            row(2, 10, 500, 2),
+            row(2, 20, 900, 1),
+        ]);
+
+        assert_eq!(got.len(), 1, "only the single-op transaction survives");
+        let legs = got.get(&1).expect("tx 1 kept");
+        assert!(legs.contains(&(10, 100)));
+        assert!(legs.contains(&(20, -40)));
+        assert!(!got.contains_key(&2), "bundled transaction reports nothing");
     }
 
     #[test]

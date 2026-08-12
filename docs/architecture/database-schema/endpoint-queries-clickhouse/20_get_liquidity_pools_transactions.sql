@@ -30,8 +30,13 @@
 --     `asset_id` maps onto the pool's two legs via `ids::asset_id` over
 --     `liquidity_pools.asset_{a,b}_{type,code,issuer_id}` — resolved in Rust,
 --     since CH's builtin `cityHash64` is NOT the surrogate's algorithm.
---     Absent rows stay NULL on the wire (older history, pre-backfill) — the
---     frontend renders blank, never `0`.
+--     Absent rows stay NULL on the wire — the frontend renders blank, never
+--     `0`. Two causes: history the backfill has not reached, and a transaction
+--     with MORE THAN ONE operation on this pool (the outer select carries
+--     `uniqExact(application_order) AS ops`; the handler drops the whole
+--     transaction when any leg reports `ops > 1`). The row is labelled by one
+--     Event chip, so a sum across a bundled deposit + path payment would sit
+--     under a caption that does not describe it.
 -- ============================================================================
 -- Endpoint:     GET /liquidity-pools/:id/transactions
 -- Purpose:      Paginated transactions touching a given pool — deposits,
