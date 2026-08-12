@@ -258,17 +258,25 @@ built its hyper client with `pool_max_idle_per_host(2)` — sized, per its own
 comment, for the indexer's **serial** writes. HTTP/1 only, so there is no h2
 multiplexing to fall back on.
 
-A Lambda instance serves one request at a time, so a 2-way `tokio::join!` is
-exactly covered and reuses both sockets. A **3-way** one is not: the third
-connection is opened per request and then evicted, and the next request pays a
-fresh TCP + TLS 1.3 + mTLS handshake to Hetzner on a 256 MB Lambda — plausibly
-more than the round trip the concurrency just saved.
+A Lambda instance serves one request at a time, so a `join!` no wider than the
+cap reuses its sockets. Above it, the surplus connection is opened per request
+and then evicted, and the next request pays a fresh TCP + TLS 1.3 + mTLS
+handshake to Hetzner on a 256 MB Lambda — plausibly more than the round trip the
+concurrency just saved.
 
-Two sites fan out 3 ways: `transactions::get_transaction` (pre-existing on
-`develop` — so this trap was already live for `txdetail`, not introduced here)
-and `contracts::fetch_contract_list` (added by this task). Cap raised to 4. It
-bounds _retained idle_ sockets, not in-flight ones, so nothing else changes and
-the indexer — which never holds more than one — is unaffected.
+**Count nesting, not arms.** The first attempt raised the cap to 4, on the
+belief that the widest fan-out was 3. Review falsified that against this task's
+own code — a `join!` inside a joined future multiplies:
+
+- `search::fetch_search` — `try_join!` over 6 arms → **6**. Pre-dates this task,
+  so the pool has been undersized for search all along.
+- `transactions::get_transaction` — 3 arms, one of which is
+  `fetch_invocation_appearances`, itself made a 2-arm join **by this task** → 4.
+  That is the archive-degraded path, so the pool is tightest exactly when the
+  request is already struggling.
+
+Cap is 8. It bounds _retained idle_ sockets, not in-flight ones, so nothing else
+changes and the indexer — which never holds more than one — is unaffected.
 
 Not measured end to end: the handshake-vs-round-trip balance needs the load-test
 rerun like everything else here.
