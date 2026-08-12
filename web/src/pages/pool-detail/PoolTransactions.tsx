@@ -1,12 +1,13 @@
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import { Stack, Typography } from '@mui/material';
-import type { PoolTransactionItem } from '@rumblefish/api-types';
+import type { PoolItem, PoolTransactionItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
   EmptyState,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
+  formatTokenAmount,
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
@@ -15,10 +16,12 @@ import {
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
+import { useMemo } from 'react';
 
 import { usePagedRows, usePoolTransactions } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
+import { assetLegLabel } from '../pool-shared/helpers.js';
 import { hashColumn } from '../transactions/cells.js';
 import { formatAbsoluteUtc } from '../transactions/formatters.js';
 
@@ -66,58 +69,124 @@ function classifyLpTx(operationTypes: readonly string[]): {
   );
 }
 
-const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
-  {
-    id: 'event',
-    header: 'Event',
-    width: 120,
-    cell: (row) => {
-      const { label, color } = classifyLpTx(row.operation_types);
-      return <Chip size="sm" color={color} label={label} />;
+/**
+ * What a row moved through this pool, as one display string — or `null` when
+ * the row carries no amounts at all.
+ *
+ * `amount_a` / `amount_b` are raw stroops **signed from the pool's side**:
+ * positive = the asset entered the pool (task 0279). That sign is the whole
+ * direction story. One leg in and one out is a swap, so it reads
+ * `in → out` (`12,059.29 XLM → 38.5M KALE`); two legs pointing the same way
+ * are a deposit (`+/+`) or a withdrawal (`-/-`) and read `X + Y`, with the
+ * Event chip already saying which.
+ *
+ * Amounts stay STRINGS end to end — `formatTokenAmount` consumes them exactly,
+ * while a leg above 2^53 stroops would lose digits as a number.
+ *
+ * `null` in means NOT KNOWN, never zero: rows older than the amount index have
+ * no value and must render blank rather than as `0`.
+ */
+export function formatPoolAmount(
+  row: Pick<PoolTransactionItem, 'amount_a' | 'amount_b'>,
+  pool: Pick<PoolItem, 'asset_a' | 'asset_b'>
+): string | null {
+  const legs = (
+    [
+      [row.amount_a, pool.asset_a],
+      [row.amount_b, pool.asset_b],
+    ] as const
+  ).flatMap(([amount, leg]) => {
+    if (amount == null || amount === '') return [];
+    // The sign is carried by the ordering and the separator, not the digits.
+    const text = formatTokenAmount(
+      amount.replace(/^-/, ''),
+      assetLegLabel(leg)
+    );
+    return text == null ? [] : [{ incoming: !amount.startsWith('-'), text }];
+  });
+  if (legs.length === 0) return null;
+
+  const swap = legs.length === 2 && legs[0].incoming !== legs[1].incoming;
+  if (!swap) return legs.map((leg) => leg.text).join(' + ');
+  // A swap reads from what entered the pool to what left it.
+  const ordered = legs[0].incoming ? legs : [...legs].reverse();
+  return ordered.map((leg) => leg.text).join(' → ');
+}
+
+function poolTxColumns(
+  pool: PoolItem
+): ExplorerTableColumn<PoolTransactionItem>[] {
+  return [
+    {
+      id: 'event',
+      header: 'Event',
+      width: 120,
+      cell: (row) => {
+        const { label, color } = classifyLpTx(row.operation_types);
+        return <Chip size="sm" color={color} label={label} />;
+      },
     },
-  },
-  hashColumn<PoolTransactionItem>(),
-  {
-    id: 'account',
-    header: 'Account',
-    width: 160,
-    cell: (row) => (
-      <IdentifierWithCopy value={row.source_account} type="account" />
-    ),
-  },
-  {
-    id: 'time',
-    header: 'Time',
-    width: 210,
-    cell: (row) => (
-      <Stack spacing={0}>
-        <RelativeTimestamp timestamp={row.created_at} />
-        <Typography
-          variant="bodyXsRegular"
-          sx={(theme) => ({ color: theme.palette.text.tertiary })}
-        >
-          {formatAbsoluteUtc(row.created_at)}
-        </Typography>
-      </Stack>
-    ),
-  },
-];
+    {
+      id: 'amount',
+      header: 'Amount',
+      width: 260,
+      cell: (row) => {
+        const text = formatPoolAmount(row, pool);
+        // Blank, not a dash or a zero: the amount is unknown for rows older
+        // than the index, and an em-dash would read as "nothing moved".
+        return text == null ? null : (
+          <Typography variant="bodySmRegular" component="span">
+            {text}
+          </Typography>
+        );
+      },
+    },
+    hashColumn<PoolTransactionItem>(),
+    {
+      id: 'account',
+      header: 'Account',
+      width: 160,
+      cell: (row) => (
+        <IdentifierWithCopy value={row.source_account} type="account" />
+      ),
+    },
+    {
+      id: 'time',
+      header: 'Time',
+      width: 210,
+      cell: (row) => (
+        <Stack spacing={0}>
+          <RelativeTimestamp timestamp={row.created_at} />
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
+            {formatAbsoluteUtc(row.created_at)}
+          </Typography>
+        </Stack>
+      ),
+    },
+  ];
+}
 
 interface PoolTransactionsProps {
   poolId: string;
+  pool: PoolItem;
 }
 
 /**
  * "Recent transactions" section on the LP detail page. Columns:
- * Type (badge) / Hash / Account / Time. The Figma "Amount" column is
- * intentionally omitted in the MVP — per-tx LP amounts are not in the DB
- * (ADR 0029: `operations_appearances.amount` is a fold count, not a
- * transfer amount). Task 0247 researched five ways to get them and
- * concluded 2026-06-03: **Path C, ingest-side per-op extraction from each
- * op's own non-collapsed LedgerEntryChanges** — 100% coverage, no
- * hot-path archive fetch. The FE add-back is task **0279**.
+ * Event (badge) / Amount / Hash / Account / Time.
+ *
+ * The Amount column was hidden from the MVP until task 0279 (issue #371):
+ * per-tx LP amounts were nowhere in the DB, since
+ * `operations_appearances.amount` is a fold count and not a transfer amount.
+ * They are now indexed per (operation, pool, asset) by the ingest-side
+ * extraction task 0247 chose — the parser already resolved every claim atom
+ * per pool and threw the attribution away. Rows older than that index have no
+ * amounts until the historical re-parse lands, and render blank.
  */
-export function PoolTransactions({ poolId }: PoolTransactionsProps) {
+export function PoolTransactions({ poolId, pool }: PoolTransactionsProps) {
   // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
   // simultaneously, so each section needs its own URL key. `resetKey`
   // drops the cursor when the user navigates to a different pool.
@@ -134,6 +203,9 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
     goNext,
     goPrev
   );
+
+  // The Amount cell needs the pool's legs, so the columns close over them.
+  const columns = useMemo(() => poolTxColumns(pool), [pool]);
 
   let body: ReactNode;
   if (isLoading || isPlaceholderData) {

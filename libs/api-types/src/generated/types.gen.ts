@@ -1606,12 +1606,16 @@ export type PaginatedPoolTransactionItem = {
      * `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
      * deploy onwards and filled backwards by a re-parse, so older rows
      * legitimately have none and must render blank rather than as `0`.
+     *
+     * A STRING, like every other on-chain amount here (`reserve_a`,
+     * `total_supply`): a JSON number is a double in the browser, so a pool
+     * leg above 2^53 stroops (~900M units) would silently lose digits.
      */
-    amount_a?: number | null;
+    amount_a?: string | null;
     /**
      * The asset-B leg of the same figure. See [`Self::amount_a`].
      */
-    amount_b?: number | null;
+    amount_b?: string | null;
     created_at: string;
     /**
      * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
@@ -1837,12 +1841,16 @@ export type PoolTransactionItem = {
    * `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
    * deploy onwards and filled backwards by a re-parse, so older rows
    * legitimately have none and must render blank rather than as `0`.
+   *
+   * A STRING, like every other on-chain amount here (`reserve_a`,
+   * `total_supply`): a JSON number is a double in the browser, so a pool
+   * leg above 2^53 stroops (~900M units) would silently lose digits.
    */
-  amount_a?: number | null;
+  amount_a?: string | null;
   /**
    * The asset-B leg of the same figure. See [`Self::amount_a`].
    */
-  amount_b?: number | null;
+  amount_b?: string | null;
   created_at: string;
   /**
    * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so

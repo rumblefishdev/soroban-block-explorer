@@ -205,9 +205,13 @@ pub struct PoolTransactionItem {
     /// `null` = NOT KNOWN, never zero. Per-pool amounts are indexed from the
     /// deploy onwards and filled backwards by a re-parse, so older rows
     /// legitimately have none and must render blank rather than as `0`.
-    pub amount_a: Option<i64>,
+    ///
+    /// A STRING, like every other on-chain amount here (`reserve_a`,
+    /// `total_supply`): a JSON number is a double in the browser, so a pool
+    /// leg above 2^53 stroops (~900M units) would silently lose digits.
+    pub amount_a: Option<String>,
     /// The asset-B leg of the same figure. See [`Self::amount_a`].
-    pub amount_b: Option<i64>,
+    pub amount_b: Option<String>,
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools` paginated by

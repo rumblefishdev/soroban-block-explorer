@@ -835,7 +835,19 @@ pub async fn fetch_pool_transactions(
     let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
     // Amounts for the same bounded key set (task 0279). A tx with no rows keeps
     // `None` on both legs — the honest "not known" the pre-backfill history has.
-    let amounts = fetch_pool_tx_amounts(client, pool_id_hex, &keys).await?;
+    //
+    // DEGRADES, never 500s: the amounts enrich a row that is already complete,
+    // and the contract already says a missing one is "not known". The failure
+    // this actually guards is deploy order — an API that ships before
+    // `lp_operation_amounts` is created on prod would otherwise turn every pool
+    // page into an error (the `accounts_recent` lesson).
+    let amounts = match fetch_pool_tx_amounts(client, pool_id_hex, &keys).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("pool amounts unavailable for {pool_id_hex}, rendering blank: {e}");
+            HashMap::new()
+        }
+    };
     let (asset_a_id, asset_b_id) = asset_ids;
 
     Ok(page

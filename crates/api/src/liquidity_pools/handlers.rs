@@ -510,8 +510,9 @@ pub async fn list_pool_transactions(
             has_soroban: r.has_soroban,
             operation_types: r.operation_types,
             created_at: r.created_at,
-            amount_a: r.amount_a,
-            amount_b: r.amount_b,
+            // Stringified at the wire boundary — see `PoolTransactionItem`.
+            amount_a: r.amount_a.map(|v| v.to_string()),
+            amount_b: r.amount_b.map(|v| v.to_string()),
         })
         .collect();
 

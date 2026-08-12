@@ -495,8 +495,10 @@ snapshot freshness — populated even on stale pools.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
 pool. Each row carries `amount_a` / `amount_b` (task 0279): what that
-transaction moved through THIS pool, per canonical leg, in raw stroops **signed
-from the pool's side** — positive = the asset entered the pool. A trade reads
+transaction moved through THIS pool, per canonical leg, as a raw-stroop decimal
+**string** (same reason as `reserve_a` — a JSON number is a browser double and
+a big leg would lose digits), **signed from the pool's side** — positive = the
+asset entered the pool. A trade reads
 `+/-`, a deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the
 direction and no event-type field is needed. `null` means NOT KNOWN, never
 zero: the amounts are indexed from their deploy and filled backwards by a
