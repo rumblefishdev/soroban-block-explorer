@@ -56,13 +56,32 @@ pub async fn list_participants(
         Err(resp) => return resp,
     };
 
+    // Fetch limit + 1 so `finalize_page` can detect a next page without
+    // a separate count query.
+    let fetch_limit = pagination.fetch_limit();
+    let has_predecessor = pagination.has_predecessor();
+    let direction = pagination.direction;
+
     // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    match exists {
+    //
+    // Both reads derive everything from the path — the page never consumes the
+    // existence answer — so they go out together (task 0446). `exists` is still
+    // what decides the 404 and is still checked first, so responses are
+    // unchanged; the cost is one wasted page read when the pool is missing.
+    let ch = state.ch();
+    let (exists, fetched) = tokio::join!(
+        queries::pool_exists(&ch, &pool_id_hex),
+        queries::fetch_participants(
+            &ch,
+            &pool_id_hex,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        ),
+    );
+    match exists.map_err(|e| e.to_string()) {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -71,21 +90,7 @@ pub async fn list_participants(
         }
     }
 
-    // Fetch limit + 1 so `finalize_page` can detect a next page without
-    // a separate count query.
-    let fetch_limit = pagination.fetch_limit();
-    let has_predecessor = pagination.has_predecessor();
-    let direction = pagination.direction;
-    let fetched = queries::fetch_participants(
-        &state.ch(),
-        &pool_id_hex,
-        pagination.cursor.as_ref(),
-        fetch_limit,
-        direction,
-    )
-    .await
-    .map_err(|e| e.to_string());
-    let mut rows = match fetched {
+    let mut rows = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_participants({pool_id}): {e}");
@@ -455,10 +460,20 @@ pub async fn list_pool_transactions(
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    match exists {
+    // Existence gate and page read both derive from the path — see
+    // `list_participants` for why they go out together (task 0446).
+    let ch = state.ch();
+    let (exists, fetched) = tokio::join!(
+        queries::pool_exists(&ch, &pool_id_hex),
+        queries::fetch_pool_transactions(
+            &ch,
+            &pool_id_hex,
+            pagination.fetch_limit(),
+            pagination.cursor.as_ref(),
+            pagination.direction,
+        ),
+    );
+    match exists.map_err(|e| e.to_string()) {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -467,16 +482,7 @@ pub async fn list_pool_transactions(
         }
     }
 
-    let fetched = queries::fetch_pool_transactions(
-        &state.ch(),
-        &pool_id_hex,
-        pagination.fetch_limit(),
-        pagination.cursor.as_ref(),
-        pagination.direction,
-    )
-    .await
-    .map_err(|e| e.to_string());
-    let mut rows = match fetched {
+    let mut rows = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_transactions({pool_id}): {e}");
@@ -643,10 +649,14 @@ pub async fn get_pool_chart(
         );
     }
 
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    match exists {
+    // Existence gate and chart read both derive from the path — see
+    // `list_participants` for why they go out together (task 0446).
+    let ch = state.ch();
+    let (exists, fetched) = tokio::join!(
+        queries::pool_exists(&ch, &pool_id_hex),
+        queries::fetch_pool_chart(&ch, &pool_id_hex, &interval, from, to),
+    );
+    match exists.map_err(|e| e.to_string()) {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -655,10 +665,7 @@ pub async fn get_pool_chart(
         }
     }
 
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &interval, from, to)
-        .await
-        .map_err(|e| e.to_string());
-    let data_points = match fetched {
+    let data_points = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_chart({pool_id}): {e}");
