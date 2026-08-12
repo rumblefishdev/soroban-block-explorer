@@ -6,6 +6,7 @@ import {
   ExplorerTable,
   formatAmount,
   formatCompactAmount,
+  formatCompactUsd,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -24,7 +25,7 @@ import {
 
 import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 
-export const POOL_COLUMN_COUNT = 5;
+export const POOL_COLUMN_COUNT = 6;
 
 /** Render leg code text — wrapped in RouterLink when legHref resolves
  *  (classic credit, SAC mirror); plain text otherwise (native, schema
@@ -125,6 +126,25 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     },
   },
   {
+    id: 'tvl',
+    header: 'TVL',
+    align: 'right',
+    width: 120,
+    cell: (row) => {
+      // Unpriceable pools (an untracked leg, or no fresh snapshot) come
+      // back with null TVL — em-dash, consistent with the reserves column.
+      if (row.tvl == null) return <Dash />;
+      return (
+        <Typography
+          variant="bodySmMedium"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
+          {formatCompactUsd(row.tvl)}
+        </Typography>
+      );
+    },
+  },
+  {
     id: 'total_shares',
     // Figma reuses the "Reserves" header for this column too. Use a
     // distinct label so screen readers (and column-mapping helpers)
@@ -179,10 +199,12 @@ interface PoolsTableProps {
 /**
  * Table for the liquidity-pools list page. Columns mirror the Figma node
  * `266:36052` design: Pool (stacked color-coded asset avatars + pair +
- * truncated id) / Reserves (per-leg) / Total shares (right-aligned, unit
- * label) / Participants. Fee column dropped (task 0348 F9): every classic
- * pool is protocol-fixed at 0.30% (`LIQUIDITY_POOL_FEE_V18`), so a per-row
- * Fee column carried no comparative signal.
+ * truncated id) / Reserves (per-leg) / TVL (USD, task 0199 Phase A2 —
+ * issue #367's ask; em-dash when a leg is unpriceable) / Total shares
+ * (right-aligned, unit label) / Participants. Fee column dropped (task
+ * 0348 F9): every classic pool is protocol-fixed at 0.30%
+ * (`LIQUIDITY_POOL_FEE_V18`), so a per-row Fee column carried no
+ * comparative signal.
  */
 export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (

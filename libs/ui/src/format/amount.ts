@@ -85,3 +85,28 @@ export function formatCompactAmount(
   if (!Number.isFinite(n)) return '—';
   return COMPACT_FORMATTER.format(n);
 }
+
+const COMPACT_USD_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+/**
+ * Compact USD display (`$753.9M`, `$1.2K`) for money columns.
+ *
+ * Use this rather than prefixing `formatCompactAmount` with a literal `$`:
+ * the sibling returns an em-dash for unparseable input, so hand-prefixing
+ * renders the nonsense `"$—"`, and a manual prefix also mis-places the
+ * sign on negatives (`$-5K` instead of `-$5K`). Returns a bare em-dash for
+ * null / non-numeric values, matching every other formatter here.
+ */
+export function formatCompactUsd(
+  value: string | number | null | undefined
+): string {
+  if (value == null) return '—';
+  const n = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(n)) return '—';
+  return COMPACT_USD_FORMATTER.format(n);
+}

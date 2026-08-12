@@ -1,6 +1,7 @@
 export {
   formatAmount,
   formatCompactAmount,
+  formatCompactUsd,
   scaleByDecimals,
 } from './amount.js';
 export { formatFee, formatStroops, formatTokenAmount } from './stroops.js';
