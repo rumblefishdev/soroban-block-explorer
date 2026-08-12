@@ -216,12 +216,6 @@ struct TxPageRawRow {
 }
 
 #[derive(Debug, Row, Deserialize)]
-struct PageAccountRow {
-    id: i64,
-    account_id: String,
-}
-
-#[derive(Debug, Row, Deserialize)]
 struct LedgerClosedAtRow {
     sequence: i64,
     closed_at: i64,
@@ -261,32 +255,22 @@ async fn resolve_source_and_closed_at(
         v.dedup();
         v
     };
-    let source_ids = dedup_keys(|r| r.source_id);
     let ledger_seqs = dedup_keys(|r| r.ledger_sequence);
-
-    // Both seeks key off `raw` alone, so they go out together (task 0446).
-    //   accounts: id -> account_id. `LIMIT 1 BY id` collapses ReplacingMergeTree
-    //   versions (account_id is immutable across versions, so no FINAL needed).
-    //   ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
-    let (account_rows, ledger_rows) = tokio::join!(
-        client
-            .query(&format!(
-                "SELECT id, account_id FROM accounts WHERE id IN ({}) LIMIT 1 BY id",
-                in_list(&source_ids),
-            ))
-            .fetch_all::<PageAccountRow>(),
-        client
-            .query(&format!(
-                "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
-                in_list(&ledger_seqs),
-            ))
-            .fetch_all::<LedgerClosedAtRow>(),
+    // ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
+    let ledgers_sql = format!(
+        "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
+        in_list(&ledger_seqs),
     );
 
-    let accounts: std::collections::HashMap<i64, String> = account_rows?
-        .into_iter()
-        .map(|r| (r.id, r.account_id))
-        .collect();
+    // Both seeks key off `raw` alone, so they go out together (task 0446).
+    // Source StrKeys go through the shared resolver, which sorts, dedups and
+    // short-circuits on an empty set itself.
+    let (accounts, ledger_rows) = tokio::join!(
+        resolve_accounts(client, raw.iter().map(|r| r.source_id).collect()),
+        client.query(&ledgers_sql).fetch_all::<LedgerClosedAtRow>(),
+    );
+
+    let accounts = accounts?;
 
     let closed_ats: std::collections::HashMap<i64, i64> = ledger_rows?
         .into_iter()
