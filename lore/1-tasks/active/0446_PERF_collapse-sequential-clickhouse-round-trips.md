@@ -4,7 +4,7 @@ title: 'PERF: collapse sequential ClickHouse round trips across the API query la
 type: PERF
 status: active
 related_adr: []
-related_tasks: ['0338', '0359']
+related_tasks: ['0338', '0359', '0402']
 tags:
   [phase-future, effort-medium, priority-medium, performance, api, clickhouse]
 links: []
@@ -280,6 +280,13 @@ changes and the indexer — which never holds more than one — is unaffected.
 
 Not measured end to end: the handshake-vs-round-trip balance needs the load-test
 rerun like everything else here.
+
+**This is evidence for [0402](../backlog/0402_PERF_txdetail-non-clickhouse-request-overhead.md).**
+That task says at least 427 ms of `txdetail` happens outside ClickHouse and
+needs its own connection/transport investigation. A per-request mTLS handshake
+on the fan-out path is exactly that class of cost, and `txdetail` is one of the
+two sites that hit it. The pool sizing here is a partial mitigation, not the
+investigation 0402 asks for.
 
 ## Acceptance Criteria
 
