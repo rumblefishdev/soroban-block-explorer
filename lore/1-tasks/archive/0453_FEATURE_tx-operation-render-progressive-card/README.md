@@ -2,7 +2,7 @@
 id: '0453'
 title: 'FEATURE: transaction operation render — one progressive card with a TRUE headline, replacing the normal/advanced split'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks:
   [

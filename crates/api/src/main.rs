@@ -194,6 +194,8 @@ async fn main() {
         sep1: Sep1Fetcher::new().expect("failed to build SEP-1 stellar.toml HTTP client"),
         nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
             .expect("failed to build NFT token_uri HTTP client"),
+        wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
+            .expect("failed to build wasm-code RPC client"),
     };
 
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
@@ -245,6 +247,8 @@ mod tests {
             sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
             nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
+            wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
+                .expect("build wasm_code fetcher"),
         };
         app(&test_config(), AppState::for_tests(ch, runtime_enrichment))
     }
@@ -337,6 +341,7 @@ mod tests {
         for path in [
             "/v1/contracts/{contract_id}",
             "/v1/contracts/{contract_id}/interface",
+            "/v1/contracts/{contract_id}/decompiled",
             "/v1/contracts/{contract_id}/invocations",
             "/v1/contracts/{contract_id}/events",
         ] {

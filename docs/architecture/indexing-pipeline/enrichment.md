@@ -36,8 +36,8 @@ that are derivable purely from the processed ledger. Some columns the
 API needs are **off-chain** — derivable only by an extra round-trip
 beyond the indexer's standard stream:
 
-- **SEP-1 TOML** — `assets.icon_url`, `assets.name` (classic credit /
-  SAC) are published by issuers at
+- **SEP-1 TOML** — `asset_enrichment.icon_url`, `asset_enrichment.name`
+  (classic credit / SAC) are published by issuers at
   `https://{home_domain}/.well-known/stellar.toml`.
 - **NFT metadata via `token_uri()`** — `nfts.{name, media_url}` are
   produced by the contract's `token_uri(token_id)` view function
@@ -107,14 +107,14 @@ queue / DLQ / alarm / concurrency cap absorbs every kind).
 > `"kind":"icon"` will not deserialise against the current worker;
 > drain the DLQ before deploying 0196.
 
-|                     |                                                                                                                                                                                        |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Task**            | 0191 (worker scaffold) + 0195 §2a (extended to also write `name`)                                                                                                                      |
-| **Producer hook**   | Query-and-batch: after commit, re-SELECT asset rows that match the parser's `ExtractedAsset` slice AND are still missing `icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)` |
-| **Worker source**   | `https://{accounts.home_domain}/.well-known/stellar.toml` (per-issuer TOML)                                                                                                            |
-| **Columns written** | `assets.icon_url`, `assets.name` (ClassicCredit + SAC only)                                                                                                                            |
-| **Failure mode**    | **Fail-soft** — permanent fails write the `''` sentinel so the producer dedup query short-circuits next ledger touch. Transient → SQS retry → DLQ                                      |
-| **UPDATE SQL**      | `COALESCE(NULLIF($n, ''), col, $n)` per column — priority `real > sentinel > NULL`                                                                                                     |
+|                     |                                                                                                                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Task**            | 0191 (worker scaffold) + 0195 §2a (extended to also write `name`)                                                                                                                                |
+| **Producer hook**   | Query-and-batch: after commit, re-SELECT asset rows that match the parser's `ExtractedAsset` slice AND still have no `asset_enrichment` row (classic credit / SAC only)                          |
+| **Worker source**   | `https://{accounts.home_domain}/.well-known/stellar.toml` (per-issuer TOML)                                                                                                                      |
+| **Columns written** | `asset_enrichment.icon_url`, `asset_enrichment.name` (ClassicCredit + SAC only) — the side table since task 0231 / ADR 0050; the `assets` columns it originally wrote were dropped (0304 / 0310) |
+| **Failure mode**    | **Fail-soft** — permanent fails write the `''` sentinel so the producer dedup query short-circuits next ledger touch. Transient → SQS retry → DLQ                                                |
+| **UPDATE SQL**      | `COALESCE(NULLIF($n, ''), col, $n)` per column — priority `real > sentinel > NULL`                                                                                                               |
 
 ### 3.2 `nft_token_uri` — per-token contract view + IPFS
 
@@ -154,15 +154,15 @@ impossible). It exists because rows enriched before 0340 carry real
 neither the default "no row yet" drain nor `--retry-sentinels` (which
 requires ALL columns empty).
 
-|                 |                                                                                                                                                                                                                        |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**     | Operator-on-demand only (never a cron). One-shot after deploying a new kind, plus `--force-retry` re-walks after upstream fixes (issuer fixes TOML).                                                                   |
-| **Drain shape** | Cursor SELECT `WHERE <kind predicate> AND id > $last ORDER BY id LIMIT N` → `tokio::spawn` fan-out bounded by `Semaphore` (default 10) → `enrich_*`                                                                    |
-| **No SQS**      | Direct DB → `enrich_*` → DB. A 50K-row publish would hit SQS rate limits and waste visibility-timeout overhead when we already hold a DB connection.                                                                   |
-| **Predicates**  | `sep1-assets`: producer-aligned (`icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)`). `nft-metadata`: stricter than producer (all three NULL — only pre-queue rows). `--force-retry` drops the predicate.   |
-| **Pool**        | `concurrency + 2` for drain, `2` for `status`. Sized at the subcommand boundary so fan-out is not throttled.                                                                                                           |
-| **Exit code**   | `0` on a clean run (every row reached a terminal outcome — real value or `''` sentinel), `1` on transient or DB failure. Operator-chainable (`enrich sep1-assets && enrich nft-metadata`).                             |
-| **Crate split** | Separate from `crates/backfill-runner` (which re-ingests Stellar ledgers from XDR archives). Different data sources, different concerns; task 0191 design decision #8 forbids modifying the ledger-backfill code path. |
+|                 |                                                                                                                                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Trigger**     | Operator-on-demand only (never a cron). One-shot after deploying a new kind, plus `--force-retry` re-walks after upstream fixes (issuer fixes TOML).                                                                                 |
+| **Drain shape** | Cursor SELECT `WHERE <kind predicate> AND id > $last ORDER BY id LIMIT N` → `tokio::spawn` fan-out bounded by `Semaphore` (default 10) → `enrich_*`                                                                                  |
+| **No SQS**      | Direct DB → `enrich_*` → DB. A 50K-row publish would hit SQS rate limits and waste visibility-timeout overhead when we already hold a DB connection.                                                                                 |
+| **Predicates**  | `sep1-assets`: producer-aligned (no `asset_enrichment` row, or the `''`-sentinel rows under `--mode sentinels`). `nft-metadata`: stricter than producer (all three NULL — only pre-queue rows). `--force-retry` drops the predicate. |
+| **Pool**        | `concurrency + 2` for drain, `2` for `status`. Sized at the subcommand boundary so fan-out is not throttled.                                                                                                                         |
+| **Exit code**   | `0` on a clean run (every row reached a terminal outcome — real value or `''` sentinel), `1` on transient or DB failure. Operator-chainable (`enrich sep1-assets && enrich nft-metadata`).                                           |
+| **Crate split** | Separate from `crates/backfill-runner` (which re-ingests Stellar ledgers from XDR archives). Different data sources, different concerns; task 0191 design decision #8 forbids modifying the ledger-backfill code path.               |
 
 See [`crates/backfill-enrichment-runner/README.md`](../../../crates/backfill-enrichment-runner/README.md)
 for the runbook and pre-flight checklist.

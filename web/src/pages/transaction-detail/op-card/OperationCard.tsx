@@ -15,6 +15,7 @@ import { HumanizedSentence } from '../shared/HumanizedSentence.js';
 import { DisclosureRow } from '../shared/DisclosureRow.js';
 import { isSorobanOp } from '../shared/opKind.js';
 
+import { allResourceFacts, readResourceCounters } from './resources.js';
 import { CallTree, parseOperationTree } from './CallTree.js';
 import {
   buildExecutionTrace,
@@ -23,7 +24,6 @@ import {
   ExecutionTrace,
   traceCallCount,
 } from './ExecutionTrace.js';
-import { opFacts } from './opFacts.js';
 import { OpAvatar } from './opIcon.js';
 import { buildRouteModel, RouteStrip } from './RouteStrip.js';
 
@@ -79,6 +79,7 @@ export function OperationCard({
   diagnosticEvents = [],
 }: OperationCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [countersOpen, setCountersOpen] = useState(false);
 
   if (light == null) {
     return (
@@ -98,7 +99,6 @@ export function OperationCard({
   const label = formatOperationType(light.type_name);
   const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);
-  const facts = opFacts(light, heavy);
   // Execution trace (0462): rebuilt client-side from the diagnostic
   // fn_call/fn_return stream — the EXECUTED calls, superset of the auth
   // tree. When present it supersedes "Authorized calls"; the auth tree
@@ -107,6 +107,16 @@ export function OperationCard({
   const traceNodes = isInvoke
     ? buildExecutionTrace(diagnosticEvents, contractEvents)
     : [];
+  // Resource counters belong to the Soroban invocation, and a Soroban tx
+  // carries exactly one (protocol rule) — so per-tx equals per-op here.
+  // Gated on `soroban`, not `isInvoke`: footprint extend/restore run through
+  // the same host and are metered the same way. They raise no `fn_call`, so
+  // they get no trace — the counters are the only thing the host says about
+  // them, and the narrower gate used to swallow those silently.
+  const counters = soroban
+    ? readResourceCounters(diagnosticEvents)
+    : new Map<string, number | string>();
+  const allCounters = allResourceFacts(counters);
   const callNodes =
     isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)
@@ -180,6 +190,70 @@ export function OperationCard({
           </Box>
         )}
 
+        {allCounters.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            {/* What the execution COST, next to what it did — lifted out of
+                the diagnostic stream, where these were rendering as nineteen
+                event rows (task 0363 / issue #378). All of them or none: a
+                curated handful on top of the same list underneath would say
+                the same thing twice, and choosing which five matter is a
+                ranking the protocol does not state. */}
+            <DisclosureRow
+              open={countersOpen}
+              onToggle={() => setCountersOpen((open) => !open)}
+              label="Resources"
+              trailing={
+                <Chip
+                  size="sm"
+                  color="neutral"
+                  label={String(allCounters.length)}
+                />
+              }
+            />
+            <Collapse in={countersOpen} unmountOnExit>
+              <Box
+                sx={{
+                  mt: 0.5,
+                  display: 'grid',
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    sm: 'repeat(2, minmax(0, 1fr))',
+                    md: 'repeat(3, minmax(0, 1fr))',
+                  },
+                  columnGap: 2,
+                  rowGap: 0.25,
+                }}
+              >
+                {allCounters.map((fact) => (
+                  <Typography
+                    key={fact.label}
+                    variant="bodyXsRegular"
+                    sx={(theme) => ({
+                      color: theme.palette.text.tertiary,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                    })}
+                  >
+                    <Box component="span" sx={{ fontFamily: 'monospace' }}>
+                      {fact.label}
+                    </Box>
+                    <Box
+                      component="span"
+                      sx={(theme) => ({
+                        color: theme.palette.text.secondary,
+                        fontVariantNumeric: 'tabular-nums',
+                      })}
+                    >
+                      {fact.value}
+                    </Box>
+                  </Typography>
+                ))}
+              </Box>
+            </Collapse>
+          </Box>
+        )}
+
         {callNodes.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
             {/* "Authorized" is load-bearing: the tree is built from the
@@ -218,39 +292,6 @@ export function OperationCard({
                 <IdentifierDisplay key={poolId} value={poolId} type="pool" />
               ))}
             </Stack>
-          </Box>
-        )}
-
-        {facts.length > 0 && (
-          <Box
-            component="dl"
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(96px, auto) 1fr',
-              columnGap: 2,
-              rowGap: 0.5,
-              m: 0,
-              mt: 1.25,
-            }}
-          >
-            {facts.map((fact) => (
-              <Box key={fact.label} sx={{ display: 'contents' }}>
-                <Typography
-                  component="dt"
-                  variant="bodySmRegular"
-                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                >
-                  {fact.label}
-                </Typography>
-                <Typography
-                  component="dd"
-                  variant="bodySmRegular"
-                  sx={(theme) => ({ color: theme.palette.text.primary, m: 0 })}
-                >
-                  {fact.value}
-                </Typography>
-              </Box>
-            ))}
           </Box>
         )}
       </Box>

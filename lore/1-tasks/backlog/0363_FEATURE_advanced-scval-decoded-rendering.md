@@ -33,6 +33,24 @@ history:
       system-events-mislabelled-as-Contract fix must NOT re-split the
       arrays on event_type, which would resurrect the 0182 double-count —
       only the chip label changes.
+  - date: '2026-08-05'
+    status: backlog
+    who: karolkow
+    note: >
+      F merged (PR #379, 39111c44) — NOT deployed; backend and frontend must
+      ship together or the Where column reads "—". Acceptance criteria
+      reconciled against what actually shipped: the filter-toggle design was
+      abandoned mid-implementation once the 27 rows proved to be two records
+      rather than one noisy list, so three criteria were rewritten rather
+      than ticked, and both "N/A" gates (docs, api-types) were wrong and are
+      now done. Two late commits recorded: c3679237 (resource meter made
+      total + widened to all Soroban ops) and fe70d7a0 (the disclosure
+      claimed the debug channel copies every event — real meta says 1 of 3).
+      Design decisions logged: raw diagnostics table kept by ruling after a
+      9-transaction measurement showed 0 unplaceable entries; Copy chip tried
+      and reverted; stage is informational only. New debt in Future Work: the
+      trace renders the diagnostic copy, not the consensus event.
+      Task stays backlog — A, B and C-lite's semantic line are open.
 ---
 
 # FEATURE: decoded ScVal rendering in advanced tx detail
@@ -251,19 +269,29 @@ existing `inlineScalar` logic. **New: only `ScValView`.**
 
 ## Acceptance Criteria
 
-- [ ] Events section stays a single chronological list — event order is never reordered or split into per-kind boxes (F)
-- [ ] Header shows a count per kind; `core_metrics` rows are hidden by default and the hidden count is stated on screen next to its toggle (F)
-- [ ] Every row shows its `event_index`, so a filtered list makes its own gaps visible (F)
-- [ ] A consensus-container `system` event (e.g. `executable_update`) is chipped `System`, not `Contract` (F)
-- [ ] The `contract_events` / `diagnostic_events` split still routes on container, not `event_type` — a transaction whose diagnostic container copies its contract events still renders each effect once (0182 regression guard, F)
+**F — reconciled 2026-08-05 against what actually shipped in #379.** Three
+criteria below described the _filter-toggles_ design and were rewritten, not
+ticked: that design was rejected mid-implementation once the 27 rows turned out
+to be two different records rather than one noisy list. Filtering assumes the
+rows belong together and the reader picks a subset; they do not belong
+together, so the split is by record and there is nothing to toggle. The
+original wording is kept struck through so the change is visible, not silent.
+
+- [x] ~~Events section stays a single chronological list — never split into per-kind boxes~~ → Events lists the **consensus stream only**, in container order, never reordered. The debug channel is a separate disclosure — split by RECORD, not by kind, which is what the rejected wording was guarding against (F)
+- [x] ~~Header shows a count per kind; `core_metrics` hidden by default with a toggle stating the hidden count~~ → no toggles: the header counts the consensus stream alone (`3 events`), the debug channel states its own count on its disclosure, and `core_metrics` left the list entirely for the operation card's `Resources` panel (F)
+- [x] Every row shows its `event_index` (F)
+- [x] A consensus-container `system` event (e.g. `executable_update`) is chipped `System`, not `Contract` — `EventsSection.test.tsx` (F)
+- [x] The `contract_events` / `diagnostic_events` split still routes on container, not `event_type` — a transaction whose diagnostic container copies its contract events still renders each effect once (0182 regression guard, F) — `EventsSection.test.tsx`
+- [x] Tx-level events state WHEN they fired: `TransactionEvent.stage` carried XDR → wire → a `Where` column, beside the operation index for per-op events. Pinned against real mainnet meta in `crates/xdr-parser/tests/tx_event_stage_real_meta.rs` (F, added during implementation)
+- [x] The `Resources` panel cannot silently drop a counter, whatever shape its value arrives in — `resources.test.ts` (F, added 2026-08-05; load-bearing, see below)
 - [ ] Event topics/data + operation args render as typed chips (addresses linked+truncated, amounts formatted), not raw `{type,value}` JSON
 - [ ] Events/Operations collapsed for large sets; raw JSON still reachable per node/section
 - [ ] Known events (transfer/mint/burn) show a one-line semantic summary
-- [ ] Invocation shown as `fn(args) → result` with sub-call tree
+- [ ] Invocation shown as `fn(args) → result` with sub-call tree — **done in 0462** (execution trace); do not rebuild
 - [ ] `error` ScVal renders as `Type/Code` chip (shared with 0352)
 - [ ] Page height for a ~30-event tx drops from ~13k px to a scannable list
-- [ ] **Docs updated** — N/A (pure FE presentation)
-- [ ] **API types regenerated** — N/A unless `scval.rs` error shape changes (then coordinate with 0352 + regen)
+- [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`: the Events-section contract (consensus stream vs debug channel), the `Where` column, and the `Resources` disclosure. Was marked `N/A — pure FE presentation`; wrong, the frontend data contract is described in those docs (ADR 0032)
+- [x] **API types regenerated** — `98a0eee8`. Was marked `N/A unless scval.rs changes`; wrong. `XdrEventDto.stage` is a new wire field, and separately a doc comment on a `ToSchema` struct IS the OpenAPI `description`, so even the comment-only correction moved the spec and reddened `API types freshness`
 
 ## UX Expert Analysis (`/ux-expert`)
 
@@ -312,6 +340,112 @@ amounts → `formatCompactAmount`. `XdrRow` already has `role=button` /
 B-lite — collapse needs a summary to show; (2) reject D outright. AC mapping is
 clean: "13k→scannable" ← A, "typed chips" ← B, "semantic summary" ← C-lite.
 Task is well-diagnosed and well-scoped.
+
+## Status (2026-08-05)
+
+**F is merged** — PR #379 merged to `develop` as `39111c44` on 2026-08-05.
+**Not deployed.** Backend and frontend must ship TOGETHER: until the deployed
+API returns `XdrEventDto.stage`, the `Where` column renders `—` for the two fee
+events (verified against the live dev API, whose response carries no `stage`
+key at all). The reply drafted for issue #378 should not go out with a
+production link before that.
+
+- **F — event taxonomy.** Landed as the two-channel split, not as the
+  grouping the issue asked for: the consensus stream (`contract` + `system`)
+  is the list and the count, the host debug channel is its own labelled
+  disclosure. On the reported transaction the header went 27 → 3, because 27
+  was counting a mirrored copy and 19 resource counters alongside 3 real
+  events. `TransactionEvent.stage` is now carried from XDR to the wire and
+  shown in a `Where` column beside the operation index — the protocol's only
+  statement of when a tx-level event fired.
+- **Resource counters** — out of the event list entirely, onto the invoke
+  operation card behind a `Resources 19` disclosure. All nineteen, in host
+  emission order, grouped numbers. They are one record with nineteen fields,
+  not nineteen events; stellarchain shows a resources panel, stellar.expert
+  shows none, and `getEvents` never returns diagnostics at all.
+
+**Late corrections, 2026-08-05** — two commits after the ones above, both from
+re-reading the shipped result rather than the plan:
+
+- `c3679237` **show every resource counter, on every Soroban op.**
+  `readResourceCounters` skipped any entry whose value was not a JSON number,
+  so a big int arriving as a decimal string would vanish and the panel would
+  read 18 of 19 without saying so. Now total: unexpected shapes pass through
+  verbatim, an unnamed counter is labelled by its index. The panel was also
+  gated on `INVOKE_HOST_FUNCTION`; footprint extend/restore run through the
+  same host and are metered the same way, but raise no `fn_call` so they get
+  no trace either — the narrow gate swallowed their counters entirely. Gated
+  on the Soroban op set now. Totality here is load-bearing: it is what lets
+  the raw diagnostics table omit `core_metrics`.
+- `fe70d7a0` **correct what the diagnostics disclosure claims.** The blurb
+  said the debug channel carries "a copy of each event above". Decoding the
+  reported transaction's meta says otherwise — of its three consensus events
+  only ONE is mirrored. The fee charge and refund are raised by ledger
+  application, not the host VM, so there is nothing for the host to copy; the
+  mirroring covers contract-emitted events only. Same overclaim was in the
+  section doc and a test comment. Disclosure relabelled `N diagnostic
+entries`: "execution diagnostics" read as a _category of event_, which is
+  the distinction the issue asked for and the wrong way round.
+
+**Already done elsewhere** — C-lite's `fn(args) → result` signature and nested
+sub-call tree shipped as the execution trace in **0462**. Do not rebuild it.
+
+**Open** — **B** (`ScValView`), **A** (collapse events/operations), and
+C-lite's remaining half: the one-line semantic summary for known events, which
+is also what fixes amounts. Note `13802682` still renders raw beside a headline
+saying `1.3802682 VELO` on the same card: `ExecutionTrace.tsx` never calls
+`formatAmount`/`scaleByDecimals`. B alone gives grouping, not the decimal
+point — scaling needs the asset, so it belongs with the semantic line.
+
+Two smaller items surfaced by review, not yet done: `EVENTS · 7` on the
+operation card and `15 events` in the section use one word for two scopes; and
+`transfer` appears in the trace both as a called function and as the event it
+raised, told apart only by a glyph.
+
+## Design Decisions
+
+### Emerged (2026-08-05)
+
+1. **The raw diagnostics table stays — deleting it was proposed and
+   rejected.** Measurement across nine real mainnet transactions (the
+   eight-fixture corpus plus #378's), replicating `buildExecutionTrace`'s
+   stack walk in Rust, found **zero** diagnostic entries the trace cannot
+   place — including the failed transaction, whose `error` / `log` /
+   `host_fn_failed` all landed inside the call that raised them. That made
+   the flat table look like pure duplication of a worse rendering, and it was
+   removed. Reinstated on the explicit instruction that the raw record must
+   always be reachable somewhere. The measurement stands and is why the
+   removal was tempting; the ruling is that a readable view is an addition to
+   the raw record, never a replacement for it.
+
+2. **A `Copy` chip on mirrored rows was tried and reverted.** The diagnostic
+   container's copy of a contract event renders with a blue `Contract` chip —
+   exactly the label the issue asked to separate. Relabelling it `Copy` was
+   implemented, then dropped: it renames a row instead of addressing why the
+   row confuses, and the chip reports the XDR's own `type_`. The disclosure
+   blurb now states plainly that the channel contains copies.
+
+3. **`core_metrics` is the ONE thing the raw table omits.** Consistent with
+   (1) only because `readResourceCounters` is total — the panel is a complete
+   record of the counters, so nothing leaves the page. On a minimal Soroban
+   transaction they are 19 of 24 rows and would bury the four that describe
+   the execution.
+
+4. **`stage` is informational, by design.** It drives no logic, no sorting,
+   no filtering — one read site (`whereLabel`). It cannot order anything:
+   per-operation events carry no stage, so there is no total order to build
+   from it. Its job is to remove an information gap, not to compute.
+
+## Future Work
+
+- **The execution trace renders the diagnostic COPY, not the consensus
+  event.** On the reported transaction the trace's `•` row is `#6` (debug
+  channel), not `#2` (consensus). Same payload, but the copy carries no
+  `op_index` — the consensus row is the richer record. Nothing differs on
+  screen today, so this is latent: if a copy ever diverged, the trace would
+  show debug data wearing a consensus event's clothes and nothing would flag
+  it. Fix shape: use the diagnostic stream for POSITION only and render the
+  matching consensus event. Zero visible change, so not done now.
 
 ## Notes
 

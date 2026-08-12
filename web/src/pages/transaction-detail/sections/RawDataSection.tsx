@@ -2,12 +2,15 @@ import { Box, Typography } from '@mui/material';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 
+import { UnavailableSection } from '../shared/Unavailable.js';
 import { XdrRow } from '../shared/XdrRow.js';
 
 interface RawDataSectionProps {
   envelopeXdr: string | null | undefined;
   resultXdr: string | null | undefined;
   resultMetaXdr: string | null | undefined;
+  /** `heavy` absent — the XDR was never loaded, not proven absent. */
+  unavailable?: boolean;
 }
 
 interface XdrEntry {
@@ -24,7 +27,18 @@ export function RawDataSection({
   envelopeXdr,
   resultXdr,
   resultMetaXdr,
+  unavailable = false,
 }: RawDataSectionProps) {
+  // All three XDR blobs come from `heavy`; absent means unfetched, so the
+  // section count below would assert a zero nothing measured (0377 F2).
+  if (unavailable) {
+    return (
+      <SectionCard title="Raw data">
+        <UnavailableSection what="Raw data" />
+      </SectionCard>
+    );
+  }
+
   const entries: XdrEntry[] = [];
   if (present(envelopeXdr))
     entries.push({

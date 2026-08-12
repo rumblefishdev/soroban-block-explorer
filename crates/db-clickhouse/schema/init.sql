@@ -283,26 +283,20 @@ ORDER BY (contract_id);
 -- set, code/issuer optional. Soroban-native: contract_id set,
 -- code/issuer=empty/0.
 --
--- DEAD columns (`ALTER … DROP COLUMN` batched in the cleanup task 0310):
---  * `total_supply` / `holder_count` (lore-0293) — nothing reads them (the API
---    serves the aggregate from `balance_aggregates`); the indexer writes NULL.
---    A global rollup written into this per-ledger-rewritten row clobbered them
---    (no-version RMT, last-write-wins → ~25% of classic served NULL in prod).
---  * `name` / `icon_url` — the indexer writes them NULL (parser never sets an
---    asset name; verified 0/367321 rows populated in prod). Every read resolves
---    the display name/icon from `asset_enrichment` (curated) coalesced over
---    `soroban_contract_metadata` (on-chain) — never from `assets` — so these two
---    are vestigial too.
+-- DROPPED columns — noted so nobody re-adds them:
+--  * `total_supply` / `holder_count` (dead per lore-0293, removed in 0310) — the
+--    API serves the aggregate from `balance_aggregates`. A global rollup written
+--    into this per-ledger-rewritten row clobbered them (no-version RMT,
+--    last-write-wins → ~25% of classic served NULL in prod).
+--  * `name` (0304) / `icon_url` (0310) — the indexer never set either (`icon_url`
+--    verified 0/411654 rows populated in prod). Every read resolves the display
+--    name/icon from `asset_enrichment` (curated) coalesced over
+--    `soroban_contract_metadata` (on-chain) — never from `assets`.
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
-    -- `name` DROPPED (task 0304): dead since 0297 (reader-less, 0/336053 prod).
-    -- Prod `ALTER … DROP COLUMN name` batches with 0310's assets deploy-drain.
-    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → balance_aggregates
-    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → balance_aggregates
-    icon_url        Nullable(String),         -- DEAD → asset_enrichment.icon_url
     -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
     -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
     -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`
@@ -355,11 +349,10 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- NULL) and would clobber it; `ReplacingMergeTree(version)` is order-safe under
 -- retries and lets the enricher CLEAR a value (re-insert NULL with a higher
 -- `version`). `version` = enricher processing timestamp (ms; non-nullable as
--- RMT requires). NOTE: `assets.{icon_url,name}` stay — `icon_url` there is
--- vestigial (always NULL; dropping it on the live table is a heavy ALTER, low
--- value — deferred to a cleanup task), and `name` is still indexer-owned for
--- soroban-native assets (read path does `COALESCE(asset_enrichment.name,
--- assets.name)`). Full reasoning + measured evidence: lore task 0231,
+-- RMT requires). NOTE: this table is now the ONLY icon/name source — the
+-- vestigial `assets.{icon_url,name}` were dropped (0304 / 0310), so every read
+-- path resolves them here (coalesced over `soroban_contract_metadata` for
+-- on-chain values). Full reasoning + measured evidence: lore task 0231,
 -- `notes/R-clickhouse-enrichment-write-strategy.md`.
 CREATE TABLE IF NOT EXISTS asset_enrichment (
     asset_type   Int16,
@@ -753,6 +746,42 @@ CREATE TABLE IF NOT EXISTS soroban_events (
     contract_id     Int64,
     transaction_id  Int64,
     ledger_sequence Int64,
+    -- OURS, NOT STELLAR'S — and deliberately so. Read this before "fixing"
+    -- it to match the protocol.
+    --
+    -- `event_index` is a flat counter we assign per transaction while walking
+    -- the event containers in order (`xdr_parser::event::extract_events`):
+    -- tx-level → per-operation → diagnostic. Stellar defines no such number.
+    -- CAP-67's V4 meta has three separate event lists and none of them carries
+    -- an index; the official identity, the one `getEvents` returns, is
+    -- TOID(ledger, tx position, operation position) + the event's position
+    -- WITHIN that operation.
+    --
+    -- Two reasons ours stays:
+    --
+    -- 1. It is part of this table's ORDER BY, so it co-defines row identity
+    --    for `ReplacingMergeTree` dedup. A deterministic per-tx counter is
+    --    exactly what replay-idempotency needs — re-processing a ledger
+    --    yields the same numbers and the merge collapses cleanly. The
+    --    official key would change what counts as the same row.
+    -- 2. The official key is NOT EXPRESSIBLE for much of this table. It needs
+    --    an operation position, and `op_index` is absent for tx-level events
+    --    (fee charge and refund, always), for every diagnostic event, and for
+    --    EVERY pre-Protocol-23 event — the V3 meta carries no per-operation
+    --    attribution at all. Adopting it would trade a total key for one that
+    --    is null-bearing across years of history.
+    --
+    -- So: ours is the better INTERNAL key, theirs is the better key for
+    -- exchanging data with the outside world. Different jobs, not a defect.
+    --
+    -- Revisit only if one of these becomes true, and budget a full rewrite of
+    -- the sort key (~10 B rows measured 2026-08-04):
+    --   * we publish our own events API and callers need stable, portable
+    --     event ids;
+    --   * we reconcile our events against an external source by id rather
+    --     than by content.
+    -- The read path does not depend on it for meaning: the transaction page
+    -- states an event's real position from `op_index` and CAP-67 `stage`.
     event_index     Int16,
     event_type      Int16,
     signature       LowCardinality(Nullable(String)),

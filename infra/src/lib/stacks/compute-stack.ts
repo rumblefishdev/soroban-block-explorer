@@ -282,6 +282,16 @@ export class ComputeStack extends cdk.Stack {
         // need Access-Control-Allow-Origin (task 0277). `domainName` is the SPA host.
         CORS_ALLOW_ORIGIN: `https://${config.domainName}`,
         MTLS_SECRET_NAME: apiSecretName,
+        // Soroban RPC pool for the on-demand decompiled-code endpoint
+        // (task 0465): WasmCodeFetcher round-robins these on failure. Same
+        // keyless pool the enrichment worker uses (see its block below);
+        // without this env the fetcher falls back to the single SDF default.
+        SOROBAN_RPC_URLS: [
+          'https://mainnet.sorobanrpc.com',
+          'https://soroban-rpc.mainnet.stellar.gateway.fm/',
+          'https://rpc.ankr.com/stellar_soroban',
+          'https://stellar.api.onfinality.io/public',
+        ].join(','),
         // Origin lock (task 0277), phase 2: arm the middleware by injecting the
         // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then
         // rejects any request (except /health) lacking a matching X-Edge-Secret —

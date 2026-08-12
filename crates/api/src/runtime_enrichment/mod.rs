@@ -15,10 +15,12 @@
 pub mod nft_token_uri;
 pub mod sep1;
 pub mod stellar_archive;
+pub mod wasm_code;
 
 use nft_token_uri::NftTokenUriFetcher;
 use sep1::Sep1Fetcher;
 use stellar_archive::StellarArchiveFetcher;
+use wasm_code::WasmCodeFetcher;
 
 /// Bundle of every runtime-enrichment fetcher held in `AppState`.
 ///
@@ -36,4 +38,5 @@ pub struct RuntimeEnrichment {
     pub stellar_archive: StellarArchiveFetcher,
     pub sep1: Sep1Fetcher,
     pub nft_token_uri: NftTokenUriFetcher,
+    pub wasm_code: WasmCodeFetcher,
 }

@@ -6,10 +6,14 @@ flowchart TB
         direction TB
         AWS_IAC[" "]
         GAL["<b>Galexie · Captive Core</b><br/>production‑galexie‑live<br/><i>AWS ECS Fargate · always‑on</i>"]
-        S3["<b>S3 bucket</b><br/>production‑stellar‑ledger‑data<br/><i>one XDR file per ledger</i>"]
+        S3["<b>S3 bucket</b><br/>production‑stellar‑ledger‑data<br/><i>one .xdr.zst file per ledger</i>"]
+        SNS["<b>SNS topic</b><br/>production‑ledger‑events<br/><i>fan‑out to per‑consumer queues</i>"]
         SQS["<b>SQS queue</b><br/>production‑ledger‑ingest<br/><i>batchSize 1 · ReportBatchItemFailures</i>"]
-        LAM["<b>Ledger Processor · Lambda (Rust)</b><br/>production‑soroban‑explorer‑indexer<br/><i>reservedConcurrentExecutions=1 · 540 s budget</i><br/><i>decode XDR, write typed rows</i>"]
+        LAM["<b>Ledger Processor · Lambda (Rust)</b><br/>production‑soroban‑explorer‑indexer<br/><i>reservedConcurrentExecutions=1</i><br/><i>600 s timeout · 540 s reconcile budget</i><br/><i>decode XDR, write typed rows</i>"]
         DLQ["<b>DLQ</b><br/>production‑ledger‑processor‑dlq<br/><i>persistent failures</i>"]
+        ENQ["<b>SQS queue</b><br/>production‑enrichment<br/><i>off‑chain metadata lookups</i>"]
+        EWK["<b>Enrichment Worker · Lambda (Rust)</b><br/>production‑soroban‑explorer‑enrichment‑worker<br/><i>icon URL + display name</i>"]
+        EDLQ["<b>DLQ</b><br/>production‑enrichment‑dlq<br/><i>unreachable sources</i>"]
     end
 
     IAC["<b>Infrastructure as code</b><br/><i>AWS CDK + Ansible</i>"]
@@ -21,10 +25,15 @@ flowchart TB
     SP -->|"streams closed ledgers"| GAL
     AWS_IAC ~~~ GAL
     GAL -->|"~1 file every 5–6 s"| S3
-    S3 -->|"S3:ObjectCreated event"| SQS
+    S3 -->|"s3:ObjectCreated:* · suffix .xdr.zst"| SNS
+    SNS -->|"subscribed queue"| SQS
     SQS -->|"triggers Lambda"| LAM
     LAM -.->|"on persistent failure"| DLQ
     LAM -->|"reconcile from max(sequence)+1<br/>write over mTLS"| CH
+    LAM -.->|"enqueue metadata lookups"| ENQ
+    ENQ --> EWK
+    EWK -.->|"unreachable source"| EDLQ
+    EWK -->|"write over mTLS"| CH
 
     IAC -.-> AWS_IAC
     IAC -.-> CH
@@ -36,7 +45,7 @@ flowchart TB
     classDef hidden    fill:transparent,stroke:transparent,color:transparent
 
     class SP external
-    class GAL,S3,SQS,LAM,DLQ ingestion
+    class GAL,S3,SNS,SQS,LAM,DLQ,ENQ,EWK,EDLQ ingestion
     class CH database
     class IAC iac
     class AWS_IAC hidden

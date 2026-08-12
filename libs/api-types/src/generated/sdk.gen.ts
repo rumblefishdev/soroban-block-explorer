@@ -16,6 +16,9 @@ import type {
   GetContractData,
   GetContractErrors,
   GetContractResponses,
+  GetDecompiledData,
+  GetDecompiledErrors,
+  GetDecompiledResponses,
   GetInterfaceData,
   GetInterfaceErrors,
   GetInterfaceResponses,
@@ -262,6 +265,29 @@ export const getContract = <ThrowOnError extends boolean = false>(
       { scheme: 'bearer', type: 'http' },
     ],
     url: '/v1/contracts/{contract_id}',
+    ...options,
+  });
+
+/**
+ * Decompile the contract's WASM on demand (task 0465, refs #374).
+ *
+ * No persistence: bytes are fetched from Soroban RPC and decompiled per
+ * request. The output is immutable per (`wasm_hash`, decompiler version),
+ * which justifies the `LONG` cache header even without a server-side cache.
+ */
+export const getDecompiled = <ThrowOnError extends boolean = false>(
+  options: Options<GetDecompiledData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    GetDecompiledResponses,
+    GetDecompiledErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/decompiled',
     ...options,
   });
 

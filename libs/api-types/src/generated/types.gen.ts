@@ -371,6 +371,7 @@ export type ContractDetailResponse = {
   deployed_at_ledger?: number | null;
   deployer?: string | null;
   is_sac: boolean;
+  sac_asset?: null | SacAsset;
   stats: ContractStats;
   /**
    * Task 0327: contract mutability, 3-state.
@@ -464,6 +465,7 @@ export type ContractListItem = {
    * `ContractStats.recent_invocations` semantics).
    */
   recent_invocations: number;
+  sac_asset?: null | SacAsset;
 };
 
 export type ContractStats = {
@@ -483,6 +485,86 @@ export type ContractStats = {
 };
 
 /**
+ * One entry of [`DecompiledResponse::diagnostics`].
+ *
+ * `severity` is soroban-ret's own (`warning` | `info`) and is deliberately
+ * passed through rather than re-graded here — with one caveat for the UI:
+ * `call_indirect` warnings are usually benign `core::fmt` vtables, so they
+ * should not be rendered as errors.
+ */
+export type DecompileDiagnostic = {
+  /**
+   * `floating_point` | `reference_types` | `multi_value` |
+   * `multi_memory` | `call_indirect` | `unknown_instruction` |
+   * `non_rust_sdk`, or a lowercased new variant from a later release.
+   */
+  category: string;
+  /**
+   * Index of the offending function, for function-scoped checks.
+   */
+  function_index?: number | null;
+  message: string;
+  /**
+   * `warning` | `info`.
+   */
+  severity: string;
+};
+
+/**
+ * Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).
+ *
+ * Source is reconstructed on demand by the pinned `soroban-ret` crate —
+ * experimental by nature: unrecovered values surface as explicit `todo!()`
+ * holes in the Rust text. The marker counts measure completeness, not
+ * correctness (a hole-free function can still be wrong); the frontend
+ * keeps its permanent "auto-reconstructed" notice regardless.
+ */
+export type DecompiledResponse = {
+  contract_id: string;
+  /**
+   * Soroban-compliance diagnostics for this binary: constructs the
+   * decompiler does not model well, so the reader knows *why* a
+   * reconstruction may be thin. Empty on the WAT paths.
+   */
+  diagnostics: Array<DecompileDiagnostic>;
+  /**
+   * `pub fn` count in the emitted Rust; `null` for WAT.
+   */
+  functions?: number | null;
+  /**
+   * What `source` contains: `rust` or `wat`.
+   */
+  representation: string;
+  /**
+   * Set when `rust` was requested but emission failed — `source` then
+   * carries the WAT fallback.
+   */
+  rust_error?: string | null;
+  /**
+   * Soroban SDK version from the binary's `contractmetav0`, when present.
+   */
+  sdk_version?: string | null;
+  /**
+   * Decompiler version that produced `source`.
+   */
+  soroban_ret_version: string;
+  source: string;
+  /**
+   * `todo!()` marker count (unrecovered values); `null` for WAT.
+   */
+  todo_holes?: number | null;
+  /**
+   * Distinct `var_N` identifiers (unrecovered names); `null` for WAT.
+   */
+  unknown_vars?: number | null;
+  /**
+   * Lowercase hex hash of the decompiled binary — the response is
+   * immutable per (`wasm_hash`, `soroban_ret_version`).
+   */
+  wasm_hash: string;
+};
+
+/**
  * E3 (`GET /transactions/:hash`) — fields sourced from XDR parse.
  *
  * Returned as the `heavy` block inside `E3Response<TransactionDetailLight>`.
@@ -491,12 +573,19 @@ export type ContractStats = {
  */
 export type E3HeavyFields = {
   /**
-   * Non-diagnostic Soroban events (contract + system) with full topic
-   * array + decoded data payload.
+   * The consensus event stream: `contract` + `system` events from the
+   * tx-level and per-operation containers. This — and only this — is what
+   * CAP-67 / `getEvents` mean by "the events of a transaction".
    */
   contract_events: Array<XdrEventDto>;
   /**
-   * Diagnostic events emitted during Soroban invocation.
+   * The host-VM debug channel (`v4.diagnostic_events`): the `fn_call` /
+   * `fn_return` trace, `core_metrics` counters, and — when diagnostic mode
+   * is on, which is always for the archive — a byte-identical COPY of every
+   * consensus event above. Not hashed into consensus, and CAP-67's own
+   * event stream (`getEvents`) does not carry it at all. Presenting these
+   * alongside `contract_events` as one list shows the copies as extra
+   * events; they are one channel about the other, not a continuation of it.
    */
   diagnostic_events: Array<XdrEventDto>;
   /**
@@ -753,10 +842,12 @@ export type LedgerListItem = {
 /**
  * Top-level chain overview returned by `GET /v1/network/stats`.
  *
- * `total_accounts` and `total_contracts` are planner
- * estimates, not exact counts. `latest_ledger_closed_at` is `None`
- * only on a cold-bootstrap cluster where no ledger has been indexed
- * yet.
+ * `total_accounts` and `total_contracts` are deduped read-time counts —
+ * see the per-field docs for the exactness each one carries. (They were
+ * `system.tables.total_rows` planner estimates until 0420, which counted
+ * unmerged ReplacingMergeTree duplicates and over-reported; that source is
+ * gone.) `latest_ledger_closed_at` is `None` only on a cold-bootstrap
+ * cluster where no ledger has been indexed yet.
  *
  * `generated_at` is the wall-clock time the underlying SELECT ran on
  * the DB. Cache hits keep the original value, so frontend can derive
@@ -784,11 +875,15 @@ export type NetworkStats = {
    */
   latest_ledger_sequence: number;
   /**
-   * Estimated indexed account count (planner estimate, not exact).
+   * Indexed account count: `count()` over `accounts_recent`, the deduped
+   * MV the `/accounts` list also pages from — so this KPI and that list
+   * agree. Exact to ±1 vs `accounts FINAL`, modulo the ~2-minute MV
+   * refresh. Safe to render as a total.
    */
   total_accounts: number;
   /**
-   * Estimated indexed Soroban contract count (planner estimate, not exact).
+   * Indexed Soroban contract count: `count() FROM soroban_contracts FINAL`.
+   * Exact — `FINAL` is affordable on a table this size.
    */
   total_contracts: number;
   /**
@@ -1266,6 +1361,7 @@ export type PaginatedContractListItem = {
      * `ContractStats.recent_invocations` semantics).
      */
     recent_invocations: number;
+    sac_asset?: null | SacAsset;
   }>;
   page: PageInfo;
 };
@@ -1685,10 +1781,11 @@ export type PoolAssetLeg = {
    */
   contract_id?: string | null;
   /**
-   * Asset icon URL, mirrored from the leg's `assets.icon_url` row so
-   * pool avatars render the same icon as the assets list. `None` for
-   * native legs and assets without an enriched icon — the FE falls back
-   * to the asset-code initial.
+   * Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool
+   * avatars render the same icon as the assets list. Until task 0310 this
+   * read the dead `assets.icon_url` column, which was never populated —
+   * every leg icon came back `None`. Still `None` for assets without an
+   * enriched icon — the FE falls back to the asset-code initial.
    */
   icon_url?: string | null;
   issuer?: string | null;
@@ -1775,6 +1872,25 @@ export type PoolTransactionItem = {
   operation_types: Array<string>;
   source_account: string;
   successful: boolean;
+};
+
+/**
+ * The classic asset a SAC contract is the contract-side facet of (ADR 0051,
+ * task 0441). `None` on non-SAC contracts — and on the rare SAC with no
+ * resolvable `asset_sac` facet row (2 of 3,946 on prod), where the frontend
+ * keeps the bare SAC badge. Native XLM is `asset_code: null, issuer: null`;
+ * a classic asset always carries both (an asset code alone is ambiguous —
+ * prod holds many issuers of "USDC").
+ */
+export type SacAsset = {
+  /**
+   * Classic asset code (e.g. `USDC`); `null` = native XLM.
+   */
+  asset_code?: string | null;
+  /**
+   * Issuer account G-strkey; `null` = native XLM.
+   */
+  issuer?: string | null;
 };
 
 /**
@@ -2030,6 +2146,17 @@ export type XdrEventDto = {
    * `XdrOperationDto.application_order - 1`.
    */
   op_index?: number | null;
+  /**
+   * CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
+   * `"after_all_txs"`. The protocol's only statement of when a tx-level
+   * event fired, and the reason `event_index` must not be read as a
+   * timeline: the fee refund is numbered ahead of the operation it
+   * refunds. Observed values on mainnet are `before_all_txs` for the charge
+   * and `after_all_txs` for the refund; `after_tx` exists in the protocol
+   * and is passed through unchanged if it appears. `None` for per-operation, diagnostic and
+   * pre-Protocol-23 events, which carry no stage.
+   */
+  stage?: string | null;
   /**
    * Decoded topic array.
    */
@@ -2444,6 +2571,53 @@ export type GetContractResponses = {
 export type GetContractResponse =
   GetContractResponses[keyof GetContractResponses];
 
+export type GetDecompiledData = {
+  body?: never;
+  path: {
+    /**
+     * Contract StrKey (C…, 56 chars)
+     */
+    contract_id: string;
+  };
+  query?: {
+    /**
+     * Requested representation: `rust` (default) or `wat`. When `rust` is
+     * requested but emission fails, the response carries the WAT fallback
+     * with `representation: "wat"` and `rust_error` set — no second
+     * round-trip needed.
+     */
+    format?: string | null;
+  };
+  url: '/v1/contracts/{contract_id}/decompiled';
+};
+
+export type GetDecompiledErrors = {
+  /**
+   * Invalid contract_id or format
+   */
+  400: ErrorEnvelope;
+  /**
+   * Contract not found, has no WASM (SAC / pre-upload), or code no longer live
+   */
+  404: ErrorEnvelope;
+  /**
+   * WASM fetch or decompilation failed
+   */
+  500: ErrorEnvelope;
+};
+
+export type GetDecompiledError = GetDecompiledErrors[keyof GetDecompiledErrors];
+
+export type GetDecompiledResponses = {
+  /**
+   * Decompiled source (Rust, or WAT fallback)
+   */
+  200: DecompiledResponse;
+};
+
+export type GetDecompiledResponse =
+  GetDecompiledResponses[keyof GetDecompiledResponses];
+
 export type ListEventsData = {
   body?: never;
   path: {
@@ -2684,10 +2858,22 @@ export type ListPoolsData = {
      */
     cursor?: string;
     /**
-     * Single-asset filter — matches either `asset_a_code` or
-     * `asset_b_code` case-insensitively (input is trimmed + uppercased
-     * before the query). Intended for the Figma list's free-text
-     * "Filter by asset pair" input.
+     * Free-text asset filter — case-insensitive substring of either
+     * `asset_a_code` or `asset_b_code` (input is trimmed before the
+     * query). The needle is matched literally: `%`, `_` and regex
+     * metacharacters have no special meaning.
+     *
+     * A `/` makes it a **pair** query: `USDC/XLM` requires both codes to be
+     * present, one on each leg, and the typed order does not matter. Only the
+     * first `/` splits, so `USDC/XLM/BTC` searches for the literal second code
+     * `XLM/BTC` and therefore matches nothing — a pool has two legs.
+     *
+     * Native legs match on `XLM` even though they store an empty code, so
+     * `XLM` returns the pools that actually hold native XLM. Note that it
+     * *also* returns credit assets minted under the code `XLM` — asset codes
+     * are not unique on Stellar, and this filter matches codes, not asset
+     * identity. Callers needing one specific issuer's asset should use the
+     * per-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.
      */
     'filter[asset_code]'?: string | null;
     'filter[asset_a_code]'?: string | null;

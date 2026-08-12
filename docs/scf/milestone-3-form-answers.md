@@ -24,7 +24,7 @@ Copy the text inside each field into the matching SCF form field.
 >    tracing tracks ingestion lag (under 30 seconds), API latency, and error
 >    rates.
 > 4. **Load test:** the production API sustains **40× the required load**
->    (49.3M-requests/month equivalent, ~33k requests measured) at a **0.000%
+>    (49.3M-requests/month equivalent; 16,232 requests measured) at a **0.000%
 >    error rate** — AC4 asks for under 0.1%. The **median request meets the
 >    latency target** (p50 151–168 ms). **The p95 target is not met: 577 ms
 >    against 200 ms.** The tail is flat across a 40× load range (577 ms → 575
@@ -37,12 +37,19 @@ Copy the text inside each field into the matching SCF form field.
 >    reduction in database work during this milestone. Full accounting, including
 >    what we do not meet and why, is in the evidence document § AC4.
 > 5. **Security:** all ingress and application security controls are in place and
->    verified against a signed security checklist (least-privilege IAM, AWS WAF +
->    throttling, no public datastore endpoint, secrets in Secrets Manager, TLS
->    end-to-end, server-side input validation, encrypted-at-rest ledger storage,
->    automated off-box backups).
+>    verified against a signed security checklist (least-privilege IAM, managed
+>    edge rule sets and rate limiting in front of the API plus an origin lock and
+>    API Gateway throttling, no public datastore endpoint, secrets in Secrets
+>    Manager, TLS end-to-end, server-side input validation, encrypted-at-rest
+>    ledger storage, automated off-box backups).
 > 6. **Post-launch report:** a 7-day post-launch monitoring report covers uptime,
 >    error rate, p95 latency, and ingestion lag per day.
+> 7. **Real-user testing since launch:** the explorer recorded **146 active
+>    users across 310 sessions** (Google Analytics, 30 days to 2026-08-07), and
+>    Stellar community members raised **11 improvement reports**, of which **5
+>    are resolved** — including a redesign of the transaction-detail page that
+>    the reports drove. The rest are tracked as open work. Details in the
+>    evidence document § 6.
 >
 > Full evidence package:
 > <TODO: Google Drive folder share link>
@@ -54,9 +61,10 @@ Copy the text inside each field into the matching SCF form field.
 ## Field 3 - Additional Deliverable Verification
 
 > **Evidence package:** <TODO: Drive folder link> - contains the Milestone 3
-> verification video, `milestone-3-evidence.pdf`, monitoring and launch
-> screenshots, the load-test results CSV, the signed security checklist, and the
-> 7-day post-launch report.
+> verification video, `milestone-3-evidence.pdf` (with the monitoring and launch
+> screenshots embedded), and the raw load-test result CSVs. The signed security
+> checklist and the 7-day post-launch report are linked from the PDF and from
+> the section below.
 >
 > **Live application (public):**
 >
@@ -72,6 +80,10 @@ Copy the text inside each field into the matching SCF form field.
 >   `https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/architecture/technical-design-general-overview.md`
 > - Infra / deploy runbook:
 >   `https://github.com/rumblefishdev/soroban-block-explorer/blob/master/infra/README.md`
+> - Signed security checklist:
+>   `https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-3-security-checklist.md`
+> - 7-day post-launch report:
+>   `https://github.com/rumblefishdev/soroban-block-explorer/blob/master/docs/scf/milestone-3-7day-report.md`
 
 ## Field 4 - Support Needed
 

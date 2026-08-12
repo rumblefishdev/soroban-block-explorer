@@ -1,4 +1,12 @@
 import { Box } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
+
+/**
+ * The same wash costs half as much opacity on a light background — at 0.28 it
+ * turns the top of the page visibly beige instead of reading as a glow.
+ */
+const glowOpacity = (theme: Theme) =>
+  theme.palette.mode === 'light' ? 0.14 : 0.28;
 
 /**
  * Home-only warm gold glow — two blurred `#fdda24` pills behind the hero.
@@ -30,7 +38,7 @@ export function HomeHeroGlow() {
           height: 110,
           borderRadius: 999,
           backgroundColor: theme.palette.surface.primaryMain,
-          opacity: 0.28,
+          opacity: glowOpacity(theme),
           filter: 'blur(75px)',
         })}
       />
@@ -44,7 +52,7 @@ export function HomeHeroGlow() {
           height: 139,
           borderRadius: 999,
           backgroundColor: theme.palette.surface.primaryMain,
-          opacity: 0.28,
+          opacity: glowOpacity(theme),
           filter: 'blur(75px)',
         })}
       />

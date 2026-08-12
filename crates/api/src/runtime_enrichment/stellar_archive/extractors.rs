@@ -253,6 +253,18 @@ fn envelope_fee_bump_source(env: &TransactionEnvelope) -> Option<String> {
     }
 }
 
+/// Wire spelling of CAP-67's `TransactionEventStage`. Snake_case to match the
+/// rest of the DTO surface; the variants are the XDR's, not ours.
+fn stage_name(stage: stellar_xdr::TransactionEventStage) -> String {
+    use stellar_xdr::TransactionEventStage as S;
+    match stage {
+        S::BeforeAllTxs => "before_all_txs",
+        S::AfterTx => "after_tx",
+        S::AfterAllTxs => "after_all_txs",
+    }
+    .to_string()
+}
+
 fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) {
     use xdr_parser::EventSource;
 
@@ -276,6 +288,7 @@ fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, V
             data: e.data,
             event_index,
             op_index: e.op_index.and_then(|i| i16::try_from(i).ok()),
+            stage: e.stage.map(stage_name),
         };
         if is_diagnostic {
             diagnostic.push(dto);

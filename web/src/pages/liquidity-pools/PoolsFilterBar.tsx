@@ -58,8 +58,8 @@ export function PoolsFilterBar({
     >
       <DebouncedField
         value={asset}
-        placeholder="Filter by asset pair..."
-        ariaLabel="Filter by asset pair"
+        placeholder="Filter by asset or pair, e.g. USDC/XLM"
+        ariaLabel="Filter by asset or pair"
         width={400}
         onCommit={onAssetChange}
       />

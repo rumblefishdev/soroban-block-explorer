@@ -76,6 +76,8 @@ async fn main() {
         sep1: Sep1Fetcher::new().expect("failed to build SEP-1 fetcher"),
         nft_token_uri: api::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
             .expect("failed to build NFT token_uri fetcher"),
+        wasm_code: api::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
+            .expect("failed to build wasm-code RPC client"),
     };
 
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")
