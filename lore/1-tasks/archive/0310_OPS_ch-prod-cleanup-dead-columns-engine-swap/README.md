@@ -1,5 +1,4 @@
 ---
-
 id: '0310'
 title: 'CH prod cleanup — drop dead assets aggregate columns + MergeTree→ReplacingMergeTree engine swap (wasm_interface_metadata, ledgers)'
 type: OPS
@@ -7,146 +6,146 @@ status: completed
 related_adr: ['0044']
 related_tasks: ['0293', '0232', '0298', '0244', '0476']
 tags:
-[
-'phase-future',
-'effort-medium',
-'priority-medium',
-'clickhouse',
-'migration',
-]
+  [
+    'phase-future',
+    'effort-medium',
+    'priority-medium',
+    'clickhouse',
+    'migration',
+  ]
 history:
-
-- date: 2026-07-21
-  status: backlog
-  who: karolkow
-  note: >
-  Scope corrected: **`assets.icon_url` is the third dead column** and was missing
-  from this task. 0293 moved supply/holders to `balance_aggregates`; `icon_url`
-  moved to `asset_enrichment` on the same principle, and `AssetRow::staged`
-  writes `None` into all three on every build. Found while auditing state-table
-  writers for 0425 — the three NULLs looked like a clobber until the DEAD
-  annotations in `init.sql` explained them. Drop all three together; splitting
-  them means a second prod ALTER for no reason.
-- date: 2026-06-22
-  status: backlog
-  who: karolkow
-  note: 'Spawned from 0293. Destructive prod cleanup deferred by 0293 (option A backward-compat): drop the now-dead assets.total_supply/holder_count and rebuild ledgers/wasm_interface_metadata as RMT. Neither is applied by CREATE TABLE IF NOT EXISTS, so each needs explicit migration. The additive 0293 rollout runbook lives in 0293 itself; this task is cleanup only, gated on that rollout being verified in prod.'
-- date: 2026-06-24
-  status: backlog
-  who: stkrolikiewicz
-  note: >
-  Engine-swap half DONE in prod (out of band, during SAC-redrain backup
-  prep). ledgers + wasm_interface_metadata MergeTree -> ReplacingMergeTree
-  via create-copy-EXCHANGE-OPTIMIZE FINAL-drop, guarded by a uniqExact
-  distinct-key gate. wasm 3760->3720 (40 byte-identical dups collapsed);
-  ledgers 12,582,889 unchanged (no dup sequences). snapshot_d backup taken
-  first. Remaining: dead-columns drop + asset_aggregates refresh monitoring
-  - docs. Task stays open (backlog).
-- date: 2026-07-07
-  status: backlog
-  who: karolkow
-  note: >
-  Reality-sync (chq re-verify + PG-retirement fallout). (1) Engine swap
-  RE-CONFIRMED in prod 2026-07-07: ledgers + wasm_interface_metadata both
-  ReplacingMergeTree (system.tables). (2) TABLE RENAMED: the `asset_aggregates`
-  table + `asset_aggregates_mv` this spec references were RETIRED by task
-  0331/0339 (ADR 0051 — SACs folded into the wrapped classic asset, unified
-  supply per asset). Supply/holders now serve from `balance_aggregates`
-  (+ `balance_aggregates_mv`), keyed on the unified `asset_id`, NOT the old
-  `(asset_code, issuer_id)`. All `asset_aggregates` refs below updated. (3) §4
-  PG aggregate decommission is now MOOT — task 0244 (PG removal) merged
-  (PR #319), so `recompute_asset_aggregates` (PG) + the `DataSource::Pg` arm
-  are gone. (4) Still-outstanding (chq-confirmed): assets.total_supply +
-  holder_count STILL present in prod → the code-strip + ALTER DROP + docs are
-  the real remaining work. Monitoring AC may now belong to 0331 (owner of
-  balance_aggregates_mv) — flagged below.
-- date: '2026-07-22'
-  status: backlog
-  who: karolkow
-  note: >
-  **Half of this task is already done — verified on prod 2026-07-22.**
-  The engine swap it asks for is in place: `wasm_interface_metadata` is
-  already `ReplacingMergeTree`, so that item can be struck.
-  The other half stands and is stronger than the task claims: `assets` holds
-  **361,015 rows of which exactly 25 carry a non-zero `total_supply` and 25 a
-  non-zero `holder_count`**. The live aggregates moved to `balance_aggregates`
-  (fed by a refreshable MV off `balances`), so these two columns are dead
-  weight on every read of the table. Dropping them is the whole remaining
-  scope. Note this is an `ALTER TABLE` on prod, so it needs an ops window.
-- date: '2026-07-22'
-  status: backlog
-  who: karolkow
-  note: >
-  **Two more dead objects found while re-verifying this task. Both belong
-  here rather than in new tasks — same operation, same ops window.**
-  **1. `assets.icon_url` is emptier than the other two.** Re-measured
-  2026-07-22: of **361,232** rows, `total_supply` and `holder_count` carry a
-  value on **42**, and `icon_url` on **0**. Not a single row in the table has
-  ever had one. It is the same dead-column class already scoped here, so add
-  it to the same `ALTER`.
-  **2. `account_balances_current` is a dead TABLE, not just dead columns.**
-  **0 rows** in prod; no writer — `persist/stage.rs:1648` and
-  `persist/writer.rs:110` both record the insert being removed for the
-  single-write design; and no live reader, the only surviving mention in
-  `crates/api` being a comment about a join that was deleted. The live
-  equivalent is `balances`, at **89,634,237 rows**.
-  Do not drop it blind, though: task **0214** still lists "`account_balances_current`
-  row count > 0" as an acceptance criterion. That criterion is unsatisfiable
-  as written and is flagged there for rewriting onto `balances` — but the two
-  changes should land in a known order, criterion first, so nobody is left
-  chasing a table this task removed.
-- date: 2026-07-29
-  status: backlog
-  who: karolkow
-  note: >
-  Body corrected to match the history. The engine swap has been recorded as
-  done since 2026-06-24 and re-verified three times, but the Summary, the
-  Context bullet and Implementation §1 still read as outstanding work — a
-  reader who stopped at the body would have scheduled an ops window for a
-  migration that ran a month ago. Re-verified on prod today: `ledgers` and
-  `wasm_interface_metadata` are both `ReplacingMergeTree`; the three dead
-  `assets` columns are still present, so the remaining scope is unchanged.
-- date: '2026-08-11'
-  status: active
-  who: karolkow
-  note: >
-  Activated for the code-strip half; the prod `ALTER`s stay with the operator.
-  Pre-flight re-verified on prod (chq) — full evidence in
-  `notes/G-prod-preflight-drop-evidence.md`. Four things the body did not say:
-  (1) **`name` is already gone from prod `assets`** (8 columns: identity
-  4-tuple + the 3 dead + `id`), so the "DROP COLUMN name batches here" note
-  carried in `init.sql` / `rows.rs` was stale — struck.
-  (2) **None of the three is in the sorting/primary key**
-  (`asset_type, asset_code, issuer_id, contract_id`), so each DROP is a cheap
-  metadata op with no re-sort.
-  (3) **Two live API readers of `assets.icon_url` existed** — the LP detail and
-  LP list queries (`max(a.icon_url)` feeding `asset_{a,b}_icon_url`). They read
-  a column that is 0/411,654 populated in prod, i.e. every LP leg icon has
-  always been NULL. Re-pointed to `asset_enrichment` (ADR 0050 — the source the
-  assets endpoints already use, 11,977 icons), which both unblocks the DROP and
-  fixes the silently-empty field.
-  (4) **The 40 surviving `total_supply`/`holder_count` rows are pre-0293
-  leftovers in the OLD scale** — `assets` held display units,
-  `balance_aggregates` holds raw (e.g. APFC 6,500,450,000 vs
-  65,004,500,000,000,000). Nothing reads them; not a second source of truth.
-- date: '2026-08-12'
-  status: completed
-  who: karolkow
-  note: >
-  **DONE — deployed and dropped in prod 2026-08-12.** Code half merged via
-  PR #390 (develop) + #391 (master); `deploy-production-compute` at
-  08:55 UTC; the three `ALTER TABLE assets DROP COLUMN` ran right after.
-  `assets` is now identity-only (5 columns). **One incident, ~9 min ingest
-  stall, no data loss:** the planned order (deploy → drain → ALTER later)
-  was WRONG for the `clickhouse` 0.15 driver — it validates the row struct
-  against `DESCRIBE TABLE` in BOTH directions, so the slimmed `AssetRow`
-  failed client-side (`SchemaMismatch`: table columns without DEFAULT not
-  covered by the struct) until the columns were actually dropped, and warm
-  Lambda containers then kept a cached 8-column DESCRIBE until a
-  config-touch recycled them. Recovery: DROPs + container recycle; reconcile
-  re-drained the S3 backlog, 157/157 ledgers verified, no gap. Full
-  post-mortem under "Issues Encountered". Refresh-monitoring AC confirmed
-  NOT owned by 0331/0339 (manual runbook check only) — spawned to 0476.
+  - date: 2026-07-21
+    status: backlog
+    who: karolkow
+    note: >
+      Scope corrected: **`assets.icon_url` is the third dead column** and was missing
+      from this task. 0293 moved supply/holders to `balance_aggregates`; `icon_url`
+      moved to `asset_enrichment` on the same principle, and `AssetRow::staged`
+      writes `None` into all three on every build. Found while auditing state-table
+      writers for 0425 — the three NULLs looked like a clobber until the DEAD
+      annotations in `init.sql` explained them. Drop all three together; splitting
+      them means a second prod ALTER for no reason.
+  - date: 2026-06-22
+    status: backlog
+    who: karolkow
+    note: 'Spawned from 0293. Destructive prod cleanup deferred by 0293 (option A backward-compat): drop the now-dead assets.total_supply/holder_count and rebuild ledgers/wasm_interface_metadata as RMT. Neither is applied by CREATE TABLE IF NOT EXISTS, so each needs explicit migration. The additive 0293 rollout runbook lives in 0293 itself; this task is cleanup only, gated on that rollout being verified in prod.'
+  - date: 2026-06-24
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Engine-swap half DONE in prod (out of band, during SAC-redrain backup
+      prep). ledgers + wasm_interface_metadata MergeTree -> ReplacingMergeTree
+      via create-copy-EXCHANGE-OPTIMIZE FINAL-drop, guarded by a uniqExact
+      distinct-key gate. wasm 3760->3720 (40 byte-identical dups collapsed);
+      ledgers 12,582,889 unchanged (no dup sequences). snapshot_d backup taken
+      first. Remaining: dead-columns drop + asset_aggregates refresh monitoring
+      + docs. Task stays open (backlog).
+  - date: 2026-07-07
+    status: backlog
+    who: karolkow
+    note: >
+      Reality-sync (chq re-verify + PG-retirement fallout). (1) Engine swap
+      RE-CONFIRMED in prod 2026-07-07: ledgers + wasm_interface_metadata both
+      ReplacingMergeTree (system.tables). (2) TABLE RENAMED: the `asset_aggregates`
+      table + `asset_aggregates_mv` this spec references were RETIRED by task
+      0331/0339 (ADR 0051 — SACs folded into the wrapped classic asset, unified
+      supply per asset). Supply/holders now serve from `balance_aggregates`
+      (+ `balance_aggregates_mv`), keyed on the unified `asset_id`, NOT the old
+      `(asset_code, issuer_id)`. All `asset_aggregates` refs below updated. (3) §4
+      PG aggregate decommission is now MOOT — task 0244 (PG removal) merged
+      (PR #319), so `recompute_asset_aggregates` (PG) + the `DataSource::Pg` arm
+      are gone. (4) Still-outstanding (chq-confirmed): assets.total_supply +
+      holder_count STILL present in prod → the code-strip + ALTER DROP + docs are
+      the real remaining work. Monitoring AC may now belong to 0331 (owner of
+      balance_aggregates_mv) — flagged below.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Half of this task is already done — verified on prod 2026-07-22.**
+      The engine swap it asks for is in place: `wasm_interface_metadata` is
+      already `ReplacingMergeTree`, so that item can be struck.
+      The other half stands and is stronger than the task claims: `assets` holds
+      **361,015 rows of which exactly 25 carry a non-zero `total_supply` and 25 a
+      non-zero `holder_count`**. The live aggregates moved to `balance_aggregates`
+      (fed by a refreshable MV off `balances`), so these two columns are dead
+      weight on every read of the table. Dropping them is the whole remaining
+      scope. Note this is an `ALTER TABLE` on prod, so it needs an ops window.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Two more dead objects found while re-verifying this task. Both belong
+      here rather than in new tasks — same operation, same ops window.**
+      **1. `assets.icon_url` is emptier than the other two.** Re-measured
+      2026-07-22: of **361,232** rows, `total_supply` and `holder_count` carry a
+      value on **42**, and `icon_url` on **0**. Not a single row in the table has
+      ever had one. It is the same dead-column class already scoped here, so add
+      it to the same `ALTER`.
+      **2. `account_balances_current` is a dead TABLE, not just dead columns.**
+      **0 rows** in prod; no writer — `persist/stage.rs:1648` and
+      `persist/writer.rs:110` both record the insert being removed for the
+      single-write design; and no live reader, the only surviving mention in
+      `crates/api` being a comment about a join that was deleted. The live
+      equivalent is `balances`, at **89,634,237 rows**.
+      Do not drop it blind, though: task **0214** still lists "`account_balances_current`
+      row count > 0" as an acceptance criterion. That criterion is unsatisfiable
+      as written and is flagged there for rewriting onto `balances` — but the two
+      changes should land in a known order, criterion first, so nobody is left
+      chasing a table this task removed.
+  - date: 2026-07-29
+    status: backlog
+    who: karolkow
+    note: >
+      Body corrected to match the history. The engine swap has been recorded as
+      done since 2026-06-24 and re-verified three times, but the Summary, the
+      Context bullet and Implementation §1 still read as outstanding work — a
+      reader who stopped at the body would have scheduled an ops window for a
+      migration that ran a month ago. Re-verified on prod today: `ledgers` and
+      `wasm_interface_metadata` are both `ReplacingMergeTree`; the three dead
+      `assets` columns are still present, so the remaining scope is unchanged.
+  - date: '2026-08-11'
+    status: active
+    who: karolkow
+    note: >
+      Activated for the code-strip half; the prod `ALTER`s stay with the operator.
+      Pre-flight re-verified on prod (chq) — full evidence in
+      `notes/G-prod-preflight-drop-evidence.md`. Four things the body did not say:
+      (1) **`name` is already gone from prod `assets`** (8 columns: identity
+      4-tuple + the 3 dead + `id`), so the "DROP COLUMN name batches here" note
+      carried in `init.sql` / `rows.rs` was stale — struck.
+      (2) **None of the three is in the sorting/primary key**
+      (`asset_type, asset_code, issuer_id, contract_id`), so each DROP is a cheap
+      metadata op with no re-sort.
+      (3) **Two live API readers of `assets.icon_url` existed** — the LP detail and
+      LP list queries (`max(a.icon_url)` feeding `asset_{a,b}_icon_url`). They read
+      a column that is 0/411,654 populated in prod, i.e. every LP leg icon has
+      always been NULL. Re-pointed to `asset_enrichment` (ADR 0050 — the source the
+      assets endpoints already use, 11,977 icons), which both unblocks the DROP and
+      fixes the silently-empty field.
+      (4) **The 40 surviving `total_supply`/`holder_count` rows are pre-0293
+      leftovers in the OLD scale** — `assets` held display units,
+      `balance_aggregates` holds raw (e.g. APFC 6,500,450,000 vs
+      65,004,500,000,000,000). Nothing reads them; not a second source of truth.
+  - date: '2026-08-12'
+    status: completed
+    who: karolkow
+    note: >
+      **DONE — deployed and dropped in prod 2026-08-12.** Code half merged via
+      PR #390 (develop) + #391 (master); `deploy-production-compute` at
+      08:55 UTC; the three `ALTER TABLE assets DROP COLUMN` ran right after.
+      `assets` is now identity-only (5 columns). **One incident, ~9 min ingest
+      stall, no data loss:** the planned order (deploy → drain → ALTER later)
+      was WRONG for the `clickhouse` 0.15 driver — it validates the row struct
+      against `DESCRIBE TABLE` in BOTH directions, so the slimmed `AssetRow`
+      failed client-side (`SchemaMismatch`: table columns without DEFAULT not
+      covered by the struct) until the columns were actually dropped, and warm
+      Lambda containers then kept a cached 8-column DESCRIBE until a
+      config-touch recycled them. Recovery: DROPs + container recycle; reconcile
+      re-drained the S3 backlog, 157/157 ledgers verified, no gap. Full
+      post-mortem under "Issues Encountered". Refresh-monitoring AC confirmed
+      NOT owned by 0331/0339 (manual runbook check only) — spawned to 0476.
+---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
 
