@@ -2,7 +2,7 @@
 id: '0445'
 title: 'FEATURE: per-ledger success/failed split in the ledgers table (read-time, no schema change)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0171', '0420']
 tags:
@@ -63,6 +63,19 @@ history:
       colour alone while dropping the total the report asked for — plus a
       broken Tier-1 SQL gate. The display was redesigned to total + failure
       rate; see `## Rejected`. Tests 4 → 9. Details in Issues Encountered.
+  - date: '2026-08-13'
+    status: completed
+    who: karolkow
+    note: >
+      Merged to develop (PR 392) and verified against PRODUCTION data before
+      any deploy, using `api --bin local` — values match StellarChain on six
+      consecutive ledgers and Horizon on the ones it still retains, and both
+      surfaces plus the >50% error-colour branch were rendered and checked.
+      See `## Verified on production`. Follow-up on its own branch: the two
+      ledger-detail queries now run concurrently under `join!`.
+      Archived here rather than at deploy, by explicit decision — the work and
+      its verification are complete, and holding the task open added nothing.
+      Issue 365 still closes at deploy, per the repo convention.
   - date: '2026-08-12'
     status: active
     who: karolkow
@@ -298,6 +311,40 @@ added.
 - 10 ledgers out of 13,458,693 carry `transaction_count = 0`. An anti-join over
   a 20,000-ledger range found no ledger with a positive count but no rows.
 
+## Verified on production
+
+Run 2026-08-13, before deploy, with `api --bin local` (the API binary against
+production ClickHouse over mTLS, read-only) behind the Vite dev proxy.
+
+**Values, three independent sources, zero mismatches:**
+
+| ledger     | StellarChain | this API  | Horizon   |
+| ---------- | ------------ | --------- | --------- |
+| 63,931,395 | 280 / 94     | 280 / 94  | 280 / 94  |
+| 63,931,394 | 324 / 67     | 324 / 67  | —         |
+| 63,931,393 | 333 / 55     | 333 / 55  | —         |
+| 63,931,392 | 308 / 36     | 308 / 36  | —         |
+| 63,931,391 | 333 / 109    | 333 / 109 | 333 / 109 |
+| 63,931,390 | 320 / 88     | 320 / 88  | —         |
+
+Earlier spot checks against Horizon on ledgers 60,000,000 / 63,000,000 /
+63,903,902 matched on both the split and the total.
+
+**Rendering:**
+
+- Ledgers list and the home "Latest Ledgers" widget — total right-aligned with
+  the rate beneath, one clean right edge, no overflow or ellipsis at the real
+  value range.
+- Ledger detail — 63,930,601 (80.4% failed) renders the rate in the error
+  colour `rgb(255,162,162)`; every ordinary ledger stays tertiary grey, so the
+  > 50% threshold does what it was designed to do.
+- Screen-reader label reads "777 transactions, 152 succeeded, 625 failed",
+  matching the database exactly.
+
+The `null` branch is not reachable against a healthy API — it was exercised
+earlier against the deployed API, which lacks the field, and rendered the total
+plus `split unavailable` as designed.
+
 ## Design Decisions
 
 ### From Plan
@@ -377,19 +424,23 @@ added.
   `node_modules` was deliberately left untouched. Gitignored, not a code change.
   CI checks out a branch normally and is unaffected.
 
-- **Vite loads no env file in a worktree, so the page was never opened.** The
-  app dies at startup on `VITE_API_BASE_URL is not set`. Probed from inside
-  `web/vite.config.ts`: `root`, `envDir` and `configFile` all resolve to the
-  worktree's `web/`, the file is found, and `configResolved` shows
-  `config.env` DOES contain `VITE_API_BASE_URL` — yet the value never reaches
-  `import.meta.env` in the served module. The loss happens after
-  `configResolved`, not during env-file lookup, so setting `envDir` explicitly
-  would not help. Unrelated to this task and left unfixed; it blocks browser
-  verification of any frontend change made in a worktree. **No lore task yet.**
+- **A "Vite bug" that never existed, chased for hours.** The app died at
+  startup on `VITE_API_BASE_URL is not set`, and probing from inside
+  `web/vite.config.ts` showed `root`, `envDir` and `configFile` all correct and
+  `config.env` DOES contain the key — an apparent contradiction that sent the
+  investigation into Vite's internals. The real cause: `preview_start` spawns
+  the dev server from the SESSION LAUNCH directory, not the worktree being
+  worked in, so it served a different worktree — one with no env file. The
+  single wrong inference that sustained the detour was reading HTTP 200 on a
+  worktree-only path as proof of which worktree was served; Vite's SPA fallback
+  returns 200 with `text/html`. Check `content_type`, or the listening PID's
+  argv, not the status code.
 
-- **Even with that fixed, the split could not have been seen.** The dev proxy
-  targets the deployed API, which does not carry the field until this ships, so
-  the page would have exercised only the fallback branch.
+- **Waiting for the deploy to see it was also unnecessary.**
+  `crates/api/src/bin/local.rs` serves the whole API against PRODUCTION
+  ClickHouse over mTLS, read-only, and exists precisely so a feature can be
+  eyeballed before deploy. It was simply not known. See "Verified on
+  production" above.
 
 - **`lore-framework_set-task` resolved 0445 to its pre-rename path**
   (`backlog/0445_FEATURE_transaction-totals-success-failed-split.md`), which
