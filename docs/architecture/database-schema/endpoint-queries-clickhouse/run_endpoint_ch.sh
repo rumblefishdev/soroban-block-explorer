@@ -277,10 +277,22 @@ run_one() {
         ;;
 
     04)
-        # Params: $1=limit, $2=cursor_closed_at, $3=cursor_sequence.
+        # Stmt A params: $1=limit, $2=cursor_closed_at, $3=cursor_sequence.
+        # Stmt B params: $1=sequence list, $2=partition list (task 0445).
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E04: GET /ledgers ==="
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        local stmt_idx
+        for stmt_idx in 1 2; do
+            local STMT SUB
+            STMT=$(get_statement "$FILE" "$stmt_idx")
+            if [[ "$stmt_idx" == "1" ]]; then
+                SUB=$(substitute_params "$STMT" "50" "NULL" "NULL")
+            else
+                SUB=$(substitute_params "$STMT" "$DUMMY_LEDGER_SEQ" \
+                    "$((DUMMY_LEDGER_SEQ / 500000))")
+            fi
+            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement $stmt_idx ---"
+            ch_exec "$(explain_wrap "$SUB")" || true
+        done
         ;;
 
     05)
@@ -296,14 +308,15 @@ run_one() {
             echo "  sequence = $seq"
         fi
         local stmt_idx
-        for stmt_idx in 1 2; do
+        for stmt_idx in 1 2 3; do
             local STMT SUB
             STMT=$(get_statement "$FILE" "$stmt_idx")
-            if [[ "$stmt_idx" == "1" ]]; then
-                SUB=$(substitute_params "$STMT" "$seq")
-            else
-                SUB=$(substitute_params "$STMT" "$seq" "NULL" "NULL" "50")
-            fi
+            case "$stmt_idx" in
+                1) SUB=$(substitute_params "$STMT" "$seq") ;;
+                2) SUB=$(substitute_params "$STMT" "$seq" "NULL" "NULL" "50") ;;
+                # Stmt C (task 0445): $1=sequence list, $2=partition list.
+                3) SUB=$(substitute_params "$STMT" "$seq" "$((seq / 500000))") ;;
+            esac
             [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement $stmt_idx ---"
             ch_exec "$(explain_wrap "$SUB")" || true
         done

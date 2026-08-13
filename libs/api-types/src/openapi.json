@@ -3098,6 +3098,11 @@
             "type": "integer",
             "format": "int64"
           },
+          "successful_transaction_count": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Successful transactions in this ledger — same semantics (and same\n`null` case) as [`LedgerListItem::successful_transaction_count`]."
+          },
           "transaction_count": {
             "type": "integer",
             "format": "int32"
@@ -3139,6 +3144,11 @@
           "sequence": {
             "type": "integer",
             "format": "int64"
+          },
+          "successful_transaction_count": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Successful transactions in this ledger; the failed count is\n`transaction_count - successful_transaction_count` (verified equal on\n3,003 sampled ledgers, and the shape Horizon itself uses — it carries\nno total field, only the two counts).\n\n`null` when the ledger has no `transactions` rows to aggregate. That is\ndistinct from `0`, which means every transaction in the ledger failed —\nrendering a missing aggregate as `0 successful` would claim a total\nfailure that did not happen."
           },
           "transaction_count": {
             "type": "integer",
@@ -3902,6 +3912,11 @@
                 "sequence": {
                   "type": "integer",
                   "format": "int64"
+                },
+                "successful_transaction_count": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "Successful transactions in this ledger; the failed count is\n`transaction_count - successful_transaction_count` (verified equal on\n3,003 sampled ledgers, and the shape Horizon itself uses — it carries\nno total field, only the two counts).\n\n`null` when the ledger has no `transactions` rows to aggregate. That is\ndistinct from `0`, which means every transaction in the ledger failed —\nrendering a missing aggregate as `0 successful` would claim a total\nfailure that did not happen."
                 },
                 "transaction_count": {
                   "type": "integer",

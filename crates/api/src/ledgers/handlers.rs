@@ -245,6 +245,7 @@ pub async fn get_ledger(
         closed_at: header_row.closed_at,
         protocol_version: header_row.protocol_version,
         transaction_count: header_row.transaction_count,
+        successful_transaction_count: header_row.successful_transaction_count,
         base_fee: header_row.base_fee,
         prev_sequence: header_row.prev_sequence,
         next_sequence: header_row.next_sequence,
