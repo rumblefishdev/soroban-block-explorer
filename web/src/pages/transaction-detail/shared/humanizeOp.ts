@@ -6,6 +6,10 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import {
+  isNativeAssetString,
+  NATIVE_ASSET_CODE,
+} from '../../assets/assetType.js';
+import {
   formatOperationType,
   isKnownOperationType,
 } from '../../transactions/operationTypes.js';
@@ -43,7 +47,7 @@ export function assetUnit(
   fallback: string | null
 ): string | null {
   if (typeof value === 'string' && value.length > 0) {
-    if (value === 'native') return 'XLM';
+    if (isNativeAssetString(value)) return NATIVE_ASSET_CODE;
     const code = value.split(':')[0];
     if (code.length > 0) return code;
   }

@@ -12,6 +12,7 @@ import {
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
+import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
 
 interface BalanceShape {
   /** Native XLM — its subline is prose ("Native asset"); non-native sublines
@@ -29,7 +30,7 @@ function shape(balance: AccountBalance): BalanceShape {
     return {
       isNative: true,
       name: 'Stellar Lumens',
-      code: 'XLM',
+      code: NATIVE_ASSET_CODE,
       subline: 'Native asset',
       chipLabel: null,
       href: routes.asset('native'),

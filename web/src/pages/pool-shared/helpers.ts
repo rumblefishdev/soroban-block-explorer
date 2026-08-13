@@ -1,6 +1,7 @@
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { assetColor } from '../assets/assetColor.js';
+import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
 import { routes } from '../../router/routes.js';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -44,7 +45,7 @@ export function legHref(leg: PoolAssetLeg): string | undefined {
  * surrounding `SectionErrorBoundary` instead of leaking into the UI.
  */
 export function assetLegLabel(leg: PoolAssetLeg): string {
-  if (leg.asset_type_name === 'native') return 'XLM';
+  if (leg.asset_type_name === 'native') return NATIVE_ASSET_CODE;
   if (leg.asset_code != null && leg.asset_code !== '') return leg.asset_code;
   throw new Error(
     `assetLegLabel: non-native leg has no asset_code (asset_type_name=${
