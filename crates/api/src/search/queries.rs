@@ -652,8 +652,9 @@ async fn search_assets(
     // Within a tier the tie-break is holder count — 441 assets carry the code
     // `USDC` (distinct issuers) and the signal separates them cleanly (613,691
     // holders for Circle's, 3,098 for the runner-up). It lives in
-    // `balance_aggregates` (task 0331); `assets.holder_count` is a DEAD column
-    // (task 0310) and is NULL for all but 40 rows — do not reach for it.
+    // `balance_aggregates` (task 0331) — `assets` has no holder column at all
+    // any more, task 0310 dropped the dead `holder_count` / `total_supply` /
+    // `icon_url` trio from prod on 2026-08-13.
     // Joined bare: the table is 1:1 on `asset_id` (339,793 rows / 339,793
     // distinct), so the usual `GROUP BY` collapse is pure cost here (measured
     // 93 ms → 71 ms without it). It cannot be page-scoped like the list's join
