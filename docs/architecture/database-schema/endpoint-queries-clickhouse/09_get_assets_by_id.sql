@@ -95,8 +95,12 @@ LEFT JOIN (
     SELECT contract_id, name, symbol, decimals
     FROM soroban_contract_metadata FINAL      -- task 0297 side table; RMT(version) → latest per contract
 ) m ON m.contract_id = sc.contract_id
-LEFT JOIN asset_aggregates agg
-       ON agg.asset_code = a.asset_code AND agg.issuer_id = a.issuer_id
+-- Task 0331: `asset_aggregates` is retired. Supply and holders come from
+-- `balance_aggregates`, the refreshable MV over the unified `balances` table,
+-- keyed by the `assets.id` surrogate rather than by (asset_code, issuer_id) —
+-- so one row covers a classic asset and its SAC facet together.
+LEFT JOIN balance_aggregates agg
+       ON agg.asset_id = a.id
 LEFT JOIN (
     SELECT asset_type, asset_code, issuer_id, contract_id,
            argMax(icon_url, version) AS icon_url,

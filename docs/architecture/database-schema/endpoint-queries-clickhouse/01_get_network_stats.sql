@@ -7,13 +7,17 @@
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.2 + §7
 -- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
 -- Data sources: DB-only.
--- Inputs:       {head} — the chain head (max ledger sequence) the API
---               version-keys its cache on (crate::common::head), inlined as a
---               trusted i64. The latest row is PINNED to it (WHERE sequence =
---               {head}) and the TPS window prunes on sequence > {head} - 200,
---               so latest_ledger_sequence always equals the cache key and the
---               previous inner (SELECT max(sequence) ...) subquery is dropped.
---               {head} = 0 (empty cluster) matches no row -> zero response.
+-- Inputs:
+--   $1  :head  Int64  the chain head (max ledger sequence) the API
+--               version-keys its cache on (crate::common::head). The Rust
+--               query inlines it as a trusted i64 via `format!`; documented
+--               here as a positional parameter so this file is standalone
+--               SQL the Tier-1 gate can parse. The latest row is PINNED to it
+--               (WHERE sequence = $1) and the TPS window prunes on
+--               sequence > $1 - 200, so latest_ledger_sequence always equals
+--               the cache key and the previous inner
+--               (SELECT max(sequence) ...) subquery is dropped.
+--               $1 = 0 (empty cluster) matches no row -> zero response.
 -- Indexes:      ledgers PK on (sequence); system.tables.total_rows for the
 --               accounts / soroban_contracts estimates.
 -- CH Engine:    ledgers — MergeTree (no FINAL needed).
@@ -56,7 +60,7 @@ SELECT
             )
         )
         FROM ledgers
-        WHERE sequence > {head} - 200                  -- prune to recent ~200 ledgers
+        WHERE sequence > $1 - 200                  -- prune to recent ~200 ledgers
           AND closed_at >= now64() - INTERVAL 60 SECOND
     )                                                                            AS tps_60s,
     (SELECT total_rows FROM system.tables WHERE database = currentDatabase() AND name = 'accounts')          AS total_accounts,
@@ -64,5 +68,5 @@ SELECT
 FROM (
     SELECT sequence, closed_at
     FROM ledgers
-    WHERE sequence = {head}   -- pinned to the cache-key head (PK point read)
+    WHERE sequence = $1   -- pinned to the cache-key head (PK point read)
 ) AS latest;

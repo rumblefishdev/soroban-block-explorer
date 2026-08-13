@@ -230,8 +230,16 @@ run_one() {
     fi
 
     case "$id" in
-    01) [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E01: GET /network/stats ==="
-        ch_exec "$(explain_wrap "$(<"$FILE")")" ;;
+    01) # Params: $1=head (chain head; the Rust query inlines it via format!).
+        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E01: GET /network/stats ==="
+        local head
+        if [[ "$SYNTAX_ONLY" == "1" ]]; then
+            head="$DUMMY_LEDGER_SEQ"
+        else
+            head=$(ch_oneshot "SELECT max(sequence) FROM ledgers")
+            require_value "$head" "ledgers" || return 1
+        fi
+        ch_exec "$(explain_wrap "$(substitute_params "$(<"$FILE")" "$head")")" ;;
 
     02)
         # Statement A — no filter. PR #175 amendment: $7 = latest_partition
