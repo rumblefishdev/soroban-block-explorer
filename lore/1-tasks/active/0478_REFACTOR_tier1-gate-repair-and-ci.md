@@ -108,9 +108,37 @@ this set rots again after CI is in place, that is the next step — not before.
       (`:q`, `:q_hex`, `:ledger`, `:partition`, …), no split markers, and a
       runner arm passing ten positional params the file never uses. The whole
       file predates the `$N` + split convention.
-- [ ] CI job
+- [ ] CI job for the gate — blocked on the three files above; wiring it while
+      they fail would paint CI red on day one and get it switched off
+- [x] **CI job for the ClickHouse-backed TESTS** — separate from the gate, same
+      container. See below.
 
 Gate: **29 of 38** parsing, up from 28 (a net +1 while 21 regressed under us).
+
+## The tests were skipping in CI, and now they do not
+
+Eleven tests across six API modules are gated on `CH_URL`. No workflow set it
+and no job ran a ClickHouse, so all eleven returned early and counted as green —
+a suite that quietly shrank. Two changes:
+
+1. `test_client_from_env` now **hard-fails when `CH_URL` is missing under
+   `CI`**. Locally the skip stays, because locally it is honest.
+2. The `rust` job starts the ClickHouse from `docker-compose.yml` — the same
+   image, config overrides and `init.sql` developers already use, reused rather
+   than a second `services:` definition that would drift — and exports
+   `CH_URL` / `CH_USER` / `CH_PASSWORD` / `CH_DATABASE`.
+
+**Three of the eleven need data, not just a schema.** The LP asset-code smokes
+assert on real `USDC` and native-XLM pools and fail with "matched no pool"
+against the empty instance CI starts. They now additionally require
+`CH_FIXTURES=1`, an explicit opt-in — deliberately NOT an automatic "no rows so
+pass", which is the silent skip this section exists to remove. Seeding fixtures
+and flipping that variable is the next step; the eight that only need a schema
+run from now on.
+
+Verified locally with the exact CI commands: `docker compose up -d --wait
+clickhouse`, `docker compose run --rm db-clickhouse-init`, then the suite with
+`CH_URL` set — 235 lib tests and 262 with `swagger-ui`, zero failures.
 
 The remaining three are one shape of work, not three: 09 and 22 need splitting
 into statements with positional parameters and per-statement runner values; 21
