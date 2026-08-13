@@ -27,8 +27,9 @@ function SupplyValue({
         variant="bodySmBold"
         sx={(theme) => ({
           color: theme.palette.text.primary,
-          // A long supply is one unbroken token — let it wrap instead of
-          // overflowing into the adjacent "Holders" cell (F4).
+          // A long supply is one unbroken token — let it wrap rather than
+          // overflow the card (F4). Since 0472 the row is full-width, so
+          // this only fires on viewports narrower than the longest supply.
           overflowWrap: 'anywhere',
         })}
       >

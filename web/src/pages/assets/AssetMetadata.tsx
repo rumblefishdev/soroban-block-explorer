@@ -14,12 +14,11 @@ import { assetDisplayCode } from './assetType.js';
  * shown, and an empty section renders a short placeholder.
  */
 export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
-  // Same display rule as the title, the list cell and the header avatar
-  // (task 0472) — this was the last site still reading the raw asset_code,
-  // so native rendered no icon row at all and Soroban tokens showed "?"
-  // beside a perfectly good symbol.
-  const displayCode = assetDisplayCode(asset);
-  const hasIcon = Boolean(asset.icon_url || displayCode);
+  // This card is titled "From TOML" — the Icon row renders only when a TOML
+  // icon actually exists (review, 2026-08-13: a generated letter avatar under
+  // that heading claimed a source it did not come from). The letter avatar
+  // still shows in the page header above, via the shared display rule.
+  const hasIcon = Boolean(asset.icon_url);
   const hasName = Boolean(asset.name);
 
   const iconNameRow: SummaryCell[] = [];
@@ -28,7 +27,11 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
       label: 'Icon',
       value: (
         <Box sx={{ py: 0.5 }}>
-          <AssetIcon code={displayCode} iconUrl={asset.icon_url} size={32} />
+          <AssetIcon
+            code={assetDisplayCode(asset)}
+            iconUrl={asset.icon_url}
+            size={32}
+          />
         </Box>
       ),
     });

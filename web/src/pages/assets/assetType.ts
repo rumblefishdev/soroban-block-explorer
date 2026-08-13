@@ -47,7 +47,9 @@ export const NATIVE_ASSET_CODE = 'XLM';
  * row shape {@link assetDisplayCode} takes — hence a separate adapter over the
  * same constant rather than one function for both.
  */
-export function isNativeAssetString(value: unknown): boolean {
+export function isNativeAssetString(
+  value: string | null | undefined
+): value is 'native' {
   return value === 'native';
 }
 
