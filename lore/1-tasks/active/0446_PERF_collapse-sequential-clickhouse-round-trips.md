@@ -3,7 +3,7 @@ id: '0446'
 title: 'PERF: collapse sequential ClickHouse round trips across the API query layer'
 type: PERF
 status: active
-related_adr: []
+related_adr: ['0054']
 related_tasks: ['0338', '0359', '0402']
 tags:
   [phase-future, effort-medium, priority-medium, performance, api, clickhouse]
