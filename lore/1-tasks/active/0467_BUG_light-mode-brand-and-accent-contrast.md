@@ -61,6 +61,15 @@ accumulated in the most visible surfaces — nav, footer, hero.
 
 ## Findings
 
+**Chip palette — `Fungible` fails AA** (found in the 0472 review, 2026-08-13,
+measured in the live DOM): emerald chip renders `#009966` on `#D0FAE5` =
+**3.22:1** at 14px/500, against the 4.5:1 minimum. Task 0472 promoted that
+chip to the contract page header, where it is the only link, so the failure
+is now load-bearing. The sibling colours pass — brown 7.90:1, accent ~13:1,
+neutral 7.06:1 — so this is one token, not the whole palette. Same override
+block as the rest of this task (`libs/ui/src/theme/overrides.ts`, the
+`props: { color: 'emerald' }` variant).
+
 ### F1 — Logo assets are theme-blind (the two screenshots)
 
 [`AppShell.tsx:71`](../../../web/src/router/AppShell.tsx) picks the image by
