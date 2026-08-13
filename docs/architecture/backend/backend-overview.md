@@ -561,6 +561,16 @@ consumed by the canonical SQL: `hash_bytes` (32-byte BYTEA — drives `transacti
 prefix branches). The raw `q` is also fed to the trigram / FTS branches (`assets`,
 `nfts`, `soroban_contracts.search_vector`).
 
+**Pools match on two shapes** (task 0470). A hash-shaped `q` is a point seek on
+`pool_id`, the full ORDER BY key. Anything else is treated as an asset code and matched
+with the SAME rule the pools list uses — case-insensitive substring against either leg,
+`A/B` pair syntax where each needle claims its own leg in either order, and native XLM
+resolved by `asset_type = 0` rather than by its (empty) stored code. The predicate is
+defined once in `crates/api/src/common/pool_asset_codes.rs` and called by both
+`/v1/search` and `/v1/liquidity-pools`, so the two surfaces cannot answer the same
+question differently. Before this, a non-hash query matched no pool at all: `KALE`
+returned 0 in search while the pools page returned 58.
+
 Behaviour:
 
 - when `q` is a fully-typed entity id (64-hex hash, full G-StrKey, full C-StrKey) **and**

@@ -14,6 +14,7 @@ use crate::common::extractors::Pagination;
 use crate::common::filters;
 use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
+use crate::common::pool_asset_codes::{normalize_asset_codes, pool_id_from_text};
 use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
@@ -138,42 +139,11 @@ pub async fn list_participants(
 // List / Detail / Transactions / Chart (task 0052)
 // ---------------------------------------------------------------------------
 
-/// Normalize `filter[asset_code]` into the needles the WHERE clause binds:
-/// trim, uppercase, then split a pair query on `/`. Empty input (e.g.
-/// `?filter[asset_code]=`) yields no needles — an empty one would otherwise
-/// match every row (`positionCaseInsensitive(…, '') = 1`).
-///
-/// `USDC/XLM` becomes two needles, and the query gives each one its own leg in
-/// either order — so the typed order does not matter, and one asset cannot
-/// satisfy both halves (`USDC/USDC` means both legs, not "USDC anywhere, twice
-/// over"). The split is
-/// `splitn(2)` on purpose: this is a *pair* filter, and an unbounded split would
-/// let a caller turn one long free-text field into thousands of needles, each
-/// costing a pass over the table. A third code therefore lands inside needle two
-/// (`XLM/BTC`), which matches nothing — correct, since a pool has two legs, and
-/// honest, since nothing was silently discarded.
-///
-/// The DB side matches each needle as a case-insensitive **substring** of either
-/// leg (0440), so the uppercasing here is belt-and-braces rather than load-bearing;
-/// the trim and the empty-needle drop are what the query depends on.
-///
-/// Stellar protocol asset codes are case-sensitive (1–12 ASCII chars,
-/// any case), but the canonical convention is uppercase (USDC, XLM). The
-/// trim+uppercase normalization matches caller intent for the list's free-text
-/// field; consumers who need exact case-sensitive issuer-disambiguated matching
-/// should use the per-leg `filter[asset_a_code]` / `filter[asset_a_issuer]` mode
-/// instead.
-fn normalize_asset_codes(raw: Option<String>) -> Vec<String> {
-    raw.map(|s| s.trim().to_uppercase())
-        .into_iter()
-        .flat_map(|s| {
-            s.splitn(2, '/')
-                .map(|part| part.trim().to_string())
-                .collect::<Vec<_>>()
-        })
-        .filter(|s| !s.is_empty())
-        .collect()
-}
+// `normalize_asset_codes` used to live here. It moved to
+// `common::pool_asset_codes` when global search adopted the same matching rule
+// (task 0470) — the needle split and the WHERE clause it feeds have to agree,
+// so they now sit in one module together. The `splitn(2)` bound, the
+// empty-needle drop and the pair semantics are documented there.
 
 fn map_pool_item(row: PoolRow) -> PoolItem {
     PoolItem {
@@ -306,6 +276,19 @@ pub async fn list_pools(
 
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
+    // One free-text box, two things a reader can paste into it: an asset code
+    // (or `A/B` pair) and a pool identifier. Try the identifier first — it is
+    // the unambiguous shape, and treating it as a code found nothing, so the
+    // page claimed the pool did not exist (task 0470).
+    let pool_id_hex = params
+        .filter_asset_code
+        .as_deref()
+        .and_then(pool_id_from_text);
+    let asset_codes = if pool_id_hex.is_some() {
+        Vec::new()
+    } else {
+        normalize_asset_codes(params.filter_asset_code)
+    };
     let resolved = ResolvedPoolListParams {
         limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
@@ -313,7 +296,8 @@ pub async fn list_pools(
         asset_a_issuer: params.filter_asset_a_issuer,
         asset_b_code: params.filter_asset_b_code,
         asset_b_issuer: params.filter_asset_b_issuer,
-        asset_codes: normalize_asset_codes(params.filter_asset_code),
+        asset_codes,
+        pool_id_hex,
     };
 
     // The CH list keys on `last_updated_ledger` (see

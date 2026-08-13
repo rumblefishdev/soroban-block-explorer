@@ -63,6 +63,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::millis_to_utc;
+use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
 use crate::common::strkey::pool_id_hex_to_strkey;
 
 use super::classifier::Classified;
@@ -181,7 +182,7 @@ pub async fn fetch_search(
         search_assets(client, q, classified, include, per_group_limit),
         search_accounts(client, classified, include, per_group_limit),
         search_nfts(client, q, classified, include, per_group_limit),
-        search_pools(client, classified, include),
+        search_pools(client, q, classified, include, per_group_limit),
     )?;
 
     // Canonical union order (irrelevant to grouping — the handler buckets by
@@ -305,37 +306,115 @@ struct PoolRow {
     label: String,
 }
 
+/// The pool's display name, identical in both arms — a hit found by id and the
+/// same pool found by code must not be labelled differently.
+///
+/// Native is detected here by the EMPTY stored code, while the asset-code
+/// predicate detects it by `asset_type = 0` (`common::pool_asset_codes`). The
+/// two signals agree on every row today — measured 2026-08-10: 0 of 73 916
+/// rows have `type = 0` with a non-empty code or the reverse — so this is a
+/// latent inconsistency, not a live one. Left as-is rather than "tidied",
+/// because changing the label expression changes strings already on the wire.
+const POOL_LABEL_SQL: &str = "concat( \
+     if(asset_a_code = '', 'XLM', toString(asset_a_code)), ' / ', \
+     if(asset_b_code = '', 'XLM', toString(asset_b_code)) \
+ ) AS label";
+
+/// Two shapes, one entity.
+///
+/// A hash-shaped query is a point seek on the primary key and stays exactly as
+/// it was. Anything else is treated as an asset code and matched with the SAME
+/// rule the pools list uses (`common::pool_asset_codes`, task 0470) — before
+/// that, a non-hash query matched no pool at all, so `KALE` reported zero here
+/// while the pools page listed 58, which read as the 0440 fix not working.
+async fn search_pools(
+    client: &clickhouse::Client,
+    q: &str,
+    classified: &Classified,
+    include: &IncludeFlags,
+    per_group_limit: i32,
+) -> Result<Vec<(String, SearchHit)>, clickhouse::error::Error> {
+    if !include.pool {
+        return Ok(Vec::new());
+    }
+    match classified.hash_bytes.as_deref() {
+        Some(bytes) => search_pool_by_id(client, bytes).await,
+        None => search_pools_by_asset_code(client, q, per_group_limit).await,
+    }
+}
+
+/// Pools whose displayed asset codes match the query. Full scan of
+/// `liquidity_pools` — 52 472 pools / 73 880 rows, measured at 47 ms and
+/// 3.3 MiB on production, on the arm that previously did nothing for this
+/// input.
+///
+/// `argMax(… , last_updated_ledger)` per `pool_id` collapses re-ingest
+/// versions on read: the table carries multiple rows per pool (measured: 73 880
+/// rows for 52 472 pools) and matching without the grouping would return the
+/// same pool several times.
+///
+/// The pools LIST dedups the same table with `FINAL` instead. That is right
+/// there — it reads one page through the primary key — and wrong here, where
+/// the predicate cannot be pushed down and `FINAL` would merge the whole table
+/// to answer a search box (task 0420 measured a 19x read amplification from
+/// exactly that shape). Same goal, different access pattern, deliberately
+/// different mechanism.
+async fn search_pools_by_asset_code(
+    client: &clickhouse::Client,
+    q: &str,
+    per_group_limit: i32,
+) -> Result<Vec<(String, SearchHit)>, clickhouse::error::Error> {
+    let codes = normalize_asset_codes(Some(q.to_string()));
+    let Some((clause, binds)) = asset_codes_predicate("", &codes) else {
+        return Ok(Vec::new());
+    };
+
+    let sql = format!(
+        "SELECT pool_hex, {POOL_LABEL_SQL} \
+         FROM ( \
+            SELECT \
+                lower(hex(pool_id)) AS pool_hex, \
+                argMax(asset_a_type, last_updated_ledger) AS asset_a_type, \
+                argMax(asset_a_code, last_updated_ledger) AS asset_a_code, \
+                argMax(asset_b_type, last_updated_ledger) AS asset_b_type, \
+                argMax(asset_b_code, last_updated_ledger) AS asset_b_code, \
+                max(last_updated_ledger) AS newest \
+            FROM liquidity_pools \
+            GROUP BY pool_id \
+         ) \
+         WHERE {clause} \
+         ORDER BY newest DESC \
+         LIMIT ?"
+    );
+
+    let mut query = client.query(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+    let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;
+
+    Ok(rows.into_iter().map(|p| pool_hit(&p)).collect())
+}
+
 /// Fires only for a hash-shaped query. `pool_id` is the full ORDER BY key, so
 /// `pool_id = unhex(?)` is a granule-pruned point seek. Codes are version-stable
 /// (composition is fixed; only reserves move `last_updated_ledger`), so
 /// `ORDER BY last_updated_ledger DESC LIMIT 1` collapses re-ingest versions to
 /// one row without a FINAL merge.
-async fn search_pools(
+async fn search_pool_by_id(
     client: &clickhouse::Client,
-    classified: &Classified,
-    include: &IncludeFlags,
+    bytes: &[u8],
 ) -> Result<Vec<(String, SearchHit)>, clickhouse::error::Error> {
-    if !include.pool {
-        return Ok(Vec::new());
-    }
-    let Some(bytes) = classified.hash_bytes.as_deref() else {
-        return Ok(Vec::new());
-    };
     let hash_hex = hex::encode(bytes);
 
     let row = client
-        .query(
-            "SELECT \
-                lower(hex(pool_id)) AS pool_hex, \
-                concat( \
-                    if(asset_a_code = '', 'XLM', toString(asset_a_code)), ' / ', \
-                    if(asset_b_code = '', 'XLM', toString(asset_b_code)) \
-                ) AS label \
+        .query(&format!(
+            "SELECT lower(hex(pool_id)) AS pool_hex, {POOL_LABEL_SQL} \
              FROM liquidity_pools \
              WHERE pool_id = unhex(?) \
              ORDER BY last_updated_ledger DESC \
-             LIMIT 1",
-        )
+             LIMIT 1"
+        ))
         .bind(&hash_hex)
         .fetch_optional::<PoolRow>()
         .await?;
@@ -343,7 +422,13 @@ async fn search_pools(
         return Ok(Vec::new());
     };
 
-    Ok(vec![(
+    Ok(vec![pool_hit(&p)])
+}
+
+/// Shared by both pool arms so an id hit and a code hit cannot describe the
+/// same pool differently.
+fn pool_hit(p: &PoolRow) -> (String, SearchHit) {
+    (
         "pool".to_string(),
         SearchHit {
             entity_type: EntityType::Pool,
@@ -351,14 +436,14 @@ async fn search_pools(
             // 0264); the column projects raw hex — convert at the boundary,
             // same as the PG row-mapper.
             identifier: pool_id_hex_to_strkey(&p.pool_hex),
-            label: p.label,
+            label: p.label.clone(),
             route_token: None,
             successful: None,
             last_activity_at: None,
             contract_id: None,
             token_id: None,
         },
-    )])
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -944,5 +1029,57 @@ mod decode_smoke {
         )
         .await
         .expect("transaction/pool bucket rows must decode");
+    }
+
+    /// Task 0470: a non-hash query used to match no pool at all, so an asset
+    /// code returned zero here while `/v1/liquidity-pools` returned dozens —
+    /// which read as the 0440 fix not working.
+    ///
+    /// This does NOT re-test the matching rule: both surfaces call
+    /// `common::pool_asset_codes::asset_codes_predicate`, so they cannot
+    /// disagree, and that module's unit tests pin the pair semantics and the
+    /// native arm. What is only testable against a real ClickHouse is the rest
+    /// of this arm — that the grouped subquery parses, that `PoolRow` decodes
+    /// it, and that a plain asset code reaches pools at all.
+    #[tokio::test]
+    async fn search_matches_pools_by_asset_code() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping search pool asset-code smoke");
+            return;
+        };
+        let all = IncludeFlags::all();
+
+        // `XLM` is the needle that separates a correct predicate from a
+        // plausible one: native legs carry an empty stored code, so a column
+        // match without the `if(type = 0, …)` arm returns credit assets minted
+        // under the code `XLM` and misses every real native pool.
+        for needle in ["XLM", "USD"] {
+            let hits = fetch_search(&ch, needle, &classifier::classify(needle), &all, 20)
+                .await
+                .expect("search decodes");
+            let pools: Vec<&SearchHit> = hits
+                .iter()
+                .filter(|(bucket, _)| bucket == "pool")
+                .map(|(_, hit)| hit)
+                .collect();
+
+            assert!(
+                !pools.is_empty(),
+                "search returned no pool for {needle:?} — the asset-code arm regressed to id-only"
+            );
+            for hit in pools {
+                assert!(
+                    hit.label.to_uppercase().contains(needle),
+                    "pool {} labelled {:?} matches neither leg of {needle:?} — filter not applied",
+                    hit.identifier,
+                    hit.label,
+                );
+                assert!(
+                    hit.identifier.starts_with('L'),
+                    "pool identifier {:?} is not an L-strkey",
+                    hit.identifier,
+                );
+            }
+        }
     }
 }
