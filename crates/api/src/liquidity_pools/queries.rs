@@ -1307,26 +1307,32 @@ pub async fn fetch_pool_transactions(
     // operation_types via the shared non-correlated aggregate (ops-only, PK
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
-    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // Source StrKeys resolve by surrogate id (bloom seek) instead of a
     // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
     // preserved via filter_map (a tx always has its source account).
-    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
-    // Amounts for the same bounded key set (task 0279). A tx with no rows keeps
-    // `None` on both legs — the honest "not known" the pre-backfill history has.
+    // Amounts come from the same bounded key set (task 0279). A tx with no rows
+    // keeps `None` on both legs — the honest "not known" the pre-backfill
+    // history has.
     //
-    // DEGRADES, never 500s: the amounts enrich a row that is already complete,
+    // All three read off `page` / `keys` alone and none consumes another's
+    // output, so they go out as one wave rather than three (task 0446).
+    let (aggregates, accounts, amounts) = tokio::join!(
+        fetch_tx_list_aggregates(client, &keys),
+        resolve_accounts(client, page.iter().map(|r| r.source_id).collect()),
+        fetch_pool_tx_amounts(client, pool_id_hex, &keys),
+    );
+    let aggregates = aggregates?;
+    let accounts = accounts?;
+    // Amounts DEGRADE, never 500: they enrich a row that is already complete,
     // and the contract already says a missing one is "not known". The failure
     // this actually guards is deploy order — an API that ships before
     // `lp_operation_amounts` is created on prod would otherwise turn every pool
     // page into an error (the `accounts_recent` lesson).
-    let amounts = match fetch_pool_tx_amounts(client, pool_id_hex, &keys).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!("pool amounts unavailable for {pool_id_hex}, rendering blank: {e}");
-            HashMap::new()
-        }
-    };
+    let amounts = amounts.unwrap_or_else(|e| {
+        tracing::warn!("pool amounts unavailable for {pool_id_hex}, rendering blank: {e}");
+        HashMap::new()
+    });
+
     Ok(page
         .into_iter()
         .filter_map(|r| {

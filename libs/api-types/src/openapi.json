@@ -993,7 +993,7 @@
       "get": {
         "tags": ["ledgers"],
         "summary": "Get ledger detail by sequence — header + prev/next navigation +\nembedded paginated transactions.",
-        "description": "Two phases, both DB-only:\n\n1. **DB header.** Resolve `:sequence` against `ledgers` + LATERAL\n   prev/next computed via `sequence` comparisons on the `ledgers`\n   PK (index-only scan, no heap fetch). 404 on miss.\n2. **DB transactions.** Keyset-paginated read of the `transactions`\n   partition with full equality partition prune\n   (`created_at = $closed_at`).\n\nThe detail endpoint reuses the standard `?limit=` / `?cursor=` query\nparameters to drive embedded transactions pagination. Detail itself\nis a single resource, so no naming collision arises — the params\npage the embedded list directly.",
+        "description": "Two DB-only reads, issued concurrently — both key off the path\n`:sequence`, so neither waits on the other (task 0446):\n\n- **Header.** Resolve `:sequence` against `ledgers` + prev/next\n  computed via `sequence` comparisons on the `ledgers` PK\n  (index-only scan, no heap fetch). Decides the 404.\n- **Transactions.** Keyset-paginated read of `transactions`, pruned\n  to the one partition holding that sequence\n  (`intDiv(ledger_sequence, 500000)`).\n\nThe detail endpoint reuses the standard `?limit=` / `?cursor=` query\nparameters to drive embedded transactions pagination. Detail itself\nis a single resource, so no naming collision arises — the params\npage the embedded list directly.",
         "operationId": "get_ledger",
         "parameters": [
           {

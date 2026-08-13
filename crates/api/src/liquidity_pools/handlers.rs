@@ -56,13 +56,32 @@ pub async fn list_participants(
         Err(resp) => return resp,
     };
 
+    // Fetch limit + 1 so `finalize_page` can detect a next page without
+    // a separate count query.
+    let fetch_limit = pagination.fetch_limit();
+    let has_predecessor = pagination.has_predecessor();
+    let direction = pagination.direction;
+
     // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
-    let exists = queries::pool_exists(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    match exists {
+    //
+    // Both reads derive everything from the path — the page never consumes the
+    // existence answer — so they go out together (task 0446). `exists` is still
+    // what decides the 404 and is still checked first, so responses are
+    // unchanged; the cost is one wasted page read when the pool is missing.
+    let ch = state.ch();
+    let (exists, fetched) = tokio::join!(
+        queries::pool_exists(&ch, &pool_id_hex),
+        queries::fetch_participants(
+            &ch,
+            &pool_id_hex,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        ),
+    );
+    match exists.map_err(|e| e.to_string()) {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -71,21 +90,7 @@ pub async fn list_participants(
         }
     }
 
-    // Fetch limit + 1 so `finalize_page` can detect a next page without
-    // a separate count query.
-    let fetch_limit = pagination.fetch_limit();
-    let has_predecessor = pagination.has_predecessor();
-    let direction = pagination.direction;
-    let fetched = queries::fetch_participants(
-        &state.ch(),
-        &pool_id_hex,
-        pagination.cursor.as_ref(),
-        fetch_limit,
-        direction,
-    )
-    .await
-    .map_err(|e| e.to_string());
-    let mut rows = match fetched {
+    let mut rows = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_participants({pool_id}): {e}");
@@ -482,6 +487,11 @@ pub async fn list_pool_transactions(
     // check (task 0279): the rows' `asset_id` maps onto them, so the response
     // can carry `amount_a` / `amount_b` aligned with the legs the page already
     // renders — one seek instead of a separate `pool_exists`.
+    //
+    // Stays SERIAL: the page read now CONSUMES `asset_ids`, so there is nothing
+    // to overlap. This supersedes task 0446's pairing of the old `pool_exists`
+    // gate with the page — a gate that also carries data is strictly better
+    // than two queries run concurrently.
     let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
@@ -674,6 +684,17 @@ pub async fn get_pool_chart(
 
     // Doubles as the 404 existence gate (one row on `liquidity_pools`) and
     // supplies the leg identities + fee_bps the USD computation joins on.
+    //
+    // Stays SERIAL, unlike the gates in `list_participants` /
+    // `list_pool_transactions` (task 0446), and for two independent reasons.
+    // The chart read now CONSUMES `ctx`, so it is genuinely dependent — nothing
+    // to overlap. It also could not have been paired even before that: its
+    // `JOIN (SELECT … FROM ledgers WHERE closed_at …)` build side is
+    // materialised even when the left side is empty, and `MAX_CHART_BUCKETS`
+    // admits a ~19-year window, so speculatively running it cost a measured
+    // 43.7M rows / 4.66 s for a pool that does not exist, against 16.5k rows /
+    // 3.6 ms for the gate. Pool ids are user-supplied strkeys. If a future
+    // change breaks the data dependency, that measurement still stands.
     let ctx = match queries::fetch_pool_price_context(&state.ch(), &pool_id_hex).await {
         Ok(Some(ctx)) => ctx,
         Ok(None) => return errors::not_found("liquidity pool not found"),
