@@ -36,13 +36,21 @@ deserve writing down once.
    crypto on a 256 MB Lambda) — more than the round trip the concurrency
    saves. Today: widest 6, pool 8. Re-count when adding fan-out.
 
-4. **Existence gates pair with the read they guard only after measuring the
-   miss.** The gate still decides the 404 first, so responses never change;
-   the cost is the guarded read wasted on a missing id. Measure that cost for
-   an id that does NOT exist: bounded (NFT transfers 24.5k rows / 6.7 ms) →
-   pair; unbounded (pool chart 43.7M rows / 4.66 s) → stay serial. Better than
-   either: a gate that also RETURNS data the page needs (0279's
-   `fetch_pool_asset_ids`) — one query doing both jobs.
+4. **Existence gates pair with the read they guard only when the miss is
+   bounded BY CONSTRUCTION, confirmed by one measurement.** The gate still
+   decides the 404 first, so responses never change; the cost is the guarded
+   read wasted on a missing id. The criterion is structural, not the
+   measurement alone — a number measured once goes stale as data grows:
+
+   - PK-prefix seek + `LIMIT` → miss cost is bounded by the query's own shape
+     regardless of table growth → pair (NFT transfers: 24.5k rows / 6.7 ms).
+   - Any scan whose extent a _caller-supplied window_ controls (the chart's
+     `ledgers` build side, up to a ~19-year window) → unbounded → stay serial
+     (measured 43.7M rows / 4.66 s for a missing pool).
+
+   Better than either: a gate that also RETURNS data the page needs (0279's
+   `fetch_pool_asset_ids`) — one query doing both jobs. Prefer it whenever the
+   schema allows.
 
 ## Consequences
 
