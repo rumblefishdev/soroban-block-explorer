@@ -265,7 +265,21 @@ pub async fn resolve_contracts(
 /// live client.
 #[cfg(test)]
 pub(crate) fn test_client_from_env() -> Option<clickhouse::Client> {
-    let url = std::env::var("CH_URL").ok()?;
+    let Ok(url) = std::env::var("CH_URL") else {
+        // Locally, no ClickHouse means skip — that is the point of the gate.
+        // In CI the same skip is a lie: eleven tests across six modules report
+        // green having touched nothing, so the suite silently shrinks and
+        // nobody sees it. The workflow starts the compose service and exports
+        // `CH_URL`; if that ever stops happening, fail here rather than
+        // pretend. `CI` is set by GitHub Actions.
+        assert!(
+            std::env::var("CI").is_err(),
+            "CH_URL is unset under CI — the ClickHouse-backed tests would skip \
+             and still report success. Start the compose ClickHouse and export \
+             CH_URL, or drop this guard deliberately."
+        );
+        return None;
+    };
     let mut c = clickhouse::Client::default().with_url(url);
     if let Ok(u) = std::env::var("CH_USER") {
         c = c.with_user(u);

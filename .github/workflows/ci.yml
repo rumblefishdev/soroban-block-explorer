@@ -127,8 +127,31 @@ jobs:
       # failing test actually prints where it panicked.
       CARGO_PROFILE_DEV_DEBUG: '1'
       RUST_BACKTRACE: '1'
+      # Eleven tests across six API modules are gated on `CH_URL` and skip
+      # without it — silently reporting green while touching nothing. The step
+      # below starts the same ClickHouse the compose file gives developers, so
+      # they actually run. `test_client_from_env` hard-fails if this ever stops
+      # being set under CI.
+      CH_URL: http://127.0.0.1:8123
+      CH_USER: default
+      CH_PASSWORD: clickhouse
+      CH_DATABASE: default
     steps:
       - uses: actions/checkout@v4
+
+      # Reuses `docker-compose.yml` rather than declaring a `services:` block,
+      # so CI and local development apply the same image, the same XML config
+      # overrides and the same `init.sql` — one definition, not two that drift.
+      # `--wait` blocks on the healthcheck; the init sidecar exits once the
+      # schema is applied, so it runs via `run --rm` instead of `up`.
+      - name: Start ClickHouse and apply the canonical schema
+        run: |
+          docker compose up -d --wait clickhouse
+          docker compose run --rm db-clickhouse-init
+          curl -sS --fail-with-body \
+            --user "$CH_USER:$CH_PASSWORD" \
+            --data-binary "SELECT count() FROM system.tables WHERE database = 'default'" \
+            "$CH_URL"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
