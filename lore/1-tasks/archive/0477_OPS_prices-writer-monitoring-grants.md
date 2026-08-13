@@ -2,7 +2,7 @@
 id: '0477'
 title: 'prices_writer monitoring grants: SELECT on system.mutations + system.view_refreshes'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0314', '0199']
 tags: ['clickhouse', 'prices-api', 'rbac', 'effort-small']
@@ -26,6 +26,22 @@ history:
       and SHOW GRANTS FOR prices_writer now lists both new grants.
       Remaining: prices-owner verification under their credentials +
       merge of PR #399 (byte-identical mirror).
+  - date: '2026-08-13'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Archived. PR #399 (byte-identical repo mirror) merged and released
+      to master in #402; the clickhouse-rbac.md row carries both grants
+      ("0314 + 0477"). Grants confirmed live on prod via SHOW GRANTS
+      (08-12). The one open AC — verification under prices credentials —
+      moves to the prices side, where a live `SELECT count() FROM
+      system.mutations` closes the loop; tracked there, not here.
+      Archived by explicit decision (0445 precedent): the explorer-side
+      work is complete and holding the task open added nothing. The 0314
+      follow-up stands unowned: ansible's users.d sync still does not
+      notify a container recreate, so a grants change applied the normal
+      way (deploy only) silently no-ops — this task dodged it with the
+      inode-preserving in-place edit.
 ---
 
 # prices_writer monitoring grants: system.mutations + system.view_refreshes
@@ -75,12 +91,15 @@ system.mutations` under their credentials.
 
 ## Acceptance Criteria
 
-- [ ] Both grants live on prod, verified by the prices owner from their side.
-- [ ] Repo (`services.xml`) matches the box file byte-for-byte after merge.
-- [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
+- [ ] Both grants live on prod, verified by the prices owner from their side —
+      live confirmed via `SHOW GRANTS` (08-12); the owner-side check moves to
+      the prices repo (see 2026-08-13 history entry)
+- [x] Repo (`services.xml`) matches the box file byte-for-byte after merge —
+      PR #399 merged, released to master in #402
+- [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
       (prices_writer row); other architecture docs N/A (no shape change
       beyond the grant list).
-- [ ] **API types regenerated** — N/A (no `crates/api` change).
+- [x] **API types regenerated** — N/A (no `crates/api` change).
 
 ## Future Work
 
