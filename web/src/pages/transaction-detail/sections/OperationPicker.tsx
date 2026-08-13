@@ -45,17 +45,10 @@ export function OperationPicker({
           scrollbarGutter: 'stable',
         }}
       >
-        {entries.length === 0 ? (
-          <Box sx={{ p: 2 }}>
-            <Typography
-              variant="bodySmRegular"
-              sx={(theme) => ({ color: theme.palette.text.tertiary })}
-            >
-              No operations in this transaction.
-            </Typography>
-          </Box>
-        ) : (
-          entries.map((entry, index) => {
+        {/* No empty state: `OperationsSection` renders `UnavailableSection`
+            at zero entries and only mounts the picker above one, so an empty
+            list cannot reach here (task 0482). */}
+        {entries.map((entry, index) => {
             const op = entry.row;
             const selected = index === selectedIndex;
             // Mini-headline (0460 #2): the same sentence the card shows, so
@@ -146,8 +139,7 @@ export function OperationPicker({
                 />
               </Box>
             );
-          })
-        )}
+        })}
       </Stack>
     </Stack>
   );

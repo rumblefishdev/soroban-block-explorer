@@ -12,24 +12,28 @@ import { UnavailableSection } from '../shared/Unavailable.js';
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
   selectedIndex: number;
+  /** 1-based number `#op-N` asked for when this transaction has no such
+   *  operation — `useSelectedOp` owns that judgement (task 0482). */
+  missingOp: number | null;
   onSelect: (index: number) => void;
 }
 
 export function OperationsSection({
   tx,
   selectedIndex,
+  missingOp,
   onSelect,
 }: OperationsSectionProps) {
   const entries = useMemo(() => buildOperationEntries(tx), [tx]);
   // Header count from operation_count (always present, never folded) — the
   // picker list may be shorter when heavy is unavailable (task 0329).
   const count = tx.operation_count;
-  // `#op-N` is user-supplied, so the index can point past the end. It is NOT
-  // silently swapped for the first operation: that showed a real operation
-  // under a number the reader asked for and did not get, which reads as an
-  // answer rather than a miss. Say what happened and leave the picker to
-  // recover from.
-  const outOfRange = selectedIndex < 0 || selectedIndex >= entries.length;
+  // `selectedIndex` always addresses an existing entry: `useSelectedOp`
+  // resolved the user-supplied `#op-N` against this same list, the way
+  // `useTableUrlState` resolves `sort`/`dir`. No range guard here — the one
+  // that used to live here answered a bad fragment by replacing the operation
+  // with a message, which for the ~85 % of transactions carrying a single
+  // operation blanked the section and pointed at a picker they never get.
   const selected = entries[selectedIndex];
 
   // 87 % of mainnet transactions have exactly one operation — an index with
@@ -37,15 +41,7 @@ export function OperationsSection({
   // the adaptive-index option deferred from 0453).
   const showPicker = entries.length > 1;
 
-  const card = outOfRange ? (
-    <Typography
-      variant="bodySmRegular"
-      sx={(theme) => ({ color: theme.palette.text.tertiary, p: 2 })}
-    >
-      This transaction has no operation {selectedIndex + 1} — it has{' '}
-      {entries.length}. Pick one from the list.
-    </Typography>
-  ) : (
+  const card = (
     /* Remount on op switch so disclosure state resets per operation. */
     <OperationCard
       key={selectedIndex}
@@ -58,6 +54,20 @@ export function OperationsSection({
       contractEvents={tx.heavy?.contract_events ?? []}
       diagnosticEvents={tx.heavy?.diagnostic_events ?? []}
     />
+  );
+
+  /* The fragment named an operation that does not exist. Say so ABOVE the
+     operation rather than instead of it: the reader still gets the page they
+     came for, and the number they asked for and did not get is named instead
+     of quietly becoming a different one. */
+  const missingNotice = missingOp != null && (
+    <Typography
+      variant="bodySmRegular"
+      sx={(theme) => ({ color: theme.palette.text.tertiary, mb: 2 })}
+    >
+      This transaction has no operation {missingOp} — it has {entries.length}.
+      Showing operation {selectedIndex + 1}.
+    </Typography>
   );
 
   // No archive data, no operation list. The DB's appearance index is NOT used
@@ -82,6 +92,7 @@ export function OperationsSection({
       meta={`${count} Operation${count === 1 ? '' : 's'}`}
     >
       <Box sx={{ p: 2 }}>
+        {missingNotice}
         {showPicker ? (
           <Grid container spacing={2}>
             {/* The card carries the substance; the picker is an index — keep

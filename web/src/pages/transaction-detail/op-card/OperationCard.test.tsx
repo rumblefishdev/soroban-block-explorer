@@ -156,7 +156,8 @@ describe('OperationCard', () => {
         },
       ],
     });
-    expect(screen.getByText(/Execution trace · 1 calls/)).toBeTruthy();
+    // Singular: this assertion used to pin "1 calls" (task 0482).
+    expect(screen.getByText(/Execution trace · 1 call$/)).toBeTruthy();
     // Literal args render in a nested (secondary-tone) span, so match the
     // whole header row by its text content.
     expect(

@@ -380,7 +380,23 @@ Transaction-level sections:
 
 Operations render as a master-detail: a picker (per-type icon + label per
 operation, selection deep-linked as `#op-N`) and **one operation card** for the
-selected operation:
+selected operation. The picker appears only above one operation — ~85 % of
+mainnet transactions carry exactly one, and an index of a single row is pure
+width tax.
+
+`#op-N` is 1-based and user-supplied, so `useSelectedOp` resolves it against
+the decoded operation list and owns the result, the way `useTableUrlState` owns
+`sort`/`dir`: the index handed to the section always addresses an existing
+operation, and no consumer carries a range guard. A fragment naming an
+operation the transaction does not have is **reported above the card, never
+substituted for it** — the operation still renders, and the number that does
+not exist is named rather than quietly becoming a different one. The fragment
+itself is left alone, so the address bar keeps what the reader asked for. While
+the archive fetch is in flight or has failed the list length is unknown, and an
+unresolvable fragment then makes no claim at all rather than asserting a count
+nobody measured (0377, 0482).
+
+The card shows:
 
 - a truthful per-type headline sentence built from `heavy.details` (light
   fields as degraded fallback; unknown types fall back to the type label);
