@@ -114,14 +114,19 @@ in Rust, because `FINAL` measured 26M rows and `LIMIT 1 BY` 4.5M rows against
 1.35M for the current shape (0420). Attaching a subquery or JOIN there risks
 that plan, so the counts come from a second query.
 
-The second query must carry the same **read guard** as the shape it copies,
-`ch::fetch_tx_list_aggregates`: an explicit key list plus a partition prune. A
-`BETWEEN min AND max` span looks equivalent on a contiguous page and is not —
-`persist::writer` commits `transactions` before the `ledgers` marker, so an
-aborted partition leaves orphan transaction rows with no ledger row, and a page
-straddling that hole sweeps all of them. Tasks 0243/0386 were quota outages in
-exactly that shape. Measured: the guarded form reads the same 16,384 rows on a
-contiguous page, so it is free.
+The second query carries the same **read guard** as the shape it copies,
+`ch::fetch_tx_list_aggregates`: an explicit key list plus a partition prune.
+
+Stated honestly, because the first version of this section overclaimed:
+`BETWEEN min AND max` reads exactly the same rows today. `ledgers` is
+contiguous — 13,466,469 distinct sequences over a 13,466,469-wide span,
+measured 2026-08-12, zero gaps — so a page's min/max spans precisely the
+ledgers on it, and both forms measured 16,384 read_rows. The key list is
+insurance against a state that does not currently exist: `persist::writer`
+commits `transactions` before the `ledgers` marker, so an aborted partition
+can leave transaction rows with no ledger row, and a page straddling that hole
+would sweep them all under `BETWEEN`. Tasks 0243/0386 were quota outages in
+that shape. Kept because it costs nothing, not because it fixes a live defect.
 
 ```sql
 SELECT ledger_sequence, countIf(successful) AS successful_count

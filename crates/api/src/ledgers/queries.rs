@@ -276,11 +276,15 @@ pub async fn fetch_list(
 /// part that matters — the same read guard: an explicit key list plus a
 /// partition prune.
 ///
-/// A `BETWEEN min AND max` span looks equivalent on a contiguous page and is
-/// not. `persist::writer` commits `transactions` BEFORE the `ledgers` marker,
-/// so an aborted partition leaves orphan transaction rows with no ledger row;
-/// a page straddling that hole would sweep every one of them. Tasks 0243/0386
-/// were quota outages in exactly this shape.
+/// `BETWEEN min AND max` would read the same rows TODAY — `ledgers` is
+/// contiguous (13,466,469 sequences over a 13,466,469-wide span, measured
+/// 2026-08-12), so a page's min/max spans exactly the ledgers on it, and both
+/// forms measured 16,384 read_rows. The key list is insurance, not a fix: if
+/// `ledgers` ever gains a hole while `transactions` keeps rows inside it —
+/// which the write order allows, since `persist::writer` commits
+/// `transactions` BEFORE the `ledgers` marker — a straddling page would sweep
+/// all of them under `BETWEEN`. Tasks 0243/0386 were quota outages in that
+/// shape, and the guard costs nothing.
 ///
 /// Measured on production 2026-08-12, `index_granularity` 8192:
 ///
