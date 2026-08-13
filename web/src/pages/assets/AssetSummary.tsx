@@ -1,4 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
+import { Fragment } from 'react';
 import type { AssetDetailResponse } from '@rumblefish/api-types';
 import {
   formatAmount,
@@ -27,13 +28,29 @@ function SupplyValue({
         variant="bodySmBold"
         sx={(theme) => ({
           color: theme.palette.text.primary,
-          // A long supply is one unbroken token — let it wrap rather than
-          // overflow the card (F4). Since 0472 the row is full-width, so
-          // this only fires on viewports narrower than the longest supply.
+          // A long supply is one unbroken token — allow wrapping rather
+          // than overflow the card (F4). The <wbr> after each group
+          // separator makes commas the PREFERRED break points, so a wrap
+          // lands between groups ("105,410,072,/690.53…"), never mid-group;
+          // `anywhere` stays as the last resort for a single segment longer
+          // than the line (an 18-decimals fraction on a phone).
           overflowWrap: 'anywhere',
         })}
       >
-        {formatAmount(scaleByDecimals(supply, decimals))}
+        {formatAmount(scaleByDecimals(supply, decimals))
+          .split(',')
+          .map((part, i) => (
+            // Index key is correct here: the list is the positional split of
+            // one string, re-derived on every render.
+            <Fragment key={i}>
+              {i > 0 && (
+                <>
+                  ,<wbr />
+                </>
+              )}
+              {part}
+            </Fragment>
+          ))}
       </Typography>
       {code && (
         <Typography
