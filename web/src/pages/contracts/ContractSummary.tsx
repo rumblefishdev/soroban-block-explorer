@@ -96,7 +96,14 @@ export function ContractSummary({
                     value={sacAssetCode(contract.sac_asset)}
                     type="asset"
                     truncate={false}
-                    href={routes.asset(sacAssetId(contract.sac_asset))}
+                    // A drifted half-pair has no honest route (`sacAssetId`
+                    // null) — the code renders unlinked rather than
+                    // mis-routing to /assets/native.
+                    href={
+                      sacAssetId(contract.sac_asset) != null
+                        ? routes.asset(sacAssetId(contract.sac_asset)!)
+                        : undefined
+                    }
                   />
                 ) : (
                   <Dash />

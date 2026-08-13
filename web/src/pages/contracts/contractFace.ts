@@ -38,13 +38,16 @@ export function contractFace(contract: ContractDetailResponse): ContractFace {
       label: 'Stellar Asset Contract',
       color: 'accent',
     };
-    if (!contract.sac_asset) {
+    // Unresolvable facet: `sac_asset` null (2 of ~3.9k on prod) or a drifted
+    // half-pair (`sacAssetId` null) — bare chip, no link, no invented name.
+    const id = contract.sac_asset && sacAssetId(contract.sac_asset);
+    if (!contract.sac_asset || !id) {
       return { meta, label: meta.label, href: undefined, title: undefined };
     }
     return {
       meta,
       label: `${meta.label} · ${sacAssetCode(contract.sac_asset)}`,
-      href: routes.asset(sacAssetId(contract.sac_asset)),
+      href: routes.asset(id),
       title: sacAssetLabel(contract.sac_asset),
     };
   }
@@ -53,6 +56,11 @@ export function contractFace(contract: ContractDetailResponse): ContractFace {
   switch (contract.contract_type_name) {
     // A SEP-41 token contract IS an asset — `assets` carries a row keyed by
     // the contract's own surrogate and `/assets/{C…}` resolves the StrKey.
+    // Deliberately unguarded (unlike the SAC branch): the response carries no
+    // field that could gate it, and the assets row is co-emitted atomically
+    // with the contract row in the same staged ledger write — 4,347 of 4,347
+    // on prod. The theoretical miss (a row mid-rebuild) lands on the asset
+    // page's NotFoundState, not a broken page.
     case 'fungible':
       return {
         meta,

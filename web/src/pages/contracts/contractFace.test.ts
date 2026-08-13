@@ -86,4 +86,18 @@ describe('contractFace (task 0472)', () => {
     expect(face.label).toBe('Stellar Asset Contract');
     expect(face.href).toBeUndefined();
   });
+
+  it('treats a drifted half-pair as unresolvable, never as native', () => {
+    // The API contract is both-present (classic) or both-null (native). One
+    // field missing is drift — the old fallback claimed such a row was XLM
+    // and routed it to /assets/native (review, 2026-08-13).
+    const face = contractFace(
+      makeContract({
+        is_sac: true,
+        sac_asset: { asset_code: 'USDC', issuer: null },
+      })
+    );
+    expect(face.label).toBe('Stellar Asset Contract');
+    expect(face.href).toBeUndefined();
+  });
 });
