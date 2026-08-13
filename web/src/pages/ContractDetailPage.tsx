@@ -38,6 +38,7 @@ export default function ContractDetailPage() {
     defaultKey: 'interface',
     validKeys: TAB_KEYS,
   });
+  const face = contract.data != null ? contractFace(contract.data) : null;
 
   if (!valid) {
     return <NotFoundState entity="contract" identifier={contractId} />;
@@ -125,31 +126,22 @@ export default function ContractDetailPage() {
             Contract
           </Typography>
           {/* Task 0472: the header names what this contract IS — for every
-              class, not just SAC — and links to it. See `contractFace`. */}
-          {contract.data != null &&
-            (() => {
-              const face = contractFace(contract.data);
-              const chip = (
-                <Chip
-                  size="md"
-                  color={face.meta.color}
-                  label={face.label}
-                  clickable={face.href != null}
-                  aria-label={
-                    face.title ? `${face.label} — ${face.title}` : undefined
-                  }
-                />
-              );
-              return face.href ? (
-                <Tooltip title={face.title ?? ''}>
-                  <RouterLink to={face.href} style={{ textDecoration: 'none' }}>
-                    {chip}
-                  </RouterLink>
-                </Tooltip>
-              ) : (
-                chip
-              );
-            })()}
+              class, not just SAC — and links to it. See `contractFace`.
+              A11y (review, 2026-08-13): the anchor is the ONLY interactive
+              element — no `clickable` on the chip (MUI would nest a keyboard-
+              dead `role="button"` inside the link), and the tooltip uses
+              `describeChild` so the visible label stays the accessible name
+              (WCAG 2.5.3) with the issuer as a description. */}
+          {face != null &&
+            (face.href ? (
+              <Tooltip title={face.title ?? ''} describeChild>
+                <RouterLink to={face.href} style={{ textDecoration: 'none' }}>
+                  <Chip size="md" color={face.meta.color} label={face.label} />
+                </RouterLink>
+              </Tooltip>
+            ) : (
+              <Chip size="md" color={face.meta.color} label={face.label} />
+            ))}
           {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a

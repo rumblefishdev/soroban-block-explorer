@@ -35,27 +35,28 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     header: 'Type',
     width: 120,
     cell: (row) => {
-      // Task 0441: a SAC names the asset it mirrors and links to it; the
-      // rare unresolvable facet degrades to the bare badge. The `Token`
+      // Task 0441: a SAC names the asset it mirrors and links to it; an
+      // unresolvable facet (null `sac_asset` OR a drifted half-pair, which
+      // `sacAssetId` reports as null) degrades to the bare badge. The `Token`
       // type chip is dropped on SAC rows (task 0472) — prod cross-tab shows
       // Token ⟺ is_sac exactly (3,946/3,946), so the pair carried zero
-      // information. The issuer rides in the tooltip/aria-label: the bare
-      // code is ambiguous (many issuers of e.g. "USDC" on prod).
+      // information. The issuer rides in the tooltip (a11y: `describeChild`
+      // keeps the visible text as the accessible NAME and makes the issuer a
+      // description — a plain Tooltip title would replace the name, breaking
+      // voice control; and the chip must NOT be `clickable`, or MUI nests a
+      // keyboard-dead `role="button"` inside the anchor).
       if (row.is_sac) {
-        return row.sac_asset ? (
-          <Tooltip title={sacAssetLabel(row.sac_asset)}>
+        const id = row.sac_asset && sacAssetId(row.sac_asset);
+        return row.sac_asset && id ? (
+          <Tooltip title={sacAssetLabel(row.sac_asset)} describeChild>
             <RouterLink
-              to={routes.asset(sacAssetId(row.sac_asset))}
+              to={routes.asset(id)}
               style={{ textDecoration: 'none' }}
             >
               <Chip
                 size="sm"
                 color="brown"
-                clickable
                 label={`SAC · ${sacAssetCode(row.sac_asset)}`}
-                aria-label={`SAC · ${sacAssetCode(
-                  row.sac_asset
-                )} — ${sacAssetLabel(row.sac_asset)}`}
               />
             </RouterLink>
           </Tooltip>

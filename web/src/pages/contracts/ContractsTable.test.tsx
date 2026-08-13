@@ -47,7 +47,11 @@ describe('ContractsTable SAC chip (tasks 0441 + 0472)', () => {
     expect(screen.queryByText('Token')).toBeNull();
   });
 
-  it('carries the issuer in the aria-label — the bare code is ambiguous', () => {
+  it('keeps the visible text as the accessible name, issuer as description', () => {
+    // WCAG 2.5.3 (review 2026-08-13): a Tooltip title used to REPLACE the
+    // link's accessible name with the issuer string, so voice control could
+    // not target the chip by its visible text. `describeChild` moves the
+    // issuer to aria-describedby instead.
     renderWithProviders(
       <ContractsTable
         rows={[
@@ -58,9 +62,10 @@ describe('ContractsTable SAC chip (tasks 0441 + 0472)', () => {
         ]}
       />
     );
-    expect(
-      screen.getByLabelText(`SAC · USDC — USDC issued by ${ISSUER}`)
-    ).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'SAC · USDC' });
+    expect(link).toHaveAccessibleDescription(`USDC issued by ${ISSUER}`);
+    // No keyboard-dead role="button" nested inside the anchor.
+    expect(link.querySelector('[role="button"]')).toBeNull();
   });
 
   it('links the native XLM SAC to the native asset page', () => {
@@ -76,8 +81,10 @@ describe('ContractsTable SAC chip (tasks 0441 + 0472)', () => {
     );
     const chip = screen.getByText('SAC · XLM');
     expect(chip.closest('a')).toHaveAttribute('href', routes.asset('native'));
-    // Native has no issuer — the label says what it is instead.
-    expect(screen.getByLabelText('SAC · XLM — Native XLM')).toBeInTheDocument();
+    // Native has no issuer — the description says what it is instead.
+    expect(
+      screen.getByRole('link', { name: 'SAC · XLM' })
+    ).toHaveAccessibleDescription('Native XLM');
   });
 
   it('degrades to the bare unlinked badge when the facet is unresolvable', () => {
