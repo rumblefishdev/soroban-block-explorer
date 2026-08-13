@@ -324,7 +324,8 @@ supply row or breaking only at group separators.
       one identity the contract endpoint puts on the wire — a Fungible's symbol
       and a collection's name would each cost an API change or a round-trip.
       The summary row stays SAC-only (it adds the issuer); the other classes
-      would get a second link to the same target.
+      would get a second link to the same target. NAMING what a Fungible or an
+      NFT contract is (not just its class) needs an API field → [[0483]].
 - [ ] SAC summary row split into two labelled cells (`Asset` + `Issuer`),
       native rendering the asset cell only; vitest case
 - [ ] SAC rows show a single chip (`SAC · CODE`, no `Token` chip); filter
@@ -354,8 +355,8 @@ supply row or breaking only at group separators.
 - [ ] Finding 11b in full — parser third layout (parked as patches), RPC
       drain, negative marker, split measurement, compliance policy
       (deferred to 0473 — see the re-decision under finding 11b)
-- [ ] No API surface change (frontend-only; no api-types regen) — EXCEPT the
-      search ordering fix, which changes result order, not the schema
+- [x] No API surface change at all — frontend-only, no api-types regen. The
+      search ordering fix that would have broken this went to [[0482]]
 - [ ] Docs: frontend-overview §6.8 + §6.10 updated
 
 ## Notes
