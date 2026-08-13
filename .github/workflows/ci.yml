@@ -136,6 +136,12 @@ jobs:
       CH_USER: default
       CH_PASSWORD: clickhouse
       CH_DATABASE: default
+      # Marks this job as one that promised a ClickHouse. If the step below
+      # ever stops setting CH_URL, the tests fail loudly here instead of
+      # skipping back into a green lie. Only this job sets it — the
+      # `typescript` job also runs `cargo test --workspace` through the nx
+      # graph, with no ClickHouse and no need for one.
+      CH_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
 
