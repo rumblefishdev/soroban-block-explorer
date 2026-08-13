@@ -1,4 +1,5 @@
 import type { ChipProps } from '@rumblefish/soroban-block-explorer-ui';
+import { NATIVE_ASSET_CODE } from '@rumblefish/soroban-block-explorer-ui';
 
 export interface AssetTypeMeta {
   /** Human-readable badge label. */
@@ -26,32 +27,14 @@ export function assetTypeMeta(typeName?: string | null): AssetTypeMeta {
   return meta ?? { label: typeName ?? 'Unknown', color: 'neutral' };
 }
 
-/**
- * What native lumens are called in the UI (task 0472). The ledger gives native
- * no `asset_code`, so every surface has to supply the name — and each one used
- * to spell it out for itself: the pool legs, the asset pages, the transaction
- * list, the operation humaniser and the account balances all carried their own
- * copy. One constant, so a rename is one edit.
- *
- * The empty-case behaviour deliberately stays PER SITE and is not unified with
- * it: `assetLegLabel` throws (a pool leg always has a name; its absence means
- * the API contract broke), while `assetDisplayCode` returns `null` (527 type-3
- * assets on prod genuinely have neither code nor symbol). Those are two correct
- * answers to two different questions, not an inconsistency to flatten.
- */
-export const NATIVE_ASSET_CODE = 'XLM';
-
-/**
- * True when an operation-side asset field denotes native lumens. Operations
- * carry the asset as a STRING (`'native'` | `'CODE:ISSUER'`), not as the asset
- * row shape {@link assetDisplayCode} takes — hence a separate adapter over the
- * same constant rather than one function for both.
- */
-export function isNativeAssetString(
-  value: string | null | undefined
-): value is 'native' {
-  return value === 'native';
-}
+// The native-XLM vocabulary lives in libs/ui/identifiers (task 0472) — the
+// format layer down there needs it too, so it cannot live up here. Re-exported
+// for the many page-level callers that reach for it alongside the asset-chip
+// metadata in this file.
+export {
+  NATIVE_ASSET_CODE,
+  isNativeAssetString,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 /**
  * The label an asset is shown under — title, breadcrumb, table cell, avatar

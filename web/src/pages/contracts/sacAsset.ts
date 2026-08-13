@@ -40,7 +40,7 @@ export function sacAssetId(sac: SacAsset): string | null {
  * no room for a labelled issuer cell like the detail row.
  */
 export function sacAssetLabel(sac: SacAsset): string {
-  if (isNativeSac(sac)) return 'Native XLM';
+  if (isNativeSac(sac)) return `Native ${NATIVE_ASSET_CODE}`;
   return sac.asset_code && sac.issuer
     ? `${sac.asset_code} issued by ${sac.issuer}`
     : sac.asset_code ?? 'Unknown asset';
