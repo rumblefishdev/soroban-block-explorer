@@ -2,7 +2,7 @@
 id: '0478'
 title: 'REFACTOR: repair the four failing Tier-1 query docs and make the gate run in CI'
 type: REFACTOR
-status: active
+status: backlog
 related_adr: ['0032', '0044']
 related_tasks: ['0331', '0445']
 tags: [docs, clickhouse, ci, tooling, priority-medium, effort-medium]
@@ -17,6 +17,22 @@ history:
       endpoints have been failing on develop for some time. Root cause of the
       drift is that the gate is a manual script — it appears in no CI workflow —
       so nothing stops the documented SQL from diverging from the code.
+  - date: '2026-08-13'
+    status: backlog
+    who: karolkow
+    note: >
+      Deferred, deliberately. The work started here reached past its own scope:
+      repairing the SQL docs, wiring the gate into CI, and — via the same
+      container — waking up eleven ClickHouse-backed tests that had been
+      skipping in CI. That last thread is a distinct question about test
+      coverage as a whole and moves to 0480; this task keeps the SQL gate.
+      Partial work is preserved on branch `refactor/0478_tier1-gate-repair`
+      (PR 404, closed unmerged): 01 and 08 parse again, 09's table reference is
+      corrected, and the runner arm for 01 supplies the head. Nothing there is
+      lost, and none of it is on develop.
+      The README line this task rewrote was reverted on develop as part of the
+      deferral, so the directory now states the situation in one sentence
+      instead of carrying a defect list nobody had signed up to fix.
 ---
 
 # REFACTOR: repair the Tier-1 query docs and gate them in CI
