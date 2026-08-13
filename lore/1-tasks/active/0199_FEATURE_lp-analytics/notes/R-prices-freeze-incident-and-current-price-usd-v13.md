@@ -515,6 +515,22 @@ quote-leg contamination is negligible for majors (XLM draws 0.0078% of its
 USD price through USDT). Sparse hourly rows are already handled by design —
 windowed argMaxIf on detail/list, 48h ASOF carry-forward on charts.
 
+**USDT endgame (08-13, owner's wrap):** the writer fix is LIVE — new
+candles price USDT at its measured market, so detail/list TVL is correct
+from our deploy onward; do NOT hold the deploy for the historical
+re-enrichment (2–4 working days end-to-end, prep-bound: repair driver
+needs a skip-already-enriched change + partition snapshots need a CH
+admin). Re-enrichment is additive and non-destructive — 30D/1Y chart
+history corrects itself in place underneath us, bounded to 2021-02-07
+onward (before that no USDT/USDC market exists to derive a rate from;
+irrelevant to our 90d/1Y windows). **Standing trap: `volume_quote_usd`
+on the ohlcv tables is written once and will NOT be corrected** — a
+re-enriched row carries two USD columns disagreeing ~7.4×. We read no
+ohlcv column (verified: shipped code touches only the two series views,
+columns identity + bucket + close_usd), so their leave-and-document
+scope is fine for us — but never sum `volume_quote_usd` in future
+work.
+
 **The USDC hole spanned THREE surfaces; one is fixed (08-12 status).**
 `price_usd_series` / `_1h` — fixed (the peg fill above, re-measured by us).
 `GET /assets/{USDC}/ohlcv` — still an empty 200 (their 0170;
