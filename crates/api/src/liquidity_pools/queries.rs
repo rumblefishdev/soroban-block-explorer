@@ -49,7 +49,8 @@ pub struct PoolRow {
     pub asset_a_issuer: Option<String>,
     /// C-strkey of the SAC mirror for the asset-A leg. `None` otherwise (task 0263).
     pub asset_a_contract_id: Option<String>,
-    /// `icon_url` from the asset-A leg's `assets` row (classic or SAC).
+    /// `icon_url` for the asset-A leg, from `asset_enrichment` (ADR 0050).
+    /// NOT from `assets` — task 0310 dropped that dead column from prod.
     pub asset_a_icon_url: Option<String>,
     pub asset_b_type: i16,
     pub asset_b_type_name: Option<String>,
@@ -57,7 +58,7 @@ pub struct PoolRow {
     pub asset_b_issuer: Option<String>,
     /// C-strkey of the SAC mirror for the asset-B leg. See `asset_a_contract_id`.
     pub asset_b_contract_id: Option<String>,
-    /// `icon_url` from the asset-B leg's `assets` row. See `asset_a_icon_url`.
+    /// `icon_url` for the asset-B leg. See `asset_a_icon_url`.
     pub asset_b_icon_url: Option<String>,
     pub fee_bps: i32,
     pub fee_percent: String,

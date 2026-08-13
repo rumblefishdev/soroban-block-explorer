@@ -17,7 +17,7 @@ export interface AssetTypeMeta {
  */
 const META: Record<string, AssetTypeMeta> = {
   native: { label: 'Native', color: 'blue' },
-  classic_credit: { label: 'Classic', color: 'neutral' },
+  classic_credit: { label: 'Classic credit', color: 'neutral' },
   soroban: { label: 'Soroban', color: 'emerald' },
 };
 
@@ -84,6 +84,6 @@ export const SAC_TAG: AssetTypeMeta = { label: 'SAC', color: 'brown' };
  */
 export const ASSET_TYPE_FILTERS: readonly { label: string; value: string }[] = [
   { label: 'All types', value: '' },
-  { label: 'Classic', value: 'classic_credit' },
+  { label: 'Classic credit', value: 'classic_credit' },
   { label: 'Soroban', value: 'soroban' },
 ];

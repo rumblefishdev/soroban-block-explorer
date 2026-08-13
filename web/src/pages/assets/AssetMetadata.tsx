@@ -6,6 +6,7 @@ import { SummaryRow, type SummaryCell } from '../detail/SummaryRow.js';
 import { safeHttpUrl } from '../url.js';
 
 import { AssetIcon } from './AssetIcon.js';
+import { assetDisplayCode } from './assetType.js';
 
 /**
  * Asset metadata card — the optional TOML-sourced name, icon, description and
@@ -13,7 +14,12 @@ import { AssetIcon } from './AssetIcon.js';
  * shown, and an empty section renders a short placeholder.
  */
 export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
-  const hasIcon = Boolean(asset.icon_url || asset.asset_code);
+  // Same display rule as the title, the list cell and the header avatar
+  // (task 0472) — this was the last site still reading the raw asset_code,
+  // so native rendered no icon row at all and Soroban tokens showed "?"
+  // beside a perfectly good symbol.
+  const displayCode = assetDisplayCode(asset);
+  const hasIcon = Boolean(asset.icon_url || displayCode);
   const hasName = Boolean(asset.name);
 
   const iconNameRow: SummaryCell[] = [];
@@ -22,11 +28,7 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
       label: 'Icon',
       value: (
         <Box sx={{ py: 0.5 }}>
-          <AssetIcon
-            code={asset.asset_code}
-            iconUrl={asset.icon_url}
-            size={32}
-          />
+          <AssetIcon code={displayCode} iconUrl={asset.icon_url} size={32} />
         </Box>
       ),
     });

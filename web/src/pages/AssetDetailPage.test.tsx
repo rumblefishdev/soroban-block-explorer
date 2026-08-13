@@ -95,7 +95,9 @@ describe('AssetDetailPage', () => {
       screen.getByRole('heading', { level: 1, name: 'XLM' })
     ).toBeInTheDocument();
     // The letter avatar takes the same label, so it reads "X", never "?".
-    expect(screen.getByText('X')).toBeInTheDocument();
+    // Two avatars carry it since 0472 unified the metadata card onto the same
+    // rule: the header and the TOML "Icon" row.
+    expect(screen.getAllByText('X').length).toBeGreaterThan(0);
     expect(screen.queryByText('?')).toBeNull();
     expect(screen.getByText('Native')).toBeInTheDocument();
   });
@@ -121,7 +123,7 @@ describe('AssetDetailPage', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'Asset' })
     ).toBeInTheDocument();
-    expect(screen.getByText('?')).toBeInTheDocument();
+    expect(screen.getAllByText('?').length).toBeGreaterThan(0);
   });
 
   it('falls back to the SEP-41 symbol for a Soroban token with no code (0304)', () => {
@@ -142,11 +144,11 @@ describe('AssetDetailPage', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'SMOL' })
     ).toBeInTheDocument();
-    expect(screen.getByText('S')).toBeInTheDocument();
+    expect(screen.getAllByText('S').length).toBeGreaterThan(0);
   });
 
   it.each([
-    ['classic_credit', 'Classic'],
+    ['classic_credit', 'Classic credit'],
     ['soroban', 'Soroban'],
   ])('renders the "%s" type with badge "%s"', (typeName, label) => {
     mockOk(
@@ -185,7 +187,7 @@ describe('AssetDetailPage', () => {
     });
 
     // Two orthogonal axes (ADR 0051): the type badge AND the SAC property tag.
-    expect(screen.getByText('Classic')).toBeInTheDocument();
+    expect(screen.getByText('Classic credit')).toBeInTheDocument();
     expect(screen.getByText('SAC')).toBeInTheDocument();
     // A deployed SAC is a real contract, so the summary row carries its
     // address, linked (task 0450).
@@ -215,7 +217,7 @@ describe('AssetDetailPage', () => {
 
     // Reserved SAC: type badge stays, but no SAC property tag (chip label
     // "SAC"). "SAC contract" in the summary row is different exact text.
-    expect(screen.getByText('Classic')).toBeInTheDocument();
+    expect(screen.getByText('Classic credit')).toBeInTheDocument();
     expect(screen.queryByText('SAC')).not.toBeInTheDocument();
     // The summary row DOES stay, showing the address unlinked with its status.
     // Keeping the oddity visible beats hiding it; making it consistent is
@@ -273,7 +275,7 @@ describe('AssetDetailPage', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'EURC' })
     ).toBeInTheDocument();
-    expect(screen.getByText('Classic')).toBeInTheDocument();
+    expect(screen.getByText('Classic credit')).toBeInTheDocument();
   });
 
   it('renders NotFoundState when the asset query 404s', () => {

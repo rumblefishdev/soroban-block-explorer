@@ -21,7 +21,7 @@ interface BalanceShape {
   name: string;
   code: string;
   subline: string;
-  chipLabel: 'Classic' | 'SAC' | 'Token' | null;
+  chipLabel: 'Classic credit' | 'SAC' | 'Token' | null;
   href: string | undefined;
 }
 
@@ -65,7 +65,7 @@ function shape(balance: AccountBalance): BalanceShape {
     name: code,
     code,
     subline: issuer,
-    chipLabel: isSac ? 'SAC' : 'Classic',
+    chipLabel: isSac ? 'SAC' : 'Classic credit',
     href,
   };
 }

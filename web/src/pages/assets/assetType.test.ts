@@ -6,7 +6,7 @@ describe('assetTypeMeta', () => {
   it('maps known type names to label + color', () => {
     expect(assetTypeMeta('native')).toEqual({ label: 'Native', color: 'blue' });
     expect(assetTypeMeta('classic_credit')).toEqual({
-      label: 'Classic',
+      label: 'Classic credit',
       color: 'neutral',
     });
     expect(assetTypeMeta('soroban')).toEqual({
