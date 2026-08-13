@@ -13,6 +13,17 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Task created after a light-mode visual + code audit'
+  - date: 2026-08-13
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Status sync: PR #386 (steps 1, 2, part of 4) merged 08-10, rode
+      release #389 (08-11) and is deployed — today's prod bundle is
+      post-#389 (established in passing during the 0474 deploy check),
+      so the per-mode logo lockups and the graphite light-mode accent
+      are live. Untouched and still open: steps 3 and 5 plus the rest
+      of the F5 triage (NftEventBadge colorsDark binding, ~12
+      common.black/white call sites, the assetColor.ts import check).
 ---
 
 # BUG: light mode is unfinished — brand logos and the accent yellow are drawn for dark only
@@ -30,11 +41,13 @@ of the theme, so they are wrong in whichever mode they were not written for.
 
 ## Status: Active
 
-**Current state:** Steps 1, 2 and part of 4 are in PR #386 (open vs `develop`).
-Design settled the accent question the other way from the guess in F2: light
-mode goes **graphite** (`scales.gray[700]`), not a darker amber, and the brand
-yellow stays reserved for filled surfaces, glows and markers. Steps 3 and 5 and
-the rest of the F5 triage are untouched.
+**Current state:** Steps 1, 2 and part of 4 merged in PR #386 (2026-08-10),
+released in #389 and deployed — the per-mode logo lockups and the graphite
+light-mode accent are live on prod. Design settled the accent question the
+other way from the guess in F2: light mode goes **graphite**
+(`scales.gray[700]`), not a darker amber, and the brand yellow stays reserved
+for filled surfaces, glows and markers. Steps 3 and 5 and the rest of the F5
+triage are untouched.
 
 Findings below are reproduced on a local dev server in light mode plus a code
 sweep; contrast ratios are computed, not eyeballed.
