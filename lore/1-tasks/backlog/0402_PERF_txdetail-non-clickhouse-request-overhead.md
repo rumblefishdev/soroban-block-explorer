@@ -4,7 +4,7 @@ title: 'PERF: txdetail — the ≥427 ms that is provably outside ClickHouse (co
 type: PERF
 status: backlog
 related_adr: []
-related_tasks: ['0357']
+related_tasks: ['0357', '0446']
 tags: [priority-high, effort-medium, layer-api, phase-post-launch]
 links:
   - crates/api/src/queries.rs
@@ -38,6 +38,15 @@ established a **~60-90 ms floor** on every request before any query runs
 AC4 budget. txdetail is the worst instance of that class, not a separate bug.
 
 ## Implementation
+
+> **Head start from [0446](../active/0446_PERF_collapse-sequential-clickhouse-round-trips.md)
+> (2026-08-12): a connection-pool miss is confirmed present on this endpoint.** > `db_clickhouse::mtls` built its client with `pool_max_idle_per_host(2)`, sized
+> for the indexer's serial writes. `txdetail` fans out 3 ways, one of those arms
+> itself 2 ways, so its peak is 4 — above the cap, which means the surplus
+> connection was opened and evicted per request, i.e. a fresh TCP + TLS 1.3 +
+> mTLS handshake every time, on the archive-degraded path. 0446 raised the cap
+> to 8 as mitigation but did NOT measure the handshake, so the attribution below
+> is still open — it now has a named suspect rather than a hypothesis.
 
 - [ ] Attribute the ≥427 ms: mTLS handshake per query vs connection-pool misses
       vs Lambda cold/warm vs serialization. Measure, do not infer — 0357's method

@@ -78,8 +78,18 @@ npm run infra:bootstrap
 ### Deploying
 
 **See [`docs/deployment.md`](docs/deployment.md) — the single source of truth**
-for what command ships what. In short: production is the only environment,
-and deploys are run manually from a laptop.
+for what command ships what. Production is the only environment.
+
+A release is a git tag: pushing `production-YYYY.MM.DD-N` to `master` runs
+[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)
+— `cdk diff` → deploy Compute → sync the SPA → smoke tests.
+
+```bash
+git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
+```
+
+> The manual laptop path stays available, and is the one to use for surgical,
+> single-stack deploys:
 
 ```bash
 make -C infra diff-production              # preview
@@ -88,7 +98,7 @@ make -C infra deploy-production-web        # ship the frontend SPA
 make -C infra deploy-production            # deploy ALL stacks (see gotchas in the guide)
 ```
 
-> There is **no staging environment and no CI-driven deploy** (AWS staging was
-> retired by task 0249). `deploy-staging.yml`, `scripts/staging-deploy.sh`,
-> `npm run infra:*:staging` and any `make deploy-staging*` target are **dead** —
-> they reference files/targets that no longer exist. Do not use them.
+> There is **no staging environment**. AWS staging was retired by task 0249,
+> and the `deploy-staging.yml` / `scripts/staging-deploy.sh` fossils by 0390.
+> `npm run infra:*:staging` and any `make deploy-staging*` target are **dead**
+> — they reference targets that no longer exist. Do not use them.

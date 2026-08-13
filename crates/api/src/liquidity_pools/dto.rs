@@ -136,10 +136,11 @@ pub struct PoolAssetLeg {
     /// `sac_contract_id` facet). `None` for native legs and for classic credit
     /// legs without a deployed SAC.
     pub contract_id: Option<String>,
-    /// Asset icon URL, mirrored from the leg's `assets.icon_url` row so
-    /// pool avatars render the same icon as the assets list. `None` for
-    /// native legs and assets without an enriched icon — the FE falls back
-    /// to the asset-code initial.
+    /// Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool
+    /// avatars render the same icon as the assets list. Until task 0310 this
+    /// read the dead `assets.icon_url` column, which was never populated —
+    /// every leg icon came back `None`. Still `None` for assets without an
+    /// enriched icon — the FE falls back to the asset-code initial.
     pub icon_url: Option<String>,
 }
 
@@ -171,10 +172,42 @@ pub struct PoolItem {
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
+    /// USD, decimal string rounded to cents (task 0199 compute-at-read).
+    /// Populated on **both** the list (Phase A2, one batched price lookup
+    /// per page) and the detail endpoint. `tvl` = latest reserves × each
+    /// leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
+    /// stale); `null` unless both legs price (never a one-leg partial) —
+    /// untracked assets and stale pools read `null`.
     pub tvl: Option<String>,
+    /// USD, decimal string rounded to cents. **Detail endpoint only.**
+    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
+    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
     pub volume: Option<String>,
+    /// USD, decimal string rounded to cents. **Detail endpoint only.**
+    /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.
     pub fee_revenue: Option<String>,
     pub latest_snapshot_at: Option<DateTime<Utc>>,
+}
+
+/// What ONE operation moved through the pool being viewed, per canonical leg
+/// (task 0279). Both legs are **signed from the pool's side**: positive = the
+/// asset entered the pool, negative = it left. So a trade reads `+/-`, a
+/// deposit `+/+` and a withdrawal `-/-` — the sign alone gives the direction,
+/// with no event-type field.
+///
+/// Raw stroops as STRINGS, like every other on-chain amount here (`reserve_a`,
+/// `total_supply`): a JSON number is a double in the browser, so a leg above
+/// 2^53 stroops (~900M units) would silently lose digits.
+///
+/// A leg is `null` when this operation did not move that asset — never `0`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PoolOperationAmount {
+    /// The operation's 1-based position in its transaction (Horizon's
+    /// `application_order`), so the list is stably ordered and each entry is
+    /// traceable to an operation on the transaction detail page.
+    pub application_order: i16,
+    pub amount_a: Option<String>,
+    pub amount_b: Option<String>,
 }
 
 /// One row from `/liquidity-pools/:id/transactions`. Shape pinned to
@@ -195,6 +228,21 @@ pub struct PoolTransactionItem {
     /// list (policy lives client-side, not in SQL).
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
+    /// What this transaction moved through THIS pool, **one entry per
+    /// operation**, in application order (task 0279 / issue #371).
+    ///
+    /// Per operation, not summed per transaction: 8.2% of (pool, transaction)
+    /// pairs on mainnet run more than one operation against the same pool
+    /// (measured 2026-08-12 over 8.49M pairs), and a sum across a bundled
+    /// deposit + path payment describes neither. One entry each keeps every
+    /// figure true on its own; the common single-operation row is a
+    /// one-element list.
+    ///
+    /// **Empty** = no figures for this row, which is NOT the same as zero:
+    /// per-pool amounts are indexed from their deploy onwards and filled
+    /// backwards by a re-parse, so older rows carry none yet and must render
+    /// blank rather than as `0`.
+    pub amounts: Vec<PoolOperationAmount>,
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools` paginated by
@@ -232,10 +280,20 @@ pub struct ChartParams {
     pub to: Option<String>,
 }
 
-/// One row from the chart endpoint. Shape pinned to canonical SQL
-/// `21_get_liquidity_pools_chart.sql`. `tvl` is "TVL at close of bucket"
-/// (last value); `volume` and `fee_revenue` are SUM (cumulative within
-/// the bucket).
+/// One row from the chart endpoint. All money fields are **USD decimal
+/// strings with exactly two decimals**, computed at read from on-chain
+/// quantities × the in-cluster price series (task 0199, ADR 0053):
+/// - `tvl` — "TVL at close of bucket": last priceable snapshot's
+///   `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its
+///   own bucket falls back to its most recent close within 48 h, so a
+///   pool whose second leg has not traded today still reports; `null`
+///   when either leg has no price within that window (untracked asset,
+///   pre-listing history, or a provider-side gap such as the
+///   2026-07-21..08-03 freeze).
+/// - `volume` — SUM over the bucket of per-ledger gross trade volume ×
+///   the leg-A price at that ledger's time. `null` for no-swap buckets and
+///   for buckets where a swap couldn't be priced (never a partial sum).
+/// - `fee_revenue` — `volume × fee_bps / 10000`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartDataPoint {
     pub bucket: DateTime<Utc>,

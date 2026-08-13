@@ -1,0 +1,44 @@
+From fade622d4966adb45b4c116b39b3273ef021a09e Mon Sep 17 00:00:00 2001
+From: Karol <bolekbolek909@gmail.com>
+Date: Tue, 11 Aug 2026 13:24:21 +0200
+Subject: [PATCH 2/2] docs(lore-0472): document the third metadata layout in
+ the module header
+
+Refs #368
+---
+ crates/xdr-parser/src/token_metadata.rs | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/crates/xdr-parser/src/token_metadata.rs b/crates/xdr-parser/src/token_metadata.rs
+index d82f9595..6ab11873 100644
+--- a/crates/xdr-parser/src/token_metadata.rs
++++ b/crates/xdr-parser/src/token_metadata.rs
+@@ -24,6 +24,25 @@
+ //! collection name (the `name` field — exactly what SEP-50 `name()` returns) is
+ //! captured straight from the ledger. Chain-verified mainnet 2026-07-13
+ //! (CARTUL5A… "SushiSwap V3 Positions NFT-V1", CAKSC7JH… "Minah").
++//!
++//! A THIRD layout exists (task 0472): hand-rolled tokens with their own
++//! `#[contracttype] enum DataKey { Name, Symbol, Decimals, … }` store one entry
++//! PER FIELD rather than one struct —
++//!
++//! ```text
++//! Vec([Symbol("Name")])     => String
++//! Vec([Symbol("Symbol")])   => String
++//! Vec([Symbol("Decimals")]) => U32
++//! ```
++//!
++//! so there is no metadata key to find and nothing to look inside; the fields
++//! sit as siblings of `Admin` / `TotalSupply`. [`split_field_name`] recognises
++//! them. Chain-verified mainnet 2026-08-11 (CDQLKMI4… "Alpha Vault Share" /
++//! `ALPHASH`, CBNMAFRH… `AVXO`).
++//!
++//! Three layouts found by three separate investigations is itself the lesson:
++//! treat this decoder as open, and prefer a shape that shows up on chain over
++//! one that looks canonical in a standard.
+ 
+ use stellar_xdr::{ContractExecutable, ScMapEntry, ScVal};
+ 
+-- 
+2.50.1 (Apple Git-155)
+

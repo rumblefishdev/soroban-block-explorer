@@ -430,9 +430,11 @@ media URL.
 **`GET /liquidity-pools/:strkey/transactions`** — Deposits, withdrawals, and trades for this
 pool.
 
-**`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue.
-Query params: `interval` (1h/1d/1w), `from`, `to`. **Launch scope: TVL only**
-(volume / fee_revenue deferred — see §6.11 and [ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).
+**`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue,
+all USD computed at read (see §6.11 and [ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).
+Query params: `interval` (1h/1d/1w), `from`, `to`. The 2026-06 "TVL only" launch
+cut was retired 2026-08-04 (task 0199): `gross_volume_a` is backfilled (0266)
+and the prices views are live in-cluster, so all three series ship together.
 
 #### Search
 
@@ -1249,16 +1251,29 @@ CREATE TABLE liquidity_pool_snapshots (
 **ClickHouse — USD denomination at read time ([ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).**
 On the ClickHouse primary store ([ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)),
 `tvl` / `volume` / `fee_revenue` are **not** materialized into these rows by a
-write-back worker. Fast-change off-chain values (USD denominations) are computed
-at **read time** by joining a per-asset `prices(asset, time_bucket → usd)` table
-(synced once per asset from the team Prices API) against the snapshot's reserves,
-mapping `ledger → closed_at → price candle`. This keeps
+write-back worker — the snapshot columns stay unwritten. Fast-change off-chain
+values (USD denominations) are computed at **read time** (task 0199, 2026-08)
+by joining the prices service's in-cluster views (`prices.price_usd_series` /
+`_1h`, `prices.current_price_usd`; natural-identity key, contract pinned in the
+prices repo `views.sql`) against the snapshot's on-chain quantities, mapping
+`ledger → closed_at → grain-floored price bucket`. This keeps
 `liquidity_pool_snapshots` single-writer (indexer only) and avoids the
-`ReplacingMergeTree` per-row read-modify-write race. **Launch scope: TVL only**
-(`reserve_a·price_a + reserve_b·price_b`); `volume` / `fee_revenue` are deferred —
-their on-chain input `gross_volume_a` (PathPayment claim atoms) is now derived at
-ingest by the live indexer and backfilled for history (task 0266); only the USD
-denomination waits on the Prices API.
+`ReplacingMergeTree` per-row read-modify-write race. All three series ship:
+`tvl = reserve_a·price_a + reserve_b·price_b` (both legs required),
+`volume = Σ gross_volume_a·price_a` (per-ledger pricing; `gross_volume_a` from
+PathPayment claim atoms, live since 0261 and backfilled by 0266),
+`fee_revenue = volume · fee_bps / 10000`. The chart reads the series views at
+the interval's grain; the detail endpoint prices latest reserves at each leg's
+last hourly close (`price_usd_series_1h`, 48h lookback — not
+`current_price_usd`, whose 0-sentinel covers native XLM as of 2026-08) and
+sums the last 24h of volume. The pools **list** prices its page the same way,
+from one batched close lookup per page (task 0199 Phase A2); `filter[min_tvl]`
+is rejected with 400 because a compute-at-read value cannot filter page
+membership. No grant is needed to read `prices.*`: the API's `api_reader` CH
+user carries no `<grants>` block in `users.d/services.xml` — unlike
+`prices_writer`/`prices_reader`, where grants NARROW access — so its
+`read_only` profile already covers the database (verified on the box
+2026-08-04).
 
 ### 6.12 Partitioning and Retention
 

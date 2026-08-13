@@ -70,9 +70,6 @@ fn column_order_assets() {
             "asset_code",
             "issuer_id",
             "contract_id",
-            "total_supply",
-            "holder_count",
-            "icon_url",
             "id", // lore-0331 surrogate (last)
         ],
     );
@@ -2231,8 +2228,6 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         contract_id: None,
         sac_contract_id: None,
         sac_deployed: false,
-        total_supply: None,
-        holder_count: None,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {

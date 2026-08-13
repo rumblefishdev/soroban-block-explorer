@@ -24,7 +24,9 @@ mod network;
 mod nfts;
 pub mod openapi;
 mod ops;
-mod runtime_enrichment;
+// `pub` so the `local` dev binary (`src/bin/local.rs`) can construct the
+// fetchers through the lib instead of re-declaring the module tree.
+pub mod runtime_enrichment;
 mod search;
 mod state;
 mod transactions;

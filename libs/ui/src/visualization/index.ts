@@ -10,6 +10,7 @@ export type {
 export { TimeSeriesChart } from './TimeSeriesChart.js';
 export type {
   TimeSeriesChartProps,
+  TimeSeriesCurve,
   TimeSeriesPoint,
   TimeSeriesInterval,
 } from './TimeSeriesChart.js';

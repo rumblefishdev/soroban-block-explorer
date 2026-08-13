@@ -356,10 +356,11 @@ explorer records.
 [`indexing-pipeline-overview.md`](../indexing-pipeline/indexing-pipeline-overview.md) §5.2
 step 14, called out here so the parser/indexer boundary stays explicit):
 
-- `assets.total_supply` / `assets.holder_count` — computed by
-  `recompute_asset_aggregates` in `crates/indexer/src/handler/persist/write.rs`
-  from `account_balances_current` _after_ the parser writes the balance rows.
-  Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
+- `balance_aggregates.total_supply` / `.holder_count` — recomputed from
+  `balances` by the refreshable `balance_aggregates_mv` (task 0293/0331), never
+  by the parser and no longer on the `assets` row at all (those columns were
+  dropped in task 0310). Per
+  [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
   on-chain-derivable, hence indexer-owned. The parser only produces the
   per-trustline / per-balance rows; the aggregate is a downstream rollup.
 - `liquidity_pool_snapshots.volume` / `fee_revenue` / `tvl` — per-op extraction
