@@ -56,11 +56,9 @@ on others. Do it for the cleanup value as much as the latency.
       (`IssuerRow` struct + hand-rolled empty-guard, ~20 lines). Replace with
       the shared helper — third such copy found; the first two fell in 0446.
       This is reuse, not a merge; independent of the phase-merge above.
-- [ ] `transactions::fetch_list` — when BOTH `?source_account=` and
-      `?contract_id=` filters are set, `resolve_account_surrogate` and
-      `resolve_contract_surrogate` are awaited serially though they are
-      independent (validated separately in the handler). Pair them; the
-      early-return on "filter resolves to nothing" moves after the join.
+- [x] `transactions::fetch_list` dual filter resolve — done in 0446 after all
+      (review asked why defer it, and there was no good answer). Struck from
+      this task's scope.
 - [ ] `search::fetch_search` — the crate's one remaining `try_join!`. The
       join-everywhere convention (0446) would swap it, BUT all six bucket
       failures are equivalent here (any bucket error = 500), which is exactly
