@@ -145,6 +145,13 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           ]}
         />
       )}
+      {/* Supply gets the row to itself and Holders the next one (task 0472).
+          Sharing a row forced the longest value in the system into a
+          half-width cell: XLM's 22-character supply wrapped three times, and
+          because the earlier overflow fix (F4) breaks anywhere, it split
+          mid-group — "105,410,0 / 95,815.54 / 27811" reads as three numbers.
+          Full width fits every supply on one line, so the anywhere-break
+          never fires. */}
       <SummaryRow
         cells={[
           {
@@ -160,10 +167,13 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
               />
             ),
           },
+        ]}
+      />
+      <SummaryRow
+        cells={[
           {
             label: 'Holders',
             value: formatAmount(asset.holder_count),
-            labelMinWidth: 70,
           },
         ]}
       />
