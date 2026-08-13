@@ -124,5 +124,8 @@ then falls out trivially: exact name > prefix, tie-break by collection size.
 
 ## Not in scope
 
-Making hits distinguishable (441 rows all displaying `USDC`) — that changes
-the response shape and is its own task.
+Making hits distinguishable (441 rows all displaying `USDC`) — split to
+[[0484]]. Ranking picks the best FIRST hit; that task is about telling the
+others apart. It turned out to be frontend-only: the issuer already ships
+inside `route_token`. Options 2-3 there (TOML domain, holder count) would
+need this task's backend work and can ride along with it.
