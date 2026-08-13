@@ -191,34 +191,16 @@ docker compose exec clickhouse clickhouse-client \
 
 ## Validation tiers
 
-| Tier | What                                                                                                                                 | Status as of task 0207                                                                                                                                                                                                                          |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Schema parse — `clickhouse-client --format=Null` returns exit 0 against canonical schema                                             | **Partial.** 28 of 38 statements (23 files) parse against the canonical schema. Four endpoints fail, for three unrelated reasons — see [§Tier-1 failures](#tier-1-failures). Measured 2026-08-12 with `./run_endpoint_ch.sh all --syntax-only`. |
-| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance   | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows.                                          |
-| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                             |
-| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                        | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                             |
+| Tier | What                                                                                                                                 | Status as of task 0207                                                                                                                                                                                                                                                                                                         |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | Schema parse — `clickhouse-client --format=Null` returns exit 0 against canonical schema                                             | **Partial.** 28 of 38 statements (23 files) parse. Endpoints 01, 08, 09 and 22 fail on named placeholders (`:q_hex` and friends) that `run_endpoint_ch.sh` does not substitute — pre-existing, unrelated to any one endpoint's SQL. Measured 2026-08-12; the previous "all 34 pass" was stale on both the count and the claim. |
+| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance   | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows.                                                                                                                         |
+| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                            |
+| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                        | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                            |
 
 The scaffold helper `compare_pg_ch.sh` is in place so the Tier 2-4 work
 is a small follow-up once the CH writer lands — it does not require
 re-deriving the per-endpoint binding logic.
-
-### Tier-1 failures
-
-Reproduce with `docker compose up -d clickhouse db-clickhouse-init` then
-`./run_endpoint_ch.sh all --syntax-only`. Four endpoints fail, and they are
-three separate problems, not one:
-
-| Endpoint               | Error                                   | Cause                                                                                                                                |
-| ---------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `01_get_network_stats` | `Syntax error at '}'` on `{head} - 200` | A Rust `format!` brace survived the copy out of `crates/api/src/network/queries.rs`. The documented SQL is not standalone.           |
-| `08_get_assets_list`   | `Unknown table 'asset_aggregates'`      | The table was retired by task 0331 (unified `balances` + `balance_aggregates`). These two files are pre-0331 — see the banner above. |
-| `09_get_assets_by_id`  | `Unknown table 'asset_aggregates'`      | Same.                                                                                                                                |
-| `22_get_search`        | `Syntax error at ':'` on `:q_hex`       | A named placeholder; `substitute_params` only handles the positional `$N` form.                                                      |
-
-None is caused by the endpoint's read path being wrong in the API — these are
-documentation and runner gaps. Fixing 08/09 means refreshing them onto the
-unified balance model; 01 means finishing the extraction; 22 means teaching the
-runner named placeholders or converting the file to `$N`.
 
 ## Reviewer guide
 
