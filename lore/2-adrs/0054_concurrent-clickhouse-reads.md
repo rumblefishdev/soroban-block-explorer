@@ -2,8 +2,19 @@
 id: '0054'
 title: 'Concurrent ClickHouse reads — four rules'
 status: accepted
-date: '2026-08-13'
+deciders: [karolkow]
 related_tasks: ['0446', '0445', '0481', '0402']
+related_adrs: []
+tags: [performance, api, clickhouse]
+links: []
+history:
+  - date: '2026-08-13'
+    status: accepted
+    who: karolkow
+    note: >
+      Written post-factum from 0446: rules discovered independently twice
+      (0446 review, 0445) deserve writing once. Rule 4 tightened same day
+      from measured-once to bounded-by-construction after review.
 ---
 
 # Concurrent ClickHouse reads — four rules
