@@ -1021,16 +1021,14 @@ pub async fn fetch_transactions(
     let sql = match contract_surrogate {
         // Arm A alone already IS the page — no wrapper to add.
         None => arm_a,
-        Some(contract_id) => union_keyset_arms(
-            &arm_a,
-            &seek(
+        Some(contract_id) => {
+            let arm_b = seek(
                 "soroban_invocations_appearances",
                 "contract_id",
                 contract_id,
-            ),
-            order,
-            limit,
-        ),
+            );
+            union_keyset_arms(&arm_a, &arm_b, order, limit)
+        }
     };
 
     let keys: Vec<(i64, i64)> = client
