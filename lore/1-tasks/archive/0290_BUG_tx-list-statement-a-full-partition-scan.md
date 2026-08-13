@@ -1,5 +1,4 @@
 ---
-
 id: '0290'
 title: 'Polled /transactions (Statement A) full-partition scan blows api_reader read_rows quota (CH Code 201)'
 type: BUG
@@ -7,36 +6,36 @@ status: completed
 related_adr: ['0044']
 related_tasks: ['0243', '0240', '0298']
 tags:
-['clickhouse', 'api', 'performance', 'quota', 'phase-launch', 'priority-high']
+  ['clickhouse', 'api', 'performance', 'quota', 'phase-launch', 'priority-high']
 links: []
 history:
-
-- date: 2026-06-15
-  status: active
-  who: fmazur
-  note: 'Created from live prod incident — api_reader read_rows quota exhausted (CH Code 201), 500-ing every CH endpoint. Root cause traced to Statement A reading ~35M rows/poll.'
-- date: 2026-06-16
-  status: active
-  who: fmazur
-  note: >
-  Re-diagnosed on prod (EXPLAIN + per-table Processed). Original
-  read-in-order hypothesis REFUTED — transactions scan reads 0.2M
-  (InReverseOrder). The 35M is the JOINs: accounts 23M (ORDER BY
-  account_id, so the id-surrogate join cannot seek) + ledgers 13M
-  (hash-join over full table). Fix = accounts.id index (skip-index/dict) +
-  ledgers/accounts join→seek rewrite. Stopgap 50B/errors-0 now actually
-  live (CH restarted during 0293 dev_read deploy).
-- date: 2026-06-17
-  status: completed
-  who: fmazur
-  note: >
-  Fix shipped + verified on prod. Two-step seek rewrite (commit 27f672ea,
-  branch fix/lore-0290-statement-a-accounts-ledgers-seek) deployed via CDK
-  Compute stack; prod query_log confirms ~1.0M rows/poll (0.2M scan + 0.82M
-  accounts bloom-seek + ~0 ledgers PK-seek) vs old 35.7M — ~35x, the 35M
-  pattern gone. accounts.id bloom_filter(0.001) index live (ALTER +
-  MATERIALIZE) and in init.sql. 3 follow-ups (lower read_rows 50B→~1-2B,
-  canonical SQL doc, regression test) deferred to 0298.
+  - date: 2026-06-15
+    status: active
+    who: fmazur
+    note: 'Created from live prod incident — api_reader read_rows quota exhausted (CH Code 201), 500-ing every CH endpoint. Root cause traced to Statement A reading ~35M rows/poll.'
+  - date: 2026-06-16
+    status: active
+    who: fmazur
+    note: >
+      Re-diagnosed on prod (EXPLAIN + per-table Processed). Original
+      read-in-order hypothesis REFUTED — transactions scan reads 0.2M
+      (InReverseOrder). The 35M is the JOINs: accounts 23M (ORDER BY
+      account_id, so the id-surrogate join cannot seek) + ledgers 13M
+      (hash-join over full table). Fix = accounts.id index (skip-index/dict) +
+      ledgers/accounts join→seek rewrite. Stopgap 50B/errors-0 now actually
+      live (CH restarted during 0293 dev_read deploy).
+  - date: 2026-06-17
+    status: completed
+    who: fmazur
+    note: >
+      Fix shipped + verified on prod. Two-step seek rewrite (commit 27f672ea,
+      branch fix/lore-0290-statement-a-accounts-ledgers-seek) deployed via CDK
+      Compute stack; prod query_log confirms ~1.0M rows/poll (0.2M scan + 0.82M
+      accounts bloom-seek + ~0 ledgers PK-seek) vs old 35.7M — ~35x, the 35M
+      pattern gone. accounts.id bloom_filter(0.001) index live (ALTER +
+      MATERIALIZE) and in init.sql. 3 follow-ups (lower read_rows 50B→~1-2B,
+      canonical SQL doc, regression test) deferred to 0298.
+---
 
 # Polled /transactions (Statement A) full-partition scan blows api_reader read_rows quota
 

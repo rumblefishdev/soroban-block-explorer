@@ -40,3 +40,35 @@ WHERE $2 IS NULL
    OR (l.closed_at, l.sequence) < ($2, $3)
 ORDER BY l.closed_at DESC, l.sequence DESC
 LIMIT $1;
+
+-- @@ split @@
+
+-- =====================================================================
+-- Statement B — per-ledger successful-transaction count (task 0445)
+--   • Separate round trip, not a JOIN on Statement A: that read is tuned
+--     for optimize_read_in_order and an attached aggregate risks the plan.
+--   • Key list + partition prune are the load-bearing read guard, same as
+--     `ch::fetch_tx_list_aggregates`. A BETWEEN span would sweep orphan
+--     transaction rows left by an aborted partition (writer.rs commits
+--     `transactions` before the `ledgers` marker) — 0243/0386 were quota
+--     outages in that shape.
+--   • LIMIT 1 BY then countIf is the house RMT dedup idiom; no FINAL (0420),
+--     no uniqExact (per-group hash set, OOM measured in contracts queries).
+--   • Absent ledger → NULL on the wire, distinct from 0 ("all failed").
+--   • Rationale in full: `fetch_successful_counts`, crates/api/src/ledgers/queries.rs
+-- Inputs:
+--   $1  :sequences   Int64 list   the deduped page's sequences
+--   $2  :partitions  Int64 list   intDiv(sequence, 500000) of those
+-- =====================================================================
+
+SELECT
+    ledger_sequence,
+    countIf(successful) AS successful_count
+FROM (
+    SELECT ledger_sequence, application_order, successful
+    FROM transactions
+    WHERE ledger_sequence IN ($1)
+      AND intDiv(ledger_sequence, 500000) IN ($2)
+    LIMIT 1 BY ledger_sequence, application_order
+)
+GROUP BY ledger_sequence;

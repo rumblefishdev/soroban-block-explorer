@@ -105,3 +105,27 @@ WHERE t.ledger_sequence = $1
   AND ($2 IS NULL OR (t.ledger_sequence, t.id) < ($2, $3))
 ORDER BY t.ledger_sequence DESC, t.id DESC
 LIMIT $4;
+
+-- @@ split @@
+
+-- =====================================================================
+-- Statement C — successful-transaction count for this ledger (task 0445)
+--   • Same statement as 04's Statement B, called with a one-element list.
+--   • A round trip rather than a scalar subquery on Statement A: a subquery
+--     returns 0 for a ledger with no `transactions` rows, which is
+--     indistinguishable from "all of them failed". Absent here → NULL on
+--     the wire → the UI renders the plain total instead of a split.
+--   • Rationale in full: `fetch_successful_counts`, crates/api/src/ledgers/queries.rs
+-- =====================================================================
+
+SELECT
+    ledger_sequence,
+    countIf(successful) AS successful_count
+FROM (
+    SELECT ledger_sequence, application_order, successful
+    FROM transactions
+    WHERE ledger_sequence IN ($1)
+      AND intDiv(ledger_sequence, 500000) IN ($2)
+    LIMIT 1 BY ledger_sequence, application_order
+)
+GROUP BY ledger_sequence;
