@@ -71,7 +71,15 @@ Both are frontend-only links; no API change, no new query.
 
 ## Scope
 
-Cross-links (original scope):
+Cross-links (original scope).
+
+> **Superseded on 2026-08-13 — read the ACs, not items 1-2 below.** Both were
+> written as SUMMARY ROWS. They shipped as a linked chip in the page HEADER
+> instead, for every contract class at once (`contractFace`), after a
+> consistency check found the header named its class only for SAC. The summary
+> row stays SAC-only because it earns its place there by adding the issuer;
+> for the other classes it would be a second link to the same target. The
+> reasoning is on the header-chip AC.
 
 1. Contract detail (Fungible): an "Asset" summary row linking to
    `routes.asset(contract_id)` — same row shape as 0441's mirrored-asset row.
@@ -292,7 +300,8 @@ ignores a stale `sac` from a pasted deep link. Shipped in task 0339
 (`960eb4a1`), long before this task.
 
 The auto-switch is also the better design than the guard I proposed: it
-answers the click instead of refusing it. Karol called this before I checked.
+answers the click instead of refusing it — called correctly in review before
+the code was checked.
 
 Method note, since this is the second time: an API-level probe says what the
 API accepts, never what the UI sends. The finding needed one look at the
@@ -333,15 +342,19 @@ supply row or breaking only at group separators.
 - [x] Linked SAC chip carries an issuer tooltip / aria-label
 - [x] `/assets/native` titles itself `XLM` with an XLM avatar, via one shared
       rule (`assetDisplayCode`); assets list cell + avatar fixed; vitest cases
-- [x] One native→XLM constant, not five (finding 9) — `NATIVE_ASSET_CODE` +
-      an `isNativeAssetString` adapter for the operation-string shape; the
-      per-site EMPTY-case behaviour is deliberately left alone (throw vs null
-      are two correct answers). No behaviour change
+- [ ] One native→XLM constant, not five (finding 9). **UNTICKED after review
+      (2026-08-13): claimed done, was not.** `NATIVE_ASSET_CODE` exists and
+      four sites use it, but five literals survive — `contracts/sacAsset.ts:5`
+      and `:27` (added by THIS branch) and `humanizeOp.ts:129,141,250` (a file
+      the branch converted in one spot out of four). `libs/ui/format/stroops.ts`
+      cannot import it at all: the constant sits in `web/src/pages/assets/`,
+      a layer above `libs/ui`. Fixing it properly means moving the constant
+      down into `libs/ui/identifiers` first
 - [x] Supply unit shows `XLM` for native — detail + list columns (finding 12)
 - [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
 - [x] Pool legs link native to `/assets/native` (finding 13); vitest case
 - [x] Search ranking (finding 14) — built and measured here, then REVERTED off
-      this branch (`aea53f01`) and split to [[0482]] with the contracts and NFT
+      this branch (`aea53f01`) and split to [[0485]] with the contracts and NFT
       buckets. It also carried the answer to "how is native discoverable"
       (finding 15b), which moves there with it. This task is frontend-only
 - [x] `Native` type chip — decided AGAINST (finding 15b): one-row filter,
@@ -359,7 +372,7 @@ supply row or breaking only at group separators.
       drain, negative marker, split measurement, compliance policy
       (deferred to 0473 — see the re-decision under finding 11b)
 - [x] No API surface change at all — frontend-only, no api-types regen. The
-      search ordering fix that would have broken this went to [[0482]]
+      search ordering fix that would have broken this went to [[0485]]
 - [x] Docs: frontend-overview §6.8 + §6.10 updated
 
 ## Notes
