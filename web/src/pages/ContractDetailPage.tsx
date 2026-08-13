@@ -1,4 +1,4 @@
-import { Box, Card, Stack, Typography } from '@mui/material';
+import { Box, Card, Stack, Tooltip, Typography } from '@mui/material';
 import {
   Chip,
   DetailErrorState,
@@ -12,12 +12,13 @@ import {
   type TabDefinition,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link as RouterLink, useParams } from 'react-router-dom';
 
 import { useContractDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
 import { ContractCode } from './contracts/ContractCode.js';
+import { contractFace } from './contracts/contractFace.js';
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
@@ -123,9 +124,32 @@ export default function ContractDetailPage() {
           <Typography variant="heading5SemiBold" component="h1">
             Contract
           </Typography>
-          {contract.data?.is_sac === true && (
-            <Chip size="md" color="accent" label="Stellar Asset Contract" />
-          )}
+          {/* Task 0472: the header names what this contract IS — for every
+              class, not just SAC — and links to it. See `contractFace`. */}
+          {contract.data != null &&
+            (() => {
+              const face = contractFace(contract.data);
+              const chip = (
+                <Chip
+                  size="md"
+                  color={face.meta.color}
+                  label={face.label}
+                  clickable={face.href != null}
+                  aria-label={
+                    face.title ? `${face.label} — ${face.title}` : undefined
+                  }
+                />
+              );
+              return face.href ? (
+                <Tooltip title={face.title ?? ''}>
+                  <RouterLink to={face.href} style={{ textDecoration: 'none' }}>
+                    {chip}
+                  </RouterLink>
+                </Tooltip>
+              ) : (
+                chip
+              );
+            })()}
           {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a
