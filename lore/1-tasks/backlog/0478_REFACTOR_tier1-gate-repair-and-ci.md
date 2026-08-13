@@ -57,6 +57,24 @@ of this is new breakage.
 | `09_get_assets_by_id`  | `Unknown table 'asset_aggregates'`      | Same.                                                                 |
 | `22_get_search`        | `Syntax error at ':'` on `:q_hex`       | Named placeholders; `substitute_params` only handles positional `$N`. |
 
+## A fifth failure appeared mid-task, which is the argument for CI
+
+`21_get_liquidity_pools_chart` parsed on 2026-08-12 and fails on 2026-08-13.
+Nothing in this task touched it: `git log` puts its last change at 4ba9424e,
+task 0199, merged 2026-08-11. It carries ten Rust `format!` fragments
+(`{bucket_fn}`, `{series_view}`, `{carry}`, six `{leg_*}`), so it shipped
+un-parseable and nobody noticed — because no pipeline runs the gate.
+
+That is the case for step 4 stated better than any argument: the set does not
+merely contain old rot, it accrues new rot at merge time.
+
+**21 is deliberately not fixed here.** Its placeholders are computed SQL
+fragments — a function name, a view name, per-leg literals — not values. Mapping
+them to parameters means reading the intent out of `liquidity_pools/queries.rs`;
+guessing produces a file that parses and lies, which is worse than one that
+fails loudly. It belongs with whoever holds 0199's context, or to a deliberate
+session of its own.
+
 ## Why it rotted
 
 Two independent reasons, and the second is the load-bearing one:
@@ -91,6 +109,29 @@ Fixing (1) without (2) buys a few weeks. This task does both.
 removes the duplication for good, and it is a bigger design decision (an
 extraction convention plus a check that the generated files are current). If
 this set rots again after CI is in place, that is the next step — not before.
+
+## Progress
+
+- [x] **01** — `{head}` → `$1`, runner arm supplies the head. Parses.
+- [x] **08** — joins `balance_aggregates` on `asset_id`. Parses.
+- [~] **09** — table reference corrected, but the file is a multi-statement
+  reference collection with **no `-- @@ split @@` markers**, so the runner
+  sends all of it as one query, and its arm feeds `$1` an integer where the
+  statement compares against a `String` contract id. Needs the same
+  split-and-renumber treatment as 22.
+- [ ] **21** — new regression, see above. Not this session's to guess at.
+- [ ] **22** — six bucket queries in one file, nine named placeholders
+      (`:q`, `:q_hex`, `:ledger`, `:partition`, …), no split markers, and a
+      runner arm passing ten positional params the file never uses. The whole
+      file predates the `$N` + split convention.
+- [ ] CI job
+
+Gate: **29 of 38** parsing, up from 28 (a net +1 while 21 regressed under us).
+
+The remaining three are one shape of work, not three: 09 and 22 need splitting
+into statements with positional parameters and per-statement runner values; 21
+needs its computed fragments resolved. None is a five-minute edit, and doing
+them badly is worse than leaving them failing loudly.
 
 ## Acceptance criteria
 
