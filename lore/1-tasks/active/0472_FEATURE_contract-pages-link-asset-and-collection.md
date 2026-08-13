@@ -326,11 +326,11 @@ supply row or breaking only at group separators.
       The summary row stays SAC-only (it adds the issuer); the other classes
       would get a second link to the same target. NAMING what a Fungible or an
       NFT contract is (not just its class) needs an API field → [[0483]].
-- [ ] SAC summary row split into two labelled cells (`Asset` + `Issuer`),
+- [x] SAC summary row split into two labelled cells (`Asset` + `Issuer`),
       native rendering the asset cell only; vitest case
-- [ ] SAC rows show a single chip (`SAC · CODE`, no `Token` chip); filter
+- [x] SAC rows show a single chip (`SAC · CODE`, no `Token` chip); filter
       label reads `SAC`; API params untouched
-- [ ] Linked SAC chip carries an issuer tooltip / aria-label
+- [x] Linked SAC chip carries an issuer tooltip / aria-label
 - [x] `/assets/native` titles itself `XLM` with an XLM avatar, via one shared
       rule (`assetDisplayCode`); assets list cell + avatar fixed; vitest cases
 - [x] One native→XLM constant, not five (finding 9) — `NATIVE_ASSET_CODE` +
@@ -339,7 +339,7 @@ supply row or breaking only at group separators.
       are two correct answers). No behaviour change
 - [x] Supply unit shows `XLM` for native — detail + list columns (finding 12)
 - [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
-- [ ] Pool legs link native to `/assets/native` (finding 13); vitest case
+- [x] Pool legs link native to `/assets/native` (finding 13); vitest case
 - [x] Search ranking (finding 14) — built and measured here, then REVERTED off
       this branch (`aea53f01`) and split to [[0482]] with the contracts and NFT
       buckets. It also carried the answer to "how is native discoverable"
@@ -348,17 +348,19 @@ supply row or breaking only at group separators.
       pinning fights the keyset cursor, search is the real path
 - [x] The impossible `Has SAC` + `Soroban` pair — RETRACTED (finding 15c):
       the mutual exclusion already shipped in task 0339; my finding was wrong
-- [ ] `Classic` vs `Classic credit` chip label — decision recorded either way
+- [x] `Classic` -> `Classic credit` on the type badge, the list filter and the
+      balances chip (2026-08-13). The short label read as "everything that is
+      not Soroban" while it filters one of three types
 - [x] Total supply stops breaking mid-number (finding 16) — variant A, supply
       takes a full-width row and Holders the next one
-- [ ] `asset_code` / `symbol` both kept — measured disjoint, documented
+- [x] `asset_code` / `symbol` both kept — measured disjoint, documented
       (finding 10)
 - [ ] Finding 11b in full — parser third layout (parked as patches), RPC
       drain, negative marker, split measurement, compliance policy
       (deferred to 0473 — see the re-decision under finding 11b)
 - [x] No API surface change at all — frontend-only, no api-types regen. The
       search ordering fix that would have broken this went to [[0482]]
-- [ ] Docs: frontend-overview §6.8 + §6.10 updated
+- [x] Docs: frontend-overview §6.8 + §6.10 updated
 
 ## Notes
 
