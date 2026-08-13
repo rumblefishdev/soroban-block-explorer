@@ -319,6 +319,35 @@ the system from overflowing into the adjacent "Holders" cell. XLM has both
 the longest value (22 chars) and a half-width cell. Needs either a full-width
 supply row or breaking only at group separators.
 
+## Decisions taken during the review pass (2026-08-13)
+
+Five agents reviewed the branch (code review, simplify, devil's advocate, a
+senior-requirements gate, UX). Everything they raised was verified before
+acting on it. What was decided rather than fixed:
+
+- **Chip glossary folded into THIS task, not a new one.** One colour per
+  meaning app-wide; a Soroban token had three names and brown meant both SAC
+  and NFT. Documented in `contractType.ts` and frontend-overview §7.
+- **Supply wrapping**: `<wbr>` at group separators rather than reworking the
+  shared `formatAmount` — the number never splits mid-group, and no other
+  caller is touched.
+- **`Soroban` ⇄ `Has SAC` stays an auto-switch** (last click wins, the other
+  filter clears). The UX review argued a disabled control is better than
+  silent state loss; the counter-argument that won is that the auto-switch
+  ANSWERS the click instead of refusing it, and the filters are orthogonal
+  facets, not a mode. Recorded as a dissent, not an oversight.
+- **The Fungible link stays unguarded** while the SAC one is gated: the
+  response carries no field to gate on, and the assets row is co-emitted
+  atomically with the contract row (4,347/4,347 on prod). A theoretical miss
+  lands on the asset page's own NotFoundState.
+- **`.claude/launch.json` was deleted upstream** (commit in task 0199), so
+  `preview_start` no longer works in any worktree; the dev server has to be
+  started by hand. Left alone — it was deliberate — but the next person will
+  trip over it.
+- **Spawned rather than absorbed**: [[0486]] (the NFT collection link is
+  half-dead and its destination anonymous), plus the contrast failure of the
+  emerald chip recorded in [[0467]].
+
 ## Acceptance criteria
 
 - [x] Fungible contract detail links its asset page; vitest case
@@ -342,14 +371,11 @@ supply row or breaking only at group separators.
 - [x] Linked SAC chip carries an issuer tooltip / aria-label
 - [x] `/assets/native` titles itself `XLM` with an XLM avatar, via one shared
       rule (`assetDisplayCode`); assets list cell + avatar fixed; vitest cases
-- [ ] One native→XLM constant, not five (finding 9). **UNTICKED after review
-      (2026-08-13): claimed done, was not.** `NATIVE_ASSET_CODE` exists and
-      four sites use it, but five literals survive — `contracts/sacAsset.ts:5`
-      and `:27` (added by THIS branch) and `humanizeOp.ts:129,141,250` (a file
-      the branch converted in one spot out of four). `libs/ui/format/stroops.ts`
-      cannot import it at all: the constant sits in `web/src/pages/assets/`,
-      a layer above `libs/ui`. Fixing it properly means moving the constant
-      down into `libs/ui/identifiers` first
+- [x] One native→XLM constant, not five (finding 9). Unticked mid-review when
+      the count turned out redistributed, then finished properly: the constant
+      moved DOWN to `libs/ui/identifiers` (the format layer needs it and could
+      never import from `web/src/pages`), and the five survivors converted —
+      `humanizeOp` x3, `stroops.ts`, the `Native XLM` phrase
 - [x] Supply unit shows `XLM` for native — detail + list columns (finding 12)
 - [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
 - [x] Pool legs link native to `/assets/native` (finding 13); vitest case
