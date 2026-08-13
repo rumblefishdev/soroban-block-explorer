@@ -2,7 +2,7 @@
 id: '0446'
 title: 'PERF: collapse sequential ClickHouse round trips across the API query layer'
 type: PERF
-status: active
+status: completed
 related_adr: ['0054']
 related_tasks: ['0338', '0359', '0402']
 tags:
@@ -27,6 +27,28 @@ history:
       concurrent site at all (its aggregate and account lookups are awaited one
       after the other though neither consumes the other's result). First slice is
       the assets keyset arms.
+  - date: '2026-08-13'
+    status: completed
+    who: karolkow
+    note: >
+      Done. 17 serial waves removed across 15 endpoints: 13 tokio::join!
+      pairings, one three-way, the assets keyset arms folded into UNION ALL,
+      the contract-events ledger seek merged into its tx seek, and the
+      fetch_list dual filter resolve paired. Existence gates paired after
+      measuring each miss; the pool chart stayed serial (43.7M rows / 4.66 s
+      per missing id) and develop independently replaced two gates with
+      data-carrying reads (0279/0199), which supersede pairing. The mTLS pool
+      was raised 2 -> 8 after review showed nested fan-out (search = 6) made
+      concurrency pay a per-request handshake. Two hand-rolled copies of
+      resolve_accounts deleted, one dead parameter and one stale published
+      OpenAPI description fixed, decode_smoke added for the union. ADR 0054
+      records the four rules. AC 4 (load-test rerun) deferred to 0402, which
+      already mandates the same harness; leftovers spawned as 0481. Reviewed
+      by five agents (review / simplify / devils-advocate / audit / ux),
+      findings verified against production before acting. 241 tests green,
+      clippy clean, OpenAPI spec unchanged by the concurrency work. Index
+      regen deliberately skipped in the worktree (its lore view lacks
+      develop-side 0481) — run on develop after merge.
 ---
 
 # Collapse sequential ClickHouse round trips across the API query layer
@@ -318,9 +340,24 @@ investigation 0402 asks for.
       job — see the load-test caveat there and the connection-pool section
       above, since a wave only pays off on an already-open socket.
 
-- [ ] Load-test rerun shows a median-latency improvement, quantified per endpoint
-- [ ] No change in response payloads — pagination, ordering and dedup semantics
-      identical (existing endpoint tests stay green without modification)
+- [ ] Load-test rerun shows a median-latency improvement, quantified per
+      endpoint — **deferred to 0402**, whose Implementation already mandates a
+      re-measure with the same harness and tiers. Decision (karolkow,
+      2026-08-13): the merge does not wait for it. Evidence base without it:
+      the `netstats` natural experiment (+21 ms for one extra query at
+      identical bytes and CH time), the already-concurrent endpoints sitting
+      one round trip below the fitted line, per-change production
+      verification, and the pool fix that removed the one mechanism able to
+      invert the sign. Worst case is bounded and rollback is one redeploy.
+- [x] No change in response payloads — pagination, ordering and dedup semantics
+      identical. All pre-existing tests green without modification (241 at
+      close, growing with develop merges); the one test removed
+      (`merge_keyset_arms_leaves_a_lone_arm_untouched`) was added and then made
+      tautological by this same branch, not an existing endpoint test. The
+      404-gate precedence and the union's key-set equivalence were additionally
+      verified against production, and a UX review traced the frontend contract
+      (404 routing, `rowKey` uniqueness, cursor opacity) end to end — no
+      user-visible change.
 - [x] **Docs updated** — `N/A — no described architecture affected`. Same
       endpoints, same DTOs, same tables; only the order in which existing
       queries are issued changed. Evidence: `extract_openapi` output is
