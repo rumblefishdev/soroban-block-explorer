@@ -280,12 +280,23 @@ Three consequences:
    asset, not just native. Finding 14 therefore absorbs this and moves up
    the order.
 
-What replaces 15: **guard the impossible filter combination.** `Has SAC` +
-`Soroban` can never match (measured zero, true by definition), yet the UI
-offers it and answers with "no results" — which reads as "nothing found"
-rather than "this question has no answer". Disable the SAC toggle while the
-Soroban type chip is active (or vice versa). `Has SAC` on its own stays
-valid: it returns classic + native SACs.
+What replaces 15: nothing — see 15c.
+
+**15c. RETRACTED (2026-08-13): the impossible-combination guard already
+exists.** I recorded "the UI offers `Has SAC` + `Soroban` and answers with an
+empty list" after calling the API directly with both params and seeing zero
+rows. The UI never sends that pair: `AssetsListPage` makes the two mutually
+exclusive — clicking `Soroban` clears `sac`, clicking `Has SAC` clears the
+type, each as ONE atomic URL update so last-click wins, plus a guard that
+ignores a stale `sac` from a pasted deep link. Shipped in task 0339
+(`960eb4a1`), long before this task.
+
+The auto-switch is also the better design than the guard I proposed: it
+answers the click instead of refusing it. Karol called this before I checked.
+
+Method note, since this is the second time: an API-level probe says what the
+API accepts, never what the UI sends. The finding needed one look at the
+filter handler.
 
 Open naming question, deliberately not folded in: the `Classic` chip filters
 `classic_credit` only, but the label reads like "everything that is not
@@ -301,11 +312,19 @@ supply row or breaking only at group separators.
 
 ## Acceptance criteria
 
-- [ ] Fungible contract detail links its asset page; vitest case
-- [ ] NFT contract detail links its filtered collection view; vitest case
+- [x] Fungible contract detail links its asset page; vitest case
+- [x] NFT contract detail links its filtered collection view; vitest case
 - [x] /ux-expert pass on the chip-vs-row question for the list; decision
       recorded — rows only, Type chips stay unlinked (2026-08-10, see Scope 3)
-- [ ] Detail header chip names + links the mirrored asset (`… · CODE`)
+- [x] Detail header chip names + links what the contract IS — for EVERY class,
+      not just SAC (`contractFace`). Consistency check while building it found
+      the same 0441-shaped gap one level down: the header named the class only
+      for SAC, so a Fungible token and a 10k-token NFT collection both rendered
+      a bare "Contract". Only SAC carries `· CODE`, because `sac_asset` is the
+      one identity the contract endpoint puts on the wire — a Fungible's symbol
+      and a collection's name would each cost an API change or a round-trip.
+      The summary row stays SAC-only (it adds the issuer); the other classes
+      would get a second link to the same target.
 - [ ] SAC summary row split into two labelled cells (`Asset` + `Issuer`),
       native rendering the asset cell only; vitest case
 - [ ] SAC rows show a single chip (`SAC · CODE`, no `Token` chip); filter
@@ -313,8 +332,10 @@ supply row or breaking only at group separators.
 - [ ] Linked SAC chip carries an issuer tooltip / aria-label
 - [x] `/assets/native` titles itself `XLM` with an XLM avatar, via one shared
       rule (`assetDisplayCode`); assets list cell + avatar fixed; vitest cases
-- [ ] One native→XLM rule, not four (finding 9) — `cells.tsx`, `humanizeOp`,
-      `AccountBalances` fold onto the shared rule; no behaviour change
+- [x] One native→XLM constant, not five (finding 9) — `NATIVE_ASSET_CODE` +
+      an `isNativeAssetString` adapter for the operation-string shape; the
+      per-site EMPTY-case behaviour is deliberately left alone (throw vs null
+      are two correct answers). No behaviour change
 - [x] Supply unit shows `XLM` for native — detail + list columns (finding 12)
 - [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
 - [ ] Pool legs link native to `/assets/native` (finding 13); vitest case
@@ -323,10 +344,11 @@ supply row or breaking only at group separators.
       the answer to "how is native discoverable" (finding 15b)
 - [x] `Native` type chip — decided AGAINST (finding 15b): one-row filter,
       pinning fights the keyset cursor, search is the real path
-- [ ] The impossible `Has SAC` + `Soroban` filter pair is not offered
-      (finding 15b); vitest case
+- [x] The impossible `Has SAC` + `Soroban` pair — RETRACTED (finding 15c):
+      the mutual exclusion already shipped in task 0339; my finding was wrong
 - [ ] `Classic` vs `Classic credit` chip label — decision recorded either way
-- [ ] Total supply stops breaking mid-number (finding 16)
+- [x] Total supply stops breaking mid-number (finding 16) — variant A, supply
+      takes a full-width row and Holders the next one
 - [ ] `asset_code` / `symbol` both kept — measured disjoint, documented
       (finding 10)
 - [ ] Finding 11b in full — parser third layout (parked as patches), RPC

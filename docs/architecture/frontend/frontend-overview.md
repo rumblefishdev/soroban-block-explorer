@@ -565,6 +565,12 @@ consistent with the "tolerate partial availability" expectation above.
 
 Contract details and interface.
 
+- **Contract header names what the contract IS** (`contractFace`, task 0472), for
+  every class, not just SAC: `Stellar Asset Contract · CODE` → the mirrored asset,
+  `Fungible` → its own asset page (`/assets/{C…}` resolves the contract StrKey),
+  `NFT` → its collection (`/nfts?contract={C…}`), `Other` → unlinked. Only SAC
+  carries the code suffix — `sac_asset` is the one identity the contract endpoint
+  returns; a Fungible's symbol and a collection's name live on other endpoints
 - Contract summary - contract ID (full, copyable), deployer account (link), deployed at
   ledger (link), WASM hash, SAC badge if applicable. A SAC additionally shows the
   asset it mirrors (tasks 0441 + 0472) as two SEPARATE labelled cells in one row —
