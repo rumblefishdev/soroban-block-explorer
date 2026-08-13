@@ -266,17 +266,24 @@ pub async fn resolve_contracts(
 #[cfg(test)]
 pub(crate) fn test_client_from_env() -> Option<clickhouse::Client> {
     let Ok(url) = std::env::var("CH_URL") else {
-        // Locally, no ClickHouse means skip — that is the point of the gate.
-        // In CI the same skip is a lie: eleven tests across six modules report
-        // green having touched nothing, so the suite silently shrinks and
-        // nobody sees it. The workflow starts the compose service and exports
-        // `CH_URL`; if that ever stops happening, fail here rather than
-        // pretend. `CI` is set by GitHub Actions.
+        // No ClickHouse means skip — that is the point of the gate, and the
+        // normal case locally.
+        //
+        // `CH_REQUIRED` marks a context that PROMISED one: the `rust` CI job
+        // starts the compose service and exports both variables. There, a
+        // missing `CH_URL` is not a skip but a broken promise — eleven tests
+        // across six modules would report green having touched nothing, and
+        // the suite would silently shrink.
+        //
+        // Deliberately keyed on `CH_REQUIRED` rather than plain `CI`: the
+        // `typescript` job also runs `cargo test --workspace` through the nx
+        // graph, without a ClickHouse and with no reason to have one. Keying
+        // on `CI` fails that job for doing nothing wrong.
         assert!(
-            std::env::var("CI").is_err(),
-            "CH_URL is unset under CI — the ClickHouse-backed tests would skip \
-             and still report success. Start the compose ClickHouse and export \
-             CH_URL, or drop this guard deliberately."
+            std::env::var("CH_REQUIRED").is_err(),
+            "CH_REQUIRED is set but CH_URL is not — the ClickHouse-backed tests \
+             would skip and still report success. Start the compose ClickHouse \
+             and export CH_URL, or drop CH_REQUIRED deliberately."
         );
         return None;
     };
