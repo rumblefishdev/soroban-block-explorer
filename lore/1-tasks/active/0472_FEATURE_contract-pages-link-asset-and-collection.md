@@ -340,9 +340,10 @@ supply row or breaking only at group separators.
 - [x] Supply unit shows `XLM` for native — detail + list columns (finding 12)
 - [x] Unnamed assets keep the `?` avatar, never a fake initial (finding 11)
 - [ ] Pool legs link native to `/assets/native` (finding 13); vitest case
-- [ ] Asset search ranks exact matches first so `q=XLM` returns XLM
-      (finding 14) — backend `ORDER BY`, API params unchanged. This is ALSO
-      the answer to "how is native discoverable" (finding 15b)
+- [x] Search ranking (finding 14) — built and measured here, then REVERTED off
+      this branch (`aea53f01`) and split to [[0482]] with the contracts and NFT
+      buckets. It also carried the answer to "how is native discoverable"
+      (finding 15b), which moves there with it. This task is frontend-only
 - [x] `Native` type chip — decided AGAINST (finding 15b): one-row filter,
       pinning fights the keyset cursor, search is the real path
 - [x] The impossible `Has SAC` + `Soroban` pair — RETRACTED (finding 15c):
