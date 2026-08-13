@@ -304,17 +304,16 @@ pub async fn fetch_list(
 /// way. Not `FINAL` (0420: 19x read amplification), and not `uniqExact`, which
 /// builds a per-group hash set (`contracts::queries` measured an OOM at
 /// 3.73 GiB on a wide window).
-async fn fetch_successful_counts(
-    client: &clickhouse::Client,
-    sequences: &[i64],
-) -> Result<HashMap<i64, i32>, clickhouse::error::Error> {
-    if sequences.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Both lists are `i64` inlined directly — integers carry no injection risk,
-    // mirroring `ch::fetch_tx_list_aggregates`.
-    let seq_list = sequences
+/// The aggregate's read guard, as two inline SQL lists: the page's sequences,
+/// and the distinct partitions they fall in (`PARTITION BY intDiv(sequence,
+/// 500000)`).
+///
+/// Inlined rather than bound because both are `i64` — integers carry no
+/// injection risk, mirroring `ch::fetch_tx_list_aggregates`. The partitions go
+/// through a `BTreeSet` so a 20-ledger page emits one entry, not twenty
+/// repeats, and two only when the page straddles a 500k boundary.
+fn key_and_partition_lists(sequences: &[i64]) -> (String, String) {
+    let keys = sequences
         .iter()
         .map(i64::to_string)
         .collect::<Vec<_>>()
@@ -327,6 +326,18 @@ async fn fetch_successful_counts(
         .map(|p| p.to_string())
         .collect::<Vec<_>>()
         .join(",");
+    (keys, partitions)
+}
+
+async fn fetch_successful_counts(
+    client: &clickhouse::Client,
+    sequences: &[i64],
+) -> Result<HashMap<i64, i32>, clickhouse::error::Error> {
+    if sequences.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let (seq_list, partitions) = key_and_partition_lists(sequences);
 
     let sql = format!(
         "SELECT ledger_sequence AS ledger_sequence, \
@@ -423,7 +434,22 @@ pub async fn fetch_by_sequence(
     client: &clickhouse::Client,
     sequence: i64,
 ) -> Result<Option<LedgerDetailRow>, clickhouse::error::Error> {
-    let row = client
+    // The count aggregate reads only `sequence`, which is this function's own
+    // parameter, so it does not depend on the header read — the two go out
+    // together. `join!` and not `try_join!`: the two failures are not
+    // equivalent. A failed header means there is no ledger to serve and must
+    // propagate; a failed aggregate must degrade to `None`, exactly as on the
+    // list path. `try_join!` would collapse both into one early return and
+    // reinstate the 500 the nullable field exists to avoid.
+    //
+    // The aggregate is a second round trip rather than a scalar subquery on
+    // the header read because a subquery returns 0 for a ledger with no
+    // `transactions` rows, which is indistinguishable from "all of them
+    // failed". Concurrent, that costs latency only on a 404, where the
+    // aggregate's answer is thrown away.
+    // Bound to a `let` because the builder is a temporary: inlined into
+    // `join!` it would be dropped while the future still borrows it (E0716).
+    let header_query = client
         .query(
             "SELECT \
                 l.sequence, \
@@ -439,21 +465,20 @@ pub async fn fetch_by_sequence(
         )
         .bind(sequence)
         .bind(sequence)
-        .bind(sequence)
-        .fetch_optional::<LedgerDetailChRow>()
-        .await?;
+        .bind(sequence);
 
-    let Some(row) = row else {
+    let just_this_ledger = [sequence];
+    let (header, counts) = tokio::join!(
+        header_query.fetch_optional::<LedgerDetailChRow>(),
+        fetch_successful_counts(client, &just_this_ledger),
+    );
+
+    let Some(row) = header? else {
         return Ok(None);
     };
 
-    // Same aggregate as the list path, one ledger wide. A second round trip
-    // rather than a scalar subquery on the header read: a subquery returns 0
-    // for a ledger with no `transactions` rows, which is indistinguishable
-    // from "all of them failed". Degrades to `None` on failure, as the list
-    // path does — the ledger itself is still worth serving.
     let mut detail: LedgerDetailRow = row.into();
-    detail.successful_transaction_count = match fetch_successful_counts(client, &[sequence]).await {
+    detail.successful_transaction_count = match counts {
         Ok(counts) => counts.get(&sequence).copied(),
         Err(e) => {
             tracing::warn!("successful-count aggregate failed for ledger {sequence}: {e}");
@@ -534,6 +559,47 @@ pub async fn fetch_transactions(
             r.into_ledger_tx_row(agg, source_account)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod read_guard_tests {
+    use super::key_and_partition_lists;
+
+    #[test]
+    fn a_page_inside_one_partition_emits_that_partition_once() {
+        let (keys, partitions) = key_and_partition_lists(&[63_903_900, 63_903_901, 63_903_902]);
+
+        assert_eq!(keys, "63903900,63903901,63903902");
+        assert_eq!(
+            partitions, "127",
+            "twenty repeats of the same partition would defeat the prune's purpose"
+        );
+    }
+
+    #[test]
+    fn a_page_straddling_a_boundary_emits_both_partitions_in_order() {
+        let (_, partitions) = key_and_partition_lists(&[63_999_999, 64_000_000]);
+
+        assert_eq!(partitions, "127,128");
+    }
+
+    #[test]
+    fn one_ledger_is_the_detail_paths_shape() {
+        let (keys, partitions) = key_and_partition_lists(&[63_903_902]);
+
+        assert_eq!(keys, "63903902");
+        assert_eq!(partitions, "127");
+    }
+
+    #[test]
+    fn keys_keep_page_order_and_duplicates_are_the_callers_problem() {
+        // `fetch_list` dedups before calling, so this only pins that the key
+        // list is a faithful echo — collapsing here would silently mask a
+        // caller that stopped deduping.
+        let (keys, _) = key_and_partition_lists(&[3, 1, 3]);
+
+        assert_eq!(keys, "3,1,3");
+    }
 }
 
 #[cfg(test)]
