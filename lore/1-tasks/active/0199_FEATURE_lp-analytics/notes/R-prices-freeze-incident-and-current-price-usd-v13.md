@@ -126,6 +126,22 @@ history:
       insurance). 0171 input given: omit the row, misses-are-absent is
       the contract. Pre-roll ETA window PASSED with the hole still empty
       — asked whether it slipped or lands as an atomic ATTACH. Reply sent.
+  - date: '2026-08-13'
+    status: mature
+    who: stkrolikiewicz
+    note: >
+      USDT inverted AGAIN, finally: their trace shows $0.14 is the real
+      market price (canonical Stellar USDT depegged June 2022, never
+      recovered) and the $1.00 peg classification was the defect — both
+      prior readings (ours "0.14 is the bug", theirs "$1 correct") were
+      wrong. SS7 rewritten. Their fix in review: price drops to ~$0.13,
+      hourly $1 fabrication stops (sparse rows). Our exposure: 106
+      USDT-legged pools ~7.4x overstated until their deploy; majors
+      unaffected via quote leg (XLM 0.0078%). Answered their two
+      questions: gaps handled by design (48h carry both paths), and
+      new-data-first sequencing is right for us — TVL is not deployed
+      to users yet (#380 merged, undeployed), so if their code fix
+      lands first, no user ever sees the wrong $1.
   - date: '2026-08-12'
     status: mature
     who: stkrolikiewicz
@@ -478,15 +494,26 @@ the last-closes path, `AND close_usd > 0` in both chart price subqueries).
 Zero occurrences in our read windows at patch time; this is insurance.
 Our 0171 input to them: omit the row — misses-are-absent is the contract.
 
-**Known-bad data while their 0172 is open:** canonical USDT (GCQTGZQQ…)
-publishes `traded` daily closes of 0.129–0.143 — its own identity price, ~7×
-understated, flapping to peg $1 on buckets with no base trades. Owner
-clarification (08-12): **the $1 is the correct value and the 0.14 is the
-defect** — the peg fill fires only where USDT didn't trade as a base, so it
-put a correct value beside a wrong one and made a uniformly-wrong column
-visibly broken. They keep it as a diagnostic (no rollback). Until 0172
-lands, canonical-USDT-leg TVL is wrong on traded buckets; do not attribute
-it to the peg fill, and do not "fix" it locally.
+**USDT — FINAL resolution (08-13), inverting the 08-12 guidance:** the
+**$0.14 is the real market price and the $1.00 was the defect.** Canonical
+Stellar USDT (GCQTGZQQ…) traded at par for fifteen months, depegged in the
+June-2022 Terra/Celsius window, and never recovered — $0.13–0.30 across
+2,011 daily candles since. It is not a dollar-pegged asset; prices was
+classifying it as one and peg-filling $1.00 wherever it didn't trade in a
+bucket. NOT caused by the 0165 peg fill (which only made the wrong $1 for
+USDT visible next to the correct $1 for USDC); the misclassification
+predates it. This paragraph previously carried the owner's 08-12 reading
+("$1 correct, 0.14 defect") — that was wrong, ours ("0.14 is the bug") was
+wrong too; the trace settled it. Their fix (in review): USDT's published
+price drops to ~$0.13, and `price_usd_series_1h` stops fabricating hourly
+$1 rows — USDT is thinly traded (40–150 trades/day), so most hourly buckets
+will simply have NO row. Sequencing: code fix first, then oracle-row purge,
+then historical re-enrichment — new data correct before history. Our
+exposure: 106 USDT-legged pools were ~7.4× overstated in $1-filled buckets
+(TVL will drop at their deploy — a correction, not a regression); the
+quote-leg contamination is negligible for majors (XLM draws 0.0078% of its
+USD price through USDT). Sparse hourly rows are already handled by design —
+windowed argMaxIf on detail/list, 48h ASOF carry-forward on charts.
 
 **The USDC hole spanned THREE surfaces; one is fixed (08-12 status).**
 `price_usd_series` / `_1h` — fixed (the peg fill above, re-measured by us).
