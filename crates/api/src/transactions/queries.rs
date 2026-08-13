@@ -363,18 +363,35 @@ pub async fn fetch_list(
     // it is looked up against the `accounts` / `soroban_contracts` natural
     // keys. A filter that names a non-existent account/contract matches no
     // rows, so we short-circuit to an empty page.
-    let source_id: Option<i64> = match params.source_account.as_deref() {
-        Some(acct) => match resolve_account_surrogate(client, acct).await? {
-            Some(id) => Some(id),
-            None => return Ok(Vec::new()),
+    // The two filters are validated independently in the handler and neither
+    // lookup consumes the other's result, so with BOTH set they go out
+    // together (task 0446). The empty-page short-circuit moves after the join:
+    // a miss on either filter still yields the same empty page, at the cost of
+    // one wasted bounded seek when exactly one of the two names nothing.
+    let (source_res, contract_res) = tokio::join!(
+        async {
+            match params.source_account.as_deref() {
+                Some(acct) => resolve_account_surrogate(client, acct).await.map(Some),
+                None => Ok(None),
+            }
         },
+        async {
+            match params.contract_id.as_deref() {
+                Some(cid) => resolve_contract_surrogate(client, cid).await.map(Some),
+                None => Ok(None),
+            }
+        },
+    );
+    // Outer Option = "was the filter set", inner = "did it resolve". A set
+    // filter that resolves to nothing matches no rows — empty page.
+    let source_id: Option<i64> = match source_res? {
+        Some(None) => return Ok(Vec::new()),
+        Some(Some(id)) => Some(id),
         None => None,
     };
-    let contract_surrogate: Option<i64> = match params.contract_id.as_deref() {
-        Some(cid) => match resolve_contract_surrogate(client, cid).await? {
-            Some(id) => Some(id),
-            None => return Ok(Vec::new()),
-        },
+    let contract_surrogate: Option<i64> = match contract_res? {
+        Some(None) => return Ok(Vec::new()),
+        Some(Some(id)) => Some(id),
         None => None,
     };
 
