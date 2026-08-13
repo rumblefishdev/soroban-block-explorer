@@ -21,7 +21,11 @@ interface BalanceShape {
   name: string;
   code: string;
   subline: string;
-  chipLabel: 'Classic credit' | 'SAC' | 'Token' | null;
+  chipLabel: 'Classic credit' | 'SAC' | 'Soroban' | null;
+  /** What the letter avatar gets. Split from `code` (the ticker under the
+   *  amount): a symbol-less token shows an em-dash ticker but must NOT get an
+   *  em-dash INITIAL — the avatar keeps its honest `?` (finding 11). */
+  avatarCode: string | null;
   href: string | undefined;
 }
 
@@ -31,6 +35,7 @@ function shape(balance: AccountBalance): BalanceShape {
       isNative: true,
       name: 'Stellar Lumens',
       code: NATIVE_ASSET_CODE,
+      avatarCode: NATIVE_ASSET_CODE,
       subline: 'Native asset',
       chipLabel: null,
       href: routes.asset('native'),
@@ -46,8 +51,13 @@ function shape(balance: AccountBalance): BalanceShape {
       // under the amount. Fall back to symbol when the token has no name.
       name: balance.name ?? symbol,
       code: symbol,
+      avatarCode: balance.symbol ?? null,
       subline: balance.contract_id ?? '',
-      chipLabel: 'Token',
+      // Chip glossary (task 0472): the type axis calls this class "Soroban"
+      // (matching the assets list), emerald like every Soroban-token chip —
+      // this said "Token" in neutral, a third name and a third colour for
+      // the same thing.
+      chipLabel: 'Soroban',
       href: balance.contract_id ? routes.asset(balance.contract_id) : undefined,
     };
   }
@@ -64,6 +74,7 @@ function shape(balance: AccountBalance): BalanceShape {
     isNative: false,
     name: code,
     code,
+    avatarCode: balance.asset_code ?? null,
     subline: issuer,
     chipLabel: isSac ? 'SAC' : 'Classic credit',
     href,
@@ -119,7 +130,7 @@ function BalanceRow({
         alignItems="center"
         sx={{ minWidth: 0, flex: 1 }}
       >
-        <AssetIcon code={s.code} size={32} />
+        <AssetIcon code={s.avatarCode} size={32} />
         <Box
           sx={{
             display: 'flex',
@@ -170,9 +181,9 @@ function BalanceRow({
               color={
                 s.chipLabel === 'SAC'
                   ? 'brown'
-                  : s.chipLabel === 'Token'
-                  ? 'neutral'
-                  : 'default'
+                  : s.chipLabel === 'Soroban'
+                  ? 'emerald'
+                  : 'neutral'
               }
               label={s.chipLabel}
             />

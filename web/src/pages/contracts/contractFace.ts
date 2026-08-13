@@ -1,4 +1,4 @@
-import type { ContractDetailResponse } from '@rumblefish/api-types';
+import type { SacAsset } from '@rumblefish/api-types';
 
 import { routes } from '../../router/routes.js';
 
@@ -24,6 +24,18 @@ import { sacAssetCode, sacAssetId, sacAssetLabel } from './sacAsset.js';
  * resolve — 2 of ~3.9k on prod): classes with nothing to point at render an
  * unlinked chip rather than a dead link.
  */
+/**
+ * Structural subset both `ContractDetailResponse` and `ContractListItem`
+ * satisfy — the face is the same decision on both surfaces, and typing the
+ * subset keeps one implementation serving the header and the list row.
+ */
+export interface ContractFaceSource {
+  contract_id: string;
+  contract_type_name?: string | null;
+  is_sac: boolean;
+  sac_asset?: SacAsset | null;
+}
+
 export interface ContractFace {
   meta: ContractTypeMeta;
   label: string;
@@ -32,11 +44,18 @@ export interface ContractFace {
   title: string | undefined;
 }
 
-export function contractFace(contract: ContractDetailResponse): ContractFace {
+export function contractFace(
+  contract: ContractFaceSource,
+  variant: 'long' | 'short' = 'long'
+): ContractFace {
   if (contract.is_sac) {
+    // Brown, not the 0441 header's accent — the chip glossary (see
+    // contractType.ts) reserves one colour per meaning, and brown already
+    // meant SAC on the list, the assets tag and the balances chip. The
+    // header was the odd one out.
     const meta: ContractTypeMeta = {
-      label: 'Stellar Asset Contract',
-      color: 'accent',
+      label: variant === 'long' ? 'Stellar Asset Contract' : 'SAC',
+      color: 'brown',
     };
     // Unresolvable facet: `sac_asset` null (2 of ~3.9k on prod) or a drifted
     // half-pair (`sacAssetId` null) — bare chip, no link, no invented name.

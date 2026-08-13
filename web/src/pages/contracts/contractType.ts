@@ -10,11 +10,18 @@ export interface ContractTypeMeta {
  * badge label + colour. Each class gets a visually distinct chip; falls back
  * to the raw type with neutral colour for unknown / null.
  */
+// Chip glossary (task 0472): one colour per MEANING across the app —
+// brown is reserved for the SAC facet everywhere (assets tag, contracts
+// chips, balances), emerald means a Soroban token (labelled by the axis the
+// page shows: type "Soroban" on /assets, class "Fungible" here), violet is
+// NFT, neutral is classic credit, subtle is the unclassified bucket. NFT was
+// brown before — colliding with SAC one column over — and Other shared
+// neutral with classic credit on the sibling page.
 const META: Record<string, ContractTypeMeta> = {
   token: { label: 'Token', color: 'blue' },
-  nft: { label: 'NFT', color: 'brown' },
+  nft: { label: 'NFT', color: 'violet' },
   fungible: { label: 'Fungible', color: 'emerald' },
-  other: { label: 'Other', color: 'neutral' },
+  other: { label: 'Other', color: 'subtle' },
 };
 
 export function contractTypeMeta(typeName?: string | null): ContractTypeMeta {

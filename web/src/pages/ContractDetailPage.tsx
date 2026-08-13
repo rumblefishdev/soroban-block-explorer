@@ -1,4 +1,4 @@
-import { Box, Card, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, Card, Stack, Typography } from '@mui/material';
 import {
   Chip,
   DetailErrorState,
@@ -12,13 +12,14 @@ import {
   type TabDefinition,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { Link as RouterLink, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import { useContractDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
 import { ContractCode } from './contracts/ContractCode.js';
 import { contractFace } from './contracts/contractFace.js';
+import { ContractFaceChip } from './contracts/ContractFaceChip.js';
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
@@ -126,22 +127,9 @@ export default function ContractDetailPage() {
             Contract
           </Typography>
           {/* Task 0472: the header names what this contract IS — for every
-              class, not just SAC — and links to it. See `contractFace`.
-              A11y (review, 2026-08-13): the anchor is the ONLY interactive
-              element — no `clickable` on the chip (MUI would nest a keyboard-
-              dead `role="button"` inside the link), and the tooltip uses
-              `describeChild` so the visible label stays the accessible name
-              (WCAG 2.5.3) with the issuer as a description. */}
-          {face != null &&
-            (face.href ? (
-              <Tooltip title={face.title ?? ''} describeChild>
-                <RouterLink to={face.href} style={{ textDecoration: 'none' }}>
-                  <Chip size="md" color={face.meta.color} label={face.label} />
-                </RouterLink>
-              </Tooltip>
-            ) : (
-              <Chip size="md" color={face.meta.color} label={face.label} />
-            ))}
+              class, not just SAC — and links to it. See `contractFace` /
+              `ContractFaceChip` (shared with the list row). */}
+          {face != null && <ContractFaceChip face={face} size="md" />}
           {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a
