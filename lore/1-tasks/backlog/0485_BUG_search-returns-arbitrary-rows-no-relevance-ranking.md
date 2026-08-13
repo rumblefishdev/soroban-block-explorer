@@ -1,5 +1,5 @@
 ---
-id: '0482'
+id: '0485'
 title: 'BUG: search returns arbitrary rows — no relevance ranking in three of four buckets'
 type: BUG
 status: backlog
@@ -13,7 +13,9 @@ history:
     status: backlog
     who: karolkow
     note: >
-      Split out of 0472. The asset-bucket fix was implemented and measured
+      Renumbered 0482 -> 0485 on 2026-08-13: 0482 was already taken by
+      `0482_BUG_op-selection-url-state-ownership` on branch
+      fix/0482_op-selection-url-state. Split out of 0472. The asset-bucket fix was implemented and measured
       there, then REVERTED off that branch (commit aea53f01) once the same
       defect turned up in two more buckets and the NFT one proved to need a
       redesign, not a sort. Everything below is measured on production.

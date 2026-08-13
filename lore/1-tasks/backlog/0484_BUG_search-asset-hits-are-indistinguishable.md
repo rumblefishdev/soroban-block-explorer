@@ -4,7 +4,7 @@ title: 'BUG: search asset hits are indistinguishable — the issuer is on the wi
 type: BUG
 status: backlog
 related_adr: ['0051']
-related_tasks: ['0482', '0472', '0318']
+related_tasks: ['0485', '0472', '0318']
 tags: [frontend, search, assets, priority-medium, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
@@ -14,7 +14,7 @@ history:
     who: karolkow
     note: >
       Found while verifying 0472's work on a local API against production data.
-      Split out of 0482 (search ranking): ranking picks the best FIRST hit,
+      Split out of 0485 (search ranking): ranking picks the best FIRST hit,
       this task is about telling the others apart. Frontend-only — the issuer
       already ships inside `route_token`; we just drop it on the floor.
 ---
@@ -81,7 +81,7 @@ api-types regen**.
 | 4     | Rely on ranking alone (0482)                | —          | first hit right, the rest a guess          |
 
 Option 1 is this task. Options 2–3 sit on top of it and belong with the search
-backend work in [[0482]].
+backend work in [[0485]].
 
 ## Watch out
 
