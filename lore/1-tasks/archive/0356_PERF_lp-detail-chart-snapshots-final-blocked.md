@@ -2,7 +2,7 @@
 id: '0356'
 title: 'PERF/BUG: lpdetail+lpchart snapshots FINAL (blocked) + non-deterministic snapshot data bug (indexer emits before+after images)'
 type: PERF
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0354', '0338']
 tags:
@@ -42,6 +42,25 @@ history:
       before≠final, validated 41/41 vs Horizon effects. Implementing the
       indexer fix: snapshot only from mutating changes + ledger-scope
       keep-last dedup (deterministic final per (pool, ledger)).
+  - date: 2026-08-13
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Archived — all four PRs merged and running on prod since mid-July;
+      the task file simply never recorded it. #318 (07-13) fixed the
+      indexer: snapshots only from mutating changes + ledger-scope
+      keep-last dedup; re-ingest idempotent in PG and CH; integration
+      test on ledger 62075700 validated 41/41 vs Horizon; no version
+      column, docs N/A. #335 (07-14) dropped FINAL on the four snapshot
+      reads, verified byte-identical against prod (0 mismatches on all
+      four sites); lpdetail read_rows 988,348 → 65,652 (~15×). The
+      50M/mo load test (07-17) then drove two follow-ups under this
+      task's scope: #347 (lpdetail: seek `ledgers` by one sequence +
+      equi-join; box total read work 78.3 → 38.35 bn) and #349 (lpchart:
+      bound the upper ledger seek both ways; 26.3M → 684k rows/req).
+      Endgame record kept in ## Outcome. One AC deferred and defused:
+      table-wide cleanup of pre-#318 duplicate rows (scan hits the 6 GiB
+      cap) — harmless, every read path dedups via LIMIT 1 BY since #335.
 ---
 
 # PERF/BUG: lpdetail+lpchart snapshots FINAL + non-deterministic snapshot bug
@@ -149,9 +168,39 @@ exceeds that and needs explicit go-ahead.)
 
 - [x] Root cause of differing-duplicate snapshots identified — indexer emits
       before+after images per op; non-deterministic DB dedup (see Root Cause)
-- [ ] Indexer emits exactly one deterministic (final-reserves) snapshot per
+- [x] Indexer emits exactly one deterministic (final-reserves) snapshot per
       `(pool_id, ledger_sequence)`; re-ingest is idempotent (same row in PG **and** CH)
-- [ ] Existing bad snapshot rows corrected (incl. ledger 62075700)
-- [ ] `lpdetail`/`lpchart` drop `FINAL`; output byte-identical on many pools (local API)
-- [ ] `read_rows` for the hottest pool well under the ~14M FINAL-merge figure
-- [ ] Docs (ADR 0032): update ingestion-pipeline / schema docs if a version column is added — else N/A
+      — #318 (3 unit tests + integration test on ledger 62075700, 41/41 vs Horizon)
+- [ ] Existing bad snapshot rows corrected (incl. ledger 62075700) — deferred,
+      defused: 62075700 itself is clean on prod (parts merged); the table-wide
+      dup scan hits the 6 GiB cap, and every read path dedups via `LIMIT 1 BY`
+      since #335, so residual dormant duplicates cannot surface
+- [x] `lpdetail`/`lpchart` drop `FINAL`; output byte-identical on many pools —
+      #335, verified against prod read-only (0 mismatches on all four sites)
+- [x] `read_rows` for the hottest pool well under the ~14M FINAL-merge figure —
+      988,348 → 65,652 (#335), then #347/#349 cut far deeper (see Outcome)
+- [x] Docs (ADR 0032): N/A — no version column added; #318 fixed the writer instead
+
+## Outcome (shipped 2026-07, archived 2026-08-13)
+
+Four PRs, all merged and deployed during the July read-path perf work:
+
+| PR   | Date  | What                                                       | Measured                                                                     |
+| ---- | ----- | ---------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| #318 | 07-13 | Indexer: deterministic final snapshot per `(pool, ledger)` | 41/41 pools vs Horizon on ledger 62075700; re-ingest idempotent              |
+| #335 | 07-14 | Drop `FINAL` on lpdetail / lpchart / lplist snapshot reads | Byte-identical on prod; lpdetail read_rows 988,348 → 65,652 (52.8 → 2.4 MiB) |
+| #347 | 07-17 | lpdetail: seek `ledgers` by one sequence, equi-join        | Box total 78.3 → 38.35 bn reads at 50M/mo; lpdetail 27.2M → 1.7M rows/req    |
+| #349 | 07-17 | lpchart: bound the upper ledger seek both ways             | 26.3M → 684k rows/req (lpchart had been 37.4% of the box's reads)            |
+
+Load-test verdict worth keeping (50M/mo = 19.45 req/s): the only endpoints that
+hold their p95 under 5× load are the two that never touch ClickHouse (txdetail
+1.1×, nftdetail 1.0×) — everything CH-bound degrades 2.4–7.3×. The box is the
+bottleneck. Remaining candidates were measured and deliberately deferred:
+lplist `created_at` (~9.6M rows/req — fixing it re-opens 0208 Path 1, a stored
+`created_at_ledger`, rejected for writer/RMT reasons) and nftdetail persist
+(0.1% of reads).
+
+Deferred, defused: enumerating residual pre-#318 duplicate rows (table-wide
+`GROUP BY … HAVING count()>1` exceeds the 6 GiB query cap; ledger 62075700
+itself is clean on prod). Harmless: writes are deterministic since #318 and
+every read path dedups via `LIMIT 1 BY` since #335.

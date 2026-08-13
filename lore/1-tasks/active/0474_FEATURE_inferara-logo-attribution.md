@@ -16,6 +16,17 @@ history:
       integration and the report-issue flow work as expected, and asked for
       one branding addition: a tiny Inferara logo in the attribution line.
       The copy stays as-is (their words: "current copy is perfect").
+  - date: 2026-08-13
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Merged in #394 (master, 08-12), riding release #402 — but NOT yet
+      deployed: the prod SPA still serves the pre-#394 bundle (the
+      ContractDetailPage chunk carries the attribution line but no
+      `#810F0C` mark fill; checked 08-13). Stays active per the
+      archive-at-deploy convention. To close: deploy the SPA, eyeball
+      the mark in both themes on prod, optionally let Inferara confirm
+      on issue #374, then archive.
 ---
 
 # Inferara logo in the Code-tab attribution line
