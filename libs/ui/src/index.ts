@@ -29,6 +29,7 @@ export {
   AnimatedNumber,
   formatAmount,
   formatCompactAmount,
+  formatCompactUsd,
   scaleByDecimals,
   formatFee,
   formatStroops,
@@ -144,13 +145,14 @@ export {
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
+  DomainChip,
+  type DomainChipProps,
 } from './identifiers/index.js';
 
 export {
   Tabs,
   useTabUrlState,
   TimeSeriesChart,
-  OperationFlowTree,
   LazySection,
 } from './visualization/index.js';
 export type {
@@ -159,12 +161,9 @@ export type {
   UseTabUrlStateOptions,
   UseTabUrlStateResult,
   TimeSeriesChartProps,
+  TimeSeriesCurve,
   TimeSeriesPoint,
   TimeSeriesInterval,
-  OperationFlowTreeProps,
-  FlowNode,
-  FlowNodeKind,
-  FlowNodeIdentifier,
   LazySectionProps,
   UseIntersectionObserverOptions,
   UseIntersectionObserverResult,

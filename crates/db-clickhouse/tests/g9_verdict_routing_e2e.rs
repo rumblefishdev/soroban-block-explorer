@@ -121,6 +121,8 @@ fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
         ]),
         data: serde_json::Value::Null,
         event_index: 0,
+        op_index: None,
+        stage: None,
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
     }

@@ -86,9 +86,11 @@ export interface EnvironmentConfig {
    * Load-test window switch (task 0338). When `true`, the API Gateway stack
    * lifts the volumetric DDoS protections so a load test measures backend
    * capacity instead of edge throttling: the per-stage + usage-plan throttle
-   * is raised to the account ceiling and the REGIONAL WAF's per-IP rate-based
-   * rule is dropped. Everything else stays: WAF managed rules, `edge_lock`
-   * (X-Edge-Secret), API-key auth, and the Lambda↔Hetzner mTLS are untouched.
+   * is raised to the account ceiling. It used to drop the REGIONAL WAF's per-IP
+   * rate-based rule as well; that WebACL no longer exists (ADR 0048, task 0302),
+   * so the throttle is now the only thing this switch touches. Everything else
+   * stays: `edge_lock` (X-Edge-Secret), API-key auth, and the Lambda↔Hetzner
+   * mTLS are untouched.
    *
    * DANGER: this removes the rate protections on the PUBLIC production API.
    * Only flip `true` for a coordinated test window, then flip back. Never
@@ -121,11 +123,6 @@ export interface EnvironmentConfig {
    * endpoint requires same-region cert).
    */
   readonly apiCertificateArn: string;
-  /**
-   * Provision WAF WebACLs (one CLOUDFRONT-scoped on the distribution,
-   * one REGIONAL-scoped on the API Gateway stage).
-   */
-  readonly enableWaf: boolean;
   /**
    * Enable CloudFront Function basic auth on the SPA distribution.
    * Production should leave this false.
@@ -298,10 +295,6 @@ export interface EnvironmentConfig {
    * continuously (validateConfig warns about this).
    */
   readonly enableOriginLockCanary: boolean;
-  /** Per-IP request limit over a 5-minute window for the CloudFront WAF. */
-  readonly cloudFrontWafRateLimit: number;
-  /** Per-IP request limit over a 5-minute window for the API Gateway WAF. */
-  readonly apiWafRateLimit: number;
 
   // Observability — X-Ray (consumed by ObservabilityStack)
 
@@ -433,16 +426,6 @@ export function validateConfig(config: EnvironmentConfig): void {
   if (!config.apiDomainName || config.apiDomainName.includes('CHANGE')) {
     errors.push(
       `apiDomainName missing or placeholder: "${config.apiDomainName}"`
-    );
-  }
-  if (config.cloudFrontWafRateLimit < 100) {
-    errors.push(
-      `cloudFrontWafRateLimit must be >= 100 (AWS WAF minimum), got: ${config.cloudFrontWafRateLimit}`
-    );
-  }
-  if (config.apiWafRateLimit < 100) {
-    errors.push(
-      `apiWafRateLimit must be >= 100 (AWS WAF minimum), got: ${config.apiWafRateLimit}`
     );
   }
   if (config.xraySamplingRate < 0 || config.xraySamplingRate > 1) {
@@ -603,20 +586,18 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
-  // Soft sanity check: an environment with no edge gating at all
-  // (no WAF, no basic auth, no origin-secret lock) exposes an
-  // unprotected public CloudFront distribution.
-  if (
-    !config.enableWaf &&
-    !config.enableBasicAuth &&
-    !config.enableOriginSecretLock
-  ) {
+  // Soft sanity check: an environment with no gating on the SPA distribution
+  // (no basic auth, no origin-secret lock) exposes it unfiltered. On production
+  // that is the accepted end state (ADR 0048, task 0302) — the distribution
+  // serves static edge-cached files from a private S3 origin — so the warning
+  // is informational, not a defect.
+  if (!config.enableBasicAuth && !config.enableOriginSecretLock) {
     // eslint-disable-next-line no-console
     console.warn(
-      `[validateConfig] WARNING: ${config.envName} has enableWaf=false, enableBasicAuth=false ` +
-        `and enableOriginSecretLock=false. The CloudFront distribution will be publicly ` +
-        `accessible with no gating. If this is intentional, ignore. Otherwise enable one of ` +
-        `them in envs/${config.envName}.json.`
+      `[validateConfig] NOTE: ${config.envName} has enableBasicAuth=false and ` +
+        `enableOriginSecretLock=false, and there is no AWS WAF. The CloudFront ` +
+        `distribution is publicly accessible with no edge gating. On production this ` +
+        `is intentional; enable one of them in envs/${config.envName}.json if it is not.`
     );
   }
 
@@ -628,9 +609,9 @@ export function validateConfig(config: EnvironmentConfig): void {
     console.warn(
       `\n========================================================================\n` +
         `[validateConfig] !!! LOAD-TEST MODE ACTIVE on "${config.envName}" !!!\n` +
-        `  API Gateway throttle is raised to the account ceiling and the WAF\n` +
-        `  per-IP rate-based rule is DROPPED. The public API has NO volumetric\n` +
-        `  rate protection in this deploy. Only valid for a coordinated test\n` +
+        `  API Gateway throttle is raised to the account ceiling. That throttle\n` +
+        `  is the only volumetric protection on the origin, so the public API has\n` +
+        `  NO rate protection in this deploy. Only valid for a coordinated test\n` +
         `  window — set loadTesting=false in envs/${config.envName}.json and\n` +
         `  redeploy as soon as the run is done. Do NOT commit loadTesting=true.\n` +
         `========================================================================\n`

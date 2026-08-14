@@ -4,7 +4,7 @@ title: 'REFACTOR: resolve transaction_hash_dict redundancy — finish (Rust→di
 type: REFACTOR
 status: backlog
 related_adr: []
-related_tasks: ['0387']
+related_tasks: ['0395', '0397']
 tags: [clickhouse, tech-debt, effort-small, priority-low]
 milestone: 3
 links: []
@@ -16,6 +16,30 @@ history:
       Spawned from 0387 deep-dive. transaction_hash_dict is defined + prod-wired
       but never called by crates/api (Rust reads transaction_hash_index directly).
       Redundant, but NOT trivial dead code — decide finish vs remove.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Measured on prod 2026-07-22 — the remove side of the fork is now clearly
+      the right one.**
+      `system.dictionaries` confirms the dictionary is real and running:
+      `transaction_hash_dict`, status **LOADED**, last successful update
+      2026-07-14, **40.01 MiB allocated** — holding **1 element**. A
+      `COMPLEX_KEY_CACHE` populating on demand explains the count; it does not
+      explain keeping 40 MiB of resident cluster memory for something nothing
+      calls. Re-confirmed the "never called" half: **zero `dictGet` occurrences in
+      `crates/api`**, so the Rust by-hash path still seeks
+      `transaction_hash_index` directly, exactly as the task describes.
+      So the dict is not merely redundant with the index — it is redundant *and*
+      costs memory on a box where read quotas already matter (see 0250: those
+      quotas are not even enforced on the production auth path).
+      One caveat against acting immediately: dropping it is a `DROP DICTIONARY`
+      on prod, i.e. an ops action, and the task notes a broad footprint
+      (definition, prod wiring, possibly init.sql). The code-side prep — deleting
+      the definition and any wiring — is safe; the prod drop needs a window.
+      Recommendation: remove, not finish. Finishing would mean routing the Rust
+      path through `dictGet` to justify 40 MiB, when a PK seek on
+      `transaction_hash_index` already answers the same question for free.
 ---
 
 # REFACTOR: transaction_hash_dict — finish or remove

@@ -33,8 +33,11 @@ This document covers the target infrastructure design only. It does not redefine
 behavior, backend API contracts, indexing logic, or database schema beyond the parts needed
 to explain how the infrastructure is deployed and operated.
 
-This document describes the intended production infrastructure model. It is not a
-reflection of the current implementation state in the repository, which is still skeletal.
+This document was originally written as an _intended_ infrastructure model, ahead of a
+skeletal repository. That caveat is retired: the system is deployed and serving mainnet
+traffic. Per [ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md)
+this file is evergreen — it must describe what runs, and any PR that changes the shape of
+the system updates it in the same PR.
 
 If any statement in this file conflicts with
 [`technical-design-general-overview.md`](../technical-design-general-overview.md), the main
@@ -87,9 +90,13 @@ Infrastructure is designed around an asynchronous ingestion chain:
 
 1. Galexie streams canonical ledger data from Stellar peers
 2. `LedgerCloseMeta` XDR files land in S3
-3. S3 object creation triggers the Ledger Processor Lambda
+3. S3 object creation rings an SQS doorbell; the Ledger Processor Lambda reconciles
+   against a ClickHouse cursor rather than trusting one event per file (task 0241)
 4. typed summary columns + appearance-index rows + derived state are written to
-   PostgreSQL in a single atomic per-ledger transaction
+   ClickHouse. **There is no per-ledger transaction** — ClickHouse has no cross-table
+   ACID. Atomicity is approximated by ordering: the `ledgers` row is flushed **last**,
+   after every other insert has ack'd, so it acts as the commit marker and a partial
+   write is re-done by the reconcile rather than half-committed
 5. list / partition-pruned API reads serve entirely from the explorer's own
    database; heavy-field detail endpoints (E3, E14) additionally fetch raw
    `.xdr.zst` from the public Stellar ledger archive at request time
@@ -101,14 +108,23 @@ This separation is a core infrastructure assumption, not an implementation detai
 
 Launch infrastructure is intentionally simpler than a long-term high-availability target.
 
-The documented plan is:
+The plan as originally documented was: start in a single Availability Zone, use Single-AZ
+RDS at launch, expand to Multi-AZ when SLA requirements justify it.
 
-- start in a single Availability Zone
-- use Single-AZ RDS at launch
-- expand to Multi-AZ and broader VPC topology only when SLA requirements justify it
+**That progression was abandoned, not completed.** Per
+[ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md) the datastore is
+a single self-hosted ClickHouse box at Hetzner, and it was never an RDS instance in
+production. The reliability posture is correspondingly different, and the trade was made
+knowingly:
 
-The infrastructure should therefore be written so this progression is possible without
-changing the overall architecture.
+- **no Multi-AZ, no managed failover** — one box. Losing it costs a restore, not a
+  failover.
+- **redundancy is disk-level** — mdadm RAID 1 on the server itself.
+- **backup is weekly**, not continuous: Borg → Hetzner BX21, `--keep-weekly 4`. There is
+  no PITR. See [`docs/backups.md`](../../backups.md) — after a restore the Lambdas do
+  **not** re-deliver the rolled-back range; it must be re-ingested with `backfill-runner`.
+- **the scaling lever is vertical first** — a bigger auction server, then a replicated
+  second node, not a managed read replica.
 
 ## 3. Target System Topology
 
@@ -128,8 +144,9 @@ Logical flow:
 Stellar peers / history archives
   -> Galexie on ECS Fargate
   -> S3 ledger object storage
-  -> Ledger Processor Lambda
-  -> RDS PostgreSQL
+  -> S3 PutObject -> SQS doorbell
+  -> Ledger Processor Lambda (outside the VPC)
+  -> ClickHouse on Hetzner ch-prod-01, over mTLS via Caddy
   -> API Gateway + Lambda API
   -> CloudFront-served frontend clients
 ```
@@ -142,7 +159,7 @@ Public user traffic should follow a simple path:
 - the frontend calls the public REST API through API Gateway
 - public browser traffic is anonymous read-only and does not carry API keys
 - API Gateway invokes Lambda-based Rust/axum handlers
-- handlers read from RDS PostgreSQL only
+- handlers read from ClickHouse only
 
 No public client should connect directly to the database or to ingestion components.
 
@@ -252,32 +269,30 @@ multi-region failover plan.
 - The block explorer's owned relational/columnar data plane lives on
   a Hetzner-hosted ClickHouse box, not in AWS. See §5.6 for the full
   description (Caddy mTLS termination, per-service RBAC, Borg backups).
-- RDS PostgreSQL was decommissioned by task 0239 — there is no
-  AWS-side database in the production topology.
+- There is **no AWS-side database** in the production topology — and there never was.
+  Task 0239's RDS "decommission" phase closed vacuously: production stacks were never
+  deployed (`validateConfig` blocked on `hostedZoneId: "CHANGE_ME"`), so no production
+  RDS existed to remove. Only a _staging_ RDS ever ran, and task 0249 destroyed the whole
+  staging footprint on 2026-05-21.
 
-**Local-dev ClickHouse pilot (parallel store, read-empty)**
+**Local-dev ClickHouse**
 
 - runs as the `clickhouse` service in `docker-compose.yml`
-  (`clickhouse/clickhouse-server:26.3`) alongside the existing `postgres`
-  service, exposing HTTP `8123` and native `9000`
-- holds the schema in `crates/db-clickhouse/schema/init.sql` (17 tables
-  - 1 `Dictionary`); applied idempotently by the `db-clickhouse-init`
-    sidecar service after `clickhouse` reports healthy, and equally by
-    the Rust `db-clickhouse-init` CLI when iterating outside Docker
-- **read-empty in scope:** no indexer write path, no API read path
-  against ClickHouse. The pilot evaluates whether a columnar OLAP store
-  is worth standing up next to RDS for analytical workloads (event
-  scans, dashboard slicing) before committing to any migration
-- documented in
-  [`docs/architecture/database-schema/clickhouse-pilot.md`](../database-schema/clickhouse-pilot.md);
-  decision recorded in
-  [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
-  and implemented under
-  [task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)
-- **not part of the AWS-hosted runtime.** Production infrastructure
-  remains Postgres-only; whether ClickHouse moves into the AWS topology
-  is gated on a follow-up ADR with measured PASS/FAIL criteria after
-  dual-write or backfill produces real data
+  (`clickhouse/clickhouse-server:26.3`), exposing HTTP `8123` and native `9000`.
+  There is **no `postgres` service** — Postgres and sqlx were removed from the codebase
+  in task 0244.
+- holds the schema in `crates/db-clickhouse/schema/init.sql` (28 tables, 3 materialized
+  views, 1 `Dictionary` as of 2026-07-22); applied idempotently by the
+  `db-clickhouse-init` sidecar after `clickhouse` reports healthy, and equally by the
+  Rust `db-clickhouse-init` CLI when iterating outside Docker
+- the ClickHouse _pilot_ framing this section used to carry is spent. ClickHouse is no
+  longer a parallel store being evaluated next to RDS — per
+  [ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md) it is the
+  sole production datastore, and the indexer and API both write and read it. The pilot
+  ADR ([0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)) and
+  [task 0204](../../../lore/1-tasks/archive/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)
+  are history; [`clickhouse-pilot.md`](../database-schema/clickhouse-pilot.md) should be
+  read the same way.
 
 ### 5.3 Processing Components
 
@@ -319,17 +334,36 @@ multi-region failover plan.
 - may issue API keys for trusted non-browser consumers, but normal explorer browsing does
   not depend on browser-embedded keys
 
-**AWS WAF**
+**Edge protection — Cloudflare on the API, nothing on the frontend**
 
-- protects the public ingress layer attached to API Gateway and CloudFront
-- applies managed rule sets, IP reputation filtering, and basic abuse controls
-- provides browser-facing protection without relying on secrets in the SPA bundle
-- **Planned change ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-  task 0277):** both WebACLs are slated to be dropped (`enableWaf:false`) and the
-  edge moved to **Cloudflare** (WAF + unmetered DDoS + Managed Challenge), with the
-  AWS origins locked to Cloudflare (API via mTLS, CloudFront via a secret-header
-  viewer-request Function). The WebACLs remain live until the Step 7 cutover + soak;
-  this section is rewritten to present tense when that ADR flips to `accepted`.
+Per [ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md) and task
+0302, **both AWS WAF WebACLs were dropped** and the constructs, the us-east-1 stack
+and the `enableWaf` setting were deleted from the CDK app. There is no AWS WAF in
+this system and no switch to re-enable one. What replaced it is asymmetric, and the
+asymmetry is deliberate:
+
+- **API** (`api-sorobanscan.rumblefishdev.com`) — fronted by **Cloudflare**: WAF
+  managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
+  accepts Cloudflare only, via a secret request header verified in the application
+  (`crates/api/src/common/edge_lock.rs`).
+- **Frontend** (`sorobanscan.rumblefish.dev`) — **no edge filtering at all.** The
+  zone stays on Route 53; the nameserver flip in task 0277 covered
+  `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
+  state, not a pending migration: the distribution serves a static, edge-cached
+  bundle from a private S3 origin via Origin Access Control, so injection-oriented
+  managed rules have no application to protect, and putting Cloudflare ahead of
+  CloudFront would stack two CDNs. AWS Shield Standard still covers volumetric
+  L3/L4; nothing caps HTTP requests per IP.
+
+API Gateway throttling and the usage-plan limits are independent of all of the
+above and are now the only volumetric control on the origin. Production defaults
+are `50` rps / `100` burst. They are **not** unconditional: setting
+`loadTesting: true` raises both to the account ceiling for a coordinated
+load-test window (`LOAD_TEST_THROTTLE_RATE` / `_BURST` in
+`stacks/api-gateway-stack.ts`), which leaves the public API with no rate
+protection at all. `validateConfig` prints a loud banner while it is set; restore
+the defaults by setting the flag back to `false` in `envs/production.json` and
+redeploying `ApiGateway` as soon as the run ends.
 
 **CloudFront CDN**
 
@@ -449,12 +483,12 @@ records inside them are recreated as the new stacks come up in
 Post-task-0239 the AWS-side runtime is intentionally stateless and
 minimal. Network shape:
 
-- **CloudFront, API Gateway, AWS WAF** — public ingress layer
-  (CloudFront viewer cert in `us-east-1`, API Gateway regional cert
-  in `eu-central-1`). _Planned: a Cloudflare edge replaces the AWS WAF
-  layer and the origins are locked to Cloudflare —
+- **CloudFront, API Gateway** — public ingress layer (CloudFront viewer
+  cert in `us-east-1`, API Gateway regional cert in `eu-central-1`).
+  The AWS WAF layer that used to sit here is gone; edge protection is
+  Cloudflare on the API only, with the origin locked to it —
   [ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-  task 0277._
+  tasks 0277 and 0302.
 - **Application Lambdas (API, Ledger Processor, type-1 enrichment
   worker)** — run OUTSIDE the VPC. Egress via AWS-managed Lambda pool.
   Identity to Hetzner CH is asserted by mTLS (no IP pinning, no VPC
@@ -511,16 +545,16 @@ Publicly exposed surfaces are:
 - public DNS routing via Route 53
 - API documentation served from utoipa-swagger-ui `/api-docs` endpoint
 
-Those public surfaces should be protected by AWS WAF and API throttling. API keys, if
-issued, are for trusted automation or partner use cases and are never required by the
-browser application.
+Protection on those surfaces is API Gateway throttling plus, on the API only, the
+Cloudflare edge with the origin locked to it via a secret request header. API keys,
+if issued, are for trusted automation or partner use cases and are never required
+by the browser application; partner `x-api-key` callers egress through the proxied
+hostname. `ch.sorobanscan` stays DNS-only (mTLS + ACME).
 
-> **Planned ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-> task 0277):** edge protection moves to **Cloudflare** and the AWS origins are
-> locked to accept Cloudflare-only traffic — the API via API Gateway **mTLS**
-> (`disableExecuteApiEndpoint:true`), CloudFront via a **secret-header**
-> viewer-request Function. Partner `x-api-key` callers must then egress through the
-> proxied hostname. `ch.sorobanscan` stays DNS-only (mTLS + ACME).
+> **AWS WAF is not part of this picture** — both WebACLs were dropped
+> ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md), task
+> 0302). The frontend distribution has no edge filtering; see § 5.4 for why that is
+> the accepted end state rather than an open gap.
 
 Non-public components should remain directly unreachable to external users.
 
@@ -545,8 +579,9 @@ indexers are explicitly not in the trust boundary.
 
 Current environments (post-task-0249):
 
-- **Development** — local PostgreSQL + local ClickHouse via
-  `docker-compose.yml` for developer and CI workflows.
+- **Development** — local ClickHouse via `docker-compose.yml` for developer and CI
+  workflows. Postgres is gone: no `postgres` service in the compose file, and sqlx was
+  removed from the codebase in task 0244.
 - **Production** — mainnet data; AWS workloads in `eu-central-1`
   (Lambdas out-of-VPC, Galexie public-subnet ECS Fargate) reaching
   the Hetzner-hosted ClickHouse data plane over mTLS.
@@ -591,8 +626,8 @@ what the source design currently commits to.
 
 Post-task-0249 there is only a production AWS environment. Profile:
 
-- public-internet availability with WAF and API throttling sized for
-  anonymous browser traffic
+- public-internet availability with API throttling sized for anonymous
+  browser traffic, and Cloudflare edge protection on the API hostname
 - response caching and Lambda concurrency tuned for real public demand
 - longer operational retention for logs, traces, and replay-relevant
   artifacts; production replay artifacts in `stellar-ledger-data`
@@ -672,14 +707,21 @@ CDK stack, not as a claim that the full stack already exists in the repository.
 
 ### 9.2 CI/CD Model
 
-The source design defines the delivery path as:
+The source design defined the delivery path as GitHub Actions → `cdk deploy`, with
+environment parity across staging and production.
 
-- GitHub Actions
-- infrastructure deployment through `cdk deploy`
-- environment parity work across staging and production
+**That is not what happens.** Read
+[`docs/deployment.md`](../../deployment.md) before acting on this section:
 
-Infrastructure rollout is therefore part of the product delivery model, not a manual-only
-operations process.
+- there is **no staging environment**, so there is no parity to maintain
+- there is **no CI-driven deploy** — `cdk deploy` is run **manually from an operator
+  laptop**, and the `staging` CI path is dead (`.github/workflows/deploy-staging.yml`
+  references `bin/staging.js` and `envs/staging.json`, neither of which exists;
+  removal is pending in PR #338)
+
+GitHub Actions still runs build, test and lint. It does not deploy. Treat infrastructure
+rollout as a manual operations process until a production deploy workflow lands
+(task 0103).
 
 ### 9.3 Public-Repo Configuration Model
 
@@ -707,8 +749,8 @@ Expected secure configuration model:
 - real secret values live in AWS Secrets Manager or SSM Parameter Store SecureString
 - CDK consumes secret references, not hard-coded secret values
 - runtime workloads (Lambda, ECS) read only the specific secrets they need through IAM
-- the staging web password is stored as a secret and referenced by the edge protection
-  mechanism rather than committed to the repository
+- the mTLS client certificate and key that AWS presents to Caddy live in Secrets Manager
+  and are read at Lambda cold start through the Secrets Manager extension
 
 ### 9.4 CI/CD Credentials and Deployment Access
 

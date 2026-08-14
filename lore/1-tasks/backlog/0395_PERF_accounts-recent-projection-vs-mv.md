@@ -4,7 +4,7 @@ title: 'PERF: re-evaluate accounts_recent — native projection vs refreshable-M
 type: PERF
 status: backlog
 related_adr: []
-related_tasks: ['0385', '0387', '0353']
+related_tasks: ['0385', '0353', '0397']
 tags: [perf, clickhouse, read-path, tech-debt, effort-small, priority-low]
 milestone: 3
 links: []
@@ -17,6 +17,20 @@ history:
       showed the 0353 "projection refused on RMT (Code 344)" premise is a
       flippable default (deduplicate_merge_projection_mode), not a hard limit.
       accounts_recent (0385) may be a workaround for a non-limitation.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Do this BEFORE 0428 — they are in conflict, noted 2026-07-22.**
+      Premise re-verified on prod: `deduplicate_merge_projection_mode` exists in
+      `system.merge_tree_settings` (default `throw`) on CH 26.3.10.60, so the
+      "projections are refused on RMT" belief from 0353 is indeed a flippable
+      setting, not a hard limitation — 0387's finding holds.
+      **The scheduling point:** 0428 proposes alerting when the `accounts_recent`
+      refresh fails. If this task succeeds, `accounts_recent` and its refresh
+      disappear entirely and there is nothing left to alert on. Building
+      monitoring for machinery that may be deleted is the wrong order, so 0395
+      gates 0428.
 ---
 
 # PERF: accounts_recent — projection vs refreshable-MV table
@@ -48,6 +62,17 @@ not urgent — acclist works today.
   won't help and `accounts_recent` stays. (accounts_recent's whole point was to
   avoid the `accounts FINAL` sort.)
 - Weigh `rebuild`-on-merge cost vs the current 2-min MV recompute + EXCHANGE.
+  **Measured 2026-07-22 (task 0397), the number this task was missing:** the
+  refresh costs **107.2 bn read_rows / 7 days** (5040 runs × 21.3M, 5 781 ms and
+  895 MiB each) to serve **2 163 reads totalling 0.16 bn** — a **670:1**
+  cost-to-use ratio, paid every 2 minutes whether or not anyone reads. The case
+  for the projection is therefore cost, not just "less machinery": a projection
+  is maintained per-part at write time, i.e. O(changed rows). If the projection
+  turns out not to work, **relaxing the interval is the fallback with most of
+  the win** — 2 min → 30 min is −93% for a staleness nobody browsing "recently
+  active accounts" would notice. Note the distinction 0397 drew: an _ordering_
+  projection over an RMT is safe (dedup still resolves at read after the seek),
+  an _aggregate_ projection is not (raw duplicate versions get summed).
 - If projection wins: migrate acclist read off `accounts_recent`, drop the MV +
   table (`mv` to `.trash/`), update docs/architecture per ADR 0032.
 

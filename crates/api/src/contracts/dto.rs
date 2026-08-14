@@ -18,6 +18,20 @@ pub struct ContractsListParams {
     pub filter_q: Option<String>,
 }
 
+/// The classic asset a SAC contract is the contract-side facet of (ADR 0051,
+/// task 0441). `None` on non-SAC contracts — and on the rare SAC with no
+/// resolvable `asset_sac` facet row (2 of 3,946 on prod), where the frontend
+/// keeps the bare SAC badge. Native XLM is `asset_code: null, issuer: null`;
+/// a classic asset always carries both (an asset code alone is ambiguous —
+/// prod holds many issuers of "USDC").
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SacAsset {
+    /// Classic asset code (e.g. `USDC`); `null` = native XLM.
+    pub asset_code: Option<String>,
+    /// Issuer account G-strkey; `null` = native XLM.
+    pub issuer: Option<String>,
+}
+
 /// One row of `GET /v1/contracts`. Identity + classification + deploy
 /// provenance + a 7-day activity signal. All fields come straight from
 /// `soroban_contracts` (+ a deployer join and a windowed invocation count);
@@ -32,6 +46,8 @@ pub struct ContractListItem {
     pub contract_type_name: Option<String>,
     /// Stellar Asset Contract flag (stored, not derived from `contract_type`).
     pub is_sac: bool,
+    /// The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`]).
+    pub sac_asset: Option<SacAsset>,
     /// Deployer account G-strkey; `null` until the deploy op is observed.
     pub deployer: Option<String>,
     /// Ledger the deploy was observed at; `null` until then.
@@ -63,6 +79,8 @@ pub struct ContractDetailResponse {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// The asset this SAC mirrors; `null` unless `is_sac` (see [`SacAsset`]).
+    pub sac_asset: Option<SacAsset>,
     /// Task 0327: contract mutability, 3-state.
     /// - `Some(true)` → **Upgradeable**: the current WASM imports
     ///   `update_current_contract_wasm` (a self-upgrade path).
@@ -165,4 +183,68 @@ pub enum EventCursor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractIdCursor {
     pub id: i64,
+}
+
+/// Query params for `GET /v1/contracts/{contract_id}/decompiled`.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct DecompiledParams {
+    /// Requested representation: `rust` (default) or `wat`. When `rust` is
+    /// requested but emission fails, the response carries the WAT fallback
+    /// with `representation: "wat"` and `rust_error` set — no second
+    /// round-trip needed.
+    pub format: Option<String>,
+}
+
+/// Response of `GET /v1/contracts/{contract_id}/decompiled` (task 0465).
+///
+/// Source is reconstructed on demand by the pinned `soroban-ret` crate —
+/// experimental by nature: unrecovered values surface as explicit `todo!()`
+/// holes in the Rust text. The marker counts measure completeness, not
+/// correctness (a hole-free function can still be wrong); the frontend
+/// keeps its permanent "auto-reconstructed" notice regardless.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DecompiledResponse {
+    pub contract_id: String,
+    /// Lowercase hex hash of the decompiled binary — the response is
+    /// immutable per (`wasm_hash`, `soroban_ret_version`).
+    pub wasm_hash: String,
+    /// What `source` contains: `rust` or `wat`.
+    pub representation: String,
+    pub source: String,
+    /// Soroban SDK version from the binary's `contractmetav0`, when present.
+    pub sdk_version: Option<String>,
+    /// Decompiler version that produced `source`.
+    pub soroban_ret_version: String,
+    /// `pub fn` count in the emitted Rust; `null` for WAT.
+    pub functions: Option<u32>,
+    /// `todo!()` marker count (unrecovered values); `null` for WAT.
+    pub todo_holes: Option<u32>,
+    /// Distinct `var_N` identifiers (unrecovered names); `null` for WAT.
+    pub unknown_vars: Option<u32>,
+    /// Set when `rust` was requested but emission failed — `source` then
+    /// carries the WAT fallback.
+    pub rust_error: Option<String>,
+    /// Soroban-compliance diagnostics for this binary: constructs the
+    /// decompiler does not model well, so the reader knows *why* a
+    /// reconstruction may be thin. Empty on the WAT paths.
+    pub diagnostics: Vec<DecompileDiagnostic>,
+}
+
+/// One entry of [`DecompiledResponse::diagnostics`].
+///
+/// `severity` is soroban-ret's own (`warning` | `info`) and is deliberately
+/// passed through rather than re-graded here — with one caveat for the UI:
+/// `call_indirect` warnings are usually benign `core::fmt` vtables, so they
+/// should not be rendered as errors.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DecompileDiagnostic {
+    /// `floating_point` | `reference_types` | `multi_value` |
+    /// `multi_memory` | `call_indirect` | `unknown_instruction` |
+    /// `non_rust_sdk`, or a lowercased new variant from a later release.
+    pub category: String,
+    /// `warning` | `info`.
+    pub severity: String,
+    pub message: String,
+    /// Index of the offending function, for function-scoped checks.
+    pub function_index: Option<u32>,
 }

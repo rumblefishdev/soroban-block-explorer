@@ -80,6 +80,28 @@ accounts**.
 → **Budget a `repair-tier1` pass after every parallel or `--reindex` backfill.**
 `repair-tier1` itself requires the indexer stopped (see the table below).
 
+**Unless the run writes one table that has no such column.** A re-parse whose
+only purpose is to populate a NEW derived table does not need to re-emit the
+other twenty-odd — and if it does, it re-arms this trap for nothing. Task 0266
+did this with a bespoke harness ("targeted write only — do NOT run the full
+persist pipeline"); task 0279 turned it into a flag:
+
+```bash
+backfill-runner run --start <A> --end <B> --lp-amounts-only
+```
+
+It parses exactly as a normal run does and persists only
+`lp_operation_amounts`, so **no Tier-1 column is touched and no `repair-tier1`
+is owed**. The trade is that it writes no `ledgers` commit marker (the marker
+means "fully ingested", which a targeted pass has not done), so resume cannot
+read progress from the DB: on a crash, restart with a narrowed `--start`.
+Re-running a range is harmless — the rows are deterministic and the RMT
+collapses the duplicates.
+
+Adding a second such mode is a one-line branch beside it in
+`sink.rs::write_ledger`; the pattern generalises to any future
+one-new-table re-parse.
+
 Two nuances worth knowing:
 
 - This is **not parallel-specific**. Per task 0232 the same columns also drift in
@@ -307,13 +329,14 @@ new binary.
 
 **Flags — with the traps:**
 
-| Flag                | Reality                                                                                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                            |
-| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`. |
-| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                  |
-| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                         |
-| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                   |
+| Flag                | Reality                                                                                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                                                      |
+| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`.                           |
+| `--lp-amounts-only` | Persists **only** `lp_operation_amounts` (task 0279). Implies `--reindex`. Writes no `ledgers` marker, so resume is manual — narrow `--start`; re-running a range is a no-op. See the rule-3 note below. |
+| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                                            |
+| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                                                   |
+| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                                             |
 
 **Config** (flag-or-env): `CLICKHOUSE_URL`, `CLICKHOUSE_USER`,
 `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`; `CLICKHOUSE_CERT` / `_KEY` / `_CA`

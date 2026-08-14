@@ -13,11 +13,22 @@ ingestion pipeline that processes `LedgerCloseMeta` XDR directly from the Stella
 
 > **Store status.** ClickHouse (self-hosted, Hetzner + mTLS) is the sole production
 > datastore per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md);
-> Postgres/sqlx were fully removed from the codebase in task 0244. The §3 Infrastructure
-> topology and the §7 Scaling Model / cost tables below still describe the **frozen
-> pre-cutover AWS-RDS deployment** — physical RDS teardown is scheduled in
+> Postgres/sqlx were fully removed from the codebase in task 0244.
+>
+> **The production RDS PostgreSQL described in earlier revisions of this document was
+> never deployed.** It was the original design, superseded before it shipped. Only a
+> _staging_ RDS ever ran, in `us-east-1`, and it was destroyed with the rest of the
+> staging footprint on 2026-05-21
+> ([task 0249](../../lore/1-tasks/archive/0249_FEATURE_destroy-aws-infra-us-east-1.md));
+> production stacks were never deployed there at all — `validateConfig` blocked on
+> `hostedZoneId: "CHANGE_ME"`. Consequently
 > [task 0239](../../lore/1-tasks/archive/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
-> Phase 6 and those sections will be revised in that PR.
+> Phase 6 ("decommission") closed **vacuously** — there was nothing running to tear
+> down — and the RDS/bastion CDK stacks were moved to `.trash/`.
+>
+> Read any remaining RDS mention below as **superseded design intent, not deployment
+> history**. Task 0248 swept the present-tense claims in §3, §7 and the cost tables
+> onto the ClickHouse-on-Hetzner topology that actually runs.
 
 ---
 
@@ -294,8 +305,8 @@ own ClickHouse store, which is populated by the Galexie-based ingestion pipeline
                                                                  │
                                                                  ▼
                                                       ┌──────────────────────┐
-                                                      │  RDS PostgreSQL      │
-                                                      │  (block explorer DB) │
+                                                      │  ClickHouse (mTLS)   │
+                                                      │  Hetzner ch-prod-01  │
                                                       └──────────────────────┘
 ```
 
@@ -419,9 +430,11 @@ media URL.
 **`GET /liquidity-pools/:strkey/transactions`** — Deposits, withdrawals, and trades for this
 pool.
 
-**`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue.
-Query params: `interval` (1h/1d/1w), `from`, `to`. **Launch scope: TVL only**
-(volume / fee_revenue deferred — see §6.11 and [ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).
+**`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue,
+all USD computed at read (see §6.11 and [ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).
+Query params: `interval` (1h/1d/1w), `from`, `to`. The 2026-06 "TVL only" launch
+cut was retired 2026-08-04 (task 0199): `gross_volume_a` is backfilled (0266)
+and the prices views are live in-cluster, so all three series ship together.
 
 #### Search
 
@@ -453,8 +466,9 @@ Caching operates at two levels:
   sequence. A CloudWatch alarm fires at >60 s lag.
 - **Lambda cold starts** — mitigated via ARM/Graviton2 runtime and provisioned concurrency
   at higher traffic tiers.
-- **Database connection pooling** — RDS Proxy manages connection pools to prevent
-  exhaustion under burst traffic.
+- **Database connections** — no proxy tier. Each Lambda constructs one
+  `clickhouse::Client` at cold start and clones it per request; the client is
+  HTTP-based and cheap to clone, so there is no pool to exhaust.
 
 ---
 
@@ -482,7 +496,7 @@ Caching operates at two levels:
 │  └──────────────────────────┬───────────────────────────┘                     │
 │                             │                                                 │
 │  ┌──────────────────────────▼───────────────────────────┐                     │
-│  │ RDS PostgreSQL (block explorer's own schema)         │                     │
+│  │ ClickHouse — Hetzner ch-prod-01, reached over mTLS   │                     │
 │  │ ledgers · transactions · operations_appearances      │                     │
 │  │ accounts · transaction_participants · tx_hash_index  │                     │
 │  │ soroban_contracts · wasm_interface_metadata · assets │                     │
@@ -494,7 +508,7 @@ Caching operates at two levels:
 │  API LAYER                  │                                                 │
 │  ┌──────────────────────────▼──────────┐  ┌────────────────────────────────┐  │
 │  │ API Gateway → Lambda (Rust/axum)    │  │ CloudFront CDN                 │  │
-│  │ REST, throttling, WAF               │  │ React SPA + static assets      │  │
+│  │ REST, throttling                    │  │ React SPA + static assets      │  │
 │  └─────────────────────────────────────┘  └────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
@@ -503,62 +517,75 @@ Connections:
   Stellar history archives → `backfill-runner` (production) or `backfill-bench` (benchmark) CLI on developer workstation (one-time, per ADR 0010)
   Galexie → S3 (LedgerCloseMeta XDR files)
   S3 PutObject event → Lambda Ledger Processor
-  Lambda Ledger Processor → RDS (write)
-  Lambda Rust/axum API → RDS (read)
+  Lambda Ledger Processor → ClickHouse over mTLS (write) — AWS leaves the VPC here
+  Lambda Rust/axum API → ClickHouse over mTLS (read)
   React SPA → API Gateway → Lambda Rust/axum API
 ```
 
 ### 3.2 Deployment Model
 
-All infrastructure runs on AWS, deployed to a **dedicated AWS sub-account owned by Rumble
-Fish**. At launch the system is deployed in a single Availability Zone (`us-east-1a`),
-expanding to multi-AZ when SLA requirements demand it.
+The AWS side runs in a **dedicated AWS sub-account owned by Rumble Fish**, in
+`eu-central-1` (moved from `us-east-1` by task 0239). The datastore is **not** in AWS —
+it is a Hetzner dedicated server, reached over mTLS. There is one environment; see
+[`docs/deployment.md`](../deployment.md).
+
+The private-subnet topology this section originally described was replaced by task 0239:
+Lambdas were taken **out of the VPC** (removing the NAT Gateway), and Galexie moved to a
+**public** subnet with `assignPublicIp` enabled.
 
 ```
-┌─ VPC — us-east-1a ──────────────────────────────────────────────────────────┐
+┌─ AWS eu-central-1 ──────────────────────────────────────────────────────────┐
 │                                                                             │
-│  ┌─ Public Subnet ───────────────────────────────────────────────────────┐  │
-│  │  CloudFront CDN                 API Gateway                           │  │
-│  └────────┬───────────────────────────┬──────────────────────────────────┘  │
-│           │                           │                                     │
-│  ┌─ Private Subnet ──────────────────────────────────────────────────────┐  │
-│  │        │                           ▼                                  │  │
-│  │        │                  Lambda (Rust/axum API)                       │  │
-│  │        │                  Lambda (Indexer / Ledger Processor)         │  │
-│  │        │                           │                                  │  │
-│  │        │              ┌────────────┴────────────┐                     │  │
-│  │        │              │ RDS PostgreSQL           │                     │  │
-│  │        │              │ (block explorer schema)  │                     │  │
-│  │        │              └─────────────────────────┘                     │  │
-│  └────────┼──────────────────────────────────────────────────────────────┘  │
-└───────────┼─────────────────────────────────────────────────────────────────┘
-            │
-  ECS Fargate (Galexie) runs in the same VPC, writing to S3 via VPC endpoint
+│  CloudFront CDN            API Gateway                                      │
+│        │                        │                                           │
+│        │                        ▼                                           │
+│        │            Lambda (Rust/axum API)          ── no VPC ──┐            │
+│        │            Lambda (Ledger Processor)       ── no VPC ──┤            │
+│        │                                                        │            │
+│  ┌─ VPC (minimal) ──────────────────────────────────────────┐   │            │
+│  │  ┌─ Public Subnet ────────────────────────────────────┐  │   │            │
+│  │  │  ECS Fargate — Galexie (assignPublicIp ENABLED)    │  │   │            │
+│  │  │            │ writes LedgerCloseMeta XDR            │  │   │            │
+│  │  │            ▼                                        │  │   │            │
+│  │  │  S3  stellar-ledger-data ──PutObject──> SQS doorbell │  │   │            │
+│  │  └─────────────────────────────────────────────────────┘  │   │            │
+│  └───────────────────────────────────────────────────────────┘   │            │
+└──────────────────────────────────────────────────────────────────┼────────────┘
+                                                                   │ mTLS
+                                                                   ▼
+                              ┌──────────────────────────────────────────────┐
+                              │ Hetzner  ch-prod-01                          │
+                              │  Caddy (client-cert CN allow-list)           │
+                              │    └─> ClickHouse (block explorer schema)    │
+                              │  mdadm RAID 1 · weekly Borg ─> BX21          │
+                              └──────────────────────────────────────────────┘
+
   Route 53 ──> CloudFront CDN
-  Lambda ····> Secrets Manager (credentials)
-  Lambda ····> CloudWatch / X-Ray (monitoring)
+  Lambda ····> Secrets Manager (mTLS client cert + credentials, via SM Extension)
+  Lambda ····> CloudWatch / X-Ray (monitoring — AWS side only; the CH box is
+               monitored on the box, not in CloudWatch)
 ```
 
 ### 3.3 Component Ownership
 
 **Hosted by Rumble Fish (AWS sub-account):**
 
-| Component                               | Service                              | Role                                                                                                                                                                                                                                                                                |
-| --------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Galexie process                         | ECS Fargate (1 task, continuous)     | Streams live ledger data from Stellar network to S3                                                                                                                                                                                                                                 |
-| Historical backfill (`backfill-runner`) | Developer workstation CLI (ADR 0010) | Streams history archives locally; writes directly to RDS. Production tool (task 0145).                                                                                                                                                                                              |
-| S3 bucket `stellar-ledger-data`         | AWS S3                               | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor                                                                                                                                                                                                                     |
-| Lambda — Ledger Processor               | AWS Lambda (S3 event-driven)         | Parses XDR; writes explorer records and derived state to RDS                                                                                                                                                                                                                        |
-| Lambda — Rust/axum API handlers         | AWS Lambda (per API Gateway route)   | Serves all public API requests                                                                                                                                                                                                                                                      |
-| RDS PostgreSQL                          | AWS RDS (db.r6g.large, Single-AZ)    | Pre-cutover block explorer database; frozen post-cutover — ClickHouse (Hetzner) has since replaced it as the production store per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md), RDS teardown pending (task 0239). See the Store-status note in the intro. |
-| API Gateway                             | AWS API Gateway                      | REST API, throttling, request validation, response caching                                                                                                                                                                                                                          |
-| AWS WAF                                 | AWS WAF                              | Managed rules and abuse protection for public ingress                                                                                                                                                                                                                               |
-| CloudFront CDN                          | AWS CloudFront                       | Serves React frontend                                                                                                                                                                                                                                                               |
-| Swagger UI                              | utoipa-swagger-ui `/api-docs`        | OpenAPI spec + interactive documentation                                                                                                                                                                                                                                            |
-| EventBridge Scheduler                   | AWS EventBridge                      | Cron triggers for operational tasks (e.g. partition management)                                                                                                                                                                                                                     |
-| Secrets Manager                         | AWS Secrets Manager                  | DB credentials, non-browser integration keys                                                                                                                                                                                                                                        |
-| CloudWatch + X-Ray                      | AWS CloudWatch                       | Logs, metrics, alarms, distributed tracing                                                                                                                                                                                                                                          |
-| CI/CD pipeline                          | GitHub Actions → AWS CDK             | Infrastructure-as-code deploy                                                                                                                                                                                                                                                       |
+| Component                               | Service                              | Role                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Galexie process                         | ECS Fargate (1 task, continuous)     | Streams live ledger data from Stellar network to S3                                                                                                                                                                                                                                                                                           |
+| Historical backfill (`backfill-runner`) | Developer workstation CLI (ADR 0010) | Streams history archives locally; writes directly to ClickHouse. Production tool (task 0145). See [`docs/backfills.md`](../backfills.md).                                                                                                                                                                                                     |
+| S3 bucket `stellar-ledger-data`         | AWS S3                               | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor                                                                                                                                                                                                                                                                               |
+| Lambda — Ledger Processor               | AWS Lambda (S3 event-driven)         | Parses XDR; writes explorer records and derived state to ClickHouse over mTLS                                                                                                                                                                                                                                                                 |
+| Lambda — Rust/axum API handlers         | AWS Lambda (per API Gateway route)   | Serves all public API requests                                                                                                                                                                                                                                                                                                                |
+| ClickHouse                              | Hetzner dedicated `ch-prod-01`       | The block explorer database, per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md). Single node, Ubuntu 24.04 on mdadm RAID 1, reached only over mTLS via Caddy. The RDS PostgreSQL this row used to name was never deployed — see the Store-status note in the intro.                                                   |
+| API Gateway                             | AWS API Gateway                      | REST API, throttling, request validation, response caching                                                                                                                                                                                                                                                                                    |
+| Edge protection (API hostname only)     | Cloudflare                           | WAF managed rules, unmetered DDoS, Managed Challenge, rate limiting on `api-sorobanscan.rumblefishdev.com`; origin locked to Cloudflare by a secret request header. AWS WAF was dropped — both WebACLs — per [ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md) and task 0302. The CloudFront frontend has no edge filtering. |
+| CloudFront CDN                          | AWS CloudFront                       | Serves React frontend                                                                                                                                                                                                                                                                                                                         |
+| Swagger UI                              | utoipa-swagger-ui `/api-docs`        | OpenAPI spec + interactive documentation                                                                                                                                                                                                                                                                                                      |
+| EventBridge Scheduler                   | AWS EventBridge                      | Cron triggers for operational tasks (e.g. partition management)                                                                                                                                                                                                                                                                               |
+| Secrets Manager                         | AWS Secrets Manager                  | DB credentials, non-browser integration keys                                                                                                                                                                                                                                                                                                  |
+| CloudWatch + X-Ray                      | AWS CloudWatch                       | Logs, metrics, alarms, distributed tracing                                                                                                                                                                                                                                                                                                    |
+| CI/CD pipeline                          | GitHub Actions → AWS CDK             | Infrastructure-as-code deploy                                                                                                                                                                                                                                                                                                                 |
 
 **External services consumed (read-only):**
 
@@ -572,57 +599,67 @@ functionality. All data flows from the canonical ledger.
 
 Public browser traffic is anonymous and read-only. The SPA must not embed API keys or
 shared secrets. Abuse control for public traffic is enforced at the ingress layer through
-API Gateway throttling/request validation and AWS WAF. If API keys are later enabled, they
-are reserved for trusted non-browser consumers and are not required for normal explorer
-browsing.
+API Gateway throttling/request validation and, on the API hostname, the Cloudflare edge.
+There is no AWS WAF — both WebACLs were dropped
+([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md), task 0302) — and the
+CloudFront frontend distribution has no edge filtering: it serves a static, edge-cached
+bundle from a private S3 origin, so managed injection rules have no application to
+protect. If API keys are later enabled, they are reserved for trusted non-browser
+consumers and are not required for normal explorer browsing.
 
 ### 3.4 Tech Stack
 
-| Component     | Technology                    | Purpose                                                   |
-| ------------- | ----------------------------- | --------------------------------------------------------- |
-| Ingestion     | Galexie (ECS Fargate)         | Streams `LedgerCloseMeta` XDR from Stellar network to S3  |
-| XDR parsing   | `stellar-xdr` crate (Rust)    | Deserializes all XDR types in Ledger Processor Lambda     |
-| API Framework | axum / Rust (per ADR 0005)    | Modular REST API with utoipa OpenAPI                      |
-| Compute       | AWS Lambda (ARM/Graviton2)    | Serverless; auto-scaling                                  |
-| Gateway       | AWS API Gateway               | Request routing, throttling, validation, response caching |
-| Edge Security | AWS WAF                       | Managed rules, IP reputation, abuse protection            |
-| Database      | RDS PostgreSQL 16             | Block explorer schema with native range partitioning      |
-| CDN           | CloudFront                    | Static asset delivery for frontend                        |
-| DNS           | Route 53                      | Domain management                                         |
-| Monitoring    | CloudWatch + X-Ray            | Logging, distributed tracing, alarms                      |
-| Secrets       | Secrets Manager               | Database credentials, non-browser integration keys        |
-| IaC           | AWS CDK (TypeScript)          | All infrastructure defined as code                        |
-| CI/CD         | GitHub Actions → `cdk deploy` | Automated deployment on merge to main                     |
+| Component     | Technology                    | Purpose                                                                                  |
+| ------------- | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| Ingestion     | Galexie (ECS Fargate)         | Streams `LedgerCloseMeta` XDR from Stellar network to S3                                 |
+| XDR parsing   | `stellar-xdr` crate (Rust)    | Deserializes all XDR types in Ledger Processor Lambda                                    |
+| API Framework | axum / Rust (per ADR 0005)    | Modular REST API with utoipa OpenAPI                                                     |
+| Compute       | AWS Lambda (ARM/Graviton2)    | Serverless; auto-scaling                                                                 |
+| Gateway       | AWS API Gateway               | Request routing, throttling, validation, response caching                                |
+| Edge Security | Cloudflare (API host only)    | Managed rules, IP reputation, DDoS, rate limiting; no AWS WAF, no edge filter on the SPA |
+| Database      | ClickHouse (Hetzner, mTLS)    | Block explorer schema; MergeTree family, `intDiv(ledger_sequence, 500000)` partitioning  |
+| CDN           | CloudFront                    | Static asset delivery for frontend                                                       |
+| DNS           | Route 53                      | Domain management                                                                        |
+| Monitoring    | CloudWatch + X-Ray            | Logging, distributed tracing, alarms                                                     |
+| Secrets       | Secrets Manager               | Database credentials, non-browser integration keys                                       |
+| IaC           | AWS CDK (TypeScript)          | All infrastructure defined as code                                                       |
+| CI/CD         | GitHub Actions → `cdk deploy` | Automated deployment on merge to main                                                    |
 
 ### 3.5 Environments
 
-| Environment     | Purpose                   | Database                    |
-| --------------- | ------------------------- | --------------------------- |
-| **Development** | Local and CI development  | Local PostgreSQL            |
-| **Staging**     | Pre-production validation | Separate RDS (testnet data) |
-| **Production**  | Live service              | Mainnet RDS                 |
+| Environment    | Purpose      | Database                           |
+| -------------- | ------------ | ---------------------------------- |
+| **Production** | Live service | ClickHouse on Hetzner `ch-prod-01` |
 
-Production is the public traffic baseline. Staging preserves the same topology and failure
-model, but uses lower concurrency/throttling budgets, smaller caches, shorter operational
-retention, and tighter access controls so pre-production validation does not carry full
-production cost. The staging web frontend should not be publicly open; it is expected to be
-protected by password-based access at the edge layer. Production durability and security
-baselines explicitly include automated RDS backups with point-in-time recovery, deletion
-protection on the production database, KMS-backed encryption for RDS, SSE-S3 (AES256)
-encryption for the public-XDR `stellar-ledger-data` bucket (KMS avoided there to drop
-per-object request cost — task 0278), and TLS on public ingress.
+**There is exactly one environment.** The multi-environment model this section
+originally described (dev / staging / production, each with its own RDS) was never
+built. AWS-side staging was destroyed by task 0249 on 2026-05-21 and never gained a
+Hetzner counterpart; every deploy is run manually from an operator laptop. See
+[`docs/deployment.md`](../deployment.md) before trusting any `staging` command still
+lying around the repo.
+
+Production durability and security baselines: **weekly** Borg backup (Sunday 03:30 UTC,
+`/etc/cron.d/ch-backup`) pushing a FREEZE-consistent tree to a Hetzner BX21 Storage Box,
+retention `--keep-weekly 4`; mdadm RAID 1 on the box itself; mTLS on every AWS →
+ClickHouse connection, terminated by Caddy and gated on client-certificate CN; SSE-S3
+(AES256) encryption for the public-XDR `stellar-ledger-data` bucket (KMS avoided there
+to drop per-object request cost — task 0278); and TLS on public ingress.
+
+> Note the RPO this implies: a weekly backup means up to seven days of ledgers must be
+> re-ingested with `backfill-runner` after a restore — the Lambdas do **not** re-deliver
+> the rolled-back range. See [`docs/backups.md`](../backups.md).
 
 ### 3.6 Scalability
 
-| Component            | Mechanism                                    | Trigger              |
-| -------------------- | -------------------------------------------- | -------------------- |
-| **API**              | Lambda auto-scale (up to 50 concurrent)      | On-demand            |
-| **Ledger Processor** | Lambda auto-scale (S3 event-driven)          | Per ledger file      |
-| **PostgreSQL**       | RDS Proxy for connection pooling             | Default              |
-|                      | Materialized views for aggregated statistics | Default              |
-|                      | Add read replica                             | Primary CPU > 60%    |
-| **CDN**              | CloudFront scales automatically              | N/A                  |
-| **Multi-AZ**         | Expand VPC + enable RDS Multi-AZ             | SLA > 99.9% required |
+| Component            | Mechanism                                    | Trigger                                                   |
+| -------------------- | -------------------------------------------- | --------------------------------------------------------- |
+| **API**              | Lambda auto-scale (up to 50 concurrent)      | On-demand                                                 |
+| **Ledger Processor** | Lambda auto-scale (S3 event-driven)          | Per ledger file                                           |
+| **ClickHouse**       | Vertical — the box is a dedicated server     | Default                                                   |
+|                      | Materialized views for aggregated statistics | Default                                                   |
+|                      | Add a second CH node (replicated MergeTree)  | Deferred per ADR 0047                                     |
+| **CDN**              | CloudFront scales automatically              | N/A                                                       |
+| **Redundancy**       | mdadm RAID 1 + weekly Borg to BX21           | Already in place; no HA pair — a box loss costs a restore |
 
 ### 3.7 Monitoring and Alerting
 
@@ -630,17 +667,16 @@ per-object request cost — task 0278), and TLS on public ingress.
 | --------------------------- | ------------------------------------------------ | -------------------- |
 | Galexie ingestion lag       | S3 file timestamp >60 s behind ledger close time | SNS → Slack/email    |
 | Ledger Processor error rate | >1% of Lambda invocations in error               | SNS → Slack/email    |
-| RDS CPU                     | >70% sustained for 5 min                         | SNS → on-call        |
-| RDS free storage            | <20% remaining                                   | SNS → expand storage |
+| ClickHouse CPU              | >70% sustained for 5 min                         | SNS → on-call        |
+| ClickHouse free disk        | <20% remaining on `md1`                          | SNS → expand storage |
 | API Gateway 5xx rate        | >0.5% of requests                                | SNS → Slack/email    |
 
-The thresholds above are the production baseline. Staging may use lower-volume alerting,
-tighter cost ceilings, and shorter retention so long as the same alarm categories remain
-represented before production rollout.
+The thresholds above are the production baseline — and, since production is the only
+environment, the only baseline.
 
 CloudWatch dashboards expose: Galexie S3 file freshness, Ledger Processor duration and
-error rate, API latency (p50/p95/p99), RDS CPU/connections, and highest indexed ledger
-sequence vs. network tip.
+error rate, API latency (p50/p95/p99), and highest indexed ledger sequence vs. network
+tip. ClickHouse host metrics are **not** in CloudWatch — the box is outside AWS.
 
 ---
 
@@ -701,12 +737,12 @@ Stellar Network (mainnet peers)
 │ 10. Detect SEP-41 token contracts, NFT contracts,       │
 │     classic LPs → assets, nfts, liquidity_pools,        │
 │     nft_ownership, lp_positions                         │
-│ 11. Commit the whole 14-step persist_ledger in a        │
-│     single DB transaction (ADR 0027)                    │
+│ 11. Flush the `ledgers` row LAST, after every other      │
+│     insert has ack'd — it is the commit marker           │
 └─────────────────────────────────────────────────────────┘
                │
                ▼
-       RDS PostgreSQL (block explorer schema — Section 6)
+       ClickHouse — Hetzner ch-prod-01 (block explorer schema — Section 6)
 ```
 
 ### 4.2 What `LedgerCloseMeta` Contains
@@ -737,7 +773,10 @@ backfill is not a production Fargate task. It runs as a **local CLI tool**
 on a developer workstation that streams from Stellar's
 **public history archives** (the same archives Horizon used for `db reingest`),
 invokes the same `process_ledger` pipeline used by the Lambda, and writes
-directly to the target RDS (dev or staging).
+directly to ClickHouse. Production is the only target — see
+[`docs/backfills.md`](../backfills.md), which also records the non-obvious
+constraint that `repair-tier1` is **mandatory** after a parallel or `--reindex`
+run.
 
 - **Scope:** from Soroban mainnet activation ledger (late 2023) to the present
 - **Parallelism:** backfill runs in configurable ledger-range batches. Batches
@@ -751,9 +790,9 @@ directly to the target RDS (dev or staging).
 
 ### 4.4 Background Workers
 
-| Worker               | Trigger                     | Role                                                         |
-| -------------------- | --------------------------- | ------------------------------------------------------------ |
-| **Ledger Processor** | S3 PutObject (~every 5–6 s) | Primary ingestion — parses XDR, writes all chain data to RDS |
+| Worker               | Trigger                     | Role                                                                |
+| -------------------- | --------------------------- | ------------------------------------------------------------------- |
+| **Ledger Processor** | S3 PutObject (~every 5–6 s) | Primary ingestion — parses XDR, writes all chain data to ClickHouse |
 
 ### 4.5 Operational Characteristics
 
@@ -817,7 +856,7 @@ XDR parsing happens in two places, each with a different scope:
   `nfts`, `liquidity_pools`, and the surrogate-keyed hubs (`accounts`,
   `soroban_contracts`), plus the appearance-index rows for
   `soroban_events_appearances` and `soroban_invocations_appearances`. No raw XDR
-  is written to RDS
+  is written to ClickHouse
   ([ADR 0029](../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)).
 
 - **Backend API (request time):** the envelope / result / result-meta payloads
@@ -1209,19 +1248,32 @@ CREATE TABLE liquidity_pool_snapshots (
 ) PARTITION BY RANGE (created_at);
 ```
 
-**ClickHouse — USD denomination at read time ([ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).**
+**ClickHouse — USD denomination at read time ([ADR 0053](../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)).**
 On the ClickHouse primary store ([ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)),
 `tvl` / `volume` / `fee_revenue` are **not** materialized into these rows by a
-write-back worker. Fast-change off-chain values (USD denominations) are computed
-at **read time** by joining a per-asset `prices(asset, time_bucket → usd)` table
-(synced once per asset from the team Prices API) against the snapshot's reserves,
-mapping `ledger → closed_at → price candle`. This keeps
+write-back worker — the snapshot columns stay unwritten. Fast-change off-chain
+values (USD denominations) are computed at **read time** (task 0199, 2026-08)
+by joining the prices service's in-cluster views (`prices.price_usd_series` /
+`_1h`, `prices.current_price_usd`; natural-identity key, contract pinned in the
+prices repo `views.sql`) against the snapshot's on-chain quantities, mapping
+`ledger → closed_at → grain-floored price bucket`. This keeps
 `liquidity_pool_snapshots` single-writer (indexer only) and avoids the
-`ReplacingMergeTree` per-row read-modify-write race. **Launch scope: TVL only**
-(`reserve_a·price_a + reserve_b·price_b`); `volume` / `fee_revenue` are deferred —
-their on-chain input `gross_volume_a` (PathPayment claim atoms) is now derived at
-ingest by the live indexer and backfilled for history (task 0266); only the USD
-denomination waits on the Prices API.
+`ReplacingMergeTree` per-row read-modify-write race. All three series ship:
+`tvl = reserve_a·price_a + reserve_b·price_b` (both legs required),
+`volume = Σ gross_volume_a·price_a` (per-ledger pricing; `gross_volume_a` from
+PathPayment claim atoms, live since 0261 and backfilled by 0266),
+`fee_revenue = volume · fee_bps / 10000`. The chart reads the series views at
+the interval's grain; the detail endpoint prices latest reserves at each leg's
+last hourly close (`price_usd_series_1h`, 48h lookback — not
+`current_price_usd`, whose 0-sentinel covers native XLM as of 2026-08) and
+sums the last 24h of volume. The pools **list** prices its page the same way,
+from one batched close lookup per page (task 0199 Phase A2); `filter[min_tvl]`
+is rejected with 400 because a compute-at-read value cannot filter page
+membership. No grant is needed to read `prices.*`: the API's `api_reader` CH
+user carries no `<grants>` block in `users.d/services.xml` — unlike
+`prices_writer`/`prices_reader`, where grants NARROW access — so its
+`read_only` profile already covers the database (verified on the box
+2026-08-04).
 
 ### 6.12 Partitioning and Retention
 
@@ -1348,46 +1400,56 @@ Ledger and transaction history are kept indefinitely.
 
 #### Low Traffic (1M requests/month)
 
-| Service                    | Configuration                                        | Monthly Cost    |
-| -------------------------- | ---------------------------------------------------- | --------------- |
-| ECS Fargate — Galexie      | 1 vCPU / 2 GB RAM, continuous                        | ~$36            |
-| RDS PostgreSQL             | db.r6g.large, Single-AZ                              | ~$175           |
-| RDS Storage                | 1 TB gp3 (full chain data from 2023)                 | ~$115           |
-| API Gateway                | 1M requests + 0.5 GB cache                           | ~$4             |
-| Lambda — API handlers      | 800K invocations, 512 MB ARM                         | ~$5             |
-| Lambda — Ingestion workers | ~500K invocations (Ledger Processor)                 | ~$10            |
-| CloudFront                 | 10 GB transfer                                       | ~$5             |
-| S3                         | Ledger XDR files (no auto-deletion, grows over time) | ~$5+            |
-| NAT Gateway                | 1x, ~100 GB data                                     | ~$40            |
-| CloudWatch + X-Ray         | Logs, metrics, tracing                               | ~$20            |
-| Secrets Manager + Route 53 | Credentials + DNS                                    | ~$10            |
-| **Total**                  |                                                      | **~$425/month** |
+| Service                    | Configuration                                                                                                                               | Monthly Cost          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| ECS Fargate — Galexie      | 1 vCPU / 2 GB RAM, continuous                                                                                                               | ~$36                  |
+| Hetzner Server Auction     | `ch-prod-01` — 128 GB DDR4 ECC, 2× 1.92 TB U.2 NVMe RAID 1 (source: [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)) | ~€60                  |
+| Hetzner BX21 Storage Box   | Borg backup target                                                                                                                          | estimate — not costed |
+| API Gateway                | 1M requests + 0.5 GB cache                                                                                                                  | ~$4                   |
+| Lambda — API handlers      | 800K invocations, 512 MB ARM                                                                                                                | ~$5                   |
+| Lambda — Ingestion workers | ~500K invocations (Ledger Processor)                                                                                                        | ~$10                  |
+| CloudFront                 | 10 GB transfer                                                                                                                              | ~$5                   |
+| S3                         | Ledger XDR files (no auto-deletion, grows over time)                                                                                        | ~$5+                  |
+| CloudWatch + X-Ray         | Logs, metrics, tracing                                                                                                                      | ~$20                  |
+| Secrets Manager + Route 53 | Credentials + DNS                                                                                                                           | ~$10                  |
+
+> **The RDS ($175 + $115) and NAT Gateway ($40) rows are gone, not moved.** Neither was
+> ever deployed in production: RDS was superseded by ADR 0047 before cutover, and the NAT
+> Gateway went away when task 0239 took the Lambdas out of the VPC. Dropping ~$330/month
+> of AWS spend for ~€60 of Hetzner was the stated point of ADR 0047.
+>
+> No current total is given here on purpose — the surviving AWS figures are the original
+> pre-pivot estimates and have not been checked against a bill. Treat every number in
+> this table as an **estimate** except the Hetzner line, which is sourced.
 
 #### Scaling Path to High Traffic (10M requests/month)
 
-| Change                                           | Trigger           | Added Cost      |
-| ------------------------------------------------ | ----------------- | --------------- |
-| Add Lambda provisioned concurrency (5 instances) | >2 req/s avg      | +$75            |
-| Add RDS read replica (db.r6g.large)              | Primary CPU >60%  | +$175           |
-| Enable RDS Multi-AZ                              | SLA >99.9% needed | +$175           |
-| Expand VPC to Multi-AZ                           | With Multi-AZ RDS | +$35 (NAT)      |
-| API Gateway + Lambda growth                      | Proportional      | +$30            |
-| CloudFront / data transfer growth                | Proportional      | +$20            |
-| **Estimated total at 10M requests/month**        |                   | **~$935/month** |
+| Change                                              | Trigger                               | Added Cost                    |
+| --------------------------------------------------- | ------------------------------------- | ----------------------------- |
+| Add Lambda provisioned concurrency (5 instances)    | >2 req/s avg                          | +$75                          |
+| Add a second ClickHouse node (replicated MergeTree) | CH CPU or disk sustained near ceiling | ~+€60 (deferred per ADR 0047) |
+| API Gateway + Lambda growth                         | Proportional                          | +$30                          |
+| CloudFront / data transfer growth                   | Proportional                          | +$20                          |
+
+> The RDS read-replica / Multi-AZ rows this table used to carry described scaling levers
+> for a database that was never deployed. ClickHouse on a dedicated box scales
+> **vertically first** — the levers are a bigger auction server or a replicated second
+> node, not a managed read replica. No total is quoted: see the note on the table above.
 
 ### 7.4 Three-Milestone Delivery Plan
 
 #### Deliverable 1 — Indexing Pipeline & Core Infrastructure
 
-> **Note (2026-05-20):** Per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md),
+> **Note (2026-05-20, corrected 2026-07-22):** Per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md),
 > the prod datastore for API reads is ClickHouse on Hetzner, not RDS PostgreSQL.
-> Acceptance criteria #2 and #3 below reference "ClickHouse" accordingly. RDS
-> retirement is scheduled in [task 0239](../../lore/1-tasks/archive/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
-> Phase 6 (M3 — post-launch cost-optimization step). The store-identity /
-> data-model prose was swept to ClickHouse in task 0244 (see the Store-status note
-> in the intro); the RDS-centric prose that remains — the §3 Infrastructure topology
-> and the §7 Scaling Model / cost tables — deliberately still describes the frozen
-> pre-cutover AWS deployment and is revised when the RDS teardown lands (task 0239).
+> Acceptance criteria #2 and #3 below reference "ClickHouse" accordingly.
+>
+> ~~RDS retirement is scheduled in task 0239 Phase 6.~~ **There was no retirement.** > [Task 0239](../../lore/1-tasks/archive/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
+> completed with Phase 6 satisfied **vacuously** — no production RDS was ever deployed.
+> The store-identity / data-model prose was swept to ClickHouse in task 0244; the §3
+> Infrastructure topology and §7 Scaling Model / cost tables were swept in task 0248
+> (2026-07-22). What follows below is the delivery plan as originally written and is
+> retained as a record of scope, not as a description of the deployment.
 >
 > **Note (2026-05-27):** The Ledger Processor trigger mechanism was reworked
 > from per-S3-event Lambda invocations to an **SQS doorbell + ClickHouse-cursor
@@ -1467,7 +1529,7 @@ caching configured on API Gateway.
 Production deployment on mainnet at public URL. Unit and integration tests covering XDR
 parsing correctness and API endpoint responses. Load test
 results documented (1M baseline, 10M stress). Security audit checklist (OWASP Top 10,
-IAM least-privilege, no public RDS endpoint). Monitoring dashboards and alerting active
+IAM least-privilege, no publicly reachable database endpoint). Monitoring dashboards and alerting active
 and accessible to Stellar team. Full API reference documentation published. GitHub
 repository made public. Professional user testing completed. 7-day post-launch monitoring
 report.
@@ -1481,10 +1543,38 @@ report.
    Galexie ingestion lag <30 s from network tip
 4. Load test report: p95 <200 ms at 1M requests/month equivalent; error rate <0.1%
 5. Security checklist signed off: no wildcard IAM, WAF/throttling active on public
-   ingress, RDS has no public endpoint, production RDS backups/PITR/deletion protection
-   enabled, RDS encrypted with KMS-backed keys and the `stellar-ledger-data` bucket with
-   SSE-S3 (AES256), all secrets in Secrets Manager, all
+   ingress, ClickHouse reachable only through Caddy with a client certificate whose CN
+   is on the allow-list (no anonymous public endpoint), weekly off-box Borg backup
+   (Sunday 03:30 UTC, `--keep-weekly 4`) with a restore procedure drill-tested
+   locally end-to-end, disk-level redundancy via mdadm RAID 1, the `stellar-ledger-data` bucket
+   with SSE-S3 (AES256), all secrets in Secrets Manager, all
    API inputs validated
+
+   > Deliberate deltas from the original AWS-shaped checklist, recorded rather than
+   > quietly dropped: **there is no PITR** (weekly Borg only — RPO up to 7 days), and
+   > **no deletion protection** in the RDS sense, because the store is a self-hosted box.
+   > Both were properties of a managed service that was never adopted.
+   >
+   > **"WAF/throttling active on public ingress" is satisfied without AWS WAF.** Both
+   > AWS WAF WebACLs were dropped ([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+   > task 0302). What holds the criterion: API Gateway throttling (`50` rps / `100`
+   > burst) plus usage-plan limits on every public route, and the Cloudflare edge —
+   > managed rules, DDoS, Managed Challenge, rate limiting — on the API hostname, with
+   > the origin locked to Cloudflare. The CloudFront frontend distribution carries no
+   > edge filter; it serves static, edge-cached files from a private S3 origin, so the
+   > managed rule groups had nothing to protect there.
+   >
+   > This wording is an expanded restatement of the criterion, not the approved text —
+   > the approved wording is the arbiter.
+   >
+   > **The backup clause was narrowed to what is demonstrable.** It previously read
+   > "weekly Borg backup **verified restorable**", which conflated two different
+   > things. Per [`docs/backups.md`](../backups.md): the restore procedure has been
+   > drill-tested locally end-to-end, but a real restore **from the Hetzner Storage
+   > Box has never been performed** — that would be the operator's first live
+   > exercise. "Verified restorable" would claim the second on the strength of the
+   > first. RPO is up to 7 days, as recorded above.
+
 6. 7-day post-launch monitoring report: uptime %, API error rate, p95 latency, Galexie
    ingestion lag per day
 

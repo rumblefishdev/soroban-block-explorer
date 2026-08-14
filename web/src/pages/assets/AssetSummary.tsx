@@ -99,14 +99,24 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           ]}
         />
       )}
+      {/* ADR 0051: the classic/native asset's Stellar Asset Contract. Link to
+       * the contract page only when deployed — an un-deployed SAC is a
+       * reserved address, not a live contract (subsumes 0337).
+       *
+       * KNOWN GAP (research task 0452): this row appears only for assets we happen to
+       * have seen a SAC handle for, which since CAP-67 means "assets that have
+       * moved" rather than "assets with a contract" — so two otherwise
+       * identical classic assets disagree here for no visible reason. The fix
+       * fix is undecided — 0452 measures how common reserved handles are and
+       * then picks between showing the address for every classic asset, only
+       * for deployed ones, or leaving this as-is with better wording.
+       * Deliberately left visible until then: a row that says "reserved, not
+       * deployed" is honest and surfaces the oddity, which beats silence. */}
       {asset.sac_contract_id && (
         <SummaryRow
           cells={[
             {
               label: 'SAC contract',
-              // ADR 0051: the classic/native asset's Stellar Asset Contract.
-              // Link to the contract page only when deployed — an un-deployed
-              // SAC is a reserved address, not a live contract (subsumes 0337).
               value: (
                 <Box
                   sx={{

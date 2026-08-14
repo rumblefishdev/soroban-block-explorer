@@ -4,7 +4,7 @@ title: 'OPS: post-ship validation of the 0365 (lptxs) + 0385 (acclist) read swap
 type: OPS
 status: backlog
 related_adr: []
-related_tasks: ['0365', '0385', '0357']
+related_tasks: ['0365', '0385', '0357', '0397']
 tags: [priority-high, effort-medium, layer-clickhouse, validation]
 links:
   - crates/api/src/liquidity_pools/queries.rs
@@ -67,10 +67,26 @@ output correctness and one ops-safety check.
       floor exists before any query runs. Either confirm the number or fold
       acclist into 0357's documented known-issue framing.
 
+### 0397 — sep1 enrichment issuer resolve (added 2026-07-22)
+
+- [ ] After the next deploy **and a drain** (the worker is bursty — a quiet
+      window logs nothing), confirm in `system.query_log` that the sep1 issuer
+      resolve reads ~24.6k rows/call, not ~24.9M. Query shape to match:
+      `nullIf(account_id, ?) AS issuer_strkey … FROM accounts WHERE id = ?`.
+- [ ] While there: the same query measured **1.91M rows / 176 granules as
+      `dev_read` vs 16.68M / 1838 as `ingestion_writer`** on identical SQL, same
+      part count, cause never established (0397 had no `ingestion_writer`
+      credentials). If the post-deploy number is not ~24.6k, that discrepancy is
+      the first suspect — and it would mean read-cost estimates taken from the
+      readonly account do not describe production.
+
 ## Acceptance Criteria
 
 - [ ] lptxs output verified byte-identical across sparse / dense / mega pools;
       E20 green.
+- [ ] 0397's post-deploy read_rows/call measured (~24.6k expected), and the
+      `dev_read` / `ingestion_writer` discrepancy either explained or recorded as
+      still open.
 - [ ] acclist output verified byte-identical across both sort directions,
       `home_domain` filter and cursor pagination.
 - [ ] Refresh recompute measured against the 6 GB cap, with the headroom recorded

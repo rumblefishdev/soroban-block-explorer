@@ -30,10 +30,22 @@ pub struct E3HeavyFields {
     pub envelope_xdr: Option<String>,
     /// Base64-encoded `TransactionResult`.
     pub result_xdr: Option<String>,
-    /// Diagnostic events emitted during Soroban invocation.
+    /// Base64-encoded `TransactionMeta` — the ledger-entry changes (who held
+    /// what before/after). The 0046 spec originally withheld it; reversed by
+    /// task 0460 #13: it is the one raw layer the page could not show, and
+    /// the raw-data section renders every XDR blob with a Lab deep link.
+    pub result_meta_xdr: Option<String>,
+    /// The host-VM debug channel (`v4.diagnostic_events`): the `fn_call` /
+    /// `fn_return` trace, `core_metrics` counters, and — when diagnostic mode
+    /// is on, which is always for the archive — a byte-identical COPY of every
+    /// consensus event above. Not hashed into consensus, and CAP-67's own
+    /// event stream (`getEvents`) does not carry it at all. Presenting these
+    /// alongside `contract_events` as one list shows the copies as extra
+    /// events; they are one channel about the other, not a continuation of it.
     pub diagnostic_events: Vec<XdrEventDto>,
-    /// Non-diagnostic Soroban events (contract + system) with full topic
-    /// array + decoded data payload.
+    /// The consensus event stream: `contract` + `system` events from the
+    /// tx-level and per-operation containers. This — and only this — is what
+    /// CAP-67 / `getEvents` mean by "the events of a transaction".
     pub contract_events: Vec<XdrEventDto>,
     /// Operations with full XDR-decoded details (type-specific JSON).
     pub operations: Vec<XdrOperationDto>,
@@ -41,8 +53,7 @@ pub struct E3HeavyFields {
     /// `None` only when the transaction had a parse error.
     pub result_code: Option<String>,
     /// Nested Soroban invocation tree, derived from `result_meta_xdr` at
-    /// extraction time (the raw `result_meta_xdr` itself is intentionally
-    /// not surfaced — see 0046 spec "result_meta_xdr is NOT returned").
+    /// extraction time.
     pub operation_tree: Option<serde_json::Value>,
 }
 
@@ -90,6 +101,20 @@ pub struct XdrEventDto {
     pub data: serde_json::Value,
     /// Event index within the transaction (zero-based).
     pub event_index: i16,
+    /// Zero-based envelope position of the operation that emitted this event
+    /// (CAP-67 V4 per-operation container only; `None` for tx-level,
+    /// diagnostic and pre-Protocol-23 events). Matches
+    /// `XdrOperationDto.application_order - 1`.
+    pub op_index: Option<i16>,
+    /// CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
+    /// `"after_all_txs"`. The protocol's only statement of when a tx-level
+    /// event fired, and the reason `event_index` must not be read as a
+    /// timeline: the fee refund is numbered ahead of the operation it
+    /// refunds. Observed values on mainnet are `before_all_txs` for the charge
+    /// and `after_all_txs` for the refund; `after_tx` exists in the protocol
+    /// and is passed through unchanged if it appears. `None` for per-operation, diagnostic and
+    /// pre-Protocol-23 events, which carry no stage.
+    pub stage: Option<String>,
 }
 
 /// Operation raw parameters (XDR-decoded full details).
@@ -102,6 +127,13 @@ pub struct XdrOperationDto {
     pub application_order: i16,
     /// Full operation details (type-specific JSON).
     pub details: serde_json::Value,
+    /// Per-operation result code from the transaction result XDR, using the
+    /// XDR library's variant names: `"Success"`, `"LowReserve"`, `"Trapped"`,
+    /// op-level rejections as `"OpNoAccount"` etc. Present on failed
+    /// transactions too — the failing op's code is the fail reason (task
+    /// 0352). `None` when the result XDR carried no per-op array
+    /// (validation-level failures) or was unavailable.
+    pub result_code: Option<String>,
 }
 
 /// Merged E3 response: DB light fields + optional XDR heavy fields.

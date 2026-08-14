@@ -118,7 +118,14 @@ The intended implementation stack is:
   types — see [Section 4.5](#45-api-types-and-codegen) below.
 
 The frontend is a public, anonymous browser client. It must not embed API keys or other
-shared secrets; API protection belongs at the API Gateway/WAF boundary, not in the bundle.
+shared secrets; API protection belongs at the ingress boundary — API Gateway throttling
+plus the Cloudflare edge in front of the API hostname — not in the bundle. Note that the
+Cloudflare Turnstile widget the SPA loads gates **API access**: the widget produces a
+challenge token, the SPA posts it to `/auth/session`, and the backend verifies it against
+Cloudflare's siteverify endpoint before minting a free-tier session JWT
+(`crates/api/src/auth/`). The token and the JWT are different things — the widget never
+issues the session. This is also not Cloudflare fronting the frontend's own domain, which
+sits on Route 53 with no edge filter.
 
 ```
 ┌────────┐     ┌──────────────────────────────────────────────────┐
@@ -350,39 +357,92 @@ Expanded behavior:
 
 ### 6.4 Transaction (`/transactions/:hash`)
 
-Both modes display the same base transaction details:
+One progressive view (ADR 0032 update, 2026-07: the former normal/advanced
+toggle is removed — everything it gated is reachable through per-section
+disclosures on a single page).
 
-- Transaction hash (full, copyable), status badge (success/failed), ledger sequence
-  (link), timestamp
-- Fee charged (XLM + stroops), source account (link), memo (type + content)
-- Signatures - signer, weight, signature hex
+Transaction-level sections:
 
-Two display modes toggle how **operations** are presented:
+- Summary: hash (full, copyable), status chip, a one-phrase story chip
+  classifying the whole transaction ("Swap · 4 ops", "Contract call") when the
+  operation shapes allow it, ledger (link), timestamp, fee, memo, source
+  account; for fee-bump envelopes also the fee source account and the inner
+  transaction hash (copy-only — inner hashes are not indexed as pages).
+- A failure banner when `successful` is false: atomicity wording ("no
+  operation was applied") plus the fail reason — the first failing
+  operation's per-op result code (`heavy.operations[].result_code`, e.g.
+  `Create Account #2 — LOW_RESERVE`, with a count when more ops failed);
+  when no per-op array exists (validation-level failures, older cached
+  responses) the raw tx-level `heavy.result_code` shows instead.
+- Signatures; Events (all decoded events, collapsed by default); Raw data
+  (`envelope_xdr`, `result_xdr`, `result_meta_xdr` as collapsible rows, each
+  with a Stellar Lab decode deep link).
 
-- **Normal mode** - graph/tree representation of the transaction's operation flow.
-  Visually shows the relationships between source account, operations, and affected
-  accounts/contracts. Each node in the tree displays a human-readable summary (e.g.
-  "Sent 1,250 USDC to GD2M...K8J1", "Swapped 100 USDC for 95.2 XLM on Soroswap"). Soroban
-  invocations render as a nested call tree showing the contract-to-contract hierarchy.
-  Designed for general users exploring transactions.
+Operations render as a master-detail: a picker (per-type icon + label per
+operation, selection deep-linked as `#op-N`) and **one operation card** for the
+selected operation:
 
-- **Advanced mode** - targeted at developers and experienced users. Shows per-operation
-  raw parameters, full argument values, operation IDs, and return values. Includes events
-  emitted (type, topics, raw data), diagnostic events, and collapsible raw XDR sections
-  (`envelope_xdr`, `result_xdr`, `result_meta_xdr`). All values are shown in their
-  original format without simplification.
+- a truthful per-type headline sentence built from `heavy.details` (light
+  fields as degraded fallback; unknown types fall back to the type label);
+- a route strip for path payments — asset chips with per-hop amounts chained
+  from `claimedAtoms`, flagged as partial when the route also crossed the
+  order book (those fills are not in the LP-only atoms);
+- an **execution trace** for contract invocations, rebuilt client-side from
+  `heavy.diagnostic_events` (`fn_call`/`fn_return` stack walk): the calls
+  that actually ran, nested, with per-node args/return behind a disclosure,
+  the contract events attached to the call that raised them, and — on a
+  failed transaction — a truthful "stopped here" on the calls that never
+  returned. `core_metrics` host counters are excluded;
+- a **Resources** disclosure carrying those `core_metrics` counters — all
+  nineteen, full integers with US grouping, on any Soroban operation
+  (footprint extend/restore are metered too and raise no `fn_call`, so the
+  counters are the only thing the host says about them);
+- when a transaction carries no diagnostic events, the card falls back to
+  the **authorized-calls** tree fed by `heavy.operation_tree`. That is the
+  auth-entry tree (what the transaction was signed to do), and the backend
+  stamps every node with the whole transaction's verdict — so the UI
+  deliberately renders no per-node ✓/✗ there;
+- the operation's own events, matched via `XdrEventDto.op_index`
+  (`application_order - 1`);
+- an "Operation details" disclosure with every raw `details` key — exactness
+  preserved; nothing null/empty that matters for debugging is hidden;
+- on a failed transaction the card dims and carries a "not applied" label.
 
-Expanded behavior:
+Consumed heavy fields: `operations[].details`, `operations[].result_code`
+(per-op result names straight from the XDR library — the fail-reason source),
+`operation_tree`, `diagnostic_events` (execution trace + Resources counters),
+`contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
+`envelope_xdr`, `result_xdr`, `result_meta_xdr`.
+Large payload areas stay collapsible.
 
-- Normal and advanced modes should be alternate presentations over the same backend
-  transaction resource, not separate data domains.
-- The mode switch should be prominent and preserve the page context.
-- Normal mode must prioritize clarity over completeness and should never expose raw XDR as
-  the primary representation.
-- Advanced mode must preserve exactness and should not silently hide null, empty, or
-  protocol-level values that matter for debugging.
-- Large payload areas such as XDR and event data should be collapsible to keep the screen
-  usable.
+#### Events section — one list, the consensus stream (issue #378)
+
+The transaction's **Events** card lists `heavy.contract_events` only: the
+tx-level and per-operation containers, hashed into the ledger, which is what
+CAP-67 and `getEvents` mean by the events of a transaction. Its `Where` column
+names the raising operation (`op_index`) or, for tx-level events, the CAP-67
+`stage` (`before all txs` / `after all txs`) — `event_index` follows XDR
+container order, so the fee refund is numbered ahead of the operation it
+refunds and the number alone would read as a timeline it is not.
+
+`heavy.diagnostic_events` sits under its own disclosure, **raw** — the call
+trace, contract logs, failure diagnostics, and the byte-identical copies of the
+contract's own events that the container carries when diagnostic mode is on
+(always, for the archive we read). The copies are not trimmed for tidiness: the
+execution trace on the operation card is a readable rendering of these rows,
+not a replacement for them, and the raw table stays as the record it derives
+from.
+
+`core_metrics` is the single omission, and only because `readResourceCounters`
+is **total** — it cannot silently drop a counter, whatever shape the value
+arrives in — so the Resources disclosure is a complete record of them and
+nothing leaves the page. On a minimal Soroban transaction they are 19 of 24
+rows, and listing them here would bury the four that describe the execution.
+
+The two never merge, and only the consensus stream is counted. That merge was
+the whole of issue #378: one list and one number for two different records, so
+a transaction that emitted 3 events advertised 27 and printed its transfer
+twice. Separating the records fixes it; hiding rows was never needed.
 
 ### 6.5 Ledgers (`/ledgers`)
 
@@ -498,7 +558,14 @@ consistent with the "tolerate partial availability" expectation above.
 Contract details and interface.
 
 - Contract summary - contract ID (full, copyable), deployer account (link), deployed at
-  ledger (link), WASM hash, SAC badge if applicable
+  ledger (link), WASM hash, SAC badge if applicable. A SAC additionally shows a
+  "Mirrors asset" row (task 0441) — the mirrored classic asset's code linked to
+  its asset page plus the issuer account (native XLM renders as `XLM` →
+  `/assets/native`); on the contracts LIST the same data turns the `SAC` chip
+  into a linked `SAC · CODE` chip. Both come from the `sac_asset` API field.
+  A non-SAC contract renders no SAC chip and no asset row at all; a SAC whose
+  `sac_asset` is `null` (unresolvable facet) keeps the bare, unlinked `SAC`
+  badge
 - Contract interface - list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
@@ -556,8 +623,11 @@ Paginated table of all liquidity pools.
 
 - Pool table - pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
   per asset, fee percentage, participant count (active LP positions; task 0246)
-- Filters - asset (`filter[asset_code]`, case-insensitive single-asset; task 0246)
-  or per-leg `(code, issuer)`, minimum TVL (`filter[min_tvl]`)
+- Filters - asset (`filter[asset_code]`, case-insensitive **substring** of either
+  leg, so `USD` matches the `USDC` pools; `A/B` is a pair query requiring both
+  codes in either order; native legs match on `XLM` despite storing an empty
+  code; task 0440) or per-leg `(code, issuer)` exact match, minimum TVL
+  (`filter[min_tvl]`)
 - Cursor-based pagination controls
 
 Expanded behavior:

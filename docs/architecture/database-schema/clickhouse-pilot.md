@@ -1,13 +1,27 @@
 # Stellar Block Explorer — ClickHouse Pilot
 
-> Companion to [`database-schema-overview.md`](./database-schema-overview.md).
-> The Postgres schema described there is the production source of truth; this
-> document describes the **parallel ClickHouse store** that stands next to it
-> for evaluation, **not** as a replacement.
-
-> **Status:** read-empty pilot. The schema and connection layer are landed;
-> indexer dual-write and API reads are deliberately deferred to follow-up
-> ADRs/tasks.
+> **Status: HISTORICAL — the pilot succeeded and this document is its record.**
+> Everything below is written in the present tense of early 2026 and is now false as a
+> description of production. ClickHouse is **the** production datastore per
+> [ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md); Postgres was
+> retired entirely in task 0244; the indexer writes ClickHouse and the API reads it.
+> For the live schema, read
+> [`database-schema-overview.md`](./database-schema-overview.md) and
+> `crates/db-clickhouse/schema/init.sql`, never this file.
+>
+> Retained because the pilot's evaluation criteria and measurements are the reasoning
+> behind ADR 0047. Read it as _why we chose this_, not _what runs_.
+>
+> <details><summary>Original header, as written</summary>
+>
+> > Companion to `database-schema-overview.md`. The Postgres schema described there is
+> > the production source of truth; this document describes the **parallel ClickHouse
+> > store** that stands next to it for evaluation, **not** as a replacement.
+> >
+> > **Status:** read-empty pilot. The schema and connection layer are landed; indexer
+> > dual-write and API reads are deliberately deferred to follow-up ADRs/tasks.
+>
+> </details>
 
 ---
 
@@ -304,7 +318,7 @@ Highlights:
 Nullable(Decimal128(7))` — per-(pool, ledger) trade volume in asset-A
   units from path-payment claim atoms (derived at ingest by the live
   indexer and, for history, by the 0266 backfill; USD `volume`/`fee_revenue`
-  stay NULL until the Prices API, ADR 0048)
+  stay NULL until the Prices API, ADR 0053)
 - `NUMERIC(28,7)` → `Decimal128(7)`
 - The only `TIMESTAMPTZ` column that survives is
   `ledgers.closed_at`, which becomes `DateTime64(3, 'UTC')`

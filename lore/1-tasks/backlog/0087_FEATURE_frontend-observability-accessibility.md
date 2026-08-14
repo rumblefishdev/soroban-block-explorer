@@ -13,6 +13,32 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Measured 2026-07-22 — neither done nor untouched, and the two halves are in
+      different states. Recommend splitting.**
+      OBSERVABILITY — genuinely absent, but **not startable as written**. Error
+      boundaries exist (`web/src/router/RouteErrorBoundary.tsx`,
+      `libs/ui/src/states/SectionErrorBoundary.tsx`, delivered by 0067, which this
+      task assumes) — they catch failures and render a message, but report
+      nowhere: no console, no transport, no persistence. So a user hitting an
+      error is invisible unless they file an issue by hand via the header link
+      (0407), which carries no route, error or stack. The blocker is that the task
+      never picked a destination — "e.g., Sentry, CloudWatch RUM, or custom
+      endpoint". Until someone decides, this is an open question, not a backlog
+      item.
+      ACCESSIBILITY — **partly satisfied organically**: `aria-*` attributes appear
+      in 26 files, `aria-label` in 19, focus styling in 10. Weak spots are
+      landmark elements (`<main>`/`<nav>`/`<header>` in only 2 files) and
+      `tabIndex` (2). Crucially `eslint-plugin-jsx-a11y` is **not** in the lint
+      config — adding it turns the rest of this half from guesswork into a
+      generated worklist, and is the single cheapest step here.
+      Recommendation: split. Accessibility has a standing argument (public
+      launch) and a clear first move. Observability needs a decision before it
+      needs an engineer. Keeping them in one task means the undecided half blocks
+      the actionable one, which is why this has sat untouched since 2026-03-24.
 ---
 
 # Frontend: observability and accessibility baseline

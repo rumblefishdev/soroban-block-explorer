@@ -1,7 +1,7 @@
-import { Box, Stack, Typography } from '@mui/material';
+import { Stack, Typography } from '@mui/material';
 import type { AccountListItem } from '@rumblefish/api-types';
 import {
-  Chip,
+  DomainChip,
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
@@ -27,27 +27,7 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
         sx={{ minWidth: 0 }}
       >
         <IdentifierWithCopy value={row.account_id} type="account" />
-        {row.home_domain && (
-          // Issuer home domain → external link to the org site. The bare
-          // domain has no scheme on-chain, so default to https.
-          <Box
-            component="a"
-            href={
-              /^https?:\/\//.test(row.home_domain)
-                ? row.home_domain
-                : `https://${row.home_domain}`
-            }
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{
-              display: 'inline-flex',
-              textDecoration: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            <Chip size="sm" color="neutral" label={row.home_domain} />
-          </Box>
-        )}
+        <DomainChip domain={row.home_domain} />
       </Stack>
     ),
   },

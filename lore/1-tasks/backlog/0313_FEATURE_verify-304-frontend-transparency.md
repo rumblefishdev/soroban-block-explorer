@@ -21,6 +21,19 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0292 future work — residual frontend verification for conditional GET.'
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Scope is smaller than it reads — verified 2026-07-22.**
+      The server side is done and shipped by 0292: conditional GET lives in
+      `crates/api/src/common/conditional.rs` and `cache_control.rs`, and is wired
+      into the `network` and `ledgers` handlers.
+      This task is *verification*, not implementation — its own summary says the
+      SPA is expected to need no code change and this task confirms it
+      empirically. Remaining: (1) confirm in a browser that revalidation is
+      transparent, (2) the optional CORS `expose-header` for `ETag`, which is
+      absent from the API today. Both small; neither is a feature build.
 ---
 
 # Verify 304 transparency in the SPA + optional ETag CORS expose-header

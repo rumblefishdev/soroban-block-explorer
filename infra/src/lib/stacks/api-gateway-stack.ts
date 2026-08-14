@@ -5,16 +5,16 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import type { Construct } from 'constructs';
 
-import { WafWebAcl } from '../constructs/waf-web-acl.js';
 import { relativeRecordName, type EnvironmentConfig } from '../types.js';
 
 // API Gateway account-level default throttle (rps / burst). Used as the
 // "lifted" ceiling when `config.loadTesting` is set, so the per-stage 50/100
 // cap stops being the bottleneck during a load test. The account limit still
-// backstops genuine abuse, and the WAF rate rule is dropped separately.
+// backstops genuine abuse. This throttle is now the only volumetric protection
+// on the origin — the REGIONAL WAF WebACL that used to add a per-IP rate rule
+// was removed (ADR 0048, task 0302).
 const LOAD_TEST_THROTTLE_RATE = 10_000;
 const LOAD_TEST_THROTTLE_BURST = 5_000;
 
@@ -31,13 +31,14 @@ export interface ApiGatewayStackProps extends cdk.StackProps {
  * - Environment-specific throttling (rate + burst limits)
  * - Optional response caching (disabled on staging to save cost)
  * - CORS for SPA browser access
- * - REGIONAL WAF WebACL with managed rules + rate limit (task 0035)
  * - API key usage plan for non-browser consumers
  *
- * NOTE on WAF: This stack creates its OWN REGIONAL WebACL. The CloudFront
- * distribution (DeliveryStack) has a separate CLOUDFRONT-scoped WebACL
- * with the same rule set. AWS WAF requires distinct ACLs for CLOUDFRONT
- * and REGIONAL scopes — one ACL cannot serve both. See task 0035.
+ * NOTE on edge protection: this stack used to create its own REGIONAL WAF
+ * WebACL (task 0035). It was removed together with the CLOUDFRONT-scoped one
+ * (ADR 0048, task 0302). Edge filtering now lives in Cloudflare, which fronts
+ * the API hostname and is the only thing in front of this stage besides the
+ * stage throttle; the origin rejects anything without the edge-secret header
+ * (`crates/api/src/common/edge_lock.rs`).
  */
 export class ApiGatewayStack extends cdk.Stack {
   readonly api: apigateway.RestApi;
@@ -48,9 +49,10 @@ export class ApiGatewayStack extends cdk.Stack {
     const { config, apiFunction } = props;
 
     // Load-test window (task 0338): lift the per-stage + usage-plan throttle to
-    // the account ceiling and drop the WAF per-IP rate rule (below), so a load
-    // test measures backend capacity rather than edge throttling. Managed WAF
-    // rules, edge_lock, API-key auth, and Lambda↔Hetzner mTLS are untouched.
+    // the account ceiling so a load test measures backend capacity rather than
+    // edge throttling. It used to drop the REGIONAL WAF per-IP rate rule too;
+    // that WebACL is gone (task 0302), so the throttle is all this switch moves.
+    // edge_lock, API-key auth, and Lambda↔Hetzner mTLS are untouched.
     const throttleRate = config.loadTesting
       ? LOAD_TEST_THROTTLE_RATE
       : config.apiGatewayThrottleRate;
@@ -125,30 +127,6 @@ export class ApiGatewayStack extends cdk.Stack {
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });
     this.api = api;
-
-    // ---------------------
-    // WAF (REGIONAL) — optional, own WebACL for API Gateway
-    // ---------------------
-    // Same rule set as the CLOUDFRONT-scoped WebACL in DeliveryStack via
-    // the shared WafWebAcl construct. A CLOUDFRONT-scoped WebACL cannot
-    // be associated with a REGIONAL resource (API Gateway stage), so two
-    // ACLs are required.
-    const waf = config.enableWaf
-      ? new WafWebAcl(this, 'ApiWaf', {
-          scope: 'REGIONAL',
-          name: `${config.envName}-soroban-explorer-api`,
-          rateLimit: config.apiWafRateLimit,
-          // Drop the per-IP rate rule during a load-test window; managed rules stay.
-          includeRateLimit: !config.loadTesting,
-        })
-      : undefined;
-
-    if (waf) {
-      new wafv2.CfnWebACLAssociation(this, 'WafAssociation', {
-        resourceArn: api.deploymentStage.stageArn,
-        webAclArn: waf.webAclArn,
-      });
-    }
 
     // ---------------------
     // Usage Plan + API Key
@@ -301,11 +279,6 @@ export class ApiGatewayStack extends cdk.Stack {
     if (mtlsTruststoreBucket) {
       new cdk.CfnOutput(this, 'ApiMtlsTruststoreBucket', {
         value: mtlsTruststoreBucket.bucketName,
-      });
-    }
-    if (waf) {
-      new cdk.CfnOutput(this, 'ApiWafWebAclArn', {
-        value: waf.webAclArn,
       });
     }
   }

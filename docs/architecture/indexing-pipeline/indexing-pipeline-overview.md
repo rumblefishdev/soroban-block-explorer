@@ -265,11 +265,10 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    [ADR 0041](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md))
    are documented at code-level in the CH writer module
    (`crates/db-clickhouse/src/persist/writer.rs`) and in the schema file
-   (`crates/db-clickhouse/schema/init.sql`). The aggregate columns (`assets.holder_count`,
-   `assets.total_supply`) are not yet wired in the CH stream-write path — they are
-   re-derived in CH via background `OPTIMIZE` + repair passes per the
-   [task 0228 phase-6 invariants](../../runbooks/0228_phase6_validation.md);
-   the live-tail indexer leaves them to those passes.
+   (`crates/db-clickhouse/schema/init.sql`). The indexer writes no aggregate at
+   all: supply/holders are recomputed from `balances` by the refreshable
+   `balance_aggregates_mv`, and the dead `assets.holder_count` /
+   `assets.total_supply` columns were dropped in task 0310.
 
 The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) was removed with
 Postgres (task 0244); its ordering rationale is preserved in

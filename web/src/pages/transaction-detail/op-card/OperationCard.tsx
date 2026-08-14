@@ -1,0 +1,321 @@
+import type {
+  OperationItem,
+  XdrEventDto,
+  XdrOperationDto,
+} from '@rumblefish/api-types';
+import { Box, Collapse, Stack, Typography } from '@mui/material';
+import type { ReactNode } from 'react';
+import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import { useState } from 'react';
+
+import { formatOperationType } from '../../transactions/operationTypes.js';
+import { OperationJsonDetail } from './OperationJsonDetail.js';
+import { detailsObj } from '../shared/humanizeOp.js';
+import { HumanizedSentence } from '../shared/HumanizedSentence.js';
+import { DisclosureRow } from '../shared/DisclosureRow.js';
+import { isSorobanOp } from '../shared/opKind.js';
+
+import { allResourceFacts, readResourceCounters } from './resources.js';
+import { CallTree, parseOperationTree } from './CallTree.js';
+import {
+  buildExecutionTrace,
+  EventDot,
+  EventLine,
+  ExecutionTrace,
+  traceCallCount,
+} from './ExecutionTrace.js';
+import { OpAvatar } from './opIcon.js';
+import { buildRouteModel, RouteStrip } from './RouteStrip.js';
+
+interface OperationCardProps {
+  light: OperationItem | undefined;
+  heavy: XdrOperationDto | null;
+  /** `tx.successful` — Stellar is atomic, so a failed transaction means no
+   *  operation was applied (the summary banner states the verdict; the card
+   *  dims and labels itself). */
+  applied: boolean;
+  fallbackOrder: number;
+  /** Ops without their own source inherit the transaction's (self-detection). */
+  txSourceAccount: string | null;
+  /** `heavy.operation_tree` — tx-level, safe to attach to the invoke card
+   *  (protocol 21+: one InvokeHostFunction per transaction). */
+  operationTree?: unknown;
+  /** Tx-level `heavy.contract_events`; the card shows the ones whose
+   *  `op_index` points at this operation (D7). Absent index → tx-level
+   *  events section only. */
+  contractEvents?: readonly XdrEventDto[];
+  /** Tx-level `heavy.diagnostic_events` — the host-VM execution trace
+   *  (fn_call/fn_return). Tx-level is safe on the invoke card for the same
+   *  reason as `operationTree` (one InvokeHostFunction per tx). */
+  diagnosticEvents?: readonly XdrEventDto[];
+}
+
+/** Small uppercase section label used across the card. */
+function Overline({ children, mb }: { children: ReactNode; mb?: number }) {
+  return (
+    <Typography
+      variant="bodyXsRegular"
+      sx={(theme) => ({
+        color: theme.palette.text.tertiary,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        fontWeight: 650,
+        mb,
+      })}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+export function OperationCard({
+  light,
+  heavy,
+  applied,
+  fallbackOrder,
+  txSourceAccount,
+  operationTree,
+  contractEvents = [],
+  diagnosticEvents = [],
+}: OperationCardProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [countersOpen, setCountersOpen] = useState(false);
+
+  if (light == null) {
+    return (
+      <Typography
+        variant="bodySmRegular"
+        sx={(theme) => ({ color: theme.palette.text.tertiary, p: 2 })}
+      >
+        No operation selected.
+      </Typography>
+    );
+  }
+
+  // heavy is 1:1 with the envelope; the light row is folded, so its
+  // application_order is the FIRST of the fold — wrong for later copies.
+  const order =
+    heavy?.application_order ?? light.application_order ?? fallbackOrder;
+  const label = formatOperationType(light.type_name);
+  const soroban = isSorobanOp(light.type_name);
+  const routeModel = buildRouteModel(heavy);
+  // Execution trace (0462): rebuilt client-side from the diagnostic
+  // fn_call/fn_return stream — the EXECUTED calls, superset of the auth
+  // tree. When present it supersedes "Authorized calls"; the auth tree
+  // stays as the fallback for txs without diagnostic events.
+  const isInvoke = light.type_name === 'INVOKE_HOST_FUNCTION';
+  const traceNodes = isInvoke
+    ? buildExecutionTrace(diagnosticEvents, contractEvents)
+    : [];
+  // Resource counters belong to the Soroban invocation, and a Soroban tx
+  // carries exactly one (protocol rule) — so per-tx equals per-op here.
+  // Gated on `soroban`, not `isInvoke`: footprint extend/restore run through
+  // the same host and are metered the same way. They raise no `fn_call`, so
+  // they get no trace — the counters are the only thing the host says about
+  // them, and the narrower gate used to swallow those silently.
+  const counters = soroban
+    ? readResourceCounters(diagnosticEvents)
+    : new Map<string, number | string>();
+  const allCounters = allResourceFacts(counters);
+  const callNodes =
+    isInvoke && traceNodes.length === 0
+      ? parseOperationTree(operationTree)
+      : [];
+  // op_index is the 0-based envelope position (CAP-67 V4 attribution);
+  // responses parsed before the field landed simply match nothing.
+  //
+  // Suppressed when the execution trace is present: the trace already shows
+  // these very events as rows, in the call that raised them and with their
+  // payload — a flat repetition underneath adds nothing. Classic operations
+  // have no trace (SAC events on a payment, say), and there this list is the
+  // only per-operation view, so it stays.
+  const opEvents =
+    heavy?.application_order != null && traceNodes.length === 0
+      ? contractEvents.filter(
+          (event) => event.op_index === heavy.application_order - 1
+        )
+      : [];
+  const detailCount = Object.keys(detailsObj(heavy) ?? {}).length;
+
+  return (
+    <Box
+      sx={(theme) => ({
+        border: `1px solid ${theme.palette.stroke.default}`,
+        borderRadius: `${theme.shape.radius.md}px`,
+        p: 2,
+      })}
+    >
+      <Stack direction="row" spacing={1.25} alignItems="center">
+        <OpAvatar typeName={light.type_name} />
+        <Overline>
+          {order} · {label}
+        </Overline>
+        <Chip
+          size="sm"
+          color={soroban ? 'success' : 'neutral'}
+          label={soroban ? 'Soroban' : 'Classic'}
+        />
+        {!applied && (
+          <Chip
+            size="sm"
+            color="error"
+            label="not applied"
+            sx={{ ml: 'auto' }}
+          />
+        )}
+      </Stack>
+
+      <Box sx={{ opacity: applied ? 1 : 0.7 }}>
+        <Typography
+          variant="bodyMedium"
+          sx={(theme) => ({ color: theme.palette.text.primary, mt: 1.25 })}
+        >
+          <HumanizedSentence
+            light={light}
+            heavy={heavy}
+            txSourceAccount={txSourceAccount}
+          />
+        </Typography>
+
+        {routeModel != null && (
+          <RouteStrip model={routeModel} applied={applied} />
+        )}
+
+        {traceNodes.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Overline mb={0.5}>
+              Execution trace · {traceCallCount(traceNodes)} calls
+            </Overline>
+            <ExecutionTrace nodes={traceNodes} />
+          </Box>
+        )}
+
+        {allCounters.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            {/* What the execution COST, next to what it did — lifted out of
+                the diagnostic stream, where these were rendering as nineteen
+                event rows (task 0363 / issue #378). All of them or none: a
+                curated handful on top of the same list underneath would say
+                the same thing twice, and choosing which five matter is a
+                ranking the protocol does not state. */}
+            <DisclosureRow
+              open={countersOpen}
+              onToggle={() => setCountersOpen((open) => !open)}
+              label="Resources"
+              trailing={
+                <Chip
+                  size="sm"
+                  color="neutral"
+                  label={String(allCounters.length)}
+                />
+              }
+            />
+            <Collapse in={countersOpen} unmountOnExit>
+              <Box
+                sx={{
+                  mt: 0.5,
+                  display: 'grid',
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    sm: 'repeat(2, minmax(0, 1fr))',
+                    md: 'repeat(3, minmax(0, 1fr))',
+                  },
+                  columnGap: 2,
+                  rowGap: 0.25,
+                }}
+              >
+                {allCounters.map((fact) => (
+                  <Typography
+                    key={fact.label}
+                    variant="bodyXsRegular"
+                    sx={(theme) => ({
+                      color: theme.palette.text.tertiary,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                    })}
+                  >
+                    <Box component="span" sx={{ fontFamily: 'monospace' }}>
+                      {fact.label}
+                    </Box>
+                    <Box
+                      component="span"
+                      sx={(theme) => ({
+                        color: theme.palette.text.secondary,
+                        fontVariantNumeric: 'tabular-nums',
+                      })}
+                    >
+                      {fact.value}
+                    </Box>
+                  </Typography>
+                ))}
+              </Box>
+            </Collapse>
+          </Box>
+        )}
+
+        {callNodes.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            {/* "Authorized" is load-bearing: the tree is built from the
+                transaction's auth entries (intent), not an execution trace —
+                see CallNode.successful for why no per-node verdict shows. */}
+            <Overline mb={0.5}>Authorized calls</Overline>
+            <CallTree nodes={callNodes} />
+          </Box>
+        )}
+
+        {opEvents.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Overline mb={0.5}>Events · {opEvents.length}</Overline>
+            {opEvents.map((event) => (
+              <Stack
+                key={event.event_index}
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                sx={{ py: 0.25, overflowX: 'auto' }}
+              >
+                <EventDot event={event} />
+                <EventLine event={event} />
+              </Stack>
+            ))}
+          </Box>
+        )}
+
+        {light.pool_ids.length > 0 && (
+          <Box sx={{ mt: 1.25 }}>
+            <Overline mb={0.5}>
+              Pools crossed · {light.pool_ids.length}
+            </Overline>
+            <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap' }}>
+              {light.pool_ids.map((poolId) => (
+                <IdentifierDisplay key={poolId} value={poolId} type="pool" />
+              ))}
+            </Stack>
+          </Box>
+        )}
+      </Box>
+
+      <DisclosureRow
+        open={detailsOpen}
+        onToggle={() => setDetailsOpen((open) => !open)}
+        label="Operation details"
+        trailing={
+          detailCount > 0 ? (
+            <Chip size="sm" color="neutral" label={String(detailCount)} />
+          ) : undefined
+        }
+        sx={(theme) => ({
+          mt: 1.5,
+          pt: 1.25,
+          borderTop: `1px solid ${theme.palette.stroke.default}`,
+        })}
+      />
+      <Collapse in={detailsOpen} unmountOnExit>
+        <Box sx={{ mt: 1.5 }}>
+          <OperationJsonDetail light={light} heavy={heavy} />
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}

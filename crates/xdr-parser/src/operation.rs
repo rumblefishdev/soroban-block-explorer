@@ -53,11 +53,9 @@ pub fn extract_operations(
             // override or tx source) is the AllowTrust issuer; it borrows
             // `source_account`, released before the move below.
             let op_source = source_account.as_deref().unwrap_or(&tx_source);
-            let asset_appearances = crate::asset_appearances::emit_asset_appearances(
-                &op.body,
-                op_source,
-                op_meta_changes(tx_meta, i),
-            );
+            let op_changes = op_meta_changes(tx_meta, i);
+            let asset_appearances =
+                crate::asset_appearances::emit_asset_appearances(&op.body, op_source, op_changes);
             // Shared by details (poolIds/claimedAtoms) and counterparties
             // (crossed-offer sellers); both read the same per-op result.
             let op_result = op_results.and_then(|rs| rs.get(i));
@@ -67,6 +65,7 @@ pub fn extract_operations(
                 &op.body,
                 return_value.as_ref(),
                 op_result,
+                op_changes,
                 ledger_sequence,
                 tx_index,
                 op_index,
@@ -103,6 +102,72 @@ pub fn tx_op_results(result: &TransactionResult) -> Option<&[OperationResult]> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Per-operation results of ANY applied transaction — success or failed.
+///
+/// Companion to [`tx_op_results`], which stays success-only because its sole
+/// consumer is claim atoms (task 0261 — rolled-back crossings must not reach
+/// `poolIds`). `TxFailed` carries the same per-op array as `TxSuccess`, and
+/// the failing operation's code IS the transaction's fail reason (task 0352),
+/// so this accessor unwraps all four applied arms. `None` only for
+/// validation-level failures (`TxBadSeq`, `TxInsufficientFee`, …), where no
+/// operation was ever attempted and no per-op array exists.
+pub fn tx_op_results_any(result: &TransactionResult) -> Option<&[OperationResult]> {
+    use TransactionResultResult::*;
+    match &result.result {
+        TxSuccess(ops) | TxFailed(ops) => Some(ops.as_slice()),
+        TxFeeBumpInnerSuccess(pair) | TxFeeBumpInnerFailed(pair) => match &pair.result.result {
+            InnerTransactionResultResult::TxSuccess(ops)
+            | InnerTransactionResultResult::TxFailed(ops) => Some(ops.as_slice()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The result code of a single operation, named by the XDR library's own
+/// variant names — no hand-rolled name table (the 0431 lesson).
+///
+/// `OpInner` unwraps to the operation-specific result variant (`"Success"`,
+/// `"LowReserve"`, `"Trapped"`, …); the operation-level rejections keep their
+/// `Op…` names (`"OpNoAccount"`, `"OpBadAuth"`, …). Task 0352: the failing
+/// operation's code is what the fail-reason banner shows.
+pub fn op_result_code(op_result: &OperationResult) -> &'static str {
+    match op_result {
+        OperationResult::OpInner(tr) => {
+            use OperationResultTr::*;
+            match tr {
+                CreateAccount(r) => r.name(),
+                Payment(r) => r.name(),
+                PathPaymentStrictReceive(r) => r.name(),
+                ManageSellOffer(r) | CreatePassiveSellOffer(r) => r.name(),
+                SetOptions(r) => r.name(),
+                ChangeTrust(r) => r.name(),
+                AllowTrust(r) => r.name(),
+                AccountMerge(r) => r.name(),
+                Inflation(r) => r.name(),
+                ManageData(r) => r.name(),
+                BumpSequence(r) => r.name(),
+                ManageBuyOffer(r) => r.name(),
+                PathPaymentStrictSend(r) => r.name(),
+                CreateClaimableBalance(r) => r.name(),
+                ClaimClaimableBalance(r) => r.name(),
+                BeginSponsoringFutureReserves(r) => r.name(),
+                EndSponsoringFutureReserves(r) => r.name(),
+                RevokeSponsorship(r) => r.name(),
+                Clawback(r) => r.name(),
+                ClawbackClaimableBalance(r) => r.name(),
+                SetTrustLineFlags(r) => r.name(),
+                LiquidityPoolDeposit(r) => r.name(),
+                LiquidityPoolWithdraw(r) => r.name(),
+                InvokeHostFunction(r) => r.name(),
+                ExtendFootprintTtl(r) => r.name(),
+                RestoreFootprint(r) => r.name(),
+            }
+        }
+        other => other.name(),
     }
 }
 
@@ -248,6 +313,7 @@ fn extract_op_details(
     body: &OperationBody,
     return_value: Option<&ScVal>,
     op_result: Option<&OperationResult>,
+    op_changes: &[LedgerEntryChange],
     _ledger_sequence: u32,
     _tx_index: usize,
     _op_index: usize,
@@ -402,14 +468,15 @@ fn extract_op_details(
             json!({
                 "asset": format_asset(&op.asset),
                 "amount": op.amount,
-                "claimants": op.claimants.len(),
+                // Task 0460 #16: the full claimant vec — the addresses are
+                // the point of the operation. One shape, no summary count
+                // beside it (derive length where needed).
+                "claimants": op.claimants.iter().map(claimant_json).collect::<Vec<_>>(),
             }),
         ),
         OperationBody::ClaimClaimableBalance(op) => (
             OperationType::ClaimClaimableBalance,
-            json!({
-                "balanceId": format_claimable_balance_id(&op.balance_id),
-            }),
+            cb_details(op_changes, &op.balance_id),
         ),
         OperationBody::BeginSponsoringFutureReserves(op) => (
             OperationType::BeginSponsoringFutureReserves,
@@ -444,9 +511,7 @@ fn extract_op_details(
         ),
         OperationBody::ClawbackClaimableBalance(op) => (
             OperationType::ClawbackClaimableBalance,
-            json!({
-                "balanceId": format_claimable_balance_id(&op.balance_id),
-            }),
+            cb_details(op_changes, &op.balance_id),
         ),
         OperationBody::SetTrustLineFlags(op) => (
             OperationType::SetTrustLineFlags,
@@ -457,25 +522,31 @@ fn extract_op_details(
                 "setFlags": op.set_flags,
             }),
         ),
-        OperationBody::LiquidityPoolDeposit(op) => (
-            OperationType::LiquidityPoolDeposit,
-            json!({
+        OperationBody::LiquidityPoolDeposit(op) => {
+            let mut details = json!({
                 "liquidityPoolId": hex::encode(op.liquidity_pool_id.0.as_slice()),
                 "maxAmountA": op.max_amount_a,
                 "maxAmountB": op.max_amount_b,
                 "minPrice": format_price(&op.min_price),
                 "maxPrice": format_price(&op.max_price),
-            }),
-        ),
-        OperationBody::LiquidityPoolWithdraw(op) => (
-            OperationType::LiquidityPoolWithdraw,
-            json!({
+            });
+            if let Some(delta) = pool_delta_details(op_changes, &op.liquidity_pool_id) {
+                details["poolDelta"] = delta;
+            }
+            (OperationType::LiquidityPoolDeposit, details)
+        }
+        OperationBody::LiquidityPoolWithdraw(op) => {
+            let mut details = json!({
                 "liquidityPoolId": hex::encode(op.liquidity_pool_id.0.as_slice()),
                 "amount": op.amount,
                 "minAmountA": op.min_amount_a,
                 "minAmountB": op.min_amount_b,
-            }),
-        ),
+            });
+            if let Some(delta) = pool_delta_details(op_changes, &op.liquidity_pool_id) {
+                details["poolDelta"] = delta;
+            }
+            (OperationType::LiquidityPoolWithdraw, details)
+        }
         OperationBody::InvokeHostFunction(op) => {
             let details = extract_invoke_host_function(op, return_value);
             (OperationType::InvokeHostFunction, details)
@@ -581,6 +652,143 @@ fn format_claimable_balance_id(id: &ClaimableBalanceId) -> Value {
     }
 }
 
+/// Claimant → `{destination, predicate}` (task 0460 #16).
+fn claimant_json(claimant: &Claimant) -> Value {
+    let Claimant::ClaimantTypeV0(v0) = claimant;
+    json!({
+        "destination": v0.destination.0.to_string(),
+        "predicate": claim_predicate_json(&v0.predicate),
+    })
+}
+
+/// The full recursive claim predicate as tagged JSON — no lossy summary;
+/// `and`/`or` carry up to 2 sub-predicates by XDR definition.
+fn claim_predicate_json(predicate: &ClaimPredicate) -> Value {
+    match predicate {
+        ClaimPredicate::Unconditional => json!({ "type": "unconditional" }),
+        ClaimPredicate::And(ps) => json!({
+            "type": "and",
+            "predicates": ps.iter().map(claim_predicate_json).collect::<Vec<_>>(),
+        }),
+        ClaimPredicate::Or(ps) => json!({
+            "type": "or",
+            "predicates": ps.iter().map(claim_predicate_json).collect::<Vec<_>>(),
+        }),
+        ClaimPredicate::Not(inner) => json!({
+            "type": "not",
+            "predicate": inner.as_deref().map(claim_predicate_json),
+        }),
+        ClaimPredicate::BeforeAbsoluteTime(t) => json!({
+            "type": "beforeAbsoluteTime",
+            "timePoint": t,
+        }),
+        ClaimPredicate::BeforeRelativeTime(secs) => json!({
+            "type": "beforeRelativeTime",
+            "seconds": secs,
+        }),
+    }
+}
+
+/// Details for claim/clawback-claimable-balance — shared by both arms. The
+/// body carries only the id; the asset + amount live in the same-op ledger
+/// entry (task 0453 D8). Keys are optional — absent when the meta lacks the
+/// entry, never guessed.
+fn cb_details(op_changes: &[LedgerEntryChange], balance_id: &ClaimableBalanceId) -> Value {
+    let mut d = json!({
+        "balanceId": format_claimable_balance_id(balance_id),
+    });
+    if let Some((asset, amount)) =
+        crate::asset_appearances::claimed_cb_asset_amount(op_changes, balance_id)
+    {
+        d["asset"] = json!(format_asset(&asset));
+        d["amount"] = json!(amount);
+    }
+    d
+}
+
+/// The constant-product body of `entry`, when it is the pool `pool_id`.
+/// Matching on the id (not the first pool entry) mirrors `lp_pool_assets`.
+fn pool_constant_product<'a>(
+    entry: &'a LedgerEntry,
+    pool_id: &PoolId,
+) -> Option<&'a LiquidityPoolEntryConstantProduct> {
+    match &entry.data {
+        LedgerEntryData::LiquidityPool(lp) if &lp.liquidity_pool_id == pool_id => {
+            let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
+            Some(cp)
+        }
+        _ => None,
+    }
+}
+
+/// What an LP deposit / withdraw actually moved, read from the operation's OWN
+/// ledger changes (task 0279).
+///
+/// The body carries only the caller's bounds — `maxAmountA`/`maxAmountB` on a
+/// deposit, `amount` + `minAmountA`/`minAmountB` on a withdrawal — never what
+/// executed. The pool entry's before/after images are the only record of that,
+/// which is why these ops have no claim atoms to read instead. Same contract as
+/// [`cb_details`]: `None` when the meta lacks the entry, never guessed.
+///
+/// `amountA` / `amountB` are AFTER MINUS BEFORE, i.e. **signed from the pool's
+/// side** — a deposit reads `+/+`, a withdrawal `-/-` — which is the sign the
+/// claim-atom consumers already use for trades, so one downstream shape covers
+/// all three event kinds (`lp_operation_amounts`). The boundary cases fall out
+/// of the same subtraction: a pool created by its first deposit has no `state`
+/// pre-image (before = 0) and one emptied by its last withdrawal is `Removed`
+/// with no post-image (after = 0).
+///
+/// Coverage follows [`op_meta_changes`]: V0–V2 metas yield no changes, so this
+/// is silent on pre-Protocol-20 ledgers — outside the ingest window, which
+/// starts at the Soroban go-live.
+fn pool_delta_details(op_changes: &[LedgerEntryChange], pool_id: &PoolId) -> Option<Value> {
+    let mut before = None;
+    let mut after = None;
+    let mut removed = false;
+    for change in op_changes {
+        match change {
+            // FIRST match wins for the pre-image (`before.or(new)`), LAST for
+            // the post-image (`new.or(after)`) — the two ends of the op. The
+            // asymmetry only shows when one op touches a pool repeatedly, as a
+            // path payment does under CAP-38 interleaved matching (a
+            // State/Updated pair per fill): taking the last `State` there would
+            // measure the final fill instead of the whole operation. Deposits
+            // and withdrawals touch it once, so today both readings agree.
+            LedgerEntryChange::State(e) => before = before.or(pool_constant_product(e, pool_id)),
+            LedgerEntryChange::Created(e)
+            | LedgerEntryChange::Updated(e)
+            | LedgerEntryChange::Restored(e) => after = pool_constant_product(e, pool_id).or(after),
+            LedgerEntryChange::Removed(LedgerKey::LiquidityPool(k)) => {
+                removed |= &k.liquidity_pool_id == pool_id;
+            }
+            LedgerEntryChange::Removed(_) => {}
+        }
+    }
+
+    // Either image identifies the pool's two assets; they never change.
+    let params = &after.or(before)?.params;
+    let (before_a, before_b) = before.map_or((0, 0), |cp| (cp.reserve_a, cp.reserve_b));
+    let (after_a, after_b) = match (removed, after) {
+        (true, _) => (0, 0),
+        (false, Some(cp)) => (cp.reserve_a, cp.reserve_b),
+        // A pre-image with nothing after it means this op did not move the
+        // pool (a `state`-only read). Nothing to report.
+        (false, None) => return None,
+    };
+
+    let (delta_a, delta_b) = (after_a - before_a, after_b - before_b);
+    if delta_a == 0 && delta_b == 0 {
+        return None;
+    }
+    Some(json!({
+        "poolId": hex::encode(pool_id.0.as_slice()),
+        "assetA": format_asset(&params.asset_a),
+        "amountA": delta_a,
+        "assetB": format_asset(&params.asset_b),
+        "amountB": delta_b,
+    }))
+}
+
 fn format_contract_executable(exec: &ContractExecutable) -> Value {
     match exec {
         ContractExecutable::Wasm(hash) => json!({ "type": "wasm", "hash": hex::encode(hash.0) }),
@@ -591,6 +799,111 @@ fn format_contract_executable(exec: &ContractExecutable) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pool_entry(reserve_a: i64, reserve_b: i64) -> LedgerEntry {
+        LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::LiquidityPool(LiquidityPoolEntry {
+                liquidity_pool_id: PoolId(Hash([0x44; 32])),
+                body: LiquidityPoolEntryBody::LiquidityPoolConstantProduct(
+                    LiquidityPoolEntryConstantProduct {
+                        params: LiquidityPoolConstantProductParameters {
+                            asset_a: Asset::Native,
+                            asset_b: Asset::CreditAlphanum4(AlphaNum4 {
+                                asset_code: AssetCode4(*b"USDC"),
+                                issuer: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+                                    [0x05; 32],
+                                ))),
+                            }),
+                            fee: 30,
+                        },
+                        reserve_a,
+                        reserve_b,
+                        total_pool_shares: 500,
+                        pool_shares_trust_line_count: 3,
+                    },
+                ),
+            }),
+            ext: LedgerEntryExt::V0,
+        }
+    }
+
+    /// A deposit adds to both reserves and a withdrawal takes from both, so the
+    /// after-minus-before deltas must come out `+/+` and `-/-` — the sign
+    /// convention the trade path already uses.
+    #[test]
+    fn pool_delta_signs_deposits_positive_and_withdrawals_negative() {
+        let pool_id = PoolId(Hash([0x44; 32]));
+        let deposit = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Updated(pool_entry(1_500, 3_000)),
+        ];
+        let delta = pool_delta_details(&deposit, &pool_id).expect("deposit delta");
+        assert_eq!(delta["amountA"], json!(500));
+        assert_eq!(delta["amountB"], json!(1_000));
+        assert_eq!(delta["assetA"], json!("native"));
+
+        let withdraw = vec![
+            LedgerEntryChange::State(pool_entry(1_500, 3_000)),
+            LedgerEntryChange::Updated(pool_entry(1_000, 2_000)),
+        ];
+        let delta = pool_delta_details(&withdraw, &pool_id).expect("withdraw delta");
+        assert_eq!(delta["amountA"], json!(-500));
+        assert_eq!(delta["amountB"], json!(-1_000));
+    }
+
+    /// The two boundaries where an image is missing: a pool created by its
+    /// first deposit has no pre-image, and one emptied by its last withdrawal
+    /// is `Removed` with no post-image.
+    #[test]
+    fn pool_delta_handles_pool_creation_and_removal() {
+        let pool_id = PoolId(Hash([0x44; 32]));
+        let created = vec![LedgerEntryChange::Created(pool_entry(1_000, 2_000))];
+        let delta = pool_delta_details(&created, &pool_id).expect("created delta");
+        assert_eq!(delta["amountA"], json!(1_000));
+        assert_eq!(delta["amountB"], json!(2_000));
+
+        let emptied = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Removed(LedgerKey::LiquidityPool(LedgerKeyLiquidityPool {
+                liquidity_pool_id: pool_id.clone(),
+            })),
+        ];
+        let delta = pool_delta_details(&emptied, &pool_id).expect("removed delta");
+        assert_eq!(delta["amountA"], json!(-1_000));
+        assert_eq!(delta["amountB"], json!(-2_000));
+    }
+
+    /// An op that touches one pool repeatedly must be measured end to end —
+    /// first pre-image to last post-image — not just its final touch. No
+    /// current caller emits this shape (deposits and withdrawals touch a pool
+    /// once), but a path payment would: CAP-38 interleaved matching writes a
+    /// State/Updated pair per fill, and reading the LAST `State` would report
+    /// only the last fill.
+    #[test]
+    fn pool_delta_spans_every_touch_of_one_op() {
+        let pool_id = PoolId(Hash([0x44; 32]));
+        let two_fills = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Updated(pool_entry(1_400, 1_500)),
+            LedgerEntryChange::State(pool_entry(1_400, 1_500)),
+            LedgerEntryChange::Updated(pool_entry(1_900, 900)),
+        ];
+        let delta = pool_delta_details(&two_fills, &pool_id).expect("delta");
+        // 1_900 - 1_000 and 900 - 2_000, not the second fill's 500 / -600.
+        assert_eq!(delta["amountA"], json!(900));
+        assert_eq!(delta["amountB"], json!(-1_100));
+    }
+
+    /// Another pool's entry in the same op must not be read as this pool's.
+    #[test]
+    fn pool_delta_ignores_a_different_pool() {
+        let changes = vec![
+            LedgerEntryChange::State(pool_entry(1_000, 2_000)),
+            LedgerEntryChange::Updated(pool_entry(1_500, 3_000)),
+        ];
+        assert!(pool_delta_details(&changes, &PoolId(Hash([0x99; 32]))).is_none());
+    }
 
     #[test]
     fn extract_payment_operation() {
@@ -1072,6 +1385,50 @@ mod tests {
     }
 
     #[test]
+    fn tx_op_results_any_covers_failed_arms() {
+        // The 0352 fixture shape (7af6d0ed…): TxFailed still carries the
+        // per-op array — success op, LowReserve, op-level OpNoAccount.
+        let ops: VecM<OperationResult> = vec![
+            OperationResult::OpInner(OperationResultTr::BeginSponsoringFutureReserves(
+                BeginSponsoringFutureReservesResult::Success,
+            )),
+            OperationResult::OpInner(OperationResultTr::CreateAccount(
+                CreateAccountResult::LowReserve,
+            )),
+            OperationResult::OpNoAccount,
+        ]
+        .try_into()
+        .unwrap();
+
+        let failed = build_tx_result(TransactionResultResult::TxFailed(ops.clone()));
+        let results = tx_op_results_any(&failed).expect("failed arm carries op results");
+        assert_eq!(
+            results.iter().map(op_result_code).collect::<Vec<_>>(),
+            vec!["Success", "LowReserve", "OpNoAccount"]
+        );
+
+        let inner_fail = InnerTransactionResultPair {
+            transaction_hash: Hash([0xEE; 32]),
+            result: InnerTransactionResult {
+                fee_charged: 100,
+                result: InnerTransactionResultResult::TxFailed(ops),
+                ext: InnerTransactionResultExt::V0,
+            },
+        };
+        let fee_bump_fail =
+            build_tx_result(TransactionResultResult::TxFeeBumpInnerFailed(inner_fail));
+        assert_eq!(
+            tx_op_results_any(&fee_bump_fail).map(<[OperationResult]>::len),
+            Some(3),
+            "fee-bump failed inner unwrapped"
+        );
+
+        // Validation-level failure: no op was attempted, no array exists.
+        let validation_failed = build_tx_result(TransactionResultResult::TxBadSeq);
+        assert!(tx_op_results_any(&validation_failed).is_none());
+    }
+
+    #[test]
     fn failed_tx_drops_pool_claims_for_op_level_success() {
         // op0 = path payment that crossed pool P at the op level, but the whole
         // tx failed (a later op failed). tx_op_results returns None for the
@@ -1219,5 +1576,58 @@ mod tests {
             operations: operations.try_into().unwrap(),
             ext: TransactionExt::V0,
         }
+    }
+
+    #[test]
+    fn create_claimable_balance_lists_claimants() {
+        // Task 0460 #16: `claimants` used to be a bare count — now it IS the
+        // vec; addresses and the (recursive) predicates must survive.
+        let claimant = |byte: u8, predicate: ClaimPredicate| {
+            Claimant::ClaimantTypeV0(ClaimantV0 {
+                destination: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([byte; 32]))),
+                predicate,
+            })
+        };
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::CreateClaimableBalance(CreateClaimableBalanceOp {
+                asset: Asset::Native,
+                amount: 5_000,
+                claimants: vec![
+                    claimant(0xBB, ClaimPredicate::Unconditional),
+                    claimant(
+                        0xCC,
+                        ClaimPredicate::Not(Some(Box::new(ClaimPredicate::BeforeAbsoluteTime(
+                            1_700_000_000,
+                        )))),
+                    ),
+                ]
+                .try_into()
+                .unwrap(),
+            }),
+        };
+        let tx = build_v1_tx(vec![op]);
+        let inner = InnerTxRef::V1(&tx);
+
+        let result = extract_operations(&inner, None, None, "abcd1234", 100, 0);
+        let details = &result[0].details;
+
+        let list = details["claimants"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        let dest = list[0]["destination"].as_str().unwrap();
+        assert!(
+            dest.starts_with('G') && dest.len() == 56,
+            "destination must be a G-strkey, got {dest}"
+        );
+        assert_eq!(list[0]["predicate"]["type"], "unconditional");
+        assert_eq!(list[1]["predicate"]["type"], "not");
+        assert_eq!(
+            list[1]["predicate"]["predicate"]["type"],
+            "beforeAbsoluteTime"
+        );
+        assert_eq!(
+            list[1]["predicate"]["predicate"]["timePoint"],
+            1_700_000_000_i64
+        );
     }
 }

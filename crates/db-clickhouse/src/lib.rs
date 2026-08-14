@@ -143,8 +143,8 @@ mod tests {
         // `asset_enrichment` + `nft_enrichment` side tables; lore-0293 added the
         // `asset_aggregates` table + its refreshable `asset_aggregates_mv` for
         // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
-        // now served from `asset_aggregates`; the dead columns' drop is deferred
-        // to task 0310); task 0297 added the `soroban_contract_metadata` side
+        // now served from `asset_aggregates`; the dead columns were dropped in
+        // task 0310); task 0297 added the `soroban_contract_metadata` side
         // table (on-chain token name/symbol/decimals); ADR 0051 / task 0339 added
         // the `asset_sac` SAC-facet side table; task 0331 FIRST added an INTERIM
         // `soroban_token_balances` per-holder side table (asset_type=3 balances
@@ -173,10 +173,12 @@ mod tests {
         // They hold already-parked rows until the classifier can name their
         // contracts; the `DROP` (and the count going 31 → 29) belongs to that
         // follow-up. See ADR 0053.
+        // task 0279: added `lp_operation_amounts` — per-(op, pool, asset) amounts
+        // behind the pool page's "Amount" column (issue #371). 31 → 32.
         assert_eq!(
             stmts.len(),
-            31,
-            "expected 28 tables + 2 materialized views + 1 dictionary, got {}",
+            32,
+            "expected 29 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

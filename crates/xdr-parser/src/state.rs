@@ -955,11 +955,11 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
 /// reclassification write step backfills the missing assets row
 /// (`write::insert_assets_from_reclassified_contracts`, task 0120).
 ///
-/// `name` / `total_supply` / `holder_count` are left `None` for Soroban
-/// rows: on-chain name/symbol extraction from ContractData storage entries
-/// is tracked as follow-up task 0156; `holder_count` is task 0135; a
-/// separate scheduled-Lambda enrichment path for SEP-1 metadata lives
-/// under task 0124.
+/// Soroban rows carry identity only. On-chain name/symbol extraction from
+/// ContractData storage entries is tracked as follow-up task 0156; a separate
+/// scheduled-Lambda enrichment path for SEP-1 metadata lives under task 0124.
+/// Supply/holders are not a parser concern at all — they are aggregated from
+/// `balances` into `balance_aggregates` (0293/0331).
 pub fn detect_assets(
     deployments: &[ExtractedContractDeployment],
     interfaces: &[ExtractedContractInterface],
@@ -1014,8 +1014,6 @@ pub fn detect_assets(
                 contract_id: None,
                 sac_contract_id: Some(deployment.contract_id.clone()),
                 sac_deployed: true,
-                total_supply: None,
-                holder_count: None,
             });
             continue;
         }
@@ -1036,8 +1034,6 @@ pub fn detect_assets(
                 // Bespoke Soroban token — no classic backing, so no SAC facet.
                 sac_contract_id: None,
                 sac_deployed: false,
-                total_supply: None,
-                holder_count: None,
             });
         }
     }
@@ -1071,14 +1067,11 @@ pub fn detect_assets(
 ///    ClassicCredit, asset_code: code, issuer_address: issuer }` per
 ///    distinct pair (dedup within this call).
 ///
-/// `name` / `total_supply` / `holder_count` are left `None`:
-///
-/// - `name` for classic credits lands via Lambda 2's `sep1_assets`
-///   enrichment path (task 0195 §2a) — runtime SEP-1 stellar.toml
-///   fetch keyed on the `(code, issuer)` pair.
-/// - `total_supply` + `holder_count` come from task 0194's
-///   `recompute_asset_aggregates` post-write step, which UPDATEs the
-///   row this producer just inserted.
+/// The row carries identity only. `name` for classic credits lands via
+/// Lambda 2's `sep1_assets` enrichment path (task 0195 §2a) — runtime SEP-1
+/// stellar.toml fetch keyed on the `(code, issuer)` pair. Supply/holders are
+/// aggregated from `balances` into `balance_aggregates` (0293/0331), never
+/// written back onto this row.
 ///
 /// The function is pure (no I/O, no DB) and idempotent on replay.
 /// Downstream dedup in `Staged::prepare`
@@ -1137,8 +1130,6 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
             // a SAC, the deploy/override path folds it onto this same row.
             sac_contract_id: None,
             sac_deployed: false,
-            total_supply: None,
-            holder_count: None,
         });
     }
 
@@ -1151,10 +1142,6 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
 /// indexer emits this once per ledger; the persist path
 /// (`upsert_assets_native`) inserts via `WHERE NOT EXISTS` against
 /// `uidx_assets_native`, so every call after the first is a no-op.
-///
-/// `total_supply` / `holder_count` are intentionally `None`
-/// — the operator can backfill metadata via a manual seed if desired,
-/// but no on-chain producer surfaces these for native XLM.
 pub fn native_asset_singleton() -> ExtractedAsset {
     ExtractedAsset {
         asset_type: TokenAssetType::Native,
@@ -1164,8 +1151,6 @@ pub fn native_asset_singleton() -> ExtractedAsset {
         // XLM's SAC facet is folded on by the deploy/override path when seen.
         sac_contract_id: None,
         sac_deployed: false,
-        total_supply: None,
-        holder_count: None,
     }
 }
 
@@ -3284,7 +3269,5 @@ mod tests {
         assert!(asset.asset_code.is_none());
         assert!(asset.issuer_address.is_none());
         assert!(asset.contract_id.is_none());
-        assert!(asset.total_supply.is_none());
-        assert!(asset.holder_count.is_none());
     }
 }

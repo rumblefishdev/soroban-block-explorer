@@ -661,6 +661,8 @@ async fn main() {
         .default_headers(headers)
         // reqwest sends NO User-Agent by default; AWS WAF CommonRuleSet's
         // `NoUserAgent_HEADER` rule then 403s every request. Set one explicitly.
+        // Task 0302 dropped that WebACL, but the header is still required:
+        // Cloudflare's managed ruleset has an equivalent no-UA rule.
         .user_agent(concat!("soroban-load-tests/", env!("CARGO_PKG_VERSION")))
         .pool_max_idle_per_host(args.vus)
         // Above the CH 30s per-query cap so a hung request surfaces, not blocks forever.

@@ -4,7 +4,7 @@ title: 'PERF: lplist — stored `created_at_ledger` (re-litigate 0208 Path 1 wit
 type: PERF
 status: backlog
 related_adr: []
-related_tasks: ['0357', '0208', '0356']
+related_tasks: ['0357', '0208', '0356', '0397']
 tags: [priority-high, effort-medium, layer-clickhouse, phase-post-launch]
 links:
   - crates/api/src/queries.rs
@@ -49,6 +49,16 @@ writer/RMT grounds. 0357 produced the numbers that argument lacked: lplist is
       promote lplist to a documented known-issue with the cause named.
 - [ ] Re-measure with the 0357 harness (`--rps` open model) — same tiers, so the
       before/after is comparable to the series 1-3 record.
+- [ ] **Check whether `min(ledger_sequence)` is the whole story.** Measured
+      2026-07-22 (task 0397): over 7 days lplist's own queries read **45.8 bn
+      rows under `FINAL`** — 27.3 bn on `lp_positions` (2 168 calls × 12.6M) and
+      18.5 bn on `liquidity_pools` (2 025 × 9.1M). These are the #2 and #3
+      `FINAL` consumers in the cluster after 0397's. Neither table carries a skip
+      index (prod has them only on `accounts`, `soroban_contracts`,
+      `transactions`, `ledgers`, `operations_appearances`), so any lookup off
+      their sort key has nothing to seek with. If storing `created_at_ledger`
+      does not also remove those `FINAL`s, the remainder is a separate piece of
+      work and should be split out rather than silently left.
 
 ## Acceptance Criteria
 

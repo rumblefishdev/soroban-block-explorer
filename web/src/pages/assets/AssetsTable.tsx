@@ -3,6 +3,7 @@ import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
   Dash,
+  DomainChip,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatAmount,
@@ -68,12 +69,42 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
   {
     id: 'issuer',
     header: 'Issuer / Contract ID',
-    width: 160,
-    // Soroban contract identity → always linked. A SAC facet (`sac_contract_id`)
-    // links to its contract page only when deployed — an un-deployed SAC is a
-    // reserved address, not a live contract (ADR 0051, subsumes 0337).
+    // Wider than a plain identifier: this cell also carries the issuer's
+    // home-domain chip. Matches the accounts list, which sized for the same
+    // content (task 0450).
+    width: 240,
+    // Read as one rule: **the issuer when the asset has one, otherwise whatever
+    // contract identifies it.** `issuer` is tested FIRST deliberately — it is
+    // the only branch whose condition is independent of the contract columns,
+    // so no future merge of `contract_id` and `sac_contract_id` can displace it.
+    //
+    // It has to be first rather than merely present. Until task 0450 the SAC
+    // branch preceded the issuer, so every wrapped classic asset (USDC among
+    // them) rendered a `C…` address and never its `G…` issuer — the column
+    // contradicted its own header and left the domain chip nothing to attach
+    // to. Ordering `contract_id` first would work today (`issuer_id` is 0 for
+    // native and soroban-native, so the two are mutually exclusive) but puts
+    // the trap one refactor away.
+    //
+    // The SAC address is NOT shown here. That is a real trade — it used to be
+    // one glance, now it is one click — but the alternatives are worse: a
+    // second address crowds the cell, and linking the Token column's `SAC` chip
+    // would make one chip navigate while the identical-looking type badges do
+    // not. It lives on the asset detail page instead, untruncated and copyable
+    // (`assets/AssetSummary.tsx`). An un-deployed SAC is a reserved address,
+    // not a live contract, hence the `linked` gate (ADR 0051, subsumes 0337).
     cell: (row) =>
-      row.contract_id ? (
+      row.issuer ? (
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ minWidth: 0 }}
+        >
+          <IdentifierWithCopy value={row.issuer} type="account" />
+          <DomainChip domain={row.issuer_home_domain} />
+        </Stack>
+      ) : row.contract_id ? (
         <IdentifierWithCopy value={row.contract_id} type="contract" />
       ) : row.sac_contract_id ? (
         <IdentifierWithCopy
@@ -81,8 +112,6 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           type="contract"
           linked={row.sac_deployed ?? false}
         />
-      ) : row.issuer ? (
-        <IdentifierWithCopy value={row.issuer} type="account" />
       ) : (
         <Dash />
       ),

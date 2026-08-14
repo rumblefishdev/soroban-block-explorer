@@ -79,7 +79,7 @@ metadata — already served by the `nft_enrichment` / `token_uri` path.
 
 Spawned from **0283**. The G5 guardrail (shipped in 0283) disabled the dead
 on-ledger name-write loop and added a tripwire; the real fix for populating
-`name` is enrichment, in the ADR 0048 side-table family. **Overlaps 0231**
+`name` is enrichment, in the ADR 0050 side-table family. **Overlaps 0231**
 (SEP-1/NFT enrichment side-tables, same AWS SQS+Lambda path) — consider folding
 the name-enrichment piece into 0231 rather than a standalone runner.
 

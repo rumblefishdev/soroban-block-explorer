@@ -5,7 +5,8 @@ type: TEST
 status: backlog
 related_adr: []
 related_tasks: ['0420']
-tags: ['area-api', 'area-clickhouse', 'testing', 'effort-medium', 'priority-medium']
+tags:
+  ['area-api', 'area-clickhouse', 'testing', 'effort-medium', 'priority-medium']
 links:
   - crates/db-clickhouse/tests/persist_e2e.rs
 history:
@@ -42,7 +43,7 @@ considered and rejected in 0420:
 - It requires refactoring query construction across six files that were just
   changed — real risk, weak payoff.
 
-What actually needs guarding is the *behaviour*: given duplicate physical rows,
+What actually needs guarding is the _behaviour_: given duplicate physical rows,
 the endpoint returns distinct rows and un-inflated counts.
 
 ## Approach
@@ -71,5 +72,6 @@ harness rather than inventing one.
 ## Notes
 
 Already covered by real tests in 0420, so out of scope here:
+
 - ledgers `dedup_consecutive` (Rust-side collapse) — unit-tested
 - `ExplorerTable` colliding row keys — component-tested

@@ -88,6 +88,7 @@ struct TableInserts {
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
     op_pools: Option<Insert<OperationPoolRow>>,
+    lp_amounts: Option<Insert<LpOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
@@ -132,6 +133,35 @@ impl PartitionWriter {
     /// crate chunk-sends them over HTTP transparently when the buffer
     /// fills. `ledgers` rows are **not** sent during this call;
     /// they're buffered as the partition's commit marker.
+    /// Stream ONLY this ledger's `lp_operation_amounts` rows — the targeted
+    /// write the 0279 backfill runs (task 0266 established the pattern: a
+    /// historical re-parse that needs one new derived table must not re-emit
+    /// every other one).
+    ///
+    /// Two things this deliberately does NOT do, both load-bearing:
+    ///
+    /// - **No other table** — a full re-emission would rewrite the 12 Tier-1
+    ///   columns that cannot survive parallel `ReplacingMergeTree` collapse
+    ///   (`docs/backfills.md` §3), turning an additive backfill into one that
+    ///   owes a `repair-tier1` pass.
+    /// - **No `ledgers` commit marker** — the marker means "fully ingested",
+    ///   which a targeted pass has not done. The cost is that resume cannot
+    ///   read progress from the DB: a crashed targeted run resumes by
+    ///   narrowing `--start`, and re-running a range is a no-op (the rows are
+    ///   deterministic and the RMT collapses them).
+    pub async fn write_lp_amounts_only(
+        &mut self,
+        staged: &StagedLedger,
+    ) -> Result<(), SchemaError> {
+        write_rows(
+            &self.client,
+            &mut self.inserts.lp_amounts,
+            "lp_operation_amounts",
+            &staged.lp_amount_rows,
+        )
+        .await
+    }
+
     pub async fn write_ledger(&mut self, mut staged: StagedLedger) -> Result<(), SchemaError> {
         // Hold the ledger row(s) back as commit marker.
         self.ledger_rows.append(&mut staged.ledger_rows);
@@ -197,6 +227,13 @@ impl PartitionWriter {
             &mut self.inserts.op_pools,
             "operation_pools",
             &staged.op_pool_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.lp_amounts,
+            "lp_operation_amounts",
+            &staged.lp_amount_rows,
         )
         .await?;
         write_rows(
@@ -306,6 +343,7 @@ impl PartitionWriter {
         end(self.inserts.participants).await?;
         end(self.inserts.op_assets).await?;
         end(self.inserts.op_pools).await?;
+        end(self.inserts.lp_amounts).await?;
         end(self.inserts.pools).await?;
         end(self.inserts.snapshots).await?;
         end(self.inserts.lp_positions).await?;
@@ -425,8 +463,15 @@ where
 ///   takes effect on the wire. The settings here are belt-and-
 ///   suspenders for future CH versions that may honour them.
 ///
-/// `enable_http_compression` is left at the CH default (off) for
-/// loopback. Documented in `crates/db-clickhouse/README.md`.
+/// Compression is not a lever here, and the setting that looks like one
+/// is not. `enable_http_compression` is a CH server setting governing
+/// **response** bodies; it does not touch the INSERT request body. The
+/// `clickhouse` crate compresses responses only — `default = ["lz4"]`,
+/// and `src/insert.rs` carries no compression path at all (unlike
+/// `src/insert_formatted.rs`). So a typed `client.insert::<T>()` body
+/// always goes out uncompressed regardless of settings. On the loopback
+/// backfill this costs nothing; from a Lambda across the public internet
+/// it is paid egress. Documented in `crates/db-clickhouse/README.md`.
 fn apply_bulk_ingest_settings<T>(insert: Insert<T>) -> Insert<T> {
     insert
         .with_setting("async_insert", "0")

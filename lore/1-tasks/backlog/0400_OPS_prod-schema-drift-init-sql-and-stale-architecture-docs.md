@@ -51,6 +51,22 @@ history:
       it lists as prod-only is **not on prod** — `system.projections` is empty, and
       CH 26.3 refuses projections on `ReplacingMergeTree` outright (`Code 344`, cf.
       0353). That row is stale.
+  - date: 2026-07-29
+    status: backlog
+    who: karolkow
+    note: >
+      Body reconciled with the 2026-07-21 entry, which it had been contradicting:
+      the opening table still advertised `oa_pool_seek` as outstanding prod-only
+      drift, and an acceptance criterion still demanded it be added to
+      `init.sql` — a criterion nobody could ever satisfy. Both corrected, and the
+      criterion repointed at `assets_pre0339`, which is the real prod-only object.
+      One claim in the 2026-07-21 entry also does not hold: `transaction_hash_dict`
+      is NOT absent from `init.sql` — `CREATE DICTIONARY IF NOT EXISTS` has been
+      there since 2026-05-10 (`8b41d9d7`, task 0204). Its `element_count = 1`
+      anomaly stands and is still worth explaining. Re-verified everything else on
+      prod today (columns, types, engines, sort keys, skip indexes, projections,
+      views, dictionaries): the only structural gaps are `net_settled` and
+      `idx_oaa_transaction_id`, both owned by 0419.
 ---
 
 # OPS: prod-only CH schema objects missing from init.sql + stale architecture docs
@@ -75,10 +91,17 @@ Two known instances of the same class, both found while working on something els
 | object                                                                | where it lives                              | how it was found                                                   |
 | --------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------ |
 | `INDEX closed_at_mm closed_at TYPE minmax GRANULARITY 4` on `ledgers` | prod only → **now in `init.sql`** (0357 PR) | 0357 load test: `lpchart` 77.9M → 26.3M read_rows/req, −27.5bn/run |
-| `oa_pool_seek` projection on `operations_appearances`                 | prod only, still not in `init.sql`          | 0281 window                                                        |
+| ~~`oa_pool_seek` projection on `operations_appearances`~~             | **does not exist** — see below              | listed here in error                                               |
 
-Both were applied deliberately and both are correct — the defect is that code and
-prod diverged with nothing to detect it.
+`closed_at_mm` was applied deliberately and is correct — the defect is that code
+and prod diverged with nothing to detect it.
+
+The projection row was wrong from the start and is struck: `system.projections`
+is empty on prod, `operations_appearances` carries three bloom indexes and no
+projection, and ClickHouse 26.3 refuses projections on `ReplacingMergeTree`
+outright (`Code 344`, cf. 0353) — so it could not have existed. Re-verified
+2026-07-29. The drift this task owns is real, but its inventory is the one in
+the 2026-07-21 history entry, not this table.
 
 The docs half is worse than stale, it is actively misleading:
 
@@ -101,8 +124,12 @@ Three separable pieces — the first is cheap and stops the bleeding.
 ### 1. Reconcile prod → `init.sql` (small)
 
 Diff every `SHOW CREATE TABLE` on prod against `init.sql` and close the gaps.
-`closed_at_mm` is already done; `oa_pool_seek` is the known remainder. Do not
-assume these two are the only ones — enumerate, don't guess:
+`closed_at_mm` is already done. The enumerated remainder is in the 2026-07-21
+history entry, re-verified 2026-07-29: `assets_pre0339` (prod-only table),
+`idx_oaa_transaction_id` and `operation_asset_appearances.net_settled` (both
+declared in code, absent on prod — owned by 0419). Everything else matches:
+28 table definitions, their columns, types, engines and sort keys, plus both
+materialised views and the dictionary, which `init.sql` does create.
 
 ```bash
 # per table: compare deployed DDL against the file
@@ -131,7 +158,8 @@ checkbox on any schema PR is a formality that cannot be met in good faith.
 ## Acceptance Criteria
 
 - [ ] Every prod CH table's deployed DDL is reconciled with `init.sql` (enumerated, not sampled)
-- [ ] `oa_pool_seek` projection is in `init.sql` (or consciously documented as prod-only, with the reason)
+- [ ] `assets_pre0339` is either dropped or documented in `init.sql` as a
+      deliberate prod-only soak backup, with an owner and a removal trigger
 - [ ] A drift gate exists that fails/alerts when deployed DDL diverges from `init.sql`
 - [ ] `docs/architecture/database-schema/**` describes ClickHouse as production; Postgres content is marked historical or removed
 - [ ] Skip indexes + projections are documented where the ADR 0032 gate points reviewers

@@ -11,7 +11,7 @@
 //! Double-gated, so it is fully inert in normal production:
 //!   1. the layer is added ONLY when `load_testing` is set (a load-test
 //!      deploy — `LOAD_TESTING=true`, set by `compute-stack.ts` off the same
-//!      `loadTesting` flag that lifts the API Gateway throttle/WAF), and
+//!      `loadTesting` flag that lifts the API Gateway throttle), and
 //!   2. the task-local is set ONLY when the request actually carries an
 //!      `X-Request-Id`.
 //!

@@ -893,10 +893,10 @@ mod tests {
         client
             .query(
                 "INSERT INTO assets \
-                 (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count, icon_url) \
-                 VALUES (1,'AAA',7001,0,NULL,NULL,NULL), \
-                        (1,'BBB',7002,0,NULL,NULL,NULL), \
-                        (0,'',0,0,NULL,NULL,NULL)",
+                 (asset_type, asset_code, issuer_id, contract_id) \
+                 VALUES (1,'AAA',7001,0), \
+                        (1,'BBB',7002,0), \
+                        (0,'',0,0)",
             )
             .execute()
             .await

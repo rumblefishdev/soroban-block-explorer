@@ -203,7 +203,12 @@ failed transaction rolls every op back, yet an op that executed before the
 failing one still shows op-level `Success` with claim atoms — gating on tx
 success keeps those phantom crossings out of `pool_ids` and
 `gross_volume_a`. Failed (or order-book-only) ops therefore contribute no
-pool attribution. The CH writer folds `poolIds` into
+pool attribution. Its companion `tx_op_results_any` unwraps the failed arms
+too (`TxFailed` carries the same per-op array) — consumed only by the
+request-time heavy path, where `op_result_code` names each op's result with
+the XDR library's own variant names (`"LowReserve"`, `"OpNoAccount"`, …) and
+the API surfaces it as `operations[].result_code`, the fail-reason source
+for the transaction page (task 0352). Claim-atom extraction never reads it. The CH writer folds `poolIds` into
 `operations_appearances.pool_ids Array(FixedString(32))` (sorted + deduped;
 one row per op identity — task 0268); the PG store keeps the legacy scalar
 `pool_id`, where these ops remain NULL pending PG retirement.
@@ -351,10 +356,11 @@ explorer records.
 [`indexing-pipeline-overview.md`](../indexing-pipeline/indexing-pipeline-overview.md) §5.2
 step 14, called out here so the parser/indexer boundary stays explicit):
 
-- `assets.total_supply` / `assets.holder_count` — computed by
-  `recompute_asset_aggregates` in `crates/indexer/src/handler/persist/write.rs`
-  from `account_balances_current` _after_ the parser writes the balance rows.
-  Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
+- `balance_aggregates.total_supply` / `.holder_count` — recomputed from
+  `balances` by the refreshable `balance_aggregates_mv` (task 0293/0331), never
+  by the parser and no longer on the `assets` row at all (those columns were
+  dropped in task 0310). Per
+  [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
   on-chain-derivable, hence indexer-owned. The parser only produces the
   per-trustline / per-balance rows; the aggregate is a downstream rollup.
 - `liquidity_pool_snapshots.volume` / `fee_revenue` / `tvl` — per-op extraction

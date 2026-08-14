@@ -10,17 +10,10 @@ export type {
 export { TimeSeriesChart } from './TimeSeriesChart.js';
 export type {
   TimeSeriesChartProps,
+  TimeSeriesCurve,
   TimeSeriesPoint,
   TimeSeriesInterval,
 } from './TimeSeriesChart.js';
-
-export { OperationFlowTree } from './OperationFlowTree.js';
-export type {
-  OperationFlowTreeProps,
-  FlowNode,
-  FlowNodeKind,
-  FlowNodeIdentifier,
-} from './OperationFlowTree.js';
 
 export { LazySection } from './LazySection.js';
 export type { LazySectionProps } from './LazySection.js';

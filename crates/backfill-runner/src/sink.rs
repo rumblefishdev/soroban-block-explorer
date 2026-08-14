@@ -26,6 +26,7 @@ use crate::error::BackfillError;
 /// exists per process; the runner passes `&Sink` down — no clones needed.
 pub struct Sink {
     client: ClickhouseClient,
+    lp_amounts_only: bool,
 }
 
 /// Row shape for the resume / status query against ClickHouse. Private
@@ -38,7 +39,32 @@ struct LedgerSeqRow {
 impl Sink {
     /// Wrap a ClickHouse client as the write-path sink.
     pub fn new(client: ClickhouseClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            lp_amounts_only: false,
+        }
+    }
+
+    /// Switch the whole process to the **targeted write** of task 0279: parse
+    /// as usual, but persist ONLY `lp_operation_amounts`.
+    ///
+    /// This is what makes a historical re-parse for one new derived table
+    /// additive. A normal run re-emits every table, which rewrites the 12
+    /// Tier-1 columns that cannot survive parallel `ReplacingMergeTree`
+    /// collapse (`docs/backfills.md` §3) and so owes a `repair-tier1` pass
+    /// afterwards; this writes one table that has no such column.
+    ///
+    /// Consequence to plan for: no `ledgers` commit marker is written, so
+    /// resume cannot read progress from the DB — see
+    /// [`db_clickhouse::persist::PartitionWriter::write_lp_amounts_only`].
+    pub fn with_lp_amounts_only(mut self, on: bool) -> Self {
+        self.lp_amounts_only = on;
+        self
+    }
+
+    /// Is this process running the 0279 targeted write?
+    pub fn lp_amounts_only(&self) -> bool {
+        self.lp_amounts_only
     }
 
     /// Borrow the underlying ClickHouse client (backfill passes read it
@@ -107,9 +133,10 @@ impl Sink {
     /// [`db_clickhouse::persist::PartitionWriter`] holding one `Insert<RowT>`
     /// per table across the partition.
     pub fn open_partition(&self) -> PartitionWriterHandle {
-        PartitionWriterHandle(db_clickhouse::persist::PartitionWriter::open(
-            self.client.clone(),
-        ))
+        PartitionWriterHandle {
+            writer: db_clickhouse::persist::PartitionWriter::open(self.client.clone()),
+            lp_amounts_only: self.lp_amounts_only,
+        }
     }
 
     /// Parse + persist a single ledger.
@@ -135,11 +162,16 @@ impl Sink {
 /// Lifecycle handle for one backfill partition's writes. Owns a
 /// [`db_clickhouse::persist::PartitionWriter`] — the 14-handle insert
 /// lifecycle described in `db-clickhouse/src/persist/writer.rs`.
-pub struct PartitionWriterHandle(db_clickhouse::persist::PartitionWriter);
+pub struct PartitionWriterHandle {
+    writer: db_clickhouse::persist::PartitionWriter,
+    /// Task 0279 targeted write — see [`Sink::with_lp_amounts_only`].
+    lp_amounts_only: bool,
+}
 
 impl PartitionWriterHandle {
     pub async fn write_ledger(&mut self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
-        let pw = &mut self.0;
+        let lp_amounts_only = self.lp_amounts_only;
+        let pw = &mut self.writer;
         {
             let parsed = indexer::handler::process::parse_ledger(meta);
             // ADR 0051 — re-key contract-held type-0/1 balances onto their
@@ -149,11 +181,20 @@ impl PartitionWriterHandle {
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
-            let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(
-                pw.client(),
-                &parsed.soroban_token_balances,
-            )
-            .await?;
+            //
+            // Skipped entirely under the 0279 targeted write: the map only
+            // re-keys BALANCE rows, which that mode does not persist, so the
+            // query would be a per-ledger round-trip bought for nothing —
+            // 13.16M of them across the run.
+            let sac_classic = if lp_amounts_only {
+                std::collections::HashMap::new()
+            } else {
+                db_clickhouse::persist::fetch_sac_classic_map(
+                    pw.client(),
+                    &parsed.soroban_token_balances,
+                )
+                .await?
+            };
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton
@@ -202,7 +243,11 @@ impl PartitionWriterHandle {
                     prior_contract_rows: &std::collections::HashMap::new(),
                 },
             )?;
-            pw.write_ledger(staged).await?;
+            if lp_amounts_only {
+                pw.write_lp_amounts_only(&staged).await?;
+            } else {
+                pw.write_ledger(staged).await?;
+            }
             Ok(())
         }
     }
@@ -210,7 +255,7 @@ impl PartitionWriterHandle {
     /// End every open insert. Mid-partition failure must call
     /// [`Self::abort`] instead.
     pub async fn commit(self) -> Result<(), BackfillError> {
-        self.0.commit().await?;
+        self.writer.commit().await?;
         Ok(())
     }
 
@@ -218,7 +263,7 @@ impl PartitionWriterHandle {
     /// them, ensuring resume finds no `ledgers` rows for this partition's
     /// range and re-does it cleanly.
     pub async fn abort(self) {
-        self.0.abort().await
+        self.writer.abort().await
     }
 }
 

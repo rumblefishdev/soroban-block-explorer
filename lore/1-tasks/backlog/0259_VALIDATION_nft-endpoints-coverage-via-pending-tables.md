@@ -49,6 +49,21 @@ history:
       to the canonical tables, the user-facing API endpoints E15/E16/E17
       have no production data to serve — so a parity verdict against
       them is premature. This task tracks closing the coverage gap.
+  - date: '2026-07-22'
+    status: backlog
+    who: karolkow
+    note: >
+      **Premise inverted — re-measure before doing anything, 2026-07-22.**
+      The task exists because E15/E16/E17 returned `sample_size=0` while the data
+      sat in quarantine: it cites `nfts_pending` at 49M rows and
+      `nft_ownership_pending` at 112M against empty canonical tables.
+      Today the numbers are the other way round: **`nfts_pending` 274 rows,
+      `nft_ownership_pending` 492; canonical `nfts` 13,053 and `nft_ownership`
+      21,600.** 0306's drain plus the write-time verdict fix (PR #341) emptied the
+      quarantine. So the coverage question is no longer "how do we read around the
+      quarantine" but simply "do E15/E16/E17 return rows now" — which is a
+      five-minute check, not the task as written. Re-scope or close after that
+      check; do not implement the pending-table workaround it describes.
 ---
 
 # VALIDATION: NFT endpoints coverage via pending tables

@@ -73,6 +73,17 @@ per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
 These encode durable rules. Keep transient state (which task is open, which PR is
 pending) out of them — it rots and makes the guide untrustworthy.
 
+## GitHub Issues
+
+Issues close at **deploy**, never at merge — merged code is not shipped code.
+
+Reference them as `Refs #123` in PR titles, bodies and commits. **Never
+`Closes` / `Fixes` / `Resolves`**: those auto-close the issue when
+`develop → master` merges, while the fix is still undeployed.
+
+Triage, post-merge comments and the post-deploy sweep: `/issues`. It never
+posts to GitHub — it drafts, a human sends.
+
 ## Context
 
 @lore/0-session/current-user.md

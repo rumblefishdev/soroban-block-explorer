@@ -3,12 +3,12 @@ id: '0048'
 title: 'Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare'
 status: accepted # proposed | accepted | deprecated | superseded
 deciders: [fmazur, team]
-related_tasks: ['0277', '0273']
+related_tasks: ['0277', '0273', '0302']
 related_adrs: ['0001', '0047']
 tags: [infra, security, waf, cloudflare, ddos, dns, edge]
 links:
   - docs/waf-vs-cloudflare/README.md
-  - lore/1-tasks/active/0277_FEATURE_migrate-edge-protection-to-cloudflare.md
+  - lore/1-tasks/archive/0277_FEATURE_migrate-edge-protection-to-cloudflare.md
 history:
   - date: '2026-06-02'
     status: proposed
@@ -29,16 +29,38 @@ history:
       made a shared secret self-contained vs cross-repo mTLS. Scope also grew
       from "lockdown" into a full paid-API access layer (Cloudflare Turnstile
       widget → session JWT free tier + X-API-Key paid tier) + a CORS layer.
-      AWS WAF teardown + soak deferred (backlog 0283). NS flipped on the
+      AWS WAF teardown + soak deferred (backlog 0283 — that id was later
+      reassigned in an ID-collision sweep; the teardown task is 0302). NS flipped on the
       `rumblefishdev.com` registrar (OVH), not the parent rumblefish.dev zone.
+  - date: '2026-07-27'
+    status: accepted
+    who: karolkow
+    note: >
+      Decision 5 taken up by task 0302, which corrected three things this ADR
+      left implicit. (a) `enableWaf:false` removes the us-east-1 WebACL stack
+      from the CDK app but does not delete it, and once removed from the app
+      `cdk destroy` can no longer address it — the teardown needs a raw
+      CloudFormation delete, ordered after the consumer stack releases its
+      cross-region export claim. (b) Decision 5's premise ("Cloudflare fronts
+      the edge") holds only for the API: the frontend zone is still on Route 53,
+      so dropping the CLOUDFRONT WebACL leaves the SPA distribution with no edge
+      filtering. Confirmed as the intended end state, not a gap — the
+      distribution serves static edge-cached files from a private S3 origin, and
+      fronting CloudFront with Cloudflare would stack two CDNs. Treat the
+      "move the frontend zone first" path as an open question rather than a
+      deferred obligation. (c) The cost rationale is framed on the wrong
+      component: the `$0.60/M` request fee is ~0.08 USD/mo at real volume
+      (~130k req/mo); the saving is the fixed WebACL + rule fee, measured
+      18.07 USD in June 2026. Teardown outcome recorded in task 0302.
 ---
 
 # ADR 0048: Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare
 
 **Related:**
 
-- [Task 0277: Migrate edge protection (WAF/DDoS) to Cloudflare](../1-tasks/active/0277_FEATURE_migrate-edge-protection-to-cloudflare.md)
+- [Task 0277: Migrate edge protection (WAF/DDoS) to Cloudflare](../1-tasks/archive/0277_FEATURE_migrate-edge-protection-to-cloudflare.md)
 - [Task 0273: Deploy web frontend to CloudFront](../1-tasks/archive/0273_FEATURE_deploy-web-frontend-to-cloudfront.md)
+- [Task 0302: Drop both AWS WAF WebACLs (executes Decision 5)](../1-tasks/active/0302_FEATURE_drop-aws-waf-after-soak/README.md)
 - [Cost + capability comparison](../../docs/waf-vs-cloudflare/README.md)
 
 ---

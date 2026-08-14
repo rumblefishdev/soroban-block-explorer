@@ -446,6 +446,8 @@ mod tests {
             topics: json!(topics),
             data,
             event_index: 0,
+            op_index: None,
+            stage: None,
             ledger_sequence: 100,
             created_at: 1700000000,
         }
@@ -870,6 +872,8 @@ mod tests {
             topics: json!([scval_to_typed_json(&topic)]),
             data: scval_to_typed_json(&data),
             event_index: 0,
+            op_index: None,
+            stage: None,
             ledger_sequence: 1,
             created_at: 1732801047,
         };
@@ -1125,6 +1129,8 @@ mod tests {
             topics: json!([scval_to_typed_json(&topic0), scval_to_typed_json(&topic1)]),
             data: scval_to_typed_json(&data),
             event_index: 0,
+            op_index: None,
+            stage: None,
             ledger_sequence: 62952436,
             created_at: 1700000000,
         };
@@ -1167,6 +1173,8 @@ mod tests {
             )
             .unwrap(),
             event_index: 0,
+            op_index: None,
+            stage: None,
             ledger_sequence: 1,
             created_at: 1700000000,
         };
