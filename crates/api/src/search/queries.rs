@@ -309,15 +309,18 @@ struct PoolRow {
 /// The pool's display name, identical in both arms — a hit found by id and the
 /// same pool found by code must not be labelled differently.
 ///
-/// Native is detected here by the EMPTY stored code, while the asset-code
-/// predicate detects it by `asset_type = 0` (`common::pool_asset_codes`). The
-/// two signals agree on every row today — measured 2026-08-10: 0 of 73 916
-/// rows have `type = 0` with a non-empty code or the reverse — so this is a
-/// latent inconsistency, not a live one. Left as-is rather than "tidied",
-/// because changing the label expression changes strings already on the wire.
+/// Native is detected by `asset_type = 0`, the SAME signal
+/// `common::pool_asset_codes` matches on. This used to key off the empty stored
+/// code instead, which gave the label and the predicate two different notions
+/// of "is this XLM" over one row. Two native conventions have already produced
+/// real bugs here — an empty code slips through filters that a type check
+/// catches — so the second one is gone rather than commented.
+///
+/// Byte-identical output, verified before the change: over all 75 218 rows,
+/// zero disagree on either leg. Nothing on the wire moves.
 const POOL_LABEL_SQL: &str = "concat( \
-     if(asset_a_code = '', 'XLM', toString(asset_a_code)), ' / ', \
-     if(asset_b_code = '', 'XLM', toString(asset_b_code)) \
+     if(asset_a_type = 0, 'XLM', toString(asset_a_code)), ' / ', \
+     if(asset_b_type = 0, 'XLM', toString(asset_b_code)) \
  ) AS label";
 
 /// Two shapes, one entity.
