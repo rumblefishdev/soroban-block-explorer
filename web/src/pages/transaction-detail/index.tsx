@@ -19,19 +19,11 @@ import { OperationsSection } from './sections/OperationsSection.js';
 import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
 import { TransactionDetailSkeleton } from './TransactionDetailSkeleton.js';
-import { useSelectedOp } from './useSelectedOp.js';
 import { useTxHashParam } from './useTxHashParam.js';
 
 export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
   const query = useTransactionDetail(valid ? hash : '');
-  // `heavy.operations` is the list `buildOperationEntries` maps 1:1 over, so
-  // its length IS the number of pickable operations. Absent while loading and
-  // when the archive fetch failed — `useSelectedOp` treats 0 as "cannot
-  // judge", not as "no such operation" (task 0482).
-  const [selection, setSelectedIndex] = useSelectedOp(
-    query.data?.heavy?.operations.length ?? 0
-  );
 
   if (!valid) {
     return <NotFoundState entity="transaction" identifier={hash} />;
@@ -88,12 +80,7 @@ export default function TransactionDetailPage() {
       </SectionErrorBoundary>
 
       <SectionErrorBoundary sectionName="transaction-operations">
-        <OperationsSection
-          tx={tx}
-          selectedIndex={selection.index}
-          missingOp={selection.missing}
-          onSelect={setSelectedIndex}
-        />
+        <OperationsSection tx={tx} />
       </SectionErrorBoundary>
 
       <SectionErrorBoundary sectionName="transaction-signatures">

@@ -8,32 +8,30 @@ import { buildOperationEntries } from './operationEntries.js';
 import { OperationCard } from '../op-card/OperationCard.js';
 import { OperationPicker } from './OperationPicker.js';
 import { UnavailableSection } from '../shared/Unavailable.js';
+import { useSelectedOp } from '../useSelectedOp.js';
 
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
-  selectedIndex: number;
-  /** 1-based number `#op-N` asked for when this transaction has no such
-   *  operation — `useSelectedOp` owns that judgement (task 0482). */
-  missingOp: number | null;
-  onSelect: (index: number) => void;
 }
 
-export function OperationsSection({
-  tx,
-  selectedIndex,
-  missingOp,
-  onSelect,
-}: OperationsSectionProps) {
+export function OperationsSection({ tx }: OperationsSectionProps) {
   const entries = useMemo(() => buildOperationEntries(tx), [tx]);
   // Header count from operation_count (always present, never folded) — the
   // picker list may be shorter when heavy is unavailable (task 0329).
   const count = tx.operation_count;
-  // `selectedIndex` always addresses an existing entry: `useSelectedOp`
-  // resolved the user-supplied `#op-N` against this same list, the way
-  // `useTableUrlState` resolves `sort`/`dir`. No range guard here — the one
-  // that used to live here answered a bad fragment by replacing the operation
-  // with a message, which for the ~85 % of transactions carrying a single
-  // operation blanked the section and pointed at a picker they never get.
+  // The `#op-N` fragment is resolved HERE because this is where the list it
+  // has to be valid against already exists. Handing the count up to the page
+  // and the answer back down as props derived the same number twice.
+  const {
+    index: selectedIndex,
+    missing: missingOp,
+    select,
+  } = useSelectedOp(entries.length);
+  // `selectedIndex` always addresses an existing entry, so there is no range
+  // guard here. The one that used to live here answered a bad fragment by
+  // replacing the operation with a message, which for the ~85 % of
+  // transactions carrying a single operation blanked the section and pointed
+  // at a picker they never get.
   const selected = entries[selectedIndex];
 
   // 87 % of mainnet transactions have exactly one operation — an index with
@@ -102,7 +100,7 @@ export function OperationsSection({
                 entries={entries}
                 txSourceAccount={tx.source_account ?? null}
                 selectedIndex={selectedIndex}
-                onSelect={onSelect}
+                onSelect={select}
               />
             </Grid>
             <Grid size={{ xs: 12, md: 7, lg: 8 }}>{card}</Grid>

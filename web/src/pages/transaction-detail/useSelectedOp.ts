@@ -51,7 +51,7 @@ export function resolveOp(hash: string, count: number): OpSelection {
  */
 export function useSelectedOp(
   count: number
-): [OpSelection, (index: number) => void] {
+): OpSelection & { select: (index: number) => void } {
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -71,5 +71,5 @@ export function useSelectedOp(
     [navigate, location.pathname, location.search]
   );
 
-  return [selection, setSelected];
+  return { ...selection, select: setSelected };
 }
