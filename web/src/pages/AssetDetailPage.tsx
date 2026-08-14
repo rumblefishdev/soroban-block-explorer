@@ -17,7 +17,11 @@ import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta, SAC_TAG } from './assets/assetType.js';
+import {
+  assetDisplayCode,
+  assetTypeMeta,
+  SAC_TAG,
+} from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -43,9 +47,15 @@ export default function AssetDetailPage() {
   }
 
   const data = asset.data;
-  // Soroban-native tokens have no classic asset_code; fall back to the on-chain
-  // SEP-41 symbol for the title + breadcrumb before the generic label (0304).
-  const code = data?.asset_code ?? data?.symbol ?? 'Asset';
+  // Native XLM and Soroban tokens both lack a classic asset_code — the shared
+  // rule names them (`XLM` / SEP-41 symbol) before the generic label (0472).
+  // The two consumers differ on the empty case: the title needs SOME string,
+  // the avatar must NOT invent one. 527 type-3 assets on prod carry neither
+  // code nor symbol (measured 2026-08-11); feeding "Asset" to the avatar
+  // would render a confident "A" that looks like a real ticker initial, so
+  // it keeps the null and shows its honest "?" placeholder.
+  const displayCode = data ? assetDisplayCode(data) : null;
+  const code = displayCode ?? 'Asset';
   const typeMeta = data ? assetTypeMeta(data.asset_type_name) : null;
 
   let summary: ReactNode = null;
@@ -73,11 +83,7 @@ export default function AssetDetailPage() {
         />
         <Stack direction="row" spacing={1.5} alignItems="center">
           {data && (
-            <AssetIcon
-              code={data.asset_code}
-              iconUrl={data.icon_url}
-              size={40}
-            />
+            <AssetIcon code={displayCode} iconUrl={data.icon_url} size={40} />
           )}
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">

@@ -1,4 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
+import { Fragment } from 'react';
 import type { AssetDetailResponse } from '@rumblefish/api-types';
 import {
   formatAmount,
@@ -9,6 +10,8 @@ import {
 
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
+
+import { assetDisplayCode } from './assetType.js';
 
 function SupplyValue({
   supply,
@@ -25,12 +28,29 @@ function SupplyValue({
         variant="bodySmBold"
         sx={(theme) => ({
           color: theme.palette.text.primary,
-          // A long supply is one unbroken token — let it wrap instead of
-          // overflowing into the adjacent "Holders" cell (F4).
+          // A long supply is one unbroken token — allow wrapping rather
+          // than overflow the card (F4). The <wbr> after each group
+          // separator makes commas the PREFERRED break points, so a wrap
+          // lands between groups ("105,410,072,/690.53…"), never mid-group;
+          // `anywhere` stays as the last resort for a single segment longer
+          // than the line (an 18-decimals fraction on a phone).
           overflowWrap: 'anywhere',
         })}
       >
-        {formatAmount(scaleByDecimals(supply, decimals))}
+        {formatAmount(scaleByDecimals(supply, decimals))
+          .split(',')
+          .map((part, i) => (
+            // Index key is correct here: the list is the positional split of
+            // one string, re-derived on every render.
+            <Fragment key={i}>
+              {i > 0 && (
+                <>
+                  ,<wbr />
+                </>
+              )}
+              {part}
+            </Fragment>
+          ))}
       </Typography>
       {code && (
         <Typography
@@ -143,6 +163,13 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           ]}
         />
       )}
+      {/* Supply gets the row to itself and Holders the next one (task 0472).
+          Sharing a row forced the longest value in the system into a
+          half-width cell: XLM's 22-character supply wrapped three times, and
+          because the earlier overflow fix (F4) breaks anywhere, it split
+          mid-group — "105,410,0 / 95,815.54 / 27811" reads as three numbers.
+          Full width fits every supply on one line, so the anywhere-break
+          never fires. */}
       <SummaryRow
         cells={[
           {
@@ -151,17 +178,20 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
               <SupplyValue
                 supply={asset.total_supply}
                 decimals={asset.decimals}
-                // Soroban-native tokens have no classic `asset_code`; fall back
-                // to the on-chain SEP-41 `symbol` so supply reads e.g. "1.5 USDC"
-                // instead of an unlabelled number (task 0304).
-                code={asset.asset_code ?? asset.symbol}
+                // The shared display rule (0472) — so supply reads "1.5 USDC"
+                // for a classic asset, the SEP-41 symbol for a Soroban token
+                // (0304), and "XLM" for native, never an unlabelled number.
+                code={assetDisplayCode(asset)}
               />
             ),
           },
+        ]}
+      />
+      <SummaryRow
+        cells={[
           {
             label: 'Holders',
             value: formatAmount(asset.holder_count),
-            labelMinWidth: 70,
           },
         ]}
       />

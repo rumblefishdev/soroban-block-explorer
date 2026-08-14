@@ -27,3 +27,4 @@ export {
   isPoolId,
   isTransactionHash,
 } from './validators.js';
+export { NATIVE_ASSET_CODE, isNativeAssetString } from './native.js';

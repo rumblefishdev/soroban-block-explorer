@@ -6,6 +6,10 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import {
+  isNativeAssetString,
+  NATIVE_ASSET_CODE,
+} from '../../assets/assetType.js';
+import {
   formatOperationType,
   isKnownOperationType,
 } from '../../transactions/operationTypes.js';
@@ -43,7 +47,7 @@ export function assetUnit(
   fallback: string | null
 ): string | null {
   if (typeof value === 'string' && value.length > 0) {
-    if (value === 'native') return 'XLM';
+    if (isNativeAssetString(value)) return NATIVE_ASSET_CODE;
     const code = value.split(':')[0];
     if (code.length > 0) return code;
   }
@@ -122,7 +126,10 @@ export function humanizeOp(
         // and every non-blank one does not — 11_168/11_168 and 55_582/55_582 in
         // the recent window, and the same at the oldest indexed partition.
         // Three were spot-checked against Horizon, all `asset_type: native`.
-        const unit = assetUnit(details?.asset, light.asset_code ?? 'XLM');
+        const unit = assetUnit(
+          details?.asset,
+          light.asset_code ?? NATIVE_ASSET_CODE
+        );
         const amount = asAmount(details?.amount);
         const target = isSelf(light, txSourceAccount)
           ? 'itself'
@@ -134,7 +141,7 @@ export function humanizeOp(
           amount != null ? formatTokenAmount(amount, unit) : null;
         return formatted != null
           ? `Sent ${formatted} to ${target}`
-          : `Sent ${unit ?? 'XLM'} to ${target}`;
+          : `Sent ${unit ?? NATIVE_ASSET_CODE} to ${target}`;
       }
       break;
     case 'PATH_PAYMENT_STRICT_SEND':
@@ -172,7 +179,7 @@ export function humanizeOp(
     case 'CHANGE_TRUST': {
       const details = detailsObj(heavy);
       const asset = details?.asset;
-      if (typeof asset === 'string' && asset !== 'native') {
+      if (typeof asset === 'string' && !isNativeAssetString(asset)) {
         const [code, issuer] = asset.split(':');
         const suffix = issuer ? ` (issuer ${shortId(issuer)})` : '';
         const limit = asAmount(details?.limit);
@@ -243,7 +250,7 @@ export function humanizeOp(
         const dest = shortId(light.destination_account);
         const amount = asAmount(detailsObj(heavy)?.startingBalance);
         const formatted =
-          amount != null ? formatTokenAmount(amount, 'XLM') : null;
+          amount != null ? formatTokenAmount(amount, NATIVE_ASSET_CODE) : null;
         return formatted != null
           ? `Created account ${dest} with ${formatted}`
           : `Created account ${dest}`;

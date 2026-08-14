@@ -13,6 +13,8 @@ import {
 import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
+import { isNativeAssetString, NATIVE_ASSET_CODE } from '../assets/assetType.js';
+
 import { formatOperationType } from './operationTypes.js';
 
 /**
@@ -51,7 +53,9 @@ export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
   // `XLM` only for native; a bespoke token with no on-chain symbol has a null
   // `asset_code` and must NOT be mislabeled as XLM (its `asset` C-StrKey still
   // links correctly).
-  const code = first.asset === 'native' ? 'XLM' : first.asset_code ?? '';
+  const code = isNativeAssetString(first.asset)
+    ? NATIVE_ASSET_CODE
+    : first.asset_code ?? '';
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5 }}>
       <Typography component="span" variant="bodySmRegular">

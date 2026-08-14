@@ -15,7 +15,7 @@ interface ContractsFiltersProps {
 
 /**
  * Filter bar for the contracts list — a contract id/name search input plus a
- * row of type chips (All / Token / NFT / Fungible / Other). Mirrors the
+ * row of type chips (All / SAC / NFT / Fungible / Other). Mirrors the
  * assets filter bar.
  */
 export function ContractsFilters({
