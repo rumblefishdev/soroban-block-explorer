@@ -31,9 +31,10 @@ export function OperationsSection({ tx }: OperationsSectionProps) {
   // the need for either.
   const selected = entries[selectedIndex];
 
-  // 87 % of mainnet transactions have exactly one operation — an index with
-  // one entry is pure width tax, so the card takes the full row (0460 #5,
-  // the adaptive-index option deferred from 0453).
+  // 84.6 % of mainnet transactions have exactly one operation (measured on
+  // production over ledgers 63 680 000–63 700 000) — an index with one entry is
+  // pure width tax, so the card takes the full row (0460 #5, the adaptive-index
+  // option deferred from 0453).
   const showPicker = entries.length > 1;
 
   const card = (

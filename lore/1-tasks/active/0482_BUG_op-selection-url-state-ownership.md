@@ -154,9 +154,9 @@ does log a warning if it ever fires, so it is observable rather than silent.
 `useSelectedOp(count)` becomes the owner of the index:
 
 - a pure `resolveOp(hash, count)` does the work and is directly testable
-- returns `{ index, missing }` — `index` always addresses an existing
-  operation, `missing` carries the 1-based number the URL asked for when that
-  operation does not exist
+- it returns a plain index that always addresses an existing operation. An
+  earlier draft also returned `missing` (the number the URL asked for) to drive
+  a notice; both were cut — see the 2026-08-14 history entry
 - `count <= 0` reports nothing: 0 also means "still loading" and "archive fetch
   failed", and answering it would assert a count nobody measured (0377)
 - the fragment is **not** rewritten — the address bar keeps what the reader
@@ -164,13 +164,18 @@ does log a warning if it ever fires, so it is observable rather than silent.
   rather than silent
 
 `OperationsSection` drops both the range guard and the message-instead-of-card
-branch, renders the operation, and shows the miss as a notice above it.
-`OperationPicker` loses its unreachable empty branch.
+branch and simply renders the operation; it also calls the hook itself rather
+than receiving the index as a prop, since it already holds the list the
+fragment must be valid against. `OperationPicker` loses its unreachable empty
+branch.
 
 ## Acceptance criteria
 
-- [x] `#op-N` past the end renders the operation AND names the number that does
-      not exist — nothing hidden, nothing silently substituted
+- [x] ~~`#op-N` past the end renders the operation AND names the number that
+      does not exist~~ → the naming half was CUT (see the 2026-08-14 entry): the
+      card numbers itself from `application_order`, so falling back to the
+      first operation mislabels nothing and the notice was unearned. What holds
+      is the first half — the operation renders, nothing is hidden
 - [x] Single-operation transactions (84.6 % of traffic) recover without a
       picker; no copy points at a control that is not rendered
 - [x] `count === 0` (loading / archive unavailable) makes no claim about
@@ -181,7 +186,9 @@ branch, renders the operation, and shows the miss as a notice above it.
       non-numeric, and unjudgeable (`count === 0`) fragments
 - [ ] Verified live on production against the reported transaction
 - [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md` §6.4
-      describes the `#op-N` contract
+      describes the `#op-N` contract. Corrected after merge: the shipped text
+      still described the notice that had been cut, and said the opposite of
+      what the code does
 - [x] **API types regenerated** — N/A, nothing under `crates/api/**`
 
 ## Future Work

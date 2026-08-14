@@ -156,8 +156,11 @@ inline rule into the shared module.
 
 ## Acceptance criteria
 
-- [ ] Any query that returns N pools on the pools page returns the same N in
-      global search — verified on `KALE` (58), `xlm/kale` (7) and `USDC`
+- [ ] Any query that returns pools on the pools page returns THE SAME POOLS in
+      global search, up to that bucket's cap — verified on `KALE`, `xlm/kale`
+      and `USDC`. Equal COUNTS are not achievable and never were: search caps
+      every bucket at `MAX_LIMIT` 50 (default 10), while `KALE` matches 58
+      pools. The criterion is set membership within the cap, not parity of N
 - [ ] Native XLM behaves identically on both surfaces (0440's rule preserved,
       not re-implemented)
 - [ ] Hash-shaped queries keep the point-seek path — no scan introduced for

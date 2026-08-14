@@ -33,9 +33,11 @@ export function resolveOp(hash: string, count: number): number {
  * The hook owns the index's validity, the way `useTableUrlState` owns
  * `sort`/`dir`: user-supplied URL state is normalised where it is read, so
  * nothing downstream defends against a value that cannot happen. It used to
- * clamp only the lower bound and let anything above the list through, which
+ * normalise only the lower bound and let anything above the list through, which
  * left the card showing operation 1 while the picker beside it highlighted
- * nothing.
+ * nothing. Note this RESETS rather than clamps — a number past the end gives
+ * the first operation, not the last; the fragment is treated as unusable, not
+ * as an intent to reach the end of the list.
  */
 export function useSelectedOp(
   count: number

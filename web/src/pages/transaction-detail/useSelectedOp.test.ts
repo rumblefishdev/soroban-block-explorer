@@ -15,7 +15,7 @@ describe('resolveOp', () => {
     expect(resolveOp('#op-3', 3)).toBe(2);
   });
 
-  it('clamps a number past the end instead of letting it through', () => {
+  it('resets a number past the end to the first operation', () => {
     // The regression this exists for: the index used to escape unclamped, so
     // the card rendered operation 1 while the picker beside it — handed the
     // raw 98 — highlighted nothing.
@@ -23,7 +23,7 @@ describe('resolveOp', () => {
     expect(resolveOp('#op-99', 4)).toBe(0);
   });
 
-  it('clamps #op-0, which is below the 1-based range', () => {
+  it('resets #op-0, which is below the 1-based range', () => {
     expect(resolveOp('#op-0', 2)).toBe(0);
   });
 

@@ -380,21 +380,25 @@ Transaction-level sections:
 
 Operations render as a master-detail: a picker (per-type icon + label per
 operation, selection deep-linked as `#op-N`) and **one operation card** for the
-selected operation. The picker appears only above one operation — ~85 % of
-mainnet transactions carry exactly one, and an index of a single row is pure
-width tax.
+selected operation. The picker appears only above one operation — 84.6 % of
+mainnet transactions carry exactly one (5 369 984 of 6 349 043, measured on
+production over ledgers 63 680 000–63 700 000, deduplicated), and an index of a
+single row is pure width tax.
 
 `#op-N` is 1-based and user-supplied, so `useSelectedOp` resolves it against
 the decoded operation list and owns the result, the way `useTableUrlState` owns
 `sort`/`dir`: the index handed to the section always addresses an existing
 operation, and no consumer carries a range guard. A fragment naming an
-operation the transaction does not have is **reported above the card, never
-substituted for it** — the operation still renders, and the number that does
-not exist is named rather than quietly becoming a different one. The fragment
-itself is left alone, so the address bar keeps what the reader asked for. While
-the archive fetch is in flight or has failed the list length is unknown, and an
-unresolvable fragment then makes no claim at all rather than asserting a count
-nobody measured (0377, 0482).
+operation the transaction does not have resolves to the first one **with no
+notice**: the card numbers itself from `application_order`, not from the
+fragment, so the reader gets a correctly numbered operation and nothing is
+hidden or mislabelled. Reaching that state needs a hand-edited URL — `#op-N` is
+written in one place, from a picker click, and an operation count never changes,
+so a shared link that worked once keeps working. The fragment itself is left
+alone, so the address bar still shows what was asked for. While the archive
+fetch is in flight or has failed the list length is unknown, and an unresolvable
+fragment then makes no claim at all rather than asserting a count nobody
+measured (0377, 0482).
 
 The card shows:
 
