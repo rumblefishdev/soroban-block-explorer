@@ -592,8 +592,11 @@ query bounded.
 
 ### 6.4 Response Caching
 
-Per task 0055, every public endpoint sets an explicit `Cache-Control` header
-that the API Gateway stage cache (CDK config — task 0097) honours. Constants
+Per task 0055, every public endpoint sets an explicit `Cache-Control` header.
+Its consumer today is the **user's browser** (plus any future edge cache) —
+the API Gateway stage cache was never enabled and stays off by decision
+(2026-08-14, task 0455; rationale and return condition in
+[`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md)). Constants
 live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
 
 | Tier             | `Cache-Control`                      | Endpoints                                                                                                                                                                                                                                                                                                                                                                      |
