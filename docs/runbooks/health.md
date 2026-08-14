@@ -56,6 +56,20 @@ system.query_log WHERE event_date=today() AND exception_code!=0 ORDER BY
 event_time DESC LIMIT 20"`. NOTE: a backlog-age page right after you
   paused the indexer is expected and correct — one knowing page per pause
   (ADR 0054 rule 4); it doubles as the forgot-to-re-enable bound.
+- **"A `galexie-ingestion-lag` page arrived"** → first check for a task
+  restart: `/ecs/production/galexie-live` logs, look for
+  `Starting Galexie` around the page time, and the ECS service events
+  (`aws ecs describe-services --cluster production-ingestion --services
+production-galexie-live --query 'services[0].events[0:5]'`). A
+  stop+start pair with NO deployment = AWS-initiated Fargate task
+  replacement (host patching) — measured 2026-08-12: ~25 min from restart
+  to full catch-up, one page, one recovery message, zero ledger gaps.
+  That is the expected envelope, not an incident; afterwards verify
+  continuity: `chq "SELECT count() FROM (SELECT sequence,
+sequence - lagInFrame(sequence) OVER (ORDER BY sequence ROWS BETWEEN 1
+PRECEDING AND CURRENT ROW) AS d FROM ledgers WHERE closed_at >
+now() - INTERVAL 3 HOUR) WHERE d > 1"` (expect 0; the window function
+  needs the ROWS frame or its first row fakes a gap).
 - **"A 5xx page arrived"** → [api-5xx.md](./api-5xx.md), every error gets
   an owner.
 - **"A DLQ page arrived"** → [dlq.md](./dlq.md), inspect → attribute →
