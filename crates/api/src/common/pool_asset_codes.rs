@@ -37,21 +37,23 @@ pub fn normalize_asset_codes(raw: Option<String>) -> Vec<String> {
 /// which finds nothing, so the page answers "no such pool" about a pool that
 /// exists. A confident wrong answer, not a missing convenience (task 0470).
 ///
-/// Both encodings of the same 32 bytes are accepted, mirroring the search
-/// classifier: the `L…` StrKey our UI displays everywhere, and the raw 64-char
-/// hex other tools emit. The DETAIL route deliberately takes the StrKey alone
-/// — a malformed path parameter should fail loudly with a 400 — but a filter
-/// has no reason to be stricter than the search box beside it.
+/// **StrKey only.** Task 0264 made the `L…` SEP-23 form canonical across every
+/// surface and dropped hex deliberately — the project was pre-deploy, so there
+/// were no hex bookmarks to preserve — and `path::pool_id_strkey` still tells
+/// callers that "hex form is no longer accepted".
 ///
-/// Returns the lowercase hex form the `pool_id` column stores.
+/// `search::classifier` does accept 64-char hex, but that is the one endpoint
+/// 0264 explicitly deferred, not a precedent. Copying it here would spread a
+/// known exception into a third place.
+///
+/// Dropping hex also removes a trap: `hex::decode` accepts any even-length
+/// string over `[0-9a-f]`, so `FACE`, `BEEF` and `CAFE` — all valid asset
+/// codes — would parse as identifiers and search for a pool that does not
+/// exist.
+///
+/// Returns the lowercase hex the `pool_id` column stores.
 pub fn pool_id_from_text(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() == 64
-        && let Ok(bytes) = hex::decode(trimmed)
-    {
-        return Some(hex::encode(bytes));
-    }
-    match stellar_strkey::LiquidityPool::from_string(trimmed) {
+    match stellar_strkey::LiquidityPool::from_string(raw.trim()) {
         Ok(stellar_strkey::LiquidityPool(bytes)) => Some(hex::encode(bytes)),
         Err(_) => None,
     }
@@ -170,11 +172,10 @@ mod tests {
     }
 
     #[test]
-    fn pool_identifier_is_recognised_in_both_encodings() {
-        // Round-trip rather than hardcoded constants: the invariant is that
-        // both spellings of the SAME 32 bytes resolve to the same stored hex.
-        // A literal strkey typed by hand would only test whether the literal
-        // was right.
+    fn pool_identifier_is_recognised_as_a_strkey() {
+        // Round-trip rather than a hand-typed constant: the invariant is that
+        // the StrKey resolves to the hex of the SAME 32 bytes. A literal typed
+        // by hand would only test whether the literal was right.
         let bytes: [u8; 32] = core::array::from_fn(|i| i as u8);
         let hex = hex::encode(bytes);
         let strkey = stellar_strkey::LiquidityPool(bytes).to_string();
@@ -183,18 +184,16 @@ mod tests {
             "expected an L-strkey, got {strkey}"
         );
 
-        assert_eq!(pool_id_from_text(&hex).as_deref(), Some(hex.as_str()));
         assert_eq!(pool_id_from_text(&strkey).as_deref(), Some(hex.as_str()));
         // Pasting from a terminal or a chat window brings whitespace along.
         assert_eq!(
             pool_id_from_text(&format!("  {strkey} ")).as_deref(),
             Some(hex.as_str())
         );
-        // Upper-case hex is the same 32 bytes; normalise to the stored form.
-        assert_eq!(
-            pool_id_from_text(&hex.to_uppercase()).as_deref(),
-            Some(hex.as_str())
-        );
+        // Hex is NOT an identifier here — 0264 made StrKey the only accepted
+        // form, and `path::pool_id_strkey` rejects hex on the detail route.
+        assert!(pool_id_from_text(&hex).is_none());
+        assert!(pool_id_from_text(&hex.to_uppercase()).is_none());
     }
 
     #[test]
@@ -204,8 +203,16 @@ mod tests {
         assert!(pool_id_from_text("XLM").is_none());
         assert!(pool_id_from_text("xlm/kale").is_none());
         assert!(pool_id_from_text("").is_none());
-        // 64 chars but not hex.
+        // 64 chars but not a StrKey.
         assert!(pool_id_from_text(&"z".repeat(64)).is_none());
+        // Hex-looking asset codes stay asset codes. With a hex branch these
+        // parsed as identifiers and searched for a pool that does not exist.
+        for code in ["FACE", "BEEF", "CAFE", "DEAD"] {
+            assert!(
+                pool_id_from_text(code).is_none(),
+                "{code} must stay an asset code"
+            );
+        }
         // A strkey of the wrong type — accounts are not pools.
         assert!(
             pool_id_from_text("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN").is_none()
