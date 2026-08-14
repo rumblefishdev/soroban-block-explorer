@@ -1,5 +1,5 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Box, Grid, Typography } from '@mui/material';
+import { Box, Grid } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -8,28 +8,27 @@ import { buildOperationEntries } from './operationEntries.js';
 import { OperationCard } from '../op-card/OperationCard.js';
 import { OperationPicker } from './OperationPicker.js';
 import { UnavailableSection } from '../shared/Unavailable.js';
+import { useSelectedOp } from '../useSelectedOp.js';
 
 interface OperationsSectionProps {
   tx: E3ResponseTransactionDetailLight;
-  selectedIndex: number;
-  onSelect: (index: number) => void;
 }
 
-export function OperationsSection({
-  tx,
-  selectedIndex,
-  onSelect,
-}: OperationsSectionProps) {
+export function OperationsSection({ tx }: OperationsSectionProps) {
   const entries = useMemo(() => buildOperationEntries(tx), [tx]);
   // Header count from operation_count (always present, never folded) — the
   // picker list may be shorter when heavy is unavailable (task 0329).
   const count = tx.operation_count;
-  // `#op-N` is user-supplied, so the index can point past the end. It is NOT
-  // silently swapped for the first operation: that showed a real operation
-  // under a number the reader asked for and did not get, which reads as an
-  // answer rather than a miss. Say what happened and leave the picker to
-  // recover from.
-  const outOfRange = selectedIndex < 0 || selectedIndex >= entries.length;
+  // The `#op-N` fragment is resolved HERE because this is where the list it
+  // has to be valid against already exists. Handing the count up to the page
+  // and the answer back down as props derived the same number twice.
+  const [selectedIndex, select] = useSelectedOp(entries.length);
+  // `selectedIndex` always addresses an existing entry, so there is no range
+  // guard here. Two attempts lived here before: falling back to `entries[0]`
+  // while the picker beside it got the raw index and highlighted nothing, then
+  // replacing the card with a message that pointed at a picker single-operation
+  // transactions never render. Resolving the fragment against the list removes
+  // the need for either.
   const selected = entries[selectedIndex];
 
   // 87 % of mainnet transactions have exactly one operation — an index with
@@ -37,15 +36,7 @@ export function OperationsSection({
   // the adaptive-index option deferred from 0453).
   const showPicker = entries.length > 1;
 
-  const card = outOfRange ? (
-    <Typography
-      variant="bodySmRegular"
-      sx={(theme) => ({ color: theme.palette.text.tertiary, p: 2 })}
-    >
-      This transaction has no operation {selectedIndex + 1} — it has{' '}
-      {entries.length}. Pick one from the list.
-    </Typography>
-  ) : (
+  const card = (
     /* Remount on op switch so disclosure state resets per operation. */
     <OperationCard
       key={selectedIndex}
@@ -91,7 +82,7 @@ export function OperationsSection({
                 entries={entries}
                 txSourceAccount={tx.source_account ?? null}
                 selectedIndex={selectedIndex}
-                onSelect={onSelect}
+                onSelect={select}
               />
             </Grid>
             <Grid size={{ xs: 12, md: 7, lg: 8 }}>{card}</Grid>
