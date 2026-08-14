@@ -11,6 +11,8 @@ import type { ReactNode } from 'react';
 import { FeeCell } from '../detail/FeeCell.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
+import { TransactionCounts } from './TransactionCounts.js';
+
 interface LedgerSummaryProps {
   ledger: LedgerDetailResponse;
 }
@@ -126,14 +128,12 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
     ],
     [
       {
-        label: 'TX Count',
+        label: 'Transactions',
         value: (
-          <Typography
-            variant="bodySmBold"
-            sx={(theme) => ({ color: theme.palette.text.primary })}
-          >
-            {formatInteger(ledger.transaction_count)}
-          </Typography>
+          <TransactionCounts
+            total={ledger.transaction_count}
+            successful={ledger.successful_transaction_count}
+          />
         ),
       },
     ],

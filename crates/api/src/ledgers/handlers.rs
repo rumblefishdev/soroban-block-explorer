@@ -155,14 +155,15 @@ pub async fn list_ledgers(
 /// Get ledger detail by sequence — header + prev/next navigation +
 /// embedded paginated transactions.
 ///
-/// Two phases, both DB-only:
+/// Two DB-only reads, issued concurrently — both key off the path
+/// `:sequence`, so neither waits on the other (task 0446):
 ///
-/// 1. **DB header.** Resolve `:sequence` against `ledgers` + LATERAL
-///    prev/next computed via `sequence` comparisons on the `ledgers`
-///    PK (index-only scan, no heap fetch). 404 on miss.
-/// 2. **DB transactions.** Keyset-paginated read of the `transactions`
-///    partition with full equality partition prune
-///    (`created_at = $closed_at`).
+/// - **Header.** Resolve `:sequence` against `ledgers` + prev/next
+///   computed via `sequence` comparisons on the `ledgers` PK
+///   (index-only scan, no heap fetch). Decides the 404.
+/// - **Transactions.** Keyset-paginated read of `transactions`, pruned
+///   to the one partition holding that sequence
+///   (`intDiv(ledger_sequence, 500000)`).
 ///
 /// The detail endpoint reuses the standard `?limit=` / `?cursor=` query
 /// parameters to drive embedded transactions pagination. Detail itself
@@ -199,8 +200,23 @@ pub async fn get_ledger(
         Err(resp) => return resp,
     };
 
-    // Phase 1 — DB header.
-    let header_row = match fetch_by_sequence_for_source(&state, sequence).await {
+    // Header and embedded transactions both key off the path `sequence` — the
+    // tx read never consumed anything from the header row — so they go out
+    // together (task 0446). The header is still what decides the 404 and is
+    // still checked first, so responses are unchanged; the cost is one wasted
+    // tx read when the ledger does not exist.
+    let (header, transactions) = tokio::join!(
+        fetch_by_sequence_for_source(&state, sequence),
+        fetch_transactions_for_source(
+            &state,
+            sequence,
+            pagination.cursor.as_ref(),
+            pagination.fetch_limit(),
+            pagination.direction,
+        ),
+    );
+
+    let header_row = match header {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("ledger with sequence {sequence} not found")),
         Err(e) => {
@@ -209,18 +225,7 @@ pub async fn get_ledger(
         }
     };
 
-    // Phase 2 — DB embedded transactions, keyset-paginated by
-    // `?limit=` / `?cursor=` query params validated above.
-    let mut tx_rows: Vec<LedgerTxRow> = match fetch_transactions_for_source(
-        &state,
-        header_row.sequence,
-        header_row.closed_at,
-        pagination.cursor.as_ref(),
-        pagination.fetch_limit(),
-        pagination.direction,
-    )
-    .await
-    {
+    let mut tx_rows: Vec<LedgerTxRow> = match transactions {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(sequence, error = %e, "DB error in get_ledger transactions");
@@ -245,6 +250,7 @@ pub async fn get_ledger(
         closed_at: header_row.closed_at,
         protocol_version: header_row.protocol_version,
         transaction_count: header_row.transaction_count,
+        successful_transaction_count: header_row.successful_transaction_count,
         base_fee: header_row.base_fee,
         prev_sequence: header_row.prev_sequence,
         next_sequence: header_row.next_sequence,
@@ -290,20 +296,11 @@ async fn fetch_by_sequence_for_source(
 async fn fetch_transactions_for_source(
     state: &AppState,
     ledger_sequence: i64,
-    closed_at: chrono::DateTime<chrono::Utc>,
     cursor: Option<&TsIdCursor>,
     limit: i64,
     direction: crate::common::cursor::Direction,
 ) -> Result<Vec<LedgerTxRow>, clickhouse::error::Error> {
-    queries::fetch_transactions(
-        &state.ch(),
-        ledger_sequence,
-        closed_at,
-        cursor,
-        limit,
-        direction,
-    )
-    .await
+    queries::fetch_transactions(&state.ch(), ledger_sequence, cursor, limit, direction).await
 }
 
 #[cfg(test)]
@@ -332,6 +329,8 @@ mod conditional_tests {
             sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
+            wasm_code: crate::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
+                .expect("build wasm_code fetcher"),
         };
         AppState::for_tests(ch, runtime_enrichment)
     }

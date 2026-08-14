@@ -216,12 +216,6 @@ struct TxPageRawRow {
 }
 
 #[derive(Debug, Row, Deserialize)]
-struct PageAccountRow {
-    id: i64,
-    account_id: String,
-}
-
-#[derive(Debug, Row, Deserialize)]
 struct LedgerClosedAtRow {
     sequence: i64,
     closed_at: i64,
@@ -261,30 +255,24 @@ async fn resolve_source_and_closed_at(
         v.dedup();
         v
     };
-    let source_ids = dedup_keys(|r| r.source_id);
     let ledger_seqs = dedup_keys(|r| r.ledger_sequence);
-
-    // accounts: id -> account_id. `LIMIT 1 BY id` collapses ReplacingMergeTree
-    // versions (account_id is immutable across versions, so no FINAL needed).
-    let accounts: std::collections::HashMap<i64, String> = client
-        .query(&format!(
-            "SELECT id, account_id FROM accounts WHERE id IN ({}) LIMIT 1 BY id",
-            in_list(&source_ids),
-        ))
-        .fetch_all::<PageAccountRow>()
-        .await?
-        .into_iter()
-        .map(|r| (r.id, r.account_id))
-        .collect();
-
     // ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
-    let closed_ats: std::collections::HashMap<i64, i64> = client
-        .query(&format!(
-            "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
-            in_list(&ledger_seqs),
-        ))
-        .fetch_all::<LedgerClosedAtRow>()
-        .await?
+    let ledgers_sql = format!(
+        "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
+        in_list(&ledger_seqs),
+    );
+
+    // Both seeks key off `raw` alone, so they go out together (task 0446).
+    // Source StrKeys go through the shared resolver, which sorts, dedups and
+    // short-circuits on an empty set itself.
+    let (accounts, ledger_rows) = tokio::join!(
+        resolve_accounts(client, raw.iter().map(|r| r.source_id).collect()),
+        client.query(&ledgers_sql).fetch_all::<LedgerClosedAtRow>(),
+    );
+
+    let accounts = accounts?;
+
+    let closed_ats: std::collections::HashMap<i64, i64> = ledger_rows?
         .into_iter()
         .map(|r| (r.sequence, r.closed_at))
         .collect();
@@ -375,18 +363,35 @@ pub async fn fetch_list(
     // it is looked up against the `accounts` / `soroban_contracts` natural
     // keys. A filter that names a non-existent account/contract matches no
     // rows, so we short-circuit to an empty page.
-    let source_id: Option<i64> = match params.source_account.as_deref() {
-        Some(acct) => match resolve_account_surrogate(client, acct).await? {
-            Some(id) => Some(id),
-            None => return Ok(Vec::new()),
+    // The two filters are validated independently in the handler and neither
+    // lookup consumes the other's result, so with BOTH set they go out
+    // together (task 0446). The empty-page short-circuit moves after the join:
+    // a miss on either filter still yields the same empty page, at the cost of
+    // one wasted bounded seek when exactly one of the two names nothing.
+    let (source_res, contract_res) = tokio::join!(
+        async {
+            match params.source_account.as_deref() {
+                Some(acct) => resolve_account_surrogate(client, acct).await.map(Some),
+                None => Ok(None),
+            }
         },
+        async {
+            match params.contract_id.as_deref() {
+                Some(cid) => resolve_contract_surrogate(client, cid).await.map(Some),
+                None => Ok(None),
+            }
+        },
+    );
+    // Outer Option = "was the filter set", inner = "did it resolve". A set
+    // filter that resolves to nothing matches no rows — empty page.
+    let source_id: Option<i64> = match source_res? {
+        Some(None) => return Ok(Vec::new()),
+        Some(Some(id)) => Some(id),
         None => None,
     };
-    let contract_surrogate: Option<i64> = match params.contract_id.as_deref() {
-        Some(cid) => match resolve_contract_surrogate(client, cid).await? {
-            Some(id) => Some(id),
-            None => return Ok(Vec::new()),
-        },
+    let contract_surrogate: Option<i64> = match contract_res? {
+        Some(None) => return Ok(Vec::new()),
+        Some(Some(id)) => Some(id),
         None => None,
     };
 
@@ -856,8 +861,13 @@ pub async fn fetch_operations(
         .flatten()
         .collect();
     let contract_ids = raw.iter().filter_map(|r| r.contract_id).collect();
-    let accounts = resolve_accounts(client, account_ids).await?;
-    let contracts = resolve_contracts(client, contract_ids).await?;
+    // Both resolve off `raw` alone — one wave, not two (task 0446).
+    let (accounts, contracts) = tokio::join!(
+        resolve_accounts(client, account_ids),
+        resolve_contracts(client, contract_ids),
+    );
+    let accounts = accounts?;
+    let contracts = contracts?;
 
     Ok(raw
         .into_iter()
@@ -988,10 +998,13 @@ pub async fn fetch_invocation_appearances(
         .bind(ledger_sequence)
         .fetch_all::<InvocationAppearanceRawRow>()
         .await?;
-    let contracts =
-        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()).await?;
-    let accounts =
-        resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()).await?;
+    // Both resolve off `raw` alone — one wave, not two (task 0446).
+    let (contracts, accounts) = tokio::join!(
+        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()),
+        resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()),
+    );
+    let contracts = contracts?;
+    let accounts = accounts?;
     let mut out: Vec<InvocationAppearanceRow> = raw
         .into_iter()
         .map(|r| InvocationAppearanceRow {

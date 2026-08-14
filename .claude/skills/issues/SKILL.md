@@ -5,11 +5,12 @@ description: Reconcile GitHub issues against lore tasks and what is actually dep
 
 # /issues — reconcile GitHub issues with lore tasks and production
 
-Reads the current state and reports what needs a human action. Takes no mode:
-run it whenever, it works out which bucket each issue is in.
+Reads the current state and reports what needs a human action. Takes no mode —
+it works out which bucket each issue is in. The optional argument is a
+selector, not a mode:
 
-`/issues` — full pass
-`/issues 366` — one issue
+`/issues` — full pass over every open issue
+`/issues 366` — one issue number
 `/issues web` — narrow the deployed-check to one component
 
 ## Ground rules — do not break these
@@ -28,9 +29,14 @@ run it whenever, it works out which bucket each issue is in.
 ## Step 1 — read the state
 
 ```bash
-gh issue list --state open --limit 50 \
+gh issue list --state open --limit 200 \
   --json number,title,labels,createdAt,author,body
 ```
+
+`--limit` is a hard cap, not a page size — `gh` returns that many and says
+nothing about the rest. If the count comes back equal to the limit, raise it
+and re-run; a silently truncated list reports issues as triaged that were
+never read.
 
 For each open issue find its lore task. **Resolve against `develop`, never
 against whatever happens to be checked out** — you are likely sitting in a
@@ -68,8 +74,12 @@ outcome (two tasks, two answers, contradicting each other):
 ```bash
 gh issue list --state all --search "<2-3 distinctive keywords>" \
   --json number,title,state
-grep -ril "<keyword>" lore/1-tasks/
+git grep -il "<keyword>" FETCH_HEAD -- lore/1-tasks/
 ```
+
+The lore search runs against the same fetched `develop` tree as Step 1, for the
+same reason: a plain `grep` here reads whatever branch is checked out and misses
+every task added since it forked.
 
 Three outcomes:
 
@@ -91,13 +101,13 @@ give and it costs nothing to ship.
 
 **c. Size it.** State which and why, with `file:line`:
 
-| Size             | Means                                                          |
-| ---------------- | -------------------------------------------------------------- |
-| `one-liner`      | frontend-only or a single query change, no API contract change |
-| `small`          | crosses layers, needs `nx run @rumblefish/api-types:generate`  |
-| `large`          | new query shape / schema change / measurement needed first     |
-| `needs-backfill` | historical data must be re-processed — see Step 5              |
-| `declined`       | we are not doing it                                            |
+| Size             | Means                                                             |
+| ---------------- | ----------------------------------------------------------------- |
+| `one-liner`      | frontend-only or a single query change, no API contract change    |
+| `small`          | crosses layers, needs `npx nx run @rumblefish/api-types:generate` |
+| `large`          | new query shape / schema change / measurement needed first        |
+| `needs-backfill` | historical data must be re-processed — see Step 5                 |
+| `declined`       | we are not doing it                                               |
 
 **d. Record it.**
 

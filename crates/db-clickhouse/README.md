@@ -349,8 +349,15 @@ The writer applies these CH settings on every per-table insert:
 > cost; future CH versions may start propagating per-query overrides
 > to the Poco socket read.
 
-`enable_http_compression` stays at CH default (off). Loopback
-transport — compression CPU on both sides for no measurable gain.
+`enable_http_compression` stays at CH default (off) — but note it is a
+server setting for **response** bodies and would not compress an INSERT
+either way. The `clickhouse` crate compresses responses only: it ships
+`default = ["lz4"]`, and `src/insert.rs` has no compression path (unlike
+`src/insert_formatted.rs`, which compresses explicitly). A typed
+`client.insert::<T>()` body therefore always leaves uncompressed. On the
+loopback backfill that is free; from a Lambda over the public internet it
+is billed egress, and no setting changes it — only switching to the
+formatted-insert API would.
 
 ## Client choice
 

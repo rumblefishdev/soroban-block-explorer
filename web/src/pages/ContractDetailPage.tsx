@@ -17,6 +17,9 @@ import { useParams } from 'react-router-dom';
 import { useContractDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
+import { ContractCode } from './contracts/ContractCode.js';
+import { contractFace } from './contracts/contractFace.js';
+import { ContractFaceChip } from './contracts/ContractFaceChip.js';
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
@@ -26,7 +29,7 @@ import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 const BREADCRUMB_TRUNCATION = { prefix: 4, suffix: 4 } as const;
 
-const TAB_KEYS = ['interface', 'invocations', 'events'] as const;
+const TAB_KEYS = ['interface', 'code', 'invocations', 'events'] as const;
 
 export default function ContractDetailPage() {
   const { contractId = '' } = useParams<{ contractId: string }>();
@@ -36,6 +39,7 @@ export default function ContractDetailPage() {
     defaultKey: 'interface',
     validKeys: TAB_KEYS,
   });
+  const face = contract.data != null ? contractFace(contract.data) : null;
 
   if (!valid) {
     return <NotFoundState entity="contract" identifier={contractId} />;
@@ -59,6 +63,14 @@ export default function ContractDetailPage() {
     summary = <ContractSummary contract={contract.data} />;
   }
 
+  // The Code tab (task 0465) only exists for contracts with a WASM — SAC
+  // and pre-upload contracts have nothing to decompile by design. A stale
+  // `?tab=code` URL on such a contract falls back to Interface rather than
+  // rendering an empty pane.
+  const hasWasm = contract.data?.wasm_hash != null;
+  const effectiveKey =
+    activeKey === 'code' && !hasWasm ? 'interface' : activeKey;
+
   // No count badges on the Invocations / Events tabs (task 0348 F1):
   // `recent_invocations` / `recent_events` are a 7-day activity window, but a
   // tab badge reads as "items in this tab" — and the tabs' tables are
@@ -67,6 +79,31 @@ export default function ContractDetailPage() {
   // are explicitly labelled "(last 7 days)".
   const tabs: TabDefinition[] = [
     { key: 'interface', label: 'Interface' },
+    ...(hasWasm
+      ? [
+          {
+            key: 'code',
+            // Amber dot = experimental marker (matches the in-tab chip).
+            label: (
+              <Box
+                component="span"
+                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
+              >
+                Code
+                <Box
+                  component="span"
+                  sx={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    bgcolor: 'warning.main',
+                  }}
+                />
+              </Box>
+            ),
+          } satisfies TabDefinition,
+        ]
+      : []),
     { key: 'invocations', label: 'Invocations' },
     { key: 'events', label: 'Events' },
   ];
@@ -89,9 +126,10 @@ export default function ContractDetailPage() {
           <Typography variant="heading5SemiBold" component="h1">
             Contract
           </Typography>
-          {contract.data?.is_sac === true && (
-            <Chip size="md" color="accent" label="Stellar Asset Contract" />
-          )}
+          {/* Task 0472: the header names what this contract IS — for every
+              class, not just SAC — and links to it. See `contractFace` /
+              `ContractFaceChip` (shared with the list row). */}
+          {face != null && <ContractFaceChip face={face} size="md" />}
           {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a
@@ -132,22 +170,34 @@ export default function ContractDetailPage() {
           >
             <Tabs
               tabs={tabs}
-              activeKey={activeKey}
+              activeKey={effectiveKey}
               onChange={setActiveKey}
               aria-label="Contract sections"
             />
           </Box>
+          {/* Keyed by contract AND tab: a crash on one contract must not
+              survive navigation to another (the boundary would otherwise
+              keep showing its error state on healthy data). */}
           <SectionErrorBoundary
-            key={activeKey}
-            sectionName={`contract-${activeKey}`}
+            key={`${contractId}-${effectiveKey}`}
+            sectionName={`contract-${effectiveKey}`}
           >
-            {activeKey === 'interface' && (
+            {effectiveKey === 'interface' && (
               <ContractInterface contractId={contractId} />
             )}
-            {activeKey === 'invocations' && (
+            {effectiveKey === 'code' && contract.data?.wasm_hash != null && (
+              // Keyed by contract: navigating between contracts must not
+              // carry over the "Rust unavailable" state of the previous one.
+              <ContractCode
+                key={contractId}
+                contractId={contractId}
+                wasmHash={contract.data.wasm_hash}
+              />
+            )}
+            {effectiveKey === 'invocations' && (
               <ContractInvocations contractId={contractId} />
             )}
-            {activeKey === 'events' && (
+            {effectiveKey === 'events' && (
               <ContractEvents contractId={contractId} />
             )}
           </SectionErrorBoundary>

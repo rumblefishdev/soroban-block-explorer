@@ -302,17 +302,17 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 ### 6.2 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                                      |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                            |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                  |
-| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                    |
-| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                          |
-| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                   |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`    |
-| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                |
+| Resource        | Endpoint(s)                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                                                                |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                                                                      |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                                                            |
+| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                                              |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
+| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
 ### 6.3 Resource Details
 
@@ -425,14 +425,34 @@ Soroban-native assets while still serving all through a unified explorer API.
 
 **`GET /contracts`** - Paginated list of Soroban contracts, newest-deployed first
 (`id DESC`, no user sort). Each row: `contract_id`, `contract_type` (+ decoded name),
-`is_sac`, `deployer`, `deployed_at_ledger`, and `recent_invocations` (a 7-day count over
+`is_sac`, `sac_asset`, `deployer`, `deployed_at_ledger`, and `recent_invocations` (a 7-day count over
 the same window as the contract-detail stats). Filters: `filter[type]` (token | other |
 nft | fungible) and `filter[q]` (full-text over name + contract_id).
+`sac_asset` (task 0441) is the classic asset a SAC mirrors —
+`{asset_code, issuer}`, both `null` for native XLM — resolved by the reverse
+`asset_sac` lookup: ONE whole-table aggregation per page batching every SAC id
+in a single `IN` list (the table is ordered by the asset side, so the lookup
+scans; accepted at 7.79 MiB measured, bloom_filter skip index is the named
+upgrade past ~5M rows), skipped entirely when the page holds no SAC. `null`
+on non-SAC rows and on the rare SAC with no resolvable facet row (frontend
+keeps the bare badge).
 
-**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with a typed `name` column, historically consumed by the search query; the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts). Post-0243 (CH cutover complete, PG retired) it has **no reader**: the CH global search resolves contract names from `soroban_contract_metadata` (`22_get_search.sql`), and task 0304 dropped the last reader — the contracts-LIST name-search fallback on `sc.name`. The dead column is pending `DROP COLUMN` (task 0310).
+**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`, `sac_asset` — the mirrored classic asset per the list-endpoint semantics above, task 0441), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with a typed `name` column, historically consumed by the search query; the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts). Post-0243 (CH cutover complete, PG retired) it has **no reader**: the CH global search resolves contract names from `soroban_contract_metadata` (`22_get_search.sql`), and task 0304 dropped the last reader — the contracts-LIST name-search fallback on `sc.name`. The dead column is pending `DROP COLUMN` (task 0310).
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
+
+**`GET /contracts/:contract_id/decompiled`** - On-demand decompilation of the contract's
+WASM (task 0465, issue #374). No persistence: the handler resolves `wasm_hash`, fetches
+the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`),
+and runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
+timeout. `?format=rust` (default) returns reconstructed Rust with completeness markers
+(`functions`, `todo_holes`, `unknown_vars` — counts, not percentages, per the
+soroban-ret team's guidance); when Rust emission fails the same response degrades to
+`representation: "wat"` with `rust_error` set. `?format=wat` returns the (lossless)
+WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code no
+longer live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
+responses carry the `LONG` cache header.
 
 **`GET /contracts/:contract_id/invocations`** - Paginated list of contract invocations.
 
@@ -464,17 +484,41 @@ task 0246), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
 `filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
 or both omitted (classic identity). The single-asset and per-leg modes coexist
 additively. Each `PoolItem` carries `participant_count` (count of active LP
-positions; task 0246) alongside the snapshot fields. Filter and projection
+positions; task 0246) alongside the snapshot fields, plus a compute-at-read
+USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
+and `fee_revenue` stay `null` on the list, they are detail-only).
+`filter[min_tvl]` is **rejected with 400**: a value computed at read cannot
+filter page membership, and the old SQL pre-filter read a snapshot column that
+is never written, so it silently returned an empty page. Filter and projection
 semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 
 **`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares,
-TVL, plus `participant_count` (task 0246). Dynamic snapshot fields come from
+TVL, plus `participant_count` (task 0246). Reserves / total shares come from
 the latest snapshot row; clients that care about freshness read
 `latest_snapshot_at` in the response. `participant_count` is independent of
-snapshot freshness — populated even on stale pools.
+snapshot freshness — populated even on stale pools. The money fields
+(`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
+computed at read from the in-cluster `prices.*` views (task 0199,
+[ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md))
+and are `null` when a leg is unpriceable. A prices-side failure degrades those
+three fields to `null` — it never fails the request.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
-pool.
+pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
+application order, each with `amount_a` / `amount_b` for the pool's canonical
+legs as raw-stroop decimal **strings** (same reason as `reserve_a` — a JSON
+number is a browser double and a big leg would lose digits), **signed from the
+pool's side** — positive = the asset entered the pool. A trade reads `+/-`, a
+deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the direction and no
+event-type field is needed.
+
+Per operation rather than summed per transaction because **8.2% of (pool,
+transaction) pairs run more than one operation against the same pool** (measured
+on prod 2026-08-12 over 8.49M pairs): a sum across a bundled deposit + path
+payment is smaller than the deposit and can even flip sign shape, so it would
+sit under an Event chip that does not describe it. An empty list means no
+figures — never zero — for history the backfill has not reached; the frontend
+renders those rows blank.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,

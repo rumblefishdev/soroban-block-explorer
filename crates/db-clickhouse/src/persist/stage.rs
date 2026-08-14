@@ -97,6 +97,112 @@ pub fn gross_volume_a_by_pool(
     gross
 }
 
+/// Per-(pool, asset) SIGNED amounts for ONE operation — everything it moved
+/// through a pool (task 0279 → `lp_operation_amounts`), from the two sources
+/// the XDR offers, which are disjoint by op type:
+///
+/// - **trades** (path payments / offers): `claimedAtoms`, the same atoms and
+///   same JSON shape [`gross_volume_a_by_pool`] walks — that one sums the
+///   attribution away, this one keeps it;
+/// - **deposits / withdrawals**: `poolDelta`, the pool's own before/after
+///   reserve images from the op's meta (`operation.rs::pool_delta_details`).
+///   They carry no claim atoms, and their op body holds only the caller's
+///   max/min bounds — never what executed.
+///
+/// **Sign is from the POOL's side**, which is the perspective the XDR atom
+/// already uses: `assetSold`/`amountSold` is what was taken FROM the offer
+/// owner (here, the pool) and `assetBought`/`amountBought` what was sent TO it.
+/// So sold → negative, bought → positive. Verified against prod rather than
+/// read off the spec: on ledger 63,904,097 of pool `41270552…` (XLM/TF),
+/// Horizon reports the pool selling XLM, and that ledger's snapshot moves
+/// `reserve_a` (XLM) down by exactly the summed sold amount while `reserve_b`
+/// (TF) rises.
+///
+/// Summing per (op, pool, asset) is what keeps the row key
+/// `(pool, ledger, tx, application_order, asset)` collision-free: one op can
+/// take the same pool several times under CAP-38 interleaved matching, and
+/// those atoms would otherwise be distinct rows sharing a key — which the RMT
+/// collapses to one, silently dropping the rest of the fill. A circular path
+/// crossing the SAME pool in BOTH directions nets out here by construction;
+/// that is the honest per-op figure, and it is why the backfill's
+/// `gross_volume_a` gate compares `abs(amount)` (see the schema comment).
+///
+/// Returned sorted, so a replay emits rows in a stable order.
+fn pool_fill_amounts(details: &Value) -> Vec<([u8; 32], i64, i64)> {
+    let mut sums: HashMap<([u8; 32], i64), i64> = HashMap::new();
+
+    let atoms = details
+        .get("claimedAtoms")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for atom in atoms {
+        let Some(pool_id) = atom_pool_id(atom) else {
+            continue;
+        };
+        // The atom is written from the offer owner's side: sold is taken FROM
+        // the pool, bought is sent TO it.
+        for (asset_key, amount_key, sign) in [
+            ("assetBought", "amountBought", 1i64),
+            ("assetSold", "amountSold", -1i64),
+        ] {
+            let (Some(asset_id), Some(amount)) = (
+                atom.get(asset_key).and_then(claim_atom_asset_id),
+                atom.get(amount_key).and_then(Value::as_i64),
+            ) else {
+                continue;
+            };
+            let entry = sums.entry((pool_id, asset_id)).or_insert(0);
+            *entry = entry.saturating_add(sign * amount);
+        }
+    }
+
+    // `poolDelta` is already after-minus-before per leg, so its sign needs no
+    // interpretation here — only the same (pool, asset) folding.
+    if let Some(delta) = details.get("poolDelta")
+        && let Some(pool_id) = atom_pool_id(delta)
+    {
+        for (asset_key, amount_key) in [("assetA", "amountA"), ("assetB", "amountB")] {
+            let (Some(asset_id), Some(amount)) = (
+                delta.get(asset_key).and_then(claim_atom_asset_id),
+                delta.get(amount_key).and_then(Value::as_i64),
+            ) else {
+                continue;
+            };
+            let entry = sums.entry((pool_id, asset_id)).or_insert(0);
+            *entry = entry.saturating_add(amount);
+        }
+    }
+
+    let mut out: Vec<_> = sums
+        .into_iter()
+        // A leg that nets to zero moved nothing this op — no row for it.
+        .filter(|(_, amount)| *amount != 0)
+        .map(|((pool_id, asset_id), amount)| (pool_id, asset_id, amount))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// The raw 32-byte pool id of a `claimedAtoms` / `poolDelta` entry.
+fn atom_pool_id(entry: &Value) -> Option<[u8; 32]> {
+    let hex = entry.get("poolId").and_then(Value::as_str)?;
+    <[u8; 32]>::try_from(hex::decode(hex).ok()?.as_slice()).ok()
+}
+
+/// The `asset_id` surrogate for a claim atom's asset ref — the `format_asset`
+/// wire shape (`"native"` or `"CODE:GISSUER"`) mapped onto the same surrogate
+/// space `operation_asset_appearances` / `balances` use, so a pool leg keys
+/// identically wherever it appears.
+fn claim_atom_asset_id(asset: &Value) -> Option<i64> {
+    let s = asset.as_str()?;
+    if s == "native" {
+        return Some(ids::NATIVE_ASSET_ID);
+    }
+    let (code, issuer) = s.split_once(':')?;
+    (!code.is_empty() && !issuer.is_empty()).then(|| ids::credit_asset_id(code, issuer))
+}
+
 #[derive(Debug, Default)]
 pub struct StagedLedger {
     pub ledger_sequence: i64,
@@ -122,6 +228,10 @@ pub struct StagedLedger {
     /// Per-(pool, tx) presence rows (task 0365) → `operation_pools`, the
     /// pool-dimension twin of `participant_rows` / `op_asset_rows`.
     pub op_pool_rows: Vec<OperationPoolRow>,
+    /// Per-(op, pool, asset) amounts (task 0279) → `lp_operation_amounts`, the
+    /// value twin of `op_pool_rows`. Trades from `claimedAtoms`, deposits and
+    /// withdrawals from the op's own reserve delta (`poolDelta`).
+    pub lp_amount_rows: Vec<LpOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
@@ -1093,6 +1203,34 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                             transaction_id: tx_id,
                         });
                     }
+                }
+            }
+
+            // ---- lp_operation_amounts (task 0279) ----
+            // The value twin of the block above: `gross_volume_a_by_pool` walks
+            // the same trade atoms and sums them into one number per pool; here
+            // the per-(op, pool, asset) attribution is KEPT instead of
+            // discarded, and deposits/withdrawals — which have no atoms — come
+            // from the op's own reserve delta.
+            {
+                let tx_id = tx_id_by_hash[tx_hash];
+                // Fail the ledger rather than clamp, matching the
+                // `transactions.application_order` conversion above: this
+                // column is part of the ORDER BY, so two operations squeezed
+                // onto one saturated value would share a key and the RMT would
+                // drop a fill silently — the loss the per-op summing exists to
+                // prevent. Unreachable while Stellar caps ops per tx at 100.
+                let order = i16::try_from(op.operation_index)
+                    .map_err(|_| staging_err("lp_operation_amounts application_order (>i16)"))?;
+                for (pool_id, asset_id, amount) in pool_fill_amounts(&op.details) {
+                    out.lp_amount_rows.push(LpOperationAmountRow {
+                        pool_id,
+                        ledger_sequence: ledger_sequence_i64,
+                        transaction_id: tx_id,
+                        application_order: order,
+                        asset_id,
+                        amount,
+                    });
                 }
             }
 
@@ -2289,6 +2427,81 @@ pub fn ledger_deltas_net_settled(
         })
         .collect();
     xdr_parser::net_settled(&resolved)
+}
+
+#[cfg(test)]
+mod pool_fill_amount_tests {
+    use super::*;
+    use serde_json::json;
+
+    const POOL_HEX: &str = "41270552ed479ebf3e86c420f1d9401d4cde64720b4c201bf9a5352e36bf05cf";
+    const TF_ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
+
+    fn atom(sold: &str, amount_sold: i64, bought: &str, amount_bought: i64) -> Value {
+        json!({
+            "poolId": POOL_HEX,
+            "assetSold": sold,
+            "amountSold": amount_sold,
+            "assetBought": bought,
+            "amountBought": amount_bought,
+        })
+    }
+
+    /// The pool SOLD native and BOUGHT the credit asset, twice in one op —
+    /// exactly the CAP-38 interleaved take that makes per-atom rows unsafe.
+    /// Both legs must fold into one row each, native negative (left the pool)
+    /// and credit positive (entered it).
+    #[test]
+    fn sums_repeated_takes_of_one_pool_and_signs_from_the_pools_side() {
+        let tf = format!("TF:{TF_ISSUER}");
+        let details = json!({
+            "claimedAtoms": [
+                atom("native", 1_396_629, &tf, 5_596_939),
+                atom("native", 2_548_470, &tf, 10_208_417),
+            ],
+        });
+
+        let native_id = ids::NATIVE_ASSET_ID;
+        let tf_id = ids::credit_asset_id("TF", TF_ISSUER);
+        let pool_id = <[u8; 32]>::try_from(hex::decode(POOL_HEX).unwrap().as_slice()).unwrap();
+
+        let mut got = pool_fill_amounts(&details);
+        got.sort_unstable_by_key(|(_, asset_id, _)| *asset_id);
+        let mut want = vec![
+            (pool_id, native_id, -(1_396_629 + 2_548_470)),
+            (pool_id, tf_id, 5_596_939 + 10_208_417),
+        ];
+        want.sort_unstable_by_key(|(_, asset_id, _)| *asset_id);
+        assert_eq!(got, want);
+    }
+
+    /// Deposits and withdrawals arrive as one already-signed `poolDelta`
+    /// instead of atoms, and must land in the same rows.
+    #[test]
+    fn reads_deposit_and_withdrawal_deltas() {
+        let tf = format!("TF:{TF_ISSUER}");
+        let details = json!({
+            "poolDelta": {
+                "poolId": POOL_HEX,
+                "assetA": "native",
+                "amountA": -1_000,
+                "assetB": tf,
+                "amountB": -2_000,
+            },
+        });
+
+        let pool_id = <[u8; 32]>::try_from(hex::decode(POOL_HEX).unwrap().as_slice()).unwrap();
+        let got = pool_fill_amounts(&details);
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&(pool_id, ids::NATIVE_ASSET_ID, -1_000)));
+        assert!(got.contains(&(pool_id, ids::credit_asset_id("TF", TF_ISSUER), -2_000)));
+    }
+
+    #[test]
+    fn no_atoms_no_rows() {
+        assert!(pool_fill_amounts(&json!({})).is_empty());
+        assert!(pool_fill_amounts(&json!({ "claimedAtoms": [] })).is_empty());
+    }
 }
 
 #[cfg(test)]

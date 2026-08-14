@@ -40,7 +40,7 @@ use crate::transactions::dto::TxListCursor;
 use chrono::{DateTime, Utc};
 
 use super::dto::ContractIdCursor;
-use super::dto::{ContractStats, EventCursor, EventItem};
+use super::dto::{ContractStats, EventCursor, EventItem, SacAsset};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -72,6 +72,8 @@ pub struct ContractRow {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// Task 0441 — the asset this SAC mirrors; `None` unless `is_sac`.
+    pub sac_asset: Option<SacAsset>,
     /// Task 0327 — contract mutability, 3-state (`None` = Unknown).
     pub upgradeable: Option<bool>,
 }
@@ -83,6 +85,8 @@ pub struct ContractListRow {
     pub contract_type: Option<i16>,
     pub contract_type_name: Option<String>,
     pub is_sac: bool,
+    /// Task 0441 — the asset this SAC mirrors; `None` unless `is_sac`.
+    pub sac_asset: Option<SacAsset>,
     pub deployer: Option<String>,
     pub deployed_at_ledger: Option<i64>,
     pub recent_invocations: i64,
@@ -150,12 +154,95 @@ struct InvocationCountChRow {
     recent_invocations: u64,
 }
 
-/// Step-2 resolve row: `accounts.id` (surrogate) → `account_id` StrKey, via the
-/// `idx_acc_id` bloom-pruned key-seek (task 0319).
 #[derive(Debug, Row, Deserialize)]
-struct ContractDeployerRow {
-    id: i64,
-    account_id: String,
+struct SacAssetChRow {
+    sac_contract_id: i64,
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+}
+
+/// Reverse SAC lookup (task 0441): the page's SAC contract surrogates → the
+/// classic asset each one mirrors, shared by the list and the detail so both
+/// resolve identically.
+///
+/// ONE batched aggregation per page, never per row — `asset_sac` is sorted by
+/// the ASSET side, so any lookup by `sac_contract_id` reads the whole table
+/// (7.79 MiB / ~0.1 s measured on prod, decision recorded in the task; a
+/// `bloom_filter` skip index is the named upgrade past ~5M rows). The
+/// `GROUP BY` collapses the AggregatingMergeTree's multi-row facet (up to 7
+/// rows per contract, identity-constant so `max` is safe); `FINAL` is not
+/// used on Aggregating engines in this codebase — every reader collapses via
+/// GROUP BY (mirrors the LP `sac` subquery).
+///
+/// Native XLM is `asset_type = 0` — NOT an empty code or zero issuer, which
+/// classic rows can never carry but which are not the native *signal* (two
+/// competing native conventions exist in this codebase). Classic issuers
+/// resolve via the same bloom key-seek as the deployer column; a SAC whose
+/// code or issuer cannot be resolved is omitted from the map, so the caller
+/// falls back to the bare `is_sac` badge rather than a half-identity.
+async fn fetch_sac_assets(
+    client: &clickhouse::Client,
+    sac_ids: &[i64],
+) -> Result<HashMap<i64, SacAsset>, clickhouse::error::Error> {
+    if sac_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let in_list = sac_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let rows = client
+        .query(&format!(
+            "SELECT \
+                sac_contract_id  AS sac_contract_id, \
+                max(asset_type)  AS asset_type, \
+                max(asset_code)  AS asset_code, \
+                max(issuer_id)   AS issuer_id \
+             FROM asset_sac \
+             WHERE sac_contract_id IN ({in_list}) \
+             GROUP BY sac_contract_id"
+        ))
+        .fetch_all::<SacAssetChRow>()
+        .await?;
+
+    let issuers = resolve_accounts(
+        client,
+        rows.iter()
+            .filter(|r| r.asset_type != 0 && r.issuer_id != 0)
+            .map(|r| r.issuer_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    )
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            if r.asset_type == 0 {
+                return Some((
+                    r.sac_contract_id,
+                    SacAsset {
+                        asset_code: None,
+                        issuer: None,
+                    },
+                ));
+            }
+            let issuer = issuers.get(&r.issuer_id).filter(|s| !s.is_empty())?;
+            if r.asset_code.is_empty() {
+                return None;
+            }
+            Some((
+                r.sac_contract_id,
+                SacAsset {
+                    asset_code: Some(r.asset_code),
+                    issuer: Some(issuer.clone()),
+                },
+            ))
+        })
+        .collect())
 }
 
 /// CH equivalent of the PG `queries::fetch_contract_list` (task 0275). Same
@@ -279,48 +366,37 @@ pub async fn fetch_contract_list(
            ) \
          GROUP BY sia.contract_id"
     );
-    let count_rows = client
-        .query(&count_sql)
-        .fetch_all::<InvocationCountChRow>()
-        .await?;
-    let counts: HashMap<i64, i64> = count_rows
-        .into_iter()
-        .map(|r| (r.contract_id, r.recent_invocations as i64))
-        .collect();
-
     // Resolve the page's deployer surrogates → StrKeys by a bloom-pruned
     // key-seek (`accounts.idx_acc_id`), replacing the full-table `accounts`
     // join (task 0319). `deployer_id = 0` means no deployer → skip.
-    let deployers: HashMap<i64, String> = {
-        let deployer_ids = list_rows
-            .iter()
-            .filter_map(|r| r.deployer_id)
-            .filter(|&d| d != 0)
-            .collect::<BTreeSet<_>>();
-        if deployer_ids.is_empty() {
-            HashMap::new()
-        } else {
-            let in_list = deployer_ids
-                .iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            client
-                .query(&format!(
-                    // `LIMIT 1 BY id`: one row per surrogate (accounts has
-                    // un-merged ReplacingMergeTree versions). `account_id` is
-                    // immutable across versions, so no ordering is needed here
-                    // (review 0319; mirrors the transactions resolve pattern).
-                    "SELECT id AS id, account_id AS account_id \
-                     FROM accounts WHERE id IN ({in_list}) LIMIT 1 BY id"
-                ))
-                .fetch_all::<ContractDeployerRow>()
-                .await?
-                .into_iter()
-                .map(|r| (r.id, r.account_id))
-                .collect()
-        }
-    };
+    let deployer_ids: Vec<i64> = list_rows
+        .iter()
+        .filter_map(|r| r.deployer_id)
+        .filter(|&d| d != 0)
+        .collect();
+
+    // Step 4 (task 0441): resolve the page's SAC contracts → mirrored assets.
+    // Skipped entirely on a SAC-free page (the common case — SACs are ~2.9%
+    // of contracts and the default newest-50 page holds none).
+    let sac_ids: Vec<i64> = list_rows
+        .iter()
+        .filter(|r| r.is_sac)
+        .map(|r| r.id)
+        .collect();
+
+    // All three read only `list_rows` — none consumes another's output, so they
+    // go out together instead of as three serial round trips (task 0446).
+    let (count_rows, deployers, sac_assets) = tokio::join!(
+        client.query(&count_sql).fetch_all::<InvocationCountChRow>(),
+        resolve_accounts(client, deployer_ids),
+        fetch_sac_assets(client, &sac_ids),
+    );
+    let counts: HashMap<i64, i64> = count_rows?
+        .into_iter()
+        .map(|r| (r.contract_id, r.recent_invocations as i64))
+        .collect();
+    let deployers = deployers?;
+    let sac_assets = sac_assets?;
 
     Ok(list_rows
         .into_iter()
@@ -332,6 +408,7 @@ pub async fn fetch_contract_list(
                 .and_then(|d| deployers.get(&d))
                 .filter(|s| !s.is_empty())
                 .cloned(),
+            sac_asset: sac_assets.get(&r.id).cloned(),
             id: r.id,
             contract_id: r.contract_id,
             contract_type: r.contract_type,
@@ -401,8 +478,18 @@ pub async fn fetch_contract(
     let Some(r) = row else { return Ok(None) };
     // Resolve the deployer StrKey by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … ON deployer.id = sc.deployer_id` (task 0345).
-    let accounts = resolve_accounts(client, r.deployer_id.into_iter().collect()).await?;
+    // Task 0441 — the mirrored asset; `fetch_sac_assets` returns empty for a
+    // non-SAC, so the pair goes out together rather than one after the other
+    // (task 0446).
+    let sac_ids: Vec<i64> = r.is_sac.then_some(r.id).into_iter().collect();
+    let (accounts, sac_assets) = tokio::join!(
+        resolve_accounts(client, r.deployer_id.into_iter().collect()),
+        fetch_sac_assets(client, &sac_ids),
+    );
+    let accounts = accounts?;
+    let sac_asset = sac_assets?.remove(&r.id);
     Ok(Some(ContractRow {
+        sac_asset,
         upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable),
         id: r.id,
         contract_id: r.contract_id,
@@ -773,14 +860,6 @@ pub async fn fetch_invocation_appearances(
         return Ok(Vec::new());
     }
 
-    // Resolve caller StrKeys by surrogate id (bloom seek) instead of a
-    // whole-`accounts` `LEFT JOIN … ON caller.id = m.caller_id` (task 0345).
-    let accounts = resolve_accounts(
-        client,
-        key_rows.iter().filter_map(|r| r.caller_id).collect(),
-    )
-    .await?;
-
     let keys: Vec<(i64, i64)> = key_rows
         .iter()
         .map(|r| (r.ledger_sequence, r.transaction_id))
@@ -811,7 +890,18 @@ pub async fn fetch_invocation_appearances(
          WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
     );
-    let tx_rows = client.query(&page_sql).fetch_all::<TxMetaChRow>().await?;
+    // Caller StrKeys resolve by surrogate id (bloom seek) instead of a
+    // whole-`accounts` `LEFT JOIN … ON caller.id = m.caller_id` (task 0345).
+    // Both reads key off `key_rows` alone, so they go out together (task 0446).
+    let (tx_rows, accounts) = tokio::join!(
+        client.query(&page_sql).fetch_all::<TxMetaChRow>(),
+        resolve_accounts(
+            client,
+            key_rows.iter().filter_map(|r| r.caller_id).collect()
+        ),
+    );
+    let tx_rows = tx_rows?;
+    let accounts = accounts?;
 
     let mut tx_by_id: HashMap<i64, TxMetaChRow> = HashMap::with_capacity(tx_rows.len());
     for row in tx_rows {
@@ -880,13 +970,9 @@ struct EventTxRow {
     /// Already `lower(hex())` in the query.
     hash: String,
     successful: bool,
-}
-
-/// Step-2 resolve row: `ledgers.sequence` → `closed_at` (millis).
-#[derive(Debug, Row, Deserialize)]
-struct EventLedgerRow {
-    sequence: i64,
-    closed_at: i64,
+    /// Parent ledger `closed_at`, joined in — CH has no
+    /// `transactions.created_at` (ADR 0044 §5.2).
+    created_at: i64,
 }
 
 /// A decoded event row + its `event_index` (the cursor tie-break, which is not
@@ -1003,12 +1089,15 @@ pub async fn fetch_events(
     }
 
     // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
-    // with PK-prefix key-seeks instead of full-table hash joins (mirrors
+    // with a PK-prefix key-seek instead of full-table hash joins (mirrors
     // `transactions::queries::resolve_source_and_closed_at`, task 0290).
     // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
     // the handful of ledgers on this page, then filters `id IN (...)`; no
     // `FINAL` (a transaction is immutable, so a dup version is identical).
-    // `ledgers WHERE sequence IN (...)` is a plain PK seek.
+    //
+    // `closed_at` rides along on the `ledgers` join rather than costing its own
+    // statement (task 0446) — the same shape `fetch_invocation_appearances`
+    // uses 150 lines up, so one round trip covers both.
     let in_list = |vals: &[i64]| {
         vals.iter()
             .map(i64::to_string)
@@ -1024,39 +1113,30 @@ pub async fn fetch_events(
     let ledger_seqs = dedup(|r| r.ledger_sequence);
     let tx_ids = dedup(|r| r.transaction_id);
 
-    let txs: std::collections::HashMap<i64, (String, bool)> = client
+    let txs: std::collections::HashMap<i64, (String, bool, i64)> = client
         .query(&format!(
-            "SELECT id AS id, lower(hex(hash)) AS hash, successful AS successful \
-             FROM transactions WHERE ledger_sequence IN ({}) AND id IN ({}) LIMIT 1 BY id",
+            "SELECT t.id AS id, lower(hex(t.hash)) AS hash, t.successful AS successful, \
+                    l.closed_at AS created_at \
+             FROM transactions t \
+             INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+             WHERE t.ledger_sequence IN ({}) AND t.id IN ({}) LIMIT 1 BY t.id",
             in_list(&ledger_seqs),
             in_list(&tx_ids),
         ))
         .fetch_all::<EventTxRow>()
         .await?
         .into_iter()
-        .map(|r| (r.id, (r.hash, r.successful)))
+        .map(|r| (r.id, (r.hash, r.successful, r.created_at)))
         .collect();
 
-    let closed_ats: std::collections::HashMap<i64, i64> = client
-        .query(&format!(
-            "SELECT sequence AS sequence, closed_at AS closed_at FROM ledgers WHERE sequence IN ({})",
-            in_list(&ledger_seqs),
-        ))
-        .fetch_all::<EventLedgerRow>()
-        .await?
-        .into_iter()
-        .map(|r| (r.sequence, r.closed_at))
-        .collect();
-
-    // Rebuild full event rows in page order, then map. A missing tx/ledger
-    // lookup defaults rather than drops the row, so the page count (and the
-    // peek `+1` next-page detection) is preserved.
+    // Rebuild full event rows in page order, then map. A missing tx lookup
+    // defaults rather than drops the row, so the page count (and the peek `+1`
+    // next-page detection) is preserved.
     Ok(raw
         .into_iter()
         .map(|r| {
-            let (transaction_hash, successful) =
+            let (transaction_hash, successful, created_at) =
                 txs.get(&r.transaction_id).cloned().unwrap_or_default();
-            let created_at = closed_ats.get(&r.ledger_sequence).copied().unwrap_or(0);
             map_event_row(EventChRow {
                 ledger_sequence: r.ledger_sequence,
                 transaction_id: r.transaction_id,

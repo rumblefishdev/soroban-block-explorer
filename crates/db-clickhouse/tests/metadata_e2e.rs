@@ -156,8 +156,8 @@ async fn token_metadata_three_fields_end_to_end() {
 
     cl.query(
         "INSERT INTO assets \
-         (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count) \
-         VALUES (3, '', 0, ?, NULL, NULL)",
+         (asset_type, asset_code, issuer_id, contract_id) \
+         VALUES (3, '', 0, ?)",
     )
     .bind(cid_surrogate)
     .execute()

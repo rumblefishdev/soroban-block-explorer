@@ -6,6 +6,7 @@ import { SummaryRow, type SummaryCell } from '../detail/SummaryRow.js';
 import { safeHttpUrl } from '../url.js';
 
 import { AssetIcon } from './AssetIcon.js';
+import { assetDisplayCode } from './assetType.js';
 
 /**
  * Asset metadata card — the optional TOML-sourced name, icon, description and
@@ -13,7 +14,11 @@ import { AssetIcon } from './AssetIcon.js';
  * shown, and an empty section renders a short placeholder.
  */
 export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
-  const hasIcon = Boolean(asset.icon_url || asset.asset_code);
+  // This card is titled "From TOML" — the Icon row renders only when a TOML
+  // icon actually exists (review, 2026-08-13: a generated letter avatar under
+  // that heading claimed a source it did not come from). The letter avatar
+  // still shows in the page header above, via the shared display rule.
+  const hasIcon = Boolean(asset.icon_url);
   const hasName = Boolean(asset.name);
 
   const iconNameRow: SummaryCell[] = [];
@@ -23,7 +28,7 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
       value: (
         <Box sx={{ py: 0.5 }}>
           <AssetIcon
-            code={asset.asset_code}
+            code={assetDisplayCode(asset)}
             iconUrl={asset.icon_url}
             size={32}
           />

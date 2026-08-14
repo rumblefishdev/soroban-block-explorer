@@ -166,6 +166,8 @@ mod tests {
             sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
+            wasm_code: crate::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
+                .expect("build wasm_code fetcher"),
         };
         let state = AppState::for_tests(ch, runtime_enrichment);
 

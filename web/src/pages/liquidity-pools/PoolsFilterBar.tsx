@@ -2,17 +2,13 @@ import { Box, MenuItem, Select, type SelectChangeEvent } from '@mui/material';
 import { DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
- * TVL preset options (Figma node 267:60674).
- *
- * Empty value (`""`) maps to "Any TVL" — no `filter[min_tvl]` sent.
- * Other values are the raw decimal thresholds the API expects.
- */
-/**
- * Hides the TVL preset filter until the backend exposes a TVL column /
- * value to filter against (no TVL is shown anywhere in the UI, so the
- * filter reads as broken). Build-time `const false` — same pattern as
- * `CHARTS_ENABLED` in pool-detail (task 0341). Flip to `true` once TVL
- * lands. Task 0351 (F10).
+ * The Min-TVL preset row stays hidden: `filter[min_tvl]` is REJECTED by
+ * the API (400). Pool TVL is computed at read from off-chain prices
+ * (task 0199), so it cannot filter page membership — the old SQL
+ * pre-filter read a snapshot column that is never written and silently
+ * returned an empty page. Re-enabling this needs server-side TVL for ALL
+ * pools per request, i.e. the prices-side materialized series; until then
+ * the row *would* break the list, not merely read as broken.
  */
 const TVL_FILTER_ENABLED = false;
 
@@ -62,8 +58,8 @@ export function PoolsFilterBar({
     >
       <DebouncedField
         value={asset}
-        placeholder="Filter by asset pair..."
-        ariaLabel="Filter by asset pair"
+        placeholder="Filter by asset or pair, e.g. USDC/XLM"
+        ariaLabel="Filter by asset or pair"
         width={400}
         onCommit={onAssetChange}
       />

@@ -2,7 +2,11 @@ import { Box, Typography } from '@mui/material';
 
 import type { EntityType } from '@rumblefish/api-types';
 
-import { ENTITY_LABEL, TAB_ORDER } from './useSearchResults.js';
+import {
+  ENTITY_LABEL,
+  SEARCH_GROUP_LIMIT,
+  TAB_ORDER,
+} from './useSearchResults.js';
 
 interface SearchResultsTabsProps {
   activeTab: EntityType;
@@ -99,9 +103,13 @@ function CountBadge({ count }: { count: number }) {
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 22,
+        // Pill, not a fixed circle: a saturated bucket renders "10+", three
+        // glyphs where a 22px circle only fits two. `minWidth` keeps the
+        // one- and two-digit cases perfectly round (0377 F7).
+        minWidth: 22,
         height: 22,
-        borderRadius: '50%',
+        px: 0.75,
+        borderRadius: 9999,
         backgroundColor: theme.palette.common.black,
         flexShrink: 0,
       })}
@@ -110,12 +118,16 @@ function CountBadge({ count }: { count: number }) {
         component="span"
         variant="bodyXsMedium"
         sx={(theme) => ({
+          // The pill is `common.black` in both modes — brand yellow, not
+          // `text.accent` (which darkens in light mode).
           color:
-            count > 0 ? theme.palette.text.accent : theme.palette.common.white,
+            count > 0
+              ? theme.palette.surface.primaryMain
+              : theme.palette.common.white,
           lineHeight: 1,
         })}
       >
-        {count}
+        {count >= SEARCH_GROUP_LIMIT ? `${count}+` : count}
       </Typography>
     </Box>
   );

@@ -2,14 +2,14 @@
 flowchart TB
     USER["<b>Browser</b><br/><i>sorobanscan.rumblefish.dev</i>"]
 
-    CFLARE["<b>Cloudflare edge</b><br/>api-sorobanscan.rumblefishdev.com<br/><i>DNS · API origin lock (AOP) · ADR 0048</i>"]
+    CFLARE["<b>Cloudflare edge</b><br/>api-sorobanscan.rumblefishdev.com<br/><i>DNS · managed rule sets · rate limiting</i><br/><i>origin lock — X-Edge-Secret · ADR 0048</i>"]
 
     subgraph AWS["AWS — eu-central-1"]
         direction TB
-        CF["<b>CloudFront CDN</b><br/><i>React SPA delivery · CLOUDFRONT-scoped WAF (us-east-1)</i>"]
+        CF["<b>CloudFront CDN</b><br/><i>React SPA delivery</i>"]
         S3["<b>S3 bucket</b><br/><i>React SPA static assets · private (OAC)</i>"]
-        APIGW["<b>API Gateway · REST</b><br/><i>throttling · response caching · REGIONAL WAF</i><br/><i>x-api-key usage plan · CORS</i>"]
-        API["<b>API Lambda (Rust · axum)</b><br/>production-soroban-explorer-api<br/><i>reads typed rows, serves REST / JSON</i>"]
+        APIGW["<b>API Gateway · REST</b><br/><i>throttling · 50 rps / 100 burst</i><br/><i>x-api-key usage plan · CORS</i>"]
+        API["<b>API Lambda (Rust · axum)</b><br/>production-soroban-explorer-api<br/><i>verifies Turnstile, issues session JWT</i><br/><i>reads typed rows, serves REST / JSON</i>"]
     end
 
     subgraph HET[" "]
@@ -18,8 +18,8 @@ flowchart TB
 
     USER -->|"load SPA (HTTPS)"| CF
     CF -->|"origin fetch (OAC)"| S3
-    USER -->|"REST /v1 calls · x-api-key"| CFLARE
-    CFLARE -->|"authenticated origin pull"| APIGW
+    USER -->|"REST /v1 calls · Authorization: Bearer &lt;JWT&gt;"| CFLARE
+    CFLARE -->|"origin pull · X-Edge-Secret"| APIGW
     APIGW -->|"Lambda proxy"| API
     API -->|"read over mTLS"| CH
 

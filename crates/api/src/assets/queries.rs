@@ -1005,7 +1005,7 @@ pub async fn fetch_transactions(
     //      activity (F-F). `None` → arm A only.
     // Same seek both arms: leading-PK range behind the `max(sequence)` fence,
     // `LIMIT 1 BY` per tx. The union's top-`limit` (sort + dedup + truncate) is the
-    // global page; `dedup` drops a tx returned by both arms.
+    // global page; the outer `LIMIT 1 BY` drops a tx returned by both arms.
     let seek = |table: &str, key_col: &str, key: i64| {
         format!(
             "SELECT ledger_sequence, transaction_id FROM {table} \
@@ -1017,38 +1017,27 @@ pub async fn fetch_transactions(
         )
     };
 
-    let mut sqls = vec![seek("operation_asset_appearances", "asset_id", asset_id)];
-    if let Some(contract_id) = contract_surrogate {
-        sqls.push(seek(
-            "soroban_invocations_appearances",
-            "contract_id",
-            contract_id,
-        ));
-    }
+    let arm_a = seek("operation_asset_appearances", "asset_id", asset_id);
+    let sql = match contract_surrogate {
+        // Arm A alone already IS the page — no wrapper to add.
+        None => arm_a,
+        Some(contract_id) => {
+            let arm_b = seek(
+                "soroban_invocations_appearances",
+                "contract_id",
+                contract_id,
+            );
+            union_keyset_arms(&arm_a, &arm_b, order, limit)
+        }
+    };
 
-    let mut keys: Vec<(i64, i64)> = Vec::new();
-    for sql in &sqls {
-        keys.extend(
-            client
-                .query(sql)
-                .fetch_all::<AssetTxKeyChRow>()
-                .await?
-                .iter()
-                .map(|r| (r.ledger_sequence, r.transaction_id)),
-        );
-    }
-
-    // Merge the arms into the global keyset page: sort in the page direction
-    // (`Next` = newest-first DESC, `Prev` = ASC — matching each arm's SQL `order`,
-    // derived from the typed `direction`, not the SQL string), dedup a tx returned
-    // by both arms, keep the first `limit`.
-    if matches!(direction, Direction::Next) {
-        keys.sort_unstable_by(|a, b| b.cmp(a));
-    } else {
-        keys.sort_unstable();
-    }
-    keys.dedup();
-    keys.truncate(limit as usize);
+    let keys: Vec<(i64, i64)> = client
+        .query(&sql)
+        .fetch_all::<AssetTxKeyChRow>()
+        .await?
+        .iter()
+        .map(|r| (r.ledger_sequence, r.transaction_id))
+        .collect();
 
     if keys.is_empty() {
         return Ok(Vec::new());
@@ -1131,9 +1120,45 @@ pub async fn fetch_transactions(
     Ok(out)
 }
 
+/// Fold the keyset arms into ONE statement (task 0446).
+///
+/// The arms read different tables and neither consumes the other's output, so
+/// they used to be awaited one at a time and merged in Rust — two serial round
+/// trips to a ClickHouse that sits outside the AWS network (measured 14.2 ms
+/// each). ClickHouse does the same merge itself: the outer `ORDER BY` is the
+/// page direction, the outer `LIMIT 1 BY` drops a transaction both arms
+/// returned, and the outer `LIMIT` truncates to the page. Each arm keeps its own
+/// `ORDER BY`/`LIMIT` so it still returns at most `limit` rows to the union.
+///
+/// Takes the two arms directly rather than a slice: there are exactly one or
+/// two, and a slice would model that as "zero or more" — an empty one would
+/// build `FROM ()`, invalid SQL no type checks. The lone-arm case is the
+/// caller's `None`, which needs no wrapper at all (`seek` already emits its own
+/// `ORDER BY` / `LIMIT 1 BY` / `LIMIT`).
+fn union_keyset_arms(arm_a: &str, arm_b: &str, order: &str, limit: i64) -> String {
+    format!(
+        "SELECT ledger_sequence, transaction_id FROM (({arm_a}) UNION ALL ({arm_b})) \
+         ORDER BY ledger_sequence {order}, transaction_id {order} \
+         LIMIT 1 BY ledger_sequence, transaction_id \
+         LIMIT {limit}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn union_keyset_arms_merges_both_arms_in_one_statement() {
+        // task 0446: the two arms are independent reads; they must cost ONE round
+        // trip, with the merge (order, cross-arm dedup, truncate) pushed into CH.
+        let sql = union_keyset_arms("SELECT a", "SELECT b", "DESC", 21);
+        assert!(sql.contains("(SELECT a) UNION ALL (SELECT b)"));
+        assert!(sql.contains("ORDER BY ledger_sequence DESC, transaction_id DESC"));
+        // Drops a transaction returned by BOTH arms — the old Rust `keys.dedup()`.
+        assert!(sql.contains("LIMIT 1 BY ledger_sequence, transaction_id"));
+        assert!(sql.ends_with("LIMIT 21"));
+    }
 
     #[test]
     fn asset_key_tuples_inlines_type_code_issuer_contract() {
@@ -1226,5 +1251,74 @@ mod tests {
         // (the LIMIT is inlined).
         assert!(!sql.contains("JOIN"));
         assert_eq!(sql.matches('?').count(), 0);
+    }
+}
+
+/// Live-CH **decode** smoke for the asset-transactions keyset read.
+///
+/// The two-arm `UNION ALL` (task 0446) is the class of SQL an offline build
+/// cannot validate: the outer `ORDER BY … LIMIT 1 BY … LIMIT` over a
+/// parenthesised union parses only against a real server, and the unit tests
+/// above assert its shape as a string, not that ClickHouse accepts it. The
+/// other read modules guard their generated SQL the same way.
+///
+/// Exercises BOTH shapes — the lone arm (no associated contract) and the union
+/// (an asset with one) — in both page directions.
+///
+/// **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
+/// Run against a reachable CH (local replica or SSH tunnel):
+///
+/// ```text
+/// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
+///   cargo test -p api --lib assets::queries::decode_smoke -- --nocapture
+/// ```
+#[cfg(test)]
+mod decode_smoke {
+    use super::*;
+
+    /// Bootstrap row: any asset, plus its associated contract surrogate if it
+    /// has one (ADR 0051 — a type-3 token's own contract, else a SAC wrapper).
+    #[derive(Debug, Row, Deserialize)]
+    struct BootAssetRow {
+        id: i64,
+        contract_surrogate: i64,
+    }
+
+    #[tokio::test]
+    async fn asset_tx_keyset_union_decodes() {
+        let Some(ch) = crate::common::ch::test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping asset-tx keyset decode smoke");
+            return;
+        };
+
+        // An asset that HAS an associated contract, so the union arm is real.
+        let boot = ch
+            .query(
+                "SELECT a.id AS id, max(sc.sac_contract_id) AS contract_surrogate \
+                 FROM assets a INNER JOIN asset_sac sc \
+                   ON sc.asset_type = a.asset_type AND sc.asset_code = a.asset_code \
+                  AND sc.issuer_id = a.issuer_id AND sc.contract_id = a.contract_id \
+                 WHERE sc.sac_contract_id != 0 \
+                 GROUP BY a.id LIMIT 1",
+            )
+            .fetch_optional::<BootAssetRow>()
+            .await
+            .expect("bootstrap asset query must run");
+
+        for direction in [Direction::Next, Direction::Prev] {
+            // Lone arm: `None` skips the wrapper entirely.
+            fetch_transactions(&ch, 1, None, 21, None, direction)
+                .await
+                .unwrap_or_else(|e| panic!("lone-arm keyset failed ({direction:?}): {e}"));
+
+            if let Some(b) = &boot {
+                fetch_transactions(&ch, b.id, Some(b.contract_surrogate), 21, None, direction)
+                    .await
+                    .unwrap_or_else(|e| panic!("union keyset failed ({direction:?}): {e}"));
+            }
+        }
+        if boot.is_none() {
+            eprintln!("no SAC-backed asset in this CH — union arm not exercised");
+        }
     }
 }

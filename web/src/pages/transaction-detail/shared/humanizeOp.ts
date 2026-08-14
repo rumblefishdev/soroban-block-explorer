@@ -6,6 +6,10 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import {
+  isNativeAssetString,
+  NATIVE_ASSET_CODE,
+} from '../../assets/assetType.js';
+import {
   formatOperationType,
   isKnownOperationType,
 } from '../../transactions/operationTypes.js';
@@ -43,7 +47,7 @@ export function assetUnit(
   fallback: string | null
 ): string | null {
   if (typeof value === 'string' && value.length > 0) {
-    if (value === 'native') return 'XLM';
+    if (isNativeAssetString(value)) return NATIVE_ASSET_CODE;
     const code = value.split(':')[0];
     if (code.length > 0) return code;
   }
@@ -107,7 +111,25 @@ export function humanizeOp(
     case 'PAYMENT':
       if (light.destination_account != null) {
         const details = detailsObj(heavy);
-        const unit = assetUnit(details?.asset, light.asset_code ?? 'XLM');
+        // The 'XLM' fallback is CORRECT here, despite the doc only saying
+        // "asset code for classic asset operations": on a payment a null code
+        // does mean native (0377 F7).
+        //
+        // Do NOT re-derive this from `asset_code`/`asset_issuer_id` agreeing —
+        // that proves nothing. `split_asset_ref` (persist/stage.rs) returns the
+        // pair all-or-nothing, so "0 rows one-sided" is forced by the writer
+        // and reads identically for a genuine native and for a parse failure.
+        //
+        // The discriminating evidence comes from `operation_asset_appearances`,
+        // written by a separate parser path: among single-operation payment
+        // transactions, EVERY blank-code one resolves to the native asset id
+        // and every non-blank one does not — 11_168/11_168 and 55_582/55_582 in
+        // the recent window, and the same at the oldest indexed partition.
+        // Three were spot-checked against Horizon, all `asset_type: native`.
+        const unit = assetUnit(
+          details?.asset,
+          light.asset_code ?? NATIVE_ASSET_CODE
+        );
         const amount = asAmount(details?.amount);
         const target = isSelf(light, txSourceAccount)
           ? 'itself'
@@ -119,7 +141,7 @@ export function humanizeOp(
           amount != null ? formatTokenAmount(amount, unit) : null;
         return formatted != null
           ? `Sent ${formatted} to ${target}`
-          : `Sent ${unit ?? 'XLM'} to ${target}`;
+          : `Sent ${unit ?? NATIVE_ASSET_CODE} to ${target}`;
       }
       break;
     case 'PATH_PAYMENT_STRICT_SEND':
@@ -157,7 +179,7 @@ export function humanizeOp(
     case 'CHANGE_TRUST': {
       const details = detailsObj(heavy);
       const asset = details?.asset;
-      if (typeof asset === 'string' && asset !== 'native') {
+      if (typeof asset === 'string' && !isNativeAssetString(asset)) {
         const [code, issuer] = asset.split(':');
         const suffix = issuer ? ` (issuer ${shortId(issuer)})` : '';
         const limit = asAmount(details?.limit);
@@ -228,7 +250,7 @@ export function humanizeOp(
         const dest = shortId(light.destination_account);
         const amount = asAmount(detailsObj(heavy)?.startingBalance);
         const formatted =
-          amount != null ? formatTokenAmount(amount, 'XLM') : null;
+          amount != null ? formatTokenAmount(amount, NATIVE_ASSET_CODE) : null;
         return formatted != null
           ? `Created account ${dest} with ${formatted}`
           : `Created account ${dest}`;

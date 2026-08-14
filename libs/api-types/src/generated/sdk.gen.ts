@@ -16,6 +16,9 @@ import type {
   GetContractData,
   GetContractErrors,
   GetContractResponses,
+  GetDecompiledData,
+  GetDecompiledErrors,
+  GetDecompiledResponses,
   GetInterfaceData,
   GetInterfaceErrors,
   GetInterfaceResponses,
@@ -265,6 +268,29 @@ export const getContract = <ThrowOnError extends boolean = false>(
     ...options,
   });
 
+/**
+ * Decompile the contract's WASM on demand (task 0465, refs #374).
+ *
+ * No persistence: bytes are fetched from Soroban RPC and decompiled per
+ * request. The output is immutable per (`wasm_hash`, decompiler version),
+ * which justifies the `LONG` cache header even without a server-side cache.
+ */
+export const getDecompiled = <ThrowOnError extends boolean = false>(
+  options: Options<GetDecompiledData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    GetDecompiledResponses,
+    GetDecompiledErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/decompiled',
+    ...options,
+  });
+
 export const listEvents = <ThrowOnError extends boolean = false>(
   options: Options<ListEventsData, ThrowOnError>
 ) =>
@@ -338,14 +364,15 @@ export const listLedgers = <ThrowOnError extends boolean = false>(
  * Get ledger detail by sequence — header + prev/next navigation +
  * embedded paginated transactions.
  *
- * Two phases, both DB-only:
+ * Two DB-only reads, issued concurrently — both key off the path
+ * `:sequence`, so neither waits on the other (task 0446):
  *
- * 1. **DB header.** Resolve `:sequence` against `ledgers` + LATERAL
- * prev/next computed via `sequence` comparisons on the `ledgers`
- * PK (index-only scan, no heap fetch). 404 on miss.
- * 2. **DB transactions.** Keyset-paginated read of the `transactions`
- * partition with full equality partition prune
- * (`created_at = $closed_at`).
+ * - **Header.** Resolve `:sequence` against `ledgers` + prev/next
+ * computed via `sequence` comparisons on the `ledgers` PK
+ * (index-only scan, no heap fetch). Decides the 404.
+ * - **Transactions.** Keyset-paginated read of `transactions`, pruned
+ * to the one partition holding that sequence
+ * (`intDiv(ledger_sequence, 500000)`).
  *
  * The detail endpoint reuses the standard `?limit=` / `?cursor=` query
  * parameters to drive embedded transactions pagination. Detail itself

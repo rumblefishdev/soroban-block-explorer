@@ -109,6 +109,16 @@ build-production-web:
 	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
 		npx nx build @rumblefish/soroban-block-explorer-web
+	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
+		AUTH=$$(jq -r '.enableAuthLayer // false' infra/envs/production.json); \
+		if [ "$$AUTH" = "true" ] && [ -n "$$KEY" ]; then \
+			if grep -rqF "$$KEY" web/dist/assets/*.js; then \
+				echo "✓ arming check: Turnstile key present in bundle"; \
+			else \
+				echo "FATAL: enableAuthLayer=true but Turnstile key absent — refusing to ship"; \
+				exit 1; \
+			fi; \
+		fi
 
 deploy-production-web: build-production-web
 	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \

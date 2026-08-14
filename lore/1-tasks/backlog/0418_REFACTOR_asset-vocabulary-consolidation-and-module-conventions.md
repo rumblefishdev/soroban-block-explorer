@@ -42,6 +42,18 @@ history:
       standalone. And the three-name surrogate storage is **deliberate**, not
       redundancy to consolidate away: `ids::{account,contract,address}_id` are
       byte-identical and the distinct names carry intent at the call site.
+  - date: '2026-08-04'
+    status: backlog
+    who: karolkow
+    note: >
+      §D reinforced with two measured findings. First: `contract_strkey` — the
+      name §D proposes — is already used 39× in the Rust crates, including SQL
+      aliases that exist only to escape the DB column name, so the rename adopts
+      an existing convention rather than inventing one. Second: two prod gates
+      (orphan surrogates, historical hash stability) that gate any Rust-side
+      surrogate recompute, not just the rename — 5 resolve-subqueries still live
+      in `nfts/queries.rs`. Re-verified that the rename is still undone and the
+      collision still present in all 13 columns.
 ---
 
 # REFACTOR/ARCH: asset-vocabulary consolidation + module conventions + god-module split
@@ -127,6 +139,39 @@ A warning comment is already in `init.sql` above `CREATE TABLE
 soroban_contracts` (landed by 0398) — remove it if this rename happens, since
 it documents a trap that would no longer exist.
 
+### The codebase already works around the name (measured 2026-08-04)
+
+`contract_strkey` — the exact name §D proposes — is **already used 39× across
+the Rust crates**, including SQL aliases whose only purpose is to escape the DB
+column name:
+
+```sql
+nullIf(sc.contract_id, '') AS contract_strkey   -- search/queries.rs:633
+sc.contract_id             AS contract_strkey   -- search/queries.rs:776
+```
+
+So the rename does not introduce a convention — it moves one the code already
+follows into the schema, and lets those aliases be deleted. Reinforces "rename"
+over "keep documenting" in the AC below.
+
+### Two prod gates before any Rust-side surrogate recompute
+
+Broader than the rename: they apply to every query that computes a surrogate in
+Rust instead of resolving through `soroban_contracts` (the 0364 pattern; **5
+such subqueries still live in `nfts/queries.rs`** — L155, L167, L305, L374,
+L468).
+
+1. **Not-found parity.** `(SELECT id FROM soroban_contracts WHERE contract_id = ?)`
+   yields empty for an unknown StrKey, so the outer predicate matches nothing.
+   `ids::contract_id()` produces a value unconditionally. Confirm no rows carry
+   a surrogate with no matching `soroban_contracts.id` — if orphans exist the
+   subquery is load-bearing, not redundant, and 0364's rewrite needs revisiting.
+2. **Historical hash stability.** The golden test guards forward only; it does
+   not prove every already-persisted surrogate was written under today's hash.
+   Sample across the **full** ledger range and diff recomputed vs stored. A past
+   re-key would break recompute-in-Rust queries on legacy rows while passing on
+   fresh ones.
+
 ## Acceptance Criteria
 
 - [ ] The ~5 inline `Native/Credit → surrogate` sites resolve through one shared
@@ -138,5 +183,9 @@ it documents a trap that would no longer exist.
 - [ ] `state.rs` god-module split into cohesive modules (twin of 0414's `stage.rs`).
 - [ ] Decision recorded on the `contract_id` naming collision inherited from
       0398 (§D): rename `soroban_contracts.contract_id` → `contract_strkey`, or
-      keep documenting it. If renamed, drop the `init.sql` warning comment.
+      keep documenting it. If renamed, drop the `init.sql` warning comment and
+      the now-redundant `AS contract_strkey` aliases.
+- [ ] Both §D prod gates checked and results recorded (orphan surrogates;
+      historical hash diff over the full ledger range) before any surrogate
+      recompute is added or an existing resolve-subquery is removed.
 - [ ] No hexagonal/DDD ceremony introduced — targeted changes only.

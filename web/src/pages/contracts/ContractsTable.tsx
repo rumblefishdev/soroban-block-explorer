@@ -1,4 +1,4 @@
-import { Stack, Typography } from '@mui/material';
+import { Typography } from '@mui/material';
 import type { ContractListItem } from '@rumblefish/api-types';
 import {
   Chip,
@@ -12,6 +12,8 @@ import {
 
 import { routes } from '../../router/routes.js';
 
+import { contractFace } from './contractFace.js';
+import { ContractFaceChip } from './ContractFaceChip.js';
 import { contractTypeMeta } from './contractType.js';
 
 const columns: ExplorerTableColumn<ContractListItem>[] = [
@@ -32,13 +34,16 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     header: 'Type',
     width: 120,
     cell: (row) => {
+      // Task 0441: a SAC names the asset it mirrors and links to it; an
+      // unresolvable facet degrades to the bare badge (contractFace handles
+      // both, shared with the detail header). The `Token` type chip is
+      // dropped on SAC rows (task 0472) — prod cross-tab shows Token ⟺
+      // is_sac exactly (3,946/3,946), so the pair carried zero information.
+      if (row.is_sac) {
+        return <ContractFaceChip face={contractFace(row, 'short')} size="sm" />;
+      }
       const meta = contractTypeMeta(row.contract_type_name);
-      return (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Chip size="sm" color={meta.color} label={meta.label} />
-          {row.is_sac && <Chip size="sm" color="brown" label="SAC" />}
-        </Stack>
-      );
+      return <Chip size="sm" color={meta.color} label={meta.label} />;
     },
   },
   {

@@ -51,7 +51,7 @@ function typedTopic(event: XdrEventDto, index: number): TypedVal | null {
     : null;
 }
 
-function symTopic(event: XdrEventDto, index: number): string | null {
+export function symTopic(event: XdrEventDto, index: number): string | null {
   const topic = typedTopic(event, index);
   return topic?.type === 'sym' && typeof topic.value === 'string'
     ? topic.value
@@ -239,15 +239,22 @@ function eventCategory(label: string): {
  *  clickable). */
 export type InlinePart =
   | { kind: 'text'; text: string }
-  | { kind: 'id'; value: string; short: string }
+  | { kind: 'id'; value: string; short: string; type: IdType }
   // A UI abbreviation, not a value — renders tertiary italic like the
   // `6 args` counts so it never reads as part of the payload.
   | { kind: 'muted'; text: string };
 
-function idType(value: string): 'contract' | 'account' | 'pool' {
+type IdType = 'contract' | 'account' | 'pool';
+
+/** Routable strkey prefixes only. `ScAddress` also carries muxed accounts
+ *  (`M…`) and claimable balances (`B…`), which have no page of their own —
+ *  defaulting them to `account` produced a link that cannot resolve. Null
+ *  means "show the value, do not link it". */
+function idType(value: string): IdType | null {
   if (value.startsWith('C')) return 'contract';
   if (value.startsWith('L')) return 'pool';
-  return 'account';
+  if (value.startsWith('G')) return 'account';
+  return null;
 }
 
 /** One argument as an inline part, or null when it wouldn't fit a row:
@@ -257,11 +264,14 @@ function shortPart(value: unknown): InlinePart | null {
   if (value == null || typeof value !== 'object') return null;
   const { type, value: inner } = value as TypedVal;
   if (type === 'address' && typeof inner === 'string' && inner.length > 12) {
-    return {
-      kind: 'id',
-      value: inner,
-      short: `${inner.slice(0, 4)}…${inner.slice(-4)}`,
-    };
+    const short = `${inner.slice(0, 4)}…${inner.slice(-4)}`;
+    const kind = idType(inner);
+    // Unroutable address forms keep the same truncation but render as text —
+    // an unclickable value is honest, a link to a page that does not exist is
+    // not.
+    return kind != null
+      ? { kind: 'id', value: inner, short, type: kind }
+      : { kind: 'text', text: short };
   }
   if (typeof inner === 'number' || typeof inner === 'boolean') {
     return { kind: 'text', text: String(inner) };
@@ -485,7 +495,7 @@ function InlineParts({ parts }: { parts: readonly InlinePart[] }) {
           ) : (
             <IdentifierWithCopy
               value={part.value}
-              type={idType(part.value)}
+              type={part.type}
               tone="inherit"
               fontSize="inherit"
             />

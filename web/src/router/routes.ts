@@ -33,6 +33,13 @@ export const routes = {
   contract: (contractId: string) => getIdentifierHref('contract', contractId),
 
   nfts: `/${routeSegments.nft}`,
+  // The NFTs list filtered to one issuing contract — a collection view (task
+  // 0472). The query key is `contract`, NOT the `filter[contract_id]` API
+  // param: `NftsListPage` registers its filters under short keys and maps them
+  // to API params itself. Not via `getIdentifierHref` — this addresses a
+  // filtered LIST, not an entity.
+  nftsByContract: (contractId: string) =>
+    `/${routeSegments.nft}?contract=${encodeURIComponent(contractId)}`,
   // Composite key `(contract_id, token_id)`: `contract_id` is the C-strkey
   // of the issuing contract (56 chars), `tokenId` is an opaque
   // contract-defined string (≤128 ASCII) — encode to guard `/`, `?`, `#`.

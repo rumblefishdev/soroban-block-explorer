@@ -120,6 +120,12 @@ Backbone timeline:
   `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
   `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
   hash — the same value `operations_appearances.pool_ids` stores per crossing)
+- `lp_operation_amounts` — per-(operation, pool, asset) amounts behind that
+  endpoint's "Amount" column (task 0279 / issue #371; the value twin of
+  `operation_pools`, same pool-leading prefix). `amount` is raw stroops in a
+  signed `Int64`, positive when the asset entered the pool — so the sign pattern
+  names the event (trade `+/-`, deposit `+/+`, withdrawal `-/-`) without a type
+  column. Rows are per-op sums of the op's claim atoms, never per atom
 
 Soroban activity model (per ADRs 0033/0034 these are pure appearance indexes — parsed
 contract-event and invocation-tree payloads are fetched at read time from the public
@@ -163,6 +169,7 @@ ledgers
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
        ├─ operation_pools (partitioned)
+       ├─ lp_operation_amounts (partitioned)
        ├─ soroban_events_appearances (partitioned)
        └─ soroban_invocations_appearances (partitioned)
 
@@ -589,6 +596,62 @@ Purpose / design notes:
   (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id
 FROM operations_appearances`) — no XDR re-parse.
 
+### 4.5.3 LP Operation Amounts (task 0279)
+
+ClickHouse-only. The **value twin of `operation_pools`** — what each operation
+actually moved through a pool, so `/liquidity-pools/:id/transactions` can render
+an "Amount" column (`12,059.29 XLM → 38.5M KALE`) instead of a bare event chip
+(issue #371). `operation_pools` remains the paging driver; this table is the
+value lookup for the page's `(ledger, tx)` set.
+
+```sql
+CREATE TABLE lp_operation_amounts (
+    pool_id           FixedString(32),  -- raw 32-byte pool hash (no surrogate)
+    ledger_sequence   Int64,
+    transaction_id    Int64,
+    application_order Int16,            -- op position within the tx
+    asset_id          Int64,            -- ids::asset_id surrogate (native first-class)
+    amount            Int64             -- raw stroops, SIGNED from the pool's side
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id);
+```
+
+Purpose / design notes:
+
+- **Row grain is (operation, pool, asset)** — the op's claim atoms are summed in
+  Rust before the insert, NOT written per atom. One op can take the same pool
+  several times (CAP-38 interleaved order-book/AMM matching) and every such atom
+  carries the identical ORDER BY tuple, so per-atom rows would have the RMT keep
+  one and silently drop the rest of the fill. A per-op sum is deterministic on
+  replay, so live ingest and the historical re-parse emit identical rows.
+- **Sign carries the semantics**: positive = the asset entered the pool, negative
+  = it left. Trade `+/-`, deposit `+/+`, withdrawal `-/-`; the two rows of one
+  (op, pool) are its two legs. No event-type column, no unsigned + direction pair.
+- **`Int64` raw stroops**, scaled by 7 at read like `balances` / `net_settled`:
+  classic AMM pools are 7-decimal by definition, the XDR sources are `int64`, and
+  a per-op sum is bounded by the pool's own `int64` reserve. Not `Int128` (that
+  width serves Soroban i128 token amounts, unreachable for a classic pool) and
+  not `Decimal128(7)` (the read-model choice in `liquidity_pool_snapshots`).
+- **Two producers, one shape**: trades from the claim atoms
+  `persist::stage::gross_volume_a_by_pool` already walks (it sums `amountA` away —
+  this table keeps that value), deposits/withdrawals from the op's own
+  `LedgerEntryChanges` (they carry no claim atoms; the op body holds the caller's
+  max/min bounds, not what actually moved).
+- **Backfill**: a targeted XDR re-parse — the per-pool amounts were never
+  persisted, so unlike `operation_pools` there is no CH-side re-key. Scope is the
+  ~13.15M ledgers with pool activity (`SELECT DISTINCT ledger_sequence FROM
+operation_pools`), ~20.6% of history. Additive: no existing table is touched, the
+  indexer keeps running, rollback is `DROP TABLE`. Validation gate:
+  `sum(abs(amount))` over the asset-A legs per (pool, ledger) must equal
+  `liquidity_pool_snapshots.gross_volume_a` — both derive from the same atoms.
+  ABS because `gross_volume_a` is gross: it counts each atom's A-side amount
+  whichever way the swap went, so a ledger where the pool only sold A has every
+  A leg negative here. An op crossing one pool in both directions nets out at
+  this table's per-op grain and is a known, legitimate mismatch.
+- No skip index: every read is a `pool_id` PK-prefix seek.
+
 ### 4.6 Soroban Contracts
 
 ```sql
@@ -825,10 +888,12 @@ CREATE TABLE assets (
     asset_code      VARCHAR(12),
     issuer_id       BIGINT        REFERENCES accounts(id),           -- ADR 0026
     contract_id     BIGINT        REFERENCES soroban_contracts(id),  -- ADR 0030; soroban identity only
-    name            VARCHAR(256),
-    total_supply    NUMERIC(28,7),                                   -- indexer recompute per ledger (ADR 0043 / task 0194 §1b)
-    holder_count    INTEGER,                                         -- indexer recompute per ledger (ADR 0043 / task 0194 §1c)
-    icon_url        VARCHAR(1024),                                   -- list-level thumbnail (ADR 0037 / task 0164)
+    -- IDENTITY ONLY. `name` (task 0304), `total_supply` / `holder_count` /
+    -- `icon_url` (task 0310) were dropped: this row is re-written whole every
+    -- ledger, so any mutable non-key column gets clobbered. Supply/holders are
+    -- aggregated from `balances` into `balance_aggregates` (task 0293/0331);
+    -- name/icon live in `asset_enrichment` (ADR 0050) coalesced over
+    -- `soroban_contract_metadata` (task 0297).
     CONSTRAINT ck_assets_asset_type_range CHECK (asset_type BETWEEN 0 AND 15),
     -- ADR 0051: a SAC is a FACET of its classic_credit / native asset, not a
     -- separate type. `assets` holds only the asset's IDENTITY; the SAC handle
@@ -869,6 +934,11 @@ CREATE TABLE asset_sac (
     -- No skip-index on `sac_contract_id`: every read aggregates the whole (small,
     -- ~31k-row) table (`GROUP BY key, max(sac_contract_id)`), so a per-column index
     -- prunes nothing; the `/assets/{C…}` deep-link filters that join result.
+    -- Readers by direction: asset → SAC on the LP endpoints and /assets;
+    -- SAC → asset (reverse, task 0441) on /contracts + /contracts/:id
+    -- (`sac_asset` field), one batched whole-table aggregation per page —
+    -- accepted at the measured 7.79 MiB; bloom_filter skip index is the
+    -- named upgrade past ~5M rows.
 );
 ```
 
@@ -934,20 +1004,22 @@ Design notes:
   - `3 = Soroban` → `xdr_parser::detect_assets` for non-SAC deployments
     whose WASM interface classifies as `Fungible` via
     `xdr_parser::classify_contract_from_wasm_spec`.
-- `icon_url` is the only SEP-1 enrichment field on the DB row — it serves the
-  list-page thumbnail (per-row), and is populated by the **type-1 enrichment
-  worker Lambda** (`crates/enrichment-worker`, task 0191): the indexer Lambda
-  emits one SQS message per newly inserted asset, the worker consumes the
-  queue, fetches the issuer's `https://{home_domain}/.well-known/stellar.toml`
-  via the shared `enrichment-shared::sep1` fetcher, extracts the matching
+- `icon_url` serves the list-page thumbnail (per-row) and lives in the
+  `asset_enrichment` side table (ADR 0050 / task 0231), never on the `assets`
+  row itself — the `assets.icon_url` column was dropped in task 0310 after
+  measuring 0 populated rows in prod. It is populated by the **type-1
+  enrichment worker Lambda** (`crates/enrichment-worker`, task 0191): the
+  indexer Lambda emits one SQS message per newly inserted asset, the worker
+  consumes the queue, fetches the issuer's
+  `https://{home_domain}/.well-known/stellar.toml` via the shared
+  `enrichment-shared::sep1` fetcher, extracts the matching
   `CURRENCIES[].image`, and writes back. Worker writes are unconditional —
   duplicate or refresh messages overwrite, which keeps the worker stateless.
   Permanent fetch failures (missing `home_domain`, 4xx, malformed TOML, no
   matching `CURRENCIES[]` row, URL exceeding the column length) write an
-  empty-string sentinel `''`. Because `''` is NOT NULL, the indexer's
-  un-enriched-asset producer query (`WHERE a.icon_url IS NULL`) excludes
-  these rows on subsequent ledgers — they are not re-emitted to the
-  enrichment queue. Distinct from **type-2 runtime enrichment** in
+  empty-string sentinel `''`, which the un-enriched-asset producer query
+  treats as "already tried" — those rows are not re-emitted to the enrichment
+  queue. Distinct from **type-2 runtime enrichment** in
   `crates/api/src/runtime_enrichment` (task 0188), which fetches per-request
   for `description` / `home_page` and never writes to the DB.
 - asset-detail SEP-1 fields (`description`, `home_page`, `conditions`,
@@ -1279,8 +1351,21 @@ Design notes:
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
   the schema's balance / amount handling
-- `volume` and `fee_revenue` are NOT populated yet — both columns stay NULL until **task 0199** lands. The indexer cannot derive them correctly from snapshot reserves alone (reserve delta nets opposite swaps inside one ledger and lacks USD denomination). Task 0199 implements per-op extraction from PathPayment `claimedOffers[].amount_sold` plus USD denomination via the price oracle infrastructure of task 0195 §2b. Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), the per-op extraction half is on-chain → indexer, and the USD denomination half is off-chain → Lambda 2.
-- `tvl` is populated by **Lambda 2 enrichment** (off-chain USD oracle, task 0195 §2b — Reflector / StellarExpert) — not by the indexer
+- `tvl`, `volume` and `fee_revenue` are **permanently unwritten** — no writer
+  populates them, and none is planned. Task 0199 landed the analytics as
+  **compute-at-read** instead ([ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)):
+  the API multiplies the on-chain quantities in these rows (`reserve_a/b`, and
+  `gross_volume_a`) by USD closes read at query time from the prices service's
+  in-cluster `prices.*` views. The earlier plan — a Lambda 2 write-back per
+  ADR 0043 — was rejected because `liquidity_pool_snapshots` is a
+  `ReplacingMergeTree` with no version column, so a per-row write-back is a
+  racy read-modify-write that a later plain insert can silently erase. Keeping
+  the columns unwritten is what keeps this table single-writer (indexer only).
+  They are retained rather than dropped so an eventual materialization has a
+  home; anything reading them today gets NULL by design.
+- `gross_volume_a` (asset-A-unit gross trade volume per `(pool, ledger)`, from
+  PathPayment claim atoms) IS populated — live since task 0261 and backfilled
+  by 0266 — and is the on-chain input the read-time USD `volume` multiplies.
 - `created_at` drives interval queries and monthly partition management
 
 ### 4.16 LP Positions

@@ -268,8 +268,8 @@ async fn count_assets_to_insert(
 async fn backfill_assets(client: &ClickhouseClient) -> Result<u64, BackfillError> {
     let before = assets_type3_count(client).await?;
     let sql = "INSERT INTO assets \
-         (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count, icon_url) \
-         SELECT 3, '', 0, sc.id, NULL, NULL, NULL \
+         (asset_type, asset_code, issuer_id, contract_id) \
+         SELECT 3, '', 0, sc.id \
          FROM soroban_contracts AS sc FINAL \
          WHERE sc.contract_type = 3 AND NOT sc.is_sac \
            AND NOT EXISTS ( \

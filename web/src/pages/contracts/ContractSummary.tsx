@@ -7,9 +7,12 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routes } from '../../router/routes.js';
 import { KpiCell } from '../detail/KpiCell.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
+
+import { sacAssetCode, sacAssetId } from './sacAsset.js';
 
 /**
  * Contract summary block — windowed stat tiles plus the metadata card
@@ -76,6 +79,53 @@ export function ContractSummary({
             },
           ]}
         />
+        {/* Task 0441: which classic asset this SAC mirrors, linked to its
+            asset page. Row only renders for a SAC; an unresolvable facet
+            (2 of ~3.9k on prod) falls back to a dash. Asset and issuer are
+            SEPARATE labelled cells (0472) — an asset code alone is ambiguous
+            (prod carries many issuers of e.g. "USDC"), but two bare links
+            side by side in one cell read as two anonymous buttons. Native
+            XLM has no issuer, so it renders the asset cell only. */}
+        {contract.is_sac && (
+          <SummaryRow
+            cells={[
+              {
+                label: 'Asset',
+                value: contract.sac_asset ? (
+                  <IdentifierDisplay
+                    value={sacAssetCode(contract.sac_asset)}
+                    type="asset"
+                    truncate={false}
+                    // A drifted half-pair has no honest route (`sacAssetId`
+                    // null) — the code renders unlinked rather than
+                    // mis-routing to /assets/native.
+                    href={
+                      sacAssetId(contract.sac_asset) != null
+                        ? routes.asset(sacAssetId(contract.sac_asset)!)
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <Dash />
+                ),
+              },
+              ...(contract.sac_asset?.issuer
+                ? [
+                    {
+                      label: 'Issuer',
+                      value: (
+                        <IdentifierDisplay
+                          value={contract.sac_asset.issuer}
+                          type="account"
+                          href={routes.account(contract.sac_asset.issuer)}
+                        />
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        )}
         <SummaryRow
           cells={[
             {

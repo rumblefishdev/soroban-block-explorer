@@ -17,7 +17,7 @@ interface AssetFiltersProps {
 
 /**
  * Filter bar for the assets list — an asset-code search input, a row of type
- * chips (All types / Classic / Soroban), and a separate "Has SAC" property
+ * chips (All types / Classic credit / Soroban), and a separate "Has SAC" property
  * toggle. Type and the SAC facet are orthogonal axes (ADR 0051): an asset has
  * a type AND may additionally carry a deployed SAC, so SAC is a property toggle,
  * not a type chip.

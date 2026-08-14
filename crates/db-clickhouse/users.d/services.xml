@@ -132,6 +132,12 @@
         <query>GRANT SELECT, INSERT, OPTIMIZE ON prices.*</query>
         <query>GRANT ALTER DELETE ON prices.*</query>
         <query>GRANT SELECT ON system.parts</query>
+        <!-- task 0477: freshness/self-monitoring reads — pending mutations
+             sat undone for 13 days in the 07-21 coarse-rollup freeze and
+             system.mutations alone would have flagged it. Same read-only
+             shape as system.parts (task 0314). -->
+        <query>GRANT SELECT ON system.mutations</query>
+        <query>GRANT SELECT ON system.view_refreshes</query>
       </grants>
     </prices_writer>
 
