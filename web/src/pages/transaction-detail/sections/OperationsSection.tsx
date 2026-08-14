@@ -24,10 +24,11 @@ export function OperationsSection({ tx }: OperationsSectionProps) {
   // and the answer back down as props derived the same number twice.
   const [selectedIndex, select] = useSelectedOp(entries.length);
   // `selectedIndex` always addresses an existing entry, so there is no range
-  // guard here. The one that used to live here answered a bad fragment by
-  // replacing the operation with a message, which for the ~85 % of
-  // transactions carrying a single operation blanked the section and pointed
-  // at a picker they never get.
+  // guard here. Two attempts lived here before: falling back to `entries[0]`
+  // while the picker beside it got the raw index and highlighted nothing, then
+  // replacing the card with a message that pointed at a picker single-operation
+  // transactions never render. Resolving the fragment against the list removes
+  // the need for either.
   const selected = entries[selectedIndex];
 
   // 87 % of mainnet transactions have exactly one operation — an index with
