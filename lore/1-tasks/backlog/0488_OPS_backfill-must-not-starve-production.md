@@ -42,6 +42,37 @@ Timeline:
 | 20:45  | last ledger the live indexer manages to commit                                                         |
 | 07:15  | operator finds it; 148 alert lines in `~/.bf/disk.log`, all unread                                     |
 
+### The second consumer — found a day later, and it was the larger one
+
+The first post-mortem blamed the scratch alone. It was wrong. On 2026-08-14,
+with the box again at 51 GB free and the arithmetic refusing to close, a plain
+`du -sh /*` found **`/home/deploy/tmux-server-3607624.log` at 351 GB, growing
+4.5 MB/s — 385 GB per day.**
+
+The tmux server had been started as `tmux -v` (verbose server logging) at some
+point months earlier, and every session on the box fed it. The backfill
+workers ran with `-v` too, so thousands of `parsing ledger` lines per second
+went through tmux and into that file, on the same filesystem as ClickHouse.
+
+Reconciling the 358 GB the outage consumed: ~233 GB was scratch, and the rest
+was this log. **Isolating the scratch was necessary and would not have been
+sufficient** — an unbounded writer sat outside every boundary we drew.
+
+Truncating it in place (`truncate -s 0`, the file being held open) returned
+335 GB instantly. Killing the server and restarting it without `-v` stopped
+the source; 14 of the 15 sessions were month-old idle shells whose scrollback
+was archived to `~/tmux-archive/` first.
+
+Two lessons beyond the disk:
+
+- **Diagnosis order.** Both times the box filled, the reflex was to inspect
+  the suspect we already knew about. `du -sh /*` costs seconds and would have
+  found this a day earlier.
+- **Verbose logging on a long batch run is not free.** Dropping `-v` from the
+  workers and the tmux server raised throughput from ~840 to ~1,980
+  ledgers/min per worker — 4.5 MB/s of log traffic was competing with
+  ClickHouse for the same RAID.
+
 Three independent failures compounded:
 
 1. **No isolation.** Batch scratch and the production database competed for
@@ -124,7 +155,18 @@ Slack):
 - ingestion lag (`now() - max(closed_at)`) above ~15 minutes.
 
 A file on the box is not an alarm. This is the single change that would have
-turned an 11-hour outage into a 10-minute one.
+turned an 11-hour outage into a 10-minute one — and, unlike the scratch cap,
+it catches consumers nobody thought to bound, which is exactly how the 351 GB
+tmux log went unnoticed for months.
+
+### Step 4b: Nothing operational writes an unbounded log to the DB volume
+
+The tmux finding generalises. Audit what writes to `/` outside ClickHouse and
+either bound it or move it: `tmux -v` (now off — do not restart the server
+with it), worker logs (`--verbose` off by default for long runs; when on,
+rotate or cap), and any `nohup`/`tee` pattern in the runbooks. A recurring
+`du -sh /*` check belongs in the disk alarm's runbook entry, because the
+alarm says "space is going" and the operator needs "here is where".
 
 ### Step 5: Resume state derivable from the database
 
@@ -165,6 +207,8 @@ worker count and expected wall time, and an explicit stop rule.
 - [ ] Ingestion-lag self-throttle with a configurable threshold
 - [ ] Backfill runs under a dedicated CH user with lower priority + quota
 - [ ] Two CloudWatch → Slack alarms live (disk free, ingestion lag), test-fired
+- [ ] Audit of unbounded writers on the DB volume; tmux `-v` confirmed off and
+      worker logs bounded
 - [ ] `gaps` subcommand emits ranges that `run` accepts unchanged
 - [ ] Preconditions checklist in `docs/backfills.md`
 - [ ] **Docs updated** — `docs/backfills.md` (preconditions, isolation,
