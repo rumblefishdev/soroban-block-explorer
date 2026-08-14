@@ -115,7 +115,8 @@ pub struct ResolvedPoolListParams {
     /// ordering. Empty = no filter.
     pub asset_codes: Vec<String>,
     /// The same free-text box, when it held a pool identifier instead
-    /// (`L…` StrKey or 64-hex, resolved to the stored hex form — task 0470).
+    /// (`L…` SEP-23 StrKey, the one canonical form per task 0264, resolved to
+    /// the stored hex — task 0470).
     /// Mutually exclusive with `asset_codes`: an identifier names exactly one
     /// pool, so there is nothing left for a code match to narrow.
     pub pool_id_hex: Option<String>,
@@ -1749,7 +1750,7 @@ pub async fn fetch_pool_list(
         filters.push_str(" AND lp.pool_id = unhex(?)");
         binds.push(pool_hex.clone());
     } else if let Some((clause, clause_binds)) =
-        asset_codes_predicate("lp.", params.asset_codes.as_slice())
+        asset_codes_predicate(params.asset_codes.as_slice())
     {
         filters.push_str(&format!(" AND {clause}"));
         binds.extend(clause_binds);

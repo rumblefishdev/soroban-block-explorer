@@ -343,6 +343,10 @@ async fn search_pools(
     }
 }
 
+/// Longest Stellar asset code (`alphanum12`); `alphanum4` is the 1–4 case.
+/// Anything longer cannot be a code, so it cannot match a pool.
+const MAX_ASSET_CODE_LEN: usize = 12;
+
 /// Pools whose displayed asset codes match the query. Full scan of
 /// `liquidity_pools` — 52 472 pools / 73 880 rows, measured at 47 ms and
 /// 3.3 MiB on production, on the arm that previously did nothing for this
@@ -365,7 +369,15 @@ async fn search_pools_by_asset_code(
     per_group_limit: i32,
 ) -> Result<Vec<(String, SearchHit)>, clickhouse::error::Error> {
     let codes = normalize_asset_codes(Some(q.to_string()));
-    let Some((clause, binds)) = asset_codes_predicate("", &codes) else {
+    // A Stellar asset code is 1–12 characters (alphanum4 / alphanum12), so a
+    // longer needle cannot match any pool. Without this gate every
+    // account- or contract-shaped query — a 56-character StrKey — paid the
+    // scan below for a guaranteed-empty result, and `/v1/search` runs its six
+    // buckets in parallel, so that cost lands on the tail of every such search.
+    if codes.iter().any(|c| c.chars().count() > MAX_ASSET_CODE_LEN) {
+        return Ok(Vec::new());
+    }
+    let Some((clause, binds)) = asset_codes_predicate(&codes) else {
         return Ok(Vec::new());
     };
 
@@ -381,7 +393,7 @@ async fn search_pools_by_asset_code(
                 max(last_updated_ledger) AS newest \
             FROM liquidity_pools \
             GROUP BY pool_id \
-         ) \
+         ) AS lp \
          WHERE {clause} \
          ORDER BY newest DESC \
          LIMIT ?"
@@ -1029,6 +1041,29 @@ mod decode_smoke {
         )
         .await
         .expect("transaction/pool bucket rows must decode");
+    }
+
+    /// A needle longer than a Stellar asset code cannot match a pool, so the
+    /// scan must not run at all. Guards the gate that keeps every account- and
+    /// contract-shaped search off the pools table (task 0470 review).
+    #[tokio::test]
+    async fn a_strkey_shaped_query_never_scans_the_pools_table() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping pools shape-gate smoke");
+            return;
+        };
+        let all = IncludeFlags::all();
+
+        // 56 characters: an account StrKey. Classified as a prefix, not a
+        // hash, so before the gate this fell through to the code arm.
+        let q = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let hits = fetch_search(&ch, q, &classifier::classify(q), &all, 20)
+            .await
+            .expect("search decodes");
+        assert!(
+            !hits.iter().any(|(bucket, _)| bucket == "pool"),
+            "a StrKey-shaped query must not reach the pools bucket"
+        );
     }
 
     /// Task 0470: a non-hash query used to match no pool at all, so an asset
