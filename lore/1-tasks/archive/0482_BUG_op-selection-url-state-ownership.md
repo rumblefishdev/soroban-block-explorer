@@ -2,7 +2,7 @@
 id: '0482'
 title: 'BUG: `#op-N` past the end blanks the operation — URL state has no owner'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0453', '0460', '0462', '0377']
 tags: [frontend, transaction-detail, url-state, priority-high, effort-small]
@@ -45,6 +45,19 @@ history:
       blank the section instead. Dropping this task would leave production
       in the worst of the three states, which is the only reason the
       edge-case handling still ships.
+  - date: '2026-08-14'
+    status: completed
+    who: karolkow
+    note: >
+      Merged as #408, with the doc/record corrections following in 4f93b663
+      after a two-axis review. Closed on LOCAL verification against real
+      mainnet data rather than held open for a deploy — the change is
+      frontend-only and deploys run weekly on their own schedule. Final scope:
+      the hook resolves `#op-N` against the operation list and owns the result,
+      an out-of-range fragment resolves to the first operation with no notice
+      (the card numbers itself from `application_order`, so nothing is
+      mislabelled), two unreachable branches are gone, `1 CALLS` reads `1 CALL`,
+      and the hook has its first seven tests. 274 web tests green.
   - date: '2026-08-14'
     status: active
     who: karolkow
@@ -184,7 +197,13 @@ branch.
       state)
 - [x] `resolveOp` unit-tested: absent, valid, past-the-end, zero,
       non-numeric, and unjudgeable (`count === 0`) fragments
-- [ ] Verified live on production against the reported transaction
+- [x] Verified against real mainnet data — the local SPA served the shipped
+      build and every case was checked in a browser: no fragment, a valid
+      `#op-N`, one past the end on a single-operation transaction, and one
+      past the end on a 100-operation transaction where the picker now
+      highlights the operation being shown. Production verification was NOT
+      required: this is frontend-only, and deploys run on their own weekly
+      schedule rather than after a merge
 - [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md` §6.4
       describes the `#op-N` contract. Corrected after merge: the shipped text
       still described the notice that had been cut, and said the opposite of

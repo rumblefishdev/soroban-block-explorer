@@ -2,7 +2,7 @@
 id: '0470'
 title: 'FEATURE: pool search consistency — same rules in the global box and the list filters'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0440']
 tags:
@@ -24,6 +24,25 @@ history:
       size: the full pools-page predicate over every pool costs 47 ms /
       73 898 rows / 3.33 MiB, and today that search arm does nothing at all
       for a non-hash query.
+  - date: '2026-08-14'
+    status: active
+    who: karolkow
+    note: >
+      STAGE 1 SHIPPED — merged as #409. Both surfaces now match pools with one
+      shared predicate, the pools filter also takes an `L…` identifier, and a
+      review round added a length gate that keeps account- and contract-shaped
+      queries off the pools scan entirely. Verified against production data by
+      running the generated SQL directly: `KALE` 58, `xlm/kale` 7, matching the
+      pools page, and 0 of 75 218 rows change label under the unified
+      native-XLM check. 533 API tests green.
+      Two criteria stay open on purpose. The latency measurement on a real
+      query mix was never run. And the set-membership check belongs on a local
+      stack (`cargo run -p api --bin local` against prod ClickHouse) rather
+      than production — deploys run weekly and independently, so nothing here
+      waits on one.
+      Stage 2 — the same rule on the assets and NFT lists, and folding
+      `pool_id_from_text` into a shared recogniser — is untouched. Task moves
+      to active because stage 2 is real remaining work, not a backlog idea.
   - date: '2026-08-10'
     status: backlog
     who: karolkow
@@ -161,11 +180,11 @@ inline rule into the shared module.
       and `USDC`. Equal COUNTS are not achievable and never were: search caps
       every bucket at `MAX_LIMIT` 50 (default 10), while `KALE` matches 58
       pools. The criterion is set membership within the cap, not parity of N
-- [ ] Native XLM behaves identically on both surfaces (0440's rule preserved,
+- [x] Native XLM behaves identically on both surfaces (0440's rule preserved,
       not re-implemented)
-- [ ] Hash-shaped queries keep the point-seek path — no scan introduced for
+- [x] Hash-shaped queries keep the point-seek path — no scan introduced for
       the case that is free today
-- [ ] The predicate exists in ONE place, shared by both endpoints
+- [x] The predicate exists in ONE place, shared by both endpoints
 - [ ] Search latency measured before and after on a real query mix
 - [ ] **Stage 2:** pasting an entity's identifier into its list's free-text
       filter selects that entity on every list that has such a filter
@@ -175,7 +194,7 @@ inline rule into the shared module.
       search bucket — no rule implemented twice
 - [ ] **Stage 2:** existing behaviour preserved — a plain code/name still
       matches as before, and no list loses a filter it has today
-- [ ] **Docs updated** — search contract under `docs/architecture/**` states
+- [x] **Docs updated** — search contract under `docs/architecture/**` states
       what matches a pool, and the list-filter contract states that a
       free-text filter also accepts the entity identifier
-- [ ] **API types regenerated** — only if the search response shape changes
+- [x] **API types regenerated** — only if the search response shape changes
