@@ -2,13 +2,28 @@
 id: '0472'
 title: 'FEATURE: contract pages link + name what they represent (fungible/NFT links, SAC polish from /ux-expert)'
 type: FEATURE
-status: active
+status: done
 related_adr: ['0051']
-related_tasks: ['0441']
+related_tasks: ['0441', '0473', '0483', '0484', '0485', '0486']
 tags: [frontend, contracts, assets, nfts, priority-low, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-14'
+    status: done
+    who: karolkow
+    note: >
+      Merged as PR #407 (170d9a1b) — 32 commits, 35 files, +1,235/−172,
+      six CI checks green. Frontend-only: three new production files
+      (162 lines), three test files, 267 vitest tests. Every fix verified
+      on a local frontend against production ClickHouse, not on fixtures.
+      Scope grew mid-task from two summary rows to one linked header chip
+      for EVERY contract class, after a consistency check found the header
+      named its class only for SAC. Search ranking was built, measured and
+      then reverted off the branch to keep the frontend-only property.
+      One criterion stays open and belongs to 0473 (the third token
+      metadata layout). Five follow-ups spawned: 0473, 0483, 0484, 0485,
+      0486. Issue #368 stays OPEN — it closes at deploy, not at merge.
   - date: '2026-08-11'
     status: active
     who: karolkow
@@ -400,6 +415,116 @@ acting on it. What was decided rather than fixed:
 - [x] No API surface change at all — frontend-only, no api-types regen. The
       search ordering fix that would have broken this went to [[0485]]
 - [x] Docs: frontend-overview §6.8 + §6.10 updated
+
+## Implementation Notes
+
+Merged as PR #407 (`170d9a1b`), 32 commits, 35 files, +1,235 / −172.
+Frontend-only: 32 of those files under `web/` + `libs/ui/`, the rest docs and
+this task. The one Rust hunk is a doc-comment correction in
+`liquidity_pools/queries.rs` (`icon_url` comes from `asset_enrichment`, not
+the dropped `assets` column) — no behaviour, no deploy of the Lambdas.
+
+Three new production files, 162 lines total:
+
+| file                             | lines | why it is not inline                                                                                                             |
+| -------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `contracts/contractFace.ts`      | 101   | header and list row must answer "what is this contract elsewhere" identically — them disagreeing is what created this task       |
+| `contracts/ContractFaceChip.tsx` | 35    | encodes the a11y contract: anchor OUTSIDE the chip, `describeChild` so the tooltip does not eat the accessible name              |
+| `libs/ui/identifiers/native.ts`  | 26    | the native→XLM constant, placed low enough that `libs/ui/format/stroops.ts` can import it (it could never reach `web/src/pages`) |
+
+Plus three test files (329 lines) and 267 vitest tests green. `ContractsTable.tsx`
+came out **net −15** — the shared face ate more branching than it added.
+
+Verified on a local frontend against the local API against PRODUCTION
+ClickHouse, not on fixtures: header chips for all three classes, keyboard
+activation (`focusIsAnchor`, Enter navigates), 40/40 pool leg links live,
+`/assets/native` titled XLM with supply unit, the chip glossary colours, the
+`Classic credit` / `Soroban` balance chips, and the 420px supply wrap.
+
+## Issues Encountered
+
+- **A doc comment of mine certified a broken behaviour.** I wrote that a SAC
+  contract id "resolves to the same asset row"; `/v1/assets/{SAC}` actually
+  returns 404 — task 0364 pinned `fetch_by_contract_id` to `asset_type = 3`.
+  17 of 40 links on the pools list were dead before this was caught.
+  Fixed by reordering `legHref` (pair form first, contract id last).
+  Not a regression introduced here — pre-existing, made visible by checking
+  the claim against a running API instead of against the source.
+- **Finding 15c: a finding of mine was simply wrong.** I recorded that the UI
+  offers the impossible `Has SAC` + `Soroban` pair, having probed the API
+  directly. The UI never sends it — mutual exclusion shipped in task 0339.
+  Method note kept in the task body: an API-level probe says what the API
+  accepts, never what the UI sends.
+- **An avatar regression I introduced mid-task.** Feeding the title's
+  `'Asset'` fallback into `AssetIcon` rendered a confident `A` for the 527
+  nameless assets — a fake ticker. Split `displayCode` from `code`; test added.
+- **Two existing tests were changed deliberately**, not repaired:
+  `ContractsTable.test.tsx` moved from asserting an `aria-label` to
+  `toHaveAccessibleDescription`, and to a `role=link` name assertion. Both
+  pinned the OLD a11y pattern (tooltip overwriting the accessible name), which
+  this task fixed. Intentional, not a regression.
+- **An empty commit shipped.** `git mv` staged the pre-edit blob and
+  lint-staged restored the edits as unstaged; `07507dc4` landed with 0
+  insertions. Caught by `git show HEAD:<file>` — exit code was 0. Fixed with a
+  second commit, never an amend.
+
+## Design Decisions
+
+### From Plan
+
+1. **Cross-links are frontend-only.** No API change, no api-types regen — the
+   `assets` row for a Fungible is keyed by the contract's own surrogate and
+   `/assets/{C…}` already resolves it; the NFTs list already filters by
+   contract.
+
+### Emerged
+
+Full reasoning for each is in "Decisions taken during the review pass" above;
+the entries below exist so a future session sees WHAT was decided without
+reading the whole file.
+
+2. **The scope grew from two summary rows to one linked header chip for every
+   contract class** (`contractFace`). A consistency check found the same
+   0441-shaped gap one level down: the header named its class only for SAC, so
+   a Fungible token and a 10k-token NFT collection both rendered a bare
+   "Contract". The summary row stayed SAC-only — it earns its place by adding
+   the issuer; for the other classes it would be a second link to one target.
+3. **Only SAC carries `· CODE`.** `sac_asset` is the one identity the contract
+   endpoint puts on the wire. Naming a Fungible or a collection needs an API
+   field → [[0483]].
+4. **One chip colour per meaning, app-wide.** A Soroban token had three names
+   across surfaces and brown meant both SAC and NFT. Glossary documented in
+   `contractType.ts` and frontend-overview §7.
+5. **The Fungible link stays unguarded while the SAC one is gated.** The
+   response carries no field to gate on, and the assets row is co-emitted
+   atomically with the contract row (4,347/4,347 on prod). A theoretical miss
+   lands on the asset page's own NotFoundState.
+6. **`Soroban` ⇄ `Has SAC` stays an auto-switch**, against the UX review's
+   preference for a disabled control. Recorded as a dissent, not an oversight.
+7. **Supply wrapping via `<wbr>` at group separators**, not a rework of the
+   shared `formatAmount`. Rejected alternatives: a lookbehind `split` (esbuild
+   cannot transpile it; Safari <16.4 would fail to parse the bundle) and a
+   zero-width space (a real character — it would follow the number into the
+   clipboard).
+8. **Finding 14 (search ranking) was built, measured, then reverted off this
+   branch** (`aea53f01`) and split to [[0485]]. It was the one change that
+   would have broken the frontend-only property.
+
+## Future Work
+
+All spawned as backlog tasks — nothing left as prose:
+
+| task     | what                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [[0473]] | the third token-metadata storage layout + RPC drain + compliance policy; the parser fix is parked as `git am`-ready patches. Carries this task's one open criterion |
+| [[0483]] | the header NAMES the asset / collection, not just its class — needs an API field                                                                                    |
+| [[0484]] | search asset hits are indistinguishable; the issuer is already in `route_token`                                                                                     |
+| [[0485]] | search relevance ranking, three buckets                                                                                                                             |
+| [[0486]] | the NFT collection link is half-dead and its destination anonymous                                                                                                  |
+
+Known and accepted, not spawned: the Fungible chip's 3.22:1 contrast (recorded
+in [[0467]]), and `.claude/launch.json` deleted upstream, so `preview_start`
+no longer works in any worktree — the dev server has to be started by hand.
 
 ## Notes
 
