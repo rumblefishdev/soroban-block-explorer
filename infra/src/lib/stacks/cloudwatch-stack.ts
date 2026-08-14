@@ -894,49 +894,20 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
         ],
-        // Row 6: API Gateway cache hit rate
-        [
-          new cloudwatch.GraphWidget({
-            title: 'API Gateway cache hit / miss',
-            left: [
-              new cloudwatch.Metric({
-                namespace: 'AWS/ApiGateway',
-                metricName: 'CacheHitCount',
-                dimensionsMap: { ApiName: apiName, Stage: stageName },
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SUM,
-                label: 'Cache hits',
-              }),
-              new cloudwatch.Metric({
-                namespace: 'AWS/ApiGateway',
-                metricName: 'CacheMissCount',
-                dimensionsMap: { ApiName: apiName, Stage: stageName },
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SUM,
-                label: 'Cache misses',
-              }),
-            ],
-            width: 12,
-            height: 6,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Lambda cold starts',
-            left: [
-              processorFunction.metric('InitDuration', {
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SAMPLE_COUNT,
-                label: 'Processor cold starts',
-              }),
-              apiFunction.metric('InitDuration', {
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SAMPLE_COUNT,
-                label: 'API cold starts',
-              }),
-            ],
-            width: 12,
-            height: 6,
-          }),
-        ],
+        // Row 6 (cache hit/miss + cold starts) removed in task 0455 — both
+        // graphed metrics that production never emits, so both rendered
+        // empty from the day they were written:
+        // - `CacheHitCount` / `CacheMissCount` need a stage cache cluster.
+        //   `apiGatewayCacheEnabled` is false and stays false by decision;
+        //   rationale and return condition in
+        //   `docs/architecture/backend/api-gateway-cache-spec.md`.
+        // - `InitDuration` is NOT a CloudWatch metric at all (verified
+        //   2026-08-14: list-metrics empty, zero datapoints over 7 days).
+        //   Lambda reports it only on the REPORT log line, so cold starts
+        //   are a Logs Insights question (`@initDuration`), not a widget.
+        //   Reinstating one means minting the metric from logs first.
+        // An empty widget is worse than no widget: it implies coverage.
+        //
         // Resources widgets (RDS CPU / connections / free storage) removed
         // in task 0239 — the production data plane lives on Hetzner
         // ClickHouse, monitored separately on the box.
