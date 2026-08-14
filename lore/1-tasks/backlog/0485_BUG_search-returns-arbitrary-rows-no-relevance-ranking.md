@@ -4,7 +4,7 @@ title: 'BUG: search returns arbitrary rows — no relevance ranking in three of 
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0472', '0470', '0471', '0318']
+related_tasks: ['0472', '0470', '0318']
 tags: [backend, search, clickhouse, priority-high, effort-medium]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
@@ -29,13 +29,27 @@ Three of the four search buckets end in `LIMIT {per_group_limit}` with **no
 `ORDER BY`**. ClickHouse returns whichever rows the scan reached first and
 stops. There is no relevance ordering, and two identical calls may disagree.
 
-| bucket                          | state                         |
-| ------------------------------- | ----------------------------- |
-| accounts                        | `ORDER BY account_id` — fine  |
-| contracts, StrKey-prefix mode   | `ORDER BY contract_id` — fine |
-| **assets** (`queries.rs` ~657)  | `LIMIT`, no `ORDER BY`        |
-| **contracts, text mode** (~553) | `LIMIT`, no `ORDER BY`        |
-| **NFTs** (~777)                 | `LIMIT`, no `ORDER BY`        |
+| bucket                          | state                                                                |
+| ------------------------------- | -------------------------------------------------------------------- |
+| accounts                        | `ORDER BY account_id` — fine                                         |
+| contracts, StrKey-prefix mode   | `ORDER BY contract_id` — fine                                        |
+| **assets** (`queries.rs` ~657)  | `LIMIT`, no `ORDER BY`                                               |
+| **contracts, text mode** (~553) | `LIMIT`, no `ORDER BY`                                               |
+| **NFTs** (~777)                 | `LIMIT`, no `ORDER BY`                                               |
+| **pools, code mode**            | `ORDER BY newest DESC` — deterministic, but freshness, not relevance |
+
+The pools row is new. Until task 0470 shipped (#409), pools matched an exact
+`pool_id` only — at most one hit, so there was nothing to rank and the bucket
+does not appear in the original three-of-four count. It is now a fourth
+text-matching bucket, and it does have an `ORDER BY`, so it is not part of the
+"two identical calls may disagree" defect. It is still not RELEVANCE: `XLM`
+matches 14 971 pools and the bucket returns 20 of them by which pool traded
+most recently, so an exact-code leg has no advantage over a substring one.
+Whatever tier ranking this task lands should extend to it.
+
+The retired `0471` reference was dropped from `related_tasks` — that task was
+folded into 0470 and its file retired rather than left as a second task on one
+subject.
 
 ## What users get today (measured on prod)
 
