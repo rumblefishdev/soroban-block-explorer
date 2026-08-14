@@ -89,8 +89,8 @@ const sortDir: SortDirection =
 an invalid direction, and nothing downstream carries a guard for one.
 
 `useSelectedOp` half-applies the same idea and then hands the problem on. The
-decision then landed in `OperationsSection`, where it became a *content*
-branch — render a message instead of the operation — rather than a *state*
+decision then landed in `OperationsSection`, where it became a _content_
+branch — render a message instead of the operation — rather than a _state_
 correction.
 
 ### History of the regression
@@ -108,13 +108,13 @@ ownership instead of either symptom.
 
 ## Symptoms, all from the one root
 
-| # | Symptom | Site |
-|---|---------|------|
-| 1 | Out-of-range fragment blanks the only operation | `OperationsSection.tsx` |
-| 2 | `selectedIndex < 0` guard is unreachable — the hook already clamps low | `OperationsSection.tsx` |
-| 3 | `OperationPicker`'s "No operations in this transaction." branch is unreachable — the section returns `UnavailableSection` at `entries.length === 0` and only renders the picker above 1 | `OperationPicker.tsx` |
-| 4 | On a multi-operation transaction a bad fragment highlights nothing (`index === selectedIndex` never matches) | `OperationPicker.tsx` |
-| 5 | No test covers either the hook or the out-of-range branch | — |
+| #   | Symptom                                                                                                                                                                                 | Site                    |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| 1   | Out-of-range fragment blanks the only operation                                                                                                                                         | `OperationsSection.tsx` |
+| 2   | `selectedIndex < 0` guard is unreachable — the hook already clamps low                                                                                                                  | `OperationsSection.tsx` |
+| 3   | `OperationPicker`'s "No operations in this transaction." branch is unreachable — the section returns `UnavailableSection` at `entries.length === 0` and only renders the picker above 1 | `OperationPicker.tsx`   |
+| 4   | On a multi-operation transaction a bad fragment highlights nothing (`index === selectedIndex` never matches)                                                                            | `OperationPicker.tsx`   |
+| 5   | No test covers either the hook or the out-of-range branch                                                                                                                               | —                       |
 
 ## Investigated and rejected
 
