@@ -22,6 +22,29 @@ history:
       cause is not the message: `useSelectedOp` normalises only the lower
       bound of a user-supplied index, so an out-of-range value escapes the
       state layer and each consumer copes differently.
+  - date: '2026-08-13'
+    status: active
+    who: karolkow
+    note: >
+      REACHABILITY CORRECTED on review — the entry above overstates this.
+      "84.6 %" is the share of transactions that render no picker, i.e. how
+      bad the result looks once you land on it. It is NOT how often anyone
+      lands on it, and the first entry reads as though it were. Checked
+      afterwards: `#op-N` is produced in exactly ONE place in the whole app
+      (`useSelectedOp`'s `setSelected`, from a picker click, always a valid
+      index), no navigation carries the fragment between pages, and an
+      operation count is immutable on-chain — so a shared `#op-3` link that
+      worked once works forever. The out-of-range path is therefore reachable
+      only by hand-editing the URL or pasting a fragment onto a different
+      transaction's address.
+      What is worth shipping is smaller and honest: the always-visible
+      `1 CALLS` plural (a one-call trace is the common shape on a failed
+      transaction), two unreachable branches, seven tests where there were
+      none — and undoing the regression `4a31a2f7` introduced. Before that
+      commit the rare path silently showed operation 1; that commit made it
+      blank the section instead. Dropping this task would leave production
+      in the worst of the three states, which is the only reason the
+      edge-case handling still ships.
 ---
 
 # BUG: `#op-N` past the end blanks the operation — URL state has no owner
@@ -34,8 +57,22 @@ does not know how many operations the transaction has, so an out-of-range index
 leaves the hook and every consumer defends against it on its own. The visible
 consequence is that `#op-99` on a single-operation transaction hides the only
 operation behind a message telling the reader to "pick one from the list" —
-a list that is not rendered for single-operation transactions, i.e. for 84.6 %
-of mainnet traffic.
+a list that is not rendered for single-operation transactions, which is 84.6 %
+of them.
+
+**How often does anyone hit it?** Rarely, and that is worth stating up front
+rather than burying. `#op-N` has exactly one producer in the app — a picker
+click, always a valid index — nothing carries the fragment across pages, and
+an operation count never changes, so a link that worked once keeps working.
+Reaching the bad path means hand-editing the URL. The 84.6 % above is the
+blast radius, not the incidence.
+
+The case still ships fixed because `4a31a2f7` made it WORSE than it was:
+before that commit a bad fragment silently showed operation 1, after it the
+section went blank. Leaving this alone means leaving production in the worst
+of the three states. The changes with everyday value are the ones that ride
+along: the `1 CALLS` plural, two unreachable branches, and the first tests
+this hook has ever had.
 
 ## Context
 
