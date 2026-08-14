@@ -704,6 +704,14 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // Dashboard
+    //
+    // Convention (task 0455, `docs/runbooks/health.md` "four sentences"):
+    // the dashboard answers WHERE. It carries what the alarms read — same
+    // metric, same queue, same math, so an ALARM state is confirmable on
+    // sight — plus a few standing conditions deliberately left unalarmed
+    // (durations, concurrency, 4xx). A widget whose signal nothing emits
+    // is a defect, not decoration: it implies coverage (see the row-6
+    // tombstone below).
     // ---------------------
     new cloudwatch.Dashboard(this, 'Dashboard', {
       dashboardName: `${config.envName}-soroban-explorer`,
@@ -716,15 +724,27 @@ export class CloudWatchStack extends cdk.Stack {
             height: 1,
           }),
         ],
-        // Row 2: Galexie freshness proxy + last indexed ledger + Processor duration
+        // Row 2: Galexie doorbell rate + last indexed ledger + Processor duration.
+        // The doorbell widget reads the SAME SQS metric as the
+        // `galexie-ingestion-lag` alarm (task 0367 moved the alarm off Lambda
+        // invocations; the widget lagged on the old signal until 0455).
+        // Invocations lie in both directions: one reconcile drains backlog
+        // for up to 9 min (sparse starts look like a dead producer during a
+        // healthy catch-up), and a 5-second retry loop looks busy while
+        // nothing persists (the 0454 outage). Doorbells count actual S3
+        // object landings — ~1 per ledger close. 1-min period is finer than
+        // the alarm's 5-min window by intent: same signal, more texture.
         [
           new cloudwatch.GraphWidget({
-            title: 'Galexie S3 freshness (Processor invocations/min)',
+            title: 'Galexie doorbell rate (ledgers → ingest queue/min)',
             left: [
-              processorFunction.metricInvocations({
+              new cloudwatch.Metric({
+                namespace: 'AWS/SQS',
+                metricName: 'NumberOfMessagesSent',
+                dimensionsMap: { QueueName: ingestQueue.queueName },
                 period: cdk.Duration.minutes(1),
                 statistic: cloudwatch.Stats.SUM,
-                label: 'Invocations',
+                label: 'Doorbells',
               }),
             ],
             width: 8,
