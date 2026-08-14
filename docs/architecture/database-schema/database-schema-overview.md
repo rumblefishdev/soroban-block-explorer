@@ -674,8 +674,10 @@ Design notes:
   routers). Replaces the previous `metadata JSONB` blob, which carried a
   single closed-shape field and so failed the typed-columns-vs-JSONB test
   established in ADR 0023 and codified in ADR 0037
-- `search_vector` combines the typed `name` and the StrKey, enabling
-  contract search on both the friendly name and the canonical identifier
+- `search_vector` (PG-era generated TSVECTOR) was retired with the store —
+  it does not exist in the CH table. Contract search matches the typed
+  `name` and the StrKey directly (`positionCaseInsensitive` scans in
+  `crates/api/src/search/queries.rs`)
 - `is_sac` is set to `true` for every SAC contract observed in scope.
   Three classification paths land here:
   1. **In-window SAC deploy** — `extract_contract_deployments` reads
@@ -1418,38 +1420,58 @@ strings (ADR 0031) are also rendered at the serialization layer, not at the DB.
 
 ### 6.1 Indexing Strategy
 
-The current schema uses indexes for four main reasons:
+ClickHouse has no B-tree secondary indexes; the PG-era index families this
+section used to describe (GIN, trigram, partial-unique, `text_pattern_ops`
+prefix btrees) have no CH equivalent and were retired with the store. The
+CH read-acceleration model has four layers, all declared in
+`crates/db-clickhouse/schema/init.sql`:
 
-- fast public lookup by canonical identifier
-- efficient recent-history access by time or ledger order
-- selective GIN / trigram access for variable-shaped or free-text fields
-- partial uniqueness for identity constraints that depend on a row's type
+1. **The sort key is the index.** Each table's `ORDER BY` defines its sparse
+   primary index; every seek path is designed against it (per-table sort keys
+   are in the DDL and in §8.0). Uniqueness is not enforced by indexes at all —
+   `ReplacingMergeTree` deduplicates by sort key at merge/read time, which is
+   why every read must dedup (`FINAL`, `GROUP BY` + `max()`, or
+   `LIMIT 1 BY`) — see the RMT rules in
+   [`clickhouse-pilot.md §5`](./clickhouse-pilot.md).
+2. **Skip indexes** bound the paths the sort key cannot serve. The deployed
+   inventory (each entry in `init.sql` carries the measurement and — per the
+   0400 lesson — its named consumer; keep prod and file in sync both ways):
 
-Notable patterns in the current design:
+   | Table                    | Index                | Type                  | Serves                                                                                                                         |
+   | ------------------------ | -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+   | `ledgers`                | `closed_at_mm`       | `minmax`              | time-window → ledger-range resolution (LP chart); measured 77.9M → 26.3M read_rows/req on the 2026-07-17 load test (task 0357) |
+   | `accounts`               | `idx_acc_id`         | `bloom_filter(0.001)` | surrogate-id → StrKey seeks: tx-list/search in `crates/api` + SEP-1 issuer resolve in the enrichment worker (tasks 0290, 0397) |
+   | `soroban_contracts`      | `idx_sc_id`          | `bloom_filter(0.001)` | tx-detail surrogate-id → `contract_id` resolve (task 0344)                                                                     |
+   | `transactions`           | `idx_tx_hash_bloom`  | `bloom_filter(0.01)`  | point lookup by hash within the partition named by `transaction_hash_index`                                                    |
+   | `operations_appearances` | `idx_oa_pool_ids`    | `bloom_filter(0.001)` | sparse-pool regime of the pool-transactions scan (task 0365)                                                                   |
+   | `operations_appearances` | `idx_oa_contract_id` | `bloom_filter(0.001)` | sparse-contract regime of the contract-filtered tx list (task 0333; the 2026-06-29 quota blowout)                              |
 
-- **Identity indexes**: `ledgers.hash` (unique), `transaction_hash_index.hash`
-  (uniqueness for partitioned `transactions` via the proxy table)
-- **Time-oriented indexes**: `idx_ledgers_closed_at`, `idx_accounts_last_seen`,
-  `idx_tx_source_created`, `idx_lps_pool`, etc. — descending on the time column
-  for recent-first browsing
-- **GIN / trigram**: `idx_contracts_search` (full-text on `soroban_contracts.search_vector`),
-  `idx_assets_code_trgm` (trigram on `assets.asset_code`),
-  `idx_nfts_name_trgm` (trigram on `nfts.name`)
-- **Partial uniqueness**: `uidx_assets_native` / `uidx_assets_classic_asset` /
-  `uidx_assets_soroban` (one row per logical asset depending on `asset_type`),
-  `uidx_abc_native` / `uidx_abc_credit` on `account_balances_current`
-- **Prefix-search btree**: `idx_accounts_prefix` / `idx_contracts_prefix` using
-  `text_pattern_ops` so that `LIKE 'G...%'` queries on the StrKey are index-driven
-- **Filtered partial indexes** for rarely-NULL columns: `idx_lpp_shares`,
-  `idx_contracts_wasm`. (Former `idx_ops_contract` / `idx_ops_pool` /
-  `idx_ops_destination` dropped in task 0163 — the wide `uq_ops_app_identity`
-  UNIQUE on `operations_appearances` serves their leftmost-prefix lookups;
-  reversible if telemetry demands it.)
+3. **A `Dictionary`** (`transaction_hash_dict`) serves hot
+   hash → `(ledger_sequence, application_order)` point lookups without
+   touching the base table (§4e in `clickhouse-pilot.md`, task 0204). Its
+   `ComplexKeyCache` layout reports `element_count` as _currently cached_
+   entries, not source size — 1 on a cold cache is healthy, not broken.
+4. **Projections: none, by constraint.** ClickHouse 26.3 refuses projections
+   on `ReplacingMergeTree` (`Code 344`, measured in task 0353); anything a
+   projection would have served is done with an MV or a skip index instead.
 
-Column-type choices also affect indexing economics: `BYTEA(32)` hashes
-([ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md)) and `SMALLINT`
-enum columns ([ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md))
-each cut index size compared to the VARCHAR originals, which is material at mainnet-year
+Two conventions guard this inventory (both are 0400 scar tissue):
+
+- **Every index names its consumer** in an `init.sql` comment. An index whose
+  consumer disappears gets dropped on both sides — `idx_oa_asset_issuer_id`
+  (consumer moved, task 0359) and `idx_oaa_transaction_id` (declared for a
+  withdrawn read path, dropped from prod AND the file 2026-08-06) are the
+  precedents.
+- **Drift runs in both directions.** Prod-only indexes (`closed_at_mm` lived
+  only on the box for a while) and file-only indexes are both defects; online
+  `ALTER … ADD INDEX + MATERIALIZE INDEX` must land in `init.sql` in the same
+  change.
+
+Column-type choices still carry the indexing economics: `FixedString(32)`
+hashes ([ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md),
+translated per `clickhouse-pilot.md §6`) and narrow enum columns
+([ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md))
+keep the sparse index and skip-index granule sets small at mainnet-year
 volumes.
 
 ### 6.2 Partitioning Strategy
@@ -1480,7 +1502,8 @@ The current retention statement is conservative:
 
 - ledger and transaction history are kept indefinitely
 - partitioned time-series tables may be pruned only if storage constraints require it
-- partitions are created ahead of time and dropped operationally, not ad hoc by application code
+- ClickHouse creates partitions automatically on insert; pruning is an operator
+  `ALTER TABLE … DROP PARTITION`, never ad-hoc application code
 
 This supports public-explorer expectations better than aggressive retention on core history.
 

@@ -14,16 +14,16 @@ All sixteen were still `backlog` at the time of this triage.
 
 ## Genuine instances (8) — the umbrella retires or reshapes these
 
-| Task     | Defect | Note                                                                                                                                                                                     |
-| -------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [[0454]] | 1 + 2  | The anchor. Alarm filter vs emitted strings, and lag emitted only on success                                                                                                             |
-| [[0400]] | 1      | `init.sql` vs prod schema. Carries a second comparison: architecture docs still describe a retired Postgres world                                                                        |
-| [[0312]] | 1      | **Closed 2026-08-10** — parked delta deployed, prod diff clean; the answer was a confirmation step at deploy, not a scheduler                                                            |
-| [[0406]] | 1      | **Closed 2026-08-06** — CI rust job provisions CH from compose + init.sql sidecar, runs both gates, red-verified by sabotage. First real Actions run pending                             |
-| [[0434]] | 1      | Protocol tables vs the chain. Different mechanism — the reference is an external crate, not a repo file                                                                                  |
-| [[0428]] | 2      | **Closed 2026-08-11** by measurement — 694/693 clean refresh hours, residual class zero, heavy causes covered by existing alarms; runbook query + return conditions recorded in the task |
-| [[0237]] | 2      | Reboot flag: the box knows, nothing asks. Different delivery path — not on CloudWatch                                                                                                    |
-| [[0382]] | 1      | Verify-range vs Horizon. **The strongest comparator in the set** and the umbrella never says so: our index is the declaration, the chain is the actual                                   |
+| Task     | Defect | Note                                                                                                                                                                                                                          |
+| -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [[0454]] | 1 + 2  | The anchor. Alarm filter vs emitted strings, and lag emitted only on success                                                                                                                                                  |
+| [[0400]] | 1      | **Closed 2026-08-14** — structural layer reconciled both directions (08-06/10), docs half done (last live-tense PG claims rewritten, skip-index inventory documented); drift-gate AC deferred to the umbrella's comparator AC |
+| [[0312]] | 1      | **Closed 2026-08-10** — parked delta deployed, prod diff clean; the answer was a confirmation step at deploy, not a scheduler                                                                                                 |
+| [[0406]] | 1      | **Closed 2026-08-06** — CI rust job provisions CH from compose + init.sql sidecar, runs both gates, red-verified by sabotage. First real Actions run pending                                                                  |
+| [[0434]] | 1      | Protocol tables vs the chain. Different mechanism — the reference is an external crate, not a repo file                                                                                                                       |
+| [[0428]] | 2      | **Closed 2026-08-11** by measurement — 694/693 clean refresh hours, residual class zero, heavy causes covered by existing alarms; runbook query + return conditions recorded in the task                                      |
+| [[0237]] | 2      | Reboot flag: the box knows, nothing asks. Different delivery path — not on CloudWatch                                                                                                                                         |
+| [[0382]] | 1      | Verify-range vs Horizon. **The strongest comparator in the set** and the umbrella never says so: our index is the declaration, the chain is the actual                                                                        |
 
 ## Cost cluster (3) — defect 3, related but its own thread
 

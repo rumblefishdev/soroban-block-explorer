@@ -183,14 +183,14 @@ already produced does not change that.
 Each row instead takes the cheapest check that sits where it can be acted on,
 and they are deliberately different mechanisms:
 
-| Instance | Check                                                                                                                                                                                                                                                               |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [[0312]] | **Done 2026-08-10** — confirmation step at deploy shipped, parked delta deployed, prod diff clean; 0312 archived                                                                                                                                                    |
-| [[0406]] | **Done 2026-08-06** — CI provisions CH from compose, runs both gates, sabotage-verified red; 0406 archived                                                                                                                                                          |
-| [[0400]] | **Measured 2026-08-06/10** — both directions reconciled; the consumer-less `idx_oaa_transaction_id` found declared-but-unused, dropped from prod and `init.sql`; docs half remains in the child task                                                                |
-| [[0434]] | **Done 2026-08-06** — `_ => {}` arms replaced with exhaustive matches (drift is now a compile error); config-setting names derived from `ConfigSettingId`; remaining gaps measured and recorded in the child task                                                   |
-| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                                                                                                                                                                    |
-| [[0454]] | **Done 2026-08-06** — filter keyed on the structured field `alarm = "ch_write_failure"`; `infra/src/lib/stacks/declared-vs-emitted.spec.ts` asserts every filter contract exists in `crates/` (comment-stripped corpus), wired into CI with Rust-aware cache inputs |
+| Instance | Check                                                                                                                                                                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [[0312]] | **Done 2026-08-10** — confirmation step at deploy shipped, parked delta deployed, prod diff clean; 0312 archived                                                                                                                                                                                                                                 |
+| [[0406]] | **Done 2026-08-06** — CI provisions CH from compose, runs both gates, sabotage-verified red; 0406 archived                                                                                                                                                                                                                                       |
+| [[0400]] | **Done 2026-08-14, archived** — both directions reconciled (2026-08-06/10; the consumer-less `idx_oaa_transaction_id` dropped from prod and `init.sql`); docs half closed: last live-tense Postgres claims rewritten to the CH model, skip-index inventory documented with consumers. Drift-gate AC deferred HERE (the open comparator AC below) |
+| [[0434]] | **Done 2026-08-06** — `_ => {}` arms replaced with exhaustive matches (drift is now a compile error); config-setting names derived from `ConfigSettingId`; remaining gaps measured and recorded in the child task                                                                                                                                |
+| [[0382]] | Overlaps [[0431]], which is building a differential oracle against `stellar-xdr`                                                                                                                                                                                                                                                                 |
+| [[0454]] | **Done 2026-08-06** — filter keyed on the structured field `alarm = "ch_write_failure"`; `infra/src/lib/stacks/declared-vs-emitted.spec.ts` asserts every filter contract exists in `crates/` (comment-stripped corpus), wired into CI with Rust-aware cache inputs                                                                              |
 
 ## Defect 2 — health measured by success
 
@@ -365,8 +365,10 @@ month is unanswerable by construction.
       without widgets) — including a stated dashboard answer for the new
       cost-anomaly alert
 - [ ] Each child task either closed by this work or explicitly re-scoped —
-      triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312
-      closed and archived)
+      triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
+      0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
+      deploy-gated verifications; re-scope of the five non-instances is with
+      the operator)
 - [x] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
       naming the signals and where they live (2026-08-11:
       `docs/runbooks/health.md` — the four-sentence convention, the coverage
