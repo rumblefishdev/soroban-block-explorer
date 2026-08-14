@@ -56,20 +56,6 @@ system.query_log WHERE event_date=today() AND exception_code!=0 ORDER BY
 event_time DESC LIMIT 20"`. NOTE: a backlog-age page right after you
   paused the indexer is expected and correct — one knowing page per pause
   (ADR 0054 rule 4); it doubles as the forgot-to-re-enable bound.
-- **"A `galexie-ingestion-lag` page arrived"** → first check for a task
-  restart: `/ecs/production/galexie-live` logs, look for
-  `Starting Galexie` around the page time, and the ECS service events
-  (`aws ecs describe-services --cluster production-ingestion --services
-production-galexie-live --query 'services[0].events[0:5]'`). A
-  stop+start pair with NO deployment = AWS-initiated Fargate task
-  replacement (host patching) — measured 2026-08-12: ~25 min from restart
-  to full catch-up, one page, one recovery message, zero ledger gaps.
-  That is the expected envelope, not an incident; afterwards verify
-  continuity: `chq "SELECT count() FROM (SELECT sequence,
-sequence - lagInFrame(sequence) OVER (ORDER BY sequence ROWS BETWEEN 1
-PRECEDING AND CURRENT ROW) AS d FROM ledgers WHERE closed_at >
-now() - INTERVAL 3 HOUR) WHERE d > 1"` (expect 0; the window function
-  needs the ROWS frame or its first row fakes a gap).
 - **"A 5xx page arrived"** → [api-5xx.md](./api-5xx.md), every error gets
   an owner.
 - **"A DLQ page arrived"** → [dlq.md](./dlq.md), inspect → attribute →
@@ -104,16 +90,8 @@ fields.error | sort count desc`.
    `system.view_refreshes` (refresh health, current), `system.errors`
    (counters since restart). Remember RMT dedup rules when reading data
    tables.
-4. **Deploy correlation** — the deploy ledger answers "which commit was
-   live at time T" directly:
-   `aws ssm get-parameter-history --region eu-central-1 --name
-/production/deploy/git-sha --query
-'Parameters[].[LastModifiedDate,Value]' --output table`
-   (every `make deploy-production*` writes `<sha>[-dirty] <scope>` on
-   success; `-dirty` = the tree carried uncommitted changes). For deploys
-   predating the ledger, fall back to `git log` on `infra/` +
-   CloudFormation stack events. A symptom that starts at a deploy boundary
-   usually is one.
+4. **Deploy correlation** — `git log` on `infra/` + CloudFormation stack
+   events; a symptom that starts at a deploy boundary usually is one.
 5. **The co-tenant** — the box is shared; their write pressure has shown up
    in our windows before. `system.query_log` filtered on their database
    answers it read-only.
