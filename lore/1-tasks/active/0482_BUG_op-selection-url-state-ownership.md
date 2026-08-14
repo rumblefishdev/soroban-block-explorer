@@ -45,6 +45,30 @@ history:
       blank the section instead. Dropping this task would leave production
       in the worst of the three states, which is the only reason the
       edge-case handling still ships.
+  - date: '2026-08-14'
+    status: active
+    who: karolkow
+    note: >
+      NOTICE CUT on review, and the reasoning that justified it was wrong.
+      The claim was that a silent fall back to operation 1 leaves the card
+      "labelled with the number the reader asked for" — taken from the
+      CodeRabbit comment behind `4a31a2f7` and never checked. It is false:
+      `OperationCard` derives its number from
+      `heavy.application_order ?? light.application_order`, and only falls
+      back to the fragment when both are absent, which is the case where the
+      section renders its unavailable state instead. So the old behaviour
+      showed operation 1 correctly numbered. Nothing was hidden and nothing
+      was mislabelled.
+      What WAS broken, and what the clamp actually fixes, is the disagreement
+      between the two halves of the section: the card fell back to operation 1
+      while `OperationPicker` received the raw out-of-range index and
+      highlighted nothing. One screen, two answers.
+      Removed with the notice: `OpSelection`, the `missing` field, the
+      `missingOp` prop and two tests. `resolveOp` now returns a number and
+      `useSelectedOp` is back to its original `[index, setter]` tuple — the
+      whole change against `develop` is the `count` argument plus the upper
+      bound. Scope is now the clamp, the `1 CALLS` plural, two unreachable
+      branches and the hook's first tests.
 ---
 
 # BUG: `#op-N` past the end blanks the operation — URL state has no owner

@@ -1,5 +1,5 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
-import { Box, Grid, Typography } from '@mui/material';
+import { Box, Grid } from '@mui/material';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -22,11 +22,7 @@ export function OperationsSection({ tx }: OperationsSectionProps) {
   // The `#op-N` fragment is resolved HERE because this is where the list it
   // has to be valid against already exists. Handing the count up to the page
   // and the answer back down as props derived the same number twice.
-  const {
-    index: selectedIndex,
-    missing: missingOp,
-    select,
-  } = useSelectedOp(entries.length);
+  const [selectedIndex, select] = useSelectedOp(entries.length);
   // `selectedIndex` always addresses an existing entry, so there is no range
   // guard here. The one that used to live here answered a bad fragment by
   // replacing the operation with a message, which for the ~85 % of
@@ -54,20 +50,6 @@ export function OperationsSection({ tx }: OperationsSectionProps) {
     />
   );
 
-  /* The fragment named an operation that does not exist. Say so ABOVE the
-     operation rather than instead of it: the reader still gets the page they
-     came for, and the number they asked for and did not get is named instead
-     of quietly becoming a different one. */
-  const missingNotice = missingOp != null && (
-    <Typography
-      variant="bodySmRegular"
-      sx={(theme) => ({ color: theme.palette.text.tertiary, mb: 2 })}
-    >
-      This transaction has no operation {missingOp} — it has {entries.length}.
-      Showing operation {selectedIndex + 1}.
-    </Typography>
-  );
-
   // No archive data, no operation list. The DB's appearance index is NOT used
   // as a stand-in: it folds same-identity operations into one row, so it would
   // render "1" under a header that correctly says "4". The header count stays —
@@ -90,7 +72,6 @@ export function OperationsSection({ tx }: OperationsSectionProps) {
       meta={`${count} Operation${count === 1 ? '' : 's'}`}
     >
       <Box sx={{ p: 2 }}>
-        {missingNotice}
         {showPicker ? (
           <Grid container spacing={2}>
             {/* The card carries the substance; the picker is an index — keep
