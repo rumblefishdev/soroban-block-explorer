@@ -734,6 +734,13 @@ export class CloudWatchStack extends cdk.Stack {
         // nothing persists (the 0454 outage). Doorbells count actual S3
         // object landings — ~1 per ledger close. 1-min period is finer than
         // the alarm's 5-min window by intent: same signal, more texture.
+        // The backlog-age widget mirrors the `ingestion-backlog-age` alarm
+        // (same metric, same 1-min MAXIMUM) with the paging threshold drawn
+        // as a horizontal line, and doubles as the reference series the
+        // sequence widget lacks: healthy is 0-1 s (732 h: median 0, p90 1);
+        // flat sequence + climbing age = the consumer stalled, whatever the
+        // cause. Known blind spot, covered by the DLQ pair: when failures
+        // drain to the DLQ the main queue empties and age reads green.
         [
           new cloudwatch.GraphWidget({
             title: 'Galexie doorbell rate (ledgers → ingest queue/min)',
@@ -747,7 +754,28 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'Doorbells',
               }),
             ],
-            width: 8,
+            width: 6,
+            height: 6,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Ingest backlog age (s, oldest doorbell)',
+            left: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/SQS',
+                metricName: 'ApproximateAgeOfOldestMessage',
+                dimensionsMap: { QueueName: ingestQueue.queueName },
+                period: cdk.Duration.minutes(1),
+                statistic: cloudwatch.Stats.MAXIMUM,
+                label: 'Oldest doorbell age',
+              }),
+            ],
+            leftAnnotations: [
+              {
+                value: config.ingestionBacklogAgeSeconds,
+                label: 'pages after 3 consecutive min above',
+              },
+            ],
+            width: 6,
             height: 6,
           }),
           new cloudwatch.GraphWidget({
@@ -762,7 +790,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'Last indexed ledger',
               }),
             ],
-            width: 8,
+            width: 6,
             height: 6,
           }),
           new cloudwatch.GraphWidget({
@@ -784,7 +812,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'p99',
               }),
             ],
-            width: 8,
+            width: 6,
             height: 6,
           }),
         ],
