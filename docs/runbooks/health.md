@@ -27,22 +27,22 @@ rules).
 `✅` = exists and effective · `➖` = deliberately none, reason given ·
 `🔜` = in code on this branch, live after the next deploy.
 
-| Condition                                           | Alarm                                                                                                    | Metric                               | Logs (WHY)                                            | Dashboard                                            |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------- |
-| Galexie stops writing ledgers                       | ✅ `galexie-ingestion-lag` (BREACHING on silence)                                                        | SQS `NumberOfMessagesSent`           | ECS logs, 90 d                                        | freshness widget (reads a retired signal — C7 fixes) |
-| Galexie disk fills                                  | ✅ `galexie-ephemeral-storage` (level; re-arm = act before ceiling)                                      | Container Insights %                 | ECS logs                                              | ➖ (C7 candidate)                                    |
-| Ledgers queued but not consumed (the 0454 gap)      | 🔜 `ingestion-backlog-age` (bare 120 s × 3 min; a planned pause pages once, knowingly)                   | SQS `ApproximateAgeOfOldestMessage`  | indexer ERROR logs, full error detail                 | ➖ (C7 adds)                                         |
-| Indexer fails a CH write                            | ✅ `indexer-ch-write-failures` (filter on `fields.alarm`, CI-guarded) + error-rate alarm                 | 2 custom metrics                     | `alarm="ch_write_failure"` events with full error     | partial                                              |
-| Ingest DLQ receives                                 | ✅ `ledger-processor-dlq-depth` (level; steady state zero; drain = purge per [dlq.md](./dlq.md))         | SQS depth                            | indexer logs                                          | depth widget                                         |
-| Enrichment fetch dead-ends (dead issuer domain)     | ➖ deliberate: classifies permanent → sentinel row, not an incident                                      | —                                    | worker WARN `reason=sep1_fetch_permanent`/`transient` | ➖                                                   |
-| Enrichment DLQ receives (DB incident / poison pill) | ✅ `enrichment-dlq-depth` (level; drain = redrive per [dlq.md](./dlq.md))                                | SQS depth                            | worker ERROR logs                                     | depth widget                                         |
-| API request returns 5xx                             | ✅ `api-gateway-5xx` (any single one; zero-tolerance per [api-5xx.md](./api-5xx.md))                     | APIGW `5XXError`                     | API ERROR logs, structured fields                     | 4xx/5xx widget                                       |
-| API slow                                            | ➖ deliberate: latency is not a page for this team; hard stall becomes 504 → 5xx alarm                   | APIGW `Latency`                      | REPORT lines                                          | latency widget                                       |
-| `accounts_recent` MV refresh silently fails         | ➖ deliberate (measured 694/693 clean hours; alarm design + return conditions in task 0428)              | —                                    | —                                                     | ➖ — diagnosis query below                           |
-| Costs step-change                                   | 🔜 Cost Anomaly Detection → SNS ([costs.md](./costs.md))                                                 | billing data                         | —                                                     | ➖ (C7: stated answer pending)                       |
-| Database host (Hetzner) degrades                    | ➖ known gap, task 0237 — indicated shape is an external dead-man's-switch (ADR 0054), NOT CloudWatch    | Prometheus on the box, not forwarded | on the box                                            | ➖                                                   |
-| Frontend errors                                     | ➖ out of the umbrella's scope (task 0087 owns it when activated)                                        | —                                    | —                                                     | ➖                                                   |
-| Slack delivery chain itself breaks                  | ➖ OPEN DECISION (ADR 0054: single unwitnessed chain; email co-subscriber / dead-man's-switch / nothing) | —                                    | —                                                     | ➖                                                   |
+| Condition                                           | Alarm                                                                                                                                                                                       | Metric                               | Logs (WHY)                                            | Dashboard                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------- |
+| Galexie stops writing ledgers                       | ✅ `galexie-ingestion-lag` (BREACHING on silence)                                                                                                                                           | SQS `NumberOfMessagesSent`           | ECS logs, 90 d                                        | freshness widget (reads a retired signal — C7 fixes) |
+| Galexie disk fills                                  | ✅ `galexie-ephemeral-storage` (level; re-arm = act before ceiling)                                                                                                                         | Container Insights %                 | ECS logs                                              | ➖ (C7 candidate)                                    |
+| Ledgers queued but not consumed (the 0454 gap)      | 🔜 `ingestion-backlog-age` (bare 120 s × 3 min; a planned pause pages once, knowingly)                                                                                                      | SQS `ApproximateAgeOfOldestMessage`  | indexer ERROR logs, full error detail                 | ➖ (C7 adds)                                         |
+| Indexer fails a CH write                            | ✅ `indexer-ch-write-failures` (filter on `fields.alarm`, CI-guarded) + error-rate alarm                                                                                                    | 2 custom metrics                     | `alarm="ch_write_failure"` events with full error     | partial                                              |
+| Ingest DLQ receives                                 | ✅ `ledger-processor-dlq-depth` (level; steady state zero; drain = purge per [dlq.md](./dlq.md))                                                                                            | SQS depth                            | indexer logs                                          | depth widget                                         |
+| Enrichment fetch dead-ends (dead issuer domain)     | ➖ deliberate: classifies permanent → sentinel row, not an incident                                                                                                                         | —                                    | worker WARN `reason=sep1_fetch_permanent`/`transient` | ➖                                                   |
+| Enrichment DLQ receives (DB incident / poison pill) | ✅ `enrichment-dlq-depth` (level; drain = redrive per [dlq.md](./dlq.md))                                                                                                                   | SQS depth                            | worker ERROR logs                                     | depth widget                                         |
+| API request returns 5xx                             | ✅ `api-gateway-5xx` (any single one; zero-tolerance per [api-5xx.md](./api-5xx.md))                                                                                                        | APIGW `5XXError`                     | API ERROR logs, structured fields                     | 4xx/5xx widget                                       |
+| API slow                                            | ➖ deliberate: latency is not a page for this team; hard stall becomes 504 → 5xx alarm                                                                                                      | APIGW `Latency`                      | REPORT lines                                          | latency widget                                       |
+| `accounts_recent` MV refresh silently fails         | ➖ deliberate (measured 694/693 clean hours; alarm design + return conditions in task 0428)                                                                                                 | —                                    | —                                                     | ➖ — diagnosis query below                           |
+| Costs step-change                                   | 🔜 Cost Anomaly Detection → SNS ([costs.md](./costs.md))                                                                                                                                    | billing data                         | —                                                     | ➖ (C7: stated answer pending)                       |
+| Database host (Hetzner) degrades                    | ➖ known gap, task 0237 — indicated shape is an external dead-man's-switch (ADR 0054), NOT CloudWatch. Cost measured 2026-08-14: disk pressure stopped ingestion ~9.5 h with one quiet page | Prometheus on the box, not forwarded | on the box                                            | ➖                                                   |
+| Frontend errors                                     | ➖ out of the umbrella's scope (task 0087 owns it when activated)                                                                                                                           | —                                    | —                                                     | ➖                                                   |
+| Slack delivery chain itself breaks                  | ➖ OPEN DECISION (ADR 0054: single unwitnessed chain; email co-subscriber / dead-man's-switch / nothing)                                                                                    | —                                    | —                                                     | ➖                                                   |
 
 ## Symptom → first move
 
@@ -66,10 +66,26 @@ production-galexie-live --query 'services[0].events[0:5]'`). A
   to full catch-up, one page, one recovery message, zero ledger gaps.
   That is the expected envelope, not an incident; afterwards verify
   continuity: `chq "SELECT count() FROM (SELECT sequence,
-sequence - lagInFrame(sequence) OVER (ORDER BY sequence ROWS BETWEEN 1
-PRECEDING AND CURRENT ROW) AS d FROM ledgers WHERE closed_at >
-now() - INTERVAL 3 HOUR) WHERE d > 1"` (expect 0; the window function
-  needs the ROWS frame or its first row fakes a gap).
+lagInFrame(sequence) OVER (ORDER BY sequence ROWS BETWEEN 1 PRECEDING
+AND CURRENT ROW) AS prev FROM ledgers WHERE closed_at >
+now() - INTERVAL 3 HOUR) WHERE prev != 0 AND sequence - prev > 1"`
+  (expect 0; the ROWS frame AND the `prev != 0` filter are both
+  load-bearing — without them the window's first row fakes a gap, which
+  bit twice before this phrasing).
+- **"Indexer errors say `Code: 243` / NOT_ENOUGH_SPACE"** → the shared
+  ClickHouse box is out of disk (materialized 2026-08-14: ~9.5 h of
+  stopped ingestion whose only page was the DLQ level alarm, hours in).
+  First moves: `chq "SELECT name, formatReadableSize(free_space),
+round(100*(1-free_space/total_space),1) AS used_pct FROM system.disks"`
+  and `chq "SELECT user, left(query,60), count() FROM system.query_log
+WHERE exception_code = 243 AND event_time > now() - INTERVAL 12 HOUR
+GROUP BY 1,2 ORDER BY 3 DESC"` — code 243 hits EVERY writer on the box
+  (both tenants), so also check for an operator bulk job (a backfill
+  staging data on the box's own disk is the known cause class). Freeing
+  space is a box-side operator action; the indexer then self-heals from
+  its cursor with no intervention (measured catch-up ≈ 7-8× realtime) —
+  afterwards purge the accumulated DLQ doorbells per [dlq.md](./dlq.md)
+  and run the continuity query above.
 - **"A 5xx page arrived"** → [api-5xx.md](./api-5xx.md), every error gets
   an owner.
 - **"A DLQ page arrived"** → [dlq.md](./dlq.md), inspect → attribute →
