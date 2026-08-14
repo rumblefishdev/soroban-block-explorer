@@ -83,6 +83,12 @@ pub struct PoolListParams {
     /// are not unique on Stellar, and this filter matches codes, not asset
     /// identity. Callers needing one specific issuer's asset should use the
     /// per-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.
+    ///
+    /// A pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,
+    /// the one canonical form (task 0264) — and selects that single pool
+    /// instead of matching asset codes (task 0470). Previously an identifier
+    /// was matched as a substring of an asset code, found nothing, and the
+    /// list answered "no pools" about a pool that exists.
     #[serde(rename = "filter[asset_code]")]
     pub filter_asset_code: Option<String>,
     #[serde(rename = "filter[asset_a_code]")]

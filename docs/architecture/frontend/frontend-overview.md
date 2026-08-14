@@ -665,8 +665,12 @@ Paginated table of all liquidity pools.
 - Filters - asset (`filter[asset_code]`, case-insensitive **substring** of either
   leg, so `USD` matches the `USDC` pools; `A/B` is a pair query requiring both
   codes in either order; native legs match on `XLM` despite storing an empty
-  code; task 0440) or per-leg `(code, issuer)` exact match, minimum TVL
-  (`filter[min_tvl]`)
+  code; task 0440). The same box also accepts a pool **identifier** in the `L…`
+  SEP-23 form and then selects that one pool — pasting an id used to be matched
+  as an asset-code substring, so the page answered "no pools" about a pool that
+  exists (task 0470). Per-leg `(code, issuer)` exact match is the alternative
+  mode. `filter[min_tvl]` is **rejected with a 400**: pool TVL is computed at
+  read time, so there is nothing to pre-filter on
 - Cursor-based pagination controls
 
 Expanded behavior:

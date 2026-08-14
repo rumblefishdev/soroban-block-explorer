@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
+use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{ChartDataPoint, PoolListCursor, PoolOperationAmount, SharesCursor};
@@ -113,6 +114,12 @@ pub struct ResolvedPoolListParams {
     /// query order-insensitive without anyone knowing Stellar's canonical leg
     /// ordering. Empty = no filter.
     pub asset_codes: Vec<String>,
+    /// The same free-text box, when it held a pool identifier instead
+    /// (`L…` SEP-23 StrKey, the one canonical form per task 0264, resolved to
+    /// the stored hex — task 0470).
+    /// Mutually exclusive with `asset_codes`: an identifier names exactly one
+    /// pool, so there is nothing left for a code match to narrow.
+    pub pool_id_hex: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1730,32 +1737,23 @@ pub async fn fetch_pool_list(
     // answer: `USDC/USDC` means the 72 pools with USDC on both sides, not the
     // 2 912 with USDC anywhere. Same for a needle that is a prefix of the other
     // (`USD/USDC`) — one asset must not satisfy both halves of the query.
-    let leg = |side: char| {
-        format!(
-            "positionCaseInsensitive(if(lp.asset_{side}_type = 0, 'XLM', lp.asset_{side}_code), ?) > 0"
-        )
-    };
-    match params.asset_codes.as_slice() {
-        [one] => {
-            filters.push_str(&format!(" AND ({} OR {})", leg('a'), leg('b')));
-            binds.push(one.clone());
-            binds.push(one.clone());
-        }
-        [first, second] => {
-            filters.push_str(&format!(
-                " AND (({a} AND {b}) OR ({a} AND {b}))",
-                a = leg('a'),
-                b = leg('b'),
-            ));
-            // Bind order follows the `?`s left to right: first/second, then the
-            // reversed assignment.
-            binds.push(first.clone());
-            binds.push(second.clone());
-            binds.push(second.clone());
-            binds.push(first.clone());
-        }
-        // `normalize_asset_codes` yields at most two needles.
-        _ => {}
+    //
+    // The predicate itself lives in `common::pool_asset_codes` because global
+    // search matches pools with the SAME rule (task 0470); two copies would
+    // drift, and the native arm above is exactly where a second one goes wrong.
+    //
+    // A pool identifier in the same box wins outright: it names one pool, so
+    // it is a point seek on the primary key rather than a scan, and there is
+    // nothing left for a code match to narrow. Before this, the identifier was
+    // matched as a substring of an asset code and the page said "no pools".
+    if let Some(pool_hex) = params.pool_id_hex.as_ref() {
+        filters.push_str(" AND lp.pool_id = unhex(?)");
+        binds.push(pool_hex.clone());
+    } else if let Some((clause, clause_binds)) =
+        asset_codes_predicate(params.asset_codes.as_slice())
+    {
+        filters.push_str(&format!(" AND {clause}"));
+        binds.extend(clause_binds);
     }
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
@@ -2314,6 +2312,7 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
+            pool_id_hex: None,
             asset_codes: Vec::new(),
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -2401,6 +2400,7 @@ mod decode_smoke {
             asset_b_issuer: None,
             // Deliberately a proper prefix of a real code: an exact-match
             // predicate returns zero rows here, a substring one does not.
+            pool_id_hex: None,
             asset_codes: vec!["USD".to_string()],
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -2440,6 +2440,7 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
+            pool_id_hex: None,
             asset_codes: vec!["XLM".to_string()],
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -2475,6 +2476,7 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
+            pool_id_hex: None,
             asset_codes: vec![a.to_string(), b.to_string()],
         };
 
