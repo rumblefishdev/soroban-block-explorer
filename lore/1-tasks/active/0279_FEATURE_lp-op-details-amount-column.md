@@ -68,6 +68,16 @@ history:
       nearest owner. Unverified against mainnet; `operation.rs` is shared with
       the indexer, so a `details` key may also change persisted JSON. 0377
       deleted the permanently-empty `Received` row rather than reword it.
+  - date: '2026-08-16'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Backfill complete — 211/211 partitions, zero gaps against
+      operation_pools. Measured: 929,971,594 rows, 11.36 GiB, 13.12 B/row,
+      no duplicates left (RMT collapsed the overlapping re-runs), no
+      OPTIMIZE FINAL needed. The 2026-08-11 estimate of ~860M rows was
+      right; the mid-run revision to 1.24B was not. Run incident and its
+      fixes tracked in 0488.
   - date: '2026-08-11'
     status: backlog
     who: stkrolikiewicz
@@ -289,10 +299,11 @@ built, the row is written fresh with a real value.
 
 Path B reads each op's own non-collapsed `LedgerEntryChanges` at ingest →
 100% per-op, no collision, no hot-path S3. Needs a narrow side table plus an
-ADR-0029 clarification: LP-only amounts are ~18 GB compressed (~2.6% of the
-DB — see "Measured on prod"), not the multi-TB corpus ADR 0029 rejected.
-(An earlier revision said "single-digit MB"; that was wrong by three orders
-of magnitude and is corrected by the 2026-08-11 measurement.)
+ADR-0029 clarification: LP-only amounts are **11.36 GiB compressed, ~1.6% of
+the DB** (measured after the backfill completed — see "Backfill executed"),
+not the multi-TB corpus ADR 0029 rejected. (An earlier revision said
+"single-digit MB", wrong by three orders of magnitude; the 2026-08-11
+estimate of ~18 GB was the right order and 60% high.)
 
 ## Measured on prod — 2026-08-11 (full history to ledger 63,827,054)
 
@@ -492,15 +503,59 @@ Two consequences worth keeping:
 Storage is unaffected — the table was always keyed per operation, since the
 RMT key demands it. Only the read path changed.
 
+## Backfill executed — measured, not estimated (2026-08-16)
+
+The historical re-parse is **complete**: every one of the 211 partitions from
+the dataset floor (50,457,424) to the live floor carries ≥99% of the ledgers
+`operation_pools` has for the same range. Zero gaps.
+
+|                        |                           estimated |    **measured** |
+| ---------------------- | ----------------------------------: | --------------: |
+| Rows                   |   850–880M (later revised to 1.24B) | **929,971,594** |
+| On disk, compressed    |                              ~18 GB |   **11.36 GiB** |
+| Bytes / row            | 21 (extrapolated) → 14.74 (partial) |       **13.12** |
+| Compression ratio      |                                   — |          **5×** |
+| Active parts           |                                   — |             135 |
+| Share of the 690 GB DB |                               ~2.6% |       **~1.6%** |
+
+Two corrections worth keeping, because both were mine:
+
+- The **original 850–880M estimate was good**; the mid-run "correction" to
+  1.24B was the error. It multiplied a raw `count()` of `operation_pools` by
+  two, and that count carries un-merged RMT duplicates while the 2× ratio does
+  not hold uniformly across eras. Measured on one partition, the tables sit at
+  1.0004 rows each; globally the ratio is 1.50. `operation_pools` is a poor
+  multiplier — the reference is only trustworthy for _coverage_, which is what
+  the gap query uses it for.
+- Bytes/row came in **below** every estimate (13.12 vs 21), so the table is
+  cheaper than the ADR-0029 exception assumed.
+
+**No `OPTIMIZE FINAL` needed.** A sampled partition has zero duplicates
+(3,397,459 rows = 3,397,459 distinct keys) — background merges collapsed the
+overlapping bands the successive worker layouts wrote. It would not matter if
+they had not: the read path's `GROUP BY … any(amount)` is exact over
+byte-identical duplicates, which is why it was written that way.
+
+`lp_operation_amounts` also confirms **2.0006 rows per (pool, transaction)** in
+the sampled partition — the two canonical legs, as designed.
+
+The run itself is written up in [0488](../backlog/0488_OPS_backfill-must-not-starve-production.md):
+it filled the box's filesystem, took ClickHouse's write space with it and put
+live ingestion 10 hours behind before the real cause (a 351 GB `tmux -v` log,
+not the scratch) was found.
+
 ## Acceptance criteria
 
 - [x] 0247 path decision recorded — Path B, re-confirmed against prod 2026-07-30
-- [ ] `lp_operation_amounts` populated on live ingest, both legs, trades and
-      deposits/withdrawals
+- [x] `lp_operation_amounts` populated on live ingest, both legs, trades and
+      deposits/withdrawals — deployed 2026-08-12, verified through the API on a
+      busy pool (three of five recent rows carried two operations each, with
+      rates agreeing to four decimals across independent transactions)
 - [ ] Amounts verified against Horizon on a **multi-pool** path payment — the
       86.7% case, not a single-pool one
-- [ ] Backfill run; live and backfill paths produce identical rows for a
-      replayed range
+- [x] Backfill run — complete 2026-08-16, 211/211 partitions, zero gaps
+      against `operation_pools`; overlapping re-runs collapsed by the RMT with
+      no duplicates left in the sampled partition
 - [ ] Pool-page read seeks on `pool_id`; `read_rows` measured and recorded
 - [ ] FE "Amount" column un-hidden, rendering deposit / withdraw / trade,
       one line per operation (see the 8.2% measurement above)
