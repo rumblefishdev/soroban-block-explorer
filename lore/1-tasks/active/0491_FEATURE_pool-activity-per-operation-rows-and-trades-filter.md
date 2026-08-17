@@ -2,7 +2,7 @@
 id: '0491'
 title: 'FEATURE: pool activity is a list of operations, with a trades filter'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0279', '0482', '0489', '0490']
 tags:
@@ -25,6 +25,18 @@ history:
       BOTH remaining halves of issue #371 — the row unit and the trades filter
       — because they need the same API change and splitting them would pay for
       that migration twice.
+  - date: '2026-08-17'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated, with the sequencing decided at the same time. 0490 is NOT done
+      first — this task's AC already requires its cap to be removed or proven
+      dead, so patching the row height beforehand writes code only to delete it.
+      0279 stays open deliberately: its remaining data-side criteria (multi-pool
+      Horizon check, `read_rows` measurement) validate figures this task merely
+      re-presents, while its "Docs updated" and "API types regenerated" items
+      are left for this task to satisfy — the response shape changes here, so
+      doing them under 0279 would mean writing them twice.
 ---
 
 # Pool activity is a list of operations, with a trades filter
