@@ -279,11 +279,38 @@ Everything below is the empty-code form.
    smoke tests that pin stage 1's fix are gated on `CH_URL`, so the tests
    protecting the fixed bug are exactly the ones a normal run skips. Overlaps
    task 0478's gate work — check it before duplicating.
-8. **`asset_type = 2` means two different things.** `credit_alphanum12` in the
-   pools module, the retired SAC variant in the assets module. `0` agrees
-   everywhere so native is unaffected, but a reader cannot tell from the column
-   which mapping applies — and this stage's whole argument is that the typed
-   check is the reliable one.
+8. **`asset_type = 2` means two different things — and the sweep called this
+   harmless, which was wrong.** `credit_alphanum12` in the pools module (the
+   raw XDR asset type), the retired SAC facet in the assets module (our own
+   enum). `0` agrees in both, so native is genuinely unaffected.
+
+   The sweep concluded from that: two correctly-mapped columns, worst case a
+   confused reader. It only ever compared the two `asset_type_name` display
+   functions, and those really are both correct. What it never asked was
+   whether a value **crosses** from one space into the other — and it does.
+
+   `f4a2f2a4` (task 0489) is the answer, written the same day and
+   independently: a pool leg's XDR type was passed to `ids::asset_id`, which
+   reads its argument as the assets enum. A `2` meant `credit_alphanum12` on
+   the way in and the retired SAC on the way out, so the function fell through
+   to an id no row is stored under. The leg then matched nothing and the API
+   returned it as null — **279 452 of 1 738 948 recent operations, 16.1%,
+   rendered one-sided on production**, and 59% of pools carry a type-2 leg.
+
+   Read-path only; the indexer had written both legs correctly all along.
+   `ids::asset_id` was deliberately left alone, because `2` must keep meaning
+   SAC for everything reading the assets enum.
+
+   Note for this task, since it repeats a pattern already in items 1 and 2:
+   the existing surrogate test used `"TF"`, a four-character code, and so
+   agreed with the bug. Three defects in one sweep hidden by a fixture that
+   picked the one input where the broken code is right.
+
+   **What stands, restated:** the two display mappings are correct and need no
+   change. What is NOT safe is treating `asset_type` as one value with one
+   meaning across module boundaries. This stage's argument — "the typed check
+   is the reliable one" — holds only within a single type space, and that
+   qualifier belongs in the shared code stage 2 extracts.
 
 Items 1 and 2 are one change and belong together at the front of stage 2, since
 they are the assets list this stage already had to touch. Items 3 and 4 are a
@@ -319,8 +346,14 @@ land. Items 5, 7 and 8 are small and independent.
       only guard it at module level — a text check for a re-added leg-code
       guard, sabotage-verified but blind to anything subtler
 - [ ] **Stage 2:** every remaining empty-code native site from the sweep is
-      either fixed or carries a stated reason — items 3, 4, 5, 7, 8. Splitting
-      3 and 4 into their own task is allowed; dropping them silently is not
+      either fixed or carries a stated reason — items 3 and 4 (now task 0495),
+      and 7 (waiting on 0478). Items 1, 2 and 5 shipped in #417; 6 was refuted
+      by measurement; 8 was fixed by task 0489. Dropping any of them silently
+      is not allowed
+- [ ] **Stage 2:** the shared code carries the type-space qualifier item 8
+      turned out to need — an `asset_type` is only comparable within the enum
+      it came from, and a pool leg's XDR type is not the assets enum. This is
+      the rule `f4a2f2a4` had to learn the expensive way
 - [ ] **Stage 2:** the hex exception in `search::classifier` is settled, not
       inherited — either removed with 0264 closed, or kept with a written reason
       and a return condition, and `backend-overview` §6.2 updated either way

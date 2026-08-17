@@ -118,6 +118,8 @@ the type, and `stroops.ts` stops defaulting an absent code to the native unit.
 The sweep that produced this is recorded in task 0470, under "Native XLM — the
 same defect class on the remaining surfaces". Items 1, 2 and 5 shipped in #417;
 item 6 was refuted by measurement; item 7 is already fixed on the unmerged 0478
-branch; item 8 was examined and is not a defect — the two `asset_type = 2`
-mappings belong to two different columns, our own asset taxonomy and the XDR
-protocol enum, and both are mapped correctly.
+branch; item 8 was called harmless and was not — the two `asset_type = 2`
+mappings do belong to two different columns and both are correct, but the sweep
+never asked whether a value crosses between the two spaces. It does, and task
+0489 (`f4a2f2a4`) measured the cost: 16.1% of recent operations rendered
+one-sided on production. The corrected entry is in 0470.
