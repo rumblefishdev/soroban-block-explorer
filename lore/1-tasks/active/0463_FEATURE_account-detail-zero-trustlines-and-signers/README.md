@@ -123,19 +123,22 @@ the ADR.
 
 ## Work breakdown
 
-1. **Native zero balances** — read-filter fix alone, 239,087 holders, ships
-   first and independently. No source, no seed, no schema change.
-2. **Lifecycle column + writer** — `ALTER` with `DEFAULT`, then the writer,
+1. **Lifecycle column + writer** — `ALTER` with `DEFAULT`, then the writer,
    covering classic, Soroban and LP write paths together (deferring any kind
-   costs a second full backward pass). Deployment order is load-bearing —
-   task 0310.
-3. **Signers extraction** — parallel to the above, no seed needed; the dormant
+   costs a second full backward pass). Must also stamp the **account-removal**
+   path (`state.rs:426-449`), so a merged account's native tombstone carries
+   `closed_at_ledger` and native needs no special case downstream. Deployment
+   order is load-bearing — task 0310.
+2. **Signers extraction** — parallel to the above, no seed needed; the dormant
    set is empty (0 of 123,772 measured).
-4. **Seed from the checkpoint snapshot** — fills gaps and marks closures.
+3. **Seed from the checkpoint snapshot** — fills gaps and marks closures.
    Version on each entry's own `lastModifiedLedgerSeq`, never on a window
    boundary (task 0492).
-5. **Flip the read filter + production verification** — only after the seed
-   verifies.
+4. **Flip the read filter + production verification** — only after the seed
+   verifies. This is where **native** becomes visible too (239,087 holders):
+   under `closed_at_ledger = 0` it needs no exemption of its own. A standalone
+   native read-filter patch was built and reverted on purpose — it would have
+   been a temporary special case dissolved by this very step.
 
 ## Scope
 

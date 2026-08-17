@@ -214,9 +214,17 @@ cases, and one path recommended for reclassification — recorded as task 0492.
   deferred into a second full backward pass (~24 h at 6 workers plus a
   mandatory `repair-tier1`, estimate extrapolated from task 0279).
 - The migration is a metadata-only `ADD COLUMN`; no rewrite of 76 M rows.
-- Native zero balances need no mechanism at all — the account's existence is
-  already derived, so it is a read-filter fix affecting 239,087 holders and
-  may ship first, independently.
+- Native zero balances (239,087 holders) need **no special case** under this
+  decision: a live account's zero XLM row carries `closed_at_ledger = 0` and
+  shows, a merged account's native tombstone carries `closed_at_ledger > 0` and
+  does not. This holds only if the writer stamps the **account-removal** path
+  (`crates/xdr-parser/src/state.rs:426-449`) as well as the trustline paths —
+  otherwise merged accounts render `XLM 0` when the filter flips.
+  A standalone native exemption (`OR asset_type = 0` plus a handler rule
+  dropping merge tombstones) was built, verified against production, and
+  **reverted deliberately**: both halves are dissolved by the filter this ADR
+  installs, so shipping them first would have meant a temporary special case
+  whose removal depended on someone remembering.
 
 ### Negative / accepted
 
