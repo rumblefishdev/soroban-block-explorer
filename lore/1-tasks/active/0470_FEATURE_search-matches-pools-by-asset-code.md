@@ -57,6 +57,25 @@ history:
       text an identifier" also exists twice — `search::classifier` on the
       server and `directRouteFor` on the frontend, whose own doc comment
       already states the policy this task generalises.
+  - date: '2026-08-17'
+    status: active
+    who: karolkow
+    note: >
+      STAGE 2 SCOPE PINNED by a repo-wide sweep of the native-XLM
+      representation. Four conventions exist, not two: the typed
+      `asset_type = 0`, the empty stored code, the `NATIVE_ASSET_ID`
+      surrogate (negative, `hash64("native")`), and the literal string
+      `"native"` on the wire. The typed and surrogate forms are already
+      clean and mutually pinned by a unit test; the whole residue is the
+      empty-code form, and it lands squarely inside this task's stage 2.
+      Eight items recorded below, ranked. Item 1 is the SAME defect stage 1
+      fixed for pools, live on the assets list. One candidate risk from the
+      sweep was refuted by measurement rather than carried: the native
+      `assets` row holds the real surrogate, not the schema default, so the
+      balances join is sound.
+      The 0264 StrKey-only debt is folded in here as well — its follow-up
+      was named in prose and never numbered, and the recogniser merge in
+      this stage is the only place where "does hex stay?" gets decided.
 ---
 
 # FEATURE: pool search consistency — one rule per entity, both directions
@@ -167,11 +186,88 @@ already taken. It never reached the list filters.
   another.
 - **Per-entity predicates to `common`,** each called by both the list and its
   search bucket — the shape `common::pool_asset_codes` already has.
+- **Settle the hex exception while the recogniser is being merged.** Task 0264
+  made the SEP-23 StrKey the single accepted spelling and deferred the search
+  endpoint (its phases 3, 9, 10) to a follow-up that was described in prose and
+  never given a number, so nothing tracks it. `search::classifier` still takes a
+  64-char hex string as a transaction or pool id. Stage 1 reached for that
+  acceptance as a model, copied it onto a new filter, and had to be corrected —
+  the exception read as the rule. Merging the two recognisers is the moment the
+  question has to be answered rather than inherited: either hex is dropped and
+  0264 closes for real, or it stays with a stated reason and a return condition.
+  Recorded as debt in `backend-overview` §6.2 in the meantime.
 
 Order: assets first (an asset id is `CODE-ISSUER` or a contract StrKey, so the
 recogniser has real work to do), NFTs second (a contract StrKey, and the typed
 filter already exists to reuse), contracts last — only to move its existing
 inline rule into the shared module.
+
+### Native XLM — the same defect class on the remaining surfaces
+
+Swept across the whole repository on 2026-08-17, after stage 1 unified the pool
+label. Four representations of native XLM exist:
+
+| Convention                                       | Where it lives                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------- |
+| `asset_type = 0`                                 | `assets`, `liquidity_pools.asset_{a,b}_type`, parser enums          |
+| empty stored code `''` + `issuer_id = 0`         | `assets.asset_code`, pool legs, `operations_appearances.asset_code` |
+| surrogate `NATIVE_ASSET_ID` (`hash64("native")`) | `balances`, `operation_asset_appearances`, `lp_operation_amounts`   |
+| literal `"native"`                               | parser JSON details, `/assets/:id` route token, prices-view key     |
+
+The typed form and the surrogate are already consistent and pinned together by
+`liquidity_pools/queries.rs` (`asset_id(0, "", 0, 0) == NATIVE_ASSET_ID`, with a
+doc comment stating that the two conventions meet only through that equality).
+Everything below is the empty-code form.
+
+1. **`assets` list `filter[code]` cannot match native XLM.**
+   `crates/api/src/assets/queries.rs` matches
+   `positionCaseInsensitive(a.asset_code, ?)` with no `asset_type = 0` arm.
+   Native is stored with an empty code, so `XLM` returns only the credit assets
+   minted under a code containing `XLM` — a confident wrong answer, not an empty
+   one. Byte-for-byte the defect stage 1 fixed for pools, on the list the
+   frontend wires to `AssetsListPage`. Fix is the same one predicate; the guard
+   test already exists next door in `common::pool_asset_codes`.
+2. **The list-page test fixture hides item 1.** `AssetsListPage.test.tsx` builds
+   native with `asset_code: 'XLM'`; the API returns `null`.
+   `AssetDetailPage.test.tsx` fixed exactly this fixture and left a comment
+   saying it "hid the real gap from the tests" — the sibling file still has it.
+   Item 1 cannot be considered fixed while the fixture lies.
+3. **`operations_appearances` carries no asset type.** The writer stores
+   `asset_code.unwrap_or_default()`, so native and a parse failure are identical
+   rows. The frontend fallback in `humanizeOp.ts` is correct only because a
+   one-off cross-check against `operation_asset_appearances` proved it
+   (11 168/11 168 and 55 582/55 582); the correctness lives in a comment rather
+   than in a type, and any writer change breaks it silently. Adding
+   `asset_type` — or the `asset_id` surrogate, which the neighbouring tables
+   already use — retires the class.
+4. **`stroops.ts` turns an absent code into `XLM`.** A shared formatter used by
+   operations, pools and balances appends the native unit whenever the code is
+   null or empty. Callers guard upstream today, so the default silently converts
+   "asset unknown" into "XLM" — the display failure mode the project already
+   ruled out elsewhere.
+5. **Pool legs lose their SAC on an empty-code guard.** The `!= ''` guards on
+   the enrichment join in both the pool detail and the pool list mean a native
+   leg never shows a contract id or icon, although native has a deployed SAC and
+   an `asset_sac` row. Inherited from the retired Postgres shape; the parity
+   target may itself have been wrong.
+6. **REFUTED — not work.** The sweep flagged `assets.id Int64 DEFAULT 0` as a
+   possible break in the balances join. Measured on production: the native row
+   holds the real surrogate, so the join is sound. Recorded so the same
+   suspicion is not re-raised.
+7. **The native regression guards do not run in CI.** The ClickHouse-backed
+   smoke tests that pin stage 1's fix are gated on `CH_URL`, so the tests
+   protecting the fixed bug are exactly the ones a normal run skips. Overlaps
+   task 0478's gate work — check it before duplicating.
+8. **`asset_type = 2` means two different things.** `credit_alphanum12` in the
+   pools module, the retired SAC variant in the assets module. `0` agrees
+   everywhere so native is unaffected, but a reader cannot tell from the column
+   which mapping applies — and this stage's whole argument is that the typed
+   check is the reliable one.
+
+Items 1 and 2 are one change and belong together at the front of stage 2, since
+they are the assets list this stage already had to touch. Items 3 and 4 are a
+larger cut (a schema column, a shared formatter) and may be split out once 1–2
+land. Items 5, 7 and 8 are small and independent.
 
 ## Acceptance criteria
 
@@ -194,6 +290,15 @@ inline rule into the shared module.
       search bucket — no rule implemented twice
 - [ ] **Stage 2:** existing behaviour preserved — a plain code/name still
       matches as before, and no list loses a filter it has today
+- [ ] **Stage 2:** `XLM` typed into the assets list filter returns native XLM
+      (sweep item 1), and the list-page fixture carries the null code the API
+      actually returns (item 2) — the second is what makes the first testable
+- [ ] **Stage 2:** every remaining empty-code native site from the sweep is
+      either fixed or carries a stated reason — items 3, 4, 5, 7, 8. Splitting
+      3 and 4 into their own task is allowed; dropping them silently is not
+- [ ] **Stage 2:** the hex exception in `search::classifier` is settled, not
+      inherited — either removed with 0264 closed, or kept with a written reason
+      and a return condition, and `backend-overview` §6.2 updated either way
 - [x] **Docs updated** — search contract under `docs/architecture/**` states
       what matches a pool, and the list-filter contract states that a
       free-text filter also accepts the entity identifier
