@@ -163,6 +163,11 @@ pub async fn execute(
                 holder,
                 balance,
                 ledger: rec.last_modified_ledger,
+                // Every record here came back from `getLedgerEntries`, and the
+                // RPC only returns entries that exist — an absent key is simply
+                // omitted from the response. So a seeded row is live by
+                // construction. ADR 0055.
+                closed: false,
             });
         }
     }

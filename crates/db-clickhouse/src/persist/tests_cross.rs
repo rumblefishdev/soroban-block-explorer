@@ -113,7 +113,13 @@ fn column_order_asset_enrichment() {
 fn column_order_balances() {
     assert_columns::<BalanceRow>(
         "balances",
-        &["holder_id", "asset_id", "amount", "last_updated_ledger"],
+        &[
+            "holder_id",
+            "asset_id",
+            "amount",
+            "last_updated_ledger",
+            "closed_at_ledger",
+        ],
     );
 }
 
@@ -216,6 +222,7 @@ fn column_order_lp_positions() {
             "shares",
             "first_deposit_ledger",
             "last_updated_ledger",
+            "closed_at_ledger",
         ],
     );
 }
@@ -2415,4 +2422,95 @@ fn build_wasm_upgrade_rows_carries_is_sac_from_prior() {
     let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
     assert_eq!(rows.len(), 1);
     assert!(rows[0].is_sac, "is_sac carried forward from the prior row");
+}
+
+/// ADR 0055 — the write path must stamp `closed_at_ledger` on exactly the rows
+/// whose ledger entry disappeared, and on no others. Before this column a
+/// removal was written as `amount = 0`, byte-identical to a live-but-empty
+/// holding, so the read path could only hide both (issue #377).
+#[test]
+fn closed_at_ledger_marks_only_real_closures() {
+    let ledger = synthetic_ledger();
+
+    // One live account: zero XLM (legal — sponsored reserves, CAP-0033), one
+    // live trustline sitting at zero, and one trustline that was REMOVED.
+    let live = ExtractedAccountState {
+        account_id: "GLIVE".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 7,
+        balances: serde_json::json!([
+            {"asset_type": "native", "balance": "0.0000000"},
+            {"asset_type": "credit_alphanum4", "asset_code": "AQUA",
+             "issuer": "GISSUER", "balance": "0.0000000"},
+        ]),
+        removed_trustlines: vec![serde_json::json!({
+            "asset_type": "credit_alphanum4", "asset_code": "SHX", "issuer": "GISSUER",
+        })],
+        account_removed: false,
+        home_domain: None,
+        created_at: 1_700_000_000,
+    };
+
+    // A merged account: the native 0 is a tombstone, not a balance.
+    let merged = ExtractedAccountState {
+        account_id: "GMERGED".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: -1,
+        balances: serde_json::json!([{"asset_type": "native", "balance": "0.0000000"}]),
+        removed_trustlines: vec![],
+        account_removed: true,
+        home_domain: None,
+        created_at: 1_700_000_000,
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[live, merged],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    let live_id = ids::account_id("GLIVE");
+    let merged_id = ids::account_id("GMERGED");
+    let find = |holder: i64, asset: i64| {
+        staged
+            .unified_balance_rows
+            .iter()
+            .find(|r| r.holder_id == holder && r.asset_id == asset)
+            .unwrap_or_else(|| panic!("no balance row for holder {holder} asset {asset}"))
+    };
+
+    // Live account, zero XLM — the row the page must start showing.
+    assert_eq!(find(live_id, ids::NATIVE_ASSET_ID).closed_at_ledger, 0);
+    // Live trustline at zero — same amount as a closure, different meaning.
+    assert_eq!(
+        find(live_id, ids::credit_asset_id("AQUA", "GISSUER")).closed_at_ledger,
+        0
+    );
+    // Removed trustline — stamped with the ledger it disappeared in.
+    assert_eq!(
+        find(live_id, ids::credit_asset_id("SHX", "GISSUER")).closed_at_ledger,
+        100
+    );
+    // Merged account — the native tombstone is a closure, not a zero balance.
+    let tombstone = find(merged_id, ids::NATIVE_ASSET_ID);
+    assert_eq!(tombstone.amount, 0);
+    assert_eq!(
+        tombstone.closed_at_ledger, 100,
+        "an account_merge tombstone must be marked closed, or merged accounts \
+         render as holding 0 XLM once the read filter flips"
+    );
 }

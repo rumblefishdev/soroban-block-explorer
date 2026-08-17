@@ -212,6 +212,9 @@ pub fn extract_soroban_token_balances(
         let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
             continue;
         };
+        // `closed` carries what the 0 cannot: the ENTRY is gone, as opposed to a
+        // holder who spent down to zero but still has one. ADR 0055.
+        let closed = change.change_type == "removed";
         let balance = match change.change_type.as_str() {
             // Holder fully spent / entry archived → 0, so the RMT supersedes the
             // stale positive balance (mirrors trustline-removal → 0).
@@ -243,6 +246,7 @@ pub fn extract_soroban_token_balances(
             holder,
             balance,
             ledger: change.ledger_sequence,
+            closed,
         });
     }
     out
@@ -407,6 +411,10 @@ pub fn extract_account_states(
         created_at: i64,
         trustline_balances: Vec<Value>,
         removed_trustlines: Vec<Value>,
+        /// Set by a `removed` account entry, cleared by any later
+        /// created/updated/restored one — merge-then-recreate must not leave
+        /// the account marked closed. ADR 0055.
+        account_removed: bool,
     }
 
     let mut map: HashMap<String, AccountAccum> = HashMap::new();
@@ -442,8 +450,10 @@ pub fn extract_account_states(
                 created_at: change.created_at,
                 trustline_balances: Vec::new(),
                 removed_trustlines: Vec::new(),
+                account_removed: false,
             });
             entry.native_balance = Some(0);
+            entry.account_removed = true;
             entry.ledger_sequence = change.ledger_sequence;
             entry.created_at = change.created_at;
             continue;
@@ -486,12 +496,16 @@ pub fn extract_account_states(
             created_at: change.created_at,
             trustline_balances: Vec::new(),
             removed_trustlines: Vec::new(),
+            account_removed: false,
         });
         entry.native_balance = Some(balance);
         entry.sequence_number = Some(seq);
         if hd.is_some() {
             entry.home_domain = hd;
         }
+        // A live entry supersedes any removal seen earlier in this change set —
+        // merge-then-recreate within one ledger must not stay marked closed.
+        entry.account_removed = false;
         entry.is_creation = entry.is_creation || is_creation;
         entry.ledger_sequence = change.ledger_sequence;
         entry.created_at = change.created_at;
@@ -555,6 +569,7 @@ pub fn extract_account_states(
                     created_at: change.created_at,
                     trustline_balances: Vec::new(),
                     removed_trustlines: Vec::new(),
+                    account_removed: false,
                 });
 
                 // Dedup: remove existing entry for same asset, then add new
@@ -621,6 +636,7 @@ pub fn extract_account_states(
                     created_at: change.created_at,
                     trustline_balances: Vec::new(),
                     removed_trustlines: Vec::new(),
+                    account_removed: false,
                 });
 
                 // Also remove from trustline_balances if it was added in same tx
@@ -662,6 +678,7 @@ pub fn extract_account_states(
                 sequence_number: accum.sequence_number.unwrap_or(-1),
                 balances: Value::Array(balances_arr),
                 removed_trustlines: accum.removed_trustlines,
+                account_removed: accum.account_removed,
                 home_domain: accum.home_domain,
                 created_at: accum.created_at,
             }
@@ -859,6 +876,9 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
             continue;
         }
 
+        // The pool-share trustline is gone (participant left) versus withdrawn
+        // to zero but still open — both write `shares = 0`. ADR 0055.
+        let closed = change.change_type == "removed";
         let (asset_holder, account_id, shares, first_deposit) = match change.change_type.as_str() {
             "created" | "updated" | "restored" => {
                 let Some(ref data) = change.data else {
@@ -916,6 +936,7 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
             shares,
             first_deposit_ledger: first_deposit,
             last_updated_ledger: change.ledger_sequence,
+            closed,
         });
     }
 
@@ -2032,6 +2053,69 @@ mod tests {
         assert_eq!(a.sequence_number, -1); // no seq on removal — must not clobber
         assert_eq!(a.balances[0]["asset_type"], "native");
         assert_eq!(a.balances[0]["balance"], "0.0000000");
+        // The 0 alone cannot say "this account is gone" — an account holding no
+        // XLM writes the same value and is very much alive (CAP-0033 sponsored
+        // reserves). ADR 0055.
+        assert!(a.account_removed, "the merge must be marked as a closure");
+    }
+
+    #[test]
+    fn live_account_holding_no_xlm_is_not_marked_removed() {
+        // The counter-case that makes the flag worth having: balance 0, account
+        // alive. Measured at 4.27M zero-native rows in production, of which
+        // 239,087 sit alongside a positive non-native balance.
+        let changes = vec![make_change(
+            "account",
+            "updated",
+            json!({ "account_id": "GPOOR" }),
+            Some(json!({
+                "account_id": "GPOOR",
+                "balance": 0,
+                "seq_num": 7,
+                "home_domain": "",
+            })),
+        )];
+
+        let accounts = extract_account_states(&changes);
+        assert_eq!(accounts[0].balances[0]["balance"], "0.0000000");
+        assert!(
+            !accounts[0].account_removed,
+            "a live account at zero XLM must not read as merged"
+        );
+    }
+
+    #[test]
+    fn merge_then_recreate_in_one_change_set_is_not_closed() {
+        // Order matters: the removal is seen first, a live entry follows. The
+        // account exists at the end of the ledger, so the closure must be
+        // cancelled — otherwise the read path would hide a live account.
+        let changes = vec![
+            make_change(
+                "account",
+                "removed",
+                json!({ "account_id": "GPHOENIX" }),
+                None,
+            ),
+            make_change(
+                "account",
+                "created",
+                json!({ "account_id": "GPHOENIX" }),
+                Some(json!({
+                    "account_id": "GPHOENIX",
+                    "balance": 50_000_000,
+                    "seq_num": 1,
+                    "home_domain": "",
+                })),
+            ),
+        ];
+
+        let accounts = extract_account_states(&changes);
+        assert_eq!(accounts.len(), 1);
+        assert!(
+            !accounts[0].account_removed,
+            "recreated in the same change set — must not stay marked closed"
+        );
+        assert_eq!(accounts[0].balances[0]["balance"], "5.0000000");
     }
 
     // -- Trustline Balance Tests (0119) --

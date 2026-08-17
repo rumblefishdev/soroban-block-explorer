@@ -355,6 +355,10 @@ pub struct ExtractedSorobanBalance {
     pub balance: i128,
     /// Ledger the balance was observed — the side table's RMT version slot.
     pub ledger: u32,
+    /// `true` when the `ContractData` entry was REMOVED in this change, rather
+    /// than merely spent down to zero. Both emit `balance = 0`, so the flag is
+    /// the only thing separating them — ADR 0055.
+    pub closed: bool,
 }
 
 /// Extracted contract deployment from LedgerEntryChanges.
@@ -402,6 +406,13 @@ pub struct ExtractedAccountState {
     /// Trustlines removed in this change set. Each entry is `{asset_type, asset_code, issuer}`.
     /// Tracked separately from `balances` to avoid marker pollution on INSERT.
     pub removed_trustlines: Vec<serde_json::Value>,
+    /// `true` when the ACCOUNT ENTRY itself was removed in this change set —
+    /// an `account_merge`, the only way an account is deleted. The native
+    /// balance is emitted as 0 either way, so without this flag the merge
+    /// tombstone is indistinguishable from an account legitimately holding no
+    /// XLM (sponsored reserves make that a live state, CAP-0033). Persist maps
+    /// it to `balances.closed_at_ledger` — ADR 0055.
+    pub account_removed: bool,
     pub home_domain: Option<String>,
     pub created_at: i64,
 }
@@ -528,6 +539,10 @@ pub struct ExtractedLpPosition {
     pub first_deposit_ledger: Option<u32>,
     /// Ledger of the change. Watermark column — older values must not overwrite newer.
     pub last_updated_ledger: u32,
+    /// `true` when the pool-share trustline was REMOVED — the participant left
+    /// the pool. A full withdrawal that keeps the trustline also writes
+    /// `shares = 0`, so the flag is what separates them. ADR 0055.
+    pub closed: bool,
 }
 
 /// Extracted operation data. Feeds the `operations_appearances` indexer path

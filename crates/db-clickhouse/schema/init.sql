@@ -428,11 +428,20 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 -- `soroban_contracts` (C) — there is no dedicated address dimension). `asset_id`
 -- → the `assets.id` surrogate (`ids::asset_id`). RMT version = `last_updated_ledger`;
 -- a removed/zeroed balance writes 0 so a fully-spent holder collapses.
+-- `closed_at_ledger` (ADR 0055): 0 = the holding relationship is live, >0 = the
+-- ledger in which the entry disappeared from the chain. Before it existed a
+-- removal was written as `amount = 0`, byte-identical to a live-but-empty
+-- holding, so the read path could not tell them apart and hid both. Ledger 0
+-- does not exist (genesis is 1), so 0 is a safe live sentinel. `DEFAULT 0` is
+-- load-bearing: the CH driver rejects inserts client-side when the table has a
+-- column the writer's struct does not know AND the column has no default, so
+-- the default is what lets the `ALTER` land before the writer deploys.
 CREATE TABLE IF NOT EXISTS balances (
     holder_id           Int64,
     asset_id            Int64,
     amount              Int128,
-    last_updated_ledger Int64
+    last_updated_ledger Int64,
+    closed_at_ledger    Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 -- holder_id FIRST: the account-detail read is a per-holder PK-prefix seek (the
@@ -531,12 +540,16 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
 
+-- `closed_at_ledger`: same lifecycle semantics as `balances` (ADR 0055) — a
+-- withdrawn position was written as `shares = 0`, indistinguishable from a
+-- position that still exists at zero.
 CREATE TABLE IF NOT EXISTS lp_positions (
     pool_id              FixedString(32),
     account_id           Int64,
     shares               Decimal128(7),
     first_deposit_ledger Int64,
-    last_updated_ledger  Int64
+    last_updated_ledger  Int64,
+    closed_at_ledger     Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id, account_id);

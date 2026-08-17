@@ -477,6 +477,9 @@ pub fn build_balance_rows(
             asset_id,
             amount: b.balance,
             last_updated_ledger: i64::from(b.ledger),
+            // The `ContractData` entry was removed, as opposed to a holder who
+            // merely spent down to zero — ADR 0055.
+            closed_at_ledger: if b.closed { i64::from(b.ledger) } else { 0 },
         };
         match idx.get(&(holder_id, asset_id)) {
             Some(&i) => rows[i] = row,
@@ -1089,6 +1092,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             shares: decimal7_string_to_i128(&pos.shares)?,
             first_deposit_ledger: first,
             last_updated_ledger: last,
+            // The pool-share trustline was removed — the participant left the
+            // pool, as opposed to withdrawing to zero and staying. ADR 0055.
+            closed_at_ledger: if pos.closed { last } else { 0 },
         };
         match lp_dedup.entry((pool_id, acct_id)) {
             Entry::Occupied(mut occ) => {
@@ -1812,12 +1818,22 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 }
                 ids::credit_asset_id(code, issuer)
             };
+            // The account entry itself was removed (`account_merge`) — the
+            // native 0 below is a tombstone, not a balance. Every other row
+            // here is live: a zero trustline balance is a real, open trustline.
+            // ADR 0055.
+            let closed_at = if st.account_removed && asset_type == AssetType::Native {
+                watermark
+            } else {
+                0
+            };
             upsert_balance(
                 &mut balance_dedup,
                 account_id_int,
                 asset_id,
                 amount,
                 watermark,
+                closed_at,
             );
         }
 
@@ -1828,7 +1844,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             }
             let asset_id = ids::credit_asset_id(code, issuer);
-            upsert_balance(&mut balance_dedup, account_id_int, asset_id, 0, watermark);
+            // The trustline was REMOVED — this is the closure the read path
+            // could never see, because it looked identical to a live zero.
+            upsert_balance(
+                &mut balance_dedup,
+                account_id_int,
+                asset_id,
+                0,
+                watermark,
+                watermark,
+            );
         }
     }
     out.unified_balance_rows.extend(balance_dedup.into_values());
@@ -1953,6 +1978,7 @@ fn upsert_balance(
     asset_id: i64,
     amount: i128,
     last_updated_ledger: i64,
+    closed_at_ledger: i64,
 ) {
     use std::collections::hash_map::Entry;
     let row = BalanceRow {
@@ -1960,6 +1986,7 @@ fn upsert_balance(
         asset_id,
         amount,
         last_updated_ledger,
+        closed_at_ledger,
     };
     match map.entry((holder_id, asset_id)) {
         Entry::Occupied(mut occ) => {
@@ -2711,6 +2738,7 @@ mod balance_tests {
             holder: "GHOLDER1".into(),
             balance: 800_009_446_178_i128,
             ledger: 100,
+            closed: false,
         }];
         // No SAC map → type-3 keying: asset_id == the token's contract surrogate.
         let rows = build_balance_rows(&extracted, &HashMap::new());
@@ -2735,12 +2763,14 @@ mod balance_tests {
                     holder: "CPOOL".into(),
                     balance: 100,
                     ledger: 10,
+                    closed: false,
                 },
                 ExtractedSorobanBalance {
                     contract_id: "CTOKEN3".into(),
                     holder: "GHOLDER".into(),
                     balance: 200,
                     ledger: 10,
+                    closed: false,
                 },
             ],
             &sac_classic,

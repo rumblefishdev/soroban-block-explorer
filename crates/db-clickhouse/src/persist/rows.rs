@@ -196,6 +196,10 @@ pub struct BalanceRow {
     pub asset_id: i64,
     pub amount: i128,
     pub last_updated_ledger: i64,
+    /// ADR 0055 — 0 while the holding relationship is live, otherwise the
+    /// ledger in which the ledger entry disappeared. `amount = 0` alone cannot
+    /// carry this: a live-but-empty holding writes exactly the same amount.
+    pub closed_at_ledger: i64,
 }
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
@@ -270,6 +274,9 @@ pub struct LpPositionRow {
     pub shares: i128,
     pub first_deposit_ledger: i64,
     pub last_updated_ledger: i64,
+    /// ADR 0055 — see [`BalanceRow::closed_at_ledger`]. A withdrawn position
+    /// and a position still open at zero shares both wrote `shares = 0`.
+    pub closed_at_ledger: i64,
 }
 
 /// `transactions` — append-only fact hub, surrogate `id`,
