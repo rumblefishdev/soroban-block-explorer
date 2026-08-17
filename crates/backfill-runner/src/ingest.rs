@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use indexer::handler::HandlerError;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::dashboard::Dashboard;
 use crate::error::BackfillError;
@@ -123,6 +123,27 @@ pub async fn ingest_ledger_from_file(
     })
 }
 
+/// Release an indexed ledger's file, unless `--keep-partitions` asked for it
+/// to stay (see [`index_partition`]).
+///
+/// A failure is logged, not propagated: the partition folder is deleted
+/// wholesale when the partition ends anyway, so the only cost of a failed
+/// unlink is the space this was meant to reclaim early — not a reason to
+/// abandon a partition that is otherwise indexing fine.
+async fn drop_indexed_file(path: &Path, keep_files: bool, partition_start: u32, seq: u32) {
+    if keep_files {
+        return;
+    }
+    if let Err(err) = tokio::fs::remove_file(path).await {
+        warn!(
+            partition = partition_start,
+            seq,
+            %err,
+            "could not drop indexed ledger file; the folder keeps it until the partition ends"
+        );
+    }
+}
+
 /// Sequentially index all ledgers in `partition` that fall within
 /// `[range_start, range_end]`, skipping any sequence already present in
 /// `completed`.
@@ -135,6 +156,19 @@ pub async fn ingest_ledger_from_file(
 ///
 /// Emits `partition indexing started` / `partition indexing complete`
 /// at info level when `--verbose` is on.
+///
+/// **Each ledger file is deleted the moment its rows are staged** — or the
+/// moment it is skipped as already-in-DB (unless `keep_files`). The folder
+/// therefore shrinks as it is parsed instead of
+/// standing at full size until the partition ends, which is what bounds a
+/// worker's disk footprint: with the next partition prefetching in parallel,
+/// the peak drops from two whole partitions (~27 GB) to one plus a
+/// shrinking remainder. Task 0488, after a backfill filled the production
+/// box's filesystem and cost ClickHouse its write space.
+///
+/// Safe to delete this early: a crash mid-partition loses only the rows
+/// since the last commit, and the restart re-syncs whatever is missing from
+/// S3 before re-parsing — the same path a partial sync already takes.
 #[allow(clippy::too_many_arguments)]
 pub async fn index_partition(
     partition: &Partition,
@@ -144,6 +178,7 @@ pub async fn index_partition(
     range_end: u32,
     completed: &HashSet<u32>,
     dashboard: &Dashboard,
+    keep_files: bool,
 ) -> Result<PartitionStats, BackfillError> {
     let (first, last) = partition.clamped(range_start, range_end);
 
@@ -163,11 +198,16 @@ pub async fn index_partition(
     let mut writer = sink.open_partition();
     let loop_result: Result<(), BackfillError> = async {
         for seq in first..=last {
+            let path = partition.local_ledger_path(seq, temp_dir);
             if completed.contains(&seq) {
+                // Already in the DB, so its file is as releasable as one we
+                // just indexed — and on the resume path it is most of the
+                // partition. Skipping the unlink here would leave a
+                // re-synced partial partition sitting at nearly full size.
+                drop_indexed_file(&path, keep_files, partition.start, seq).await;
                 stats.skipped_completed += 1;
                 continue;
             }
-            let path = partition.local_ledger_path(seq, temp_dir);
             assert!(
                 path.exists(),
                 "ledger file missing post-sync: partition={} seq={} path={}",
@@ -176,6 +216,7 @@ pub async fn index_partition(
                 path.display()
             );
             let t = ingest_ledger_from_file(&path, &mut writer, seq, partition.start).await?;
+            drop_indexed_file(&path, keep_files, partition.start, seq).await;
             stats.indexed += 1;
             stats.total_bytes += t.bytes as u64;
             stats.parse_total_ms += t.parse_ms;
@@ -218,4 +259,32 @@ pub async fn index_partition(
     );
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flag's polarity is the one thing that can silently go wrong here:
+    /// inverted, a run either keeps every file (the disk-full incident that
+    /// task 0488 came from) or deletes the files `--keep-partitions` exists
+    /// to preserve.
+    #[tokio::test]
+    async fn indexed_files_go_unless_keep_partitions_asked_for_them() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let dir = tmp.path();
+
+        let dropped = dir.join("dropped.xdr.zst");
+        tokio::fs::write(&dropped, b"x").await.expect("write");
+        drop_indexed_file(&dropped, false, 64_000, 64_001).await;
+        assert!(!dropped.exists(), "indexed file must be released");
+
+        let kept = dir.join("kept.xdr.zst");
+        tokio::fs::write(&kept, b"x").await.expect("write");
+        drop_indexed_file(&kept, true, 64_000, 64_002).await;
+        assert!(kept.exists(), "--keep-partitions must still keep it");
+
+        // A file that is already gone is not an error worth failing on.
+        drop_indexed_file(&dropped, false, 64_000, 64_001).await;
+    }
 }
