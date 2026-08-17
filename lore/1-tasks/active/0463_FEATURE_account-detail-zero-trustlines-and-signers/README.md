@@ -2,7 +2,7 @@
 id: '0463'
 title: 'FEATURE: account detail — show zero-balance trustlines + signers/thresholds'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0464', '0321', '0331', '0295', '0214']
 tags:
@@ -36,6 +36,14 @@ history:
       indexed — was wrong and is corrected in notes/S-. Design is NOT final:
       the signers/balances question is being re-researched in a fresh
       session.
+  - date: '2026-08-17'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Opened with the design still unsettled on purpose — the
+      solution space is being re-planned from scratch before any code, since
+      option A was chosen for cost rather than fit and the signers half may
+      belong to a different option entirely.
 ---
 
 # FEATURE: account detail — zero-balance trustlines + signers/thresholds

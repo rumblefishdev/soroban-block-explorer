@@ -4,11 +4,22 @@ title: 'FEATURE: contract detail names the asset / collection it is (not just it
 type: FEATURE
 status: backlog
 related_adr: ['0051']
-related_tasks: ['0472', '0441']
+related_tasks: ['0472', '0441', '0490']
 tags: [api, frontend, contracts, assets, nfts, priority-medium, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-17'
+    status: backlog
+    who: karolkow
+    note: >
+      Scope extended after the 0472 deploy: the same header chip is also the
+      only chip in the app rendered at a different size and in a different
+      register from every other surface. Measured on production, not inferred
+      — see `## The chip is also inconsistent`. Bundled here rather than
+      spawned as its own task because both halves change the same component's
+      presentation; the size half is frontend-only and need not wait for the
+      API field.
   - date: '2026-08-13'
     status: backlog
     who: karolkow
@@ -75,6 +86,18 @@ collection's name lives in the NFT data. Options, none of them frontend-only:
    already exist, only the label source changes.
 4. Regenerate `libs/api-types` (CI gate `API types freshness`).
 
+## Decide the register while rewriting the label
+
+Item 3 of `## Scope` changes what the chip says, so the wording question
+belongs here rather than in a styling task: `Stellar Asset Contract` renders
+on the contract detail only, while five surfaces say `SAC` (asset header,
+assets table, account balances, contracts table, contracts list filter).
+Pick one register and apply it to all six.
+
+The chip's SIZE drifted on the same page and is a different problem with a
+different fix — measured and filed in 0490 with the rest of the frontend
+consistency sweep. Do not decide it twice.
+
 ## Watch out
 
 527 type-3 assets on prod have neither code nor symbol, and 75% of NFT
@@ -90,3 +113,5 @@ rendered a confident "A" that read like a real ticker).
 - [ ] `libs/api-types` regenerated in the same commit as the API change
 - [ ] vitest cases for named and unnamed, per class
 - [ ] Docs: backend-overview (contract endpoint) + frontend-overview §6.10
+- [ ] One register for the SAC label across all six surfaces (chip SIZE is
+      0490's, not this task's)

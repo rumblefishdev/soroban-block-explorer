@@ -154,7 +154,14 @@ pub async fn execute(
             SyncOutcome::Complete => {
                 dashboard.set_stage("indexing");
                 let stats = index_partition(
-                    partition, temp_dir, sink, start, end, &completed, &dashboard,
+                    partition,
+                    temp_dir,
+                    sink,
+                    start,
+                    end,
+                    &completed,
+                    &dashboard,
+                    keep_partitions,
                 )
                 .await?;
 
