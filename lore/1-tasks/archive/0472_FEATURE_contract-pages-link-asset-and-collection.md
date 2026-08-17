@@ -2,13 +2,28 @@
 id: '0472'
 title: 'FEATURE: contract pages link + name what they represent (fungible/NFT links, SAC polish from /ux-expert)'
 type: FEATURE
-status: done
+status: completed
 related_adr: ['0051']
 related_tasks: ['0441', '0473', '0483', '0484', '0485', '0486']
 tags: [frontend, contracts, assets, nfts, priority-low, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-17'
+    status: completed
+    who: karolkow
+    note: >
+      Deployed to production in release `production-2026.08.17-1` (PR #413,
+      first release through the CI tag path; Compute then SPA, run green).
+      Verified live on prod, on the contract the issue itself points at:
+      the list row renders `SAC · KALE` linking `/assets/KALE-GBDV…KALE`,
+      and the detail header carries the same chip plus the labelled
+      `Asset` / `Issuer` rows. The mapping was checked against Horizon,
+      not against our own read path — `/assets?asset_code=KALE&asset_issuer=…`
+      returns `contract_id = CB23…OUOV`, the same contract. Ledger split
+      from 0445 shipped in the same release. Issue #368 close drafted;
+      the four follow-ups (0483–0486) stay in backlog and do not hold it
+      open — they are ours, not the reporter's ask.
   - date: '2026-08-14'
     status: done
     who: karolkow
