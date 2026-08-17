@@ -704,9 +704,17 @@ pub async fn fetch_pool_by_id(
     // a separate `asset_type = 2`) — so the deployed SAC's `C…` StrKey resolves by
     // two hops: leg `(code, issuer)` → `asset_sac.sac_contract_id` (surrogate) →
     // `soroban_contracts.contract_id` (un-deployed SACs have no contract row →
-    // NULL, as before). The classic carrier is `asset_type IN (0, 1)`. Native legs
-    // (`asset_code = ''`) are excluded from the join (NULL code → no assets match →
-    // NULL contract_id + NULL icon_url).
+    // NULL, as before). The classic carrier is `asset_type IN (0, 1)`.
+    //
+    // **Native legs are IN the join** (task 0470). They used to be excluded by an
+    // `asset_code != ''` guard on every arm, on the assumption that an empty code
+    // could match nothing — but native XLM has a deployed SAC like any other
+    // classic asset, so the guard was hiding a real answer: the leg reported a
+    // NULL `contract_id` for an asset that has one. `('', 0)` is a safe join key
+    // here, measured: it is exactly one asset across `asset_type IN (0, 1)`,
+    // since a classic credit code is 1–12 characters by protocol. The icon stays
+    // NULL, but because `asset_enrichment` holds no native row at all — not
+    // because a guard forbids the lookup.
     //
     // **Latest snapshot subquery — NO `FINAL`** (0356 / PR #318). The indexer now
     // writes exactly one deterministic row per `(pool_id, ledger_sequence)`, so
@@ -756,16 +764,16 @@ pub async fn fetch_pool_by_id(
                             argMax(icon_url, version) AS icon_url \
                      FROM asset_enrichment \
                      WHERE asset_type IN (0, 1) AND asset_code IN ( \
-                         SELECT asset_a_code FROM legs WHERE asset_a_code != '' \
-                         UNION ALL SELECT asset_b_code FROM legs WHERE asset_b_code != '') \
+                         SELECT asset_a_code FROM legs \
+                         UNION ALL SELECT asset_b_code FROM legs) \
                      GROUP BY asset_type, asset_code, issuer_id, contract_id \
                  ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
                      AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
                  WHERE a.asset_type IN (0, 1) \
                    AND (a.asset_code, a.issuer_id) IN ( \
-                       SELECT asset_a_code, asset_a_issuer_id FROM legs WHERE asset_a_code != '' \
+                       SELECT asset_a_code, asset_a_issuer_id FROM legs \
                        UNION ALL \
-                       SELECT asset_b_code, asset_b_issuer_id FROM legs WHERE asset_b_code != '') \
+                       SELECT asset_b_code, asset_b_issuer_id FROM legs) \
                  GROUP BY a.asset_code, a.issuer_id \
              ) \
              SELECT \
@@ -798,10 +806,8 @@ pub async fn fetch_pool_by_id(
              LEFT JOIN iss iss_b ON iss_b.id = lp.asset_b_issuer_id \
              LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
                                 AND sac_a.issuer_id = lp.asset_a_issuer_id \
-                                AND lp.asset_a_code != '' \
              LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                                 AND sac_b.issuer_id = lp.asset_b_issuer_id \
-                                AND lp.asset_b_code != '' \
              LEFT JOIN ( \
                  SELECT pool_id, \
                         toNullable(ledger_sequence) AS ledger_sequence, \
@@ -1806,8 +1812,8 @@ pub async fn fetch_pool_list(
                     max(last_updated_ledger) + 10000 AS hi FROM page \
          ), \
          codes AS ( \
-             SELECT asset_a_code AS c FROM page WHERE asset_a_code != '' \
-             UNION ALL SELECT asset_b_code FROM page WHERE asset_b_code != '' \
+             SELECT asset_a_code AS c FROM page \
+             UNION ALL SELECT asset_b_code FROM page \
          ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
@@ -1833,8 +1839,8 @@ pub async fn fetch_pool_list(
                  AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
              WHERE a.asset_type IN (0, 1) AND a.asset_code IN (SELECT c FROM codes) \
                AND (a.asset_code, a.issuer_id) IN ( \
-                   SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
-                   UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \
+                   SELECT asset_a_code, asset_a_issuer_id FROM page \
+                   UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page) \
              GROUP BY a.asset_code, a.issuer_id \
          ) \
          SELECT \
@@ -1883,10 +1889,8 @@ pub async fn fetch_pool_list(
          ) pc ON pc.pool_id = lp.pool_id \
          LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
                             AND sac_a.issuer_id = lp.asset_a_issuer_id \
-                            AND lp.asset_a_code != '' \
          LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
                             AND sac_b.issuer_id = lp.asset_b_issuer_id \
-                            AND lp.asset_b_code != '' \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
             duplicate rows): without it this LEFT JOIN doubled every page row \
             whose latest snapshot ledger falls in the duplicated range, doubling \
@@ -2099,6 +2103,42 @@ mod tests {
                 "leg {code} must resolve to the asset_id production stores",
             );
         }
+    }
+
+    /// The SAC joins on both pool reads must not filter a leg out for having an
+    /// empty `asset_code` (task 0470).
+    ///
+    /// An empty code is native XLM's real, stored identity — not a missing
+    /// value — and native has a deployed SAC. An `asset_code != ''` guard was
+    /// added deliberately in `a19ac8f6` to match Postgres, which returned NULL
+    /// there; Postgres is retired and `/v1/assets/native` publishes that same
+    /// SAC, so the guard left one asset describing itself two ways depending on
+    /// the endpoint.
+    ///
+    /// Pinned on the module source because both queries are inline string
+    /// literals — there is no builder to call. That is the honest limit of this
+    /// guard: it catches the exact regression (a re-added `!= ''` on a leg
+    /// code) and nothing subtler. A behavioural test needs the queries
+    /// extracted first, which is recorded as an acceptance criterion on 0470.
+    #[test]
+    fn no_leg_code_guard_can_exclude_the_native_leg_from_its_sac() {
+        // Only the production half — the test module below quotes the guard it
+        // is looking for, and would match itself.
+        let src = include_str!("queries.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // Count only the leg-code guards; other `!= ''` comparisons in this
+        // module are about different columns and are none of this test's
+        // business.
+        let guards = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains("asset_a_code != ''") || l.contains("asset_b_code != ''"))
+            .count();
+        assert_eq!(
+            guards, 0,
+            "a leg-code guard is back: it silently drops native XLM's SAC, \
+             which /v1/assets/native still reports"
+        );
     }
 
     /// A transaction that ran several operations against the pool keeps each

@@ -685,7 +685,17 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // Match the needle against the short `asset_code` AND the on-chain
     // name/symbol from `soroban_contract_metadata` (`m`). type-3 assets carry an
     // empty `asset_code`, so a code-only match leaves them unfindable (task
-    // 0370). In the FINAL select `m` was always joined; the seek only joins it
+    // 0370).
+    //
+    // **Native XLM is stored with an EMPTY code too**, so it needs the same
+    // `if(type = 0, 'XLM', code)` arm the pools predicate uses
+    // (`common::pool_asset_codes`, task 0470). Without it `XLM` returned 6 404
+    // credit assets minted under a code containing "XLM" and not the one asset
+    // everybody meant — measured on production, where the native row matched 0
+    // times. Search the needle against what the row DISPLAYS as, not against
+    // what happens to be stored.
+    //
+    // In the FINAL select `m` was always joined; the seek only joins it
     // (+ `sc`) WHEN searching, so the default page stays a bare `assets` walk. We
     // do NOT match `asset_enrichment.name` — substring-matching the classic
     // SEP-1 names adds noise for no gain (classic assets are findable by code).
@@ -702,7 +712,7 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
             " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
               LEFT JOIN (SELECT contract_id, name, symbol FROM soroban_contract_metadata FINAL) m \
                   ON m.contract_id = sc.contract_id",
-            " AND (positionCaseInsensitive(a.asset_code, ?) > 0 \
+            " AND (positionCaseInsensitive(if(a.asset_type = 0, 'XLM', toString(a.asset_code)), ?) > 0 \
                OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
                OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
         )
@@ -1225,7 +1235,7 @@ mod tests {
             sac_only: false,
         };
         let sql = build_list_seek_sql(&params, Direction::Next);
-        assert!(sql.contains("positionCaseInsensitive(a.asset_code"));
+        assert!(sql.contains("toString(a.asset_code)"));
         assert!(sql.contains("coalesce(m.name, '')"));
         assert!(sql.contains("coalesce(m.symbol, '')"));
         // Classic enrichment names (ae.name) are intentionally NOT matched —
@@ -1234,6 +1244,34 @@ mod tests {
         // 3 needle placeholders (code + m.name + m.symbol); the LIMIT is now
         // inlined, so MUST equal the 3×`.bind(code)` in `fetch_list`.
         assert_eq!(sql.matches('?').count(), 3);
+    }
+
+    #[test]
+    fn native_is_matched_by_type_not_by_stored_code() {
+        // Task 0470. Native XLM is stored with an EMPTY `asset_code`, so a bare
+        // `positionCaseInsensitive(a.asset_code, 'XLM')` matched 6 404 credit
+        // assets minted under a code containing "XLM" and missed the real one
+        // (measured on production: the native row matched 0 times). Same defect
+        // and same fix as the pools predicate — see the guard test beside it in
+        // `common::pool_asset_codes`.
+        //
+        // Pinned on the SQL rather than on a result set because the CH-backed
+        // tests only run with `CH_URL` set; this one runs everywhere.
+        let params = ResolvedListParams {
+            limit: 10,
+            cursor: None,
+            asset_type: None,
+            asset_code: Some("XLM".to_string()),
+            sac_only: false,
+        };
+        let sql = build_list_seek_sql(&params, Direction::Next);
+        assert!(
+            sql.contains("if(a.asset_type = 0, 'XLM', toString(a.asset_code))"),
+            "the needle must be matched against the DISPLAYED code, so native \
+             XLM is reachable; got: {sql}"
+        );
+        // The bare form is what made native unfindable — it must not come back.
+        assert!(!sql.contains("positionCaseInsensitive(a.asset_code, ?)"));
     }
 
     #[test]

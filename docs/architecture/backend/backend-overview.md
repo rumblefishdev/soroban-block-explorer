@@ -426,6 +426,15 @@ expanding the backend contract beyond what the frontend is expected to show.
 **`GET /assets`** - Paginated list of assets (native XLM, classic credit assets, SACs, and Soroban-native assets).
 Query params: `limit`, `cursor`, `filter[type]` (native/classic_credit/sac/soroban), `filter[code]`.
 
+`filter[code]` is a case-insensitive **substring**, matched against three things: the
+asset code, and the on-chain `name` and `symbol` from contract metadata (task 0370 —
+Soroban-native assets carry an empty code, so a code-only match left them unfindable).
+The code it matches is the **displayed** one, `if(asset_type = 0, 'XLM', asset_code)` —
+native XLM is stored with an empty code, so matching the stored column returned the
+credit assets minted under a code containing "XLM" and never the real one (task 0470).
+Classic SEP-1 enrichment names are deliberately NOT matched: classic assets are findable
+by code, and substring-matching their names adds noise.
+
 **`GET /assets/:id`** - Asset detail: asset code, issuer/contract, type, supply, holder
 count, metadata. The numeric surrogate was dropped (PR #175 / the PG→CH composite move),
 so `:id` is a single canonical token in one of three forms: a contract StrKey
