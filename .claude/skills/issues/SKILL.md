@@ -138,13 +138,29 @@ Note in the report that the issue is now waiting on a deploy. **Do not close.**
 
 ## Step 4 — after a production deploy
 
-Deploys are manual and today per-stack (`make deploy-production-*`, with the
-frontend SPA synced separately). So **ask the user what they just deployed**,
-then only consider issues whose fix is in that component.
+**Read the release, do not ask.** A release is a `production-*` tag, and
+`/release` has already assembled what it shipped — take its buckets
+(shippable / partial / noise) as the input here. Invoked standalone, recover
+the same thing from the last tag:
 
-> When merge-to-master plus a tag or a button becomes the deploy trigger, and
-> a deploy stops being per-stack, replace this question with reading the
-> release. Nothing else in this skill changes.
+```bash
+git fetch origin --quiet
+git tag --list 'production-*' --sort=-creatordate | head -2
+git log <previous-tag>..<latest-tag> --format='%s%n%b' | grep -oE 'Refs #[0-9]+' | sort -u
+```
+
+Two cautions carried over from `/release`, both of which have already produced
+wrong conclusions here:
+
+- **A `Refs #N` trailer is a claim, not evidence.** Check that the range's code
+  actually advances the issue — a docs-only commit and an outright mistyped
+  trailer look identical to `grep`.
+- **A merged crate is not a deployed crate.** The tag deploys the Compute
+  stack's three Lambdas and the SPA; anything else under `crates/**`
+  (`backfill-runner`, notably) ships to the repo, not to production.
+
+Surgical `workflow_dispatch` deploys are still per-stack — for those, ask which
+stack, and only consider issues whose fix is in it.
 
 **Verify before drafting anything — hybrid rule:**
 
