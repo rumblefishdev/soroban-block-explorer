@@ -202,10 +202,11 @@ worker count and expected wall time, and an explicit stop rule.
       with the loopback recipe and the reboot caveat
 - [ ] `--max-scratch-gb` + pre-flight capacity check; run refuses to start
       when the budget does not fit
-- [ ] Per-ledger file deletion — **code landed with this task's PR**
-      (`ingest.rs::drop_indexed_file`, covering both the indexed and the
-      already-in-DB path); measured peak footprint per worker still to be
-      recorded here on the next run
+- [x] Per-ledger file deletion — landed with this task's own PR
+      (`ingest.rs::drop_indexed_file`, on both the indexed and the
+      already-in-DB path, so a resumed partition shrinks too)
+- [ ] Peak footprint per worker measured on a real run and recorded here —
+      the number that says whether the bound above is worth what it claims
 - [ ] Ingestion-lag self-throttle with a configurable threshold
 - [ ] Backfill runs under a dedicated CH user with lower priority + quota
 - [ ] Two CloudWatch → Slack alarms live (disk free, ingestion lag), test-fired
