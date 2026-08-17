@@ -6,8 +6,11 @@ status: backlog
 related_adr: []
 related_tasks: ['0279', '0489', '0491']
 tags: [frontend, layer-frontend-pages, priority-medium, effort-small]
-links:
-  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/371'
+# Deliberately NOT linked to issue #371. This is our own debt from how 0279
+# shaped the cell, not something the reporter asked for — and `/issues` will
+# not close a bundled issue until every linked task ships, so linking it would
+# hold #371 hostage to cosmetics that 0491 may delete unbuilt.
+links: []
 history:
   - date: '2026-08-17'
     status: backlog
