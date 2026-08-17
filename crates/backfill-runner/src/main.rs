@@ -17,6 +17,7 @@ mod repair_tier1;
 mod rpc_snapshot;
 mod run;
 mod sink;
+mod snapshot;
 mod status;
 mod sync;
 mod util;
@@ -211,6 +212,23 @@ enum Command {
     /// (ReplacingMergeTree). Reads CURRENT chain state, so it is correct regardless
     /// of indexer lag; live ingest supersedes it on catch-up. Requires
     /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
+    /// Tally the history-archive checkpoint snapshot: fetch the bucket list and
+    /// stream-decode every bucket, reporting live/dead counts per ledger entry
+    /// type. READ-ONLY — writes nothing, anywhere.
+    ///
+    /// This is the measurement task 0463's seed must publish before it is
+    /// allowed to write: how many entries of each type the network actually
+    /// holds, and what a full pass costs in wall-clock. Our own tables cannot
+    /// answer the first question — 78.85% of chain history predates our ledger
+    /// floor, so entries that never moved have no row here to count.
+    ///
+    /// `--buckets N` limits the pass to the N newest buckets for a cheap probe;
+    /// omit it for the full ~4.5 GB.
+    SnapshotTally {
+        #[arg(long)]
+        buckets: Option<usize>,
+    },
+
     /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
         #[arg(long)]
@@ -334,6 +352,11 @@ async fn main() {
                 "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
+        }
+        Command::SnapshotTally { buckets } => {
+            snapshot::tally_command(buckets)
+                .await
+                .expect("snapshot tally failed — read-only, safe to re-run");
         }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse

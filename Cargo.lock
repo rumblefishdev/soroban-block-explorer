@@ -895,6 +895,7 @@ dependencies = [
  "clickhouse",
  "db-clickhouse",
  "domain",
+ "flate2",
  "hex",
  "indexer",
  "indicatif",
