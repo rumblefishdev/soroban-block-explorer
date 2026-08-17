@@ -62,6 +62,19 @@ history:
       0210. The pool's HELD reserves are already captured by 0331 (contract-held); only the
       LP-SHARE token supply is missing. External check (StellarExpert live, 2026-07-02)
       confirmed the type-3 coverage is otherwise complete — no indexing gap, just this decoder.
+  - date: '2026-08-18'
+    status: backlog
+    who: karolkow
+    note: >
+      Task 0505 MERGED IN and its file removed. Two things changed. (1) This
+      task's verification target was Horizon, which Karol ruled legacy and
+      banned from verification on 2026-08-17 — so the acceptance criterion
+      "< 1% drift vs Horizon" is no longer usable. The replacement is the
+      protocol's own `LedgerHeader.total_coins` / `fee_pool`, which we already
+      receive in every ledger and currently discard. (2) That reframes the
+      goal: supply is not validated by matching another indexer, it is
+      validated by a reconciliation identity that must balance. See the
+      2026-08-18 section in the body.
 ---
 
 # BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources
@@ -117,6 +130,93 @@ claimable-balance id) + native-LP reserves (holder = pool id), keyed by `assets.
 Then `sum(balances)` reaches full Horizon parity. Much smaller than the original 4-source
 recompute. Until then, classic-asset `total_supply` undercounts by (claimable + native-LP
 reserves) — the residual ~20-50% drift on heavily-pooled assets.
+
+## 2026-08-18 (karolkow) — the oracle changes: `total_coins`, not Horizon
+
+**Horizon is legacy and banned from verification.** The old acceptance target
+("< 1% drift vs Horizon `/assets`") cannot be used. Two independent reasons,
+either sufficient: Horizon is another indexer's opinion rather than the
+protocol's own accounting, and it has twice misled this project on fields it
+derives itself.
+
+**The replacement is already in every ledger and we throw it away.**
+`LedgerHeader` carries `total_coins` and `fee_pool` — the protocol's own count
+of every stroop in existence. Our `ledgers` table stores six header fields
+(`sequence`, `hash`, `closed_at`, `protocol_version`, `transaction_count`,
+`base_fee`) and discards the rest, including both of these, plus `base_reserve`
+(minimum-balance reasoning) and `bucket_list_hash` (checkpoint state hash —
+useful to task 0502).
+
+### The reconciliation identity — this task's real acceptance criterion
+
+The right question is not "does our sum match an external figure" but "does the
+ledger balance". For XLM:
+
+```
+total_coins  =  Σ account XLM          (indexed today)
+              + Σ claimable balances   (source #2 — NOT indexed)
+              + Σ native LP reserves   (source #3 — NOT indexed)
+              + fee_pool               (header field — not stored)
+```
+
+Our sum should therefore **fall short of `total_coins` by exactly the
+unindexed terms**. Equality today would signal a double-count, not success.
+
+That inverts how this task proves itself. Instead of chasing a percentage
+against someone else's number, the residual becomes a **measurement of the
+remaining gap**, and it should shrink to `fee_pool` alone as sources #2 and #3
+land. When it does, the identity closes — and that is the completion signal.
+
+For non-native assets there is no header equivalent, so those keep an
+external cross-check; use raw XDR / the checkpoint snapshot (task 0502),
+never Horizon.
+
+### The continuous reconciliation check
+
+Not a CI test — CI has no production data, and a one-shot verification would
+have caught none of this year's regressions. It must be a **monitored
+invariant**: both sides already live in ClickHouse (`total_coins` per ledger
+once stored, the sum in `balance_aggregates`), so the residual is a query that
+can run on a schedule alongside the existing aggregate refresh.
+
+What makes it useful is that the residual should be **stable**, not zero.
+Alert on unexplained movement, not on a threshold:
+
+- residual jumps up → we started missing value (a write path dropped rows, a
+  venue grew, ingestion fell behind);
+- residual jumps down or goes negative → we are counting value that is not
+  there (phantom balances, a double-count, ghosts).
+
+Concrete evidence that this is not hypothetical: ~1.3M phantom XLM from
+merged-account ghosts (task 0321) sat inside the published `total_supply`
+undetected, and would have moved this residual the day it appeared.
+
+### Scope added by the merge
+
+- Store `total_coins`, `fee_pool`, `base_reserve`, `bucket_list_hash` on
+  `ledgers` (`ALTER … ADD COLUMN … DEFAULT` first, then the writer — the
+  ADR 0055 deployment order).
+- Establish the identity above with each term measured, not asserted —
+  including where contract-held XLM (SAC, re-keyed to native by ADR 0051)
+  sits within it.
+- Ship the residual as a monitored invariant with alerting on movement.
+- Replace the Horizon acceptance criterion with "the identity closes".
+
+### Notes carried over from 0505
+
+- **Circulating supply is not total supply.** Our published 105,409,692,490
+  XLM looked like a 2x error against the quoted ~50B until the ~55.4B in
+  `GALAXYVOID…` — SDF's 2019 burn address — was verified by decoding its raw
+  `AccountEntry` via `getLedgerEntries`: the chain agrees with us to the
+  stroop. **Task 0342 owns the display convention**; this task only supplies
+  the number that makes the distinction measurable.
+- That episode is itself the argument for storing the oracle: answering
+  "why 105B and not 50B" required external sources and hand-decoded XDR, and
+  would have been one query if `total_coins` were stored.
+- Source #2 (claimable balances) overlaps task **0504**, which found the same
+  gap from the other direction — five ledger entry types parsed and never
+  stored. Whichever runs first should claim the ingestion path; the other
+  consumes it.
 
 ## Context
 
