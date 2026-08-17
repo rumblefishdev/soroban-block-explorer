@@ -415,6 +415,12 @@ pub fn extract_account_states(
         /// created/updated/restored one — merge-then-recreate must not leave
         /// the account marked closed. ADR 0055.
         account_removed: bool,
+        /// Some = an AccountEntry was observed (full-set semantics — an empty
+        /// vec is a real "no signers" state). None = trustline-only accum;
+        /// no signers row may be emitted. lore-0463.
+        signers: Option<Vec<Value>>,
+        thresholds: Option<String>,
+        flags: Option<u32>,
     }
 
     let mut map: HashMap<String, AccountAccum> = HashMap::new();
@@ -451,6 +457,9 @@ pub fn extract_account_states(
                 trustline_balances: Vec::new(),
                 removed_trustlines: Vec::new(),
                 account_removed: false,
+                signers: None,
+                thresholds: None,
+                flags: None,
             });
             entry.native_balance = Some(0);
             entry.account_removed = true;
@@ -497,6 +506,9 @@ pub fn extract_account_states(
             trustline_balances: Vec::new(),
             removed_trustlines: Vec::new(),
             account_removed: false,
+            signers: None,
+            thresholds: None,
+            flags: None,
         });
         entry.native_balance = Some(balance);
         entry.sequence_number = Some(seq);
@@ -506,6 +518,20 @@ pub fn extract_account_states(
         // A live entry supersedes any removal seen earlier in this change set —
         // merge-then-recreate within one ledger must not stay marked closed.
         entry.account_removed = false;
+        // Full-set semantics: the entry carries the COMPLETE signer list, so a
+        // missing/empty array is a real "no signers" state, not absence of
+        // data. Master is not in this list (thresholds byte 0). lore-0463.
+        entry.signers = Some(
+            data.get("signers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        entry.thresholds = data
+            .get("thresholds")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        entry.flags = data.get("flags").and_then(Value::as_u64).map(|f| f as u32);
         entry.is_creation = entry.is_creation || is_creation;
         entry.ledger_sequence = change.ledger_sequence;
         entry.created_at = change.created_at;
@@ -570,6 +596,9 @@ pub fn extract_account_states(
                     trustline_balances: Vec::new(),
                     removed_trustlines: Vec::new(),
                     account_removed: false,
+                    signers: None,
+                    thresholds: None,
+                    flags: None,
                 });
 
                 // Dedup: remove existing entry for same asset, then add new
@@ -637,6 +666,9 @@ pub fn extract_account_states(
                     trustline_balances: Vec::new(),
                     removed_trustlines: Vec::new(),
                     account_removed: false,
+                    signers: None,
+                    thresholds: None,
+                    flags: None,
                 });
 
                 // Also remove from trustline_balances if it was added in same tx
@@ -679,6 +711,9 @@ pub fn extract_account_states(
                 balances: Value::Array(balances_arr),
                 removed_trustlines: accum.removed_trustlines,
                 account_removed: accum.account_removed,
+                signers: accum.signers,
+                thresholds: accum.thresholds,
+                flags: accum.flags,
                 home_domain: accum.home_domain,
                 created_at: accum.created_at,
             }
@@ -2081,6 +2116,80 @@ mod tests {
         assert!(
             !accounts[0].account_removed,
             "a live account at zero XLM must not read as merged"
+        );
+    }
+
+    /// lore-0463: signers/thresholds/flags flow through the accumulator with
+    /// full-set semantics — Some(empty) is a real state, None means the entry
+    /// was never observed.
+    #[test]
+    fn signers_flow_through_with_full_set_semantics() {
+        let changes = vec![make_change(
+            "account",
+            "updated",
+            json!({ "account_id": "GMULTI" }),
+            Some(json!({
+                "account_id": "GMULTI",
+                "balance": 100,
+                "seq_num": 5,
+                "home_domain": "",
+                "thresholds": "01030303",
+                "flags": 4,
+                "signers": [
+                    {"key": "GS1", "weight": 1, "type": "ed25519"},
+                    {"key": "TS2", "weight": 2, "type": "preauth_tx"},
+                ],
+            })),
+        )];
+        let a = &extract_account_states(&changes)[0];
+        assert_eq!(a.thresholds.as_deref(), Some("01030303"));
+        assert_eq!(a.flags, Some(4));
+        let sg = a.signers.as_ref().expect("entry observed => Some");
+        assert_eq!(sg.len(), 2);
+        assert_eq!(sg[1]["type"], "preauth_tx");
+    }
+
+    #[test]
+    fn entry_without_signers_field_yields_some_empty_not_none() {
+        // Removing the last signer emits an entry whose set is empty — that
+        // MUST surface as Some(empty), or persist would skip the write and
+        // the stale set would survive in the RMT forever.
+        let changes = vec![make_change(
+            "account",
+            "updated",
+            json!({ "account_id": "GBARE" }),
+            Some(json!({
+                "account_id": "GBARE",
+                "balance": 1,
+                "seq_num": 1,
+                "home_domain": "",
+                "thresholds": "01000000",
+                "flags": 0,
+            })),
+        )];
+        let a = &extract_account_states(&changes)[0];
+        assert_eq!(a.signers.as_deref(), Some(&[][..]));
+        assert_eq!(a.thresholds.as_deref(), Some("01000000"));
+    }
+
+    #[test]
+    fn trustline_only_change_never_observes_signers() {
+        let changes = vec![make_change(
+            "trustline",
+            "created",
+            json!({ "account_id": "GTL" }),
+            Some(json!({
+                "account_id": "GTL",
+                "asset": {"type": "credit_alphanum4", "code": "AQUA", "issuer": "GISS"},
+                "balance": 5,
+                "limit": 100,
+                "flags": 1,
+            })),
+        )];
+        let a = &extract_account_states(&changes)[0];
+        assert!(
+            a.signers.is_none() && a.thresholds.is_none(),
+            "a trustline-only accum must not fabricate an observed entry"
         );
     }
 

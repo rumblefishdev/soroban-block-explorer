@@ -406,6 +406,19 @@ pub struct ExtractedAccountState {
     /// Trustlines removed in this change set. Each entry is `{asset_type, asset_code, issuer}`.
     /// Tracked separately from `balances` to avoid marker pollution on INSERT.
     pub removed_trustlines: Vec<serde_json::Value>,
+    /// Full signer set from the observed `AccountEntry`, master EXCLUDED (raw
+    /// XDR truth — master weight is thresholds byte 0; Horizon synthesizes a
+    /// master entry, we do not). `Some(vec)` — entry observed, and the vec IS
+    /// the complete set (may be empty: removing the last signer must emit an
+    /// empty set so the RMT row atomically supersedes the old one). `None` —
+    /// no `AccountEntry` in this change set (trustline-only accum); no signers
+    /// row may be written. lore-0463.
+    pub signers: Option<Vec<serde_json::Value>>,
+    /// 4-byte hex from `AccountEntry.thresholds`: master weight, low, med,
+    /// high. Same Some/None semantics as `signers`.
+    pub thresholds: Option<String>,
+    /// `AccountEntry.flags`. Same Some/None semantics as `signers`.
+    pub flags: Option<u32>,
     /// `true` when the ACCOUNT ENTRY itself was removed in this change set —
     /// an `account_merge`, the only way an account is deleted. The native
     /// balance is emitted as 0 either way, so without this flag the merge

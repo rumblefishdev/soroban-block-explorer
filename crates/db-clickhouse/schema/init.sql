@@ -292,6 +292,36 @@ ORDER BY (contract_id);
 --    verified 0/411654 rows populated in prod). Every read resolves the display
 --    name/icon from `asset_enrichment` (curated) coalesced over
 --    `soroban_contract_metadata` (on-chain) — never from `assets`.
+-- Signers + thresholds side table (task 0463 / issue #377). ONE row per
+-- account carrying the FULL signer set as parallel arrays: the protocol caps
+-- signers at 20 and rewrites AccountEntry wholesale, so RMT atomically
+-- replaces the whole set — a removed signer cannot survive as a ghost, no
+-- lifecycle column needed. A SIDE table, not columns on `accounts`, because
+-- `accounts` takes whole-row writes from more than one path (participant
+-- skeletons, RPC bootstrap) and a bolt-on column would be clobbered — the
+-- proven failure mode of tasks 0492/0500. Written ONLY when an AccountEntry
+-- was observed in the change set; trustline-only appearances never touch it.
+-- Master weight is thresholds byte 0 and is NOT in the arrays (Horizon
+-- synthesizes a master entry into its list; raw XDR does not — we store raw
+-- truth, and any cross-check must diff against getLedgerEntries XDR, not
+-- Horizon). signer_weights is UInt32 as in XDR; protocol constrains 0-255
+-- and SetOptions deletes at 0, so out-of-range or zero weights are logged as
+-- anomalies at persist, stored as carried.
+CREATE TABLE IF NOT EXISTS account_signers (
+    account_id          Int64,
+    signer_keys         Array(String),
+    signer_weights      Array(UInt32),
+    signer_types        Array(LowCardinality(String)),
+    master_weight       UInt8,
+    threshold_low       UInt8,
+    threshold_med       UInt8,
+    threshold_high      UInt8,
+    flags               UInt32,
+    last_updated_ledger Int64
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (account_id);
+
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),

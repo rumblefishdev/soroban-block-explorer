@@ -313,6 +313,17 @@ fn account_key(a: &AccountEntry) -> Value {
     json!({ "account_id": a.account_id.to_string() })
 }
 
+/// XDR arm → the wire word for a signer key kind. Total over `SignerKey` on
+/// purpose — a new arm must fail compilation here, never pass through blank.
+fn signer_type_name(key: &SignerKey) -> &'static str {
+    match key {
+        SignerKey::Ed25519(_) => "ed25519",
+        SignerKey::PreAuthTx(_) => "preauth_tx",
+        SignerKey::HashX(_) => "hash_x",
+        SignerKey::Ed25519SignedPayload(_) => "ed25519_signed_payload",
+    }
+}
+
 fn account_data(a: &AccountEntry) -> Value {
     json!({
         "account_id": a.account_id.to_string(),
@@ -322,6 +333,16 @@ fn account_data(a: &AccountEntry) -> Value {
         "home_domain": String::from_utf8_lossy(a.home_domain.as_slice()).to_string(),
         "thresholds": hex::encode(a.thresholds.0),
         "flags": a.flags,
+        // Raw XDR truth: the master key is NOT in this list — its weight is
+        // thresholds byte 0. Horizon SYNTHESIZES a master entry into its
+        // signers array; comparing against Horizon therefore reads off-by-one
+        // by design. Signer keys render as strkeys via stellar-xdr's own
+        // Display (G/T/X/P namespaces). lore-0463.
+        "signers": a.signers.iter().map(|s| json!({
+            "key": s.key.to_string(),
+            "weight": s.weight,
+            "type": signer_type_name(&s.key),
+        })).collect::<Vec<_>>(),
     })
 }
 

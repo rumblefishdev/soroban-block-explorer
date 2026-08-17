@@ -62,6 +62,25 @@ fn column_order_accounts() {
 }
 
 #[test]
+fn column_order_account_signers() {
+    assert_columns::<AccountSignersRow>(
+        "account_signers",
+        &[
+            "account_id",
+            "signer_keys",
+            "signer_weights",
+            "signer_types",
+            "master_weight",
+            "threshold_low",
+            "threshold_med",
+            "threshold_high",
+            "flags",
+            "last_updated_ledger",
+        ],
+    );
+}
+
+#[test]
 fn column_order_assets() {
     assert_columns::<AssetRow>(
         "assets",
@@ -2448,6 +2467,12 @@ fn closed_at_ledger_marks_only_real_closures() {
             "asset_type": "credit_alphanum4", "asset_code": "SHX", "issuer": "GISSUER",
         })],
         account_removed: false,
+        signers: Some(vec![
+            serde_json::json!({"key": "GSIGNER1", "weight": 1, "type": "ed25519"}),
+            serde_json::json!({"key": "TSIGNER2", "weight": 255, "type": "preauth_tx"}),
+        ]),
+        thresholds: Some("01030303".to_string()),
+        flags: Some(0),
         home_domain: None,
         created_at: 1_700_000_000,
     };
@@ -2461,6 +2486,9 @@ fn closed_at_ledger_marks_only_real_closures() {
         balances: serde_json::json!([{"asset_type": "native", "balance": "0.0000000"}]),
         removed_trustlines: vec![],
         account_removed: true,
+        signers: None,
+        thresholds: None,
+        flags: None,
         home_domain: None,
         created_at: 1_700_000_000,
     };
@@ -2513,4 +2541,132 @@ fn closed_at_ledger_marks_only_real_closures() {
         "an account_merge tombstone must be marked closed, or merged accounts \
          render as holding 0 XLM once the read filter flips"
     );
+}
+
+/// lore-0463: the signers side row follows full-set-replace semantics and is
+/// emitted ONLY when the AccountEntry itself was observed.
+#[test]
+fn signer_rows_full_set_replace_semantics() {
+    let ledger = synthetic_ledger();
+
+    // Entry observed, thresholds 01030303 (master 1, low/med/high 3), two
+    // signers — the issue #377 fixture shape.
+    let observed = ExtractedAccountState {
+        account_id: "GOBSERVED".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 7,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: Some(vec![
+            serde_json::json!({"key": "GS1", "weight": 1, "type": "ed25519"}),
+            serde_json::json!({"key": "XS2", "weight": 3, "type": "hash_x"}),
+        ]),
+        thresholds: Some("01030303".to_string()),
+        flags: Some(5),
+    };
+    // Entry observed with an EMPTY set — removing the last signer must still
+    // emit a row, or the stale set survives in the RMT forever.
+    let emptied = ExtractedAccountState {
+        account_id: "GEMPTIED".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 9,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: Some(vec![]),
+        thresholds: Some("01000000".to_string()),
+        flags: Some(0),
+    };
+    // Trustline-only accum: NO entry observed — must not touch the set.
+    let trustline_only = ExtractedAccountState {
+        account_id: "GTRUSTONLY".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: -1,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([
+            {"asset_type": "credit_alphanum4", "asset_code": "AQUA",
+             "issuer": "GISSUER", "balance": "1.0000000"},
+        ]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: None,
+        thresholds: None,
+        flags: None,
+    };
+    // Merged account: nothing to emit.
+    let merged = ExtractedAccountState {
+        account_id: "GMERGED2".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: -1,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([{"asset_type": "native", "balance": "0.0000000"}]),
+        removed_trustlines: vec![],
+        account_removed: true,
+        signers: None,
+        thresholds: None,
+        flags: None,
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[observed, emptied, trustline_only, merged],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(
+        staged.account_signer_rows.len(),
+        2,
+        "exactly the two entry-observed accounts emit signer rows"
+    );
+    let obs = staged
+        .account_signer_rows
+        .iter()
+        .find(|r| r.account_id == ids::account_id("GOBSERVED"))
+        .expect("observed row");
+    assert_eq!(obs.master_weight, 1);
+    assert_eq!(
+        (obs.threshold_low, obs.threshold_med, obs.threshold_high),
+        (3, 3, 3),
+        "thresholds hex must parse as [master, low, med, high] — a byte-order \
+         swap here mislabels every multisig account"
+    );
+    assert_eq!(obs.signer_keys, vec!["GS1", "XS2"]);
+    assert_eq!(obs.signer_weights, vec![1, 3]);
+    assert_eq!(obs.signer_types, vec!["ed25519", "hash_x"]);
+    assert_eq!(obs.flags, 5);
+    assert_eq!(obs.last_updated_ledger, 100);
+
+    let emp = staged
+        .account_signer_rows
+        .iter()
+        .find(|r| r.account_id == ids::account_id("GEMPTIED"))
+        .expect("emptied row");
+    assert!(
+        emp.signer_keys.is_empty(),
+        "an emptied set must write an empty row, not skip the write"
+    );
+    assert_eq!(emp.master_weight, 1);
 }
