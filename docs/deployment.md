@@ -111,6 +111,28 @@ second release on the same day.
   has to be on `master` before the first tag, and fixing the workflow means
   cutting a new tag, not re-running the old one.
 - **Issues close at deploy, not at merge** — run `/issues` after a release.
+- **Budget ~15 min per tag run, and expect no speed-up on the next one.**
+  `cdk diff` builds all three Lambdas during synth (`cargo-lambda-cdk`'s
+  `RustFunction` builds at synth time, not as a separate step), and it does so
+  from a **cold Rust cache every single release**. `Swatinem/rust-cache` writes
+  under the ref that ran it, and a GitHub Actions run reads caches only from
+  its own ref or from the default branch — so tag `-2` cannot see what tag `-1`
+  cached, and nothing ever writes the `v0-rust-deploy-*` key on `master`. CI's
+  own `v0-rust-ci-rust-*` caches are a different key and unreachable from this
+  job. Measured 2026-08-17 across both releases that day:
+
+  | step                         | `production-2026.08.17-1` | `-2`       |
+  | ---------------------------- | ------------------------- | ---------- |
+  | `cdk diff` (cold Rust build) | 10m35s                    | 10m58s     |
+  | `cdk deploy`                 |                           | 48s        |
+  | SPA build + sync             |                           | 20s        |
+  | **whole run**                | **13m24s**                | **14m06s** |
+
+  The diff dominates; everything after it is seconds, because the synth is
+  already built and only Lambda code changes. Do not plan a release around the
+  tail. **Deliberately not fixed** — seeding the cache from `master` means
+  paying an extra Lambda build on every merge to save ~8 min on a release cut a
+  few times a month.
 
 The job binds `environment: production`, so its OIDC subject is
 `repo:<org>/<repo>:environment:production` — that string is what the deploy

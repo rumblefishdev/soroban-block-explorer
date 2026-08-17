@@ -2,9 +2,9 @@
 id: '0489'
 title: 'BUG: the pool Amount column drops every credit_alphanum12 leg'
 type: BUG
-status: active
+status: completed
 related_adr: ['0051']
-related_tasks: ['0279']
+related_tasks: ['0279', '0490', '0491']
 tags: [api, clickhouse, layer-backend, priority-high, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/371'
@@ -17,6 +17,18 @@ history:
       (production-2026.08.17-1) shipped 0279's Amount column to production.
       A trade renders one-sided instead of `A → B`; root cause proven on prod
       the same session. Read-path only, no re-index needed.
+  - date: '2026-08-17'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Shipped in production-2026.08.17-2 and verified on production the same
+      day. Pool LCGK…CFJT (yXLM type 1 / CETES type 2) renders
+      `0.0025 yXLM → 0.0056817 CETES`, and Horizon's `liquidity_pool_trade`
+      effect for that operation reports `sold 0.0056817 CETES / bought
+      0.0025000 yXLM` — signs, amounts and direction all agree. 3 files of
+      code, 1 new helper, 1 call site; 30 + 9 tests. Two follow-ups spawned
+      (0490, 0491). One acceptance criterion was found to be unmeasurable and
+      is rewritten below rather than ticked.
 ---
 
 # The pool Amount column drops every credit_alphanum12 leg
@@ -150,10 +162,23 @@ read the `assets` facet space, and widening it there would break them.
 - [x] Proven to catch the bug: with the old resolution restored the test fails
       `left: 0, right: 3098242843307699806`, not merely passes with the fix
 - [x] No re-parse and no backfill — read path only, one expression changed
-- [ ] A trade on such a pool renders `A → B` on the page, checked on prod
-      after deploy, and against Horizon for the same operation
-- [ ] Post-deploy: re-run the blast-radius query and confirm the one-sided
-      share drops to the net-to-zero floor (~0.01%)
+- [x] A trade on such a pool renders `A → B` on the page, checked on prod
+      after deploy, and against Horizon for the same operation — pool
+      `LCGK…CFJT`, tx `24d04961…c5b5`: the page shows
+      `0.0025 yXLM → 0.0056817 CETES`, Horizon's `liquidity_pool_trade` effect
+      for pool `8ca53441…` reports `sold 0.0056817 CETES / bought 0.0025000
+    yXLM`. Both trade directions render on that page
+- [x] ~~Post-deploy: re-run the blast-radius query and confirm the one-sided
+      share drops to the net-to-zero floor (~0.01%)~~ — **this criterion was
+      unmeasurable as written.** The blast-radius query counts operations on
+      pools that HAVE a type-2 leg, which is a property of the pool
+      definitions, not of the reader. A read-path fix cannot move it, and it
+      did not (15.54% after deploy, against 16.1% before — the drift is new
+      ledgers entering the window, nothing else). What the query CAN show is
+      the data floor it was meant to compare against: 162 of 1,812,838
+      operations carry a single leg, 0.0089%, and those are the genuine
+      net-to-zero cases. The read-side proof is the criterion above; a SQL
+      count over ClickHouse was never going to prove anything about the API
 - [x] **Docs updated** — per ADR 0032,
       `20_get_liquidity_pools_transactions.sql` now states which resolver the
       leg uses and why the other one is wrong
@@ -176,6 +201,19 @@ Three files, +1 helper, one call site changed.
 
 Verification: 30 `liquidity_pools` tests, 90 `db-clickhouse` tests, clippy
 clean on both crates.
+
+## Issues Encountered
+
+- **An acceptance criterion that could not be measured.** "Re-run the
+  blast-radius query and confirm the share drops" sounded like verification
+  and was not: the query counts pool _definitions_, which a read-path fix
+  never touches. Writing it felt rigorous because it carried a number. The
+  lesson is narrow and reusable — when a fix changes what the API _answers_,
+  the proof has to come from the API, not from the store behind it.
+- **A leg↔id mapping stated from inference.** The two `asset_id` values were
+  first labelled by eyeballing which asset the screenshot rendered. The golden
+  test proved them inverted. Corrected in place, with the correction called
+  out, since the raw numbers had already been quoted.
 
 ## Design Decisions
 
