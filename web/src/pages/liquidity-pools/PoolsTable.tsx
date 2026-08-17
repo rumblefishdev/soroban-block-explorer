@@ -28,7 +28,7 @@ import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 export const POOL_COLUMN_COUNT = 6;
 
 /** Render leg code text — wrapped in RouterLink when legHref resolves
- *  (classic credit, SAC mirror); plain text otherwise (native, schema
+ *  (native, classic credit, contract-id fallback); plain text otherwise (schema
  *  drift). Matches the precedence used by PoolSummary + PoolKpiStrip. */
 function assetCodeNode(leg: PoolAssetLeg): ReactNode {
   const code = assetLegLabel(leg);

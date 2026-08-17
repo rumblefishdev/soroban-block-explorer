@@ -1,4 +1,5 @@
 import type { ChipProps } from '@rumblefish/soroban-block-explorer-ui';
+import { NATIVE_ASSET_CODE } from '@rumblefish/soroban-block-explorer-ui';
 
 export interface AssetTypeMeta {
   /** Human-readable badge label. */
@@ -17,13 +18,41 @@ export interface AssetTypeMeta {
  */
 const META: Record<string, AssetTypeMeta> = {
   native: { label: 'Native', color: 'blue' },
-  classic_credit: { label: 'Classic', color: 'neutral' },
+  classic_credit: { label: 'Classic credit', color: 'neutral' },
   soroban: { label: 'Soroban', color: 'emerald' },
 };
 
 export function assetTypeMeta(typeName?: string | null): AssetTypeMeta {
   const meta = typeName ? META[typeName] : undefined;
   return meta ?? { label: typeName ?? 'Unknown', color: 'neutral' };
+}
+
+// The native-XLM vocabulary lives in libs/ui/identifiers (task 0472) — the
+// format layer down there needs it too, so it cannot live up here. Re-exported
+// for the many page-level callers that reach for it alongside the asset-chip
+// metadata in this file.
+export {
+  NATIVE_ASSET_CODE,
+  isNativeAssetString,
+} from '@rumblefish/soroban-block-explorer-ui';
+
+/**
+ * The label an asset is shown under — title, breadcrumb, table cell, avatar
+ * letter. Native XLM carries `asset_code = null` (it has no code on the
+ * ledger), so it needs the same rule the pool legs already use
+ * (`assetLegLabel`): the type, not the code, names it. Soroban tokens have no
+ * classic code either and fall back to the on-chain SEP-41 symbol (task 0304).
+ *
+ * Returns `null` when nothing names the asset, so each caller picks its own
+ * empty rendering (a dash in a table, a generic title on a page).
+ */
+export function assetDisplayCode(asset: {
+  asset_type_name?: string | null;
+  asset_code?: string | null;
+  symbol?: string | null;
+}): string | null {
+  if (asset.asset_type_name === 'native') return NATIVE_ASSET_CODE;
+  return asset.asset_code ?? asset.symbol ?? null;
 }
 
 /**
@@ -40,6 +69,6 @@ export const SAC_TAG: AssetTypeMeta = { label: 'SAC', color: 'brown' };
  */
 export const ASSET_TYPE_FILTERS: readonly { label: string; value: string }[] = [
   { label: 'All types', value: '' },
-  { label: 'Classic', value: 'classic_credit' },
+  { label: 'Classic credit', value: 'classic_credit' },
   { label: 'Soroban', value: 'soroban' },
 ];

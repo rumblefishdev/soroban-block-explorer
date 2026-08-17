@@ -13,6 +13,17 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Task created after a light-mode visual + code audit'
+  - date: 2026-08-13
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Status sync: PR #386 (steps 1, 2, part of 4) merged 08-10, rode
+      release #389 (08-11) and is deployed — today's prod bundle is
+      post-#389 (established in passing during the 0474 deploy check),
+      so the per-mode logo lockups and the graphite light-mode accent
+      are live. Untouched and still open: steps 3 and 5 plus the rest
+      of the F5 triage (NftEventBadge colorsDark binding, ~12
+      common.black/white call sites, the assetColor.ts import check).
 ---
 
 # BUG: light mode is unfinished — brand logos and the accent yellow are drawn for dark only
@@ -30,11 +41,13 @@ of the theme, so they are wrong in whichever mode they were not written for.
 
 ## Status: Active
 
-**Current state:** Steps 1, 2 and part of 4 are in PR #386 (open vs `develop`).
-Design settled the accent question the other way from the guess in F2: light
-mode goes **graphite** (`scales.gray[700]`), not a darker amber, and the brand
-yellow stays reserved for filled surfaces, glows and markers. Steps 3 and 5 and
-the rest of the F5 triage are untouched.
+**Current state:** Steps 1, 2 and part of 4 merged in PR #386 (2026-08-10),
+released in #389 and deployed — the per-mode logo lockups and the graphite
+light-mode accent are live on prod. Design settled the accent question the
+other way from the guess in F2: light mode goes **graphite**
+(`scales.gray[700]`), not a darker amber, and the brand yellow stays reserved
+for filled surfaces, glows and markers. Steps 3 and 5 and the rest of the F5
+triage are untouched.
 
 Findings below are reproduced on a local dev server in light mode plus a code
 sweep; contrast ratios are computed, not eyeballed.
@@ -47,6 +60,15 @@ task. Nobody has since done a deliberate light-mode pass, so the gaps
 accumulated in the most visible surfaces — nav, footer, hero.
 
 ## Findings
+
+**Chip palette — `Fungible` fails AA** (found in the 0472 review, 2026-08-13,
+measured in the live DOM): emerald chip renders `#009966` on `#D0FAE5` =
+**3.22:1** at 14px/500, against the 4.5:1 minimum. Task 0472 promoted that
+chip to the contract page header, where it is the only link, so the failure
+is now load-bearing. The sibling colours pass — brown 7.90:1, accent ~13:1,
+neutral 7.06:1 — so this is one token, not the whole palette. Same override
+block as the rest of this task (`libs/ui/src/theme/overrides.ts`, the
+`props: { color: 'emerald' }` variant).
 
 ### F1 — Logo assets are theme-blind (the two screenshots)
 

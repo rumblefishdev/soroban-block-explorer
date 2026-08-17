@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
+use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{ChartDataPoint, PoolListCursor, PoolOperationAmount, SharesCursor};
@@ -49,7 +50,8 @@ pub struct PoolRow {
     pub asset_a_issuer: Option<String>,
     /// C-strkey of the SAC mirror for the asset-A leg. `None` otherwise (task 0263).
     pub asset_a_contract_id: Option<String>,
-    /// `icon_url` from the asset-A leg's `assets` row (classic or SAC).
+    /// `icon_url` for the asset-A leg, from `asset_enrichment` (ADR 0050).
+    /// NOT from `assets` — task 0310 dropped that dead column from prod.
     pub asset_a_icon_url: Option<String>,
     pub asset_b_type: i16,
     pub asset_b_type_name: Option<String>,
@@ -57,7 +59,7 @@ pub struct PoolRow {
     pub asset_b_issuer: Option<String>,
     /// C-strkey of the SAC mirror for the asset-B leg. See `asset_a_contract_id`.
     pub asset_b_contract_id: Option<String>,
-    /// `icon_url` from the asset-B leg's `assets` row. See `asset_a_icon_url`.
+    /// `icon_url` for the asset-B leg. See `asset_a_icon_url`.
     pub asset_b_icon_url: Option<String>,
     pub fee_bps: i32,
     pub fee_percent: String,
@@ -112,6 +114,12 @@ pub struct ResolvedPoolListParams {
     /// query order-insensitive without anyone knowing Stellar's canonical leg
     /// ordering. Empty = no filter.
     pub asset_codes: Vec<String>,
+    /// The same free-text box, when it held a pool identifier instead
+    /// (`L…` SEP-23 StrKey, the one canonical form per task 0264, resolved to
+    /// the stored hex — task 0470).
+    /// Mutually exclusive with `asset_codes`: an identifier names exactly one
+    /// pool, so there is nothing left for a code match to narrow.
+    pub pool_id_hex: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1307,26 +1315,32 @@ pub async fn fetch_pool_transactions(
     // operation_types via the shared non-correlated aggregate (ops-only, PK
     // seek on the page's tx keys).
     let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
-    let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
-    // Resolve source StrKeys by surrogate id (bloom seek) instead of a
+    // Source StrKeys resolve by surrogate id (bloom seek) instead of a
     // whole-`accounts` `INNER JOIN accounts src` (task 0354). INNER-JOIN drop
     // preserved via filter_map (a tx always has its source account).
-    let accounts = resolve_accounts(client, page.iter().map(|r| r.source_id).collect()).await?;
-    // Amounts for the same bounded key set (task 0279). A tx with no rows keeps
-    // `None` on both legs — the honest "not known" the pre-backfill history has.
+    // Amounts come from the same bounded key set (task 0279). A tx with no rows
+    // keeps `None` on both legs — the honest "not known" the pre-backfill
+    // history has.
     //
-    // DEGRADES, never 500s: the amounts enrich a row that is already complete,
+    // All three read off `page` / `keys` alone and none consumes another's
+    // output, so they go out as one wave rather than three (task 0446).
+    let (aggregates, accounts, amounts) = tokio::join!(
+        fetch_tx_list_aggregates(client, &keys),
+        resolve_accounts(client, page.iter().map(|r| r.source_id).collect()),
+        fetch_pool_tx_amounts(client, pool_id_hex, &keys),
+    );
+    let aggregates = aggregates?;
+    let accounts = accounts?;
+    // Amounts DEGRADE, never 500: they enrich a row that is already complete,
     // and the contract already says a missing one is "not known". The failure
     // this actually guards is deploy order — an API that ships before
     // `lp_operation_amounts` is created on prod would otherwise turn every pool
     // page into an error (the `accounts_recent` lesson).
-    let amounts = match fetch_pool_tx_amounts(client, pool_id_hex, &keys).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!("pool amounts unavailable for {pool_id_hex}, rendering blank: {e}");
-            HashMap::new()
-        }
-    };
+    let amounts = amounts.unwrap_or_else(|e| {
+        tracing::warn!("pool amounts unavailable for {pool_id_hex}, rendering blank: {e}");
+        HashMap::new()
+    });
+
     Ok(page
         .into_iter()
         .filter_map(|r| {
@@ -1723,32 +1737,23 @@ pub async fn fetch_pool_list(
     // answer: `USDC/USDC` means the 72 pools with USDC on both sides, not the
     // 2 912 with USDC anywhere. Same for a needle that is a prefix of the other
     // (`USD/USDC`) — one asset must not satisfy both halves of the query.
-    let leg = |side: char| {
-        format!(
-            "positionCaseInsensitive(if(lp.asset_{side}_type = 0, 'XLM', lp.asset_{side}_code), ?) > 0"
-        )
-    };
-    match params.asset_codes.as_slice() {
-        [one] => {
-            filters.push_str(&format!(" AND ({} OR {})", leg('a'), leg('b')));
-            binds.push(one.clone());
-            binds.push(one.clone());
-        }
-        [first, second] => {
-            filters.push_str(&format!(
-                " AND (({a} AND {b}) OR ({a} AND {b}))",
-                a = leg('a'),
-                b = leg('b'),
-            ));
-            // Bind order follows the `?`s left to right: first/second, then the
-            // reversed assignment.
-            binds.push(first.clone());
-            binds.push(second.clone());
-            binds.push(second.clone());
-            binds.push(first.clone());
-        }
-        // `normalize_asset_codes` yields at most two needles.
-        _ => {}
+    //
+    // The predicate itself lives in `common::pool_asset_codes` because global
+    // search matches pools with the SAME rule (task 0470); two copies would
+    // drift, and the native arm above is exactly where a second one goes wrong.
+    //
+    // A pool identifier in the same box wins outright: it names one pool, so
+    // it is a point seek on the primary key rather than a scan, and there is
+    // nothing left for a code match to narrow. Before this, the identifier was
+    // matched as a substring of an asset code and the page said "no pools".
+    if let Some(pool_hex) = params.pool_id_hex.as_ref() {
+        filters.push_str(" AND lp.pool_id = unhex(?)");
+        binds.push(pool_hex.clone());
+    } else if let Some((clause, clause_binds)) =
+        asset_codes_predicate(params.asset_codes.as_slice())
+    {
+        filters.push_str(&format!(" AND {clause}"));
+        binds.extend(clause_binds);
     }
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
@@ -2307,6 +2312,7 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
+            pool_id_hex: None,
             asset_codes: Vec::new(),
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -2394,6 +2400,7 @@ mod decode_smoke {
             asset_b_issuer: None,
             // Deliberately a proper prefix of a real code: an exact-match
             // predicate returns zero rows here, a substring one does not.
+            pool_id_hex: None,
             asset_codes: vec!["USD".to_string()],
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -2433,6 +2440,7 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
+            pool_id_hex: None,
             asset_codes: vec!["XLM".to_string()],
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -2468,6 +2476,7 @@ mod decode_smoke {
             asset_a_issuer: None,
             asset_b_code: None,
             asset_b_issuer: None,
+            pool_id_hex: None,
             asset_codes: vec![a.to_string(), b.to_string()],
         };
 

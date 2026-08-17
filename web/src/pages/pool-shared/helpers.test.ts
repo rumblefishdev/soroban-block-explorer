@@ -16,16 +16,58 @@ function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
 }
 
 describe('legHref', () => {
-  it('returns undefined for native legs (no on-chain address)', () => {
-    expect(
-      legHref(makeLeg({ asset_type: 0, asset_type_name: 'native' }))
-    ).toBeUndefined();
+  // Changed in task 0472 — this case previously asserted `undefined`. Not a
+  // regression: `/assets/native` became the canonical asset token in 0243,
+  // which retired the "native has no address" rationale this rule was built
+  // on. XLM was the only leg in the app that rendered as dead text.
+  it('links native legs to the canonical /assets/native token', () => {
+    expect(legHref(makeLeg({ asset_type: 0, asset_type_name: 'native' }))).toBe(
+      '/assets/native'
+    );
   });
 
-  it('prefers contract_id (SAC mirror) over code/issuer', () => {
+  it('prefers the canonical native token over an XLM SAC mirror', () => {
     expect(
       legHref(
         makeLeg({
+          asset_type: 0,
+          asset_type_name: 'native',
+          asset_code: null,
+          issuer: null,
+          contract_id:
+            'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+        })
+      )
+    ).toBe('/assets/native');
+  });
+
+  // Flipped in task 0472 — this case previously asserted contract_id-first.
+  // Intentional: task 0364 dropped SAC-facet aliasing from the assets
+  // endpoint, so /assets/{SAC C…} 404s and the pair is the only live route
+  // for a classic leg (~93k legs carry a SAC mirror on prod).
+  it('prefers code-issuer over the SAC mirror, whose address now 404s', () => {
+    expect(
+      legHref(
+        makeLeg({
+          contract_id:
+            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+        })
+      )
+    ).toBe(
+      `/assets/${encodeURIComponent(
+        'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+      )}`
+    );
+  });
+
+  it('falls back to contract_id only when the pair is incomplete', () => {
+    expect(
+      legHref(
+        makeLeg({
+          asset_code: null,
+          issuer: null,
+          asset_type: 3,
+          asset_type_name: 'soroban',
           contract_id:
             'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
         })

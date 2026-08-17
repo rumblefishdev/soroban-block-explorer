@@ -147,7 +147,15 @@ pub async fn get_account(
         }
     };
 
-    let balances = match fetch_account_balances(&state, header.id).await {
+    // Balances and deleted-status both key off `header.id` alone — neither
+    // consumes the other, so they go out together (task 0446). Kept as two
+    // `match` arms so each keeps its own error log line.
+    let (balances_res, deleted_res) = tokio::join!(
+        fetch_account_balances(&state, header.id),
+        fetch_deleted_for_source(&state, header.id, header.last_seen_ledger),
+    );
+
+    let balances = match balances_res {
         Ok(rows) => rows
             .into_iter()
             .map(|r| AccountBalance {
@@ -169,7 +177,7 @@ pub async fn get_account(
         }
     };
 
-    let deleted = match fetch_deleted_for_source(&state, header.id, header.last_seen_ledger).await {
+    let deleted = match deleted_res {
         Ok(d) => d,
         Err(e) => {
             tracing::error!("DB error deriving deleted status for {account_id}: {e}");

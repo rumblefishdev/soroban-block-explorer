@@ -217,12 +217,27 @@ pub fn client_with_mtls(
             // half-dead sockets that surface as `connection closed` on the next
             // request after a quiet period.
             .pool_idle_timeout(Duration::from_secs(8))
-            // The indexer writes ledger-by-ledger but the Lambda is sized for
-            // reservedConcurrentExecutions ≤ a handful. Two pooled connections
-            // per host is plenty for serial writes; bumping this hides
-            // connection-error symptoms but uses more SM Extension warm-cert
-            // memory across reuse.
-            .pool_max_idle_per_host(2)
+            // Must cover the WIDEST concurrent read a single request makes, not
+            // just the indexer's serial writes this was originally sized for
+            // (task 0446). Below the cap, the surplus connection is opened per
+            // request and then evicted, so every such request pays a fresh
+            // TCP + TLS 1.3 + mTLS handshake to Hetzner on a 256 MB Lambda —
+            // which can cost more than the round trip the concurrency saves.
+            // `enable_http1()` only, so there is no h2 multiplexing to absorb it.
+            //
+            // **Count nesting, not arms.** A `join!` inside a joined future
+            // multiplies:
+            //   * `search::fetch_search` — `try_join!` over 6 arms → 6.
+            //   * `transactions::get_transaction` — 3 arms, one of which is
+            //     `fetch_invocation_appearances`, itself a 2-arm join → 4. That
+            //     is the archive-degraded path, so the pool is tightest exactly
+            //     when the request is already struggling.
+            //
+            // 8 covers the widest (6) with spare. A Lambda instance serves one
+            // request at a time, so this bounds retained idle sockets per
+            // instance, not in-flight ones; the indexer never holds more than
+            // one either way.
+            .pool_max_idle_per_host(8)
             .build(https);
 
     let url = format!("https://{domain}");

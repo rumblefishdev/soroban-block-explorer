@@ -816,6 +816,11 @@ export type LedgerDetailResponse = {
   prev_sequence?: number | null;
   protocol_version: number;
   sequence: number;
+  /**
+   * Successful transactions in this ledger — same semantics (and same
+   * `null` case) as [`LedgerListItem::successful_transaction_count`].
+   */
+  successful_transaction_count?: number | null;
   transaction_count: number;
   /**
    * Paginated linked transactions, DB-only `TransactionListItem` rows.
@@ -836,6 +841,18 @@ export type LedgerListItem = {
   hash: string;
   protocol_version: number;
   sequence: number;
+  /**
+   * Successful transactions in this ledger; the failed count is
+   * `transaction_count - successful_transaction_count` (verified equal on
+   * 3,003 sampled ledgers, and the shape Horizon itself uses — it carries
+   * no total field, only the two counts).
+   *
+   * `null` when the ledger has no `transactions` rows to aggregate. That is
+   * distinct from `0`, which means every transaction in the ledger failed —
+   * rendering a missing aggregate as `0 successful` would claim a total
+   * failure that did not happen.
+   */
+  successful_transaction_count?: number | null;
   transaction_count: number;
 };
 
@@ -1428,6 +1445,18 @@ export type PaginatedLedgerListItem = {
     hash: string;
     protocol_version: number;
     sequence: number;
+    /**
+     * Successful transactions in this ledger; the failed count is
+     * `transaction_count - successful_transaction_count` (verified equal on
+     * 3,003 sampled ledgers, and the shape Horizon itself uses — it carries
+     * no total field, only the two counts).
+     *
+     * `null` when the ledger has no `transactions` rows to aggregate. That is
+     * distinct from `0`, which means every transaction in the ledger failed —
+     * rendering a missing aggregate as `0 successful` would claim a total
+     * failure that did not happen.
+     */
+    successful_transaction_count?: number | null;
     transaction_count: number;
   }>;
   page: PageInfo;
@@ -2932,6 +2961,12 @@ export type ListPoolsData = {
      * are not unique on Stellar, and this filter matches codes, not asset
      * identity. Callers needing one specific issuer's asset should use the
      * per-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.
+     *
+     * A pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,
+     * the one canonical form (task 0264) — and selects that single pool
+     * instead of matching asset codes (task 0470). Previously an identifier
+     * was matched as a substring of an asset code, found nothing, and the
+     * list answered "no pools" about a pool that exists.
      */
     'filter[asset_code]'?: string | null;
     'filter[asset_a_code]'?: string | null;

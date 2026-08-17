@@ -18,6 +18,8 @@ import { useContractDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
 import { ContractCode } from './contracts/ContractCode.js';
+import { contractFace } from './contracts/contractFace.js';
+import { ContractFaceChip } from './contracts/ContractFaceChip.js';
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
@@ -37,6 +39,7 @@ export default function ContractDetailPage() {
     defaultKey: 'interface',
     validKeys: TAB_KEYS,
   });
+  const face = contract.data != null ? contractFace(contract.data) : null;
 
   if (!valid) {
     return <NotFoundState entity="contract" identifier={contractId} />;
@@ -123,9 +126,10 @@ export default function ContractDetailPage() {
           <Typography variant="heading5SemiBold" component="h1">
             Contract
           </Typography>
-          {contract.data?.is_sac === true && (
-            <Chip size="md" color="accent" label="Stellar Asset Contract" />
-          )}
+          {/* Task 0472: the header names what this contract IS — for every
+              class, not just SAC — and links to it. See `contractFace` /
+              `ContractFaceChip` (shared with the list row). */}
+          {face != null && <ContractFaceChip face={face} size="md" />}
           {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a

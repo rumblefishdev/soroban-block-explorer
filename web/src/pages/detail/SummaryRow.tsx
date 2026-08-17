@@ -4,8 +4,6 @@ import type { ReactNode } from 'react';
 export interface SummaryCell {
   label: string;
   value: ReactNode;
-
-  labelMinWidth?: number;
 }
 
 /**
@@ -46,7 +44,7 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
             sx={(theme) => ({
               color: theme.palette.text.primary,
 
-              minWidth: { xs: 'auto', sm: cell.labelMinWidth ?? 140 },
+              minWidth: { xs: 'auto', sm: 140 },
               flexShrink: 0,
             })}
           >

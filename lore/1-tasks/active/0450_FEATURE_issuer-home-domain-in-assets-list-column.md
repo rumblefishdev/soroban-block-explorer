@@ -123,6 +123,37 @@ history:
       absent, since the address is derivable for every classic asset from
       `(code, issuer, network)` with no query at all. Deferred to 0452 rather
       than widened here. The assets-list column change stands.
+  - date: '2026-08-10'
+    status: active
+    who: karolkow
+    note: >
+      Audited during the post-deploy verification sweep. The column is LIVE on
+      production and renders correctly — verified against real issuers
+      (`tokenglade.com`, `damianfi.litemint.store`, `stellarterm.com`), absent
+      domains degrade cleanly, both tables share `DomainChip`, the column is
+      240 wide, and the wire field plus generated types are in place. Eight
+      criteria ticked accordingly; the record previously showed none, which
+      read as "nothing shipped".
+      Two criteria FAILED and stay open, both found by measuring rather than
+      reading. (1) The USDC case the task was written around is EMPTY:
+      `issuer_home_domain` is null for
+      `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`, while the
+      account carries `circle.com` on-chain. AQUA (61 863 holders) is the same
+      — `aqua.network` on-chain, null for us. Coverage across classic assets
+      is 22.2 % (75 288 of 338 963). A whole-row RMT clobber was suspected and
+      REFUTED by measurement: of 1 014 072 accounts that ever carried a
+      domain, zero lose it on their newest row, so this is missing capture,
+      not overwriting. Root cause not yet established — spawned as [[0469]].
+      (2) The two-source conflict the task itself predicted was never
+      resolved: the list shows the on-chain `home_domain` while the asset
+      detail labels a `Domain` row derived from the SEP-1 TOML `ORG_URL`
+      hostname (`AssetMetadata.tsx:39`). Same label, different sources, on two
+      surfaces describing the same asset.
+      Docs criterion stays open until the source question is settled — writing
+      the column into the architecture docs while two surfaces disagree on
+      what it means would document the ambiguity as if it were the contract.
+      The no-extra-round-trip criterion also stays open: it asks for a
+      before/after `read_rows` comparison that has not been run.
 ---
 
 # FEATURE: issuer home domain in the assets-list issuer column
@@ -337,23 +368,23 @@ toggle. Nobody asked for it; note it here so its absence reads as a decision.
 
 ## Acceptance criteria
 
-- [ ] `issuer_home_domain` present on the assets-list item response
+- [x] `issuer_home_domain` present on the assets-list item response
 - [ ] No additional ClickHouse round trip vs today — verified by comparing the
       query count / `read_rows` on a list page before and after
-- [ ] Source decision recorded (see the two-source section) before coding
-- [ ] Column decision recorded — a classic asset with a SAC shows its issuer,
+- [x] Source decision recorded (see the two-source section) before coding
+- [x] Column decision recorded — a classic asset with a SAC shows its issuer,
       not only the SAC contract
 - [ ] Verified on USDC specifically: it has a SAC, so it is the case that is
       broken today and the case the report used
-- [ ] Column renders `StrKey` + domain; absent domain degrades cleanly
-- [ ] Issuer column widened (160 → 240) so the chip is not crushed
-- [ ] Both tables render the cell from one shared component, not two copies
+- [x] Column renders `StrKey` + domain; absent domain degrades cleanly
+- [x] Issuer column widened (160 → 240) so the chip is not crushed
+- [x] Both tables render the cell from one shared component, not two copies
 - [ ] Asset detail and assets list agree on what "Domain" means — no surface
       shows a value the other contradicts
-- [ ] Contract-backed rows (soroban, SAC facet) unchanged
+- [x] Contract-backed rows (soroban, SAC facet) unchanged
 - [ ] **Docs updated** — assets endpoint contract under `docs/architecture/**`
       per ADR 0032
-- [ ] **API types regenerated** — touches `crates/api/**`; run
+- [x] **API types regenerated** — touches `crates/api/**`; run
       `npx nx run @rumblefish/api-types:generate`
 
 ## Notes

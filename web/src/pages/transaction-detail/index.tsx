@@ -19,12 +19,10 @@ import { OperationsSection } from './sections/OperationsSection.js';
 import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
 import { TransactionDetailSkeleton } from './TransactionDetailSkeleton.js';
-import { useSelectedOp } from './useSelectedOp.js';
 import { useTxHashParam } from './useTxHashParam.js';
 
 export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
-  const [selectedIndex, setSelectedIndex] = useSelectedOp();
   const query = useTransactionDetail(valid ? hash : '');
 
   if (!valid) {
@@ -82,11 +80,7 @@ export default function TransactionDetailPage() {
       </SectionErrorBoundary>
 
       <SectionErrorBoundary sectionName="transaction-operations">
-        <OperationsSection
-          tx={tx}
-          selectedIndex={selectedIndex}
-          onSelect={setSelectedIndex}
-        />
+        <OperationsSection tx={tx} />
       </SectionErrorBoundary>
 
       <SectionErrorBoundary sectionName="transaction-signatures">

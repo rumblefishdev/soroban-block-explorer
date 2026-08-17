@@ -993,7 +993,7 @@
       "get": {
         "tags": ["ledgers"],
         "summary": "Get ledger detail by sequence — header + prev/next navigation +\nembedded paginated transactions.",
-        "description": "Two phases, both DB-only:\n\n1. **DB header.** Resolve `:sequence` against `ledgers` + LATERAL\n   prev/next computed via `sequence` comparisons on the `ledgers`\n   PK (index-only scan, no heap fetch). 404 on miss.\n2. **DB transactions.** Keyset-paginated read of the `transactions`\n   partition with full equality partition prune\n   (`created_at = $closed_at`).\n\nThe detail endpoint reuses the standard `?limit=` / `?cursor=` query\nparameters to drive embedded transactions pagination. Detail itself\nis a single resource, so no naming collision arises — the params\npage the embedded list directly.",
+        "description": "Two DB-only reads, issued concurrently — both key off the path\n`:sequence`, so neither waits on the other (task 0446):\n\n- **Header.** Resolve `:sequence` against `ledgers` + prev/next\n  computed via `sequence` comparisons on the `ledgers` PK\n  (index-only scan, no heap fetch). Decides the 404.\n- **Transactions.** Keyset-paginated read of `transactions`, pruned\n  to the one partition holding that sequence\n  (`intDiv(ledger_sequence, 500000)`).\n\nThe detail endpoint reuses the standard `?limit=` / `?cursor=` query\nparameters to drive embedded transactions pagination. Detail itself\nis a single resource, so no naming collision arises — the params\npage the embedded list directly.",
         "operationId": "get_ledger",
         "parameters": [
           {
@@ -1101,7 +1101,7 @@
           {
             "name": "filter[asset_code]",
             "in": "query",
-            "description": "Free-text asset filter — case-insensitive substring of either\n`asset_a_code` or `asset_b_code` (input is trimmed before the\nquery). The needle is matched literally: `%`, `_` and regex\nmetacharacters have no special meaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent, one on each leg, and the typed order does not matter. Only the\nfirst `/` splits, so `USDC/XLM/BTC` searches for the literal second code\n`XLM/BTC` and therefore matches nothing — a pool has two legs.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity. Callers needing one specific issuer's asset should use the\nper-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.",
+            "description": "Free-text asset filter — case-insensitive substring of either\n`asset_a_code` or `asset_b_code` (input is trimmed before the\nquery). The needle is matched literally: `%`, `_` and regex\nmetacharacters have no special meaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent, one on each leg, and the typed order does not matter. Only the\nfirst `/` splits, so `USDC/XLM/BTC` searches for the literal second code\n`XLM/BTC` and therefore matches nothing — a pool has two legs.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity. Callers needing one specific issuer's asset should use the\nper-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.\n\nA pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,\nthe one canonical form (task 0264) — and selects that single pool\ninstead of matching asset codes (task 0470). Previously an identifier\nwas matched as a substring of an asset code, found nothing, and the\nlist answered \"no pools\" about a pool that exists.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -3098,6 +3098,11 @@
             "type": "integer",
             "format": "int64"
           },
+          "successful_transaction_count": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Successful transactions in this ledger — same semantics (and same\n`null` case) as [`LedgerListItem::successful_transaction_count`]."
+          },
           "transaction_count": {
             "type": "integer",
             "format": "int32"
@@ -3139,6 +3144,11 @@
           "sequence": {
             "type": "integer",
             "format": "int64"
+          },
+          "successful_transaction_count": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Successful transactions in this ledger; the failed count is\n`transaction_count - successful_transaction_count` (verified equal on\n3,003 sampled ledgers, and the shape Horizon itself uses — it carries\nno total field, only the two counts).\n\n`null` when the ledger has no `transactions` rows to aggregate. That is\ndistinct from `0`, which means every transaction in the ledger failed —\nrendering a missing aggregate as `0 successful` would claim a total\nfailure that did not happen."
           },
           "transaction_count": {
             "type": "integer",
@@ -3902,6 +3912,11 @@
                 "sequence": {
                   "type": "integer",
                   "format": "int64"
+                },
+                "successful_transaction_count": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "Successful transactions in this ledger; the failed count is\n`transaction_count - successful_transaction_count` (verified equal on\n3,003 sampled ledgers, and the shape Horizon itself uses — it carries\nno total field, only the two counts).\n\n`null` when the ledger has no `transactions` rows to aggregate. That is\ndistinct from `0`, which means every transaction in the ledger failed —\nrendering a missing aggregate as `0 successful` would claim a total\nfailure that did not happen."
                 },
                 "transaction_count": {
                   "type": "integer",

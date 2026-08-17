@@ -145,6 +145,8 @@ export {
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
+  NATIVE_ASSET_CODE,
+  isNativeAssetString,
   DomainChip,
   type DomainChipProps,
 } from './identifiers/index.js';

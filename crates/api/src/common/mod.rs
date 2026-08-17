@@ -18,5 +18,6 @@ pub mod filters;
 pub mod head;
 pub mod pagination;
 pub mod path;
+pub mod pool_asset_codes;
 pub mod request_id;
 pub mod strkey;

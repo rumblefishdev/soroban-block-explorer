@@ -1,3 +1,4 @@
+import { NATIVE_ASSET_CODE } from '../identifiers/native.js';
 import { formatAmount, scaleByDecimals } from './amount.js';
 
 /**
@@ -53,7 +54,8 @@ export function formatTokenAmount(
 ): string | null {
   const decimal = stroopsToDecimal(stroops);
   if (decimal == null) return null;
-  const unit = assetCode != null && assetCode.length > 0 ? assetCode : 'XLM';
+  const unit =
+    assetCode != null && assetCode.length > 0 ? assetCode : NATIVE_ASSET_CODE;
   return `${groupDecimalString(decimal)} ${unit}`;
 }
 

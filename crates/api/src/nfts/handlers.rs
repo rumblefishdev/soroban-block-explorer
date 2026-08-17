@@ -280,24 +280,29 @@ pub async fn list_nft_transfers(
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
 
-    // Existence first (404-vs-empty disambiguation), then the page. CH keys
+    // Existence gate (404-vs-empty disambiguation) alongside the page. CH keys
     // `nft_ownership` on `(contract_id, token_id)` directly, so no surrogate
-    // indirection. `Ok(None)` = the NFT does not exist → 404.
-    let fetched: Result<Option<Vec<NftTransferItem>>, clickhouse::error::Error> =
-        match queries::nft_exists(&state.ch(), &contract_id, &token_id).await {
-            Ok(true) => queries::fetch_transfers(
-                &state.ch(),
-                &contract_id,
-                &token_id,
-                pagination.cursor.as_ref(),
-                fetch_limit,
-                direction,
-            )
-            .await
-            .map(Some),
-            Ok(false) => Ok(None),
-            Err(e) => Err(e),
-        };
+    // indirection — the page never consumes the existence answer and both
+    // derive from the path, so they go out together (task 0446). Existence
+    // still decides: `Ok(None)` = the NFT does not exist → 404, and a missing
+    // NFT costs one wasted page read.
+    let ch = state.ch();
+    let (exists, transfers) = tokio::join!(
+        queries::nft_exists(&ch, &contract_id, &token_id),
+        queries::fetch_transfers(
+            &ch,
+            &contract_id,
+            &token_id,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        ),
+    );
+    let fetched: Result<Option<Vec<NftTransferItem>>, clickhouse::error::Error> = match exists {
+        Ok(true) => transfers.map(Some),
+        Ok(false) => Ok(None),
+        Err(e) => Err(e),
+    };
     let mut rows = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
