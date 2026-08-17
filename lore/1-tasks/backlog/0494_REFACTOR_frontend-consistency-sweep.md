@@ -1,5 +1,5 @@
 ---
-id: '0490'
+id: '0494'
 title: 'REFACTOR: frontend consistency sweep — one chip size, one placeholder, one name per thing, real heading hierarchy'
 type: REFACTOR
 status: backlog
