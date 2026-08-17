@@ -9,6 +9,17 @@ tags: [api, frontend, contracts, assets, nfts, priority-medium, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-08-17'
+    status: backlog
+    who: karolkow
+    note: >
+      Scope extended after the 0472 deploy: the same header chip is also the
+      only chip in the app rendered at a different size and in a different
+      register from every other surface. Measured on production, not inferred
+      — see `## The chip is also inconsistent`. Bundled here rather than
+      spawned as its own task because both halves change the same component's
+      presentation; the size half is frontend-only and need not wait for the
+      API field.
   - date: '2026-08-13'
     status: backlog
     who: karolkow
@@ -75,6 +86,40 @@ collection's name lives in the NFT data. Options, none of them frontend-only:
    already exist, only the label source changes.
 4. Regenerate `libs/api-types` (CI gate `API types freshness`).
 
+## The chip is also inconsistent
+
+Reported after the 2026-08-17 deploy by comparing two sibling detail pages —
+`/contracts/CB23…OUOV` and the asset it links to, `/assets/KALE-GBDV…KALE`.
+Measured with computed styles on production:
+
+|                 | asset detail | contract detail                 |
+| --------------- | ------------ | ------------------------------- |
+| font-size       | 12px         | 14px                            |
+| font-weight     | 700          | 500                             |
+| padding         | 2px 8px      | 4px 12px                        |
+| rendered height | 21px         | 28px                            |
+| label           | `SAC`        | `Stellar Asset Contract · KALE` |
+
+Same font family (Satoshi) — the "different typeface" impression is the weight
+swap, on a chip a third taller.
+
+**The contract page is the outlier, on both axes.** `size="md"` occurs in
+exactly one file in the whole frontend — `ContractDetailPage.tsx:132` (the face
+chip) and `:139` (the 0327 upgradeability badge). Every other chip in the app —
+asset header, account header, all tables, transactions, ledgers — is `sm`. The
+long register is equally alone: `Stellar Asset Contract` renders on the contract
+detail only, while five surfaces say `SAC` (asset header, assets table, account
+balances, contracts table, contracts list filter).
+
+The counter-case is worth stating rather than assuming away: a page header may
+legitimately carry a larger chip than a table row. If that is the intent, the
+fix is the reverse one — asset and account headers move up, and the app grows a
+documented header-chip size. What must not survive is one page differing from
+every other by accident.
+
+Note the register question is not independent of this task's main scope: item 3
+below rewrites what the label says, so decide the wording once, for both.
+
 ## Watch out
 
 527 type-3 assets on prod have neither code nor symbol, and 75% of NFT
@@ -90,3 +135,6 @@ rendered a confident "A" that read like a real ticker).
 - [ ] `libs/api-types` regenerated in the same commit as the API change
 - [ ] vitest cases for named and unnamed, per class
 - [ ] Docs: backend-overview (contract endpoint) + frontend-overview §6.10
+- [ ] Contract detail chips match the rest of the app (one size decision,
+      applied everywhere, not per page)
+- [ ] One register for the SAC label across all six surfaces
