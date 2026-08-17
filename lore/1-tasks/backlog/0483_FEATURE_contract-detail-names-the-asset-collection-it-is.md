@@ -118,7 +118,7 @@ documented header-chip size. What must not survive is one page differing from
 every other by accident.
 
 Note the register question is not independent of this task's main scope: item 3
-below rewrites what the label says, so decide the wording once, for both.
+of `## Scope` rewrites what the label says, so decide the wording once, for both.
 
 ## Watch out
 
