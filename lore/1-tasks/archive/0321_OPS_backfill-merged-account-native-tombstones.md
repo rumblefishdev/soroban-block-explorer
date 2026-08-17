@@ -2,7 +2,7 @@
 id: '0321'
 title: 'OPS: backfill native=0 tombstones for merged-account ghosts (DB-only, no S3 re-parse)'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0295', '0349']
 tags: [ops, clickhouse, layer-data, accountmerge, priority-medium, effort-small]
@@ -30,6 +30,20 @@ history:
       account's higher-ledger row, so the backfill must NOT special-case them.
       Post-0295 truly-deleted native ghosts already ≈0 (fix-forward works); this
       backfill is purely the pre-fix historical tail.
+  - date: '2026-08-17'
+    status: completed
+    who: karolkow
+    note: >
+      Archived after live verification (during 0463 work). The backfill's
+      fingerprint is present in prod: merged accounts from sampled early
+      windows carry native amount=0 rows versioned exactly at their merge
+      ledger, and two windows (pre-fix 51.0-51.1M and recent 62.52-62.53M)
+      show ZERO ghosts with positive native. Verified from the data
+      fingerprint, not a run log. NOTE: the verification also uncovered a
+      SEPARATE defect outside this task's scope — participant skeleton rows
+      bump last_seen past death, so the deleted DERIVATION reports 5/5
+      sampled dead accounts as alive (task 0500). The tombstones this task
+      owned are correct; the chip defect is 0324's derivation assumption.
 ---
 
 # OPS: backfill native=0 tombstones for merged ghosts
