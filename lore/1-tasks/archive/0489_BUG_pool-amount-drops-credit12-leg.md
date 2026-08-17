@@ -167,7 +167,7 @@ read the `assets` facet space, and widening it there would break them.
       `LCGK…CFJT`, tx `24d04961…c5b5`: the page shows
       `0.0025 yXLM → 0.0056817 CETES`, Horizon's `liquidity_pool_trade` effect
       for pool `8ca53441…` reports `sold 0.0056817 CETES / bought 0.0025000
-    yXLM`. Both trade directions render on that page
+yXLM`. Both trade directions render on that page
 - [x] ~~Post-deploy: re-run the blast-radius query and confirm the one-sided
       share drops to the net-to-zero floor (~0.01%)~~ — **this criterion was
       unmeasurable as written.** The blast-radius query counts operations on
