@@ -163,6 +163,29 @@ pub fn credit_asset_id(asset_code: &str, issuer: &str) -> i64 {
     asset_id(1, asset_code, account_id(issuer), 0)
 }
 
+/// The surrogate for one leg of a liquidity pool, from the `liquidity_pools`
+/// columns (`asset_a_type` / `asset_a_code` / `asset_a_issuer_id`).
+///
+/// **`asset_type` there is NOT the project enum [`asset_id`] takes.** It is the
+/// raw XDR asset type, where `1` is `credit_alphanum4` and `2` is
+/// `credit_alphanum12` — both ordinary classic credit assets. In the project
+/// enum `2` means the retired SAC facet, so feeding a pool leg straight into
+/// [`asset_id`] sends every 12-character code into the `_ => contract_id` arm
+/// and yields `0`, an id nothing is ever stored under (task 0489: that silently
+/// blanked one leg of every trade on 59% of pools).
+///
+/// A pool leg is classic by construction — native or credit, never a contract —
+/// so both credit widths collapse onto the one credit surrogate the writer uses
+/// (`stage.rs::claim_atom_asset_id` → [`credit_asset_id`]).
+#[inline]
+pub fn pool_leg_asset_id(asset_type: i16, asset_code: &str, issuer_id: i64) -> i64 {
+    if asset_type == 0 {
+        NATIVE_ASSET_ID
+    } else {
+        asset_id(1, asset_code, issuer_id, 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -32,9 +32,15 @@
 --     `any()` is exact because duplicates of a key are byte-identical by
 --     construction (one reducer, shared by live ingest and the re-parse).
 --     `FINAL` would merge whole parts to answer a bounded seek.
---     `asset_id` maps onto the pool's two legs via `ids::asset_id` over
---     `liquidity_pools.asset_{a,b}_{type,code,issuer_id}` — resolved in Rust,
---     since CH's builtin `cityHash64` is NOT the surrogate's algorithm.
+--     `asset_id` maps onto the pool's two legs via `ids::pool_leg_asset_id`
+--     over `liquidity_pools.asset_{a,b}_{type,code,issuer_id}` — resolved in
+--     Rust, since CH's builtin `cityHash64` is NOT the surrogate's algorithm.
+--     NOT via `ids::asset_id`: that reads `asset_type` as the project enum of
+--     the `assets` table (2 = retired SAC facet), while `liquidity_pools`
+--     stores the raw XDR type (2 = `credit_alphanum12`). Passing a pool leg
+--     straight in sent every 12-character code to `_ => contract_id` = 0, an
+--     id nothing is stored under, so that leg silently vanished from the
+--     response — one-sided trades on 59% of pools until task 0489.
 --     A transaction with no rows sends an empty list — the frontend renders
 --     blank, never `0` — for history the backfill has not reached.
 -- ============================================================================
