@@ -4,7 +4,7 @@ title: 'FEATURE: store `total_coins` / `fee_pool` from the ledger header — a f
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0331', '0321', '0463', '0503', '0504']
+related_tasks: ['0210', '0342', '0331', '0321', '0463', '0503', '0504']
 tags:
   [
     backend,
@@ -71,20 +71,67 @@ stroop.
 Two lessons, both worth encoding in whatever this task builds:
 
 - **circulating supply ≠ total supply.** If a "supply" figure is ever shown to
-  users, say which one it is. Most explorers show circulating.
+  users, say which one it is. Most explorers show circulating. (Task 0342
+  owns this decision and had already identified the same burn-void account on
+  2026-07-02 — the "discovery" here was a rediscovery, which is itself an
+  argument for the oracle: a stored number would have made the question
+  trivial instead of sending someone hunting through external sources.)
 - The near-miss happened because the check had to be improvised from outside
   sources. With `total_coins` stored, the question would have been a single
   query.
+
+## Relationship to the two tasks that already exist
+
+Checked before filing — this does NOT duplicate either, but neither can be
+read without it:
+
+- **Task 0210** (`total_supply` parity) wants our supply validated against an
+  external source, and that source is **Horizon** — now legacy and banned from
+  verification. 0210 therefore has a target it may no longer use.
+  **`total_coins` is the replacement oracle**, and a better one: it is the
+  protocol's own accounting rather than another indexer's opinion, it needs no
+  network call, and it arrives with every ledger.
+- **Task 0342** (supply display convention) already owns the burn-void
+  question — it was filed 2026-07-02 after the 0331 run surfaced exactly the
+  `GALAXYVOID…` balance, verified as real on-chain data. **The
+  circulating-versus-total labelling decision belongs to 0342, not here.**
+  This task only supplies the number that makes the distinction measurable.
+
+## The reconciliation identity — the real deliverable
+
+The question "should our sum converge to `total_coins`?" has a sharper answer
+than yes or no. XLM exists in venues we do and do not index, so the identity
+is:
+
+```
+total_coins  =  Σ account XLM (indexed)
+              + Σ claimable balances (NOT indexed — task 0504)
+              + Σ liquidity-pool reserves (NOT indexed — LiquidityPoolEntry)
+              + fee_pool (header field, not indexed)
+```
+
+So our sum should **not** equal `total_coins` — it should fall short by
+exactly the unindexed terms. That is what makes the oracle useful: the residual
+is not noise to explain away, it is the **measured size of our blind spot**,
+and it should shrink to `fee_pool` alone as 0504's entry types get indexed.
+
+Establishing this identity — confirming each term, and where contract-held XLM
+(SAC, re-keyed to the native id by ADR 0051) sits within it — is the substance
+of this task. Do not assume the terms; verify each against a decoded header
+and the chain.
 
 ## Scope
 
 - Parse and store `total_coins`, `fee_pool`, `base_reserve` and
   `bucket_list_hash` on `ledgers` (`ALTER … ADD COLUMN … DEFAULT` first, then
   the writer — the ADR 0055 deployment order).
-- A continuous check comparing our summed native supply against
-  `total_coins`, with the residual attributed to unindexed venues rather than
-  silently ignored.
-- Decide whether "supply" on the UI means circulating or total, and label it.
+- Establish and document the reconciliation identity above, with each term
+  measured rather than asserted.
+- A continuous check of the residual, so a regression (phantom XLM, a
+  double-count, a dropped venue) surfaces as a moving number instead of
+  sitting undetected.
+- Hand the circulating-versus-total labelling to **0342**; hand the
+  external-parity goal of **0210** its new oracle.
 - Whether to backfill historical ledgers is a separate, measured decision.
 
 ## Acceptance criteria
