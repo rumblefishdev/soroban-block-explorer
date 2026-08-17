@@ -39,8 +39,14 @@
 --     the `assets` table (2 = retired SAC facet), while `liquidity_pools`
 --     stores the raw XDR type (2 = `credit_alphanum12`). Passing a pool leg
 --     straight in sent every 12-character code to `_ => contract_id` = 0, an
---     id nothing is stored under, so that leg silently vanished from the
---     response — one-sided trades on 59% of pools until task 0489.
+--     id nothing is stored under, so that leg matched no row and came back
+--     null (task 0489). 59% of pools carry a type-2 leg, and the damage came
+--     in two shapes: a mixed pool (type 1-or-0 beside type 2) rendered the
+--     trade ONE-SIDED, while a pool with BOTH legs type 2 — 13,703 of them —
+--     resolved to (0, 0) and rendered NOTHING. The blank case is the reason
+--     this went unnoticed: an empty Amount cell is the documented signal for
+--     "the amount index has not reached this row yet", so it read as a
+--     pending backfill rather than a bug.
 --     A transaction with no rows sends an empty list — the frontend renders
 --     blank, never `0` — for history the backfill has not reached.
 -- ============================================================================

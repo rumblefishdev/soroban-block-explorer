@@ -177,12 +177,37 @@ pub fn credit_asset_id(asset_code: &str, issuer: &str) -> i64 {
 /// A pool leg is classic by construction — native or credit, never a contract —
 /// so both credit widths collapse onto the one credit surrogate the writer uses
 /// (`stage.rs::claim_atom_asset_id` → [`credit_asset_id`]).
+///
+/// The three XDR types are matched EXPLICITLY rather than via an `else`, so
+/// that a fourth one has to be thought about instead of silently inheriting the
+/// credit formula. Soroban-AMM indexing (issue #405) would bring exactly that:
+/// a leg holding a Soroban token, whose real surrogate is its contract id. An
+/// `else` would hand back a well-formed hash matching no row — the same silent
+/// blank this function exists to fix, and harder to spot than the `0` was.
 #[inline]
 pub fn pool_leg_asset_id(asset_type: i16, asset_code: &str, issuer_id: i64) -> i64 {
-    if asset_type == 0 {
-        NATIVE_ASSET_ID
-    } else {
-        asset_id(1, asset_code, issuer_id, 0)
+    match asset_type {
+        // XDR `ASSET_TYPE_NATIVE`.
+        0 => NATIVE_ASSET_ID,
+        // XDR `CREDIT_ALPHANUM4` / `CREDIT_ALPHANUM12` — both classic credit,
+        // one surrogate, keyed on (code, issuer) with no width in the formula.
+        1 | 2 => asset_id(1, asset_code, issuer_id, 0),
+        // Unreachable from a classic AMM pool, whose XDR `Asset` admits only the
+        // three above. Loud rather than fatal: a wrong id blanks a cell, while a
+        // panic here would take down a read path over a display value.
+        other => {
+            debug_assert!(
+                false,
+                "pool leg asset_type {other} is not an XDR asset type — \
+                 pool_leg_asset_id needs a real surrogate for it, not the credit formula",
+            );
+            tracing::warn!(
+                asset_type = other,
+                "unexpected pool leg asset_type; falling back to the classic-credit \
+                 surrogate, which will not match any lp_operation_amounts row",
+            );
+            asset_id(1, asset_code, issuer_id, 0)
+        }
     }
 }
 

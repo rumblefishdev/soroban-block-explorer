@@ -23,14 +23,24 @@ history:
 
 ## Summary
 
-`/liquidity-pools/:id/transactions` returns `amount_b: null` (or `amount_a`)
-for any pool whose leg is a `credit_alphanum12` asset, so the frontend renders
-a trade as a single figure instead of the `A → B` pair issue #371 asked for.
-The data on disk is correct and complete — this is a surrogate mismatch on the
-read path, fixable in one expression, with no re-parse and no backfill.
+`/liquidity-pools/:id/transactions` returns `null` for any leg that is a
+`credit_alphanum12` asset, so the frontend cannot render the `A → B` pair issue
+#371 asked for. The data on disk is correct and complete — this is a surrogate
+mismatch on the read path, fixable in one expression, with no re-parse and no
+backfill.
 
 **Measured on prod 2026-08-17: 279,452 of 1,738,948 recent pool operations
-(16.1%) render one-sided.**
+(16.1%) are affected**, in two shapes:
+
+| pool                                        | legs resolved | rendered                  |
+| ------------------------------------------- | ------------- | ------------------------- |
+| type 2 beside type 0/1 (240,751 ops)        | one           | trade shown **one-sided** |
+| both legs type 2 (38,701 ops, 13,703 pools) | neither       | **nothing at all**        |
+
+The blank case is why this survived review and a release. An empty Amount cell
+is the _documented_ signal for "the amount index has not reached this row yet"
+(`PoolTransactions.tsx`), so on a 2/2 pool the bug is indistinguishable from a
+pending backfill.
 
 ## Context
 
@@ -111,12 +121,16 @@ In `fetch_pool_asset_ids` (`crates/api/src/liquidity_pools/queries.rs`), resolve
 each leg as native-or-classic instead of passing the raw XDR type through:
 
 ```rust
-// A pool leg is classic by construction: type 1 and 2 are both credit assets
-// and share ONE surrogate (`asset_id(1, …)`, what `credit_asset_id` writes).
-// Passing the XDR type straight into `asset_id` sends credit12 into the
-// SAC arm and yields 0, a value the table never holds.
-fn pool_leg_id(asset_type: i16, code: &str, issuer_id: i64) -> i64 {
-    if asset_type == 0 { ids::NATIVE_ASSET_ID } else { ids::asset_id(1, code, issuer_id, 0) }
+// Types matched EXPLICITLY, not `0 => native, else => credit`: an `else`
+// hands a future type the credit formula and a well-formed id that matches
+// nothing — the same silent blank, minus the obviously bogus 0 that made
+// this one findable. Soroban-AMM legs (issue #405) would be exactly that.
+pub fn pool_leg_asset_id(asset_type: i16, asset_code: &str, issuer_id: i64) -> i64 {
+    match asset_type {
+        0 => NATIVE_ASSET_ID,
+        1 | 2 => asset_id(1, asset_code, issuer_id, 0),
+        other => { /* debug_assert! + tracing::warn!, never panic */ }
+    }
 }
 ```
 
@@ -173,10 +187,17 @@ clean on both crates.
 ### Emerged
 
 2. **A second test against real production values.** The first test only
-   proves this module is self-consistent — both sides could drift together.
-   Pinning the two `asset_id` values prod actually stores makes the equality
-   answerable from outside the code.
-3. **Left the mapping wrong-way-round note in place.** The evidence block first
+   proves this module is self-consistent — both sides reduce to the same
+   `asset_id(1, …)` call, so they could drift together and stay green. Pinning
+   the two `asset_id` values prod actually stores makes the equality answerable
+   from outside the code. Found in review of this task's own diff.
+3. **Explicit `match 0 | 1 | 2`, not an `else`.** A total function over `i16`
+   hands any future type the credit formula and a well-formed id that matches
+   nothing — the same silent blank, harder to spot than the old `0`. Soroban-AMM
+   indexing (issue #405) would bring exactly that leg. `debug_assert!` so a test
+   fails, `tracing::warn!` so prod says something, and no panic: a wrong id
+   blanks a cell, a panic takes down a read path over a display value.
+4. **Left the mapping wrong-way-round note in place.** The evidence block first
    labelled the two ids inverted; corrected, and the correction is called out
    rather than quietly overwritten, because the raw numbers were already quoted
    in the session that found the bug.
