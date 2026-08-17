@@ -2051,6 +2051,42 @@ mod tests {
         );
     }
 
+    /// The SAC joins on both pool reads must not filter a leg out for having an
+    /// empty `asset_code` (task 0470).
+    ///
+    /// An empty code is native XLM's real, stored identity — not a missing
+    /// value — and native has a deployed SAC. An `asset_code != ''` guard was
+    /// added deliberately in `a19ac8f6` to match Postgres, which returned NULL
+    /// there; Postgres is retired and `/v1/assets/native` publishes that same
+    /// SAC, so the guard left one asset describing itself two ways depending on
+    /// the endpoint.
+    ///
+    /// Pinned on the module source because both queries are inline string
+    /// literals — there is no builder to call. That is the honest limit of this
+    /// guard: it catches the exact regression (a re-added `!= ''` on a leg
+    /// code) and nothing subtler. A behavioural test needs the queries
+    /// extracted first, which is recorded as an acceptance criterion on 0470.
+    #[test]
+    fn no_leg_code_guard_can_exclude_the_native_leg_from_its_sac() {
+        // Only the production half — the test module below quotes the guard it
+        // is looking for, and would match itself.
+        let src = include_str!("queries.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // Count only the leg-code guards; other `!= ''` comparisons in this
+        // module are about different columns and are none of this test's
+        // business.
+        let guards = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains("asset_a_code != ''") || l.contains("asset_b_code != ''"))
+            .count();
+        assert_eq!(
+            guards, 0,
+            "a leg-code guard is back: it silently drops native XLM's SAC, \
+             which /v1/assets/native still reports"
+        );
+    }
+
     /// A transaction that ran several operations against the pool keeps each
     /// one's figure — 8.2% of pool transactions do, and summing them would
     /// describe none of them. Entries come out in application order, with each

@@ -1793,13 +1793,22 @@ export type ParticipantItem = {
  * and accepts both C-strkey (SAC) and `code-issuer` composite, so all
  * non-native legs resolve to the same asset row.
  *
- * * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
- * address in classic Stellar protocol; SAC mirror is network-dependent).
- * * `contract_id` — C-strkey of the SAC mirror for a classic credit
- * leg (populated when the leg's `(asset_code, issuer)` classic_credit /
- * native `assets` row carries a deployed SAC facet — `sac_contract_id`
- * resolving a `soroban_contracts.contract_id`, ADR 0051). `None` for legs
- * without a deployed SAC mirror. Pool legs only carry XDR `AssetType` (native /
+ * * `asset_type == 0` — native XLM; routes to `/assets/native`, the
+ * reserved token for the classic XLM singleton (it has no `code-issuer`
+ * identity to compose).
+ * * `contract_id` — C-strkey of the SAC mirror for a classic credit OR
+ * native leg (populated when the leg's `(asset_code, issuer)`
+ * classic_credit / native `assets` row carries a deployed SAC facet —
+ * `sac_contract_id` resolving a `soroban_contracts.contract_id`,
+ * ADR 0051). `None` for legs without a deployed SAC mirror.
+ *
+ * Native legs were excluded from this until task 0470. The exclusion was
+ * deliberate (`a19ac8f6`) and its reason was Postgres parity — PG returned
+ * NULL there. Postgres is retired, and the same native `assets` row
+ * already publishes that SAC as `sac_contract_id` on `/v1/assets/native`
+ * and in the assets list, which the frontend renders. Withholding it here
+ * alone made one asset describe itself two ways depending on the endpoint.
+ * Pool legs only carry XDR `AssetType` (native /
  * credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
  * so SAC / Soroban legs are not directly representable here;
  * `contract_id` surfaces the SAC mirror look-up so the FE can
@@ -1822,8 +1831,9 @@ export type PoolAssetLeg = {
   /**
    * C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`
    * classic_credit / native asset (ADR 0051 — resolved via the row's
-   * `sac_contract_id` facet). `None` for native legs and for classic credit
-   * legs without a deployed SAC.
+   * `sac_contract_id` facet). `None` only when no SAC is deployed for that
+   * asset. Native XLM has one, and reports it here (task 0470) exactly as
+   * `/v1/assets/native` already did.
    */
   contract_id?: string | null;
   /**
