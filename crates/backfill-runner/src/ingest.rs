@@ -157,8 +157,9 @@ async fn drop_indexed_file(path: &Path, keep_files: bool, partition_start: u32, 
 /// Emits `partition indexing started` / `partition indexing complete`
 /// at info level when `--verbose` is on.
 ///
-/// **Each ledger file is deleted the moment its rows are staged** (unless
-/// `keep_files`). The folder therefore shrinks as it is parsed instead of
+/// **Each ledger file is deleted the moment its rows are staged** — or the
+/// moment it is skipped as already-in-DB (unless `keep_files`). The folder
+/// therefore shrinks as it is parsed instead of
 /// standing at full size until the partition ends, which is what bounds a
 /// worker's disk footprint: with the next partition prefetching in parallel,
 /// the peak drops from two whole partitions (~27 GB) to one plus a
@@ -197,11 +198,16 @@ pub async fn index_partition(
     let mut writer = sink.open_partition();
     let loop_result: Result<(), BackfillError> = async {
         for seq in first..=last {
+            let path = partition.local_ledger_path(seq, temp_dir);
             if completed.contains(&seq) {
+                // Already in the DB, so its file is as releasable as one we
+                // just indexed — and on the resume path it is most of the
+                // partition. Skipping the unlink here would leave a
+                // re-synced partial partition sitting at nearly full size.
+                drop_indexed_file(&path, keep_files, partition.start, seq).await;
                 stats.skipped_completed += 1;
                 continue;
             }
-            let path = partition.local_ledger_path(seq, temp_dir);
             assert!(
                 path.exists(),
                 "ledger file missing post-sync: partition={} seq={} path={}",
@@ -265,8 +271,8 @@ mod tests {
     /// to preserve.
     #[tokio::test]
     async fn indexed_files_go_unless_keep_partitions_asked_for_them() {
-        let dir = std::env::temp_dir().join("bf-drop-indexed-file-test");
-        tokio::fs::create_dir_all(&dir).await.expect("mkdir");
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let dir = tmp.path();
 
         let dropped = dir.join("dropped.xdr.zst");
         tokio::fs::write(&dropped, b"x").await.expect("write");
@@ -280,7 +286,5 @@ mod tests {
 
         // A file that is already gone is not an error worth failing on.
         drop_indexed_file(&dropped, false, 64_000, 64_001).await;
-
-        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }
