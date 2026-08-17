@@ -33,7 +33,10 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{ChartDataPoint, PoolListCursor, PoolOperationAmount, SharesCursor};
+use super::dto::{
+    ChartDataPoint, PoolActivityCursor, PoolEvent, PoolListCursor, PoolOperationAmount,
+    SharesCursor,
+};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -120,6 +123,23 @@ pub struct ResolvedPoolListParams {
     /// Mutually exclusive with `asset_codes`: an identifier names exactly one
     /// pool, so there is nothing left for a code match to narrow.
     pub pool_id_hex: Option<String>,
+}
+
+/// One activity row after enrichment — the handler maps this straight into
+/// `PoolActivityItem` (task 0491).
+#[derive(Debug, Clone)]
+pub struct PoolActivityRow {
+    pub transaction_hash: String,
+    pub ledger_sequence: i64,
+    /// Surrogate `transactions.id`. Not on the wire — it is the cursor's
+    /// middle component, the same tie-break the sort key uses.
+    pub transaction_id: i64,
+    pub application_order: i16,
+    pub event: Option<PoolEvent>,
+    pub amount_a: Option<String>,
+    pub amount_b: Option<String>,
+    pub source_account: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -1369,6 +1389,189 @@ pub async fn fetch_pool_transactions(
                 operation_types,
                 created_at: millis_to_utc(r.created_at_ms),
                 amounts,
+            })
+        })
+        .collect())
+}
+
+/// One activity row: an operation against the pool, with its two legs already
+/// pivoted and classified by SQL.
+#[derive(Debug, Row, Deserialize)]
+struct PoolActivityChRow {
+    ls: i64,
+    tid: i64,
+    ao: i16,
+    /// `''` when a leg is missing — see `n_a` / `n_b` below.
+    event: String,
+    raw_a: i64,
+    raw_b: i64,
+    /// Leg presence. `anyIf` over a non-nullable `Int64` yields `0` for "no
+    /// such row", which is indistinguishable from a real zero amount and
+    /// would classify a half-row as a trade. These counts are what make the
+    /// missing-leg case detectable instead of silently wrong.
+    n_a: u64,
+    n_b: u64,
+}
+
+/// Transaction-level enrichment for the activity page's DISTINCT tx keys.
+#[derive(Debug, Row, Deserialize)]
+struct ActivityTxRow {
+    id: i64,
+    hash: String,
+    source_id: i64,
+    created_at_ms: i64,
+}
+
+/// `GET /v1/liquidity-pools/:id/activity` — one row per (operation, pool),
+/// task 0491.
+///
+/// **The driver changes table, and that is the whole design.**
+/// `operation_pools` is keyed `(pool_id, ledger_sequence, transaction_id)`
+/// with no `application_order`, so it cannot page per operation.
+/// `lp_operation_amounts` is keyed
+/// `(pool_id, ledger_sequence, transaction_id, application_order, asset_id)`
+/// — the page's exact grain, one PK-prefix seek, no join to reach it.
+///
+/// **Known consequence: an operation with no amount rows is not listed.** The
+/// retired `/transactions` shape drove off `operation_pools`, which the
+/// indexer writes for an op that *declares* a pool whether or not the
+/// transaction succeeded; amounts are written only for value that actually
+/// moved (claim atoms for trades, the op's own `LedgerEntryChanges` for
+/// deposits/withdrawals). A failed explicit LP op therefore had a row before
+/// and has none now. This is deliberate — the page answers "what moved
+/// through this pool", a failed op moved nothing, and it narrows a known
+/// CH-vs-Horizon breadth difference rather than widening it. Reversing it
+/// would mean carrying `application_order` into `operation_pools`: a schema
+/// change plus a re-key backfill, for rows the page would then have to render
+/// with empty amounts.
+///
+/// No `FINAL`. The table is a ReplacingMergeTree whose producer is
+/// deterministic (the schema header's single-writer argument), so an
+/// unmerged duplicate is byte-identical to its twin and `anyIf` picks the
+/// same value either way. `GROUP BY` collapses them for free.
+pub async fn fetch_pool_activity(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    asset_ids: (i64, i64),
+    limit: i64,
+    cursor: Option<&PoolActivityCursor>,
+    direction: Direction,
+    event: Option<PoolEvent>,
+) -> Result<Vec<PoolActivityRow>, clickhouse::error::Error> {
+    let (op, order) = keyset_sql_desc(direction);
+    let (asset_a, asset_b) = asset_ids;
+
+    // Keyset on the sort-key prefix, in WHERE so the seek still prunes — a
+    // post-GROUP BY bound would read the pool's whole history first. Bounds
+    // are i64/i16 (no injection), inlined like the other CH list paths.
+    let keyset = match cursor {
+        Some(c) => format!(
+            " AND (ledger_sequence, transaction_id, application_order) {op} ({}, {}, {})",
+            c.ledger_sequence, c.transaction_id, c.application_order
+        ),
+        None => String::new(),
+    };
+
+    // The filter is a HAVING on the very expression that produces `event`, so
+    // a chip and the filter that admitted its row can never disagree. The
+    // malformed `''` case matches no value on purpose.
+    let having = match event {
+        Some(e) => format!(" HAVING event = '{}'", e.as_sql()),
+        None => String::new(),
+    };
+
+    let driver_sql = format!(
+        "SELECT \
+            ledger_sequence   AS ls, \
+            transaction_id    AS tid, \
+            application_order AS ao, \
+            countIf(asset_id = {asset_a}) AS n_a, \
+            countIf(asset_id = {asset_b}) AS n_b, \
+            anyIf(amount, asset_id = {asset_a}) AS raw_a, \
+            anyIf(amount, asset_id = {asset_b}) AS raw_b, \
+            multiIf(n_a = 0 OR n_b = 0, '', \
+                    raw_a > 0 AND raw_b > 0, 'deposit', \
+                    raw_a < 0 AND raw_b < 0, 'withdrawal', \
+                    'trade') AS event \
+         FROM lp_operation_amounts \
+         WHERE pool_id = toFixedString(unhex(?), 32) \
+           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
+         GROUP BY ls, tid, ao{having} \
+         ORDER BY ls {order}, tid {order}, ao {order} \
+         LIMIT {limit}"
+    );
+    let rows = client
+        .query(&driver_sql)
+        .bind(pool_id_hex)
+        .fetch_all::<PoolActivityChRow>()
+        .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Enrich the page's DISTINCT transactions — several operations of one
+    // transaction share a row here, so this set is smaller than the page.
+    // Keys inlined (i64) with the partition prune that turns the
+    // `(ledger_sequence, id) IN (…)` filter into a tight PK seek, same shape
+    // as `common::ch::fetch_tx_list_aggregates`.
+    let tx_keys: std::collections::BTreeSet<(i64, i64)> =
+        rows.iter().map(|r| (r.ls, r.tid)).collect();
+    let in_tuples = tx_keys
+        .iter()
+        .map(|(ls, tid)| format!("({ls},{tid})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = tx_keys
+        .iter()
+        .map(|(ls, _)| ls / 500_000)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let detail_sql = format!(
+        "SELECT \
+            t.id                                 AS id, \
+            lower(hex(t.hash))                   AS hash, \
+            t.source_id                          AS source_id, \
+            toUnixTimestamp64Milli(l.closed_at)  AS created_at_ms \
+         FROM transactions t \
+         INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+           AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
+         LIMIT 1 BY t.id"
+    );
+    let txs = client
+        .query(&detail_sql)
+        .fetch_all::<ActivityTxRow>()
+        .await?;
+    let by_tx: HashMap<i64, &ActivityTxRow> = txs.iter().map(|t| (t.id, t)).collect();
+
+    // Source StrKeys by surrogate id (bloom seek) rather than a whole-
+    // `accounts` INNER JOIN — task 0354.
+    let accounts = resolve_accounts(client, txs.iter().map(|t| t.source_id).collect()).await?;
+
+    // A page row whose transaction did not resolve is DROPPED, not rendered
+    // half-blank: it would have no hash to link and no timestamp to sort by.
+    // Unreachable unless the tx tables are behind the amounts table, and the
+    // `max(sequence)` fence above already keeps the seek behind the commit
+    // marker.
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let tx = by_tx.get(&r.tid)?;
+            let source_account = accounts.get(&tx.source_id)?.clone();
+            let complete = r.n_a > 0 && r.n_b > 0;
+            Some(PoolActivityRow {
+                transaction_hash: tx.hash.clone(),
+                ledger_sequence: r.ls,
+                transaction_id: r.tid,
+                application_order: r.ao,
+                event: PoolEvent::from_sql(&r.event),
+                amount_a: complete.then(|| r.raw_a.to_string()),
+                amount_b: complete.then(|| r.raw_b.to_string()),
+                source_account,
+                created_at: millis_to_utc(tx.created_at_ms),
             })
         })
         .collect())

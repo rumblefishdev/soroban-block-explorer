@@ -21,8 +21,9 @@ use crate::state::AppState;
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
-    ChartParams, ChartResponse, ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor,
-    PoolListParams, PoolTransactionItem, SharesCursor,
+    ChartParams, ChartResponse, ParticipantItem, PoolActivityCursor, PoolActivityItem,
+    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolListCursor, PoolListParams,
+    PoolTransactionItem, SharesCursor,
 };
 use super::queries::{self, PoolRow, PoolTxRow, ResolvedPoolListParams};
 
@@ -425,6 +426,120 @@ fn pool_tx_cursor_for(r: &PoolTxRow) -> TxListCursor {
         ledger_sequence: r.ledger_sequence,
         tiebreak: r.id,
     }
+}
+
+/// `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
+/// (task 0491, issue #371).
+///
+/// Supersedes `/transactions`, whose row was a transaction. That unit could
+/// not carry an honest `Event` chip (a bundled deposit + trade collapsed to
+/// one label), forced the Amount cell to stack figures that must not be
+/// summed, and made a trades filter inexpressible — "trades only" has no
+/// truthful answer for a transaction that deposits *and* trades. The old path
+/// stays mounted until the frontend moves to this one (task 0491 step 3),
+/// which is also when its handler, DTO and query go.
+#[utoipa::path(
+    get,
+    path = "/liquidity-pools/{pool_id}/activity",
+    tag = "liquidity-pools",
+    params(
+        ("pool_id" = String, Path,
+         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+        ("limit" = Option<u32>, Query,
+         description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query,
+         description = "Opaque pagination cursor from a previous response."),
+        ("filter[event]" = Option<PoolEvent>, Query,
+         description = "Restrict to `trade`, `deposit` or `withdrawal`."),
+    ),
+    responses(
+        (status = 200, description = "Paginated pool activity, one row per operation",
+         body = Paginated<PoolActivityItem>),
+        (status = 400, description = "Invalid pool_id, limit, cursor, or event", body = ErrorEnvelope),
+        (status = 404, description = "Pool not found",  body = ErrorEnvelope),
+        (status = 500, description = "Database error",  body = ErrorEnvelope),
+    )
+)]
+pub async fn list_pool_activity(
+    State(state): State<AppState>,
+    Path(pool_id): Path<String>,
+    pagination: Pagination<PoolActivityCursor>,
+    Query(params): Query<PoolActivityParams>,
+) -> Response {
+    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
+        Ok(hex) => hex,
+        Err(resp) => return resp,
+    };
+
+    // The pool's two leg surrogates, which double as this path's existence
+    // check: the driver pivots `lp_operation_amounts.asset_id` onto them, so
+    // the read cannot run without them and a missing pool is one seek away
+    // (task 0279's pairing, kept).
+    let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
+        .await
+        .map_err(|e| e.to_string());
+    let asset_ids = match legs {
+        Ok(Some(ids)) => ids,
+        Ok(None) => return errors::not_found("liquidity pool not found"),
+        Err(e) => {
+            tracing::error!("DB error in fetch_pool_asset_ids({pool_id}): {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let fetched = queries::fetch_pool_activity(
+        &state.ch(),
+        &pool_id_hex,
+        asset_ids,
+        pagination.fetch_limit(),
+        pagination.cursor.as_ref(),
+        pagination.direction,
+        params.event,
+    )
+    .await
+    .map_err(|e| e.to_string());
+    let mut rows = match fetched {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("DB error in fetch_pool_activity({pool_id}): {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |dir, r| {
+            cursor::encode(
+                &PoolActivityCursor {
+                    ledger_sequence: r.ledger_sequence,
+                    transaction_id: r.transaction_id,
+                    application_order: r.application_order,
+                },
+                dir,
+            )
+        },
+    );
+    let data: Vec<PoolActivityItem> = rows
+        .into_iter()
+        .map(|r| PoolActivityItem {
+            transaction_hash: r.transaction_hash,
+            ledger_sequence: r.ledger_sequence,
+            application_order: r.application_order,
+            event: r.event,
+            amount_a: r.amount_a,
+            amount_b: r.amount_b,
+            source_account: r.source_account,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 #[utoipa::path(

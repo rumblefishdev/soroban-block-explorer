@@ -251,6 +251,141 @@ pub struct PoolTransactionItem {
     pub amounts: Vec<PoolOperationAmount>,
 }
 
+// ---------------------------------------------------------------------------
+// Activity (task 0491) — the per-operation successor to `/transactions`
+// ---------------------------------------------------------------------------
+
+/// What an operation did to the pool, named by the SIGN PAIR of its two legs
+/// and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+/// perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+/// There is no operation-type column to read and no join to `operations`.
+///
+/// Classified in SQL rather than here, because the same expression is the
+/// `filter[event]` predicate: two classifiers would eventually disagree, and
+/// the one the user sees must be the one the filter used. This deliberately
+/// reverses the client-side policy the retired `/transactions` shape carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolEvent {
+    Trade,
+    Deposit,
+    Withdrawal,
+}
+
+impl PoolEvent {
+    /// Map the SQL label. Empty string = the malformed-row case below, which
+    /// travels as `null` rather than being guessed into a category.
+    pub fn from_sql(label: &str) -> Option<Self> {
+        match label {
+            "trade" => Some(Self::Trade),
+            "deposit" => Some(Self::Deposit),
+            "withdrawal" => Some(Self::Withdrawal),
+            _ => None,
+        }
+    }
+
+    /// The SQL literal, for the `filter[event]` predicate.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Trade => "trade",
+            Self::Deposit => "deposit",
+            Self::Withdrawal => "withdrawal",
+        }
+    }
+}
+
+#[cfg(test)]
+mod pool_event_tests {
+    use super::PoolEvent;
+
+    /// `as_sql` feeds the `HAVING` and `from_sql` reads the label back off the
+    /// same column, so a drift between them would filter on one vocabulary and
+    /// render another — rows silently classified as `null` while the filter
+    /// still matched them.
+    #[test]
+    fn sql_label_round_trips() {
+        for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
+            assert_eq!(PoolEvent::from_sql(e.as_sql()), Some(e), "{e:?}");
+        }
+    }
+
+    /// The missing-leg case travels as `null`, never guessed into a category.
+    #[test]
+    fn unknown_label_is_none() {
+        assert_eq!(PoolEvent::from_sql(""), None);
+        assert_eq!(PoolEvent::from_sql("swap"), None);
+    }
+}
+
+/// `filter[...]` query parameters for `GET /v1/liquidity-pools/{id}/activity`.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct PoolActivityParams {
+    /// `trade` | `deposit` | `withdrawal`. Applied as a `HAVING` on the same
+    /// expression that produces `event`, so the filtered list and the chips
+    /// cannot disagree.
+    ///
+    /// Rows whose `event` is `null` (a leg missing — see [`PoolActivityItem`])
+    /// match no filter value: we cannot claim such a row is a trade.
+    #[serde(rename = "filter[event]")]
+    pub event: Option<PoolEvent>,
+}
+
+/// Cursor payload for `GET /v1/liquidity-pools/{id}/activity`, keyed on
+/// `(ledger_sequence, transaction_id, application_order)` — the sort-key
+/// prefix of `lp_operation_amounts` minus its `asset_id` tail.
+///
+/// A plain struct, not an enum tagged by datasource. The retired
+/// `/transactions` cursor carried `tiebreak`, which is absent here, so a
+/// stale one fails to deserialize and the extractor answers `invalid_cursor`
+/// on its own — no explicit source guard needed (the retired endpoint needed
+/// `pool_tx_cursor_matches_source` only because both of its variants
+/// deserialized cleanly).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolActivityCursor {
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+    pub application_order: i16,
+}
+
+/// One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
+/// against this pool**, not one transaction (task 0491, issue #371).
+///
+/// The transaction-level fields the retired `/transactions` shape carried
+/// (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
+/// `operation_types`) are gone: the first three describe the transaction, not
+/// this row, and repeating them per operation invites reading a transaction
+/// fee as an operation fee. `operation_types` is replaced by `event`, which is
+/// what it was approximating.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PoolActivityItem {
+    /// Transaction hash (64-char lowercase hex). NOT unique across rows — a
+    /// transaction running several operations against this pool appears once
+    /// per operation, so a row key needs `application_order` too.
+    pub transaction_hash: String,
+    pub ledger_sequence: i64,
+    /// The operation's 1-based position in its transaction (Horizon's
+    /// `application_order`), and the `#op-N` anchor on the transaction detail
+    /// page this row links to (task 0482).
+    pub application_order: i16,
+    /// `null` only for the malformed case where the pool's two legs did not
+    /// both land in `lp_operation_amounts`. Unreachable by construction — an
+    /// op that touches a pool moves both legs — but the read stays total
+    /// rather than classifying a half-row.
+    pub event: Option<PoolEvent>,
+    /// Signed from the POOL's perspective: positive entered the pool, negative
+    /// left it. Raw stroops as a decimal string, scaled by 7 at render like
+    /// every other amount here — a JSON number is a double in the browser, so
+    /// a leg above 2^53 stroops would silently lose digits.
+    ///
+    /// The sign is the payload, not decoration: it is what names `event`, so
+    /// the frontend must not take an absolute value before deciding direction.
+    /// `null` on both legs in the malformed case above.
+    pub amount_a: Option<String>,
+    pub amount_b: Option<String>,
+    pub source_account: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Cursor payload for `GET /v1/liquidity-pools` paginated by
 /// `(created_at_ledger DESC, pool_id DESC)`. The `pool_id` half travels
 /// as 64-char lowercase hex; the SQL decodes it back to BYTEA inside the

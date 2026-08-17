@@ -33,6 +33,7 @@ import {
   listNfts,
   listNftTransfers,
   listParticipants,
+  listPoolActivity,
   listPools,
   listPoolTransactions,
   listTransactions,
@@ -109,6 +110,9 @@ import type {
   ListParticipantsData,
   ListParticipantsError,
   ListParticipantsResponse,
+  ListPoolActivityData,
+  ListPoolActivityError,
+  ListPoolActivityResponse,
   ListPoolsData,
   ListPoolsError,
   ListPoolsResponse,
@@ -1134,6 +1138,102 @@ export const getPoolOptions = (options: Options<GetPoolData>) =>
     },
     queryKey: getPoolQueryKey(options),
   });
+
+export const listPoolActivityQueryKey = (
+  options: Options<ListPoolActivityData>
+) => createQueryKey('listPoolActivity', options);
+
+/**
+ * `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
+ * (task 0491, issue #371).
+ *
+ * Supersedes `/transactions`, whose row was a transaction. That unit could
+ * not carry an honest `Event` chip (a bundled deposit + trade collapsed to
+ * one label), forced the Amount cell to stack figures that must not be
+ * summed, and made a trades filter inexpressible — "trades only" has no
+ * truthful answer for a transaction that deposits *and* trades. The old path
+ * stays mounted until the frontend moves to this one (task 0491 step 3),
+ * which is also when its handler, DTO and query go.
+ */
+export const listPoolActivityOptions = (
+  options: Options<ListPoolActivityData>
+) =>
+  queryOptions<
+    ListPoolActivityResponse,
+    ListPoolActivityError,
+    ListPoolActivityResponse,
+    ReturnType<typeof listPoolActivityQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await listPoolActivity({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: listPoolActivityQueryKey(options),
+  });
+
+export const listPoolActivityInfiniteQueryKey = (
+  options: Options<ListPoolActivityData>
+): QueryKey<Options<ListPoolActivityData>> =>
+  createQueryKey('listPoolActivity', options, true);
+
+/**
+ * `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
+ * (task 0491, issue #371).
+ *
+ * Supersedes `/transactions`, whose row was a transaction. That unit could
+ * not carry an honest `Event` chip (a bundled deposit + trade collapsed to
+ * one label), forced the Amount cell to stack figures that must not be
+ * summed, and made a trades filter inexpressible — "trades only" has no
+ * truthful answer for a transaction that deposits *and* trades. The old path
+ * stays mounted until the frontend moves to this one (task 0491 step 3),
+ * which is also when its handler, DTO and query go.
+ */
+export const listPoolActivityInfiniteOptions = (
+  options: Options<ListPoolActivityData>
+) =>
+  infiniteQueryOptions<
+    ListPoolActivityResponse,
+    ListPoolActivityError,
+    InfiniteData<ListPoolActivityResponse>,
+    QueryKey<Options<ListPoolActivityData>>,
+    | string
+    | Pick<
+        QueryKey<Options<ListPoolActivityData>>[0],
+        'body' | 'headers' | 'path' | 'query'
+      >
+  >(
+    // @ts-ignore
+    {
+      queryFn: async ({ pageParam, queryKey, signal }) => {
+        // @ts-ignore
+        const page: Pick<
+          QueryKey<Options<ListPoolActivityData>>[0],
+          'body' | 'headers' | 'path' | 'query'
+        > =
+          typeof pageParam === 'object'
+            ? pageParam
+            : {
+                query: {
+                  cursor: pageParam,
+                },
+              };
+        const params = createInfiniteParams(queryKey, page);
+        const { data } = await listPoolActivity({
+          ...options,
+          ...params,
+          signal,
+          throwOnError: true,
+        });
+        return data;
+      },
+      queryKey: listPoolActivityInfiniteQueryKey(options),
+    }
+  );
 
 export const getPoolChartQueryKey = (options: Options<GetPoolChartData>) =>
   createQueryKey('getPoolChart', options);

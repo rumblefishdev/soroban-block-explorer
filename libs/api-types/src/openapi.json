@@ -1242,6 +1242,97 @@
         }
       }
     },
+    "/v1/liquidity-pools/{pool_id}/activity": {
+      "get": {
+        "tags": ["liquidity-pools"],
+        "summary": "`GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations\n(task 0491, issue #371).",
+        "description": "Supersedes `/transactions`, whose row was a transaction. That unit could\nnot carry an honest `Event` chip (a bundled deposit + trade collapsed to\none label), forced the Amount cell to stack figures that must not be\nsummed, and made a trades filter inexpressible — \"trades only\" has no\ntruthful answer for a transaction that deposits *and* trades. The old path\nstays mounted until the frontend moves to this one (task 0491 step 3),\nwhich is also when its handler, DTO and query go.",
+        "operationId": "list_pool_activity",
+        "parameters": [
+          {
+            "name": "pool_id",
+            "in": "path",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[event]",
+            "in": "query",
+            "description": "Restrict to `trade`, `deposit` or `withdrawal`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PoolEvent"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated pool activity, one row per operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_PoolActivityItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pool_id, limit, cursor, or event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/liquidity-pools/{pool_id}/chart": {
       "get": {
         "tags": ["liquidity-pools"],
@@ -4084,6 +4175,70 @@
           }
         }
       },
+      "Paginated_PoolActivityItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst this pool**, not one transaction (task 0491, issue #371).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
+              "required": [
+                "transaction_hash",
+                "ledger_sequence",
+                "application_order",
+                "source_account",
+                "created_at"
+              ],
+              "properties": {
+                "amount_a": {
+                  "type": ["string", "null"],
+                  "description": "Signed from the POOL's perspective: positive entered the pool, negative\nleft it. Raw stroops as a decimal string, scaled by 7 at render like\nevery other amount here — a JSON number is a double in the browser, so\na leg above 2^53 stroops would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\n`null` on both legs in the malformed case above."
+                },
+                "amount_b": {
+                  "type": ["string", "null"]
+                },
+                "application_order": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "event": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PoolEvent",
+                      "description": "`null` only for the malformed case where the pool's two legs did not\nboth land in `lp_operation_amounts`. Unreachable by construction — an\nop that touches a pool moves both legs — but the read stays total\nrather than classifying a half-row."
+                    }
+                  ]
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "source_account": {
+                  "type": "string"
+                },
+                "transaction_hash": {
+                  "type": "string",
+                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `application_order` too."
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
       "Paginated_PoolItem": {
         "type": "object",
         "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
@@ -4362,6 +4517,57 @@
           }
         }
       },
+      "PoolActivityItem": {
+        "type": "object",
+        "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst this pool**, not one transaction (task 0491, issue #371).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
+        "required": [
+          "transaction_hash",
+          "ledger_sequence",
+          "application_order",
+          "source_account",
+          "created_at"
+        ],
+        "properties": {
+          "amount_a": {
+            "type": ["string", "null"],
+            "description": "Signed from the POOL's perspective: positive entered the pool, negative\nleft it. Raw stroops as a decimal string, scaled by 7 at render like\nevery other amount here — a JSON number is a double in the browser, so\na leg above 2^53 stroops would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\n`null` on both legs in the malformed case above."
+          },
+          "amount_b": {
+            "type": ["string", "null"]
+          },
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PoolEvent",
+                "description": "`null` only for the malformed case where the pool's two legs did not\nboth land in `lp_operation_amounts`. Unreachable by construction — an\nop that touches a pool moves both legs — but the read stays total\nrather than classifying a half-row."
+              }
+            ]
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "source_account": {
+            "type": "string"
+          },
+          "transaction_hash": {
+            "type": "string",
+            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `application_order` too."
+          }
+        }
+      },
       "PoolAssetLeg": {
         "type": "object",
         "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.\n\nLinkable identifiers (task 0263 / F-K-9). All link targets are the\n**asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic\nand accepts both C-strkey (SAC) and `code-issuer` composite, so all\nnon-native legs resolve to the same asset row.\n\n  * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain\n    address in classic Stellar protocol; SAC mirror is network-dependent).\n  * `contract_id` — C-strkey of the SAC mirror for a classic credit\n    leg (populated when the leg's `(asset_code, issuer)` classic_credit /\n    native `assets` row carries a deployed SAC facet — `sac_contract_id`\n    resolving a `soroban_contracts.contract_id`, ADR 0051). `None` for legs\n    without a deployed SAC mirror. Pool legs only carry XDR `AssetType` (native /\n    credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,\n    so SAC / Soroban legs are not directly representable here;\n    `contract_id` surfaces the SAC mirror look-up so the FE can\n    route to the asset detail page via `/assets/${contract_id}`.\n  * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE\n    routes to `/assets/${asset_code}-${issuer}` (composite form\n    accepted by `parse_asset_id`).",
@@ -4391,6 +4597,11 @@
             "type": ["string", "null"]
           }
         }
+      },
+      "PoolEvent": {
+        "type": "string",
+        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `lp_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
+        "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {
         "type": "object",

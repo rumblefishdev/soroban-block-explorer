@@ -1586,6 +1586,49 @@ export type PaginatedParticipantItem = {
  * when M2 endpoint modules are wired in. Unused in M1 — kept as
  * infrastructure that M2 endpoints will consume.
  */
+export type PaginatedPoolActivityItem = {
+  data: Array<{
+    /**
+     * Signed from the POOL's perspective: positive entered the pool, negative
+     * left it. Raw stroops as a decimal string, scaled by 7 at render like
+     * every other amount here — a JSON number is a double in the browser, so
+     * a leg above 2^53 stroops would silently lose digits.
+     *
+     * The sign is the payload, not decoration: it is what names `event`, so
+     * the frontend must not take an absolute value before deciding direction.
+     * `null` on both legs in the malformed case above.
+     */
+    amount_a?: string | null;
+    amount_b?: string | null;
+    /**
+     * The operation's 1-based position in its transaction (Horizon's
+     * `application_order`), and the `#op-N` anchor on the transaction detail
+     * page this row links to (task 0482).
+     */
+    application_order: number;
+    created_at: string;
+    event?: null | PoolEvent;
+    ledger_sequence: number;
+    source_account: string;
+    /**
+     * Transaction hash (64-char lowercase hex). NOT unique across rows — a
+     * transaction running several operations against this pool appears once
+     * per operation, so a row key needs `application_order` too.
+     */
+    transaction_hash: string;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
 export type PaginatedPoolItem = {
   data: Array<{
     asset_a: PoolAssetLeg;
@@ -1784,6 +1827,48 @@ export type ParticipantItem = {
 };
 
 /**
+ * One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
+ * against this pool**, not one transaction (task 0491, issue #371).
+ *
+ * The transaction-level fields the retired `/transactions` shape carried
+ * (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
+ * `operation_types`) are gone: the first three describe the transaction, not
+ * this row, and repeating them per operation invites reading a transaction
+ * fee as an operation fee. `operation_types` is replaced by `event`, which is
+ * what it was approximating.
+ */
+export type PoolActivityItem = {
+  /**
+   * Signed from the POOL's perspective: positive entered the pool, negative
+   * left it. Raw stroops as a decimal string, scaled by 7 at render like
+   * every other amount here — a JSON number is a double in the browser, so
+   * a leg above 2^53 stroops would silently lose digits.
+   *
+   * The sign is the payload, not decoration: it is what names `event`, so
+   * the frontend must not take an absolute value before deciding direction.
+   * `null` on both legs in the malformed case above.
+   */
+  amount_a?: string | null;
+  amount_b?: string | null;
+  /**
+   * The operation's 1-based position in its transaction (Horizon's
+   * `application_order`), and the `#op-N` anchor on the transaction detail
+   * page this row links to (task 0482).
+   */
+  application_order: number;
+  created_at: string;
+  event?: null | PoolEvent;
+  ledger_sequence: number;
+  source_account: string;
+  /**
+   * Transaction hash (64-char lowercase hex). NOT unique across rows — a
+   * transaction running several operations against this pool appears once
+   * per operation, so a row key needs `application_order` too.
+   */
+  transaction_hash: string;
+};
+
+/**
  * One leg of an LP's asset pair. Surfaces both the decoded
  * `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
  * SMALLINT — same contract as `assets/dto::AssetItem`.
@@ -1836,6 +1921,19 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
 };
+
+/**
+ * What an operation did to the pool, named by the SIGN PAIR of its two legs
+ * and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+ * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+ * There is no operation-type column to read and no join to `operations`.
+ *
+ * Classified in SQL rather than here, because the same expression is the
+ * `filter[event]` predicate: two classifiers would eventually disagree, and
+ * the one the user sees must be the one the filter used. This deliberately
+ * reverses the client-side policy the retired `/transactions` shape carried.
+ */
+export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
  * One pool row returned by the list endpoint. Shape pinned to canonical
@@ -3041,6 +3139,59 @@ export type GetPoolResponses = {
 };
 
 export type GetPoolResponse = GetPoolResponses[keyof GetPoolResponses];
+
+export type ListPoolActivityData = {
+  body?: never;
+  path: {
+    /**
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     */
+    pool_id: string;
+  };
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Restrict to `trade`, `deposit` or `withdrawal`.
+     */
+    'filter[event]'?: PoolEvent;
+  };
+  url: '/v1/liquidity-pools/{pool_id}/activity';
+};
+
+export type ListPoolActivityErrors = {
+  /**
+   * Invalid pool_id, limit, cursor, or event
+   */
+  400: ErrorEnvelope;
+  /**
+   * Pool not found
+   */
+  404: ErrorEnvelope;
+  /**
+   * Database error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListPoolActivityError =
+  ListPoolActivityErrors[keyof ListPoolActivityErrors];
+
+export type ListPoolActivityResponses = {
+  /**
+   * Paginated pool activity, one row per operation
+   */
+  200: PaginatedPoolActivityItem;
+};
+
+export type ListPoolActivityResponse =
+  ListPoolActivityResponses[keyof ListPoolActivityResponses];
 
 export type GetPoolChartData = {
   body?: never;
