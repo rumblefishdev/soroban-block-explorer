@@ -910,6 +910,10 @@ struct PoolLegsChRow {
 /// Resolved in Rust, not SQL: the surrogate is `cityhash_102_128`'s lower half
 /// and CH's builtin `cityHash64` is a DIFFERENT algorithm (see the schema
 /// header), so the writer's helper is the only way to reproduce the key.
+///
+/// Via [`ids::pool_leg_asset_id`], NOT `ids::asset_id` — `liquidity_pools`
+/// stores the XDR asset type, where `2` is `credit_alphanum12`, while
+/// `asset_id` reads `2` as the retired SAC facet and returns `0` for it.
 pub async fn fetch_pool_asset_ids(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -926,8 +930,8 @@ pub async fn fetch_pool_asset_ids(
         .await?;
     Ok(rows.first().map(|r| {
         (
-            ids::asset_id(r.asset_a_type, &r.asset_a_code, r.asset_a_issuer_id, 0),
-            ids::asset_id(r.asset_b_type, &r.asset_b_code, r.asset_b_issuer_id, 0),
+            ids::pool_leg_asset_id(r.asset_a_type, &r.asset_a_code, r.asset_a_issuer_id),
+            ids::pool_leg_asset_id(r.asset_b_type, &r.asset_b_code, r.asset_b_issuer_id),
         )
     }))
 }
@@ -2038,17 +2042,67 @@ mod tests {
     /// no row ever matches a leg and the Amount column silently goes blank
     /// instead of failing. The bridge is `asset_a_issuer_id`, which the writer
     /// fills with `ids::account_id(issuer_strkey)`.
+    ///
+    /// Every XDR asset type a pool leg can hold is covered here on purpose.
+    /// The first version of this test used `"TF"` — `credit_alphanum4`, XDR
+    /// type 1 — and so agreed with the buggy resolution: type 2 is
+    /// `credit_alphanum12` in `liquidity_pools`, but the retired SAC facet in
+    /// `ids::asset_id`, which answered `0` for it. 59% of pools carry a type-2
+    /// leg and the suite stayed green (task 0489). A code of each width is now
+    /// pinned, so the next type-space mix-up fails here.
     #[test]
     fn pool_leg_surrogates_match_the_written_asset_ids() {
         const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
+        let issuer_id = ids::account_id(ISSUER);
         // Native leg: type 0, empty code, issuer_id 0.
-        assert_eq!(ids::asset_id(0, "", 0, 0), ids::NATIVE_ASSET_ID);
-        // Credit leg: the 4-arg form over stored columns == the 2-arg helper
-        // over the StrKey the atom carries.
-        assert_eq!(
-            ids::asset_id(1, "TF", ids::account_id(ISSUER), 0),
-            ids::credit_asset_id("TF", ISSUER),
-        );
+        assert_eq!(ids::pool_leg_asset_id(0, "", 0), ids::NATIVE_ASSET_ID);
+        // credit_alphanum4 (XDR type 1) and credit_alphanum12 (XDR type 2) are
+        // both classic credit, so both must land on the surrogate the writer
+        // computes from the StrKey the claim atom carries.
+        for (asset_type, code) in [(1i16, "TF"), (2i16, "CETES")] {
+            assert_eq!(
+                ids::pool_leg_asset_id(asset_type, code, issuer_id),
+                ids::credit_asset_id(code, ISSUER),
+                "leg {code} (XDR type {asset_type}) must match the written asset_id",
+            );
+        }
+        // The bug this replaced: a type-2 leg resolved to 0, and 0 is an id no
+        // row is ever stored under, so the leg could never match.
+        assert_ne!(ids::pool_leg_asset_id(2, "CETES", issuer_id), 0);
+    }
+
+    /// The same equality against REAL production values, so the pin does not
+    /// rest on this module's own arithmetic being self-consistent.
+    ///
+    /// Pool `8CA53441…` (yXLM / CETES) is the one that exposed task 0489: a
+    /// `credit_alphanum4` leg beside a `credit_alphanum12` one, so the page
+    /// rendered the first and dropped the second. Left column read from
+    /// `liquidity_pools`, right column the `DISTINCT asset_id` that
+    /// `lp_operation_amounts` actually holds for that pool — both captured
+    /// from prod on 2026-08-17. Static values, no network.
+    #[test]
+    fn pool_leg_surrogates_match_production_rows() {
+        // (asset_type, code, issuer_id) -> the asset_id stored on prod
+        for (asset_type, code, issuer_id, stored) in [
+            (
+                1i16,
+                "yXLM",
+                -5_950_609_493_839_131_376i64,
+                258_332_573_254_456_524i64,
+            ),
+            (
+                2i16,
+                "CETES",
+                1_238_723_897_090_515_379i64,
+                4_032_595_941_348_833_451i64,
+            ),
+        ] {
+            assert_eq!(
+                ids::pool_leg_asset_id(asset_type, code, issuer_id),
+                stored,
+                "leg {code} must resolve to the asset_id production stores",
+            );
+        }
     }
 
     /// The SAC joins on both pool reads must not filter a leg out for having an

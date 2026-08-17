@@ -245,11 +245,32 @@ Everything below is the empty-code form.
    null or empty. Callers guard upstream today, so the default silently converts
    "asset unknown" into "XLM" — the display failure mode the project already
    ruled out elsewhere.
-5. **Pool legs lose their SAC on an empty-code guard.** The `!= ''` guards on
-   the enrichment join in both the pool detail and the pool list mean a native
-   leg never shows a contract id or icon, although native has a deployed SAC and
-   an `asset_sac` row. Inherited from the retired Postgres shape; the parity
-   target may itself have been wrong.
+5. **Pool legs lose their SAC on an empty-code guard — FIXED in #417, and the
+   history matters.** The `!= ''` guards in both the pool detail and the pool
+   list meant a native leg reported a NULL contract id, although native has a
+   deployed SAC and an `asset_sac` row.
+
+   The guard was **deliberate**, not an oversight — `a19ac8f6` added it because
+   the join _did_ surface the native SAC, and removed it to match Postgres,
+   which returned NULL there. Two of its three stated reasons no longer hold:
+   Postgres is retired, and "the frontend renders native legs unlinked" has
+   been false since `a8028d82` linked them to `/assets/native`. The third —
+   that the SAC mirror is network-dependent — does not separate native from
+   anything else, since every SAC address is network-dependent and we publish
+   the others.
+
+   What settled it: `/v1/assets/native` and the assets list **already report
+   that same SAC** as `sac_contract_id`, and the frontend renders it in both.
+   The pool leg was the only surface withholding it, so one asset described
+   itself two ways depending on which endpoint was asked.
+
+   Guarded at module level (sabotage-verified) rather than behaviourally,
+   because both pool queries are inline string literals. The follow-up is in
+   the acceptance criteria.
+
+   The icon stays NULL for native and that is correct: `asset_enrichment` holds
+   no native row at all (measured: 0). The guard was never what withheld it.
+
 6. **REFUTED — not work.** The sweep flagged `assets.id Int64 DEFAULT 0` as a
    possible break in the balances join. Measured on production: the native row
    holds the real surrogate, so the join is sound. Recorded so the same
@@ -293,6 +314,10 @@ land. Items 5, 7 and 8 are small and independent.
 - [ ] **Stage 2:** `XLM` typed into the assets list filter returns native XLM
       (sweep item 1), and the list-page fixture carries the null code the API
       actually returns (item 2) — the second is what makes the first testable
+- [ ] **Stage 2:** the two pool queries are extracted from inline string
+      literals so the native-SAC rule can be pinned behaviourally. #417 could
+      only guard it at module level — a text check for a re-added leg-code
+      guard, sabotage-verified but blind to anything subtler
 - [ ] **Stage 2:** every remaining empty-code native site from the sweep is
       either fixed or carries a stated reason — items 3, 4, 5, 7, 8. Splitting
       3 and 4 into their own task is allowed; dropping them silently is not

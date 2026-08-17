@@ -87,50 +87,68 @@ Measurements and the full option comparison live in the notes:
 - [`notes/S-source-options.md`](notes/S-source-options.md) — every source
   considered, what is ruled out and why, and two corrections to earlier claims.
 
-## Current design — A, read-time Soroban RPC
+The earlier read-time-RPC design in `notes/S-` is **superseded** — it cannot
+reach backward completeness, because `getLedgerEntries` has no enumeration
+primitive. Keep the notes as the record of how the decision was reached; do
+not implement from them.
 
-Not final; see the open question at the end of `S-`.
+Planning map (local, gitignored, not in the repo): `.wayfinder/0463/` — the
+decision trail, five resolved research tickets with their measurements, and
+the implementation tickets.
 
-One batched `getLedgerEntries` per account-detail request:
+## Decided design — [ADR 0055](../../../2-adrs/0055_holding-lifecycle-column-on-balances.md)
 
-- `LedgerKey::Account` → the full `AccountEntry`, **signers and thresholds
-  included**;
-- `LedgerKey::Trustline` for the account's zero rows → **entry present = live,
-  absent = closed**. We never enumerate; ClickHouse names the candidates.
+The lifecycle becomes a **column on `balances`**; rows are never deleted.
 
-Four things the measurement added to the naive version:
+```sql
+ALTER TABLE balances ADD COLUMN closed_at_ledger Int64 DEFAULT 0;
+```
 
-1. **No call when the account is merged.** 58 % of the sampled population. The
-   page already derives `deleted`; a merged account has nothing to verify.
-2. **Batch in parallel, cap only as a backstop.** One sampled account carries
-   873 zero rows — five sequential round-trips on a page view. Parallel
-   batches make that one round-trip's latency; keep a high cap for absurdity.
-3. **Failure is stated, not silent.** Hiding all zeros on a failed lookup is a
-   return to the bug being fixed. Say the verification did not run.
-4. **Use the RPC pool with failover** (`SOROBAN_RPC_URLS`, as `nft_token_uri`
-   does) plus a short per-account cache — not a single hardcoded endpoint.
+The entity is the **holding relationship**, not the trustline: the same
+ambiguity affects Soroban and LP holdings, and task 0331 already unified every
+holding kind into this one table. The read path filters on
+`closed_at_ledger = 0` instead of `amount != 0`.
 
-### Accepted gaps
+Signers take a side table `account_signers` (single writer, RMT by ledger) —
+not a column on `accounts`, whose whole-row replacement makes a bolt-on unsafe.
 
-- **~7 % of live zero trustlines stay invisible** — we hold no row for them,
-  and `getLedgerEntries` cannot list an account's trustlines. Closing this
-  needs the database route (task 0464).
-- Type-3 (Soroban token) holdings hit the same zero ambiguity, but their
-  existence question is a `ContractData` entry, not a trustline. Classic only
-  in the first cut.
-- `balance_aggregates_mv` computes `holder_count` as `countIf(amount > 0)`.
-  Nothing here changes that and it must stay so: a zero-balance trustline is
-  not a holder.
+Backward completeness comes from a one-off seed of the history archive's
+checkpoint bucket list (**4.54 GB gzipped, 21 files**, measured), which both
+fills the ~7 % we hold no row for **and** derives the closures as
+`{our zero rows} − {live in snapshot}`. Without that second step, flipping the
+filter resurrects ghosts.
 
-## Prerequisite
+Full reasoning, rejected alternatives and the measured production facts are in
+the ADR.
 
-The `getLedgerEntries` client, key builders and decoders live in
-`crates/backfill-runner/src/rpc_snapshot.rs`. Its own module docs pre-authorise
-the move: _"the refactor-to-a-shared-crate is a one-day move if a second
-consumer appears."_ The API is that consumer. Move it beside
-`crates/enrichment-shared/nft_token_uri`, which already speaks Soroban RPC.
-`AccountSnapshot` (`:519`) is deliberately lean and discards
-signers/thresholds/flags — widen it.
+## Work breakdown
+
+1. **Native zero balances** — read-filter fix alone, 239,087 holders, ships
+   first and independently. No source, no seed, no schema change.
+2. **Lifecycle column + writer** — `ALTER` with `DEFAULT`, then the writer,
+   covering classic, Soroban and LP write paths together (deferring any kind
+   costs a second full backward pass). Deployment order is load-bearing —
+   task 0310.
+3. **Signers extraction** — parallel to the above, no seed needed; the dormant
+   set is empty (0 of 123,772 measured).
+4. **Seed from the checkpoint snapshot** — fills gaps and marks closures.
+   Version on each entry's own `lastModifiedLedgerSeq`, never on a window
+   boundary (task 0492).
+5. **Flip the read filter + production verification** — only after the seed
+   verifies.
+
+## Scope
+
+**In:** classic, native and Soroban holdings; the LP **write path**; signers
+and thresholds.
+
+**Out:** rendering LP positions on the account page — task 0493, because the
+page renders none today and `lp_positions` is ordered `(pool_id, account_id)`,
+making the account-side read a full scan. Balance history over time — task 0464.
+
+**Under investigation, non-blocking:** Soroban entries have an
+archived-but-restorable state the codebase never reads, so type-3 holdings may
+over-report.
 
 ## Acceptance criteria
 
@@ -138,18 +156,17 @@ signers/thresholds/flags — widen it.
       assets, not two
 - [ ] A **closed** trustline still does not appear — verified on an account
       with a known removal, not only the happy path
-- [ ] A merged account triggers no RPC call at all
+- [ ] The 873-zero-row account shows none of those 873
+- [ ] Native zero balances appear (239,087 holders), watching the two-convention
+      trap for native
 - [ ] Signers (key, weight, type) and low/med/high thresholds are shown; the
       fixture reads as multisig
-- [ ] A failed lookup says so on screen and hides nothing silently
-- [ ] The moved RPC client keeps `backfill-runner` green
-- [ ] **Docs updated** — `docs/architecture/**` read-path / frontend data
-      contract sections, since the account-detail response shape changes
+- [ ] `total_supply` and `holder_count` unchanged for a spot-checked asset
+- [ ] The 200-account probe from `notes/R-` returns zero accounts where the
+      chain holds more live zero trustlines than we do
+- [ ] **Verified on production**, not at merge — the destination is a shipped,
+      checked change
+- [ ] **Docs updated** — `docs/architecture/**` read path and frontend data
+      contract; `docs/backfills.md` gains the seed pass
 - [ ] **API types regenerated** — yes, the account DTO gains fields
       (`npx nx run @rumblefish/api-types:generate`)
-
-## Relation to 0464
-
-Task 0464 (trustline as an entity) would replace this task's **trustline**
-half and, per the correction in `notes/S-`, could replace the signers half
-too. It is gated on an archive re-parse, so it is not a substitute today.
