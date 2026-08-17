@@ -2,7 +2,7 @@
 id: '0475'
 title: 'FEATURE: /release skill — collect what actually ships and cut the production tag'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: ['0009', '0052']
 related_tasks: ['0390']
 tags: [ci, cd, tooling, priority-low, effort-small, layer-infra]
@@ -22,6 +22,21 @@ history:
       matters. What is genuinely unserved is "what is actually shipping".
       Deferred until after the first real `production-*` tag so the skill is
       written from what hurt, not from a guessed pipeline.
+  - date: '2026-08-17'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Single-phase — promoted from backlog and completed in one PR.
+      The deferral paid off. Written the same day as
+      production-2026.08.17-1 and -2, so every caution in the skill is a
+      thing that actually went wrong rather than a guess: a `Refs #405` that
+      was a docs-only commit, a `Refs #371` on a disk-headroom fix, a
+      backfill-runner change that merged but does not deploy, a green tag whose
+      SPA smoke can pass against the stale bundle, a verification query that
+      could not measure the thing it claimed to, and a cold Rust cache that
+      makes every tag cost ~15 min forever. A skill guessed on 08-12 would have
+      had none of them. `.claude/skills/release/SKILL.md` plus the `/issues`
+      Step 4 handoff.
 ---
 
 # /release — collect what ships, then cut the tag
@@ -68,9 +83,18 @@ live commit needed manual bundle-hash detective work.
 
 ## Acceptance Criteria
 
-- [ ] `/release` prints the PR / task / issue list for the range and the exact
-      tag command; no GitHub write of any kind.
-- [ ] First-release case (no previous `production-*` tag) handled explicitly.
-- [ ] `/issues` Step 4 updated to read the release instead of asking.
-- [ ] Written **after** at least one real tag deploy, against what that run
-      actually needed.
+- [x] `/release` prints the PR / task / issue list for the range and the exact
+      tag command.
+- [x] ~~no GitHub write of any kind~~ — **narrowed, deliberately.** The skill
+      does create the release PR (`gh pr create`), because that is the step
+      the operator wanted automated and it is reversible. What stays
+      human-only is the pair that actually matters: **pushing the tag**, which
+      is the release decision and the pipeline's only approval gate, and
+      **posting issue comments**, which `/issues` already forbids. A blanket
+      no-writes rule would have banned the PR while permitting nothing safer.
+- [x] First-release case (no previous `production-*` tag) handled explicitly —
+      stops and asks for `--since` rather than dumping all history.
+- [x] `/issues` Step 4 updated to read the release instead of asking, and
+      carries the two cautions below.
+- [x] Written **after** at least one real tag deploy — after two, on
+      2026-08-17, against what those runs actually needed.
