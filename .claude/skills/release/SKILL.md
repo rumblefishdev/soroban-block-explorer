@@ -198,15 +198,17 @@ Four details that matter:
 gh run watch --exit-status $(gh run list --workflow deploy-production.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-**Budget ~15 minutes and do not promise a faster next one.** `cdk diff` builds
-all three Lambdas during synth from a cold Rust cache on _every_ tag — the
-cache is written under the tag's own ref and no tag can read another's. The
-diff is ~11 min of that; everything after it is seconds. Full reasoning in
-`docs/deployment.md` § Releases.
+**Budget ~15 minutes; expect less, promise nothing.** `cdk diff` builds all
+three Lambdas during synth. Since 2026-08-18 the tag run restores the Rust
+cache CI writes on every `master` push (same arm runner, same `ci-rust-lambda`
+key), so a warm run compiles only the workspace crates — but the cache can be
+evicted, and a cold run is the old ~11-minute diff. A `-web` tag skips the
+build entirely. Full reasoning in `docs/deployment.md` § Releases.
 
 **Read the `cdk diff` step even on a green run.** It covers _every_ stack, not
-just the deployed ones, which makes it the one place a delta parked in an
-undeployed stack becomes visible. Anything it lists outside your tag's scope is
+just the deployed ones (`-web` runs are the exception — they skip the build and
+print no diff), which makes it the one place a delta parked in an undeployed
+stack becomes visible. Anything it lists outside your tag's scope is
 still-not-live: either cut a second tag for it or say so in the note. Silence
 here is the honest signal that nothing is left behind.
 

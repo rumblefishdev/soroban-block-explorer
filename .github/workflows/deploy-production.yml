@@ -90,7 +90,17 @@ permissions:
 jobs:
   deploy:
     name: Build + diff + deploy + smoke
-    runs-on: ubuntu-latest
+    # arm, to match ci.yml's `rust-lambda` job — NOT an incidental choice.
+    # That job runs `cargo lambda build --release --arm64` on every master
+    # push and saves the result under rust-cache key `ci-rust-lambda`;
+    # default-branch caches are readable from any ref, tags included. On
+    # x86 this job could never touch that cache (the rustc host triple is
+    # part of the key) and cross-compiled via zig from cold on every tag —
+    # the measured 11-minute `cdk diff`. Same runner + same key turns the
+    # synth build incremental: deps restore, only the workspace crates
+    # compile. The Lambdas are ARM_64 anyway, so this is also the native
+    # build. AWS CLI / Node / pip are all on the arm image.
+    runs-on: ubuntu-24.04-arm
     # Secret scoping only — the environment has no required reviewers, so this
     # does NOT reintroduce an approval gate (the tag push is the approval).
     environment: production
@@ -143,15 +153,32 @@ jobs:
       - name: Install dependencies
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: npm ci
+      # The Rust/CDK steps are gated off for `-web` (stacks == ''): a
+      # content-only sync has no use for an 11-minute Lambda build, and the
+      # price is only that a `-web` run leaves no drift record — every other
+      # tag shape still prints one.
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+        if: steps.plan.outputs.stacks != ''
+      # Same pinned version, same `shared-key` as ci.yml's `rust-lambda` job —
+      # that pairing (with the arm runner above) is what makes the tag run
+      # restore master's cache instead of building cold. `save-if: false`
+      # because a save under the tag's own ref can never be read by anything
+      # (nothing else runs on that ref) and 1-2 GB per release would evict the
+      # useful master caches out of the repo's 10 GB quota.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        if: steps.plan.outputs.stacks != ''
+        with:
+          shared-key: ci-rust-lambda
+          save-if: 'false'
       - name: Install cargo-lambda
+        if: steps.plan.outputs.stacks != ''
         run: pip3 install cargo-lambda
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: eu-central-1
       - name: Build CDK app
+        if: steps.plan.outputs.stacks != ''
         run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
       # ALL stacks, not just the selected ones. This step is the release's
       # drift record: a delta parked in a stack this tag does not deploy shows
@@ -159,13 +186,19 @@ jobs:
       # `--fail` — a diff in an unselected stack is information, not an error,
       # and auto-deploying whatever differs is exactly the stowaway the `-all`
       # selector exists to make deliberate.
+      #
+      # This is also the run's ONE synth (it writes `cdk.out`, Lambda builds
+      # included); the deploy step below reuses that assembly, which both
+      # skips a second synth and guarantees what deploys is byte-for-byte
+      # what was diffed.
       - name: cdk diff — every stack, deployed or not
+        if: steps.plan.outputs.stacks != ''
         run: |
           cd infra && npx cdk --app "node dist/bin/production.js" diff --strict
       - name: CDK deploy
         if: steps.plan.outputs.stacks != ''
         run: |
-          cd infra && npx cdk --app "node dist/bin/production.js" \
+          cd infra && npx cdk --app cdk.out \
             deploy ${{ steps.plan.outputs.stacks }} ${{ steps.plan.outputs.exclusively }} \
             --require-approval never
         env:
