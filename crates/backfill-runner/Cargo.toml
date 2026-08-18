@@ -65,11 +65,12 @@ hex = { workspace = true }
 # CH-direct NFT re-parse (`nft_reparse`). Runtime dep of the main bin, not just
 # tests — the dev-dependency below is for pool-ids-backfill tests only.
 domain = { path = "../domain" }
+# Task 0463: checkpoint-snapshot buckets are spilled to an unnamed temp file
+# instead of being buffered — the largest is 2.47 GB. Was a dev-dependency
+# (sync.rs fixtures) until the snapshot reader needed it at runtime.
+tempfile = "3"
 
 [dev-dependencies]
-# Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture
-# directories without polluting the developer's filesystem.
-tempfile = "3"
 # `pool-ids-backfill` tests construct `ExtractedOperation` whose `op_type`
 # field is a `domain::OperationType`.
 domain = { path = "../domain" }

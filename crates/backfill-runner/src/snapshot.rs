@@ -42,13 +42,15 @@
 //! `lastModifiedLedgerSeq` so live parser writes win regardless of load order
 //! — never on a window boundary, which is the defect task 0492 documents.
 
-use std::io::Read;
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 
 use flate2::read::GzDecoder;
 use stellar_xdr::{
     BucketEntry, Frame, LedgerEntryData, LedgerEntryType, LedgerKey, Limited, Limits, ReadXdr,
 };
 use tracing::info;
+
+use db_clickhouse::persist::ids;
 
 use crate::error::BackfillError;
 
@@ -225,12 +227,50 @@ fn ledger_key_index(k: &LedgerKey) -> Option<usize> {
     Some(t as i32 as usize)
 }
 
+/// Download one bucket to an unnamed temp file and stream-decode it from there.
+///
+/// The response body is NOT buffered in memory: the largest single bucket
+/// measured 2.47 GB, and a first version of this that called `.bytes()` peaked
+/// at 2.80 GB RSS on the full pass — the whole bucket plus its decompression
+/// window. The seed adds a per-key dedup set on top of this, so the download
+/// must not be the thing that owns the memory budget.
+///
+/// The temp file is unlinked on drop, so a crash mid-pass leaves nothing behind.
+pub(crate) async fn stream_bucket_from_url<F>(
+    client: &reqwest::Client,
+    url: &str,
+    f: F,
+) -> Result<u64, BackfillError>
+where
+    F: FnMut(SnapshotRecord) -> Result<(), BackfillError>,
+{
+    let mut resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| BackfillError::Incomplete(format!("bucket fetch failed: {e}")))?;
+
+    let mut tmp = tempfile::tempfile()
+        .map_err(|e| BackfillError::Incomplete(format!("bucket temp file failed: {e}")))?;
+    let mut bytes = 0u64;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| BackfillError::Incomplete(format!("bucket body failed: {e}")))?
+    {
+        bytes += chunk.len() as u64;
+        tmp.write_all(&chunk)
+            .map_err(|e| BackfillError::Incomplete(format!("bucket spill failed: {e}")))?;
+    }
+    tmp.seek(SeekFrom::Start(0))
+        .map_err(|e| BackfillError::Incomplete(format!("bucket rewind failed: {e}")))?;
+
+    stream_bucket(BufReader::new(&tmp), f)?;
+    Ok(bytes)
+}
+
 /// Read-only pass over the checkpoint snapshot: fetch the bucket list, stream
 /// every bucket, report per-entry-type counts and wall-clock. Writes nothing.
-///
-/// Buckets are streamed to a temp file first rather than buffered in memory —
-/// the largest single bucket measured 2.47 GB, and holding that plus its
-/// decompression window in RAM is exactly the failure the seed must avoid.
 pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
     let client = reqwest::Client::new();
@@ -249,29 +289,21 @@ pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
     for (i, hash) in list.hashes.iter().take(take).enumerate() {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
-        let body = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| BackfillError::Incomplete(format!("bucket fetch failed: {e}")))?
-            .bytes()
-            .await
-            .map_err(|e| BackfillError::Incomplete(format!("bucket body failed: {e}")))?;
-        bytes_total += body.len() as u64;
         let before = tally.records;
-        let decoded = stream_bucket(&body[..], |rec| {
+        let bytes = stream_bucket_from_url(&client, &url, |rec| {
             tally.observe(&rec);
             Ok(())
-        })?;
+        })
+        .await?;
+        bytes_total += bytes;
         println!(
             "  [{:>2}/{take}] {:>10} B  {:>9} records  {:>6.1}s  {}",
             i + 1,
-            body.len(),
+            bytes,
             tally.records - before,
             t0.elapsed().as_secs_f64(),
             &hash[..12]
         );
-        let _ = decoded;
     }
 
     println!("\n  entry type          live         dead");
@@ -291,6 +323,314 @@ pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
          \x20 several buckets and only the FIRST occurrence is live state."
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// First-wins deduplication — records to DISTINCT entries (task 0463 step 3b)
+// ---------------------------------------------------------------------------
+
+/// A holding keyed the way OUR `balances` table keys it: the two `cityhash`
+/// surrogates. Deriving these locally is what makes the comparison possible at
+/// all — the surrogates are deterministic hashes of the StrKey, not database
+/// counters, so the snapshot can be translated into our key space without a
+/// single lookup.
+///
+/// Note this is NOT computable in ClickHouse SQL: `cityHash64()` there is the
+/// 64-bit CityHash variant, a different algorithm from the low half of the
+/// 128-bit one `ids::` uses (see that module's header). The translation has to
+/// happen in Rust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HoldingKey {
+    pub holder_id: i64,
+    pub asset_id: i64,
+}
+
+/// First-wins state of one entry. `live == false` means the newest record for
+/// this key was a `DeadEntry`, i.e. the entry is deleted as of the checkpoint.
+#[derive(Debug, Clone, Copy)]
+pub struct SnapEntry {
+    pub live: bool,
+    /// The entry's OWN `lastModifiedLedgerSeq`. Zero for a dead entry, which
+    /// carries only a key. Anything seeded from this versions on it — never on
+    /// a window boundary (the task 0492 defect).
+    pub ledger: u32,
+    /// Stroops, exactly as the ledger carries them. Zero for a dead entry.
+    pub amount: i64,
+    /// Set during the comparison when a row on our side matched this key.
+    /// Whatever stays false at the end is what the network has and we do not.
+    pub matched: bool,
+}
+
+impl SnapEntry {
+    fn live(ledger: u32, amount: i64) -> Self {
+        Self {
+            live: true,
+            ledger,
+            amount,
+            matched: false,
+        }
+    }
+    fn dead() -> Self {
+        Self {
+            live: false,
+            ledger: 0,
+            amount: 0,
+            matched: false,
+        }
+    }
+}
+
+/// One classified record, in our key space. Entry types we do not model are
+/// counted, not silently dropped.
+enum SnapItem {
+    /// An `AccountEntry` carries TWO facts: the account exists, and it holds
+    /// this much native XLM. Native is not a trustline — it lives on the
+    /// account — so "absent from the snapshot" for a native holding means the
+    /// ACCOUNT is gone. That is the ~52k merged-account ghost case.
+    Account { holder_id: i64, entry: SnapEntry },
+    /// A classic credit trustline, keyed onto our surrogate pair.
+    Trustline { key: HoldingKey, entry: SnapEntry },
+    /// A pool-share trustline. Same ledger entry type, DIFFERENT table on our
+    /// side (`lp_positions`), so it is tallied apart rather than folded into
+    /// the `balances` comparison and counted as a phantom.
+    PoolShare {
+        holder_id: i64,
+        pool_id: [u8; 32],
+        entry: SnapEntry,
+    },
+}
+
+/// The deduplicated snapshot, ready to compare against our tables.
+#[derive(Debug, Default)]
+pub struct SnapshotState {
+    /// `holder_id` → the account's existence and its NATIVE holding.
+    pub accounts: std::collections::HashMap<i64, SnapEntry>,
+    /// Classic credit trustlines.
+    pub trustlines: std::collections::HashMap<HoldingKey, SnapEntry>,
+    /// Pool shares, kept separate — see [`SnapItem::PoolShare`].
+    pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), SnapEntry>,
+    /// Records of entry types this comparison does not model (offers, contract
+    /// data, TTL, …). Reported so the pass never looks more complete than it is.
+    pub unmodelled: u64,
+    /// Records superseded by an earlier (newer) record for the same key. This
+    /// is the number first-wins actually suppressed.
+    pub superseded: u64,
+}
+
+impl SnapshotState {
+    /// Insert under FIRST-WINS: the bucket list is ordered newest-first, so the
+    /// first record seen for a key is the live state and every later one is
+    /// history. A `DeadEntry` seen first must NOT be overwritten by an older
+    /// `LiveEntry` further down — that is exactly the resurrection bug this
+    /// whole effort is about, in the source format.
+    fn absorb(&mut self, item: SnapItem) {
+        use std::collections::hash_map::Entry;
+        macro_rules! first_wins {
+            ($map:expr, $k:expr, $v:expr) => {
+                match $map.entry($k) {
+                    Entry::Vacant(slot) => {
+                        slot.insert($v);
+                    }
+                    Entry::Occupied(_) => self.superseded += 1,
+                }
+            };
+        }
+        match item {
+            SnapItem::Account { holder_id, entry } => first_wins!(self.accounts, holder_id, entry),
+            SnapItem::Trustline { key, entry } => first_wins!(self.trustlines, key, entry),
+            SnapItem::PoolShare {
+                holder_id,
+                pool_id,
+                entry,
+            } => {
+                first_wins!(self.pool_shares, (holder_id, pool_id), entry)
+            }
+        }
+    }
+
+    pub fn live_accounts(&self) -> usize {
+        self.accounts.values().filter(|e| e.live).count()
+    }
+    pub fn live_trustlines(&self) -> usize {
+        self.trustlines.values().filter(|e| e.live).count()
+    }
+    pub fn live_pool_shares(&self) -> usize {
+        self.pool_shares.values().filter(|e| e.live).count()
+    }
+}
+
+/// The surrogate `asset_id` for a trustline asset, or `None` for a pool share
+/// (which is not an `assets` row at all).
+///
+/// Matches the writer's derivation exactly — same canonical code normalizer,
+/// same `credit_asset_id` formula. A divergence here would not fail loudly; it
+/// would silently key every asset differently and report the entire network as
+/// missing, so the two call sites are deliberately spelled the same way.
+fn trustline_asset_id(asset: &stellar_xdr::TrustLineAsset) -> Option<i64> {
+    use stellar_xdr::TrustLineAsset as A;
+    match asset {
+        // A native "trustline" does not exist on chain; native lives on the
+        // AccountEntry. Kept total rather than unreachable.
+        A::Native => Some(ids::NATIVE_ASSET_ID),
+        A::CreditAlphanum4(a) => Some(ids::credit_asset_id(
+            &xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
+            &a.issuer.to_string(),
+        )),
+        A::CreditAlphanum12(a) => Some(ids::credit_asset_id(
+            &xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
+            &a.issuer.to_string(),
+        )),
+        A::PoolShare(_) => None,
+    }
+}
+
+/// Classify one decoded record into our key space, or `None` for an entry type
+/// this comparison does not model.
+fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
+    use stellar_xdr::{LedgerEntryData as D, LedgerKey as K, TrustLineAsset as A};
+    match rec {
+        SnapshotRecord::Live(e) => match &e.data {
+            D::Account(a) => Some(SnapItem::Account {
+                holder_id: ids::address_id(&a.account_id.to_string()),
+                entry: SnapEntry::live(e.last_modified_ledger_seq, a.balance),
+            }),
+            D::Trustline(t) => {
+                let holder_id = ids::address_id(&t.account_id.to_string());
+                let entry = SnapEntry::live(e.last_modified_ledger_seq, t.balance);
+                match (&t.asset, trustline_asset_id(&t.asset)) {
+                    (A::PoolShare(p), _) => Some(SnapItem::PoolShare {
+                        holder_id,
+                        pool_id: p.0.0,
+                        entry,
+                    }),
+                    (_, Some(asset_id)) => Some(SnapItem::Trustline {
+                        key: HoldingKey {
+                            holder_id,
+                            asset_id,
+                        },
+                        entry,
+                    }),
+                    (_, None) => None,
+                }
+            }
+            _ => None,
+        },
+        SnapshotRecord::Dead(k) => match k.as_ref() {
+            K::Account(a) => Some(SnapItem::Account {
+                holder_id: ids::address_id(&a.account_id.to_string()),
+                entry: SnapEntry::dead(),
+            }),
+            K::Trustline(t) => {
+                let holder_id = ids::address_id(&t.account_id.to_string());
+                match (&t.asset, trustline_asset_id(&t.asset)) {
+                    (A::PoolShare(p), _) => Some(SnapItem::PoolShare {
+                        holder_id,
+                        pool_id: p.0.0,
+                        entry: SnapEntry::dead(),
+                    }),
+                    (_, Some(asset_id)) => Some(SnapItem::Trustline {
+                        key: HoldingKey {
+                            holder_id,
+                            asset_id,
+                        },
+                        entry: SnapEntry::dead(),
+                    }),
+                    (_, None) => None,
+                }
+            }
+            _ => None,
+        },
+    }
+}
+
+/// Stream every bucket and fold it into a deduplicated [`SnapshotState`].
+///
+/// Memory is the distinct-entry count, not the record count: ~124M records
+/// collapse onto the accounts + trustlines the network actually holds.
+pub async fn build_state(
+    client: &reqwest::Client,
+    list: &BucketList,
+    mut on_bucket: impl FnMut(usize, u64, f64),
+) -> Result<SnapshotState, BackfillError> {
+    let mut state = SnapshotState::default();
+    for (i, hash) in list.hashes.iter().enumerate() {
+        let url = BucketList::url(PUBNET_ARCHIVE, hash);
+        let t0 = std::time::Instant::now();
+        let bytes = stream_bucket_from_url(client, &url, |rec| {
+            match classify(&rec) {
+                Some(item) => state.absorb(item),
+                None => state.unmodelled += 1,
+            }
+            Ok(())
+        })
+        .await?;
+        on_bucket(i, bytes, t0.elapsed().as_secs_f64());
+    }
+    Ok(state)
+}
+
+/// Read-only: decode the snapshot and report DISTINCT entries after first-wins.
+/// Writes nothing. This is the number that can be compared with our tables —
+/// the raw record counts from `snapshot-tally` cannot, because a key appears in
+/// as many buckets as it has versions.
+pub async fn dedup_command() -> Result<(), BackfillError> {
+    let started = std::time::Instant::now();
+    let client = reqwest::Client::new();
+    let list = fetch_bucket_list(&client, PUBNET_ARCHIVE).await?;
+    println!(
+        "checkpoint ledger {} — {} buckets",
+        list.checkpoint_ledger,
+        list.hashes.len()
+    );
+    let take = list.hashes.len();
+    let state = build_state(&client, &list, |i, bytes, secs| {
+        println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
+    })
+    .await?;
+
+    report_state(
+        &state,
+        list.checkpoint_ledger,
+        started.elapsed().as_secs_f64(),
+    );
+    Ok(())
+}
+
+/// Shared reporting so the dedup pass and the comparison pass cannot drift into
+/// describing the same numbers differently.
+pub fn report_state(state: &SnapshotState, checkpoint_ledger: u32, secs: f64) {
+    let dead_accounts = state.accounts.len() - state.live_accounts();
+    let dead_trustlines = state.trustlines.len() - state.live_trustlines();
+    println!(
+        "
+  DISTINCT entries at checkpoint {checkpoint_ledger} (first-wins applied)"
+    );
+    println!("  entity            live         deleted");
+    println!(
+        "  accounts     {:>10} {:>15}",
+        state.live_accounts(),
+        dead_accounts
+    );
+    println!(
+        "  trustlines   {:>10} {:>15}",
+        state.live_trustlines(),
+        dead_trustlines
+    );
+    println!(
+        "  pool shares  {:>10} {:>15}",
+        state.live_pool_shares(),
+        state.pool_shares.len() - state.live_pool_shares()
+    );
+    println!(
+        "
+  {} records superseded by a newer one for the same key",
+        state.superseded
+    );
+    println!(
+        "  {} records of entry types this comparison does not model          (offers, contract data, TTL, claimable balances, …)",
+        state.unmodelled
+    );
+    println!("  {secs:.1}s");
 }
 
 #[cfg(test)]
