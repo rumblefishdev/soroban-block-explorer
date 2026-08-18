@@ -364,12 +364,23 @@ fn compare_from_tsv(
                 .parse::<i128>()
                 .map_err(|e| BackfillError::Incomplete(format!("line {} {what}: {e}", lineno + 1)))
         };
+        // `as i64` would TRUNCATE a malformed export silently and misclassify
+        // the row under a wrong surrogate; reject instead. `amount` stays i128
+        // — the column is Int128 and large-supply tokens use the range.
+        let as_i64 = |v: i128, what: &str| -> Result<i64, BackfillError> {
+            i64::try_from(v).map_err(|_| {
+                BackfillError::Incomplete(format!(
+                    "line {}: {what} out of i64 range: {v}",
+                    lineno + 1
+                ))
+            })
+        };
         let row = OurBalance {
-            holder_id: next("holder_id")? as i64,
-            asset_id: next("asset_id")? as i64,
+            holder_id: as_i64(next("holder_id")?, "holder_id")?,
+            asset_id: as_i64(next("asset_id")?, "asset_id")?,
             amount: next("amount")?,
-            last_updated_ledger: next("last_updated_ledger")? as i64,
-            closed_at_ledger: next("closed_at_ledger")? as i64,
+            last_updated_ledger: as_i64(next("last_updated_ledger")?, "last_updated_ledger")?,
+            closed_at_ledger: as_i64(next("closed_at_ledger")?, "closed_at_ledger")?,
         };
         seen += 1;
         fold_row(

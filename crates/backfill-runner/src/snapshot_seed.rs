@@ -91,6 +91,9 @@ struct Corrections {
     ghost_native_stroops: i128,
     n_ghost_classic: u64,
     n_heal: u64,
+    /// Rows the snapshot does not have but WE touched after the checkpoint —
+    /// the snapshot is the stale side, so they are left alone.
+    n_newer_than_checkpoint: u64,
 }
 
 /// Read a one-column TSV of existing dimension ids (`SELECT id FROM …`).
@@ -167,6 +170,14 @@ fn fold_our_row(
         other => {
             if let Some(e) = other {
                 e.matched = true;
+            }
+            // The snapshot's silence is only evidence AS OF its checkpoint. A
+            // row our writer touched AFTER that ledger is fresher than the
+            // snapshot: closing it would delete a holding the network created
+            // in the gap. Skip and report — never guess against newer data.
+            if last_updated > i64::from(checkpoint) {
+                out.n_newer_than_checkpoint += 1;
+                return;
             }
             if amount == 0 {
                 out.n_closure += 1;
@@ -429,6 +440,7 @@ pub async fn seed_command(
            native ghosts zeroed  {}   ({:.7} XLM — full list in ghosts.tsv)\n\
            classic ghosts zeroed {}   (amounts are per-asset units; see ghosts.tsv)\n\
            self-heals          {}\n\
+           left alone (ours newer than checkpoint) {}\n\
          account_signers rows: {}\n\
          asset stubs:          {}\n\
          account stubs:        {}\n",
@@ -440,6 +452,7 @@ pub async fn seed_command(
         corr.ghost_native_stroops as f64 / 1e7,
         corr.n_ghost_classic,
         corr.n_heal,
+        corr.n_newer_than_checkpoint,
         corr.signers.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
