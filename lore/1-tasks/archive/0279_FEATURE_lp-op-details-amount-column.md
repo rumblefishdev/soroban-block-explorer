@@ -590,7 +590,7 @@ not the scratch) was found.
 - [x] FE "Amount" column un-hidden, rendering deposit / withdraw / trade,
       one line per operation (see the 8.2% measurement above) — verified on
       production 2026-08-17 on pool `LCCC…MXS7`: `Deposit 0.1260385 XLM +
-  0.0000045 YxT`, `Trade 0.0000001 YxT → 0.0027931 XLM`, and a
+0.0000045 YxT`, `Trade 0.0000001 YxT → 0.0027931 XLM`, and a
       three-operation transaction rendering three lines. Withdraw was **not**
       observed live — it takes the same same-sign `+` branch as deposit, only
       with negative amounts, and that branch is covered by
