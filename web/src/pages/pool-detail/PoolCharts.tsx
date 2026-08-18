@@ -1,4 +1,5 @@
 import { Box, Card, Stack, Typography } from '@mui/material';
+import type { ChartDataPoint } from '@rumblefish/api-types';
 import {
   CardSkeleton,
   LazySection,
@@ -10,7 +11,11 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo, useState } from 'react';
 
-import { usePoolChart, type ChartPeriod } from '../../api/index.js';
+import {
+  periodBucketMs,
+  usePoolChart,
+  type ChartPeriod,
+} from '../../api/index.js';
 
 type ChartMetric = 'tvl' | 'volume' | 'fees';
 
@@ -199,6 +204,37 @@ function ChartEmptyState({ title, hint }: { title: string; hint: string }) {
   );
 }
 
+/**
+ * Map API chart rows to chart points for one metric, dropping rows where
+ * the metric is null or non-numeric (a gap must stay a gap, not become 0).
+ *
+ * `bucketEndShiftMs` moves each point from bucket START to bucket END,
+ * clamped to `nowMs` for the in-progress bucket. TVL needs this: the
+ * backend's per-bucket TVL is `argMax` — the state at the END of the
+ * bucket — so stamped at the bucket start, `stepAfter` held an end-of-week
+ * value from that week's Monday and drew a drop up to a bucket earlier
+ * than it happened (task 0505: a real Aug 12–16 decline rendered as an
+ * Aug 10 cliff on 1Y). Flows (volume / fees) pass 0 — a bar labeled by
+ * its bucket start is "the week of Aug 10", which is right.
+ */
+export function toChartPoints(
+  rows: readonly ChartDataPoint[],
+  field: 'tvl' | 'volume' | 'fee_revenue',
+  bucketEndShiftMs: number,
+  nowMs: number
+): TimeSeriesPoint[] {
+  const pts: TimeSeriesPoint[] = [];
+  for (const row of rows) {
+    const raw = row[field];
+    if (raw == null) continue;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) continue;
+    const bucketMs = new Date(row.bucket).getTime() + bucketEndShiftMs;
+    pts.push({ timestamp: Math.min(bucketMs, nowMs), value: num });
+  }
+  return pts;
+}
+
 interface PoolChartsProps {
   poolId: string;
 }
@@ -212,26 +248,15 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
     period
   );
 
-  /**
-   * Map the API's `(bucket, tvl|volume|fee_revenue)` rows into the
-   * `TimeSeriesPoint[]` shape consumed by `TimeSeriesChart`. Skip rows
-   * where the chosen metric is null so the chart doesn't render gaps as
-   * zero values.
-   */
+  // See `toChartPoints` — TVL (a state, argMax over the bucket) is stamped
+  // at bucket END; volume / fees (flows) keep the bucket-start label.
   const points = useMemo(() => {
     if (!data) return [];
     const field: 'tvl' | 'volume' | 'fee_revenue' =
       metric === 'fees' ? 'fee_revenue' : metric;
-    const pts: TimeSeriesPoint[] = [];
-    for (const row of data.data_points) {
-      const raw = row[field];
-      if (raw == null) continue;
-      const num = Number(raw);
-      if (!Number.isFinite(num)) continue;
-      pts.push({ timestamp: row.bucket, value: num });
-    }
-    return pts;
-  }, [data, metric]);
+    const shift = metric === 'tvl' ? periodBucketMs(period) : 0;
+    return toChartPoints(data.data_points, field, shift, Date.now());
+  }, [data, metric, period]);
 
   /**
    * Tell "nothing happened" apart from "we cannot price what happened".
@@ -314,10 +339,9 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
             data={points}
             // Per-metric rendering — see METRIC_RENDERING. This departs
             // from Figma node `325:24354` (flat line, a hollow mark on
-            // every bucket): the marks are now density-gated by the chart
-            // and the fill is a fade rather than the solid wash that made
-            // `area` unusable before, so TVL reads as a level without the
-            // fill burying anything.
+            // every bucket): static marks are gone entirely (task 0505 —
+            // only the hover dot remains) and the fill is a fade rather
+            // than the solid wash that made `area` unusable before.
             variant={METRIC_RENDERING[metric].variant}
             curve={METRIC_RENDERING[metric].curve}
             valueFormatter={usdFormatter}
