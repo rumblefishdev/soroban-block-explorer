@@ -159,6 +159,81 @@ making the account-side read a full scan. Balance history over time — task 046
 archived-but-restorable state the codebase never reads, so type-3 holdings may
 over-report.
 
+## Status 2026-08-18 — seed built and dry-run verified; production write is the next move
+
+Everything below is measured on production data and RPC-verified, not estimated.
+
+### What exists in code (this branch, committed)
+
+1. **Lifecycle writer** — the indexer now stamps `closed_at_ledger` (and zeroes
+   the amount) when a trustline is removed and when an account is merged, for
+   classic, native, Soroban and LP write paths. It also extracts signers +
+   thresholds into `account_signers`. This is NOT deployed yet.
+2. **Checkpoint-snapshot toolchain** (`backfill-runner` subcommands, all
+   read-only except the seed's explicit `--execute`):
+   - `snapshot-tally` — decode the archive's full-state snapshot, count records
+     (4.44 GB, 21 buckets, ~6 min, 13.5 MB peak RSS after the streaming fix).
+   - `snapshot-dedup` — first-wins per key → DISTINCT entries. The bucket list
+     is newest-first; the first record per key is the live one.
+   - `snapshot-compare` — four-way diff of our `balances` against the network:
+     missing / closure / ghost (ours >0, network gone) / divergent / stale,
+     classic and native separately, with stride samples and a below/above-floor
+     histogram of the missing bucket.
+   - `snapshot-verify` — spot-check any sample against Soroban RPC raw XDR
+     (`getLedgerEntries`); absence from the response = entry does not exist.
+   - `snapshot-seed` — builds ALL corrections; dry-run writes artifacts only
+     (`manifest.json`, `summary.txt`, `ghosts.tsv`), `--execute` inserts.
+
+### The measured truth (checkpoint 64,010,495; RPC-verified 260/260 sampled)
+
+| finding                                            | count                                 | note                                                                                                                                                                                                                                            |
+| -------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| live trustlines the network has, we hold NO row    | **19,290,231**                        | the real gap is **60%**, not the ~7% the 200-account probe suggested — that probe sampled accounts WE hold; dormant-since-floor lines were invisible to it. 99.997% have `lastModifiedLedgerSeq` below our floor: dormancy, not a parser defect |
+| our zero rows that are REAL closures               | **24,474,026**                        | the ghost set the read flip must not resurrect                                                                                                                                                                                                  |
+| native ghosts (account deleted, we still show XLM) | **1,035,265** carrying **45.51M XLM** | task 0321's class, 17× its own measurement — its method only saw merges we ingested; RPC check: 100/100 sampled accounts absent on chain                                                                                                        |
+| assets we have never seen at all                   | **97,139**                            | network has 391,092 live assets, we know 344,989, intersection ~294k (we also hold ~51k dead ones)                                                                                                                                              |
+| signers rows ready to seed                         | **10,865,408**                        | every live account, versioned on each entry's own ledger                                                                                                                                                                                        |
+
+Asymmetry explained: the RPC bootstrap (task 0492) seeded accounts + native
+balances, never trustlines — so native measures complete while classic misses
+19.3M.
+
+### Decisions taken (recorded in the map ticket + seed module docs)
+
+- **Closure ledger = the run's checkpoint ledger** (both `closed_at_ledger`
+  and the RMT version). Semantics for seeded rows: "closed at or before".
+  Free cohort provenance until 0492 lands a real convention.
+- **Ghosts are corrected AND reported** (option A applies): RPC proved them
+  real removals, so `amount = 0` together with `closed_at_ledger`; the full
+  list always lands in `ghosts.tsv`.
+- **Pool shares NOT seeded** — `manifest.json` re-derives the identical
+  snapshot for the ADR 0056 LP merge (archive is content-addressed).
+- **No indexer stop needed for the seed**: every row versions on a real ledger
+  (entry's own, or the checkpoint), so RMT ordering makes load order
+  irrelevant — the live writer's newer rows win regardless.
+
+### The load-bearing order (do not reorder)
+
+1. **Deploy the lifecycle writer** (indexer from this branch).
+2. Fresh `our_balances` + id exports (minutes before the seed; the skew
+   window measurably grows divergents 1.5k→25k).
+3. **`snapshot-seed --execute`** against a checkpoint taken AFTER the deploy.
+   Reversed, every removal in the gap outversions its seed closure and
+   resurrects the ghost.
+4. Coverage measurement + RPC cross-check (standing requirement), the
+   200-account probe as a REPEATABLE check.
+5. Only then: flip the read filter, ship signers API/DTO/UI (explicit
+   "not indexed" state until then), regenerate API types, update docs.
+
+### Open follow-ups spawned along the way
+
+- 0502 (reusable snapshot decoder — extract `snapshot.rs` from
+  backfill-runner into its own crate; the seed stays a backfill-runner
+  consumer), 0503 (exhaustive audit), 0504 (five discarded entry types),
+  0497 (retire repair-tier1), 0498/0499 (LP merge), 0492 (provenance).
+- Lore id collisions present ON DEVELOP (pre-existing, not from this branch):
+  two `0496_*` tasks, two `0054_*` ADRs.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five
