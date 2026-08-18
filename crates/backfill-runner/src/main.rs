@@ -18,6 +18,8 @@ mod rpc_snapshot;
 mod run;
 mod sink;
 mod snapshot;
+mod snapshot_compare;
+mod snapshot_seed;
 mod status;
 mod sync;
 mod util;
@@ -229,6 +231,61 @@ enum Command {
         buckets: Option<usize>,
     },
 
+    /// Step 3b — decode the snapshot and report DISTINCT entries after
+    /// first-wins deduplication. `snapshot-tally` counts RECORDS, which cannot
+    /// be compared with our tables: a key appears once per version across the
+    /// bucket levels. READ-ONLY.
+    SnapshotDedup,
+
+    /// Step 3c — four-way comparison of `balances` against the snapshot:
+    /// missing / closure / anomaly / divergent / stale, reported separately for
+    /// classic trustlines and native holdings. READ-ONLY — writes nothing.
+    SnapshotCompare {
+        /// Fold our rows from a TSV export (the `slice_sql` column list)
+        /// instead of querying ClickHouse directly — the transport used when
+        /// the mTLS material lives with the operator's read-only wrapper.
+        #[arg(long)]
+        our_rows: Option<PathBuf>,
+        /// Write per-bucket sample TSVs here (closure/anomaly/divergent/agree/
+        /// missing), for RPC spot-verification of every verdict.
+        #[arg(long)]
+        dump_dir: Option<PathBuf>,
+    },
+
+    /// Verify sampled comparison verdicts against Soroban RPC (raw XDR — the
+    /// arbiter). Input TSV: `account<TAB>G…` or
+    /// `trustline<TAB>G…<TAB>CODE<TAB>G-issuer`. Absence from the response
+    /// means the entry does not exist. Requires `--soroban-rpc-url`. READ-ONLY.
+    SnapshotVerify {
+        #[arg(long)]
+        samples: PathBuf,
+    },
+
+    /// Step 3d — THE seed (ADR 0055): build every correction the comparison
+    /// proved necessary. Default is a DRY-RUN that decodes, folds and writes
+    /// artifacts (manifest.json, summary.txt, ghosts.tsv) without touching the
+    /// database; `--execute` performs the inserts. Deployment order is
+    /// load-bearing: deploy the lifecycle writer FIRST, then seed from a
+    /// checkpoint taken after that deploy (see the module docs).
+    SnapshotSeed {
+        /// Our deduplicated balances export (the `slice_sql` column list).
+        #[arg(long)]
+        our_rows: PathBuf,
+        /// One-column TSV: `SELECT id FROM assets` — existing asset ids.
+        #[arg(long)]
+        assets_ids: PathBuf,
+        /// One-column TSV: `SELECT id FROM accounts GROUP BY id` — existing
+        /// account ids.
+        #[arg(long)]
+        accounts_ids: PathBuf,
+        /// Directory for provenance artifacts (manifest, summary, ghost list).
+        #[arg(long)]
+        artifacts: PathBuf,
+        /// Actually insert. Without this flag the run is read-only.
+        #[arg(long)]
+        execute: bool,
+    },
+
     /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
         #[arg(long)]
@@ -357,6 +414,43 @@ async fn main() {
             snapshot::tally_command(buckets)
                 .await
                 .expect("snapshot tally failed — read-only, safe to re-run");
+        }
+        Command::SnapshotDedup => {
+            snapshot::dedup_command()
+                .await
+                .expect("snapshot dedup failed — read-only, safe to re-run");
+        }
+        Command::SnapshotCompare { our_rows, dump_dir } => {
+            snapshot_compare::compare_command(&sink, our_rows.as_deref(), dump_dir.as_deref())
+                .await
+                .expect("snapshot compare failed — read-only, safe to re-run");
+        }
+        Command::SnapshotVerify { samples } => {
+            let rpc = cli
+                .soroban_rpc_url
+                .as_deref()
+                .expect("snapshot-verify requires --soroban-rpc-url");
+            snapshot_compare::verify_command(rpc, &samples)
+                .await
+                .expect("snapshot verify failed — read-only, safe to re-run");
+        }
+        Command::SnapshotSeed {
+            our_rows,
+            assets_ids,
+            accounts_ids,
+            artifacts,
+            execute,
+        } => {
+            snapshot_seed::seed_command(
+                &sink,
+                &our_rows,
+                &assets_ids,
+                &accounts_ids,
+                &artifacts,
+                execute,
+            )
+            .await
+            .expect("snapshot seed failed");
         }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse
