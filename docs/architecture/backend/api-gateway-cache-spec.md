@@ -50,7 +50,7 @@ guarantees this — the gateway can therefore treat `no-store` as the
 invariant signal for "do not cache".
 
 The full per-endpoint mapping is documented in
-[`backend-overview.md` §6.4](./backend-overview.md#64-response-caching).
+[`backend-overview.md` §6.5](./backend-overview.md#65-response-caching).
 
 ## Required gateway behaviour
 
@@ -127,6 +127,6 @@ CloudFront layer in this topology.
 
 - Backend cache-control source of truth:
   [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs)
-- Backend overview §6.4: [`backend-overview.md`](./backend-overview.md#64-response-caching)
+- Backend overview §6.5: [`backend-overview.md`](./backend-overview.md#65-response-caching)
 - Driving task: [`lore/1-tasks/active/0055_FEATURE_backend-api-gateway-caching.md`](../../../lore/1-tasks/active/0055_FEATURE_backend-api-gateway-caching.md)
 - Companion CDK task: [`lore/1-tasks/.../0097_FEATURE_…`](../../../lore/1-tasks/) — gateway infrastructure

@@ -42,6 +42,35 @@ pub(crate) fn is_strkey_shape(value: &str, prefix: char) -> bool {
             .all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7'))
 }
 
+/// The same free-text box also has to accept a pool's own identifier.
+///
+/// Without this, pasting `LD7K…` into the pools filter runs it through
+/// `normalize_asset_codes` and matches it as a substring of an asset CODE —
+/// which finds nothing, so the page answers "no such pool" about a pool that
+/// exists. A confident wrong answer, not a missing convenience (task 0470).
+///
+/// **StrKey only.** Task 0264 made the `L…` SEP-23 form canonical across every
+/// surface and dropped hex deliberately — the project was pre-deploy, so there
+/// were no hex bookmarks to preserve — and `path::pool_id_strkey` still tells
+/// callers that "hex form is no longer accepted".
+///
+/// `search::classifier` does accept 64-char hex, but that is the one endpoint
+/// 0264 explicitly deferred, not a precedent. Copying it here would spread a
+/// known exception into a third place.
+///
+/// Dropping hex also removes a trap: `hex::decode` accepts any even-length
+/// string over `[0-9a-f]`, so `FACE`, `BEEF` and `CAFE` — all valid asset
+/// codes — would parse as identifiers and search for a pool that does not
+/// exist.
+///
+/// Returns the lowercase hex the `pool_id` column stores.
+pub(crate) fn pool_id_from_text(raw: &str) -> Option<String> {
+    match stellar_strkey::LiquidityPool::from_string(raw.trim()) {
+        Ok(stellar_strkey::LiquidityPool(bytes)) => Some(hex::encode(bytes)),
+        Err(_) => None,
+    }
+}
+
 pub(crate) fn pool_id_hex_to_strkey(hex_str: &str) -> String {
     assert_eq!(
         hex_str.len(),
@@ -145,5 +174,53 @@ mod tests {
     #[should_panic(expected = "pool_id hex must be exactly 64 chars")]
     fn pool_id_hex_to_strkey_panics_on_short_input() {
         let _ = pool_id_hex_to_strkey("abc");
+    }
+
+    #[test]
+    fn an_asset_code_is_not_mistaken_for_an_identifier() {
+        // The whole point of the split: these must fall through to the code
+        // matcher, not become a point seek that finds nothing.
+        assert!(pool_id_from_text("XLM").is_none());
+        assert!(pool_id_from_text("xlm/kale").is_none());
+        assert!(pool_id_from_text("").is_none());
+        // 64 chars but not a StrKey.
+        assert!(pool_id_from_text(&"z".repeat(64)).is_none());
+        // Hex-looking asset codes stay asset codes. With a hex branch these
+        // parsed as identifiers and searched for a pool that does not exist.
+        for code in ["FACE", "BEEF", "CAFE", "DEAD"] {
+            assert!(
+                pool_id_from_text(code).is_none(),
+                "{code} must stay an asset code"
+            );
+        }
+        // A strkey of the wrong type — accounts are not pools.
+        assert!(
+            pool_id_from_text("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN").is_none()
+        );
+    }
+
+    #[test]
+    fn pool_identifier_is_recognised_as_a_strkey() {
+        // Round-trip rather than a hand-typed constant: the invariant is that
+        // the StrKey resolves to the hex of the SAME 32 bytes. A literal typed
+        // by hand would only test whether the literal was right.
+        let bytes: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let hex = hex::encode(bytes);
+        let strkey = stellar_strkey::LiquidityPool(bytes).to_string();
+        assert!(
+            strkey.starts_with('L'),
+            "expected an L-strkey, got {strkey}"
+        );
+
+        assert_eq!(pool_id_from_text(&strkey).as_deref(), Some(hex.as_str()));
+        // Pasting from a terminal or a chat window brings whitespace along.
+        assert_eq!(
+            pool_id_from_text(&format!("  {strkey} ")).as_deref(),
+            Some(hex.as_str())
+        );
+        // Hex is NOT an identifier here — 0264 made StrKey the only accepted
+        // form, and `path::pool_id_strkey` rejects hex on the detail route.
+        assert!(pool_id_from_text(&hex).is_none());
+        assert!(pool_id_from_text(&hex.to_uppercase()).is_none());
     }
 }

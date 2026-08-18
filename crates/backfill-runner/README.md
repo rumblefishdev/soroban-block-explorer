@@ -24,9 +24,11 @@ inserts — see [Writes](#writes) below.
   `--ch-cert` / `--ch-key` / `--ch-ca` (task 0307).
 - Run from `us-east-1` (same region as the public archive) to avoid
   cross-region ingress costs.
-- Local scratch disk: **~2 × partition_size** (a couple of GB). The runner
-  keeps at most the partition being indexed plus the prefetched N+1 on
-  disk; each partition's folder is deleted after it fully indexes.
+- Local scratch disk: **under ~2 × partition_size**. The runner keeps at
+  most the partition being indexed plus the prefetched N+1 on disk, and
+  releases each ledger file as it is indexed, so the indexing partition
+  shrinks as it goes. Scratch must live on a filesystem the database
+  cannot allocate from (task 0488).
 
 ## Usage
 
@@ -254,9 +256,11 @@ background task: a single-slot prefetch of partition N+1 running while
 partition N indexes. No worker pool, no `JoinSet` of indexer tasks —
 concurrency inside the indexer is explicitly out of scope.
 
-After partition N finishes indexing, its local folder is deleted before
-awaiting the N+1 prefetch. This bounds disk at ~2 × partition_size
-regardless of range width.
+Each ledger file is deleted as soon as it is indexed (or skipped as
+already-in-DB), and partition N's folder is removed wholesale before
+awaiting the N+1 prefetch. Disk is therefore bounded by the prefetched
+N+1 plus N's shrinking remainder — under ~2 × partition_size and falling
+through each partition, regardless of range width.
 
 ## Resume & idempotency
 
@@ -375,14 +379,21 @@ as a percentage.
 
 ## Disk footprint
 
-Bounded at ~2 × partition_size by mandatory cleanup-after-index. A crash
-leaves at most two partitions on disk (the one being indexed + the N+1
-prefetch); both are reclaimed on the next successful iteration, and
-`aws s3 sync` patches up any partial folder. On error, cleanup is
-**deliberately skipped** — the broken partition stays on disk for
-forensics, and `aws s3 sync` on retry fills in any missing tail instead
-of re-downloading from zero. If forensics aren't needed after a failure,
-`rm -rf .temp/backfill-runner/` is the recovery.
+Bounded **under** ~2 × partition_size by per-ledger release plus
+mandatory cleanup-after-index: the partition being indexed shrinks file
+by file while the N+1 prefetch fills, so the peak is one full partition
+plus a remainder rather than two full ones (task 0488 — a backfill filled
+the production box and cost ClickHouse its write space). A crash leaves
+at most that much on disk; it is reclaimed on the next successful
+iteration, and `aws s3 sync` patches up any partial folder.
+
+On error, folder cleanup is **deliberately skipped**, but per-ledger
+release means the surviving folder holds only the ledgers not yet indexed
+— the failing ledger's own file included, since it is unlinked only after
+a successful ingest. Retry re-syncs the already-consumed files instead of
+re-downloading from zero. Pass `--keep-partitions` when a run needs the
+whole folder intact for forensics or repeated re-parses. If neither is
+needed after a failure, `rm -rf .temp/backfill-runner/` is the recovery.
 
 ## Throughput
 

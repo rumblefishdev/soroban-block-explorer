@@ -2,7 +2,7 @@
 id: '0279'
 title: 'LP per-pool amounts: persist what the indexer already computes, un-hide the Amount column'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0029']
 related_tasks: ['0274', '0247', '0199', '0261', '0365', '0393', '0377']
 tags:
@@ -68,6 +68,16 @@ history:
       nearest owner. Unverified against mainnet; `operation.rs` is shared with
       the indexer, so a `details` key may also change persisted JSON. 0377
       deleted the permanently-empty `Received` row rather than reword it.
+  - date: '2026-08-16'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Backfill complete — 211/211 partitions, zero gaps against
+      operation_pools. Measured: 929,971,594 rows, 11.36 GiB, 13.12 B/row,
+      no duplicates left (RMT collapsed the overlapping re-runs), no
+      OPTIMIZE FINAL needed. The 2026-08-11 estimate of ~860M rows was
+      right; the mid-run revision to 1.24B was not. Run incident and its
+      fixes tracked in 0488.
   - date: '2026-08-11'
     status: backlog
     who: stkrolikiewicz
@@ -173,6 +183,23 @@ history:
       order), and the FE renders `in → out` for swaps, `X + Y` for
       deposits/withdrawals, blank for unknown. Remaining: targeted-write
       mode, then deploy (table pre-create FIRST) and the run.
+  - date: '2026-08-17'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed by reconciling the criteria against what production actually
+      does — the task still claimed the Amount column was hidden while it had
+      been rendering for days. Verified live: pool LCCC…MXS7 shows
+      `Deposit 0.1260385 XLM + 0.0000045 YxT`, `Trade 0.0000001 YxT →
+      0.0027931 XLM`, and a three-operation transaction as three lines; the
+      multi-pool Horizon check landed on tx 24d04961…c5b5, which crosses
+      three pools and agrees to the stroop. Shipped across
+      production-2026.08.17-1 and -2 (the latter carrying 0489, without which
+      every credit12 leg was missing). Two criteria are NOT ticked: the
+      `read_rows` measurement is handed to 0491, which re-keys this read and
+      already carries it; withdraw rendering is inferred from the shared
+      code branch, not observed. Issue #371 stays OPEN — this task was one
+      third of it, and 0491 holds the rest.
 ---
 
 # LP per-pool amounts: persist what the indexer already computes
@@ -289,10 +316,11 @@ built, the row is written fresh with a real value.
 
 Path B reads each op's own non-collapsed `LedgerEntryChanges` at ingest →
 100% per-op, no collision, no hot-path S3. Needs a narrow side table plus an
-ADR-0029 clarification: LP-only amounts are ~18 GB compressed (~2.6% of the
-DB — see "Measured on prod"), not the multi-TB corpus ADR 0029 rejected.
-(An earlier revision said "single-digit MB"; that was wrong by three orders
-of magnitude and is corrected by the 2026-08-11 measurement.)
+ADR-0029 clarification: LP-only amounts are **11.36 GiB compressed, ~1.6% of
+the DB** (measured after the backfill completed — see "Backfill executed"),
+not the multi-TB corpus ADR 0029 rejected. (An earlier revision said
+"single-digit MB", wrong by three orders of magnitude; the 2026-08-11
+estimate of ~18 GB was the right order and 60% high.)
 
 ## Measured on prod — 2026-08-11 (full history to ledger 63,827,054)
 
@@ -492,20 +520,88 @@ Two consequences worth keeping:
 Storage is unaffected — the table was always keyed per operation, since the
 RMT key demands it. Only the read path changed.
 
+## Backfill executed — measured, not estimated (2026-08-16)
+
+The historical re-parse is **complete**: every one of the 211 partitions from
+the dataset floor (50,457,424) to the live floor carries ≥99% of the ledgers
+`operation_pools` has for the same range. Zero gaps.
+
+|                        |                           estimated |    **measured** |
+| ---------------------- | ----------------------------------: | --------------: |
+| Rows                   |   850–880M (later revised to 1.24B) | **929,971,594** |
+| On disk, compressed    |                              ~18 GB |   **11.36 GiB** |
+| Bytes / row            | 21 (extrapolated) → 14.74 (partial) |       **13.12** |
+| Compression ratio      |                                   — |          **5×** |
+| Active parts           |                                   — |             135 |
+| Share of the 690 GB DB |                               ~2.6% |       **~1.6%** |
+
+Two corrections worth keeping, because both were mine:
+
+- The **original 850–880M estimate was good**; the mid-run "correction" to
+  1.24B was the error. It multiplied a raw `count()` of `operation_pools` by
+  two, and that count carries un-merged RMT duplicates while the 2× ratio does
+  not hold uniformly across eras. Measured on one partition, the tables sit at
+  1.0004 rows each; globally the ratio is 1.50. `operation_pools` is a poor
+  multiplier — the reference is only trustworthy for _coverage_, which is what
+  the gap query uses it for.
+- Bytes/row came in **below** every estimate (13.12 vs 21), so the table is
+  cheaper than the ADR-0029 exception assumed.
+
+**No `OPTIMIZE FINAL` needed.** A sampled partition has zero duplicates
+(3,397,459 rows = 3,397,459 distinct keys) — background merges collapsed the
+overlapping bands the successive worker layouts wrote. It would not matter if
+they had not: the read path's `GROUP BY … any(amount)` is exact over
+byte-identical duplicates, which is why it was written that way.
+
+`lp_operation_amounts` also confirms **2.0006 rows per (pool, transaction)** in
+the sampled partition — the two canonical legs, as designed.
+
+The run itself is written up in [0488](../backlog/0488_OPS_backfill-must-not-starve-production.md):
+it filled the box's filesystem, took ClickHouse's write space with it and put
+live ingestion 10 hours behind before the real cause (a 351 GB `tmux -v` log,
+not the scratch) was found.
+
 ## Acceptance criteria
 
 - [x] 0247 path decision recorded — Path B, re-confirmed against prod 2026-07-30
-- [ ] `lp_operation_amounts` populated on live ingest, both legs, trades and
-      deposits/withdrawals
-- [ ] Amounts verified against Horizon on a **multi-pool** path payment — the
-      86.7% case, not a single-pool one
-- [ ] Backfill run; live and backfill paths produce identical rows for a
-      replayed range
-- [ ] Pool-page read seeks on `pool_id`; `read_rows` measured and recorded
-- [ ] FE "Amount" column un-hidden, rendering deposit / withdraw / trade,
-      one line per operation (see the 8.2% measurement above)
-- [ ] The stale comment in `PoolTransactions.tsx` is corrected — it currently
-      points at task **0249**, which is about destroying AWS infrastructure
-- [ ] **Docs updated** — `docs/architecture/**` schema + endpoint contract per
-      ADR 0032, and the ADR-0029 exception
-- [ ] **API types regenerated** — touches `crates/api/**`
+- [x] `lp_operation_amounts` populated on live ingest, both legs, trades and
+      deposits/withdrawals — deployed 2026-08-12, verified through the API on a
+      busy pool (three of five recent rows carried two operations each, with
+      rates agreeing to four decimals across independent transactions)
+- [x] Amounts verified against Horizon on a **multi-pool** path payment — the
+      86.7% case, not a single-pool one. Tx `24d04961…c5b5` (2026-08-17)
+      crosses three pools; Horizon's `liquidity_pool_trade` effects give
+      `8ca53441… sold 0.0056817 CETES / bought 0.0025000 yXLM`,
+      `7fec7836… sold 1.2470222 AQUA / bought 0.0056817 CETES`,
+      `59fa1dc5… sold 0.0025202 XLM / bought 1.2470222 AQUA` — and
+      `lp_operation_amounts` holds `+25000 / −56817` for our pool's two legs,
+      matching to the stroop with the sign convention (positive = entered
+      the pool)
+- [x] Backfill run — complete 2026-08-16, 211/211 partitions, zero gaps
+      against `operation_pools`; overlapping re-runs collapsed by the RMT with
+      no duplicates left in the sampled partition
+- [ ] ~~Pool-page read seeks on `pool_id`; `read_rows` measured and
+      recorded~~ — **handed to [0491](../backlog/0491_FEATURE_pool-activity-per-operation-rows-and-trades-filter.md)**,
+      which already carries it as an acceptance criterion. 0491 re-keys this
+      exact read to a per-operation cursor, so a number measured now describes
+      a query that is about to be replaced. Measuring it there compares the
+      shapes that matter — before and after the change — instead of pinning a
+      baseline nobody will read
+- [x] FE "Amount" column un-hidden, rendering deposit / withdraw / trade,
+      one line per operation (see the 8.2% measurement above) — verified on
+      production 2026-08-17 on pool `LCCC…MXS7`: `Deposit 0.1260385 XLM +
+    0.0000045 YxT`, `Trade 0.0000001 YxT → 0.0027931 XLM`, and a
+      three-operation transaction rendering three lines. Withdraw was **not**
+      observed live — it takes the same same-sign `+` branch as deposit, only
+      with negative amounts, and that branch is covered by
+      `PoolTransactions.test.tsx`, but this is an inference rather than an
+      observation and is recorded as such
+- [x] The stale comment in `PoolTransactions.tsx` is corrected — the doc
+      comment now cites task 0279 and issue #371; no `0249` reference remains
+      in the file
+- [x] **Docs updated** — `lp_operation_amounts` documented in
+      `database-schema-overview.md` and in the canonical
+      `20_get_liquidity_pools_transactions.sql`, whose leg-resolution note was
+      further corrected by 0489
+- [x] **API types regenerated** — `amount_a` present in both
+      `openapi.json` and `generated/types.gen.ts`

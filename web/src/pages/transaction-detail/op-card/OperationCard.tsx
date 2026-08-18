@@ -117,6 +117,7 @@ export function OperationCard({
     ? readResourceCounters(diagnosticEvents)
     : new Map<string, number | string>();
   const allCounters = allResourceFacts(counters);
+  const callCount = traceCallCount(traceNodes);
   const callNodes =
     isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)
@@ -184,7 +185,10 @@ export function OperationCard({
         {traceNodes.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
             <Overline mb={0.5}>
-              Execution trace · {traceCallCount(traceNodes)} calls
+              {/* Singular matters: a one-call trace is the common shape on a
+                  failed transaction, and the fold badge below already counts
+                  "1 call" correctly (see `FoldBadge`). */}
+              Execution trace · {callCount} call{callCount === 1 ? '' : 's'}
             </Overline>
             <ExecutionTrace nodes={traceNodes} />
           </Box>

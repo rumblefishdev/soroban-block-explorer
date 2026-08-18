@@ -300,7 +300,34 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 **Base URL:** `https://api.soroban-explorer.com/v1`
 
-### 6.2 Endpoint Inventory
+### 6.2 Identifier form — StrKey only
+
+**Every entity identifier on the wire is its SEP-23 StrKey, and only that.** Hex
+is not accepted as input and never appears in a response: transactions use the
+64-char hash, accounts `G…`, contracts `C…`, liquidity pools `L…`, and an NFT is
+the composite `(contract StrKey, token_id)`.
+
+Decided in task 0264 ("strkey canonical everywhere — strkey-only, no legacy hex
+compat"): the project was pre-deploy, so there were no hex bookmarks worth a
+compatibility path, and the Stellar ecosystem addresses pools by StrKey (CAP-38
+/ SEP-23). `common::path::pool_id_strkey` enforces it on the detail route and
+says so in its 400 body — _"hex form is no longer accepted"_. Internal storage
+stays hex (`pool_id` is 32 raw bytes); the conversion happens at the boundary,
+never in the contract.
+
+**Two known exceptions, both recorded as debt rather than precedent:**
+
+- `/v1/search` still classifies a 64-hex string as a pool or transaction id.
+  0264 deferred the search endpoint explicitly (its Phases 3, 9 and 10) — it is
+  unfinished work, not a second standard. Do not copy it.
+- Cursors are opaque base64 payloads and carry internal surrogate ids; they are
+  not identifiers and are never parsed by clients.
+
+When adding a filter or route that takes an identifier, take the StrKey. Task
+0470 reached for the search classifier as a model, accepted hex on a new pools
+filter, and had to be corrected — the exception looked like the rule.
+
+### 6.3 Endpoint Inventory
 
 | Resource        | Endpoint(s)                                                                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -314,7 +341,7 @@ These are backend concerns even when their outputs are consumed by frontend page
 | Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
 | Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
-### 6.3 Resource Details
+### 6.4 Resource Details
 
 #### Network
 
@@ -399,6 +426,15 @@ expanding the backend contract beyond what the frontend is expected to show.
 **`GET /assets`** - Paginated list of assets (native XLM, classic credit assets, SACs, and Soroban-native assets).
 Query params: `limit`, `cursor`, `filter[type]` (native/classic_credit/sac/soroban), `filter[code]`.
 
+`filter[code]` is a case-insensitive **substring**, matched against three things: the
+asset code, and the on-chain `name` and `symbol` from contract metadata (task 0370 —
+Soroban-native assets carry an empty code, so a code-only match left them unfindable).
+The code it matches is the **displayed** one, `if(asset_type = 0, 'XLM', asset_code)` —
+native XLM is stored with an empty code, so matching the stored column returned the
+credit assets minted under a code containing "XLM" and never the real one (task 0470).
+Classic SEP-1 enrichment names are deliberately NOT matched: classic assets are findable
+by code, and substring-matching their names adds noise.
+
 **`GET /assets/:id`** - Asset detail: asset code, issuer/contract, type, supply, holder
 count, metadata. The numeric surrogate was dropped (PR #175 / the PG→CH composite move),
 so `:id` is a single canonical token in one of three forms: a contract StrKey
@@ -478,8 +514,12 @@ quality may vary significantly.
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** - Paginated list of pools. Query params: `limit`, `cursor`,
-`filter[asset_code]` (single-asset, case-insensitive, matches either leg —
-task 0246), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
+`filter[asset_code]` (case-insensitive **substring** of either leg, so `USD`
+matches the `USDC` pools; `A/B` is a pair query where each needle claims its own
+leg in either order; native legs match on `XLM` despite storing an empty code —
+tasks 0246/0440. The same parameter also accepts a pool **identifier** in the
+`L…` SEP-23 form, which selects that one pool instead of matching codes —
+task 0470), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
 `filter[asset_b_code]`, `filter[asset_b_issuer]` (G-StrKey),
 `filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
 or both omitted (classic identity). The single-asset and per-leg modes coexist
@@ -561,6 +601,16 @@ consumed by the canonical SQL: `hash_bytes` (32-byte BYTEA — drives `transacti
 prefix branches). The raw `q` is also fed to the trigram / FTS branches (`assets`,
 `nfts`, `soroban_contracts.search_vector`).
 
+**Pools match on two shapes** (task 0470). A hash-shaped `q` is a point seek on
+`pool_id`, the full ORDER BY key. Anything else is treated as an asset code and matched
+with the SAME rule the pools list uses — case-insensitive substring against either leg,
+`A/B` pair syntax where each needle claims its own leg in either order, and native XLM
+resolved by `asset_type = 0` rather than by its (empty) stored code. The predicate is
+defined once in `crates/api/src/common/pool_asset_codes.rs` and called by both
+`/v1/search` and `/v1/liquidity-pools`, so the two surfaces cannot answer the same
+question differently. Before this, a non-hash query matched no pool at all: `KALE`
+returned 0 in search while the pools page returned 58.
+
 Behaviour:
 
 - when `q` is a fully-typed entity id (64-hex hash, full G-StrKey, full C-StrKey) **and**
@@ -590,7 +640,7 @@ flag is FALSE).
 No caching: `q` variability makes a TTL cache useless and the per-CTE `LIMIT` keeps each
 query bounded.
 
-### 6.4 Response Caching
+### 6.5 Response Caching
 
 Per task 0055, every public endpoint sets an explicit `Cache-Control` header.
 Its consumer today is the **user's browser** (plus any future edge cache) —
