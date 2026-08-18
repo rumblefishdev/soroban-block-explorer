@@ -78,6 +78,7 @@ Every file must:
 | `soroban_invocations_appearances`    | same                                           | **yes**                                                                                                                                                                         |
 | `nft_ownership`                      | same                                           | **yes**                                                                                                                                                                         |
 | `liquidity_pool_snapshots`           | same                                           | **yes**                                                                                                                                                                         |
+| `lp_operation_amounts`               | `ReplacingMergeTree` (no version, partitioned) | no — the producer is deterministic (schema header's single-writer argument), so an unmerged duplicate is byte-identical to its twin; the `GROUP BY` in 24 collapses it for free |
 
 **Rationale:** `ReplacingMergeTree` deduplicates by ORDER BY key on background
 merges. Between ingestion and merge, the same logical row can appear N times.
@@ -159,10 +160,10 @@ statement files. Single-statement files have no separator.
 | 17  | `17_get_nfts_transfers.sql`               | `GET /nfts/:id/transfers`                 | DB-only                                                                 |
 | 18  | `18_get_liquidity_pools_list.sql`         | `GET /liquidity-pools`                    | DB-only                                                                 |
 | 19  | `19_get_liquidity_pools_by_id.sql`        | `GET /liquidity-pools/:id`                | DB-only                                                                 |
-| 20  | `20_get_liquidity_pools_transactions.sql` | `GET /liquidity-pools/:id/transactions`   | DB-only                                                                 |
 | 21  | `21_get_liquidity_pools_chart.sql`        | `GET /liquidity-pools/:id/chart`          | DB-only                                                                 |
 | 22  | `22_get_search.sql`                       | `GET /search`                             | DB-only **(StrKey-prefix only; free-text deferred — no pg_trgm in CH)** |
 | 23  | `23_get_liquidity_pools_participants.sql` | `GET /liquidity-pools/:id/participants`   | DB-only                                                                 |
+| 24  | `24_get_liquidity_pools_activity.sql`     | `GET /liquidity-pools/:id/activity`       | DB-only **(one row per OPERATION; `filter[event]` off the sign pair)**  |
 
 ## Running
 

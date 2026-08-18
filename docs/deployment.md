@@ -39,7 +39,11 @@ Always preview first: `make -C infra diff-production`.
 
 Shipping a **release** — Compute + SPA together, as one act — is a different
 thing from the per-change table above: see
-[§ Releases and the CI deploy path](#releases-and-the-ci-deploy-path).
+[§ Releases and the CI deploy path](#releases-and-the-ci-deploy-path). Every
+row above also has a tag form (`production-<date>-<N>-<StackName>`), which
+runs the same deploy from CI instead of a laptop and leaves a full `cdk diff`
+in the job log; the `make` targets remain the right tool when you want to
+watch the diff before committing to it.
 
 ---
 
@@ -84,33 +88,91 @@ stale. A real pre-mainnet tier is proposed as the **testnet** environment
 
 ## Releases and the CI deploy path
 
-**A release is a git tag.** Pushing `production-YYYY.MM.DD-N` to `master` runs
+**A release is a git tag.** Pushing `production-YYYY.MM.DD-N[-SELECTOR]` to
+`master` runs
 [`.github/workflows/deploy-production.yml`](../.github/workflows/deploy-production.yml):
 
 ```
-build → cdk diff → cdk deploy Explorer-production-Compute --exclusively
-      → make -C infra deploy-production-web → smoke (API /health + frontend 200)
+build → cdk diff (ALL stacks) → cdk deploy <selected> → make -C infra deploy-production-web
+      → smoke (API /health + frontend 200)
 ```
 
 ```bash
-git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
+git fetch origin
+git tag production-$(date -u +%Y.%m.%d)-1 origin/master
+git push origin production-$(date -u +%Y.%m.%d)-1
 ```
+
+Tag `origin/master`, not a local `master` (routinely stale), and push the tag
+**by name** — `--tags` also pushes every stale local tag.
 
 The tag **is** the release decision — there is no separate approval gate,
 because a tag is deliberate in a way a merge is not. `-N` increments for a
 second release on the same day.
 
+**The optional selector puts the deploy's scope inside that same decision:**
+
+| Tag                                  | CDK deploy                                  | SPA content |
+| ------------------------------------ | ------------------------------------------- | ----------- |
+| `production-2026.08.18-1`            | `Explorer-production-Compute --exclusively` | yes         |
+| `production-2026.08.18-1-all`        | `--all` — every stack that differs          | yes         |
+| `production-2026.08.18-1-CloudWatch` | that stack, `--exclusively`                 | no          |
+| `production-2026.08.18-1-web`        | none                                        | yes         |
+
+A selector other than `all` / `web` is appended to `Explorer-production-`
+**verbatim**, so it carries the stack's own case (`CloudWatch`, `ApiGateway`,
+`LedgerBucket`, `CloudflareBootstrap`, `HetznerDns`, …). The mapping lives in
+[`infra/scripts/deploy-scope.sh`](../infra/scripts/deploy-scope.sh) — run it to
+see what a tag will do, and note that it now **rejects** a malformed tag
+outright, where the old `production-*` trigger would deploy the release set for
+any name at all.
+
 - **The standard release set is Compute + SPA content.** A release users cannot
-  see is not shipped, so the SPA sync runs on every tag.
-- **Surgical deploys stay on `workflow_dispatch`** — name the stack(s) in the
-  `stacks` input (`--exclusively` on by default, `deploy_web` opt-in). Never a
-  blind `--all`, for the same reason as the per-stack rule below.
-- **`cdk diff` runs before every deploy and is printed into the job log** — that
-  log is the record of what the release changed.
+  see is not shipped, so the SPA sync runs on every unselected tag.
+- **`-all` means "everything that differs", not "everything"** — CDK skips
+  unchanged stacks. It is also the only path that ships parked, unreviewed
+  drift ([0312's CloudflareBootstrap delta](#gotchas--read-before-you-deploy)
+  sat undeployed for weeks). Prefer naming the one stack you mean; typing
+  `-all` is what keeps a full deploy a choice rather than a side effect, the
+  same job the typed `yes` does in `infra/Makefile`.
+- **The SPA step is not a Delivery deploy.** It reads that stack's
+  `SpaBucketName` / `DistributionId` outputs and syncs S3. Changes to
+  `delivery-stack.ts` itself need `-Delivery` or `-all`.
+- **Surgical deploys can also stay on `workflow_dispatch`** — name the stack(s)
+  in the `stacks` input (`--exclusively` on by default, `deploy_web` opt-in).
+  Use it when the deploy should not mint a tag.
+- **`cdk diff` covers ALL stacks, deliberately wider than the deploy** — it is
+  printed into the job log, and it is how a delta parked in a stack this tag
+  does not ship becomes visible at release time instead of being forgotten on
+  someone's laptop. It runs with `--strict`, without which `cdk diff` silently
+  hides entries containing non-ASCII characters.
 - **Tag runs execute the workflow file _at the tagged commit_.** The workflow
   has to be on `master` before the first tag, and fixing the workflow means
   cutting a new tag, not re-running the old one.
 - **Issues close at deploy, not at merge** — run `/issues` after a release.
+- **Budget ~15 min per tag run; expect much less when the cache holds.**
+  `cdk diff` builds all three Lambdas during synth (`cargo-lambda-cdk`'s
+  `RustFunction` builds at synth time, not as a separate step). Until
+  2026-08-18 it did so from a **cold Rust cache on every release** — measured
+  2026-08-17: 10m35s / 10m58s of diff in 13-14-minute runs. The deploy job now
+  runs on `ubuntu-24.04-arm` with rust-cache key `ci-rust-lambda` —
+  deliberately the same runner arch and key as CI's `rust-lambda` job, which
+  runs the identical `cargo lambda build --release --arm64` **on every push to
+  `master`** and saves the cache there. Default-branch caches are readable
+  from any ref, tags included, and the tag points at `master` HEAD, so the
+  `Cargo.lock` hash matches exactly: dependencies restore, only the workspace
+  crates compile. On x86 that cache was unreachable by construction (the rustc
+  host triple is part of the key), which is why the old note said "expect no
+  speed-up" — the premise that seeding would cost an extra build per merge
+  turned out to be false, because CI was already paying for that exact build.
+
+  Still budget the full ~15 min: the cache can be evicted (10 GB repo quota —
+  the deploy job sets `save-if: false` so tag runs don't contribute to that
+  pressure), and a cold run costs what it always did. The deploy step reuses
+  the diff's synth output (`--app cdk.out`), so what deploys is byte-for-byte
+  what was diffed and nothing is built twice. A `-web` tag skips the Rust/CDK
+  path entirely (no drift record on those runs — every other tag shape prints
+  one).
 
 The job binds `environment: production`, so its OIDC subject is
 `repo:<org>/<repo>:environment:production` — that string is what the deploy
@@ -178,9 +240,33 @@ Frontend **content** is separate: `deploy-production-web`
 
 ### Gotchas — read before you deploy
 
+- **A SPA build without the Turnstile site key takes production down for
+  users.** With `enableAuthLayer: true` the API rejects unauthenticated
+  requests; a bundle built without `VITE_TURNSTILE_SITE_KEY` ships an
+  un-armed SPA whose every API call answers 401 — the site renders and
+  shows no data. `build-production-web` bakes the key from
+  `envs/production.json`, but the **Nx build cache can serve a stale
+  no-key bundle** even when the env is correct. For any isolated/first
+  production web build, add `--skip-nx-cache`, and after `deploy-production-web`
+  verify from a clean browser that `/auth/session` answers 200 and data
+  renders. (This happened live; the outage looked like an API failure
+  while the defect was in the shipped bundle.)
+
+- **Every new stack MUST tag its resources** with
+  `Project=soroban-block-explorer` (+ `Environment`, `ManagedBy`) via
+  `cdk.Tags.of(this).add(...)` — the account is shared with
+  `stellar-prices-api` and the `Project` tag is the only cost-attribution
+  dimension (task 0449; the July 2026 cost investigation took a day
+  because untagged spend cannot be attributed after the fact). Cost
+  allocation tag activation lives in the **organization management
+  account**, not here.
 - **`make deploy-production` deploys `--all`.** It will push every pending
   change across _every_ stack. For a single change, prefer the per-stack
-  target.
+  target. Since task 0455 the target first prints the full `cdk diff
+--strict` and requires a literal `yes` before deploying, so parked deltas
+  (the 0312 stowaway class) are seen, not shipped blind; `FORCE=1` skips the
+  prompt for non-interactive use. `--strict` matters on its own: without it
+  `cdk diff` silently hides entries containing non-ASCII characters.
 - **Per-stack `make` targets also deploy that stack's dependencies**
   (CDK default). If a dependency stack has an unrelated pending change, it
   ships too. To deploy **exactly one stack** and nothing else, run raw with
@@ -349,7 +435,9 @@ make -C infra deploy-production-web
 ### CloudWatch alarms / API Gateway / DNS
 
 - Alarms & dashboards: `make -C infra deploy-production-cloudwatch`
-  (use the `--exclusively` raw form if other stacks have pending changes).
+  (use the `--exclusively` raw form if other stacks have pending changes), or
+  from CI with a `production-<date>-<N>-CloudWatch` tag, which is
+  `--exclusively` already and skips the SPA sync.
 - API Gateway cache / throttle / edge-lock toggles live in
   `production.json` (`apiGatewayCache*`, `apiGatewayThrottle*`,
   `enableApiMtls`, `enable*Lock`): `make -C infra deploy-production-apigateway`.

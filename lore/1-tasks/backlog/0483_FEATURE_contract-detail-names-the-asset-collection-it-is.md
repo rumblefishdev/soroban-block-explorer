@@ -4,7 +4,7 @@ title: 'FEATURE: contract detail names the asset / collection it is (not just it
 type: FEATURE
 status: backlog
 related_adr: ['0051']
-related_tasks: ['0472', '0441', '0490']
+related_tasks: ['0472', '0441', '0494']
 tags: [api, frontend, contracts, assets, nfts, priority-medium, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
@@ -95,7 +95,7 @@ assets table, account balances, contracts table, contracts list filter).
 Pick one register and apply it to all six.
 
 The chip's SIZE drifted on the same page and is a different problem with a
-different fix — measured and filed in 0490 with the rest of the frontend
+different fix — measured and filed in 0494 with the rest of the frontend
 consistency sweep. Do not decide it twice.
 
 ## Watch out
@@ -114,4 +114,4 @@ rendered a confident "A" that read like a real ticker).
 - [ ] vitest cases for named and unnamed, per class
 - [ ] Docs: backend-overview (contract endpoint) + frontend-overview §6.10
 - [ ] One register for the SAC label across all six surfaces (chip SIZE is
-      0490's, not this task's)
+      0494's, not this task's)

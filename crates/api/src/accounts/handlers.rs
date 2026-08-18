@@ -72,7 +72,7 @@ pub async fn list_accounts(
         match fetch_list_for_source(&state, &resolved, sort, direction).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("DB error in list_accounts: {e}");
+                tracing::error!(error = %e, "DB error in list_accounts");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -142,7 +142,7 @@ pub async fn get_account(
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),
         Err(e) => {
-            tracing::error!("DB error fetching account {account_id}: {e}");
+            tracing::error!(account_id = %account_id, error = %e, "DB error fetching account");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -172,7 +172,7 @@ pub async fn get_account(
             })
             .collect(),
         Err(e) => {
-            tracing::error!("DB error fetching balances for {account_id}: {e}");
+            tracing::error!(account_id = %account_id, error = %e, "DB error fetching account balances");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -180,7 +180,7 @@ pub async fn get_account(
     let deleted = match deleted_res {
         Ok(d) => d,
         Err(e) => {
-            tracing::error!("DB error deriving deleted status for {account_id}: {e}");
+            tracing::error!(account_id = %account_id, error = %e, "DB error deriving account deleted status");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -255,7 +255,7 @@ pub async fn list_account_transactions(
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),
         Err(e) => {
-            tracing::error!("DB error resolving account {account_id}: {e}");
+            tracing::error!(account_id = %account_id, error = %e, "DB error resolving account");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -275,7 +275,7 @@ pub async fn list_account_transactions(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_account_transactions: {e}");
+            tracing::error!(account_id = %account_id, error = %e, "DB error in list_account_transactions");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };

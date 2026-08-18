@@ -11,7 +11,7 @@ export const CURSOR_PARAMS = {
   /** Liquidity-pool detail — participants section. */
   POOL_PARTICIPANTS: 'cursor_p',
   /** Liquidity-pool detail — transactions section. */
-  POOL_TRANSACTIONS: 'cursor_t',
+  POOL_ACTIVITY: 'cursor_t',
   /** Contract detail — events tab. */
   CONTRACT_EVENTS: 'cursor_e',
   /** Contract detail — invocations tab. */

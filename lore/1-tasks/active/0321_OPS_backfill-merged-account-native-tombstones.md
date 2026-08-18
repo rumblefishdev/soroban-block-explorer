@@ -30,6 +30,41 @@ history:
       account's higher-ledger row, so the backfill must NOT special-case them.
       Post-0295 truly-deleted native ghosts already ≈0 (fix-forward works); this
       backfill is purely the pre-fix historical tail.
+  - date: '2026-08-17'
+    status: completed
+    who: karolkow
+    note: >
+      Archived after live verification (during 0463 work). The backfill's
+      fingerprint is present in prod: merged accounts from sampled early
+      windows carry native amount=0 rows versioned exactly at their merge
+      ledger, and two windows (pre-fix 51.0-51.1M and recent 62.52-62.53M)
+      show ZERO ghosts with positive native. Verified from the data
+      fingerprint, not a run log. NOTE: the verification also uncovered a
+      SEPARATE defect outside this task's scope — participant skeleton rows
+      bump last_seen past death, so the deleted DERIVATION reports 5/5
+      sampled dead accounts as alive (task 0500). The tombstones this task
+      owned are correct; the chip defect is 0324's derivation assumption.
+  - date: '2026-08-17'
+    status: active
+    who: karolkow
+    note: >
+      UN-ARCHIVED same day — the archival was premature and my verification was
+      too weak. It sampled two ledger WINDOWS and found them clean; a
+      full-population measurement then found ~59,272 merged accounts still
+      holding a POSITIVE native balance, and a 25-account chain check returned
+      22 real ghosts (Horizon 404) versus 3 legitimately alive
+      (recycled/failed merge). Extrapolated: roughly 52k real ghosts holding
+      on the order of 1.3M phantom XLM. Ghosts cluster in eras 54M-64M while
+      the 50-52M range is clean, so whatever ran covered only part of the
+      range. The task stands: the backfill still owes the rest. Method note
+      for whoever runs it: verify against the CHAIN, not against our own
+      windows — the window sample is what misled me. Re-confirmed the same
+      day against RAW XDR (`getLedgerEntries`, LedgerKey::Account, absence
+      from `entries` = account gone) rather than Horizon, which is legacy and
+      must not be used: identical result, 22 of 25 absent. Note for the run
+      itself: after ADR 0055 the ghosts also inflate `balance_aggregates`,
+      because `sum(amount)` ignores `closed_at_ledger` — so the fix must ZERO
+      the stale amount, not merely stamp the closure.
 ---
 
 # OPS: backfill native=0 tombstones for merged ghosts

@@ -28,6 +28,20 @@ history:
       (duplication) and 0433 (frontend validation).
       The config-setting count I verified myself by diffing our match arms
       against the crate's enum, rather than trusting the agent's report.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Defect 1 parser fix landed on the 0455 branch (6c211c74: exhaustive
+      ConfigSettingId match + coverage test). Backfill measured against prod
+      (read-only): the "stored as unknown" premise does not hold — no CH table
+      stores ledger-entry changes at all (31 prod tables checked, zero
+      entry/config_setting columns), and every downstream extractor ignores
+      config_setting entries. Rows to backfill: ZERO; the backfill AC
+      dissolves. Remaining real scope of this task is defect 2 (asset_type
+      served with two contradictory meanings by live API endpoints) and
+      defect 3 (claimable-balance id format matching neither Horizon nor
+      SEP-23), plus the minor items.
 ---
 
 # BUG: hand-maintained protocol tables have already drifted

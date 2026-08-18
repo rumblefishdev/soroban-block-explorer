@@ -1586,6 +1586,68 @@ export type PaginatedParticipantItem = {
  * when M2 endpoint modules are wired in. Unused in M1 — kept as
  * infrastructure that M2 endpoints will consume.
  */
+export type PaginatedPoolActivityItem = {
+  data: Array<{
+    /**
+     * Signed from the POOL's perspective: positive entered the pool, negative
+     * left it. Raw stroops as a decimal string, scaled by 7 at render like
+     * every other amount here — a JSON number is a double in the browser, so
+     * a leg above 2^53 stroops would silently lose digits.
+     *
+     * The sign is the payload, not decoration: it is what names `event`, so
+     * the frontend must not take an absolute value before deciding direction.
+     * `null` on both legs in the malformed case above.
+     */
+    amount_a?: string | null;
+    amount_b?: string | null;
+    /**
+     * The operation's 1-based position in its transaction (Horizon's
+     * `application_order`), and the `#op-N` anchor on the transaction detail
+     * page this row links to (task 0482).
+     */
+    application_order: number;
+    created_at: string;
+    event?: null | PoolEvent;
+    ledger_sequence: number;
+    /**
+     * How many pools the WHOLE operation crossed — `length(pool_ids)` from
+     * the same appearance seek that resolves the source account. `1` for
+     * every deposit/withdrawal (an LP op declares exactly one pool) and for
+     * a single-hop trade; `> 1` marks this row as one hop of a longer path
+     * payment, whose full route lives on the op's detail page. `null` only
+     * when the appearance row is missing — unknown, never guessed to `1`.
+     */
+    pools_crossed?: number | null;
+    /**
+     * Who performed THIS OPERATION — the operation's own source account when
+     * it declares one, otherwise the transaction's, which is what an absent
+     * `Operation.sourceAccount` means in the XDR.
+     *
+     * Not simply the transaction's source: on a per-operation row that names
+     * the wrong account whenever the two differ, which on prod is 41% of
+     * operations in a recent ledger window. The retired `/transactions` shape
+     * could only ever carry the transaction's, since its row WAS one.
+     */
+    source_account: string;
+    /**
+     * Transaction hash (64-char lowercase hex). NOT unique across rows — a
+     * transaction running several operations against this pool appears once
+     * per operation, so a row key needs `application_order` too.
+     */
+    transaction_hash: string;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
 export type PaginatedPoolItem = {
   data: Array<{
     asset_a: PoolAssetLeg;
@@ -1636,56 +1698,6 @@ export type PaginatedPoolItem = {
      * at the leg-A last hourly close; `null` when the pool is unpriceable.
      */
     volume?: string | null;
-  }>;
-  page: PageInfo;
-};
-
-/**
- * Canonical envelope for paginated list responses.
- *
- * Generic over the item type `T` so every endpoint can reuse a single
- * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
- * picked up automatically by utoipa-axum via the handler return type
- * when M2 endpoint modules are wired in. Unused in M1 — kept as
- * infrastructure that M2 endpoints will consume.
- */
-export type PaginatedPoolTransactionItem = {
-  data: Array<{
-    /**
-     * What this transaction moved through THIS pool, **one entry per
-     * operation**, in application order (task 0279 / issue #371).
-     *
-     * Per operation, not summed per transaction: 8.2% of (pool, transaction)
-     * pairs on mainnet run more than one operation against the same pool
-     * (measured 2026-08-12 over 8.49M pairs), and a sum across a bundled
-     * deposit + path payment describes neither. One entry each keeps every
-     * figure true on its own; the common single-operation row is a
-     * one-element list.
-     *
-     * **Empty** = no figures for this row, which is NOT the same as zero:
-     * per-pool amounts are indexed from their deploy onwards and filled
-     * backwards by a re-parse, so older rows carry none yet and must render
-     * blank rather than as `0`.
-     */
-    amounts: Array<PoolOperationAmount>;
-    created_at: string;
-    /**
-     * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
-     * there is no `decimals` field — the frontend scales by 1e7.
-     */
-    fee_charged: number;
-    has_soroban: boolean;
-    hash: string;
-    ledger_sequence: number;
-    operation_count: number;
-    /**
-     * Distinct `op_type_name(...)` labels for every op in the tx, sorted
-     * asc. Frontend §6.14 categorises trade vs LP-mgmt activity from this
-     * list (policy lives client-side, not in SQL).
-     */
-    operation_types: Array<string>;
-    source_account: string;
-    successful: boolean;
   }>;
   page: PageInfo;
 };
@@ -1784,6 +1796,67 @@ export type ParticipantItem = {
 };
 
 /**
+ * One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
+ * against this pool**, not one transaction (task 0491, issue #371).
+ *
+ * The transaction-level fields the retired `/transactions` shape carried
+ * (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
+ * `operation_types`) are gone: the first three describe the transaction, not
+ * this row, and repeating them per operation invites reading a transaction
+ * fee as an operation fee. `operation_types` is replaced by `event`, which is
+ * what it was approximating.
+ */
+export type PoolActivityItem = {
+  /**
+   * Signed from the POOL's perspective: positive entered the pool, negative
+   * left it. Raw stroops as a decimal string, scaled by 7 at render like
+   * every other amount here — a JSON number is a double in the browser, so
+   * a leg above 2^53 stroops would silently lose digits.
+   *
+   * The sign is the payload, not decoration: it is what names `event`, so
+   * the frontend must not take an absolute value before deciding direction.
+   * `null` on both legs in the malformed case above.
+   */
+  amount_a?: string | null;
+  amount_b?: string | null;
+  /**
+   * The operation's 1-based position in its transaction (Horizon's
+   * `application_order`), and the `#op-N` anchor on the transaction detail
+   * page this row links to (task 0482).
+   */
+  application_order: number;
+  created_at: string;
+  event?: null | PoolEvent;
+  ledger_sequence: number;
+  /**
+   * How many pools the WHOLE operation crossed — `length(pool_ids)` from
+   * the same appearance seek that resolves the source account. `1` for
+   * every deposit/withdrawal (an LP op declares exactly one pool) and for
+   * a single-hop trade; `> 1` marks this row as one hop of a longer path
+   * payment, whose full route lives on the op's detail page. `null` only
+   * when the appearance row is missing — unknown, never guessed to `1`.
+   */
+  pools_crossed?: number | null;
+  /**
+   * Who performed THIS OPERATION — the operation's own source account when
+   * it declares one, otherwise the transaction's, which is what an absent
+   * `Operation.sourceAccount` means in the XDR.
+   *
+   * Not simply the transaction's source: on a per-operation row that names
+   * the wrong account whenever the two differ, which on prod is 41% of
+   * operations in a recent ledger window. The retired `/transactions` shape
+   * could only ever carry the transaction's, since its row WAS one.
+   */
+  source_account: string;
+  /**
+   * Transaction hash (64-char lowercase hex). NOT unique across rows — a
+   * transaction running several operations against this pool appears once
+   * per operation, so a row key needs `application_order` too.
+   */
+  transaction_hash: string;
+};
+
+/**
  * One leg of an LP's asset pair. Surfaces both the decoded
  * `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
  * SMALLINT — same contract as `assets/dto::AssetItem`.
@@ -1793,13 +1866,22 @@ export type ParticipantItem = {
  * and accepts both C-strkey (SAC) and `code-issuer` composite, so all
  * non-native legs resolve to the same asset row.
  *
- * * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
- * address in classic Stellar protocol; SAC mirror is network-dependent).
- * * `contract_id` — C-strkey of the SAC mirror for a classic credit
- * leg (populated when the leg's `(asset_code, issuer)` classic_credit /
- * native `assets` row carries a deployed SAC facet — `sac_contract_id`
- * resolving a `soroban_contracts.contract_id`, ADR 0051). `None` for legs
- * without a deployed SAC mirror. Pool legs only carry XDR `AssetType` (native /
+ * * `asset_type == 0` — native XLM; routes to `/assets/native`, the
+ * reserved token for the classic XLM singleton (it has no `code-issuer`
+ * identity to compose).
+ * * `contract_id` — C-strkey of the SAC mirror for a classic credit OR
+ * native leg (populated when the leg's `(asset_code, issuer)`
+ * classic_credit / native `assets` row carries a deployed SAC facet —
+ * `sac_contract_id` resolving a `soroban_contracts.contract_id`,
+ * ADR 0051). `None` for legs without a deployed SAC mirror.
+ *
+ * Native legs were excluded from this until task 0470. The exclusion was
+ * deliberate (`a19ac8f6`) and its reason was Postgres parity — PG returned
+ * NULL there. Postgres is retired, and the same native `assets` row
+ * already publishes that SAC as `sac_contract_id` on `/v1/assets/native`
+ * and in the assets list, which the frontend renders. Withholding it here
+ * alone made one asset describe itself two ways depending on the endpoint.
+ * Pool legs only carry XDR `AssetType` (native /
  * credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
  * so SAC / Soroban legs are not directly representable here;
  * `contract_id` surfaces the SAC mirror look-up so the FE can
@@ -1822,8 +1904,9 @@ export type PoolAssetLeg = {
   /**
    * C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`
    * classic_credit / native asset (ADR 0051 — resolved via the row's
-   * `sac_contract_id` facet). `None` for native legs and for classic credit
-   * legs without a deployed SAC.
+   * `sac_contract_id` facet). `None` only when no SAC is deployed for that
+   * asset. Native XLM has one, and reports it here (task 0470) exactly as
+   * `/v1/assets/native` already did.
    */
   contract_id?: string | null;
   /**
@@ -1836,6 +1919,19 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
 };
+
+/**
+ * What an operation did to the pool, named by the SIGN PAIR of its two legs
+ * and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+ * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+ * There is no operation-type column to read and no join to `operations`.
+ *
+ * Classified in SQL rather than here, because the same expression is the
+ * `filter[event]` predicate: two classifiers would eventually disagree, and
+ * the one the user sees must be the one the filter used. This deliberately
+ * reverses the client-side policy the retired `/transactions` shape carried.
+ */
+export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
  * One pool row returned by the list endpoint. Shape pinned to canonical
@@ -1893,72 +1989,6 @@ export type PoolItem = {
    * at the leg-A last hourly close; `null` when the pool is unpriceable.
    */
   volume?: string | null;
-};
-
-/**
- * What ONE operation moved through the pool being viewed, per canonical leg
- * (task 0279). Both legs are **signed from the pool's side**: positive = the
- * asset entered the pool, negative = it left. So a trade reads `+/-`, a
- * deposit `+/+` and a withdrawal `-/-` — the sign alone gives the direction,
- * with no event-type field.
- *
- * Raw stroops as STRINGS, like every other on-chain amount here (`reserve_a`,
- * `total_supply`): a JSON number is a double in the browser, so a leg above
- * 2^53 stroops (~900M units) would silently lose digits.
- *
- * A leg is `null` when this operation did not move that asset — never `0`.
- */
-export type PoolOperationAmount = {
-  amount_a?: string | null;
-  amount_b?: string | null;
-  /**
-   * The operation's 1-based position in its transaction (Horizon's
-   * `application_order`), so the list is stably ordered and each entry is
-   * traceable to an operation on the transaction detail page.
-   */
-  application_order: number;
-};
-
-/**
- * One row from `/liquidity-pools/:id/transactions`. Shape pinned to
- * canonical SQL `20_get_liquidity_pools_transactions.sql`.
- */
-export type PoolTransactionItem = {
-  /**
-   * What this transaction moved through THIS pool, **one entry per
-   * operation**, in application order (task 0279 / issue #371).
-   *
-   * Per operation, not summed per transaction: 8.2% of (pool, transaction)
-   * pairs on mainnet run more than one operation against the same pool
-   * (measured 2026-08-12 over 8.49M pairs), and a sum across a bundled
-   * deposit + path payment describes neither. One entry each keeps every
-   * figure true on its own; the common single-operation row is a
-   * one-element list.
-   *
-   * **Empty** = no figures for this row, which is NOT the same as zero:
-   * per-pool amounts are indexed from their deploy onwards and filled
-   * backwards by a re-parse, so older rows carry none yet and must render
-   * blank rather than as `0`.
-   */
-  amounts: Array<PoolOperationAmount>;
-  created_at: string;
-  /**
-   * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
-   * there is no `decimals` field — the frontend scales by 1e7.
-   */
-  fee_charged: number;
-  has_soroban: boolean;
-  hash: string;
-  ledger_sequence: number;
-  operation_count: number;
-  /**
-   * Distinct `op_type_name(...)` labels for every op in the tx, sorted
-   * asc. Frontend §6.14 categorises trade vs LP-mgmt activity from this
-   * list (policy lives client-side, not in SQL).
-   */
-  operation_types: Array<string>;
-  source_account: string;
-  successful: boolean;
 };
 
 /**
@@ -3042,6 +3072,59 @@ export type GetPoolResponses = {
 
 export type GetPoolResponse = GetPoolResponses[keyof GetPoolResponses];
 
+export type ListPoolActivityData = {
+  body?: never;
+  path: {
+    /**
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     */
+    pool_id: string;
+  };
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Restrict to `trade`, `deposit` or `withdrawal`.
+     */
+    'filter[event]'?: string;
+  };
+  url: '/v1/liquidity-pools/{pool_id}/activity';
+};
+
+export type ListPoolActivityErrors = {
+  /**
+   * Invalid pool_id, limit, cursor, or event
+   */
+  400: ErrorEnvelope;
+  /**
+   * Pool not found
+   */
+  404: ErrorEnvelope;
+  /**
+   * Database error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListPoolActivityError =
+  ListPoolActivityErrors[keyof ListPoolActivityErrors];
+
+export type ListPoolActivityResponses = {
+  /**
+   * Paginated pool activity, one row per operation
+   */
+  200: PaginatedPoolActivityItem;
+};
+
+export type ListPoolActivityResponse =
+  ListPoolActivityResponses[keyof ListPoolActivityResponses];
+
 export type GetPoolChartData = {
   body?: never;
   path: {
@@ -3145,55 +3228,6 @@ export type ListParticipantsResponses = {
 
 export type ListParticipantsResponse =
   ListParticipantsResponses[keyof ListParticipantsResponses];
-
-export type ListPoolTransactionsData = {
-  body?: never;
-  path: {
-    /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
-     */
-    pool_id: string;
-  };
-  query?: {
-    /**
-     * Items per page (1–100, default 20).
-     */
-    limit?: number;
-    /**
-     * Opaque pagination cursor from a previous response.
-     */
-    cursor?: string;
-  };
-  url: '/v1/liquidity-pools/{pool_id}/transactions';
-};
-
-export type ListPoolTransactionsErrors = {
-  /**
-   * Invalid pool_id, limit, or cursor
-   */
-  400: ErrorEnvelope;
-  /**
-   * Pool not found
-   */
-  404: ErrorEnvelope;
-  /**
-   * Database error
-   */
-  500: ErrorEnvelope;
-};
-
-export type ListPoolTransactionsError =
-  ListPoolTransactionsErrors[keyof ListPoolTransactionsErrors];
-
-export type ListPoolTransactionsResponses = {
-  /**
-   * Paginated pool transactions
-   */
-  200: PaginatedPoolTransactionItem;
-};
-
-export type ListPoolTransactionsResponse =
-  ListPoolTransactionsResponses[keyof ListPoolTransactionsResponses];
 
 export type GetNetworkStatsData = {
   body?: never;

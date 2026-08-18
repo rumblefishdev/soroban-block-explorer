@@ -165,12 +165,21 @@ pub async fn handler(
         // batchSize is 1, so this loops once; if it ever isn't, a second
         // reconcile in the same batch is a cheap no-op (cursor already moved).
         if let Err(e) = reconcile(state).await {
-            // Sanitised label only — never the raw `HandlerError` Display,
-            // which (for a CH `BadResponse`) can echo row values into logs.
-            let safe = safe_error_message(&e);
+            // Full error Display on purpose (policy reversed 2026-08-10,
+            // lore-0455): the old sanitizer reduced the 0454 outage to the
+            // undiagnosable label "ClickHouse error". Everything ClickHouse
+            // could echo back is public on-chain data, so detail in logs
+            // costs nothing and buys the post-incident "why".
+            // `alarm` is a machine contract, not log copy: the
+            // `indexer-ch-write-failures` CloudWatch metric filter keys on
+            // `$.fields.alarm = "ch_write_failure"`. Reword the human
+            // message freely; rename this field only together with
+            // `infra/src/lib/stacks/cloudwatch-stack.ts` (the
+            // declared-vs-emitted infra test enforces the pair).
             error!(
+                alarm = "ch_write_failure",
                 message_id = %msg.message_id,
-                error = %safe,
+                error = %e,
                 "reconcile failed — will redeliver doorbell"
             );
             batch_item_failures.push(BatchItemFailure {
@@ -417,70 +426,15 @@ async fn persist_with_retry(
     Ok(())
 }
 
-/// Render a `HandlerError` for logging / error propagation with **all
-/// server-supplied detail stripped**.
-///
-/// Logging policy: logs carry diagnostic metadata only — error class,
-/// ClickHouse exception code, HTTP status — and **never** any
-/// server-supplied body. `clickhouse::error::Error::BadResponse`
-/// echoes the verbatim server response, which for a rejected INSERT
-/// includes the offending row's values (account StrKeys, balances,
-/// asset codes). Even though that data is public on-chain, our policy
-/// is zero private/business data in logs: a log line exists to point
-/// the operator at the failure class, not to dump record contents.
-///
-/// We therefore NEVER call `Display`/`to_string()` on an inner error
-/// (which could embed a body); we emit fixed labels plus, for
-/// `BadResponse`, only the leading `Code: NNN` / HTTP-status token
-/// extracted by [`safe_bad_response_token`]. This string is used both
-/// in our `error!`/`warn!` macros and as the value `return Err(…)`
-/// hands to `lambda_runtime` (which would otherwise log the full
-/// `Display` via its `Diagnostic` serialization, bypassing any
-/// in-macro redaction).
-fn safe_error_message(err: &HandlerError) -> String {
-    match err {
-        HandlerError::S3Download(_) => "S3 download failed".to_string(),
-        HandlerError::Parse(_) => "XDR parse failed".to_string(),
-        HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(ch)) => match ch {
-            clickhouse::error::Error::Network(_) => "ClickHouse network error".to_string(),
-            clickhouse::error::Error::TimedOut => "ClickHouse request timed out".to_string(),
-            clickhouse::error::Error::BadResponse(msg) => {
-                format!("ClickHouse bad response ({})", safe_bad_response_token(msg))
-            }
-            // Any other clickhouse error variant (Custom, serde, etc.)
-            // could carry a payload fragment in its Display — emit a
-            // bare label, never the contents.
-            _ => "ClickHouse error".to_string(),
-        },
-        HandlerError::ClickHouse(db_clickhouse::SchemaError::Staging(_)) => {
-            "ClickHouse staging error".to_string()
-        }
-    }
-}
-
-/// Extract ONLY the leading code/status token from a CH `BadResponse`
-/// body — never the trailing detail, which can carry row values.
-/// Returns `"Code: NNN"` for a CH exception body, `"HTTP NNN"` for a
-/// plain HTTP status line, or `"detail suppressed"` for anything else
-/// (a proxy HTML page, an opaque body) where we cannot prove the
-/// remainder is data-free.
-fn safe_bad_response_token(msg: &str) -> String {
-    // CH exception body: "Code: NNN. DB::Exception: …".
-    if let Some(rest) = msg.strip_prefix("Code: ") {
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        if !digits.is_empty() {
-            return format!("Code: {digits}");
-        }
-    }
-    // Plain HTTP status line: "NNN <reason>". Only the 3-digit status
-    // is guaranteed data-free; the reason phrase / any proxy body is
-    // not, so keep just the numeric status.
-    let leading: String = msg.chars().take_while(char::is_ascii_digit).collect();
-    if leading.len() == 3 {
-        return format!("HTTP {leading}");
-    }
-    "detail suppressed".to_string()
-}
+// A `safe_error_message` sanitizer used to live here, reducing every error
+// to a fixed label ("ClickHouse error") so no server-echoed row values could
+// reach the logs. Removed 2026-08-10 (lore-0455): the database holds only
+// public on-chain data, and the sanitizer's catch-all made the 2026-07-29
+// outage undiagnosable — 19 minutes of failing writes logged as two words.
+// Errors now log their full `Display`. Boundary of this decision: logs stay
+// inside the account (CloudWatch, IAM-gated; nothing beyond alarm state
+// reaches Slack). If logs ever ship to a third-party sink, re-open the
+// redaction question before flipping that switch.
 
 /// Generic retry envelope — drives `op` until it returns `Ok` or the
 /// backoff schedule is exhausted. `is_transient` decides which errors
@@ -524,7 +478,7 @@ where
                         ledger_sequence,
                         attempt,
                         backoff_ms = delay.as_millis() as u64,
-                        error = %safe_error_message(&err),
+                        error = %err,
                         "ledger persist hit transient CH error — retrying"
                     );
                     tokio::time::sleep(delay).await;
@@ -954,53 +908,18 @@ mod tests {
         ));
     }
 
-    /// `safe_error_message` must emit ONLY the CH code token for a
-    /// rejected-INSERT error — never the body detail that carries row
-    /// values. This is the zero-private-data-in-logs guarantee.
+    /// The full error Display must survive into the rendered string —
+    /// the sanitizer that used to strip it made the 2026-07-29 outage
+    /// undiagnosable. Guards against a well-meaning re-introduction.
     #[test]
-    fn safe_error_message_strips_ch_body_detail() {
-        // Body shaped like a real INCORRECT_DATA rejection echoing a
-        // (synthetic) account value in the detail.
-        let body = "Code: 117. DB::Exception: INCORRECT_DATA: \
-                    Cannot parse 'GSYNTHETICACCOUNTVALUE' as Decimal in column balance";
+    fn handler_error_display_keeps_ch_detail() {
+        let body = "Code: 252. DB::Exception: Too many parts (5000)";
         let err = HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(
             clickhouse::error::Error::BadResponse(body.to_string()),
         ));
-        let rendered = safe_error_message(&err);
-        // Code retained for triage…
-        assert_eq!(rendered, "ClickHouse bad response (Code: 117)");
-        // …and the row value / detail is GONE.
-        assert!(!rendered.contains("GSYNTHETICACCOUNTVALUE"));
-        assert!(!rendered.contains("balance"));
-        assert!(!rendered.contains("Cannot parse"));
-    }
-
-    #[test]
-    fn safe_bad_response_token_extracts_code_or_status_only() {
-        assert_eq!(
-            safe_bad_response_token("Code: 159. DB::Exception: TIMEOUT_EXCEEDED: detail"),
-            "Code: 159"
-        );
-        assert_eq!(safe_bad_response_token("502 Bad Gateway"), "HTTP 502");
-        // Opaque proxy body with no recognisable leading token → fully
-        // suppressed (no passthrough of arbitrary content).
-        assert_eq!(
-            safe_bad_response_token("<html>upstream sent value GABC...</html>"),
-            "detail suppressed"
-        );
-    }
-
-    #[test]
-    fn safe_error_message_uses_fixed_labels_no_detail() {
-        // Inner strings must never appear in the rendered label.
-        let s3 = HandlerError::S3Download("bucket=secret key=ledgers/123".into());
-        assert_eq!(safe_error_message(&s3), "S3 download failed");
-        assert!(!safe_error_message(&s3).contains("secret"));
-
-        let net = HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(
-            clickhouse::error::Error::TimedOut,
-        ));
-        assert_eq!(safe_error_message(&net), "ClickHouse request timed out");
+        let rendered = err.to_string();
+        assert!(rendered.contains("Code: 252"));
+        assert!(rendered.contains("Too many parts"));
     }
 
     /// Prefix-boundary: `Code: 6` must not match `Code: 60`, and a

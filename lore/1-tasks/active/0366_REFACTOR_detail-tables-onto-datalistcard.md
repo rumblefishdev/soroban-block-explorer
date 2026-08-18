@@ -85,3 +85,17 @@ Follow-up from task 0351 finding F6. Refactor only, no behaviour change.
 - [ ] `web` typecheck + lint + test green
 - [ ] **Docs updated** — N/A (no system-shape change; pure FE component reuse)
 - [ ] **API types regenerated** — N/A (FE-only)
+
+## Notes
+
+- **Mobile card rows belong here** (2026-08-18, from the 0491 UX pass). On a
+  375px viewport the richest tables are ~3 screens of horizontal scroll —
+  the pool activity table measured 1020px. 0491 added the small lever
+  (`ExplorerTableColumn.hideBelow`, adopted for its Account column, 1020 →
+  860px), but the honest ceiling of a five-column data table on a phone is a
+  **card row**: chip + amount line, secondary line, meta line — the reason
+  stellar.expert reads well on mobile is that its sentence rows reflow.
+  Since this task funnels every detail table through one shell, a
+  `renderCard` variant on `DataListCard` (used below `sm`, `renderTable`
+  above) would give all 8 tables a mobile mode in one place instead of
+  eight bespoke ones. Scope it here, not per-table.
