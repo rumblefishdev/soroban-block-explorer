@@ -82,7 +82,7 @@ interface PoolParticipantsProps {
  * of the rest of the page so failures stay scoped.
  */
 export function PoolParticipants({ poolId }: PoolParticipantsProps) {
-  // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
+  // Namespaced cursor: LP detail mounts PoolParticipants + PoolActivity
   // simultaneously, so each section needs its own URL key. `resetKey`
   // drops the cursor when the user navigates to a different pool.
   const { cursor, goNext, goPrev } = useCursorPagination({

@@ -205,60 +205,201 @@ pub struct PoolItem {
     pub latest_snapshot_at: Option<DateTime<Utc>>,
 }
 
-/// What ONE operation moved through the pool being viewed, per canonical leg
-/// (task 0279). Both legs are **signed from the pool's side**: positive = the
-/// asset entered the pool, negative = it left. So a trade reads `+/-`, a
-/// deposit `+/+` and a withdrawal `-/-` — the sign alone gives the direction,
-/// with no event-type field.
+// ---------------------------------------------------------------------------
+// Activity (task 0491) — the per-operation successor to `/transactions`
+// ---------------------------------------------------------------------------
+
+/// What an operation did to the pool, named by the SIGN PAIR of its two legs
+/// and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+/// perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+/// There is no operation-type column to read and no join to `operations`.
 ///
-/// Raw stroops as STRINGS, like every other on-chain amount here (`reserve_a`,
-/// `total_supply`): a JSON number is a double in the browser, so a leg above
-/// 2^53 stroops (~900M units) would silently lose digits.
-///
-/// A leg is `null` when this operation did not move that asset — never `0`.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct PoolOperationAmount {
-    /// The operation's 1-based position in its transaction (Horizon's
-    /// `application_order`), so the list is stably ordered and each entry is
-    /// traceable to an operation on the transaction detail page.
-    pub application_order: i16,
-    pub amount_a: Option<String>,
-    pub amount_b: Option<String>,
+/// Classified in SQL rather than here, because the same expression is the
+/// `filter[event]` predicate: two classifiers would eventually disagree, and
+/// the one the user sees must be the one the filter used. This deliberately
+/// reverses the client-side policy the retired `/transactions` shape carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolEvent {
+    Trade,
+    Deposit,
+    Withdrawal,
 }
 
-/// One row from `/liquidity-pools/:id/transactions`. Shape pinned to
-/// canonical SQL `20_get_liquidity_pools_transactions.sql`.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct PoolTransactionItem {
-    pub hash: String,
+impl PoolEvent {
+    /// The whole classifier: the sign pair of an operation's two legs.
+    ///
+    /// Both amounts are signed from the pool's perspective, so a leg that
+    /// entered the pool is positive. Anything that is not "both in" or "both
+    /// out" moved value across the pool in opposite directions, which is a
+    /// trade — including the zero-amount edge a dust swap can produce, since
+    /// it is still not a deposit and not a withdrawal.
+    ///
+    /// Callers must only reach here with BOTH legs present; a half-row has no
+    /// event (see [`PoolActivityItem::event`]).
+    pub fn from_signs(amount_a: i64, amount_b: i64) -> Self {
+        if amount_a > 0 && amount_b > 0 {
+            Self::Deposit
+        } else if amount_a < 0 && amount_b < 0 {
+            Self::Withdrawal
+        } else {
+            Self::Trade
+        }
+    }
+
+    /// Parse a `filter[event]` value.
+    pub fn from_param(value: &str) -> Option<Self> {
+        match value {
+            "trade" => Some(Self::Trade),
+            "deposit" => Some(Self::Deposit),
+            "withdrawal" => Some(Self::Withdrawal),
+            _ => None,
+        }
+    }
+
+    /// The accepted spelling, for the `allowed` list a rejection returns.
+    /// `const` so that list can be built from these three arms instead of
+    /// being retyped next to the handler and drifting from the parser.
+    pub const fn as_param(self) -> &'static str {
+        match self {
+            Self::Trade => "trade",
+            Self::Deposit => "deposit",
+            Self::Withdrawal => "withdrawal",
+        }
+    }
+}
+
+#[cfg(test)]
+mod pool_event_tests {
+    use super::PoolEvent;
+
+    /// The classifier itself. It used to live in SQL as a `multiIf` and could
+    /// only be checked against a live ClickHouse; in Rust it is the one thing
+    /// this endpoint gets wrong most visibly, so it gets the table.
+    #[test]
+    fn sign_pair_names_the_event() {
+        let cases = [
+            (120, 3, PoolEvent::Deposit),
+            (-4, -9, PoolEvent::Withdrawal),
+            (120, -4, PoolEvent::Trade),
+            (-4, 120, PoolEvent::Trade),
+        ];
+        for (a, b, want) in cases {
+            assert_eq!(PoolEvent::from_signs(a, b), want, "({a}, {b})");
+        }
+    }
+
+    /// A zero leg is not a deposit and not a withdrawal, so it falls to trade
+    /// rather than to whichever branch happens to be first.
+    #[test]
+    fn zero_leg_is_not_a_deposit() {
+        assert_eq!(PoolEvent::from_signs(0, 5), PoolEvent::Trade);
+        assert_eq!(PoolEvent::from_signs(0, -5), PoolEvent::Trade);
+        assert_eq!(PoolEvent::from_signs(0, 0), PoolEvent::Trade);
+    }
+
+    /// `as_param` feeds the `allowed` list a rejection returns and
+    /// `from_param` reads the caller's value back, so drift between them would
+    /// advertise a value the endpoint then refuses.
+    #[test]
+    fn filter_value_round_trips() {
+        for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
+            assert_eq!(PoolEvent::from_param(e.as_param()), Some(e), "{e:?}");
+        }
+        assert_eq!(PoolEvent::from_param("swap"), None);
+        assert_eq!(PoolEvent::from_param(""), None);
+    }
+}
+
+/// `filter[...]` query parameters for `GET /v1/liquidity-pools/{id}/activity`.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct PoolActivityParams {
+    /// `trade` | `deposit` | `withdrawal`. Applied as a `HAVING` on the same
+    /// expression that produces `event`, so the filtered list and the chips
+    /// cannot disagree.
+    ///
+    /// Rows whose `event` is `null` (a leg missing — see [`PoolActivityItem`])
+    /// match no filter value: we cannot claim such a row is a trade.
+    ///
+    /// A `String`, not a `PoolEvent`, deliberately: every `filter[…]` param in
+    /// this API takes text and is validated in the handler
+    /// (`ChartParams::interval`, assets' `filter[sac]`). Deserializing straight
+    /// into the enum would make serde reject a bad value, and serde's rejection
+    /// is axum's plain-text `QueryRejection` — not the `ErrorEnvelope` this
+    /// endpoint documents, and with no `allowed` list for the caller.
+    #[serde(rename = "filter[event]")]
+    pub event: Option<String>,
+}
+
+/// Cursor payload for `GET /v1/liquidity-pools/{id}/activity`, keyed on
+/// `(ledger_sequence, transaction_id, application_order)` — the sort-key
+/// prefix of `lp_operation_amounts` minus its `asset_id` tail.
+///
+/// A plain struct, not an enum tagged by datasource. The retired
+/// `/transactions` cursor carried `tiebreak`, which is absent here, so a
+/// stale one fails to deserialize and the extractor answers `invalid_cursor`
+/// on its own — no explicit source guard needed (the retired endpoint needed
+/// `pool_tx_cursor_matches_source` only because both of its variants
+/// deserialized cleanly).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolActivityCursor {
     pub ledger_sequence: i64,
+    pub transaction_id: i64,
+    pub application_order: i16,
+}
+
+/// One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
+/// against this pool**, not one transaction (task 0491, issue #371).
+///
+/// The transaction-level fields the retired `/transactions` shape carried
+/// (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
+/// `operation_types`) are gone: the first three describe the transaction, not
+/// this row, and repeating them per operation invites reading a transaction
+/// fee as an operation fee. `operation_types` is replaced by `event`, which is
+/// what it was approximating.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PoolActivityItem {
+    /// Transaction hash (64-char lowercase hex). NOT unique across rows — a
+    /// transaction running several operations against this pool appears once
+    /// per operation, so a row key needs `application_order` too.
+    pub transaction_hash: String,
+    pub ledger_sequence: i64,
+    /// The operation's 1-based position in its transaction (Horizon's
+    /// `application_order`), and the `#op-N` anchor on the transaction detail
+    /// page this row links to (task 0482).
+    pub application_order: i16,
+    /// `null` only for the malformed case where the pool's two legs did not
+    /// both land in `lp_operation_amounts`. Unreachable by construction — an
+    /// op that touches a pool moves both legs — but the read stays total
+    /// rather than classifying a half-row.
+    pub event: Option<PoolEvent>,
+    /// Signed from the POOL's perspective: positive entered the pool, negative
+    /// left it. Raw stroops as a decimal string, scaled by 7 at render like
+    /// every other amount here — a JSON number is a double in the browser, so
+    /// a leg above 2^53 stroops would silently lose digits.
+    ///
+    /// The sign is the payload, not decoration: it is what names `event`, so
+    /// the frontend must not take an absolute value before deciding direction.
+    /// `null` on both legs in the malformed case above.
+    pub amount_a: Option<String>,
+    pub amount_b: Option<String>,
+    /// Who performed THIS OPERATION — the operation's own source account when
+    /// it declares one, otherwise the transaction's, which is what an absent
+    /// `Operation.sourceAccount` means in the XDR.
+    ///
+    /// Not simply the transaction's source: on a per-operation row that names
+    /// the wrong account whenever the two differ, which on prod is 41% of
+    /// operations in a recent ledger window. The retired `/transactions` shape
+    /// could only ever carry the transaction's, since its row WAS one.
     pub source_account: String,
-    /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
-    /// there is no `decimals` field — the frontend scales by 1e7.
-    pub fee_charged: i64,
-    pub successful: bool,
-    pub operation_count: i16,
-    pub has_soroban: bool,
-    /// Distinct `op_type_name(...)` labels for every op in the tx, sorted
-    /// asc. Frontend §6.14 categorises trade vs LP-mgmt activity from this
-    /// list (policy lives client-side, not in SQL).
-    pub operation_types: Vec<String>,
+    /// How many pools the WHOLE operation crossed — `length(pool_ids)` from
+    /// the same appearance seek that resolves the source account. `1` for
+    /// every deposit/withdrawal (an LP op declares exactly one pool) and for
+    /// a single-hop trade; `> 1` marks this row as one hop of a longer path
+    /// payment, whose full route lives on the op's detail page. `null` only
+    /// when the appearance row is missing — unknown, never guessed to `1`.
+    pub pools_crossed: Option<i64>,
     pub created_at: DateTime<Utc>,
-    /// What this transaction moved through THIS pool, **one entry per
-    /// operation**, in application order (task 0279 / issue #371).
-    ///
-    /// Per operation, not summed per transaction: 8.2% of (pool, transaction)
-    /// pairs on mainnet run more than one operation against the same pool
-    /// (measured 2026-08-12 over 8.49M pairs), and a sum across a bundled
-    /// deposit + path payment describes neither. One entry each keeps every
-    /// figure true on its own; the common single-operation row is a
-    /// one-element list.
-    ///
-    /// **Empty** = no figures for this row, which is NOT the same as zero:
-    /// per-pool amounts are indexed from their deploy onwards and filled
-    /// backwards by a re-parse, so older rows carry none yet and must render
-    /// blank rather than as `0`.
-    pub amounts: Vec<PoolOperationAmount>,
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools` paginated by

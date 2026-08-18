@@ -78,12 +78,12 @@ import type {
   ListParticipantsData,
   ListParticipantsErrors,
   ListParticipantsResponses,
+  ListPoolActivityData,
+  ListPoolActivityErrors,
+  ListPoolActivityResponses,
   ListPoolsData,
   ListPoolsErrors,
   ListPoolsResponses,
-  ListPoolTransactionsData,
-  ListPoolTransactionsErrors,
-  ListPoolTransactionsResponses,
   ListTransactionsData,
   ListTransactionsErrors,
   ListTransactionsResponses,
@@ -425,6 +425,34 @@ export const getPool = <ThrowOnError extends boolean = false>(
     }
   );
 
+/**
+ * `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
+ * (task 0491, issue #371).
+ *
+ * Supersedes `/transactions`, whose row was a transaction. That unit could
+ * not carry an honest `Event` chip (a bundled deposit + trade collapsed to
+ * one label), forced the Amount cell to stack figures that must not be
+ * summed, and made a trades filter inexpressible — "trades only" has no
+ * truthful answer for a transaction that deposits *and* trades. The old path
+ * stays mounted until the frontend moves to this one (task 0491 step 3),
+ * which is also when its handler, DTO and query go.
+ */
+export const listPoolActivity = <ThrowOnError extends boolean = false>(
+  options: Options<ListPoolActivityData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    ListPoolActivityResponses,
+    ListPoolActivityErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/activity',
+    ...options,
+  });
+
 export const getPoolChart = <ThrowOnError extends boolean = false>(
   options: Options<GetPoolChartData, ThrowOnError>
 ) =>
@@ -454,22 +482,6 @@ export const listParticipants = <ThrowOnError extends boolean = false>(
       { scheme: 'bearer', type: 'http' },
     ],
     url: '/v1/liquidity-pools/{pool_id}/participants',
-    ...options,
-  });
-
-export const listPoolTransactions = <ThrowOnError extends boolean = false>(
-  options: Options<ListPoolTransactionsData, ThrowOnError>
-) =>
-  (options.client ?? client).get<
-    ListPoolTransactionsResponses,
-    ListPoolTransactionsErrors,
-    ThrowOnError
-  >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
-    url: '/v1/liquidity-pools/{pool_id}/transactions',
     ...options,
   });
 
