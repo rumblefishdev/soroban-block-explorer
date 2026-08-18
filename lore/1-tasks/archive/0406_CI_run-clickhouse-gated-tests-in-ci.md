@@ -69,7 +69,7 @@ all about the ACs it was supposed to satisfy.
 - [x] Handle the **two different gates**: the env-var self-skip suites run in a
       dedicated step with `CLICKHOUSE_URL` set; the `#[ignore]`d tests run with
       `--ignored`, **name-filtered** (`select_sep1_chunk select_nft_chunk
-    filter_drops`) to the five CH-only ones — the other `#[ignore]`s need live
+filter_drops`) to the five CH-only ones — the other `#[ignore]`s need live
       mainnet RPC / S3 / issuer TOML and stay manual.
 - [x] Make a skip **visible**: a count guard sums `N passed` across the
       `--ignored` leg and fails the step below 5, so a drifted name filter turns
@@ -87,7 +87,7 @@ all about the ACs it was supposed to satisfy.
       locally; first real Actions run pending by design (see history).
 - [x] A deliberately broken column reference makes the run **red** — verified by
       re-introducing `sc.name` in `contract_type_rebuild`: `Code: 47
-    UNKNOWN_IDENTIFIER`, exit 101, test named with file:line and full SQL in
+UNKNOWN_IDENTIFIER`, exit 101, test named with file:line and full SQL in
       the log. Verified twice (fail-fast and `--no-fail-fast` variants).
 - [x] The run is visible in the job log: per-test lines plus per-binary
       `test result:` counts (90+6 db-clickhouse, 54 backfill-runner, 5 ignored),
