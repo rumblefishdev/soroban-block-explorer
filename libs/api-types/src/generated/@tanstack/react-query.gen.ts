@@ -35,7 +35,6 @@ import {
   listParticipants,
   listPoolActivity,
   listPools,
-  listPoolTransactions,
   listTransactions,
   type Options,
 } from '../sdk.gen.js';
@@ -116,9 +115,6 @@ import type {
   ListPoolsData,
   ListPoolsError,
   ListPoolsResponse,
-  ListPoolTransactionsData,
-  ListPoolTransactionsError,
-  ListPoolTransactionsResponse,
   ListTransactionsData,
   ListTransactionsError,
   ListTransactionsResponse,
@@ -1326,78 +1322,6 @@ export const listParticipantsInfiniteOptions = (
         return data;
       },
       queryKey: listParticipantsInfiniteQueryKey(options),
-    }
-  );
-
-export const listPoolTransactionsQueryKey = (
-  options: Options<ListPoolTransactionsData>
-) => createQueryKey('listPoolTransactions', options);
-
-export const listPoolTransactionsOptions = (
-  options: Options<ListPoolTransactionsData>
-) =>
-  queryOptions<
-    ListPoolTransactionsResponse,
-    ListPoolTransactionsError,
-    ListPoolTransactionsResponse,
-    ReturnType<typeof listPoolTransactionsQueryKey>
-  >({
-    queryFn: async ({ queryKey, signal }) => {
-      const { data } = await listPoolTransactions({
-        ...options,
-        ...queryKey[0],
-        signal,
-        throwOnError: true,
-      });
-      return data;
-    },
-    queryKey: listPoolTransactionsQueryKey(options),
-  });
-
-export const listPoolTransactionsInfiniteQueryKey = (
-  options: Options<ListPoolTransactionsData>
-): QueryKey<Options<ListPoolTransactionsData>> =>
-  createQueryKey('listPoolTransactions', options, true);
-
-export const listPoolTransactionsInfiniteOptions = (
-  options: Options<ListPoolTransactionsData>
-) =>
-  infiniteQueryOptions<
-    ListPoolTransactionsResponse,
-    ListPoolTransactionsError,
-    InfiniteData<ListPoolTransactionsResponse>,
-    QueryKey<Options<ListPoolTransactionsData>>,
-    | string
-    | Pick<
-        QueryKey<Options<ListPoolTransactionsData>>[0],
-        'body' | 'headers' | 'path' | 'query'
-      >
-  >(
-    // @ts-ignore
-    {
-      queryFn: async ({ pageParam, queryKey, signal }) => {
-        // @ts-ignore
-        const page: Pick<
-          QueryKey<Options<ListPoolTransactionsData>>[0],
-          'body' | 'headers' | 'path' | 'query'
-        > =
-          typeof pageParam === 'object'
-            ? pageParam
-            : {
-                query: {
-                  cursor: pageParam,
-                },
-              };
-        const params = createInfiniteParams(queryKey, page);
-        const { data } = await listPoolTransactions({
-          ...options,
-          ...params,
-          signal,
-          throwOnError: true,
-        });
-        return data;
-      },
-      queryKey: listPoolTransactionsInfiniteQueryKey(options),
     }
   );
 

@@ -23,6 +23,6 @@ export { useContractInvocations } from './useContractInvocations.js';
 export { useContractEvents } from './useContractEvents.js';
 export { usePoolsList } from './usePoolsList.js';
 export { usePoolDetail } from './usePoolDetail.js';
-export { usePoolTransactions } from './usePoolTransactions.js';
+export { usePoolActivity } from './usePoolActivity.js';
 export { usePoolParticipants } from './usePoolParticipants.js';
 export { usePoolChart, type ChartPeriod } from './usePoolChart.js';

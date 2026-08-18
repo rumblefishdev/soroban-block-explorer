@@ -160,7 +160,6 @@ statement files. Single-statement files have no separator.
 | 17  | `17_get_nfts_transfers.sql`               | `GET /nfts/:id/transfers`                 | DB-only                                                                 |
 | 18  | `18_get_liquidity_pools_list.sql`         | `GET /liquidity-pools`                    | DB-only                                                                 |
 | 19  | `19_get_liquidity_pools_by_id.sql`        | `GET /liquidity-pools/:id`                | DB-only                                                                 |
-| 20  | `20_get_liquidity_pools_transactions.sql` | `GET /liquidity-pools/:id/transactions`   | DB-only **(superseded by 24 — retired once the frontend moves)**        |
 | 21  | `21_get_liquidity_pools_chart.sql`        | `GET /liquidity-pools/:id/chart`          | DB-only                                                                 |
 | 22  | `22_get_search.sql`                       | `GET /search`                             | DB-only **(StrKey-prefix only; free-text deferred — no pg_trgm in CH)** |
 | 23  | `23_get_liquidity_pools_participants.sql` | `GET /liquidity-pools/:id/participants`   | DB-only                                                                 |

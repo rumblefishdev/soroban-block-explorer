@@ -84,9 +84,6 @@ import type {
   ListPoolsData,
   ListPoolsErrors,
   ListPoolsResponses,
-  ListPoolTransactionsData,
-  ListPoolTransactionsErrors,
-  ListPoolTransactionsResponses,
   ListTransactionsData,
   ListTransactionsErrors,
   ListTransactionsResponses,
@@ -485,22 +482,6 @@ export const listParticipants = <ThrowOnError extends boolean = false>(
       { scheme: 'bearer', type: 'http' },
     ],
     url: '/v1/liquidity-pools/{pool_id}/participants',
-    ...options,
-  });
-
-export const listPoolTransactions = <ThrowOnError extends boolean = false>(
-  options: Options<ListPoolTransactionsData, ThrowOnError>
-) =>
-  (options.client ?? client).get<
-    ListPoolTransactionsResponses,
-    ListPoolTransactionsErrors,
-    ThrowOnError
-  >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
-    url: '/v1/liquidity-pools/{pool_id}/transactions',
     ...options,
   });
 

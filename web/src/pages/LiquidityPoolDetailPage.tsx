@@ -16,7 +16,7 @@ import { PoolDetailSkeleton } from './pool-detail/PoolDetailSkeleton.js';
 import { PoolKpiStrip } from './pool-detail/PoolKpiStrip.js';
 import { PoolParticipants } from './pool-detail/PoolParticipants.js';
 import { PoolSummary } from './pool-detail/PoolSummary.js';
-import { PoolTransactions } from './pool-detail/PoolTransactions.js';
+import { PoolActivity } from './pool-detail/PoolActivity.js';
 
 /**
  * Liquidity-pool detail page (`/liquidity-pools/:id`). Composes the
@@ -96,7 +96,7 @@ export default function LiquidityPoolDetailPage() {
             <PoolParticipants poolId={poolId} />
           </SectionErrorBoundary>
           <SectionErrorBoundary sectionName="pool-transactions">
-            <PoolTransactions poolId={poolId} pool={detail.data} />
+            <PoolActivity poolId={poolId} pool={detail.data} />
           </SectionErrorBoundary>
         </>
       )}

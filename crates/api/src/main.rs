@@ -488,7 +488,7 @@ mod tests {
         for path in [
             "/v1/liquidity-pools",
             "/v1/liquidity-pools/{pool_id}",
-            "/v1/liquidity-pools/{pool_id}/transactions",
+            "/v1/liquidity-pools/{pool_id}/activity",
             "/v1/liquidity-pools/{pool_id}/chart",
             "/v1/liquidity-pools/{pool_id}/participants",
         ] {

@@ -4,8 +4,6 @@
 //!   - `GET /v1/liquidity-pools`                          (task 0052)
 //!   - `GET /v1/liquidity-pools/{pool_id}`                (task 0052)
 //!   - `GET /v1/liquidity-pools/{pool_id}/activity`       (task 0491)
-//!   - `GET /v1/liquidity-pools/{pool_id}/transactions`   (task 0052, retired
-//!     by 0491 step 3 once the frontend moves to `/activity`)
 //!   - `GET /v1/liquidity-pools/{pool_id}/chart`          (task 0052)
 //!   - `GET /v1/liquidity-pools/{pool_id}/participants`   (task 0126)
 //!
@@ -27,7 +25,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::list_pools))
         .routes(routes!(handlers::get_pool))
         .routes(routes!(handlers::list_pool_activity))
-        .routes(routes!(handlers::list_pool_transactions))
         .routes(routes!(handlers::get_pool_chart))
         .routes(routes!(handlers::list_participants))
 }
