@@ -98,30 +98,32 @@ describe('declared custom metric namespaces exist in crates/', () => {
 });
 
 describe('custom metric names read from code-published namespaces exist in crates/', () => {
-  // `cloudwatch.Metric` uses `namespace:`; `logs.MetricFilter` uses
-  // `metricNamespace:`. A name read via `namespace:` must have a publisher,
-  // and there are exactly two legitimate kinds:
+  // A name read via `namespace:` must have a publisher, and there are two
+  // legitimate kinds:
   //   1. Rust code (PutMetricData) — the name appears in `crates/`.
-  //   2. A `logs.MetricFilter` in this same stack minted it — the name
-  //      appears next to a `metricNamespace:`. Those names never occur in
-  //      Rust by construction (the filter mints them from log matching);
-  //      their emitted-side contract is the filter PATTERN, which the
-  //      filter-literal suite above already guards. The dashboard reading
-  //      filter-minted `ChWriteFailures` (task 0455, second slice) made
-  //      this case real — under the Rust-only rule that legitimate read
-  //      failed CI.
-  const filterMinted = new Set(
-    stackSources.flatMap(({ text }) =>
-      [...text.matchAll(/metricNamespace:\s*'([^']+)'/g)]
-        .filter((m) => isCustomNamespace(m[1]))
-        .flatMap((m) => {
-          const window = text.slice(Math.max(0, m.index - 400), m.index + 400);
-          return [...window.matchAll(/metricName:\s*'([^']+)'/g)].map(
-            (n) => n[1]
-          );
-        })
-    )
-  );
+  //   2. A `logs.MetricFilter` in this stack mints it from matching log
+  //      lines. Such names never appear in Rust by construction; their
+  //      emitted-side contract is the filter PATTERN, which the
+  //      filter-literal suite above already guards end to end.
+  //
+  // Kind 2 is an EXPLICIT list, not inferred. A derived version was written
+  // first — collect every `metricName` within 400 characters of a
+  // `metricNamespace:` — and it failed its own smell test: a fabricated
+  // metric read placed near the filter block was silently accepted, because
+  // proximity is not provenance. That version failed OPEN, which is the one
+  // direction a guard must never fail. Adding an entry here is a deliberate
+  // act that has to name the filter construct that mints it; forgetting to
+  // add one fails CI loudly, which is the safe direction.
+  //
+  // The exact version of this check would assert against the SYNTHESIZED
+  // template (`Template.fromStack`), where MetricFilter transformations and
+  // dashboard bodies are concrete resources rather than source text. Worth
+  // doing if this list ever grows past a couple of entries.
+  const FILTER_MINTED_METRICS = new Set([
+    // Minted by `IndexerChWriteFailureFilter` in cloudwatch-stack.ts from
+    // log lines carrying `$.fields.alarm = "ch_write_failure"`.
+    'ChWriteFailures',
+  ]);
 
   const names = new Set(
     stackSources.flatMap(({ text }) =>
@@ -139,9 +141,10 @@ describe('custom metric names read from code-published namespaces exist in crate
   for (const name of names) {
     it(`"${name}"`, () => {
       expect(
-        rustCorpus.includes(name) || filterMinted.has(name),
+        rustCorpus.includes(name) || FILTER_MINTED_METRICS.has(name),
         `metric "${name}" is read by the stack but nothing publishes it — ` +
-          `no Rust source and no MetricFilter in the stack`
+          `no Rust source emits it and it is not in FILTER_MINTED_METRICS. ` +
+          `If a MetricFilter mints it, add it to that list naming the filter.`
       ).toBe(true);
     });
   }
