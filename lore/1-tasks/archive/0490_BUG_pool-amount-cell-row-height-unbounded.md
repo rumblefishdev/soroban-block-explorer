@@ -2,7 +2,7 @@
 id: '0490'
 title: 'BUG: the pool Amount cell grows without bound and its Event chip names no line'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0279', '0489', '0491']
 tags: [frontend, layer-frontend-pages, priority-medium, effort-small]
@@ -21,6 +21,17 @@ history:
       scoped to the row-height cap only — the structural answer (one row per
       operation) is 0491, and doing both here would pull the API change
       forward for no gain.
+  - date: '2026-08-18'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Superseded by 0491, exactly as this task's own Implementation section
+      predicted ("if 0491 lands first, this task is likely moot"). Never
+      implemented: the stacking Amount cell it meant to cap was deleted whole
+      when the row unit became one operation, so there is no cap to remove and
+      no unreachable code to carry. The one criterion that survived the row-
+      unit change — the column holds the two-leg `A → B` form without wrapping
+      — was carried into 0491 and verified live at width 320.
 ---
 
 # The pool Amount cell grows without bound
