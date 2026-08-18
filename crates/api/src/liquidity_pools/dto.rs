@@ -326,8 +326,15 @@ pub struct PoolActivityParams {
     ///
     /// Rows whose `event` is `null` (a leg missing — see [`PoolActivityItem`])
     /// match no filter value: we cannot claim such a row is a trade.
+    ///
+    /// A `String`, not a `PoolEvent`, deliberately: every `filter[…]` param in
+    /// this API takes text and is validated in the handler
+    /// (`ChartParams::interval`, assets' `filter[sac]`). Deserializing straight
+    /// into the enum would make serde reject a bad value, and serde's rejection
+    /// is axum's plain-text `QueryRejection` — not the `ErrorEnvelope` this
+    /// endpoint documents, and with no `allowed` list for the caller.
     #[serde(rename = "filter[event]")]
-    pub event: Option<PoolEvent>,
+    pub event: Option<String>,
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools/{id}/activity`, keyed on

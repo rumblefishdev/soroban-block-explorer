@@ -1285,7 +1285,7 @@
             "description": "Restrict to `trade`, `deposit` or `withdrawal`.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/PoolEvent"
+              "type": "string"
             }
           }
         ],

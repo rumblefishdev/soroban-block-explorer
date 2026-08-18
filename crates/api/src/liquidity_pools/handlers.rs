@@ -428,6 +428,10 @@ fn pool_tx_cursor_for(r: &PoolTxRow) -> TxListCursor {
     }
 }
 
+/// Accepted `filter[event]` values, and the `allowed` list a rejection
+/// returns. Kept next to the handler like [`ALLOWED_INTERVALS`].
+const ALLOWED_EVENTS: &[&str] = &["trade", "deposit", "withdrawal"];
+
 /// `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
 /// (task 0491, issue #371).
 ///
@@ -450,7 +454,7 @@ fn pool_tx_cursor_for(r: &PoolTxRow) -> TxListCursor {
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query,
          description = "Opaque pagination cursor from a previous response."),
-        ("filter[event]" = Option<PoolEvent>, Query,
+        ("filter[event]" = Option<String>, Query,
          description = "Restrict to `trade`, `deposit` or `withdrawal`."),
     ),
     responses(
@@ -488,6 +492,27 @@ pub async fn list_pool_activity(
         }
     };
 
+    // Validated here rather than by serde on the way in, so a bad value gets
+    // this API's error envelope with the allowed list — same shape the chart's
+    // `interval` returns.
+    let event = match params.event.as_deref() {
+        Some(s) => match PoolEvent::from_sql(s) {
+            Some(e) => Some(e),
+            None => {
+                return errors::bad_request_with_details(
+                    errors::INVALID_FILTER,
+                    "filter[event] must be one of: trade, deposit, withdrawal",
+                    serde_json::json!({
+                        "param": "filter[event]",
+                        "received": s,
+                        "allowed": ALLOWED_EVENTS,
+                    }),
+                );
+            }
+        },
+        None => None,
+    };
+
     let fetched = queries::fetch_pool_activity(
         &state.ch(),
         &pool_id_hex,
@@ -495,7 +520,7 @@ pub async fn list_pool_activity(
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
-        params.event,
+        event,
     )
     .await
     .map_err(|e| e.to_string());

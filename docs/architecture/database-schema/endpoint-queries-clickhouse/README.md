@@ -78,6 +78,7 @@ Every file must:
 | `soroban_invocations_appearances`    | same                                           | **yes**                                                                                                                                                                         |
 | `nft_ownership`                      | same                                           | **yes**                                                                                                                                                                         |
 | `liquidity_pool_snapshots`           | same                                           | **yes**                                                                                                                                                                         |
+| `lp_operation_amounts`               | `ReplacingMergeTree` (no version, partitioned) | no — the producer is deterministic (schema header's single-writer argument), so an unmerged duplicate is byte-identical to its twin; the `GROUP BY` in 24 collapses it for free |
 
 **Rationale:** `ReplacingMergeTree` deduplicates by ORDER BY key on background
 merges. Between ingestion and merge, the same logical row can appear N times.

@@ -3160,7 +3160,7 @@ export type ListPoolActivityData = {
     /**
      * Restrict to `trade`, `deposit` or `withdrawal`.
      */
-    'filter[event]'?: PoolEvent;
+    'filter[event]'?: string;
   };
   url: '/v1/liquidity-pools/{pool_id}/activity';
 };
