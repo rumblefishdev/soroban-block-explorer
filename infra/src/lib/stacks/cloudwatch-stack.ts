@@ -825,12 +825,27 @@ export class CloudWatchStack extends cdk.Stack {
         // Row 3: Processor errors + DLQ depth
         [
           new cloudwatch.GraphWidget({
-            title: 'Ledger Processor errors',
+            // Two series because the processor fails in two disjoint modes
+            // and each is invisible in the other's metric: a crash raises
+            // Lambda `Errors` but a failed CH write does NOT (the handler
+            // reports batch-item failure so SQS redelivers — Errors stayed 0
+            // through the whole 0454 outage), while `ChWriteFailures` (the
+            // filter-minted metric the zero-tolerance alarm reads) counts
+            // exactly those quiet failures. One glance answers "is the
+            // processor failing" in both modes.
+            title: 'Ledger Processor errors + CH write failures',
             left: [
               processorFunction.metricErrors({
                 period: cdk.Duration.minutes(5),
                 statistic: cloudwatch.Stats.SUM,
-                label: 'Errors',
+                label: 'Lambda errors',
+              }),
+              new cloudwatch.Metric({
+                namespace: 'SorobanBlockExplorer/Indexer',
+                metricName: 'ChWriteFailures',
+                period: cdk.Duration.minutes(5),
+                statistic: cloudwatch.Stats.SUM,
+                label: 'CH write failures',
               }),
             ],
             width: 6,
@@ -976,3 +991,4 @@ export class CloudWatchStack extends cdk.Stack {
     cdk.Tags.of(this).add('ManagedBy', 'cdk');
   }
 }
+

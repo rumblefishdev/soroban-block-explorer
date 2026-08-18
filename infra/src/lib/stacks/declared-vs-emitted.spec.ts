@@ -99,11 +99,33 @@ describe('declared custom metric namespaces exist in crates/', () => {
 
 describe('custom metric names read from code-published namespaces exist in crates/', () => {
   // `cloudwatch.Metric` uses `namespace:`; `logs.MetricFilter` uses
-  // `metricNamespace:`. Filter-produced metric names come from log matching,
-  // not from Rust, so only pair names with `namespace:` occurrences.
+  // `metricNamespace:`. A name read via `namespace:` must have a publisher,
+  // and there are exactly two legitimate kinds:
+  //   1. Rust code (PutMetricData) — the name appears in `crates/`.
+  //   2. A `logs.MetricFilter` in this same stack minted it — the name
+  //      appears next to a `metricNamespace:`. Those names never occur in
+  //      Rust by construction (the filter mints them from log matching);
+  //      their emitted-side contract is the filter PATTERN, which the
+  //      filter-literal suite above already guards. The dashboard reading
+  //      filter-minted `ChWriteFailures` (task 0455, second slice) made
+  //      this case real — under the Rust-only rule that legitimate read
+  //      failed CI.
+  const filterMinted = new Set(
+    stackSources.flatMap(({ text }) =>
+      [...text.matchAll(/metricNamespace:\s*'([^']+)'/g)]
+        .filter((m) => isCustomNamespace(m[1]))
+        .flatMap((m) => {
+          const window = text.slice(Math.max(0, m.index - 400), m.index + 400);
+          return [...window.matchAll(/metricName:\s*'([^']+)'/g)].map(
+            (n) => n[1]
+          );
+        })
+    )
+  );
+
   const names = new Set(
     stackSources.flatMap(({ text }) =>
-      [...text.matchAll(/namespace:\s*'([^']+)'/g)]
+      [...text.matchAll(/(?<!\w)namespace:\s*'([^']+)'/g)]
         .filter((m) => isCustomNamespace(m[1]))
         .flatMap((m) => {
           const window = text.slice(Math.max(0, m.index - 400), m.index + 400);
@@ -117,8 +139,9 @@ describe('custom metric names read from code-published namespaces exist in crate
   for (const name of names) {
     it(`"${name}"`, () => {
       expect(
-        rustCorpus.includes(name),
-        `metric "${name}" is read by the stack but no Rust source publishes it`
+        rustCorpus.includes(name) || filterMinted.has(name),
+        `metric "${name}" is read by the stack but nothing publishes it — ` +
+          `no Rust source and no MetricFilter in the stack`
       ).toBe(true);
     });
   }
