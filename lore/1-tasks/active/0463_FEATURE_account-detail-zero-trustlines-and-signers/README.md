@@ -123,19 +123,28 @@ the ADR.
 
 ## Work breakdown
 
-1. **Native zero balances** — read-filter fix alone, 239,087 holders, ships
-   first and independently. No source, no seed, no schema change.
-2. **Lifecycle column + writer** — `ALTER` with `DEFAULT`, then the writer,
+1. **Lifecycle column + writer** — `ALTER` with `DEFAULT`, then the writer,
    covering classic, Soroban and LP write paths together (deferring any kind
-   costs a second full backward pass). Deployment order is load-bearing —
-   task 0310.
-3. **Signers extraction** — parallel to the above, no seed needed; the dormant
-   set is empty (0 of 123,772 measured).
-4. **Seed from the checkpoint snapshot** — fills gaps and marks closures.
-   Version on each entry's own `lastModifiedLedgerSeq`, never on a window
-   boundary (task 0492).
-5. **Flip the read filter + production verification** — only after the seed
-   verifies.
+   costs a second full backward pass). Must also stamp the **account-removal**
+   path (`state.rs:426-449`), so a merged account's native tombstone carries
+   `closed_at_ledger` and native needs no special case downstream. Deployment
+   order is load-bearing — task 0310.
+2. **Signers extraction** — the writer half is parallel to the above, but the
+   history is **not** free: forward-only indexing would leave ~94 % of accounts
+   without a signers row after a month (830,014 of 14,509,686 accounts moved in
+   the last ~30 days). An empty signers section reads as "not multisig", so the
+   API and UI wait for the seed, or ship an explicit "not indexed" state.
+3. **Seed from the checkpoint snapshot** — fills gaps and marks closures, and
+   carries **`AccountEntry` too**, so signers get their history from the same
+   artifact. Version on each entry's own `lastModifiedLedgerSeq`, never on a
+   window boundary (task 0492). **Coverage must be measured afterwards and
+   cross-checked against the RPC route regardless of the result** — a standing
+   requirement, not a nicety.
+4. **Flip the read filter + production verification** — only after the seed
+   verifies. This is where **native** becomes visible too (239,087 holders):
+   under `closed_at_ledger = 0` it needs no exemption of its own. A standalone
+   native read-filter patch was built and reverted on purpose — it would have
+   been a temporary special case dissolved by this very step.
 
 ## Scope
 
@@ -160,7 +169,12 @@ over-report.
 - [ ] Native zero balances appear (239,087 holders), watching the two-convention
       trap for native
 - [ ] Signers (key, weight, type) and low/med/high thresholds are shown; the
-      fixture reads as multisig
+      fixture reads as multisig (verified on chain: thresholds 3/3/3, five
+      signers at weight 1 — a genuine 3-of-5)
+- [ ] An account with no signers row renders an explicit "not indexed", never
+      an empty list that reads as "not multisig"
+- [ ] Seed coverage measured for BOTH trustlines and accounts, and
+      cross-checked against the RPC route regardless of the measured result
 - [ ] `total_supply` and `holder_count` unchanged for a spot-checked asset
 - [ ] The 200-account probe from `notes/R-` returns zero accounts where the
       chain holds more live zero trustlines than we do

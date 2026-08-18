@@ -18,7 +18,14 @@ vi.mock('../api/hooks/useAssetsList.js', () => ({
 function makeAsset(overrides: Partial<AssetItem> = {}): AssetItem {
   return {
     id: 'native',
-    asset_code: 'XLM',
+    // Native carries NO asset_code on the ledger — the API returns null, and
+    // the display rule (`assetDisplayCode`) is what names it XLM (0472). The
+    // fixture used to hand it 'XLM', which is exactly what hid the broken
+    // `filter[code]` from these tests: the list query matched the stored code
+    // with no type arm, so `XLM` returned 6 404 impostor assets and never the
+    // real one (0470 sweep). `AssetDetailPage.test.tsx` fixed the same fixture
+    // and this sibling kept it.
+    asset_code: null,
     asset_type: 0,
     asset_type_name: 'native',
     decimals: 7,
@@ -59,7 +66,7 @@ afterEach(() => {
 describe('AssetsListPage', () => {
   it('renders the page header and the rows from a successful query', () => {
     mockOk([
-      makeAsset({ id: 'native', asset_code: 'XLM', asset_type_name: 'native' }),
+      makeAsset({ id: 'native', asset_code: null, asset_type_name: 'native' }),
       makeAsset({
         id: 'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
         asset_code: 'USDC',
