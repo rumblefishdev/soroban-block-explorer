@@ -3,17 +3,44 @@ name: Deploy Production
 # ─────────────────────────────────────────────────────────────────────────────
 # Tag-driven production deploy.
 #
-#   • Release act = pushing a `production-YYYY.MM.DD-N` tag (same date-tag
-#     convention the retired staging pipeline used — see the four historical
-#     `staging-2026.04.*` tags). The tag IS the human decision; there is no
-#     separate approval gate by design (team decision 2026-08-10).
-#   • `workflow_dispatch` stays for surgical single-stack deploys.
-#   • Safety model:  build → `cdk diff` (printed into the log as the record of
-#     what changed) → `cdk deploy` → smoke tests.
-#   • Deploys the CHOSEN stack(s), NOT a blind `--all`. Tag runs deploy the
-#     standard release set (Compute + SPA content); dispatch runs deploy the
-#     `stacks` input. This mirrors the operational lesson that a full deploy
-#     ships unrelated drift as a side effect — always diff + pick a stack.
+#   • Release act = pushing a `production-YYYY.MM.DD-N[-SELECTOR]` tag (same
+#     date-tag convention the retired staging pipeline used — see the four
+#     historical `staging-2026.04.*` tags). The tag IS the human decision;
+#     there is no separate approval gate by design (team decision
+#     2026-08-10). The optional selector puts the deploy's SCOPE inside that
+#     same decision, so widening a release stays one deliberate act:
+#
+#       production-2026.08.18-1              Compute + SPA — the standard
+#                                            release set, unchanged default
+#       production-2026.08.18-1-all          every stack that differs, + SPA
+#       production-2026.08.18-1-CloudWatch   that stack alone, --exclusively,
+#                                            no SPA
+#       production-2026.08.18-1-web          SPA content only, no CDK deploy
+#
+#     Any selector other than `all` / `web` is appended to
+#     `Explorer-production-` verbatim, so it must carry the stack's own case:
+#     `Network`, `LedgerBucket`, `Compute`, `Ingestion`, `Delivery`,
+#     `Observability`, `ApiGateway`, `CloudWatch`, `CloudflareBootstrap`,
+#     `HetznerDns` (the list `infra/src/lib/app.ts` builds). A typo is not
+#     silent — `cdk` fails on an unknown stack id before anything deploys.
+#
+#   • `-all` is not "deploy everything unconditionally": CDK skips stacks with
+#     no changes, so it means "everything that actually differs". It is also
+#     the only path that can ship parked, unreviewed drift — 0312's
+#     CloudflareBootstrap delta sat undeployed for weeks and would have gone
+#     out as a stowaway on any unrelated full deploy. Typing `-all` into the
+#     tag name is what keeps that an explicit choice instead of a side
+#     effect; `infra/Makefile` guards the laptop path with a typed `yes` for
+#     the same reason.
+#
+#   • `workflow_dispatch` stays for deploys that should not mint a tag.
+#   • Safety model:  build → `cdk diff` over ALL stacks → `cdk deploy` the
+#     SELECTED stacks → smoke tests. The diff is deliberately wider than the
+#     deploy: it is the release's drift record, and it is how a change parked
+#     in a stack this tag does not ship becomes visible at release time
+#     instead of being forgotten on someone's laptop. `--strict` because
+#     without it `cdk diff` silently hides entries containing non-ASCII
+#     characters (measured during the 0312 investigation).
 #
 # Prerequisites (inert until these exist):
 #   1. GitHub environment `production` holding secrets AWS_DEPLOY_ROLE_ARN
@@ -26,8 +53,11 @@ name: Deploy Production
 #      us-east-1 internally, but the stacks deploy to eu-central-1 via
 #      production.json — do not change aws-region here.
 #
-# Release:
-#   git tag production-$(date +%Y.%m.%d)-1 master && git push origin --tags
+# Release (always tag `origin/master`, always push the tag BY NAME — a local
+# `master` is routinely stale, and `--tags` pushes every stale local tag too):
+#   git fetch origin
+#   git tag production-$(date -u +%Y.%m.%d)-1 origin/master
+#   git push origin production-$(date -u +%Y.%m.%d)-1
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -37,7 +67,7 @@ on:
   workflow_dispatch:
     inputs:
       stacks:
-        description: 'Stack id(s) to deploy, space-separated. Prefer ONE stack; avoid a blind --all.'
+        description: 'Stack id(s) to deploy, space-separated, or --all. Prefer ONE stack.'
         required: true
         default: 'Explorer-production-Compute'
       exclusively:
@@ -57,10 +87,6 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  # Tag runs get the standard release set; dispatch runs pick their stack.
-  STACKS: ${{ inputs.stacks || 'Explorer-production-Compute' }}
-
 jobs:
   deploy:
     name: Build + diff + deploy + smoke
@@ -72,6 +98,37 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Resolve WHAT to deploy before spending 15 minutes building it, so a
+      # malformed tag fails in seconds rather than after the synth. Both event
+      # types land on the same three outputs, which is why every step below
+      # reads `plan` and never `github.event_name`.
+      - name: Plan — resolve the deploy scope
+        id: plan
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Grammar and mapping live in the script, which emits these exact
+            # `key=value` lines and pins them in its own `--self-check`.
+            if ! scope="$(./infra/scripts/deploy-scope.sh "${GITHUB_REF_NAME}")"; then
+              echo "::error::malformed release tag '${GITHUB_REF_NAME}' — expected production-YYYY.MM.DD-N[-SELECTOR]"
+              exit 1
+            fi
+          else
+            excl='${{ inputs.exclusively && '--exclusively' || '' }}'
+            # A human can type `--all` into the input; cdk rejects it paired
+            # with --exclusively. (An `if`, not `[ … ] && …`: under `set -e` a
+            # false test as the last statement of a block exits the step.)
+            if [ '${{ inputs.stacks }}' = '--all' ]; then excl=''; fi
+            scope="$(printf 'stacks=%s\nexclusively=%s\nweb=%s\n' \
+              '${{ inputs.stacks }}' "$excl" '${{ inputs.deploy_web }}')"
+          fi
+          echo "$scope" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Deploy scope'
+            echo '```'
+            echo "$scope"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@v4
         id: setup-node
         with:
@@ -96,21 +153,28 @@ jobs:
           aws-region: eu-central-1
       - name: Build CDK app
         run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
-      - name: cdk diff — the log record of what this deploy changes
+      # ALL stacks, not just the selected ones. This step is the release's
+      # drift record: a delta parked in a stack this tag does not deploy shows
+      # up here, at release time, in front of whoever cut the tag. Never add
+      # `--fail` — a diff in an unselected stack is information, not an error,
+      # and auto-deploying whatever differs is exactly the stowaway the `-all`
+      # selector exists to make deliberate.
+      - name: cdk diff — every stack, deployed or not
         run: |
-          cd infra && npx cdk --app "node dist/bin/production.js" \
-            diff ${{ env.STACKS }} ${{ (github.event_name == 'push' || inputs.exclusively) && '--exclusively' || '' }}
+          cd infra && npx cdk --app "node dist/bin/production.js" diff --strict
       - name: CDK deploy
+        if: steps.plan.outputs.stacks != ''
         run: |
           cd infra && npx cdk --app "node dist/bin/production.js" \
-            deploy ${{ env.STACKS }} ${{ (github.event_name == 'push' || inputs.exclusively) && '--exclusively' || '' }} \
+            deploy ${{ steps.plan.outputs.stacks }} ${{ steps.plan.outputs.exclusively }} \
             --require-approval never
         env:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-      # SPA content is part of every tag release (a release the user can't see
-      # isn't shipped); dispatch runs opt in via the deploy_web input.
+      # SPA content ships with the default and `-all` release sets (a release
+      # the user can't see isn't shipped) and with the `-web` selector; a
+      # single-stack tag leaves it alone, and dispatch opts in.
       - name: Deploy SPA content (build → S3 sync → CloudFront invalidation)
-        if: github.event_name == 'push' || inputs.deploy_web
+        if: steps.plan.outputs.web == 'true'
         run: make -C infra deploy-production-web
       - name: Smoke test — API /health (edge-lock-exempt, no secret needed)
         run: |
