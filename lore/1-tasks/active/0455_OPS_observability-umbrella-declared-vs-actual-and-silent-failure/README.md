@@ -92,6 +92,40 @@ history:
       hand-provisioned secrets tagged. Remaining: alarm core merge
       (stall + DLQ-growth + re-arm), MV freshness from data recency, budgets,
       health runbook, final deploy + verification.
+  - date: 2026-08-18
+    status: active
+    who: karolkow
+    note: >
+      Consolidation stretch (08-11..08-18) closed by PR #422 to develop.
+      Two live incidents validated the thesis in one week: 2026-08-12
+      galexie-lag page = AWS Fargate task replacement (~25 min envelope,
+      recorded as a health.md symptom path), and 2026-08-14 disk pressure
+      on the shared ClickHouse box stopped ingestion ~9.5 h with ONE quiet
+      page (DLQ level, 5 h in) - the backlog-age alarm on this branch
+      would have paged at minute 4. Lessons written into health.md
+      (Code 243 playbook, continuity-query fix, measured 0237 cost).
+      0400 closed and archived (docs half done; drift-gate AC deferred to
+      the comparator AC here). API-gateway stage cache decided NOT
+      ADOPTED after measurement (browser tiers + in-process moka are the
+      live caches, Cloudflare is DYNAMIC; return condition = measured
+      origin pressure, preferred lever a Cloudflare cache rule).
+      Dashboard reconciliation: a whole-batch rewrite was withdrawn by
+      the operator to a stash and REDONE as per-decision atomic changes -
+      the process lesson stands: one decision, one diff, one approval.
+      First slice shipped: two never-populated widgets removed (cache
+      hit/miss - cluster never provisioned; cold starts - InitDuration is
+      not a CloudWatch metric, measured empty), the freshness widget
+      moved onto the alarm's own doorbell signal, the backlog-age widget
+      added with the paging threshold drawn from config, the convention
+      comment states the rule. ch-write-failures threshold cut 10 -> 0
+      (operator decision, the 5xx zero-tolerance rule; >10 would never
+      see a single poison-pill ledger). Two develop merges absorbed
+      (271 + 76 commits; the 0390 tag-driven CI deploy is now armed for
+      Compute+SPA, Ingestion/CloudWatch stay laptop-only). Second slice
+      planned for a follow-up PR from fresh develop: worker-errors and
+      CH-write-failures widgets (with the guard learning
+      MetricFilter-minted names), cost graph, runbook matrix cells,
+      open decisions (Slack-chain witness, X-Ray, canary, retention).
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -363,7 +397,12 @@ month is unanswerable by construction.
       shipped; anomaly detection committed — checks off after deploy)
 - [ ] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
       without widgets) — including a stated dashboard answer for the new
-      cost-anomaly alert
+      cost-anomaly alert. First slice in PR #422 (two dead widgets removed,
+      freshness widget on the alarm's signal, backlog-age widget with
+      threshold line); still open for the second PR: worker-errors +
+      CH-write-failures widgets, the cost graph + stated answer, and the
+      per-decision leftovers (Galexie disk %, cost reading note, ledger
+      RATE series)
 - [ ] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
       0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
