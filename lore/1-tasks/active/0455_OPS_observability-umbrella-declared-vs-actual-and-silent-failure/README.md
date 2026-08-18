@@ -416,6 +416,47 @@ month is unanswerable by construction.
       shipped earlier)
 - [ ] **API types regenerated** — N/A, no API surface change
 
+## Carried to the follow-up PR (raised in PR #422 review, decided not to widen)
+
+1. **`alarm="ch_write_failure"` fires on non-CH failures.** `reconcile()` can
+   fail three ways (`HandlerError::S3Download`, `::Parse`, `::ClickHouse`) and
+   all three log the same alarm field, so an S3 outage or a parser bug pages as
+   "CH write failure". Coverage is total (nothing is missed) and the full error
+   Display is in the log line, so it misleads for the first minute rather than
+   blinding — but the name is a declared-vs-actual defect of exactly this
+   task's class. Options: (a) one generic `reconcile_failed` contract for every
+   terminal failure — honest, but renames a deployed metric, its filter, the
+   alarm, the guard test and three docs; (b) keep the field, add a `cause`
+   field and fix the alarm description — small diff, alarm name still lies;
+   (c) document and accept. Operator decision pending.
+2. **The NFT fetcher refuses redirects; measured 2026-08-18 whether it should.**
+   `Policy::limited(0)` is the SSRF guard, and the gateway pool was chosen in
+   0311 precisely because it answers `200` without redirecting. Re-measured:
+   for a **file** CID (the normal metadata shape) both `ipfs.io` and
+   `gateway.pinata.cloud` still answer `200` in one hop, so the pairing holds.
+   But a **directory** CID without a trailing slash answers `301` to the same
+   host + `/`, and refusing that loses the content; `dweb.link` (not in our
+   pool) redirects to a per-CID subdomain, which is the shape the guard exists
+   to stop; `cloudflare-ipfs.com` is dead, confirming the comment. Proposal:
+   mirror the SEP-1 policy — bounded hops, https-only, same registrable domain
+   as the gateway base — which recovers the trailing-slash case and still
+   blocks the subdomain/off-host shapes. Note the classification fix shipped in
+   this PR stays correct either way: once the policy follows safe redirects, an
+   `is_redirect()` error can only mean "refused as unsafe or over budget",
+   which is permanent by construction.
+3. **NFT metadata coverage is ~82%, and nothing measures it.** Measured
+   2026-08-18 on production, joining `nfts FINAL` to the deduped
+   `nft_enrichment` side table (`argMax(_, version)`): of 13 294 promoted
+   NFTs, **10 897 carry a name and 10 901 a media URL — about 2 390 have
+   neither**. (Method note for whoever picks this up: the columns on `nfts`
+   itself are vestigial NULL by design — the live indexer rewrites that row on
+   every ownership change — so a count over `nfts.name` reads 0 and means
+   nothing. This note first recorded exactly that false 0%.) The residual may
+   be entirely legitimate (contracts with no `token_uri`), but no signal
+   distinguishes "nothing to fetch" from "fetch is failing", which is defect 2
+   applied to an enrichment family. Wants its own task: first establish the
+   split, then decide whether a coverage signal is worth an alarm.
+
 ## Notes
 
 - Deliberately NOT in scope: replacing CloudWatch, dashboards, tracing coverage,
