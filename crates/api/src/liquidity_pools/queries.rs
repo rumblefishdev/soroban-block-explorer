@@ -1394,23 +1394,16 @@ pub async fn fetch_pool_transactions(
         .collect())
 }
 
-/// One activity row: an operation against the pool, with its two legs already
-/// pivoted and classified by SQL.
+/// One raw leg from `lp_operation_amounts` — the table's own grain, read in
+/// sort-key order and paired in Rust. No `GROUP BY`: see
+/// [`fetch_pool_activity`] for the measurement that removed it.
 #[derive(Debug, Row, Deserialize)]
-struct PoolActivityChRow {
+struct PoolLegChRow {
     ls: i64,
     tid: i64,
     ao: i16,
-    /// `''` when a leg is missing — see `n_a` / `n_b` below.
-    event: String,
-    raw_a: i64,
-    raw_b: i64,
-    /// Leg presence. `anyIf` over a non-nullable `Int64` yields `0` for "no
-    /// such row", which is indistinguishable from a real zero amount and
-    /// would classify a half-row as a trade. These counts are what make the
-    /// missing-leg case detectable instead of silently wrong.
-    n_a: u64,
-    n_b: u64,
+    asset_id: i64,
+    amount: i64,
 }
 
 /// Transaction-level enrichment for the activity page's DISTINCT tx keys.
@@ -1422,33 +1415,100 @@ struct ActivityTxRow {
     created_at_ms: i64,
 }
 
+/// One operation's two legs, paired out of the key-ordered leg stream.
+struct PairedOp {
+    ls: i64,
+    tid: i64,
+    ao: i16,
+    amount_a: Option<i64>,
+    amount_b: Option<i64>,
+}
+
+impl PairedOp {
+    /// `None` unless BOTH legs landed — the read stays total rather than
+    /// classifying a half-row. `anyIf`-style defaulting would have made a
+    /// missing leg read as `0` and turn a half-row into a "trade".
+    fn event(&self) -> Option<PoolEvent> {
+        match (self.amount_a, self.amount_b) {
+            (Some(a), Some(b)) => Some(PoolEvent::from_signs(a, b)),
+            _ => None,
+        }
+    }
+}
+
+/// Fold the key-ordered leg stream into operations.
+///
+/// The two legs of one operation are ADJACENT by construction: `asset_id` is
+/// the last component of the sort key, so rows sharing
+/// `(ledger_sequence, transaction_id, application_order)` are neighbours. That
+/// is the whole reason this can be a fold instead of an aggregation.
+///
+/// `truncated` means the read hit its row cap, so the final group may be
+/// missing a leg that simply did not fit — it is dropped and re-read from the
+/// previous complete key on the next window.
+fn pair_legs(rows: Vec<PoolLegChRow>, legs: (i64, i64), truncated: bool) -> Vec<PairedOp> {
+    let (asset_a, asset_b) = legs;
+    let mut out: Vec<PairedOp> = Vec::new();
+    for r in rows {
+        match out.last_mut() {
+            Some(last) if last.ls == r.ls && last.tid == r.tid && last.ao == r.ao => {
+                if r.asset_id == asset_a {
+                    last.amount_a = Some(r.amount);
+                } else if r.asset_id == asset_b {
+                    last.amount_b = Some(r.amount);
+                }
+            }
+            _ => out.push(PairedOp {
+                ls: r.ls,
+                tid: r.tid,
+                ao: r.ao,
+                amount_a: (r.asset_id == asset_a).then_some(r.amount),
+                amount_b: (r.asset_id == asset_b).then_some(r.amount),
+            }),
+        }
+    }
+    if truncated {
+        out.pop();
+    }
+    out
+}
+
 /// `GET /v1/liquidity-pools/:id/activity` — one row per (operation, pool),
 /// task 0491.
 ///
-/// **The driver changes table, and that is the whole design.**
-/// `operation_pools` is keyed `(pool_id, ledger_sequence, transaction_id)`
-/// with no `application_order`, so it cannot page per operation.
-/// `lp_operation_amounts` is keyed
+/// **The driver table is the design.** `operation_pools` is keyed
+/// `(pool_id, ledger_sequence, transaction_id)` with no `application_order`,
+/// so it cannot page per operation. `lp_operation_amounts` is keyed
 /// `(pool_id, ledger_sequence, transaction_id, application_order, asset_id)`
-/// — the page's exact grain, one PK-prefix seek, no join to reach it.
+/// — the page's exact grain, reached by one PK-prefix seek.
+///
+/// **No `GROUP BY`, and that is measured, not stylistic.** The first cut of
+/// this function pivoted the legs with `countIf`/`anyIf` and grouped by the
+/// key triple. On prod's busiest pool (1.68M leg rows) that read **2.60M rows
+/// / 109 ms / 182 MiB** to return 21 operations — a `GROUP BY` has to consume
+/// the pool's whole slice before `ORDER BY … LIMIT` can pick the newest 21.
+/// `optimize_aggregation_in_order` did not help (same rows, 253 ms). Reading
+/// the same rows in sort-key order and pairing them here is **115k rows /
+/// 9 ms / ~11 MiB** (median of 3), against **159k / 11 ms** for the
+/// per-transaction endpoint this replaces: 22× off the first cut, and
+/// slightly under the shape it supersedes.
+///
+/// Take the medians, not single runs — a cold run of EITHER shape reads
+/// 0.7–1.0M rows, so one measurement each can invert the comparison. Measured
+/// 2026-08-18 on prod; `log_comment` `lore0491-*` / `rep-*` in
+/// `system.query_log`.
+///
+/// For the record: `FINAL` was never the cost — it added 22% (2.60M → 3.17M),
+/// not an order of magnitude. It stays off because the producer is
+/// deterministic (schema header's single-writer argument), so an unmerged
+/// duplicate is byte-identical to its twin.
 ///
 /// **Known consequence: an operation with no amount rows is not listed.** The
-/// retired `/transactions` shape drove off `operation_pools`, which the
-/// indexer writes for an op that *declares* a pool whether or not the
-/// transaction succeeded; amounts are written only for value that actually
-/// moved (claim atoms for trades, the op's own `LedgerEntryChanges` for
-/// deposits/withdrawals). A failed explicit LP op therefore had a row before
-/// and has none now. This is deliberate — the page answers "what moved
-/// through this pool", a failed op moved nothing, and it narrows a known
-/// CH-vs-Horizon breadth difference rather than widening it. Reversing it
-/// would mean carrying `application_order` into `operation_pools`: a schema
-/// change plus a re-key backfill, for rows the page would then have to render
-/// with empty amounts.
-///
-/// No `FINAL`. The table is a ReplacingMergeTree whose producer is
-/// deterministic (the schema header's single-writer argument), so an
-/// unmerged duplicate is byte-identical to its twin and `anyIf` picks the
-/// same value either way. `GROUP BY` collapses them for free.
+/// indexer writes `operation_pools` for an op that *declares* a pool whether
+/// or not the transaction succeeded; amounts are written only for value that
+/// actually moved. A failed explicit LP op therefore had a row under
+/// `/transactions` and has none here — the page answers "what moved through
+/// this pool", and a failed op moved nothing.
 pub async fn fetch_pool_activity(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -1459,53 +1519,67 @@ pub async fn fetch_pool_activity(
     event: Option<PoolEvent>,
 ) -> Result<Vec<PoolActivityRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
-    let (asset_a, asset_b) = asset_ids;
 
-    // Keyset on the sort-key prefix, in WHERE so the seek still prunes — a
-    // post-GROUP BY bound would read the pool's whole history first. Bounds
-    // are i64/i16 (no injection), inlined like the other CH list paths.
-    let keyset = match cursor {
-        Some(c) => format!(
-            " AND (ledger_sequence, transaction_id, application_order) {op} ({}, {}, {})",
-            c.ledger_sequence, c.transaction_id, c.application_order
-        ),
-        None => String::new(),
-    };
+    // Where the next window resumes. `<` on the whole triple skips the last
+    // kept operation outright — both its legs share that triple, so there is
+    // no half-operation to step over.
+    let mut after: Option<(i64, i64, i16)> =
+        cursor.map(|c| (c.ledger_sequence, c.transaction_id, c.application_order));
 
-    // The filter is a HAVING on the very expression that produces `event`, so
-    // a chip and the filter that admitted its row can never disagree. The
-    // malformed `''` case matches no value on purpose.
-    let having = match event {
-        Some(e) => format!(" HAVING event = '{}'", e.as_sql()),
-        None => String::new(),
-    };
+    // Two legs per operation, plus slack so the cap rarely lands mid-op.
+    let mut window = (limit * 2 + 2).max(64);
+    let mut ops: Vec<PairedOp> = Vec::new();
 
-    let driver_sql = format!(
-        "SELECT \
-            ledger_sequence   AS ls, \
-            transaction_id    AS tid, \
-            application_order AS ao, \
-            countIf(asset_id = {asset_a}) AS n_a, \
-            countIf(asset_id = {asset_b}) AS n_b, \
-            anyIf(amount, asset_id = {asset_a}) AS raw_a, \
-            anyIf(amount, asset_id = {asset_b}) AS raw_b, \
-            multiIf(n_a = 0 OR n_b = 0, '', \
-                    raw_a > 0 AND raw_b > 0, 'deposit', \
-                    raw_a < 0 AND raw_b < 0, 'withdrawal', \
-                    'trade') AS event \
-         FROM lp_operation_amounts \
-         WHERE pool_id = toFixedString(unhex(?), 32) \
-           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
-         GROUP BY ls, tid, ao{having} \
-         ORDER BY ls {order}, tid {order}, ao {order} \
-         LIMIT {limit}"
-    );
-    let rows = client
-        .query(&driver_sql)
-        .bind(pool_id_hex)
-        .fetch_all::<PoolActivityChRow>()
-        .await?;
-    if rows.is_empty() {
+    // One pass when unfiltered (the common case). With `filter[event]` the
+    // matching rate is unknown up front — the event is only knowable once both
+    // legs are in hand — so the window doubles until the page fills or the
+    // pool runs out. Geometric growth keeps this O(log) round trips and never
+    // reads more than ~2× the span it had to cover; a linear re-poll would be
+    // the slow version of the same idea.
+    loop {
+        let keyset = match after {
+            Some((ls, tid, ao)) => format!(
+                " AND (ledger_sequence, transaction_id, application_order) {op} ({ls}, {tid}, {ao})"
+            ),
+            None => String::new(),
+        };
+        let sql = format!(
+            "SELECT \
+                ledger_sequence   AS ls, \
+                transaction_id    AS tid, \
+                application_order AS ao, \
+                asset_id          AS asset_id, \
+                amount            AS amount \
+             FROM lp_operation_amounts \
+             WHERE pool_id = toFixedString(unhex(?), 32) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
+             ORDER BY ls {order}, tid {order}, ao {order} \
+             LIMIT {window}"
+        );
+        let rows = client
+            .query(&sql)
+            .bind(pool_id_hex)
+            .fetch_all::<PoolLegChRow>()
+            .await?;
+
+        let exhausted = (rows.len() as i64) < window;
+        let batch = pair_legs(rows, asset_ids, !exhausted);
+        if let Some(last) = batch.last() {
+            after = Some((last.ls, last.tid, last.ao));
+        }
+
+        match event {
+            Some(want) => ops.extend(batch.into_iter().filter(|o| o.event() == Some(want))),
+            None => ops.extend(batch),
+        }
+
+        if exhausted || (ops.len() as i64) >= limit {
+            break;
+        }
+        window *= 2;
+    }
+    ops.truncate(limit as usize);
+    if ops.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -1515,7 +1589,7 @@ pub async fn fetch_pool_activity(
     // `(ledger_sequence, id) IN (…)` filter into a tight PK seek, same shape
     // as `common::ch::fetch_tx_list_aggregates`.
     let tx_keys: std::collections::BTreeSet<(i64, i64)> =
-        rows.iter().map(|r| (r.ls, r.tid)).collect();
+        ops.iter().map(|o| (o.ls, o.tid)).collect();
     let in_tuples = tx_keys
         .iter()
         .map(|(ls, tid)| format!("({ls},{tid})"))
@@ -1553,23 +1627,23 @@ pub async fn fetch_pool_activity(
 
     // A page row whose transaction did not resolve is DROPPED, not rendered
     // half-blank: it would have no hash to link and no timestamp to sort by.
-    // Unreachable unless the tx tables are behind the amounts table, and the
+    // Unreachable unless the tx tables lag the amounts table, and the
     // `max(sequence)` fence above already keeps the seek behind the commit
     // marker.
-    Ok(rows
+    Ok(ops
         .into_iter()
-        .filter_map(|r| {
-            let tx = by_tx.get(&r.tid)?;
+        .filter_map(|o| {
+            let tx = by_tx.get(&o.tid)?;
             let source_account = accounts.get(&tx.source_id)?.clone();
-            let complete = r.n_a > 0 && r.n_b > 0;
+            let event = o.event();
             Some(PoolActivityRow {
                 transaction_hash: tx.hash.clone(),
-                ledger_sequence: r.ls,
-                transaction_id: r.tid,
-                application_order: r.ao,
-                event: PoolEvent::from_sql(&r.event),
-                amount_a: complete.then(|| r.raw_a.to_string()),
-                amount_b: complete.then(|| r.raw_b.to_string()),
+                ledger_sequence: o.ls,
+                transaction_id: o.tid,
+                application_order: o.ao,
+                event,
+                amount_a: event.and(o.amount_a).map(|v| v.to_string()),
+                amount_b: event.and(o.amount_b).map(|v| v.to_string()),
                 source_account,
                 created_at: millis_to_utc(tx.created_at_ms),
             })

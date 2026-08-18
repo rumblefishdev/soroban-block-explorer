@@ -273,10 +273,29 @@ pub enum PoolEvent {
 }
 
 impl PoolEvent {
-    /// Map the SQL label. Empty string = the malformed-row case below, which
-    /// travels as `null` rather than being guessed into a category.
-    pub fn from_sql(label: &str) -> Option<Self> {
-        match label {
+    /// The whole classifier: the sign pair of an operation's two legs.
+    ///
+    /// Both amounts are signed from the pool's perspective, so a leg that
+    /// entered the pool is positive. Anything that is not "both in" or "both
+    /// out" moved value across the pool in opposite directions, which is a
+    /// trade — including the zero-amount edge a dust swap can produce, since
+    /// it is still not a deposit and not a withdrawal.
+    ///
+    /// Callers must only reach here with BOTH legs present; a half-row has no
+    /// event (see [`PoolActivityItem::event`]).
+    pub fn from_signs(amount_a: i64, amount_b: i64) -> Self {
+        if amount_a > 0 && amount_b > 0 {
+            Self::Deposit
+        } else if amount_a < 0 && amount_b < 0 {
+            Self::Withdrawal
+        } else {
+            Self::Trade
+        }
+    }
+
+    /// Parse a `filter[event]` value.
+    pub fn from_param(value: &str) -> Option<Self> {
+        match value {
             "trade" => Some(Self::Trade),
             "deposit" => Some(Self::Deposit),
             "withdrawal" => Some(Self::Withdrawal),
@@ -284,8 +303,10 @@ impl PoolEvent {
         }
     }
 
-    /// The SQL literal, for the `filter[event]` predicate.
-    pub fn as_sql(self) -> &'static str {
+    /// The accepted spelling, for the `allowed` list a rejection returns.
+    /// `const` so that list can be built from these three arms instead of
+    /// being retyped next to the handler and drifting from the parser.
+    pub const fn as_param(self) -> &'static str {
         match self {
             Self::Trade => "trade",
             Self::Deposit => "deposit",
@@ -298,22 +319,41 @@ impl PoolEvent {
 mod pool_event_tests {
     use super::PoolEvent;
 
-    /// `as_sql` feeds the `HAVING` and `from_sql` reads the label back off the
-    /// same column, so a drift between them would filter on one vocabulary and
-    /// render another — rows silently classified as `null` while the filter
-    /// still matched them.
+    /// The classifier itself. It used to live in SQL as a `multiIf` and could
+    /// only be checked against a live ClickHouse; in Rust it is the one thing
+    /// this endpoint gets wrong most visibly, so it gets the table.
     #[test]
-    fn sql_label_round_trips() {
-        for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
-            assert_eq!(PoolEvent::from_sql(e.as_sql()), Some(e), "{e:?}");
+    fn sign_pair_names_the_event() {
+        let cases = [
+            (120, 3, PoolEvent::Deposit),
+            (-4, -9, PoolEvent::Withdrawal),
+            (120, -4, PoolEvent::Trade),
+            (-4, 120, PoolEvent::Trade),
+        ];
+        for (a, b, want) in cases {
+            assert_eq!(PoolEvent::from_signs(a, b), want, "({a}, {b})");
         }
     }
 
-    /// The missing-leg case travels as `null`, never guessed into a category.
+    /// A zero leg is not a deposit and not a withdrawal, so it falls to trade
+    /// rather than to whichever branch happens to be first.
     #[test]
-    fn unknown_label_is_none() {
-        assert_eq!(PoolEvent::from_sql(""), None);
-        assert_eq!(PoolEvent::from_sql("swap"), None);
+    fn zero_leg_is_not_a_deposit() {
+        assert_eq!(PoolEvent::from_signs(0, 5), PoolEvent::Trade);
+        assert_eq!(PoolEvent::from_signs(0, -5), PoolEvent::Trade);
+        assert_eq!(PoolEvent::from_signs(0, 0), PoolEvent::Trade);
+    }
+
+    /// `as_param` feeds the `allowed` list a rejection returns and
+    /// `from_param` reads the caller's value back, so drift between them would
+    /// advertise a value the endpoint then refuses.
+    #[test]
+    fn filter_value_round_trips() {
+        for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
+            assert_eq!(PoolEvent::from_param(e.as_param()), Some(e), "{e:?}");
+        }
+        assert_eq!(PoolEvent::from_param("swap"), None);
+        assert_eq!(PoolEvent::from_param(""), None);
     }
 }
 

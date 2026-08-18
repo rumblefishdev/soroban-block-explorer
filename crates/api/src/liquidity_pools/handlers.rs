@@ -428,9 +428,14 @@ fn pool_tx_cursor_for(r: &PoolTxRow) -> TxListCursor {
     }
 }
 
-/// Accepted `filter[event]` values, and the `allowed` list a rejection
-/// returns. Kept next to the handler like [`ALLOWED_INTERVALS`].
-const ALLOWED_EVENTS: &[&str] = &["trade", "deposit", "withdrawal"];
+/// The `allowed` list a `filter[event]` rejection returns. Derived from the
+/// enum's own spellings rather than retyped, so it cannot advertise a value
+/// `PoolEvent::from_param` would then refuse.
+const ALLOWED_EVENTS: [&str; 3] = [
+    PoolEvent::Trade.as_param(),
+    PoolEvent::Deposit.as_param(),
+    PoolEvent::Withdrawal.as_param(),
+];
 
 /// `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
 /// (task 0491, issue #371).
@@ -496,7 +501,7 @@ pub async fn list_pool_activity(
     // this API's error envelope with the allowed list — same shape the chart's
     // `interval` returns.
     let event = match params.event.as_deref() {
-        Some(s) => match PoolEvent::from_sql(s) {
+        Some(s) => match PoolEvent::from_param(s) {
             Some(e) => Some(e),
             None => {
                 return errors::bad_request_with_details(
