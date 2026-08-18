@@ -138,6 +138,15 @@ describe('PoolActivity table', () => {
     expect(screen.queryByText('—')).not.toBeInTheDocument();
   });
 
+  /** The way back to everything has to be visible. An earlier cut used a
+   *  toggle group, where clearing meant clicking the active button again —
+   *  nothing on screen says so. */
+  it('offers an explicit way back to all events, selected by default', () => {
+    mockRows([makeRow()]);
+    renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
+    expect(screen.getByText('All events')).toBeInTheDocument();
+  });
+
   it('says the pool is empty only when no filter is narrowing it', () => {
     mockRows([]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);

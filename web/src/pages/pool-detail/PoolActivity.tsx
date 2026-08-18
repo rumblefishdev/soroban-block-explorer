@@ -2,12 +2,7 @@ import AddCircleOutline from '@mui/icons-material/AddCircleOutline';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import RemoveCircleOutline from '@mui/icons-material/RemoveCircleOutline';
 import SwapHoriz from '@mui/icons-material/SwapHoriz';
-import {
-  Stack,
-  ToggleButton,
-  ToggleButtonGroup,
-  Typography,
-} from '@mui/material';
+import { MenuItem, Select, Stack, Typography } from '@mui/material';
 import type {
   PoolActivityItem,
   PoolEvent,
@@ -65,6 +60,11 @@ const EVENT_META: Record<
 
 /** `filter[event]` values, in the order the control offers them. */
 const EVENT_FILTERS: PoolEvent[] = ['trade', 'deposit', 'withdrawal'];
+
+/** The "no filter" entry. Empty string, matching `TransactionFilters`'
+ *  `ALL_OPERATIONS` — the param is dropped from the URL rather than set to a
+ *  sentinel the API would have to understand. */
+const ALL_EVENTS = '';
 
 /** URL param holding the active filter, so a filtered view is shareable —
  *  the reporter on issue #371 pointed at stellar.expert's `?filter=trades`. */
@@ -243,11 +243,11 @@ export function PoolActivity({ poolId, pool }: PoolActivityProps) {
   // The Amount cell needs the pool's legs, so the columns close over them.
   const columns = useMemo(() => activityColumns(pool), [pool]);
 
-  const onFilter = (_: unknown, next: PoolEvent | null) => {
+  const onFilter = (next: string) => {
     setSearchParams(
       (prev) => {
         const params = new URLSearchParams(prev);
-        if (next == null) params.delete(EVENT_PARAM);
+        if (next === ALL_EVENTS) params.delete(EVENT_PARAM);
         else params.set(EVENT_PARAM, next);
         return params;
       },
@@ -255,20 +255,27 @@ export function PoolActivity({ poolId, pool }: PoolActivityProps) {
     );
   };
 
+  // A `Select` whose first entry clears the filter — the same control the
+  // transactions list and the pool list use. An earlier cut of this used a
+  // ToggleButtonGroup, which is used nowhere else as a filter and offered no
+  // visible way back to "everything": clearing meant clicking the active
+  // button a second time, which nothing on screen suggests.
   const filterControl = (
-    <ToggleButtonGroup
+    <Select
       size="small"
-      exclusive
-      value={event ?? null}
-      onChange={onFilter}
+      value={event ?? ALL_EVENTS}
+      onChange={(e) => onFilter(e.target.value)}
+      displayEmpty
       aria-label="Filter activity by event"
+      sx={{ width: { xs: '100%', sm: 220 } }}
     >
+      <MenuItem value={ALL_EVENTS}>All events</MenuItem>
       {EVENT_FILTERS.map((value) => (
-        <ToggleButton key={value} value={value}>
+        <MenuItem key={value} value={value}>
           {EVENT_META[value].label}
-        </ToggleButton>
+        </MenuItem>
       ))}
-    </ToggleButtonGroup>
+    </Select>
   );
 
   let body: ReactNode;
