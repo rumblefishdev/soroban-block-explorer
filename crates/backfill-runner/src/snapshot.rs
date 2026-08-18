@@ -35,6 +35,34 @@
 //! first means the entry was deleted and must not be resurrected by an older
 //! `LiveEntry` further down. Readers MUST honour first-wins per key.
 //!
+//! ## Validated against the reference implementation (2026-08-18)
+//!
+//! Our ordering and dedup were checked against `stellar/go`'s
+//! `ingest.NewCheckpointChangeReader` (`ingest/checkpoint_change_reader.go`),
+//! the reference reader for this artifact. Same level order (0→10, `curr`
+//! before `snap`, zero hashes skipped), same DEADENTRY-as-tombstone rule. We
+//! are deliberately MORE conservative on INITENTRY — see `stream_bucket`.
+//!
+//! - **`next` is correctly ignored.** Each manifest level also carries `next`,
+//!   the descriptor of an in-flight merge. It is not committed state: Go's
+//!   `BucketList.Hash()` folds only `curr` and `snap`. Note the live manifest
+//!   currently shows `state: 0` on every level, but historical checkpoints do
+//!   not — never infer "next is always idle" from today's file.
+//! - **Shadow buckets are not a concern.** CAP-0025 (protocol 12, 2019)
+//!   removed them; they only ever existed inside an in-flight merge, never in
+//!   a committed `curr`/`snap`. A modern reader sees a superset of the old
+//!   behaviour.
+//! - **`hotArchiveBuckets` is deliberately not read.** CAP-0062 (protocol 23)
+//!   added a second bucket list for evicted Soroban `PERSISTENT` entries. An
+//!   eviction DELETES the entry from the live bucket list, so `currentBuckets`
+//!   alone remains the authority on what is live and this reader classifies an
+//!   evicted holding as gone — correct. What the hot archive would ADD is the
+//!   ability to say "archived but restorable" instead of "gone", a display
+//!   distinction (task 0463's T8 question, resolved in our favour). It also
+//!   becomes load-bearing for anyone validating the bucket-list hash against a
+//!   ledger header: post-23 that hash is
+//!   `SHA256(liveStateBucketListHash, hotArchiveHash)`.
+//!
 //! ## Staleness contract
 //!
 //! The snapshot is correct at its checkpoint ledger and stale the moment it
@@ -180,12 +208,31 @@ where
         count += 1;
         match entry {
             // INITENTRY and LIVEENTRY both mean "this is the entry's state".
+            //
+            // `stellar/go`'s reader deliberately does NOT record INITENTRY keys
+            // in its seen-set, leaning on the CAP-0020 invariant that an
+            // INITENTRY implies no older entry for that key survives. That is a
+            // MEMORY optimisation resting on an invariant, not a correctness
+            // rule. Treating both alike is strictly more conservative and stays
+            // right even if the invariant is ever violated — do not "fix" this
+            // to match Go.
             BucketEntry::Liveentry(e) | BucketEntry::Initentry(e) => {
                 f(SnapshotRecord::Live(Box::new(e)))?;
             }
+            // A tombstone. Seen first for a key it means deleted, and an older
+            // LIVEENTRY below must not resurrect it — same rule `stellar/go`
+            // implements with its `visitedLedgerKeys` set.
             BucketEntry::Deadentry(k) => f(SnapshotRecord::Dead(Box::new(k)))?,
             // Bucket metadata carries the protocol version, not ledger state.
-            BucketEntry::Metaentry(_) => {}
+            // It is REQUIRED to be the first record; anywhere else means we are
+            // not reading what we think we are, so fail rather than skip.
+            BucketEntry::Metaentry(_) => {
+                if count != 1 {
+                    return Err(BackfillError::Incomplete(format!(
+                        "METAENTRY at record {count}, expected only at record 1 —                          bucket format is not what this reader assumes"
+                    )));
+                }
+            }
         }
     }
     Ok(count)

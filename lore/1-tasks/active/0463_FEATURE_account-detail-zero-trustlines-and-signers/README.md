@@ -250,6 +250,39 @@ balances, never trustlines — so native measures complete while classic misses
   durable artifacts are `manifest.json` (checkpoint + 21 bucket hashes —
   re-derives the exact snapshot), `summary.txt`, `ghosts.tsv`.
 
+### Library audit 2026-08-18 — what upstream already does, and what it does not
+
+Checked our hand-rolled pieces against the ecosystem (Karol's standing
+prefer-the-official-library rule) rather than assuming:
+
+- **Dedup + ordering VALIDATED against the reference implementation.**
+  `stellar/go`'s `ingest.NewCheckpointChangeReader` uses the same level order
+  (0→10, `curr` before `snap`) and the same DEADENTRY-as-tombstone rule. On
+  INITENTRY we are deliberately MORE conservative: Go skips recording those
+  keys, leaning on the CAP-0020 invariant as a memory optimisation. Recorded in
+  the module docs as "do not fix this to match Go".
+- **No Rust equivalent exists** for bucket decoding or state reconstruction.
+  SDF's `stellar-archivist` (rs-stellar-archivist, first release 2025-07) does
+  cover manifest parsing, bucket-URL layout and checkpoint math — but it never
+  decodes a bucket (`grep -c BucketEntry src/` = 0). Adoption is a judgement
+  call on a 4-star, ~23-download crate whose default features pull five cloud
+  backends; our three small functions are byte-for-byte equivalent to its
+  `history_format` module. Left as-is, documented, revisit in 0502.
+- **`next` correctly ignored** — Go's `BucketList.Hash()` folds only `curr` and
+  `snap`, so `next` (an in-flight merge) is by definition not committed state.
+  Caveat recorded: today's manifest shows `state: 0` everywhere, but historical
+  checkpoints do not — do not infer the field is always idle.
+- **Shadow buckets are a non-issue** — CAP-0025 removed them in protocol 12 and
+  they never appeared in a committed `curr`/`snap`.
+- **`hotArchiveBuckets` (CAP-0062, protocol 23) resolved T8 in our favour** —
+  eviction DELETES the entry from the live bucket list, so `currentBuckets` is
+  the authority on liveness and classifying an evicted holding as gone is
+  correct. The archived-but-restorable distinction is a display question, not a
+  correctness one. Future constraint: post-23 the header bucket-list hash is
+  `SHA256(live, hotArchive)` — hash verification must fold both.
+- Hardening applied: METAENTRY is now required at record 1 (Go errors on this
+  too) instead of being silently skipped anywhere.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from
