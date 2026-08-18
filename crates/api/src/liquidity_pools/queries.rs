@@ -1079,6 +1079,16 @@ struct ActivityTxRow {
     created_at_ms: i64,
 }
 
+/// The operation's own source account, `None` when it declares none (the XDR
+/// default: the transaction's source).
+#[derive(Debug, Row, Deserialize)]
+struct OpSourceChRow {
+    ls: i64,
+    tid: i64,
+    ao: i16,
+    source_id: Option<i64>,
+}
+
 /// One operation's two legs, paired out of the key-ordered leg stream.
 struct PairedOp {
     ls: i64,
@@ -1285,9 +1295,47 @@ pub async fn fetch_pool_activity(
         .await?;
     let by_tx: HashMap<i64, &ActivityTxRow> = txs.iter().map(|t| (t.id, t)).collect();
 
+    // The OPERATION's own source account. A Stellar operation may declare one,
+    // and then it — not the transaction's source — is who performed this
+    // operation; `operations_appearances.source_id` is NULL when it does not,
+    // which per the XDR means "same as the transaction's". Showing the
+    // transaction's source on a per-operation row names the wrong account
+    // whenever they differ (measured on prod: 41% of ops in a recent ledger
+    // window declare their own, and stellar.expert shows that one).
+    //
+    // `(ledger_sequence, transaction_id, application_order)` IS this table's
+    // sort key, so the page's bounded IN-list is a PK seek with the same
+    // partition prune. `max()` rather than `LIMIT 1 BY`: the table holds one
+    // row per APPEARANCE, so an operation has several, and aggregation skips
+    // the NULLs instead of picking one arbitrarily.
+    let op_sources_sql = format!(
+        "SELECT \
+            ledger_sequence   AS ls, \
+            transaction_id    AS tid, \
+            application_order AS ao, \
+            max(source_id)    AS source_id \
+         FROM operations_appearances \
+         WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
+           AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+         GROUP BY ls, tid, ao"
+    );
+    let op_sources = client
+        .query(&op_sources_sql)
+        .fetch_all::<OpSourceChRow>()
+        .await?;
+    let by_op: HashMap<(i64, i64, i16), i64> = op_sources
+        .iter()
+        .filter_map(|r| r.source_id.map(|id| ((r.ls, r.tid, r.ao), id)))
+        .collect();
+
     // Source StrKeys by surrogate id (bloom seek) rather than a whole-
-    // `accounts` INNER JOIN — task 0354.
-    let accounts = resolve_accounts(client, txs.iter().map(|t| t.source_id).collect()).await?;
+    // `accounts` INNER JOIN — task 0354. One resolve for both kinds of source.
+    let account_ids = txs
+        .iter()
+        .map(|t| t.source_id)
+        .chain(by_op.values().copied())
+        .collect();
+    let accounts = resolve_accounts(client, account_ids).await?;
 
     // A page row whose transaction did not resolve is DROPPED, not rendered
     // half-blank: it would have no hash to link and no timestamp to sort by.
@@ -1298,7 +1346,13 @@ pub async fn fetch_pool_activity(
         .into_iter()
         .filter_map(|o| {
             let tx = by_tx.get(&o.tid)?;
-            let source_account = accounts.get(&tx.source_id)?.clone();
+            // The operation's own source, falling back to the transaction's —
+            // which is what the XDR's absent `sourceAccount` means.
+            let source_id = by_op
+                .get(&(o.ls, o.tid, o.ao))
+                .copied()
+                .unwrap_or(tx.source_id);
+            let source_account = accounts.get(&source_id)?.clone();
             let event = o.event();
             Some(PoolActivityRow {
                 transaction_hash: tx.hash.clone(),

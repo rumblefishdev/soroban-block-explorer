@@ -373,6 +373,14 @@ pub struct PoolActivityItem {
     /// `null` on both legs in the malformed case above.
     pub amount_a: Option<String>,
     pub amount_b: Option<String>,
+    /// Who performed THIS OPERATION — the operation's own source account when
+    /// it declares one, otherwise the transaction's, which is what an absent
+    /// `Operation.sourceAccount` means in the XDR.
+    ///
+    /// Not simply the transaction's source: on a per-operation row that names
+    /// the wrong account whenever the two differ, which on prod is 41% of
+    /// operations in a recent ledger window. The retired `/transactions` shape
+    /// could only ever carry the transaction's, since its row WAS one.
     pub source_account: String,
     pub created_at: DateTime<Utc>,
 }

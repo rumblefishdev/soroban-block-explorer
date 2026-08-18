@@ -4145,7 +4145,8 @@
                   "format": "int64"
                 },
                 "source_account": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Who performed THIS OPERATION — the operation's own source account when\nit declares one, otherwise the transaction's, which is what an absent\n`Operation.sourceAccount` means in the XDR.\n\nNot simply the transaction's source: on a per-operation row that names\nthe wrong account whenever the two differ, which on prod is 41% of\noperations in a recent ledger window. The retired `/transactions` shape\ncould only ever carry the transaction's, since its row WAS one."
                 },
                 "transaction_hash": {
                   "type": "string",
@@ -4406,7 +4407,8 @@
             "format": "int64"
           },
           "source_account": {
-            "type": "string"
+            "type": "string",
+            "description": "Who performed THIS OPERATION — the operation's own source account when\nit declares one, otherwise the transaction's, which is what an absent\n`Operation.sourceAccount` means in the XDR.\n\nNot simply the transaction's source: on a per-operation row that names\nthe wrong account whenever the two differ, which on prod is 41% of\noperations in a recent ledger window. The retired `/transactions` shape\ncould only ever carry the transaction's, since its row WAS one."
           },
           "transaction_hash": {
             "type": "string",

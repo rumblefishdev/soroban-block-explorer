@@ -106,5 +106,32 @@ WHERE (t.ledger_sequence, t.id) IN ((58123456, 991), (58123455, 990))
   AND intDiv(t.ledger_sequence, 500000) IN (116)
 LIMIT 1 BY t.id;
 
--- STEP 3 — source StrKeys by surrogate id (bloom seek), NOT a whole-`accounts`
--- INNER JOIN (task 0354). `common::ch::resolve_accounts`.
+-- STEP 3 — the OPERATION's own source account.
+--
+-- ⚠️  NOT the transaction's. A Stellar operation may declare its own source,
+--     and then it is who performed this operation; `source_id` is NULL when it
+--     declares none, which per the XDR means "the transaction's". On a
+--     per-operation row the transaction's source is simply the wrong account
+--     whenever the two differ — measured on prod, 41% of operations in a
+--     recent ledger window declare their own, and stellar.expert shows that
+--     one. The retired endpoint 20 could only carry the transaction's, because
+--     its row WAS a transaction.
+--
+-- `(ledger_sequence, transaction_id, application_order)` IS this table's sort
+-- key, so the bounded IN-list is a PK seek with the same partition prune.
+-- `max()` rather than `LIMIT 1 BY`: the table holds one row per APPEARANCE, so
+-- an operation has several, and aggregation skips the NULLs instead of picking
+-- a row arbitrarily.
+SELECT
+    ledger_sequence   AS ls,
+    transaction_id    AS tid,
+    application_order AS ao,
+    max(source_id)    AS source_id
+FROM operations_appearances
+WHERE (ledger_sequence, transaction_id) IN ((58123456, 991), (58123455, 990))
+  AND intDiv(ledger_sequence, 500000) IN (116)
+GROUP BY ls, tid, ao;
+
+-- STEP 4 — source StrKeys by surrogate id (bloom seek), NOT a whole-`accounts`
+-- INNER JOIN (task 0354). `common::ch::resolve_accounts`, one call for both
+-- the operation sources above and the transaction sources from STEP 2.

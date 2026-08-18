@@ -1609,6 +1609,16 @@ export type PaginatedPoolActivityItem = {
     created_at: string;
     event?: null | PoolEvent;
     ledger_sequence: number;
+    /**
+     * Who performed THIS OPERATION — the operation's own source account when
+     * it declares one, otherwise the transaction's, which is what an absent
+     * `Operation.sourceAccount` means in the XDR.
+     *
+     * Not simply the transaction's source: on a per-operation row that names
+     * the wrong account whenever the two differ, which on prod is 41% of
+     * operations in a recent ledger window. The retired `/transactions` shape
+     * could only ever carry the transaction's, since its row WAS one.
+     */
     source_account: string;
     /**
      * Transaction hash (64-char lowercase hex). NOT unique across rows — a
@@ -1809,6 +1819,16 @@ export type PoolActivityItem = {
   created_at: string;
   event?: null | PoolEvent;
   ledger_sequence: number;
+  /**
+   * Who performed THIS OPERATION — the operation's own source account when
+   * it declares one, otherwise the transaction's, which is what an absent
+   * `Operation.sourceAccount` means in the XDR.
+   *
+   * Not simply the transaction's source: on a per-operation row that names
+   * the wrong account whenever the two differ, which on prod is 41% of
+   * operations in a recent ledger window. The retired `/transactions` shape
+   * could only ever carry the transaction's, since its row WAS one.
+   */
   source_account: string;
   /**
    * Transaction hash (64-char lowercase hex). NOT unique across rows — a
