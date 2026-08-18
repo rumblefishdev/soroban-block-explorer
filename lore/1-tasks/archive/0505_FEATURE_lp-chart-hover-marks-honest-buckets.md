@@ -2,7 +2,7 @@
 id: '0505'
 title: 'LP chart polish: hover-only marks + honest end-of-bucket TVL stamping'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0199', '0356']
 tags: ['frontend', 'charts', 'effort-small']
@@ -19,6 +19,15 @@ history:
       Implemented + verified in browser against prod API (dev proxy): marks
       hidden with hover dot intact, 1Y cliff moved Aug 10 → Aug 17. 278 web
       tests green (+4 new on toChartPoints). PR pending.
+  - date: 2026-08-18
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      All 6 acceptance criteria met (2 N/A by scope: no docs/architecture
+      shape change, no API surface change). 4 files touched + 1 new test
+      file, 4 new tests. Key decisions: bucket-end stamping on the frontend
+      rather than a new API field; PERIOD_CONFIG as the single source for
+      interval + bucket width. Archived with the implementation PR.
 ---
 
 # LP chart polish: hover-only marks + honest end-of-bucket TVL stamping
@@ -33,9 +42,10 @@ state) at the bucket **start**, so with `stepAfter` a weekly drop renders up
 to a week earlier than it happened — stamp TVL points at bucket end instead
 (last point clamped to now).
 
-## Status: Active
+## Status: Completed
 
-**Current state:** Implemented + browser-verified; PR pending.
+**Current state:** Implemented, browser-verified against the prod API, and
+shipped on `feat/0505_lp-chart-hover-marks-honest-buckets`.
 
 ## Context
 
