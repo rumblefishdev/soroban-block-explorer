@@ -1,5 +1,26 @@
 # API Gateway stage cache — specification
 
+> **Status: NOT ADOPTED — decision 2026-08-14 (task 0455).** The stage cache
+> has never been enabled: `apiGatewayCacheEnabled` is `false` in
+> `infra/envs/production.json` and the live stage reports
+> `cacheClusterEnabled: false` (verified read-only the same day). The 0097
+> intent "enable before launch" predates Cloudflare fronting the API
+> (task 0277) and was overtaken by it. What actually caches today: the
+> per-endpoint `Cache-Control` tiers below in every user's **browser**, and
+> the **in-process moka caches** for contract detail (45 s) and network
+> stats (60 s) — Cloudflare proxies but does not cache
+> (`cf-cache-status: DYNAMIC`, no cache rules in `infra/cloudflare/`).
+> A dedicated Memcached cluster is a standing cost serving a need nothing
+> has measured.
+>
+> **Return condition:** measured origin pressure — ClickHouse read-quota
+> incidents on cacheable endpoints, or API latency the moka layer cannot
+> absorb. If that day comes, the preferred lever is a **Cloudflare cache
+> rule honouring these origin headers** (zero AWS cost, shared edge cache,
+> the backend contract below already exists for it), not this cluster.
+> The spec is retained because the `Cache-Control` contract it defines is
+> live and load-bearing either way.
+
 Spec for the CDK API Gateway stage cache that consumes the `Cache-Control`
 headers set by the axum backend (task 0055). Implementation lives in CDK
 task 0097.

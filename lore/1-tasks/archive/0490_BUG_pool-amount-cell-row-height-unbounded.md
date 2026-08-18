@@ -2,12 +2,15 @@
 id: '0490'
 title: 'BUG: the pool Amount cell grows without bound and its Event chip names no line'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0279', '0489', '0491']
 tags: [frontend, layer-frontend-pages, priority-medium, effort-small]
-links:
-  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/371'
+# Deliberately NOT linked to issue #371. This is our own debt from how 0279
+# shaped the cell, not something the reporter asked for — and `/issues` will
+# not close a bundled issue until every linked task ships, so linking it would
+# hold #371 hostage to cosmetics that 0491 may delete unbuilt.
+links: []
 history:
   - date: '2026-08-17'
     status: backlog
@@ -18,6 +21,17 @@ history:
       scoped to the row-height cap only — the structural answer (one row per
       operation) is 0491, and doing both here would pull the API change
       forward for no gain.
+  - date: '2026-08-18'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Superseded by 0491, exactly as this task's own Implementation section
+      predicted ("if 0491 lands first, this task is likely moot"). Never
+      implemented: the stacking Amount cell it meant to cap was deleted whole
+      when the row unit became one operation, so there is no cap to remove and
+      no unreachable code to carry. The one criterion that survived the row-
+      unit change — the column holds the two-leg `A → B` form without wrapping
+      — was carried into 0491 and verified live at width 320.
 ---
 
 # The pool Amount cell grows without bound

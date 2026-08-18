@@ -2139,19 +2139,24 @@ fn tx_has_soroban_map(operations: &[(String, Vec<ExtractedOperation>)]) -> HashM
         .collect()
 }
 
-struct OpTyped {
-    destination: Option<String>,
-    contract_id: Option<String>,
-    asset_code: Option<String>,
-    asset_issuer: Option<String>,
+/// Canonical per-type projection of an operation's identity fields from its
+/// `details` JSON. Public because `audit-harness` (operations-order-diff)
+/// projects the SAME identity when diffing DB order against archive XDR —
+/// it previously kept a hand-maintained copy, which drifted (task 0455,
+/// finding 9); sharing the one implementation makes drift inexpressible.
+pub struct OpTyped {
+    pub destination: Option<String>,
+    pub contract_id: Option<String>,
+    pub asset_code: Option<String>,
+    pub asset_issuer: Option<String>,
     /// Liquidity pools touched by the op. Single-element for LP
     /// deposit/withdraw; the full crossed-pool list (from result claim
     /// atoms) for path payments; empty otherwise. Task 0261 / 0268.
-    pool_ids_hex: Vec<String>,
+    pub pool_ids_hex: Vec<String>,
 }
 
 impl OpTyped {
-    fn from_details(op_type: OperationType, details: &Value) -> Self {
+    pub fn from_details(op_type: OperationType, details: &Value) -> Self {
         let mut out = Self {
             destination: None,
             contract_id: None,
@@ -2222,7 +2227,36 @@ impl OpTyped {
             OperationType::BeginSponsoringFutureReserves => {
                 out.destination = str_field(details, "sponsoredId");
             }
-            _ => {}
+            // Deliberately no identity fields beyond `source`. Exhaustive on
+            // purpose (no `_` arm): a protocol bump that adds an operation
+            // type must fail compilation here and force a decision, instead
+            // of silently projecting an empty identity (task 0455; same
+            // total-function posture as 0434). Offers can still touch pools —
+            // that identity arrives via the `poolIds` fallback below.
+            //
+            // Audited per-arm (2026-08-06): none of these drop data, because
+            // this struct was never the only channel. Offer selling/buying
+            // pairs and claimable-balance assets go through
+            // `xdr_parser::asset_appearances` → `operation_asset_appearances`
+            // (a single asset_code column cannot hold a two-asset op);
+            // CB claimants, inflationDest and revoke-sponsorship targets go
+            // through `xdr_parser::op_participants` (the single op-side
+            // participant source). `balanceId`/`offerId` are entity ids,
+            // consistently not identity dimensions.
+            OperationType::ManageSellOffer
+            | OperationType::CreatePassiveSellOffer
+            | OperationType::SetOptions
+            | OperationType::Inflation
+            | OperationType::ManageData
+            | OperationType::BumpSequence
+            | OperationType::ManageBuyOffer
+            | OperationType::CreateClaimableBalance
+            | OperationType::ClaimClaimableBalance
+            | OperationType::EndSponsoringFutureReserves
+            | OperationType::RevokeSponsorship
+            | OperationType::ClawbackClaimableBalance
+            | OperationType::ExtendFootprintTtl
+            | OperationType::RestoreFootprint => {}
         }
         // `poolIds` (path payments + offers crossing an LP — task 0261) is
         // present on any op whose result carried claim atoms, regardless of op

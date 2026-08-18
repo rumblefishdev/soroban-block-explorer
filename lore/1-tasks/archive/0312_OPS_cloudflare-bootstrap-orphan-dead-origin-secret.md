@@ -2,7 +2,7 @@
 id: '0312'
 title: 'OPS: deploy CloudflareBootstrap slim-down — orphan the dead OriginSecret (0277 leftover)'
 type: OPS
-status: backlog
+status: completed
 related_adr: ['0048']
 related_tasks: ['0277', '0291']
 tags: ['infra', 'cloudflare', 'cdk', 'cleanup', 'phase-future', 'priority-low']
@@ -32,6 +32,22 @@ history:
       of drift before someone runs `--all` by accident. Note also that
       `cdk diff` hides entries containing non-ASCII characters unless `--strict`
       is passed, so a diff read without it is not a complete diff.
+  - date: 2026-08-10
+    status: completed
+    who: karolkow
+    note: >
+      Deployed with `--exclusively` from a clean checkout (the flag matters:
+      this stack has no dependencies, but the habit is what stops a repeat of
+      the incident where a per-stack deploy dragged in a dependency's
+      half-finished change). Verified after: stack UPDATE_COMPLETE, the secret
+      dropped from stack resources, the physical secret intact in Secrets
+      Manager (Retain), TF-state bucket untouched, API still 401s a raw
+      request. Two earlier attempts never reached CloudFormation - the first
+      was run from the home directory and died on `cd: no such file or
+      directory`, which the stack's event history confirmed (no events since
+      creation in June). Production diff is now clean, so the confirmation
+      prompt added to `make deploy-production` under 0455 has a meaningful
+      baseline: a non-empty diff means something new.
 ---
 
 # Deploy CloudflareBootstrap slim-down — orphan the dead OriginSecret
@@ -82,9 +98,15 @@ that commit, so the deployed stack still manages the now-dead secret.
 
 ## Acceptance Criteria
 
-- [ ] `cdk diff` on `Explorer-production-CloudflareBootstrap` is clean (no
-      pending OriginSecret orphan), OR the diff is formally accepted +
-      documented as a permanent no-op.
-- [ ] Edge-auth verified intact after any deploy (API still rejects requests
-      without `X-Edge-Secret`).
-- [ ] No other stack depends on the orphaned `OriginSecret`.
+- [x] `cdk diff` on `Explorer-production-CloudflareBootstrap` is clean —
+      deployed 2026-08-10, stack now UPDATE_COMPLETE with only CDKMetadata,
+      the TF-state bucket and its policy; the `OriginSecretName` output is
+      gone.
+- [x] Edge-auth verified intact after the deploy — a raw request to the API
+      still answers `401 authentication required` (it reads Compute's
+      `EdgeSecret`, a different resource).
+- [x] No other stack depends on the orphaned `OriginSecret` — verified before
+      the deploy from the deployed template (`DeletionPolicy: Retain`) and
+      CloudTrail: the secret's entire access history is `DescribeSecret` calls
+      by humans, never a `GetSecretValue`, and `enableOriginSecretLock` is
+      false in production. The physical secret survives, unmanaged.

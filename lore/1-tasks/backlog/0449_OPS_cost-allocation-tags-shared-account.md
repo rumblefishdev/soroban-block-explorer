@@ -15,6 +15,99 @@ history:
       Spawned from the July cost investigation, which took several hours mostly
       because no cost figure in the account can be attributed to a project
       without reverse-engineering it from CloudWatch and the database.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Tag inventory measured on our side: all stacks emit
+      Project=soroban-block-explorer, Environment=production, ManagedBy=cdk.
+      The co-tenant project's tag status is unverified - the read-only
+      tagging-API call is outside the assistant's allowlist, needs an
+      operator run of resourcegroupstaggingapi get-resources. Activation of
+      the Project cost-allocation tag in Billing is risk-free (reporting
+      metadata only, touches no resources) and non-retroactive, so worth
+      doing immediately even before the co-tenant aligns; untagged resources
+      land in the "no tag key" bucket.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Two blockers dissolved by measurement (read-only). (1) The co-tenant
+      ALREADY tags consistently: sampled prices-* Lambdas all carry
+      Project=stellar-prices-api with the same Environment/ManagedBy keys as
+      ours - the "agree the key with its owners" step is de facto done.
+      (2) The empty Cost-allocation-tags page mystery: account 750702271865
+      is a MEMBER of AWS Organization o-gj0pr49dpf; the management (payer)
+      account is 045028348791 (invoices@rumblefish.pl), and cost allocation
+      tags can only be activated THERE. Action re-routed: ask the management
+      account owner to activate the Project tag (Billing -> Cost allocation
+      tags -> User-defined -> Project -> Activate). Activation is
+      non-retroactive - every day unactivated is a day of history that stays
+      unattributable (the July investigation cost a full day for exactly
+      this reason).
+  - date: 2026-08-10
+    status: backlog
+    who: karolkow
+    note: >
+      Big day for this task. (1) Tag ACTIVATED by the management-account
+      owner, verified from CE: Cost Explorer groups by Project with real
+      values; a historical backfill was reportedly requested too (mgmt-side
+      feature; applies tags resources carried at usage time, so Galexie
+      tasks stay unattributed historically). (2) Untagged bucket broken
+      down: ~84% of account spend, of which ~74% is Galexie Fargate - ECS
+      does not propagate service tags to tasks; FIXED in CDK
+      (propagateTags: SERVICE, commit 78bcf735), forward-only. (3) Cost
+      Anomaly Detection added (commit 29dbf9a1): per-SERVICE monitor over
+      the whole account + IMMEDIATE subscription onto the alarm topic +
+      costalerts.amazonaws.com topic-policy grant; threshold in config,
+      set to 3 USD cumulative-per-anomaly after discussion. Measured
+      before adding: the account had ZERO anomaly monitors and ZERO
+      budgets. (4) Residual untagged after the fix ~0.6 USD/day:
+      inherently untaggable (public IPv4, X-Ray, CW metrics) plus
+      hand-provisioned secrets (8 ours: mtls/*, ca/key, operator/env,
+      ops/deploy-ssh-key; 2 prices') - one-time tag-resource commands for
+      the operator. (5) The "RDS" line in the untagged bucket is OURS,
+      not the co-tenant's: two manual snapshots of the retired staging
+      Postgres in us-east-1 (20+40 GB, Apr/May 2026) billing
+      ChargedBackupUsage - staging retired by 0249, PG by 0243/0244;
+      deletion commands handed to the operator (irreversible, data
+      worthless by construction). (6) Runbook docs/runbooks/costs.md
+      added: per-project view, untagged-remainder view, how to read an
+      anomaly alert, stated non-coverage (Hetzner invoice, management
+      account, slow creep until Budgets land). Remaining here: per-project
+      Budgets with forecast alerts after ~a week of honestly-attributed
+      data, and the second anomaly subscription for the co-tenant's
+      channel if they want one.
+  - date: 2026-08-10
+    status: backlog
+    who: karolkow
+    note: >
+      Operator pass executed and verified the same day. (1) Both retired
+      staging-Postgres snapshots in us-east-1 deleted - describe-db-snapshots
+      now returns zero; the RDS billing line should hit 0 within ~2 days.
+      Safe by written policy: 0249 retained them as 30-day last-resort
+      insurance, expired since May/June, restore-share lists empty. (2) All
+      8 hand-provisioned secrets tagged
+      (Project/Environment/ManagedBy=manual), verified 13/15 secrets in the
+      account now carry Project - the remaining 2 are the co-tenant's
+      (prices/production/clickhouse-mtls-*), theirs to tag. Gotcha for the
+      runbook: the operator's admin session defaults to us-east-1, so
+      Secrets Manager calls need an explicit --region eu-central-1 (the
+      first tagging pass bounced off ResourceNotFound harmlessly). Durable
+      fix still owed: the 0227 provisioning path should tag at creation so
+      future hand-made secrets do not reopen the gap.
+  - date: 2026-08-10
+    status: backlog
+    who: karolkow
+    note: >
+      Decision: per-project AWS Budgets are DROPPED, not deferred. What is
+      already in place suffices - attribution is one Cost Explorer view,
+      step changes are covered by account-wide Cost Anomaly Detection, and
+      a second alerting mechanism for two people is exactly the
+      per-component-notifier growth ADR 0054 exists to stop. The
+      slow-creep gap Budgets would have covered is accepted and named in
+      docs/runbooks/costs.md. This closes the last open scope item; the
+      task archives once the anomaly-detection deploy is verified.
 ---
 
 # The AWS account bills two projects as one
@@ -94,7 +187,9 @@ the quantity as well as the amount.
 - [ ] `ce get-cost-and-usage --group-by TAG` returns a per-project split with no
       material spend in the untagged bucket
 - [ ] `docs/deployment.md` states the requirement for new stacks
-- [ ] A per-tag budget or anomaly monitor exists and routes to the Slack topic
+- [ ] An anomaly monitor exists and routes to the Slack topic (per-tag
+      Budgets dropped 2026-08-10 — see history; anomaly detection committed,
+      checks off after deploy)
       already used by the production alarms
 - [ ] The alert is verified by a deliberate test, not assumed to work
 

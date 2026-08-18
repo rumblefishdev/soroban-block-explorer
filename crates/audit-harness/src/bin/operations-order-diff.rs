@@ -40,7 +40,6 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use domain::OperationType;
 use serde::Serialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
@@ -214,7 +213,11 @@ struct OpIdentity {
     contract_id: Option<String>,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
-    pool_id_hex: Option<String>,
+    /// Multi-pool since 0261/0268 (path payments crossing LPs). The retired
+    /// PG schema this binary still reads stores a single pool per row; the
+    /// DB side wraps it into a 0/1-element list until the 0361 CH port
+    /// re-expresses the query against the multi-pool appearance rows.
+    pool_ids_hex: Vec<String>,
 }
 
 impl OpIdentity {
@@ -245,10 +248,18 @@ impl OpIdentity {
                 .as_deref()
                 .map(|s| format!(" cid={}", short(s)))
                 .unwrap_or_default(),
-            self.pool_id_hex
-                .as_deref()
-                .map(|s| format!(" pool={}", short(s)))
-                .unwrap_or_default(),
+            if self.pool_ids_hex.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " pools={}",
+                    self.pool_ids_hex
+                        .iter()
+                        .map(|s| short(s))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            },
         )
     }
 }
@@ -528,8 +539,14 @@ fn extract_xdr_order(
     Ok(order)
 }
 
+/// XDR-side identity projection. Uses the PRODUCTION extractor
+/// (`db_clickhouse::persist::stage::OpTyped`) directly — this binary
+/// previously carried a hand-maintained copy "kept in lockstep", which
+/// drifted (single pool vs the multi-pool `poolIds` extraction added in
+/// 0261/0268, task 0455 finding 9). One implementation, no lockstep to
+/// maintain.
 fn identity_from_extracted(op: &ExtractedOperation) -> OpIdentity {
-    let typed = OpTypedAudit::from_details(op.op_type, &op.details);
+    let typed = db_clickhouse::persist::stage::OpTyped::from_details(op.op_type, &op.details);
     OpIdentity {
         op_type: op.op_type as i16,
         source: op.source_account.clone(),
@@ -537,101 +554,7 @@ fn identity_from_extracted(op: &ExtractedOperation) -> OpIdentity {
         contract_id: typed.contract_id,
         asset_code: typed.asset_code,
         asset_issuer: typed.asset_issuer,
-        pool_id_hex: typed.pool_id_hex,
-    }
-}
-
-/// Mirrors `OpTyped::from_details` from `crates/indexer/src/handler/persist/staging.rs`.
-/// Kept in lockstep so the audit projection matches the DB UNIQUE constraint
-/// (`uq_ops_app_identity`) byte-for-byte. If staging.rs evolves to extract
-/// extra identity fields, update this struct too.
-#[derive(Default)]
-struct OpTypedAudit {
-    destination: Option<String>,
-    contract_id: Option<String>,
-    asset_code: Option<String>,
-    asset_issuer: Option<String>,
-    pool_id_hex: Option<String>,
-}
-
-impl OpTypedAudit {
-    fn from_details(op_type: OperationType, details: &Value) -> Self {
-        let mut out = Self::default();
-        match op_type {
-            OperationType::CreateAccount | OperationType::AccountMerge => {
-                out.destination = str_field(details, "destination");
-            }
-            OperationType::Payment => {
-                out.destination = str_field(details, "destination");
-                let (code, issuer) = split_asset_ref(details.get("asset"));
-                out.asset_code = code;
-                out.asset_issuer = issuer;
-            }
-            OperationType::PathPaymentStrictReceive | OperationType::PathPaymentStrictSend => {
-                out.destination = str_field(details, "destination");
-                let (code, issuer) = split_asset_ref(details.get("destAsset"));
-                out.asset_code = code;
-                out.asset_issuer = issuer;
-            }
-            OperationType::Clawback => {
-                out.destination = str_field(details, "from");
-                let (code, issuer) = split_asset_ref(details.get("asset"));
-                out.asset_code = code;
-                out.asset_issuer = issuer;
-            }
-            OperationType::LiquidityPoolDeposit | OperationType::LiquidityPoolWithdraw => {
-                out.pool_id_hex = str_field(details, "liquidityPoolId");
-            }
-            OperationType::InvokeHostFunction => {
-                out.contract_id = str_field(details, "contractId");
-            }
-            OperationType::ChangeTrust => {
-                let (code, issuer) = split_asset_ref(details.get("asset"));
-                out.asset_code = code;
-                out.asset_issuer = issuer;
-            }
-            OperationType::SetTrustLineFlags => {
-                out.destination = str_field(details, "trustor");
-                let (code, issuer) = split_asset_ref(details.get("asset"));
-                out.asset_code = code;
-                out.asset_issuer = issuer;
-            }
-            OperationType::AllowTrust => {
-                out.destination = str_field(details, "trustor");
-                if let Some(asset) = details.get("asset")
-                    && let Some(code) = asset.as_str()
-                {
-                    out.asset_code = Some(code.to_string());
-                }
-            }
-            OperationType::BeginSponsoringFutureReserves => {
-                out.destination = str_field(details, "sponsoredId");
-            }
-            _ => {}
-        }
-        out
-    }
-}
-
-fn str_field(obj: &Value, field: &str) -> Option<String> {
-    obj.get(field)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn split_asset_ref(asset: Option<&Value>) -> (Option<String>, Option<String>) {
-    let Some(s) = asset.and_then(Value::as_str) else {
-        return (None, None);
-    };
-    if s == "native" {
-        return (None, None);
-    }
-    match s.split_once(':') {
-        Some((code, issuer)) if !code.is_empty() && !issuer.is_empty() => {
-            (Some(code.to_string()), Some(issuer.to_string()))
-        }
-        _ => (None, None),
+        pool_ids_hex: typed.pool_ids_hex,
     }
 }
 
@@ -670,7 +593,11 @@ async fn fetch_db_order(
             contract_id: r.get("contract_id"),
             asset_code: r.get("asset_code"),
             asset_issuer: r.get("asset_issuer"),
-            pool_id_hex: r.get("pool_id_hex"),
+            // PG rows carry at most one pool; see OpIdentity.pool_ids_hex.
+            pool_ids_hex: r
+                .get::<Option<String>, _>("pool_id_hex")
+                .into_iter()
+                .collect(),
         })
         .collect())
 }

@@ -16,7 +16,10 @@ tags:
 milestone: 2
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/367'
-  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/371'
+  # #371 dropped 2026-08-17 — the ownership overlap this task recorded as open
+  # was settled by events, not by argument: 0279 shipped the per-tx amounts
+  # that were this task's Phase B, and they are live and verified on
+  # production. See the history entry of that date.
 history:
   - date: '2026-05-07'
     status: backlog
@@ -466,6 +469,20 @@ history:
       (now lists chart+detail+list, the local mTLS verification, and all
       five prices-side gaps incl. the USDC quote-only finding). One review
       cycle for karolkow. CI green post-fold.
+  - date: '2026-08-17'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      OWNERSHIP OVERLAP CLOSED — issue #371 unlinked from this task. The
+      2026-07-31 entry left it open ("claimed by both this task and 0279,
+      to resolve before Phase B starts"); events resolved it. 0279's
+      lp_operation_amounts shipped in production-2026.08.17-1, 0489 fixed the
+      credit12 leg it dropped in -2, and the per-tx amounts are verified live
+      on the pool page in all three forms (deposit `A + B`, trade `A → B`,
+      one line per operation). That WAS Phase B, so this task no longer owns
+      #371 and should not hold it open — it keeps #367 (TVL), which is its
+      actual subject. Phase B is struck from this task's scope; nothing else
+      changes. The residual UX work on that view is 0490 and 0491.
 ---
 
 # LP analytics: TVL + volume + fee_revenue

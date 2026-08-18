@@ -1,10 +1,12 @@
 import * as cdk from 'aws-cdk-lib';
+import * as ce from 'aws-cdk-lib/aws-ce';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as chatbot from 'aws-cdk-lib/aws-chatbot';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -19,11 +21,17 @@ export interface CloudWatchStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
   readonly apiFunction: lambda.IFunction;
   readonly processorFunction: lambda.IFunction;
+  /** Ledger ingest queue — the Galexie lag alarm reads its doorbell rate. */
+  readonly ingestQueue: sqs.IQueue;
   readonly deadLetterQueue: sqs.IQueue;
   /** Type-1 enrichment DLQ (task 0191) — alarmed on depth > 0. */
   readonly enrichmentDlq: sqs.IQueue;
   /** Type-1 enrichment worker Lambda (task 0191) — error-rate alarm. */
   readonly enrichmentWorkerFunction: lambda.IFunction;
+  /** Galexie ECS cluster — ephemeral-storage alarm dimensions. */
+  readonly galexieCluster: ecs.ICluster;
+  /** Galexie live-ingest ECS service — ephemeral-storage alarm dimensions. */
+  readonly galexieService: ecs.IBaseService;
   readonly restApi: apigateway.RestApi;
   /**
    * CloudFront `*.cloudfront.net` domain of the SPA distribution, used as a
@@ -62,9 +70,12 @@ export class CloudWatchStack extends cdk.Stack {
       config,
       apiFunction,
       processorFunction,
+      ingestQueue,
       deadLetterQueue,
       enrichmentDlq,
       enrichmentWorkerFunction,
+      galexieCluster,
+      galexieService,
       restApi,
       spaDistributionDomainName,
     } = props;
@@ -114,6 +125,62 @@ export class CloudWatchStack extends cdk.Stack {
       }),
     });
 
+    // ---------------------
+    // Cost anomaly detection (task 0449 / 0455 defect 3)
+    // The account had ZERO cost monitoring (measured 2026-08-10: no anomaly
+    // monitor, no budget) — the July step change in one service's spend ran
+    // for three weeks before a human read a bill. This monitor learns a
+    // per-SERVICE baseline for the WHOLE account (tagged or not, current
+    // services or future ones) and alerts with the root-cause service named,
+    // so the next such step change is a same-day Slack message instead of a
+    // month-end surprise. Free of charge; alerts ride the existing topic.
+    //
+    // Per-project budgets are the complement (creep vs spikes) and are added
+    // separately once Fargate task tagging (propagateTags on the Galexie
+    // service) has produced a week of honestly-attributed data — today the
+    // Project tag sees ~9% of this project's real spend.
+    // ---------------------
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCostAnomalyDetectionPublish',
+        // Cost Anomaly Detection publishes from this service principal;
+        // without the explicit topic-policy grant, subscription delivery
+        // fails silently at deploy validation.
+        principals: [new iam.ServicePrincipal('costalerts.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+      })
+    );
+    const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
+      this,
+      'CostAnomalyMonitor',
+      {
+        monitorName: `${config.envName}-cost-anomaly-by-service`,
+        monitorType: 'DIMENSIONAL',
+        monitorDimension: 'SERVICE',
+      }
+    );
+    new ce.CfnAnomalySubscription(this, 'CostAnomalySubscription', {
+      subscriptionName: `${config.envName}-cost-anomaly-to-alarm-topic`,
+      monitorArnList: [costAnomalyMonitor.attrMonitorArn],
+      // IMMEDIATE = notify as soon as the anomaly is detected (cost data
+      // refreshes a few times a day, so "immediate" means hours, not
+      // minutes — still ~20x faster than the July discovery). SNS
+      // subscribers require IMMEDIATE; DAILY/WEEKLY are email-only.
+      frequency: 'IMMEDIATE',
+      subscribers: [{ type: 'SNS', address: alarmTopic.topicArn }],
+      // Only anomalies whose total impact reaches this many USD notify —
+      // keeps single-cent blips out of Slack while the July shape (a
+      // service's spend stepping up day after day) clears it easily.
+      thresholdExpression: JSON.stringify({
+        Dimensions: {
+          Key: 'ANOMALY_TOTAL_IMPACT_ABSOLUTE',
+          MatchOptions: ['GREATER_THAN_OR_EQUAL'],
+          Values: [String(config.costAnomalyAlertThresholdUsd)],
+        },
+      }),
+    });
+
     const alarmAction = new cloudwatchActions.SnsAction(alarmTopic);
 
     // ---------------------
@@ -156,11 +223,10 @@ export class CloudWatchStack extends cdk.Stack {
         alarmName: `${config.envName}-galexie-ingestion-lag`,
         alarmDescription:
           'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window — Galexie may have stopped writing.',
-        // Queue name is deterministic (see ComputeStack ledger-ingest queue).
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'NumberOfMessagesSent',
-          dimensionsMap: { QueueName: `${config.envName}-ledger-ingest` },
+          dimensionsMap: { QueueName: ingestQueue.queueName },
           period: cdk.Duration.minutes(config.galexieLagMinutes),
           statistic: cloudwatch.Stats.SUM,
         }),
@@ -168,6 +234,58 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
         evaluationPeriods: 1,
         treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+      })
+    );
+
+    // ---------------------
+    // Alarm 1a: ingest backlog age — the consumer-side counterpart to Alarm 1
+    //
+    // Alarm 1 watches the PRODUCER (are ledgers landing in S3). This one
+    // watches whether they are being CONSUMED: the age of the oldest queued
+    // doorbell. The 2026-07-29 outage (lore-0454) sat exactly in that gap —
+    // Galexie kept delivering, the indexer persisted nothing for 19 minutes,
+    // all seven alarms stayed green, and this metric tracked it perfectly
+    // (0 → 1421 s) with nothing reading it.
+    //
+    // Deliberately a BARE threshold — no pause/failure discrimination. A
+    // planned indexer pause (event-source-mapping disabled) WILL page once
+    // when the backlog crosses the threshold; the operator who just paused it
+    // knows exactly why, and that one knowing page also bounds the
+    // forgot-to-re-enable case, which a discriminator would hide forever. An
+    // `IF(received > 0, age, 0)` discriminator was designed, measured and
+    // withdrawn as overcomplication — see ADR 0054, "Considered and
+    // withdrawn".
+    //
+    // Threshold and window are measured, not guessed (732 h to 2026-08-04):
+    // the hourly max age had median 0 s / p90 1 s, and every hour above 60 s
+    // is the same set as above 600 s — known incidents and declared pauses,
+    // nothing in between. So any threshold in that band produces the same
+    // page count; 120 s buys the earliest detection (0454 replay: pages
+    // 09:43 vs 09:54 at 600 s, self-heal was 09:58). Three consecutive
+    // minutes so a single stray datapoint cannot page anyone.
+    //
+    // NOT_BREACHING: an empty idle queue publishes no datapoint, and silence
+    // of the producer is Alarm 1's job (BREACHING there) — paging both for
+    // one fault is how alarms get muted (ADR 0054 rule 3).
+    // ---------------------
+    withActions(
+      new cloudwatch.Alarm(this, 'IngestBacklogAgeAlarm', {
+        alarmName: `${config.envName}-ingestion-backlog-age`,
+        alarmDescription:
+          'Queued ledgers are not being consumed — oldest doorbell exceeded the age threshold. Real stall (lore-0454 shape) OR a paused/forgotten event-source mapping; if you just paused the indexer on purpose, this page is expected. Runbook: docs/deployment.md (pause procedure) + docs/runbooks/live-tail-cutover.md.',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateAgeOfOldestMessage',
+          dimensionsMap: { QueueName: ingestQueue.queueName },
+          period: cdk.Duration.minutes(1),
+          statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: config.ingestionBacklogAgeSeconds,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
 
@@ -180,16 +298,17 @@ export class CloudWatchStack extends cdk.Stack {
     // → temp never cleaned → task wedged while `pgrep stellar-core` still
     // reports healthy). Metric-math on % is robust to disk-size changes.
     // Sustained 3×5 min avoids paging on a transient merge spike.
-    // Cluster/service names are deterministic (see IngestionStack).
+    // Re-arm answer (rule 2, ADR 0054): a level alarm is correct here — the
+    // condition is "act before the ceiling", and acting (disk bump / temp
+    // cleanup, see the 0367 runbook trail) drops utilization below 60%,
+    // which clears and re-arms the alarm. Standing >60% is never accepted.
     // ---------------------
-    const galexieCluster = `${config.envName}-ingestion`;
-    const galexieService = `${config.envName}-galexie-live`;
     const ephemeralUsed = new cloudwatch.Metric({
       namespace: 'ECS/ContainerInsights',
       metricName: 'EphemeralStorageUtilized',
       dimensionsMap: {
-        ClusterName: galexieCluster,
-        ServiceName: galexieService,
+        ClusterName: galexieCluster.clusterName,
+        ServiceName: galexieService.serviceName,
       },
       period: cdk.Duration.minutes(5),
       statistic: cloudwatch.Stats.MAXIMUM,
@@ -198,8 +317,8 @@ export class CloudWatchStack extends cdk.Stack {
       namespace: 'ECS/ContainerInsights',
       metricName: 'EphemeralStorageReserved',
       dimensionsMap: {
-        ClusterName: galexieCluster,
-        ServiceName: galexieService,
+        ClusterName: galexieCluster.clusterName,
+        ServiceName: galexieService.serviceName,
       },
       period: cdk.Duration.minutes(5),
       statistic: cloudwatch.Stats.MAXIMUM,
@@ -220,6 +339,11 @@ export class CloudWatchStack extends cdk.Stack {
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 3,
         datapointsToAlarm: 3,
+        // NOT_BREACHING is correct here (task 0455 review): Container
+        // Insights stops publishing when no task is running, so missing
+        // data means "service stopped", not "disk full" — and a stopped
+        // Galexie already pages via the lag alarm's BREACHING above.
+        // Paging here too would double-page one incident.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -254,6 +378,14 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): the ratio has
+        // no datapoint when invocations are 0, and 0 invocations is not an
+        // error-RATE problem — it is either a planned pause (must not page)
+        // or a dead input, which is the lag alarm's job (BREACHING there).
+        // Beware what this alarm can NOT see: a total stall never reaches
+        // Lambda `Errors` at all — measured 0 through every lag event of a
+        // 30-day window (0454). Absence coverage is the backlog-age alarm's
+        // job (Alarm 1a), not this alarm's.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -280,26 +412,23 @@ export class CloudWatchStack extends cdk.Stack {
           'ProcessorLogGroupRef',
           `/aws/lambda/${processorFunction.functionName}`
         ),
-        // JSON-anchored match on `$.fields.message` — the indexer
-        // Lambda uses `tracing_subscriber::fmt().json()`, so each log
-        // line is `{"fields":{"message":"...","error":"..."},...}`.
-        // A bare substring filter would match the second message
-        // accidentally through `fields.error` (which Display-formats
-        // `HandlerError::ClickHouse` to "ClickHouse write failed: ..."),
-        // and any future variant rewording would silently break the
-        // alarm. Match on the exact event message strings emitted by
-        // `mod.rs::handler` and `main.rs` cold-start.
-        filterPattern: logs.FilterPattern.any(
-          logs.FilterPattern.stringValue(
-            '$.fields.message',
-            '=',
-            'failed to process S3 record'
-          ),
-          logs.FilterPattern.stringValue(
-            '$.fields.message',
-            '=',
-            'failed to build mTLS CH client'
-          )
+        // JSON-anchored match on `$.fields.alarm` — a dedicated
+        // machine-contract field, NOT the human `message` prose. The
+        // indexer Lambda uses `tracing_subscriber::fmt().json()`, so
+        // each log line is `{"fields":{"alarm":"...","message":...}}`.
+        // History: this filter originally matched the prose `failed to
+        // process S3 record`; the doorbell rewrite (`bee784df`)
+        // reworded the emit site and left the filter matching nothing —
+        // the metric stayed flat 0 through the 0454 outage. Prose is
+        // for operators and may be reworded freely; the `alarm` field
+        // is emitted by both hard-failure sites (`handler/mod.rs`
+        // post-retry reconcile failure, `main.rs` mTLS cold-start) and
+        // exists only for this filter. The declared-vs-emitted infra
+        // test fails CI if the pair ever splits (task 0455).
+        filterPattern: logs.FilterPattern.stringValue(
+          '$.fields.alarm',
+          '=',
+          'ch_write_failure'
         ),
         metricNamespace: 'SorobanBlockExplorer/Indexer',
         metricName: 'ChWriteFailures',
@@ -316,27 +445,55 @@ export class CloudWatchStack extends cdk.Stack {
           period: cdk.Duration.minutes(5),
           statistic: cloudwatch.Stats.SUM,
         }),
-        // Threshold tuned to survive a planned Caddy reload window
-        // (~30 s = up to ~10 ledger events post-retry-exhaustion).
-        // Raise further if observed false-alarms during routine
-        // operational maintenance.
-        threshold: 10,
+        // Zero-tolerance threshold (operator decision 2026-08-18, same
+        // rule as the 5xx alarm): ONE failure line = page. A line here is
+        // already post-filter — it means a reconcile exhausted the whole
+        // in-band retry envelope, not a single flaky request — so it is
+        // never routine. An earlier draft used >10 to absorb a planned
+        // Caddy reload (worst case ~6 lines), but that is exactly the
+        // suppression logic this task rejected for pauses and for 5xx:
+        // one knowing page during own maintenance is cheap, and >10
+        // would ALSO hide the slow modes forever — a single poison-pill
+        // ledger (the 0454 shape) emits only 1-2 lines per window and
+        // would never cross 10. Raise the threshold only with a
+        // measurement: if routine maintenance pages more than about once
+        // a month, record the observed line counts and set it just above
+        // them.
+        threshold: 0,
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): this is a
+        // failure COUNTER — months of silence are its healthy steady
+        // state, and the filter's defaultValue 0 only appears in periods
+        // where the Lambda logged anything at all. Fully-missing data
+        // means "no invocations", which is a planned pause or a stall —
+        // the backlog-age alarm (Alarm 1a) owns that; BREACHING here
+        // would page on every planned pause.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
 
     // ---------------------
     // Alarm 3: DLQ depth
-    // Any message landing in the DLQ means a ledger permanently failed processing.
+    //
+    // A LEVEL alarm on purpose — the zero-tolerance shape (lore-0455, same
+    // philosophy as the 5xx alarm): the DLQ's steady state is EMPTY, so any
+    // content is an event. What lands here is only "our side failed" —
+    // doorbells that failed reconcile maxReceiveCount times during a CH/S3
+    // incident. Re-arm answer (rule 2, ADR 0054): drain per
+    // docs/runbooks/dlq.md — doorbells carry no data (the indexer reconciles
+    // from the durable cursor), so after the incident PURGE the queue and
+    // the alarm returns to OK, re-armed. Standing content is never
+    // accepted; the historical 15-day latch was a missing drain procedure,
+    // not a detection failure. A DIFF()-growth variant was considered and
+    // withdrawn — see ADR 0054.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
         alarmName: `${config.envName}-ledger-processor-dlq-depth`,
         alarmDescription:
-          'Ledger Processor DLQ has messages — one or more ledgers permanently failed processing.',
+          'Ledger Processor DLQ has messages — reconcile failed repeatedly during an incident. Runbook: docs/runbooks/dlq.md (inspect, fix cause, then purge — doorbells carry no data).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -349,21 +506,31 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): SQS stops
+        // publishing for a queue with ~6 h of no activity, so missing
+        // data is the healthy idle-empty state; any depth > 0 resumes
+        // publishing and trips the alarm on a single datapoint.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
 
     // ---------------------
     // Alarm 5b: Type-1 enrichment DLQ depth (task 0191)
-    // Any message landing in the enrichment DLQ means an asset
-    // permanently failed enrichment after maxReceiveCount=3 retries.
-    // Same shape as Alarm 5.
+    //
+    // Same zero-tolerance level shape as Alarm 3. What lands here: DB-write
+    // failures during a CH incident (redrive material) and worker
+    // crash/timeout poison pills (reproduction evidence). Dead issuer
+    // domains — historically 100% of this queue's traffic (measured 30
+    // days: 6 keys, ~1000 retries, zero genuine blips) — no longer arrive:
+    // connect-level fetch failures classify permanent and sentinel
+    // immediately (enrichment-shared http_transient.rs, 2026-08-11).
+    // Re-arm answer: fix the cause, then REDRIVE per docs/runbooks/dlq.md.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(this, 'EnrichmentDlqDepthAlarm', {
         alarmName: `${config.envName}-enrichment-dlq-depth`,
         alarmDescription:
-          'Enrichment worker DLQ has messages — one or more assets permanently failed enrichment.',
+          'Enrichment worker DLQ has messages — a DB incident or a poison-pill message (dead-domain fetches sentinel instead of landing here). Runbook: docs/runbooks/dlq.md (inspect, fix cause, then redrive).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -376,6 +543,7 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING — same idle-empty rationale as Alarm 3.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -412,47 +580,66 @@ export class CloudWatchStack extends cdk.Stack {
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): no datapoint
+        // means 0 invocations, and for this worker that is a NORMAL
+        // state — the consumer is deliberately gated off in prod until
+        // the 0301 rollout, and even enabled it only runs when the
+        // producer publishes misses. BREACHING would page continuously.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
 
     // ---------------------
-    // Alarm 6: API Gateway 5xx rate
-    // 5xxError / Count > threshold over 5-minute window.
+    // Alarm 6: any API Gateway 5xx
+    //
+    // Every 5xx is a defect, not a health indicator to tolerate (lore-0455).
+    // Measured before this rewrite: 30 days held 80 gateway 5xx, ALL of them
+    // real backend errors in three root-cause classes (CH 60/241/48), every
+    // one pre-launch or a since-fixed query — base rate at rewrite time was
+    // 0 for 24 straight days. At base 0 a single 5xx IS an event, so the
+    // alarm is a bare count: no ratio math (percent-of-a-tiny-denominator
+    // was the old alarm's noise source — 28 notifications for those 80
+    // errors), no threshold knob. If this alarm starts paging regularly,
+    // the fix is to repair the 5xx class it points at — never to widen
+    // this alarm. Investigate with Logs Insights on the API log group:
+    // filter level="ERROR", group by fields.error / fields.message.
+    //
+    // Paging shape: CloudWatch notifies on state transition, so a burst is
+    // one page (ALARM holds while errors continue) and the alarm re-arms
+    // itself after one clean window — rule 2 of ADR 0054.
+    //
+    // Caveat: gateway 5XXError also counts 502/504 the Lambda log never
+    // sees (no access logging on the stage — deliberate, add only when a
+    // silent-504 investigation actually needs it).
     // ---------------------
     const stageName = restApi.deploymentStage.stageName;
     const apiName = restApi.restApiName;
 
-    const api5xx = new cloudwatch.Metric({
-      namespace: 'AWS/ApiGateway',
-      metricName: '5XXError',
-      dimensionsMap: { ApiName: apiName, Stage: stageName },
-      period: cdk.Duration.minutes(5),
-      statistic: cloudwatch.Stats.SUM,
-    });
-    const apiCount = new cloudwatch.Metric({
-      namespace: 'AWS/ApiGateway',
-      metricName: 'Count',
-      dimensionsMap: { ApiName: apiName, Stage: stageName },
-      period: cdk.Duration.minutes(5),
-      statistic: cloudwatch.Stats.SUM,
-    });
-
     withActions(
       new cloudwatch.Alarm(this, 'ApiGateway5xxAlarm', {
-        alarmName: `${config.envName}-api-gateway-5xx-rate`,
+        // Renamed from `-api-gateway-5xx-rate`: the alarm no longer measures
+        // a rate, and a name that lies is how the next reader mistrusts the
+        // whole set. CloudFormation replaces the alarm on rename — state
+        // history restarts, accepted (same call as the DLQ growth renames).
+        alarmName: `${config.envName}-api-gateway-5xx`,
         alarmDescription:
-          'API Gateway 5xx error rate exceeded threshold — user-facing errors.',
-        metric: new cloudwatch.MathExpression({
-          expression: '(m5xx / mcount) * 100',
-          usingMetrics: { m5xx: api5xx, mcount: apiCount },
+          'An API request returned 5xx — a user saw a server error. Every 5xx is a defect: query the API log group in Logs Insights (filter level="ERROR", group by fields.error) and account for each error; do not tune this alarm.',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/ApiGateway',
+          metricName: '5XXError',
+          dimensionsMap: { ApiName: apiName, Stage: stageName },
           period: cdk.Duration.minutes(5),
-          label: '5xx Rate (%)',
+          statistic: cloudwatch.Stats.SUM,
         }),
-        threshold: config.apiGateway5xxThreshold,
+        threshold: 0,
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): no datapoint
+        // means the stage served zero requests in 5 min, and zero traffic
+        // is not a server-error condition. Reachability of the public
+        // entry point is the origin-lock canary's job (which pages
+        // BREACHING on silence).
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
@@ -523,6 +710,14 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // Dashboard
+    //
+    // Convention (task 0455, `docs/runbooks/health.md` "four sentences"):
+    // the dashboard answers WHERE. It carries what the alarms read — same
+    // metric, same queue, same math, so an ALARM state is confirmable on
+    // sight — plus a few standing conditions deliberately left unalarmed
+    // (durations, concurrency, 4xx). A widget whose signal nothing emits
+    // is a defect, not decoration: it implies coverage (see the row-6
+    // tombstone below).
     // ---------------------
     new cloudwatch.Dashboard(this, 'Dashboard', {
       dashboardName: `${config.envName}-soroban-explorer`,
@@ -535,18 +730,58 @@ export class CloudWatchStack extends cdk.Stack {
             height: 1,
           }),
         ],
-        // Row 2: Galexie freshness proxy + last indexed ledger + Processor duration
+        // Row 2: Galexie doorbell rate + last indexed ledger + Processor duration.
+        // The doorbell widget reads the SAME SQS metric as the
+        // `galexie-ingestion-lag` alarm (task 0367 moved the alarm off Lambda
+        // invocations; the widget lagged on the old signal until 0455).
+        // Invocations lie in both directions: one reconcile drains backlog
+        // for up to 9 min (sparse starts look like a dead producer during a
+        // healthy catch-up), and a 5-second retry loop looks busy while
+        // nothing persists (the 0454 outage). Doorbells count actual S3
+        // object landings — ~1 per ledger close. 1-min period is finer than
+        // the alarm's 5-min window by intent: same signal, more texture.
+        // The backlog-age widget mirrors the `ingestion-backlog-age` alarm
+        // (same metric, same 1-min MAXIMUM) with the paging threshold drawn
+        // as a horizontal line, and doubles as the reference series the
+        // sequence widget lacks: healthy is 0-1 s (732 h: median 0, p90 1);
+        // flat sequence + climbing age = the consumer stalled, whatever the
+        // cause. Known blind spot, covered by the DLQ pair: when failures
+        // drain to the DLQ the main queue empties and age reads green.
         [
           new cloudwatch.GraphWidget({
-            title: 'Galexie S3 freshness (Processor invocations/min)',
+            title: 'Galexie doorbell rate (ledgers → ingest queue/min)',
             left: [
-              processorFunction.metricInvocations({
+              new cloudwatch.Metric({
+                namespace: 'AWS/SQS',
+                metricName: 'NumberOfMessagesSent',
+                dimensionsMap: { QueueName: ingestQueue.queueName },
                 period: cdk.Duration.minutes(1),
                 statistic: cloudwatch.Stats.SUM,
-                label: 'Invocations',
+                label: 'Doorbells',
               }),
             ],
-            width: 8,
+            width: 6,
+            height: 6,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Ingest backlog age (s, oldest doorbell)',
+            left: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/SQS',
+                metricName: 'ApproximateAgeOfOldestMessage',
+                dimensionsMap: { QueueName: ingestQueue.queueName },
+                period: cdk.Duration.minutes(1),
+                statistic: cloudwatch.Stats.MAXIMUM,
+                label: 'Oldest doorbell age',
+              }),
+            ],
+            leftAnnotations: [
+              {
+                value: config.ingestionBacklogAgeSeconds,
+                label: 'pages after 3 consecutive min above',
+              },
+            ],
+            width: 6,
             height: 6,
           }),
           new cloudwatch.GraphWidget({
@@ -561,7 +796,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'Last indexed ledger',
               }),
             ],
-            width: 8,
+            width: 6,
             height: 6,
           }),
           new cloudwatch.GraphWidget({
@@ -583,7 +818,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'p99',
               }),
             ],
-            width: 8,
+            width: 6,
             height: 6,
           }),
         ],
@@ -713,49 +948,20 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
         ],
-        // Row 6: API Gateway cache hit rate
-        [
-          new cloudwatch.GraphWidget({
-            title: 'API Gateway cache hit / miss',
-            left: [
-              new cloudwatch.Metric({
-                namespace: 'AWS/ApiGateway',
-                metricName: 'CacheHitCount',
-                dimensionsMap: { ApiName: apiName, Stage: stageName },
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SUM,
-                label: 'Cache hits',
-              }),
-              new cloudwatch.Metric({
-                namespace: 'AWS/ApiGateway',
-                metricName: 'CacheMissCount',
-                dimensionsMap: { ApiName: apiName, Stage: stageName },
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SUM,
-                label: 'Cache misses',
-              }),
-            ],
-            width: 12,
-            height: 6,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Lambda cold starts',
-            left: [
-              processorFunction.metric('InitDuration', {
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SAMPLE_COUNT,
-                label: 'Processor cold starts',
-              }),
-              apiFunction.metric('InitDuration', {
-                period: cdk.Duration.minutes(5),
-                statistic: cloudwatch.Stats.SAMPLE_COUNT,
-                label: 'API cold starts',
-              }),
-            ],
-            width: 12,
-            height: 6,
-          }),
-        ],
+        // Row 6 (cache hit/miss + cold starts) removed in task 0455 — both
+        // graphed metrics that production never emits, so both rendered
+        // empty from the day they were written:
+        // - `CacheHitCount` / `CacheMissCount` need a stage cache cluster.
+        //   `apiGatewayCacheEnabled` is false and stays false by decision;
+        //   rationale and return condition in
+        //   `docs/architecture/backend/api-gateway-cache-spec.md`.
+        // - `InitDuration` is NOT a CloudWatch metric at all (verified
+        //   2026-08-14: list-metrics empty, zero datapoints over 7 days).
+        //   Lambda reports it only on the REPORT log line, so cold starts
+        //   are a Logs Insights question (`@initDuration`), not a widget.
+        //   Reinstating one means minting the metric from logs first.
+        // An empty widget is worse than no widget: it implies coverage.
+        //
         // Resources widgets (RDS CPU / connections / free storage) removed
         // in task 0239 — the production data plane lives on Hetzner
         // ClickHouse, monitored separately on the box.

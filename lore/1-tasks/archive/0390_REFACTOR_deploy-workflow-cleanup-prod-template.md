@@ -2,7 +2,7 @@
 id: '0390'
 title: 'CI: retire dead staging-deploy workflow + add tag-driven production deploy'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0009', '0052']
 related_tasks: []
 tags: [priority-low, effort-small, layer-infra, milestone-3, phase-launch]
@@ -52,6 +52,22 @@ history:
       and cites lore-0390. Skipped `.claude/skills/issues/SKILL.md`: its Step 4
       already carries a forward-looking note keyed to the trigger actually
       changing, and the tag path is still inert.
+  - date: 2026-08-17
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Enablement finished and the path is proven. 2026-08-12: the CICD stack was
+      deployed (`make -C infra deploy-cicd`) — the account had **no** OIDC
+      provider and **no** `soroban-explorer-*-deploy` role, so the April secrets
+      in the legacy `staging` environment had never pointed at anything here;
+      there was nothing to audit, only to create. GitHub environment `production`
+      added with policies (tag `production-*`, branch `master`) and both secrets.
+      2026-08-17: `production-2026.08.17-1` and `-2` deployed through the
+      workflow, both green — first end-to-end validation. Legacy `staging`
+      environment deleted. Three hardening items deferred (SHA stamping,
+      upload-before-delete S3 ordering, rollback runbook); the fourth,
+      CI-carries-the-frontend, shipped in the 2026-08-10 tag-driven revision.
+      Spawned 0475 (`/release` skill), since delivered.
 ---
 
 # CI: retire dead staging-deploy workflow + tag-driven prod deploy
@@ -215,14 +231,14 @@ land deliberately — re-apply verbatim):**
 - [x] Dead `deploy-staging.yml` removed; us-east-1 staging confirmed absent (0 stacks).
 - [x] `deploy-production.yml` added — tag-driven (`production-*`) + dispatch,
       diff→per-stack deploy→SPA sync→smoke; header documents prerequisites.
-- [ ] Secrets provisioned; first release tag deployed via the workflow
-      validated end-to-end.
+- [x] Secrets provisioned; first release tag deployed via the workflow
+      validated end-to-end — `production-2026.08.17-1` and `-2`, both runs green.
 - [x] **Docs updated** — `docs/architecture/**` genuinely N/A (CI process, not
       the shape of the system), but the **operational** docs were not: `README.md`
       § Deploying, `docs/deployment.md` (banner, deploy planes, § No staging,
       new § Releases and the CI deploy path, `GALEXIE_IMAGE_DIGEST` note, SPA
       arming guard, rollback, config vs secrets) and ADR 0009 → `superseded`.
-- [ ] **API types regenerated** — N/A (no API surface change).
+- [x] **API types regenerated** — N/A (no API surface change).
 
 ## Notes
 

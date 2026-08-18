@@ -10,7 +10,27 @@ import { detailPolicy } from '../polling.js';
  */
 export type ChartPeriod = '1D' | '7D' | '30D' | '1Y';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * Per-preset backend params + the bucket width that interval produces.
+ * One table so the query params and the bucket-end stamping in
+ * `PoolCharts` cannot drift apart.
+ */
+const PERIOD_CONFIG: Record<
+  ChartPeriod,
+  { interval: '1h' | '1d' | '1w'; spanMs: number; bucketMs: number }
+> = {
+  '1D': { interval: '1h', spanMs: DAY_MS, bucketMs: HOUR_MS },
+  '7D': { interval: '1h', spanMs: 7 * DAY_MS, bucketMs: HOUR_MS },
+  '30D': { interval: '1d', spanMs: 30 * DAY_MS, bucketMs: DAY_MS },
+  '1Y': { interval: '1w', spanMs: 365 * DAY_MS, bucketMs: 7 * DAY_MS },
+};
+
+/** Width in ms of the buckets the backend returns for a period preset. */
+export const periodBucketMs = (period: ChartPeriod): number =>
+  PERIOD_CONFIG[period].bucketMs;
 
 /**
  * Maps a period preset to the underlying backend `(interval, from)`
@@ -20,26 +40,8 @@ function periodToQueryParams(period: ChartPeriod): {
   interval: '1h' | '1d' | '1w';
   from: string;
 } {
-  const now = Date.now();
-  switch (period) {
-    case '1D':
-      return { interval: '1h', from: new Date(now - DAY_MS).toISOString() };
-    case '7D':
-      return {
-        interval: '1h',
-        from: new Date(now - 7 * DAY_MS).toISOString(),
-      };
-    case '30D':
-      return {
-        interval: '1d',
-        from: new Date(now - 30 * DAY_MS).toISOString(),
-      };
-    case '1Y':
-      return {
-        interval: '1w',
-        from: new Date(now - 365 * DAY_MS).toISOString(),
-      };
-  }
+  const { interval, spanMs } = PERIOD_CONFIG[period];
+  return { interval, from: new Date(Date.now() - spanMs).toISOString() };
 }
 
 /**

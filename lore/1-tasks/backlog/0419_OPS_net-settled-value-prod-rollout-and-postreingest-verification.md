@@ -48,6 +48,25 @@ history:
       REMOVED in the meantime (see [[0411]]), so step 2's deploy no longer
       exposes anything; the read has to be written back before the column means
       anything to a client.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Index step executed on prod (ADD + MATERIALIZE idx_oaa_transaction_id,
+      mutation clean, ingestion tip advanced throughout) - then re-audited:
+      the index has ZERO consumers today. The net-settled read it serves was
+      withdrawn from the API (see common/ch.rs and [[0411]]); every live
+      query on operation_asset_appearances filters by asset_id (the leading
+      key). Real cost measured: 19.87 GiB (bloom 0.001 over 11.25bn non-null
+      near-unique values - the 97 MiB analogy to the mostly-NULL
+      idx_oa_asset_issuer_id was wrong). 0411 plans the (ledger,tx)
+      companion which would supersede the bloom entirely. DECIDED same day
+      (karolkow): dropped from prod AND removed from init.sql - no paying
+      for speculation; 0411 chooses bloom-vs-companion and recreation is
+      one ADD+MATERIALIZE pair (minutes). The rollout plan's index step is
+      hereby superseded - do not re-run it from this task.
+      Also executed same day: DROP idx_oa_asset_issuer_id (the 0381
+      decision), verified gone; ~97 MiB reclaimed.
 ---
 
 # OPS: net-settled value column — prod rollout + post-reingest verification

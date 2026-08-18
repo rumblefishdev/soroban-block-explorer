@@ -332,7 +332,10 @@ export function TimeSeriesChart({
             {
               data: yData,
               area: variant === 'area',
-              showMark: true,
+              // No static per-point marks — at chart densities they read as
+              // beading on the line. The hover dot (nearest point + tooltip)
+              // is LineHighlightPlot, a separate element unaffected by this.
+              showMark: false,
               ...(curve ? { curve } : {}),
               color: scales.blue[400],
               valueFormatter: formatValue,
@@ -347,22 +350,6 @@ export function TimeSeriesChart({
             // the line the subject and the fill a magnitude cue.
             '&& .MuiAreaElement-root': {
               fill: `url(#${areaGradientId})`,
-            },
-            // Marks stay on at EVERY density — a threshold that hid them
-            // past N points made the same range render differently on two
-            // pools (measured: a 7-day window is 25 points on one pool and
-            // 41 on another), which reads as two different chart types.
-            //
-            // What actually caused the beading was their size, not the
-            // count: r:3 with a 6px halo is ~12px across, and 52 weekly
-            // points on a ~570px plot sit ~11px apart, so they could not
-            // help but touch. At ~4px they stay separate at that density
-            // and still mark where a real sample is on a flat series.
-            '&& .MuiLineChart-mark': {
-              fill: scales.blue[100],
-              stroke: `${scales.blue[400]}aa`,
-              strokeWidth: 2,
-              r: 2,
             },
           }}
         >

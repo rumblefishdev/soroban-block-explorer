@@ -36,6 +36,7 @@ hex = { workspace = true }
 stellar-xdr = { workspace = true }
 xdr-parser = { path = "../xdr-parser" }
 domain = { path = "../domain" }
+db-clickhouse = { path = "../db-clickhouse" }
 zstd = { workspace = true }
 # `archive-diff --table liquidity_pools` reconstructs LiquidityPoolParameters
 # XDR from DB-stored asset rows and SHA-256s the canonical bytes for

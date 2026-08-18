@@ -2,7 +2,7 @@
 id: '0321'
 title: 'OPS: backfill native=0 tombstones for merged-account ghosts (DB-only, no S3 re-parse)'
 type: OPS
-status: completed
+status: active
 related_adr: []
 related_tasks: ['0295', '0349']
 tags: [ops, clickhouse, layer-data, accountmerge, priority-medium, effort-small]
@@ -44,6 +44,27 @@ history:
       bump last_seen past death, so the deleted DERIVATION reports 5/5
       sampled dead accounts as alive (task 0500). The tombstones this task
       owned are correct; the chip defect is 0324's derivation assumption.
+  - date: '2026-08-17'
+    status: active
+    who: karolkow
+    note: >
+      UN-ARCHIVED same day — the archival was premature and my verification was
+      too weak. It sampled two ledger WINDOWS and found them clean; a
+      full-population measurement then found ~59,272 merged accounts still
+      holding a POSITIVE native balance, and a 25-account chain check returned
+      22 real ghosts (Horizon 404) versus 3 legitimately alive
+      (recycled/failed merge). Extrapolated: roughly 52k real ghosts holding
+      on the order of 1.3M phantom XLM. Ghosts cluster in eras 54M-64M while
+      the 50-52M range is clean, so whatever ran covered only part of the
+      range. The task stands: the backfill still owes the rest. Method note
+      for whoever runs it: verify against the CHAIN, not against our own
+      windows — the window sample is what misled me. Re-confirmed the same
+      day against RAW XDR (`getLedgerEntries`, LedgerKey::Account, absence
+      from `entries` = account gone) rather than Horizon, which is legacy and
+      must not be used: identical result, 22 of 25 absent. Note for the run
+      itself: after ADR 0055 the ghosts also inflate `balance_aggregates`,
+      because `sum(amount)` ignores `closed_at_ledger` — so the fix must ZERO
+      the stale amount, not merely stamp the closure.
 ---
 
 # OPS: backfill native=0 tombstones for merged ghosts
