@@ -25,7 +25,16 @@
     "tags": [
       "type:infra",
       "scope:infra"
-    ]
+    ],
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^default",
+          "{workspaceRoot}/crates/**/*.rs"
+        ]
+      }
+    }
   },
   "devDependencies": {
     "aws-cdk": "^2.1114.1"

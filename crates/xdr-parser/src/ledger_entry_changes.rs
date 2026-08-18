@@ -532,23 +532,37 @@ fn contract_code_data(cc: &ContractCodeEntry) -> Value {
 // ---------------------------------------------------------------------------
 
 fn config_setting_key(cs: &ConfigSettingEntry) -> Value {
-    let id = match cs {
-        ConfigSettingEntry::ContractMaxSizeBytes(_) => "contract_max_size_bytes",
-        ConfigSettingEntry::ContractComputeV0(_) => "contract_compute_v0",
-        ConfigSettingEntry::ContractLedgerCostV0(_) => "contract_ledger_cost_v0",
-        ConfigSettingEntry::ContractHistoricalDataV0(_) => "contract_historical_data_v0",
-        ConfigSettingEntry::ContractEventsV0(_) => "contract_events_v0",
-        ConfigSettingEntry::ContractBandwidthV0(_) => "contract_bandwidth_v0",
-        ConfigSettingEntry::ContractCostParamsCpuInstructions(_) => "contract_cost_params_cpu",
-        ConfigSettingEntry::ContractCostParamsMemoryBytes(_) => "contract_cost_params_memory",
-        ConfigSettingEntry::ContractDataKeySizeBytes(_) => "contract_data_key_size_bytes",
-        ConfigSettingEntry::ContractDataEntrySizeBytes(_) => "contract_data_entry_size_bytes",
-        ConfigSettingEntry::StateArchival(_) => "state_archival",
-        ConfigSettingEntry::ContractExecutionLanes(_) => "contract_execution_lanes",
-        ConfigSettingEntry::EvictionIterator(_) => "eviction_iterator",
-        _ => "unknown",
-    };
-    json!({ "config_setting_id": id })
+    json!({ "config_setting_id": config_setting_id_name(cs.discriminant()) })
+}
+
+/// Stored identifier for a config-setting variant. Matching on
+/// `ConfigSettingId` (a unit enum) rather than `ConfigSettingEntry` lets the
+/// coverage test below enumerate `ConfigSettingEntry::VARIANTS` without
+/// constructing entry payloads.
+fn config_setting_id_name(id: ConfigSettingId) -> &'static str {
+    match id {
+        ConfigSettingId::ContractMaxSizeBytes => "contract_max_size_bytes",
+        ConfigSettingId::ContractComputeV0 => "contract_compute_v0",
+        ConfigSettingId::ContractLedgerCostV0 => "contract_ledger_cost_v0",
+        ConfigSettingId::ContractHistoricalDataV0 => "contract_historical_data_v0",
+        ConfigSettingId::ContractEventsV0 => "contract_events_v0",
+        ConfigSettingId::ContractBandwidthV0 => "contract_bandwidth_v0",
+        ConfigSettingId::ContractCostParamsCpuInstructions => "contract_cost_params_cpu",
+        ConfigSettingId::ContractCostParamsMemoryBytes => "contract_cost_params_memory",
+        ConfigSettingId::ContractDataKeySizeBytes => "contract_data_key_size_bytes",
+        ConfigSettingId::ContractDataEntrySizeBytes => "contract_data_entry_size_bytes",
+        ConfigSettingId::StateArchival => "state_archival",
+        ConfigSettingId::ContractExecutionLanes => "contract_execution_lanes",
+        ConfigSettingId::EvictionIterator => "eviction_iterator",
+        ConfigSettingId::LiveSorobanStateSizeWindow => "live_soroban_state_size_window",
+        ConfigSettingId::ContractParallelComputeV0 => "contract_parallel_compute_v0",
+        ConfigSettingId::ContractLedgerCostExtV0 => "contract_ledger_cost_ext_v0",
+        ConfigSettingId::ScpTiming => "scp_timing",
+        ConfigSettingId::FrozenLedgerKeys => "frozen_ledger_keys",
+        ConfigSettingId::FrozenLedgerKeysDelta => "frozen_ledger_keys_delta",
+        ConfigSettingId::FreezeBypassTxs => "freeze_bypass_txs",
+        ConfigSettingId::FreezeBypassTxsDelta => "freeze_bypass_txs_delta",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,5 +1156,23 @@ mod tests {
             .expect("instance METADATA should be extracted on `updated` too");
         assert_eq!(md.name.as_deref(), Some("liquidFi LP token"));
         assert_eq!(md.decimals, Some(7));
+    }
+
+    /// Every config-setting variant the compiled `stellar-xdr` defines must
+    /// map to a stored identifier. A variant landing in the `"unknown"`
+    /// catch-all means the hand-maintained table lags the protocol: the next
+    /// protocol bump should fail this test, not silently store `"unknown"`
+    /// (task 0434).
+    #[test]
+    fn config_setting_id_table_covers_every_variant() {
+        let unmapped: Vec<&str> = ConfigSettingEntry::VARIANTS
+            .iter()
+            .filter(|id| config_setting_id_name(**id) == "unknown")
+            .map(|id| id.name())
+            .collect();
+        assert!(
+            unmapped.is_empty(),
+            "config_setting_id_name lacks arms for: {unmapped:?}"
+        );
     }
 }

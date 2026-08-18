@@ -35,12 +35,20 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              # The CH e2e leg of the rust job provisions ClickHouse from the
+              # compose file (image pin + schema sidecar), so compose changes
+              # must re-run it.
+              - 'docker-compose.yml'
               - '.github/workflows/ci.yml'
             typescript:
               - 'apps/**'
               - 'libs/**'
               - 'web/**'
               - 'infra/**'
+              # The infra declared-vs-emitted test (task 0455) reads Rust
+              # sources: alarm filter fields/strings must exist at a
+              # crates/ emit site. A Rust-only rename must re-run it.
+              - 'crates/**'
               - 'package.json'
               - 'package-lock.json'
               - 'tsconfig*.json'
@@ -147,6 +155,57 @@ jobs:
       # configurations so neither path bit-rots.
       - run: cargo clippy -p api --all-targets --features swagger-ui -- -D warnings
       - run: cargo test -p api --features swagger-ui
+
+      # ClickHouse-gated e2e (task 0406). The suites self-skip when
+      # CLICKHOUSE_URL is unset, so the plain `cargo test` above has
+      # never executed them — the 0304 `sc.name` breakage reached prod
+      # green. Same image (pinned to the prod major, 26.3) and same
+      # schema path as local dev: the compose sidecar applies
+      # `crates/db-clickhouse/schema/init.sql` before the run.
+      - name: Start ClickHouse
+        run: |
+          docker compose up -d clickhouse
+          docker compose run --rm db-clickhouse-init
+
+      # Two gates (documented in 0394/0406): the CLICKHOUSE_URL-gated
+      # tests run once the env var is set; the #[ignore]d enrichment
+      # tests additionally need `--ignored` and are name-filtered to
+      # the CH-only ones — the rest of the #[ignore] set needs live
+      # mainnet RPC / S3 / issuer TOML endpoints and stays manual.
+      # --test-threads=1: the suites seed shared tables with sentinel
+      # rows and clean up with ALTER DELETE; parallel runs against one
+      # server race each other.
+      # The count guard keeps the --ignored leg honest: a drifted name
+      # filter would otherwise match nothing and pass green — the same
+      # silent skip this job exists to end.
+      - name: ClickHouse e2e
+        shell: bash
+        env:
+          CLICKHOUSE_URL: http://localhost:8123
+          CLICKHOUSE_PASSWORD: clickhouse
+        run: |
+          # Both legs ALWAYS run, then the job fails on any of them. Under the
+          # default `bash -e`, a red first leg aborted the step, so the
+          # #[ignore] leg and its count guard never ran — one red run told you
+          # about one half. `--no-fail-fast` already buys completeness inside a
+          # leg; this buys it across legs, which is the same reason this job
+          # exists (no silent skips).
+          set +e
+          cargo test --no-fail-fast -p db-clickhouse -p backfill-runner -- --test-threads=1
+          gated_status=$?
+          cargo test --no-fail-fast -p backfill-enrichment-runner -p enrichment-shared -- --ignored --test-threads=1 \
+            select_sep1_chunk select_nft_chunk filter_drops | tee ignored-run.log
+          ignored_status=${PIPESTATUS[0]}
+          set -e
+          passed=$(grep -Eo '[0-9]+ passed' ignored-run.log | awk '{s+=$1} END {print s}')
+          if [ "${passed:-0}" -lt 5 ]; then
+            echo "::error::expected >=5 CH-only #[ignore] tests to pass, got ${passed:-0} — did the name filters drift?"
+            exit 1
+          fi
+          if [ "$gated_status" -ne 0 ] || [ "$ignored_status" -ne 0 ]; then
+            echo "::error::ClickHouse e2e failed (env-gated leg: $gated_status, #[ignore] leg: $ignored_status)"
+            exit 1
+          fi
 
   # The release Lambda build shares no compilation with the debug clippy/test
   # steps (different profile), so it runs as its own job in parallel with `rust`

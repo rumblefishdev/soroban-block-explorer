@@ -305,6 +305,14 @@ export class IngestionStack extends cdk.Stack {
       circuitBreaker: { rollback: true },
       minHealthyPercent: 0,
       maxHealthyPercent: 100,
+      // Fargate bills TASKS, and ECS does not propagate service tags to
+      // tasks by default — so Galexie's compute (the account's single
+      // largest line, measured 2026-08-10: ~74% of daily spend) landed in
+      // the "no Project tag" bucket and per-project cost attribution
+      // showed 9% of our real cost (task 0449 / 0455). This one line
+      // stamps the service's tags (Project/Environment/ManagedBy) onto
+      // every task it launches.
+      propagateTags: ecs.PropagatedTagSource.SERVICE,
     });
     this.liveService = liveService;
 

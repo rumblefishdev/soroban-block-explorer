@@ -120,7 +120,7 @@ pub async fn list_nfts(
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_nfts: {e}");
+            tracing::error!(error = %e, "DB error in list_nfts");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -182,7 +182,8 @@ pub async fn get_nft(
             tracing::error!(
                 contract_id = %contract_id,
                 token_id = %token_id,
-                "DB error fetching nft: {e}"
+                error = %e,
+                "DB error fetching nft"
             );
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
@@ -310,7 +311,8 @@ pub async fn list_nft_transfers(
             tracing::error!(
                 contract_id = %contract_id,
                 token_id = %token_id,
-                "DB error in nft transfers: {e}"
+                error = %e,
+                "DB error in nft transfers"
             );
             return errors::internal_error(errors::DB_ERROR, "database error");
         }

@@ -200,9 +200,33 @@ Frontend **content** is separate: `deploy-production-web`
 
 ### Gotchas — read before you deploy
 
+- **A SPA build without the Turnstile site key takes production down for
+  users.** With `enableAuthLayer: true` the API rejects unauthenticated
+  requests; a bundle built without `VITE_TURNSTILE_SITE_KEY` ships an
+  un-armed SPA whose every API call answers 401 — the site renders and
+  shows no data. `build-production-web` bakes the key from
+  `envs/production.json`, but the **Nx build cache can serve a stale
+  no-key bundle** even when the env is correct. For any isolated/first
+  production web build, add `--skip-nx-cache`, and after `deploy-production-web`
+  verify from a clean browser that `/auth/session` answers 200 and data
+  renders. (This happened live; the outage looked like an API failure
+  while the defect was in the shipped bundle.)
+
+- **Every new stack MUST tag its resources** with
+  `Project=soroban-block-explorer` (+ `Environment`, `ManagedBy`) via
+  `cdk.Tags.of(this).add(...)` — the account is shared with
+  `stellar-prices-api` and the `Project` tag is the only cost-attribution
+  dimension (task 0449; the July 2026 cost investigation took a day
+  because untagged spend cannot be attributed after the fact). Cost
+  allocation tag activation lives in the **organization management
+  account**, not here.
 - **`make deploy-production` deploys `--all`.** It will push every pending
   change across _every_ stack. For a single change, prefer the per-stack
-  target.
+  target. Since task 0455 the target first prints the full `cdk diff
+--strict` and requires a literal `yes` before deploying, so parked deltas
+  (the 0312 stowaway class) are seen, not shipped blind; `FORCE=1` skips the
+  prompt for non-interactive use. `--strict` matters on its own: without it
+  `cdk diff` silently hides entries containing non-ASCII characters.
 - **Per-stack `make` targets also deploy that stack's dependencies**
   (CDK default). If a dependency stack has an unrelated pending change, it
   ships too. To deploy **exactly one stack** and nothing else, run raw with

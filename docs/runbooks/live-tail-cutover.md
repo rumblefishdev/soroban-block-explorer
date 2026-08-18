@@ -871,6 +871,13 @@ Operator on-call until T+24h. Watch:
   when individual ledgers retry several times).
 - `<env>-ledger-processor-dlq-depth` alarm — any DLQ message = ledger
   permanently failed after all S3-redelivery attempts.
+- `<env>-ingestion-backlog-age` alarm — ledgers are queued but not being
+  consumed (oldest doorbell older than the configured age). This is the
+  consumer-side counterpart to `<env>-galexie-ingestion-lag`, which only sees
+  whether ledgers are landing in S3. A deliberate indexer pause WILL trip it
+  once the backlog crosses the threshold — one knowing page per pause is the
+  accepted design (ADR 0054 rule 4), and it doubles as the
+  forgot-to-re-enable bound.
 - CH disk usage growth — `df -h /var/lib/clickhouse` on the box.
   Expected: ~linear at steady-state pubnet ledger size (≈ 50–200 MiB /
   hour).

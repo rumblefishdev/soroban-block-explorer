@@ -132,7 +132,7 @@ pub async fn list_transactions(
         match fetch_list_for_source(&state, &resolved, direction, live_head).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("DB error in list_transactions: {e}");
+                tracing::error!(error = %e, "DB error in list_transactions");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -271,7 +271,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("transaction not found"),
         Err(e) => {
-            tracing::error!("DB error looking up transaction detail: {e}");
+            tracing::error!(tx_hash = %hash, error = %e, "DB error looking up transaction detail");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -292,7 +292,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     let op_rows: Vec<OpRow> = match op_rows_res {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error fetching operations: {e}");
+            tracing::error!(tx_hash = %tx.hash, error = %e, "DB error fetching operations");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -307,12 +307,12 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             fetch_invocations_for_source(&state, &tx),
         );
         let participants = p_res.unwrap_or_else(|e| {
-            tracing::warn!("DB fallback: fetch_participants failed: {e}");
+            tracing::warn!(error = %e, "DB fallback: fetch_participants failed");
             Vec::new()
         });
         let events = e_res
             .unwrap_or_else(|e| {
-                tracing::warn!("DB fallback: fetch_event_appearances failed: {e}");
+                tracing::warn!(error = %e, "DB fallback: fetch_event_appearances failed");
                 Vec::new()
             })
             .into_iter()
@@ -324,7 +324,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .collect();
         let invocations = i_res
             .unwrap_or_else(|e| {
-                tracing::warn!("DB fallback: fetch_invocation_appearances failed: {e}");
+                tracing::warn!(error = %e, "DB fallback: fetch_invocation_appearances failed");
                 Vec::new()
             })
             .into_iter()
@@ -399,8 +399,8 @@ async fn compute_heavy(state: &AppState, hash: &str, tx: &TxDetailRow) -> Option
         Ok(seq) => seq,
         Err(_) => {
             tracing::warn!(
-                "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
-                tx.ledger_sequence
+                ledger_sequence = tx.ledger_sequence,
+                "out-of-u32-range ledger_sequence for tx detail; degrading to heavy = unavailable"
             );
             return None;
         }
@@ -414,7 +414,7 @@ async fn compute_heavy(state: &AppState, hash: &str, tx: &TxDetailRow) -> Option
     {
         Ok(meta) => extract_e3_heavy(&meta, hash, &state.network_id),
         Err(e) => {
-            tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+            tracing::warn!(ledger_sequence = seq, error = %e, "failed to fetch ledger for tx detail");
             None
         }
     }

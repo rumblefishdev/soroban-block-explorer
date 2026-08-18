@@ -134,7 +134,7 @@ pub async fn get_search(
     //    `Vec<(String, SearchHit)>`, so grouping below is backend-agnostic.
     let fetched = queries::fetch_search(&state.ch(), q_raw, &classified, &include, limit as i32)
         .await
-        .map_err(|e| tracing::error!("CH error in get_search broad: {e}"));
+        .map_err(|e| tracing::error!(error = %e, "CH error in get_search broad"));
     let rows = match fetched {
         Ok(rows) => rows,
         Err(()) => return errors::internal_error(errors::DB_ERROR, "Unable to perform search."),
