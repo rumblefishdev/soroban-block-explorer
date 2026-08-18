@@ -392,6 +392,13 @@ pub struct PoolActivityItem {
     /// operations in a recent ledger window. The retired `/transactions` shape
     /// could only ever carry the transaction's, since its row WAS one.
     pub source_account: String,
+    /// How many pools the WHOLE operation crossed — `length(pool_ids)` from
+    /// the same appearance seek that resolves the source account. `1` for
+    /// every deposit/withdrawal (an LP op declares exactly one pool) and for
+    /// a single-hop trade; `> 1` marks this row as one hop of a longer path
+    /// payment, whose full route lives on the op's detail page. `null` only
+    /// when the appearance row is missing — unknown, never guessed to `1`.
+    pub pools_crossed: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 

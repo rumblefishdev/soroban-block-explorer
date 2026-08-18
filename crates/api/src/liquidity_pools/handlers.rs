@@ -547,6 +547,7 @@ pub async fn list_pool_activity(
             amount_a: r.amount_a,
             amount_b: r.amount_b,
             source_account: r.source_account,
+            pools_crossed: r.pools_crossed,
             created_at: r.created_at,
         })
         .collect();

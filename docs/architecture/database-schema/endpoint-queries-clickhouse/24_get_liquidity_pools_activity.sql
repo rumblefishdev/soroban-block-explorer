@@ -122,11 +122,18 @@ LIMIT 1 BY t.id;
 -- `max()` rather than `LIMIT 1 BY`: the table holds one row per APPEARANCE, so
 -- an operation has several, and aggregation skips the NULLs instead of picking
 -- a row arbitrarily.
+-- `pools_crossed` rides the same seek: `pool_ids` is the op's sorted+deduped
+-- crossing list, identical on every appearance row, so max(length()) is just
+-- "the length". It lets a row say "one hop of an N-pool route" without
+-- carrying the route (that lives on the op detail page the row links to).
+-- Cost of the array column, measured: 8.4k → 20.6k read_rows, same 7 ms,
+-- <1 MiB — noise against the 115k page read.
 SELECT
     ledger_sequence   AS ls,
     transaction_id    AS tid,
     application_order AS ao,
-    max(source_id)    AS source_id
+    max(source_id)    AS source_id,
+    max(length(pool_ids)) AS pools_crossed
 FROM operations_appearances
 WHERE (ledger_sequence, transaction_id) IN ((58123456, 991), (58123455, 990))
   AND intDiv(ledger_sequence, 500000) IN (116)

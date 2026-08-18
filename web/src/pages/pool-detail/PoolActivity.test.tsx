@@ -8,6 +8,8 @@ import {
   activityRowKey,
   formatPoolAmount,
   PoolActivity,
+  poolAmountLegs,
+  tradeRate,
 } from './PoolActivity.js';
 
 const hookMock = vi.hoisted(() => ({ usePoolActivity: vi.fn() }));
@@ -19,8 +21,12 @@ vi.mock('../../api/index.js', async (importOriginal) => ({
 
 /** An XLM / USDC pool, in canonical leg order. */
 const pool = {
-  asset_a: { asset_type_name: 'native', asset_code: null },
-  asset_b: { asset_type_name: 'credit_alphanum4', asset_code: 'USDC' },
+  asset_a: { asset_type_name: 'native', asset_type: 0, asset_code: null },
+  asset_b: {
+    asset_type_name: 'credit_alphanum4',
+    asset_type: 1,
+    asset_code: 'USDC',
+  },
 } as Parameters<typeof formatPoolAmount>[1];
 
 describe('formatPoolAmount', () => {
@@ -55,6 +61,37 @@ describe('formatPoolAmount', () => {
   });
 });
 
+describe('tradeRate', () => {
+  /** Quoted as out-per-in, the way stellar.expert does — the real fbdfc7ec
+   *  trade reads `at 3,063 KALE/XLM` there and must read the same here. */
+  it('quotes a swap as out per in, 4 significant figures', () => {
+    const parts = poolAmountLegs(
+      { amount_a: '1253398', amount_b: '-3839199963' },
+      pool
+    );
+    expect(tradeRate(parts)).toBe('3,063 USDC/XLM');
+  });
+
+  it('keeps sub-one rates readable instead of rounding them to zero', () => {
+    const parts = poolAmountLegs(
+      { amount_a: '-62441', amount_b: '192417893' },
+      pool
+    );
+    expect(tradeRate(parts)).toBe('0.0003245 XLM/USDC');
+  });
+
+  it('has no rate for a deposit and no rate against a zero leg', () => {
+    expect(
+      tradeRate(
+        poolAmountLegs({ amount_a: '1200000000', amount_b: '5000000' }, pool)
+      )
+    ).toBeNull();
+    expect(
+      tradeRate(poolAmountLegs({ amount_a: '0', amount_b: '-5000000' }, pool))
+    ).toBeNull();
+  });
+});
+
 describe('activityRowKey', () => {
   /** The hash alone is NOT unique: one transaction can run several
    *  operations against the same pool, and each is its own row. */
@@ -69,9 +106,16 @@ describe('activityRowKey', () => {
 });
 
 describe('PoolActivity table', () => {
+  // `asset_type` matters: `legHref` keys native routing off `asset_type === 0`,
+  // so a fixture without it renders a plain unlinked code and the link test
+  // passes vacuously against nothing.
   const poolItem = {
-    asset_a: { asset_type_name: 'native', asset_code: null },
-    asset_b: { asset_type_name: 'credit_alphanum4', asset_code: 'USDC' },
+    asset_a: { asset_type_name: 'native', asset_type: 0, asset_code: null },
+    asset_b: {
+      asset_type_name: 'credit_alphanum4',
+      asset_type: 1,
+      asset_code: 'USDC',
+    },
   } as PoolItem;
 
   const makeRow = (over: Partial<PoolActivityItem> = {}) =>
@@ -113,8 +157,11 @@ describe('PoolActivity table', () => {
     // trade in the same transaction, now labelled correctly one row each.
     expect(table.getByText('Deposit')).toBeInTheDocument();
     expect(table.getByText('Trade')).toBeInTheDocument();
-    expect(table.getByText('120 XLM + 0.5 USDC')).toBeInTheDocument();
-    expect(table.getByText('120 XLM → 0.5 USDC')).toBeInTheDocument();
+    // The amount line renders as parts (digits, icon, linked code), so the
+    // joined sentence lives on the line's aria-label — which is also what a
+    // screen reader announces for the cell.
+    expect(table.getByLabelText('120 XLM + 0.5 USDC')).toBeInTheDocument();
+    expect(table.getByLabelText('120 XLM → 0.5 USDC')).toBeInTheDocument();
   });
 
   it('links a row to its own operation anchor, not just the transaction', () => {
@@ -145,6 +192,25 @@ describe('PoolActivity table', () => {
     mockRows([makeRow()]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
     expect(screen.getByText('All events')).toBeInTheDocument();
+  });
+
+  it('marks a multi-pool route hop, and only then', () => {
+    mockRows([
+      makeRow({ application_order: 1, pools_crossed: 4 }),
+      makeRow({ application_order: 2, pools_crossed: 1 }),
+    ]);
+    renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
+    expect(screen.getByText('1 of 4 pools')).toBeInTheDocument();
+    expect(screen.queryByText('1 of 1 pools')).not.toBeInTheDocument();
+  });
+
+  it('links a leg to its asset page from the amount cell', () => {
+    mockRows([makeRow()]);
+    renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
+    const link = screen
+      .getAllByRole('link')
+      .find((a) => a.getAttribute('href') === '/assets/native');
+    expect(link).toBeDefined();
   });
 
   it('says the pool is empty only when no filter is narrowing it', () => {

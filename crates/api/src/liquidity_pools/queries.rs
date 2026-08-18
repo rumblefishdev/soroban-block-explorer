@@ -135,6 +135,10 @@ pub struct PoolActivityRow {
     pub amount_a: Option<String>,
     pub amount_b: Option<String>,
     pub source_account: String,
+    /// How many pools the whole operation crossed (`length(pool_ids)` off the
+    /// same appearance seek that resolves the op source). `None` = unknowable
+    /// (no appearance row), never guessed to `1`.
+    pub pools_crossed: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -1093,6 +1097,8 @@ struct OpSourceChRow {
     tid: i64,
     ao: i16,
     source_id: Option<i64>,
+    /// `length(pool_ids)` — how many pools the whole operation crossed.
+    pools_crossed: u64,
 }
 
 /// One operation's two legs, paired out of the key-ordered leg stream.
@@ -1314,12 +1320,20 @@ pub async fn fetch_pool_activity(
     // partition prune. `max()` rather than `LIMIT 1 BY`: the table holds one
     // row per APPEARANCE, so an operation has several, and aggregation skips
     // the NULLs instead of picking one arbitrarily.
+    //
+    // `pools_crossed` rides the same seek for free: `pool_ids` is the op's
+    // sorted+deduped crossing list, written identically on every appearance
+    // row (stage.rs fans the one list out), so `max(length(...))` is just
+    // "the length". It is what lets a row say "this trade was one hop of an
+    // N-pool route" without carrying the route itself — the route lives on
+    // the op's detail page, which the row already links to.
     let op_sources_sql = format!(
         "SELECT \
             ledger_sequence   AS ls, \
             transaction_id    AS tid, \
             application_order AS ao, \
-            max(source_id)    AS source_id \
+            max(source_id)    AS source_id, \
+            max(length(pool_ids)) AS pools_crossed \
          FROM operations_appearances \
          WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
            AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
@@ -1329,9 +1343,9 @@ pub async fn fetch_pool_activity(
         .query(&op_sources_sql)
         .fetch_all::<OpSourceChRow>()
         .await?;
-    let by_op: HashMap<(i64, i64, i16), i64> = op_sources
+    let by_op: HashMap<(i64, i64, i16), (Option<i64>, u64)> = op_sources
         .iter()
-        .filter_map(|r| r.source_id.map(|id| ((r.ls, r.tid, r.ao), id)))
+        .map(|r| ((r.ls, r.tid, r.ao), (r.source_id, r.pools_crossed)))
         .collect();
 
     // Source StrKeys by surrogate id (bloom seek) rather than a whole-
@@ -1339,7 +1353,7 @@ pub async fn fetch_pool_activity(
     let account_ids = txs
         .iter()
         .map(|t| t.source_id)
-        .chain(by_op.values().copied())
+        .chain(by_op.values().filter_map(|(src, _)| *src))
         .collect();
     let accounts = resolve_accounts(client, account_ids).await?;
 
@@ -1354,10 +1368,11 @@ pub async fn fetch_pool_activity(
             let tx = by_tx.get(&o.tid)?;
             // The operation's own source, falling back to the transaction's —
             // which is what the XDR's absent `sourceAccount` means.
-            let source_id = by_op
+            let (op_source, pools_crossed) = by_op
                 .get(&(o.ls, o.tid, o.ao))
                 .copied()
-                .unwrap_or(tx.source_id);
+                .map_or((None, None), |(src, n)| (src, Some(n as i64)));
+            let source_id = op_source.unwrap_or(tx.source_id);
             let source_account = accounts.get(&source_id)?.clone();
             let event = o.event();
             Some(PoolActivityRow {
@@ -1369,6 +1384,7 @@ pub async fn fetch_pool_activity(
                 amount_a: event.and(o.amount_a).map(|v| v.to_string()),
                 amount_b: event.and(o.amount_b).map(|v| v.to_string()),
                 source_account,
+                pools_crossed,
                 created_at: millis_to_utc(tx.created_at_ms),
             })
         })

@@ -1610,6 +1610,15 @@ export type PaginatedPoolActivityItem = {
     event?: null | PoolEvent;
     ledger_sequence: number;
     /**
+     * How many pools the WHOLE operation crossed — `length(pool_ids)` from
+     * the same appearance seek that resolves the source account. `1` for
+     * every deposit/withdrawal (an LP op declares exactly one pool) and for
+     * a single-hop trade; `> 1` marks this row as one hop of a longer path
+     * payment, whose full route lives on the op's detail page. `null` only
+     * when the appearance row is missing — unknown, never guessed to `1`.
+     */
+    pools_crossed?: number | null;
+    /**
      * Who performed THIS OPERATION — the operation's own source account when
      * it declares one, otherwise the transaction's, which is what an absent
      * `Operation.sourceAccount` means in the XDR.
@@ -1819,6 +1828,15 @@ export type PoolActivityItem = {
   created_at: string;
   event?: null | PoolEvent;
   ledger_sequence: number;
+  /**
+   * How many pools the WHOLE operation crossed — `length(pool_ids)` from
+   * the same appearance seek that resolves the source account. `1` for
+   * every deposit/withdrawal (an LP op declares exactly one pool) and for
+   * a single-hop trade; `> 1` marks this row as one hop of a longer path
+   * payment, whose full route lives on the op's detail page. `null` only
+   * when the appearance row is missing — unknown, never guessed to `1`.
+   */
+  pools_crossed?: number | null;
   /**
    * Who performed THIS OPERATION — the operation's own source account when
    * it declares one, otherwise the transaction's, which is what an absent
