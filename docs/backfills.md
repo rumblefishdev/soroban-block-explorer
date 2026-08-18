@@ -349,6 +349,56 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 > reads `first_seen_ledger` — which is why "the write finished" is not the same
 > as "the backfill is done".
 
+## Checkpoint-snapshot passes (task 0463 / ADR 0055)
+
+The SDF history archive publishes the **complete state of pubnet** at each
+checkpoint as a bucket list (~4.5 GB gzipped, 21 files). This is a different
+kind of source from everything above: backfills replay **changes** we already
+hold, while the snapshot answers **"what does the network have that we do
+not?"** — the only question a change-stream can never answer (78.85% of chain
+history predates our ledger floor).
+
+Five subcommands, all read-only except the seed's explicit `--execute`:
+
+| Subcommand                                                                                 | What it does                                                                                                                                         | Writes                                                                      |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `snapshot-tally`                                                                           | download + decode all buckets, count records per entry type                                                                                          | nothing                                                                     |
+| `snapshot-dedup`                                                                           | first-wins per key → DISTINCT live/dead entries                                                                                                      | nothing                                                                     |
+| `snapshot-compare --our-rows <tsv> [--dump-dir <dir>]`                                     | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with samples and a ledger-floor histogram | nothing                                                                     |
+| `snapshot-verify --samples <tsv>` (needs `--soroban-rpc-url`)                              | spot-check any sample against live chain state via `getLedgerEntries` raw XDR — absence from the response means the entry does not exist             | nothing                                                                     |
+| `snapshot-seed --our-rows … --assets-ids … --accounts-ids … --artifacts <dir> [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default                                | `balances`, `account_signers`, `assets`, `accounts` — only with `--execute` |
+
+**The seed's ordering contract (do not reorder):**
+
+1. Deploy the lifecycle writer (the indexer that stamps `closed_at_ledger`)
+   FIRST.
+2. Export fresh inputs minutes before the run (`our_balances` via the sliced
+   `argMax` query in `snapshot_compare::slice_sql`, plus `SELECT id FROM
+assets/accounts`); the skew window measurably grows false divergents.
+3. Run `snapshot-seed --execute` against a checkpoint taken AFTER the deploy.
+   Reversed, every removal between checkpoint and deploy is written by the old
+   writer as a plain zero with a HIGHER version than the seed's closure — the
+   ghost resurrects.
+
+**No indexer stop is needed.** Every seeded row versions on a real ledger:
+live data on the entry's own `lastModifiedLedgerSeq`, closures on the run's
+checkpoint ledger (semantics: "closed at or before"). ReplacingMergeTree keeps
+the higher version, so the live writer's newer rows always win regardless of
+load order.
+
+**After the seed (standing requirement, not advice):** measure the coverage
+achieved for trustlines and accounts separately, AND cross-check a sample
+against the RPC route regardless of the result. The 200-account probe from
+task 0463's notes is the repeatable check: zero accounts where the chain holds
+more live zero trustlines than we do, and zero where we show more than the
+chain.
+
+**Provenance:** the run writes `manifest.json` (checkpoint ledger + the 21
+bucket hashes) into the artifacts dir. The archive is content-addressed, so
+that manifest alone re-derives the identical snapshot later — the planned LP
+merge (ADR 0056) depends on this. `ghosts.tsv` records every positive-amount
+row the seed zeroed.
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)
