@@ -49,6 +49,16 @@
 //!   manifest JSON saved into the artifacts dir; nothing else must be kept.
 //! - **Type-3 / contract-held holdings** — different ledger entry type
 //!   (`ContractData`); their audit is task 0503 on the same decoder.
+//!
+//! ## Why the `assets` stubs need no RMT version
+//!
+//! `assets` is `ReplacingMergeTree` with NO version column, keyed on the
+//! identity 4-tuple — on merge ClickHouse keeps the last-inserted row per
+//! key. That is safe here because every field of an `AssetRow` (including the
+//! `id` surrogate) is a pure function of that same identity tuple: any two
+//! rows ever written for one key are byte-identical, so it cannot matter
+//! which survives. Stubs are additionally emitted only for ids absent from
+//! the exported known-id set, so they never contend with an existing row.
 
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;

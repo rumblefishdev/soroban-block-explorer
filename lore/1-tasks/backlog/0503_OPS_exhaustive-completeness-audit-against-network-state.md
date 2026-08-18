@@ -64,6 +64,44 @@ Report absolute counts **and** the value at stake where the entity carries
 one (phantom XLM, mislabelled holders), because a count alone does not convey
 whether a gap matters.
 
+## Measured baseline 2026-08-18 (checkpoint 64,010,495) — the ledger of what is and is not compared
+
+Raw per-type counts from `snapshot-tally` (full 21-bucket pass, distinct
+entries after first-wins where stated). NOTHING below is forgotten: every row
+has an explicit status and an owner task.
+
+| snapshot entry type      | network live (records unless noted) | our side                                                                                              | compared?                                                                       | owner           |
+| ------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------- |
+| `account`                | **10,863,731 distinct**             | `accounts` 14.5M ids, `balances` native                                                               | **YES** — four-way + RPC 260/260                                                | 0463 (done)     |
+| `trustline` (classic)    | **32,344,912 distinct**             | `balances`                                                                                            | **YES** — four-way + RPC                                                        | 0463 (done)     |
+| `trustline` (pool share) | **77,048 distinct live**            | `lp_positions`: 108,579 pairs, only 40,738 positive, 67,841 at zero (same live-zero/closed ambiguity) | counted, NOT diffed                                                             | 0499 / ADR 0056 |
+| `liquidity_pool`         | 179,523                             | `liquidity_pools`                                                                                     | NOT diffed                                                                      | **this task**   |
+| `contract_data`          | 17,124,415                          | `balances` type-3, `soroban_contracts`, `nfts`                                                        | NOT diffed (needs ScVal Balance-key decode; archived-state caveat, 0463 map T8) | **this task**   |
+| `contract_code`          | 2,774                               | `soroban_contracts.wasm_hash`                                                                         | NOT diffed                                                                      | **this task**   |
+| `offer`                  | 1,208,197                           | **no table** — and open offers lock funds we report as spendable                                      | tally only                                                                      | 0504            |
+| `claimable_balance`      | 5,443,206                           | **no table** — value addressed to accounts, invisible                                                 | tally only                                                                      | 0504            |
+| `data`                   | 100,449                             | **no table**                                                                                          | tally only                                                                      | 0504            |
+| `ttl`                    | 16,987,781                          | **no table** — Soroban archival state; type-3 may over-report                                         | tally only                                                                      | 0504 / 0463 T8  |
+| `config_setting`         | 54                                  | **no table** — network config, no product surface                                                     | tally only; deliberate skip candidate                                           | 0504            |
+
+## The window discriminator — the audit's core verdict rule
+
+For every discrepancy, read the entry's own `lastModifiedLedgerSeq` against
+our ledger floor (50,457,424) and the seed checkpoint:
+
+- **before the floor** → we never saw it; a coverage gap, not a defect;
+- **inside our window** → the change passed through our parser and the result
+  is still wrong: **we index incorrectly** — a bug with a reproduction ledger
+  attached;
+- **after the 0463 seed lands**, the first category collapses for seeded
+  entities: any NEW discrepancy in accounts/trustlines/native IS an indexing
+  defect (modulo export-vs-checkpoint skew churn, measured growing 1.5k→25k
+  divergents with the gap — take the export minutes before the snapshot).
+
+Proven live already: the 0463 comparison put 99.997% of 19.29M missing
+trustlines below the floor and the 648 in-window ones were all post-export
+churn — the parser's first full-population correctness pass.
+
 ## Rules for the audit itself
 
 - **Read-only.** This measures; remediation is a separate task per finding.

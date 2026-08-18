@@ -227,6 +227,27 @@ balances, never trustlines — so native measures complete while classic misses
 5. Only then: flip the read filter, ship signers API/DTO/UI (explicit
    "not indexed" state until then), regenerate API types, update docs.
 
+### Findings 2026-08-18 (second sweep — Karol's "omit nothing" pass)
+
+- **The RPC bootstrap is NOT a one-off**: `bootstrap.rs` runs once per backfill
+  window inside `run` (fills skeleton accounts via per-key RPC, task 0214).
+  The seed covers its purpose strictly better, but retiring it is a live
+  backfill-flow change — gated on the seed verifying on prod; recorded in 0502.
+- **`assets` stubs need no RMT version** (question raised in review of the
+  plan): the table has no version column, so CH keeps the last-inserted row
+  per identity key — safe here because every `AssetRow` field including the
+  `id` surrogate is a pure function of the identity tuple, so all rows for one
+  key are byte-identical; stubs additionally only target absent ids. Argument
+  recorded in the seed module docs.
+- **Every snapshot entry type now has an explicit owner** — the full 10-type
+  ledger (network counts, our side, compared-or-not, owner task) lives in
+  0503; the window-discriminator verdict rule (before-floor = coverage gap,
+  in-window = WE index wrong; post-seed it becomes a pure correctness
+  monitor) is recorded in both 0502 and 0503.
+- Snapshot bytes are never kept on disk (unnamed temp file per bucket); the
+  durable artifacts are `manifest.json` (checkpoint + 21 bucket hashes —
+  re-derives the exact snapshot), `summary.txt`, `ghosts.tsv`.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from
