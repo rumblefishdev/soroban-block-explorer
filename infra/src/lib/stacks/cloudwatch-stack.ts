@@ -881,6 +881,29 @@ export class CloudWatchStack extends cdk.Stack {
             width: 6,
             height: 6,
           }),
+          // The last alarm that had no widget (2026-08-04 survey). Raw error
+          // COUNT, deliberately not the alarm's errors/invocations ratio: the
+          // ratio is unreadable at this worker's traffic (a 1-of-1 window is
+          // 100%), and the count is what an operator compares against the DLQ
+          // depth beside it — errors climbing while the DLQ stays flat means
+          // the retries are absorbing them.
+          new cloudwatch.GraphWidget({
+            title: 'Enrichment worker errors',
+            left: [
+              enrichmentWorkerFunction.metricErrors({
+                period: cdk.Duration.minutes(5),
+                statistic: cloudwatch.Stats.SUM,
+                label: 'Errors',
+              }),
+            ],
+            width: 6,
+            height: 6,
+          }),
+        ],
+        // Row 3b: standing context, deliberately unalarmed (four sentences,
+        // rule 3). Kept off the failure row above so that row reads as
+        // "every one of these has an alarm behind it".
+        [
           new cloudwatch.GraphWidget({
             title: 'Lambda concurrent executions',
             left: [
@@ -903,7 +926,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'API',
               }),
             ],
-            width: 6,
+            width: 12,
             height: 6,
           }),
         ],
@@ -976,6 +999,53 @@ export class CloudWatchStack extends cdk.Stack {
         //   are a Logs Insights question (`@initDuration`), not a widget.
         //   Reinstating one means minting the metric from logs first.
         // An empty widget is worse than no widget: it implies coverage.
+        //
+        // Row 7: Cost — the dashboard answer the cost-anomaly alert lacked
+        // (task 0449 acceptance criterion).
+        //
+        // Cost Anomaly Detection publishes NO CloudWatch metric, so nothing
+        // can graph the alert itself; `AWS/Billing EstimatedCharges` is the
+        // only graphable spend signal. Three properties to read it correctly,
+        // all of them AWS behaviour rather than choices made here:
+        //   * it is CUMULATIVE month-to-date, not per-day — the slope is the
+        //     daily burn and the line resets to zero on the 1st;
+        //   * it refreshes every ~6 h, so it is a trend, never a live number;
+        //   * it is published only in us-east-1, hence the explicit region.
+        // Account-wide by design (both projects): that is exactly the scope
+        // the anomaly monitor watches, so alert and graph agree. Per-project
+        // attribution is a Cost Explorer question — docs/runbooks/costs.md.
+        //
+        // What this catches that the anomaly monitor does not: slow creep.
+        // A monitor learns a baseline and fires on step changes; spend that
+        // rises a little every day never looks like a step. Budgets were the
+        // designed answer and were dropped 2026-08-10, so this graph is the
+        // only place a human sees creep at all.
+        [
+          new cloudwatch.TextWidget({
+            markdown: '## Cost',
+            width: 24,
+            height: 1,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title:
+              'Account charges, month-to-date (USD, cumulative, both projects)',
+            left: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/Billing',
+                metricName: 'EstimatedCharges',
+                dimensionsMap: { Currency: 'USD' },
+                region: 'us-east-1',
+                period: cdk.Duration.hours(6),
+                statistic: cloudwatch.Stats.MAXIMUM,
+                label: 'Month-to-date',
+              }),
+            ],
+            width: 12,
+            height: 6,
+          }),
+        ],
         //
         // Resources widgets (RDS CPU / connections / free storage) removed
         // in task 0239 — the production data plane lives on Hetzner

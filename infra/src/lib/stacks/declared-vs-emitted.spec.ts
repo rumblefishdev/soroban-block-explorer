@@ -7,6 +7,30 @@
  * time. This test asserts every declared literal appears somewhere under
  * `crates/`, so a rename on either side fails CI instead of leaving a filter
  * or alarm silently matching nothing.
+ *
+ * ## Why a grep-shaped guard, and when to replace it
+ *
+ * Three ways to keep the two sides honest were compared (2026-08-18). The
+ * ranking is a function of how many contracts exist, so it is recorded here
+ * with its trigger rather than re-argued each time:
+ *
+ * - **A. This test (current).** ~100 lines, no build step, no generated
+ *   files. Reads source text, so it is approximate by construction — that is
+ *   the price. Fits today's THREE live contracts.
+ * - **B. Assert on the synthesized template.** Same idea, exact mechanism:
+ *   `Template.fromStack()` exposes `AWS::Logs::MetricFilter` transformations
+ *   and dashboard/alarm bodies as real resources, so provenance stops being
+ *   inferred from proximity. Costs a stack fixture (the constructor takes
+ *   functions, queues, a cluster and a REST API). **Trigger: a second or
+ *   third MetricFilter, or the first time this file needs another heuristic.**
+ * - **C. One source of truth + codegen.** A contracts file generating the
+ *   constants for both sides. Built, measured and REJECTED in `827898d0` as
+ *   overkill for three pairs: it does not remove this guard (something must
+ *   still assert the generated file is current) and adds five moving parts.
+ *   **Trigger: ~10 contracts, or emitters spanning multiple crates.**
+ *
+ * Recommendation: stay on A, jump to B when a heuristic is added or a filter
+ * is, and only reach for C at the contract count that made it lose.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
