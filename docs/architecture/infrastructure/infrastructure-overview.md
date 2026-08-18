@@ -666,12 +666,28 @@ to a follow-up monitoring task per task 0216 future work.
 
 ### 8.2 Alerting Surface
 
-The documented alarms (production):
+The deployed alarms (production; authoritative definitions in
+`infra/src/lib/stacks/cloudwatch-stack.ts`):
 
-- Galexie ingestion lag when S3 file timestamps are more than 60 seconds behind ledger close
+- Galexie ingestion lag — zero doorbells sent to the ingest queue in 5 min
+  (SQS `NumberOfMessagesSent`, one per S3 ledger object; the queue metric is
+  the alarm signal, S3 listing is only a diagnostic cross-check), missing data
+  treated as breaching
+- Galexie ephemeral storage above 60% sustained 3×5 min
+- Ingest backlog age above 120 s for 3 consecutive minutes — the consumer-side
+  counterpart to the lag alarm (a planned indexer pause pages once, knowingly)
 - Ledger Processor error rate above 1% of Lambda invocations
-- API Gateway 5xx rate above 0.5% of requests
+- Indexer ClickHouse write failures — **any** post-retry hard-failure log line
+  in 5 min (zero tolerance; a matching line means the whole in-band retry
+  envelope was exhausted)
+- Ledger Processor DLQ depth above 0
 - Type-1 enrichment DLQ depth above 0
+- Enrichment worker error rate above 1% of Lambda invocations
+- API Gateway 5xx — **any single** 5xx in a 5-minute window (zero tolerance;
+  the response to a page is to fix the class, not to raise a threshold — see
+  [`docs/runbooks/api-5xx.md`](../../runbooks/api-5xx.md))
+- Origin-lock canary (flag-gated, off until the Cloudflare cutover) — a direct
+  origin answering instead of 403
 
 These values are the production baseline. ClickHouse-side alerts
 (query backpressure, partition merge stalls, disk usage) live on

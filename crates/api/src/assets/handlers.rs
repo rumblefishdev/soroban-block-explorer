@@ -187,7 +187,7 @@ pub async fn list_assets(
     let mut rows: Vec<AssetRow> = match fetch_list_for_source(&state, &resolved, direction).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_assets: {e}");
+            tracing::error!(error = %e, "DB error in list_assets");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -252,7 +252,7 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("asset not found"),
         Err(e) => {
-            tracing::error!("DB error fetching asset {id}: {e}");
+            tracing::error!(asset_id = %id, error = %e, "DB error fetching asset");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -275,7 +275,7 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
                     extract_sep1_fields(&parsed, asset_code.as_deref(), issuer.as_deref())
                 }
                 Err(e) => {
-                    tracing::warn!("SEP-1 fetch failed for issuer home_domain {domain:?}: {e}");
+                    tracing::warn!(home_domain = %domain, error = %e, "SEP-1 fetch failed for issuer home_domain");
                     (None, None)
                 }
             }
@@ -433,7 +433,7 @@ pub async fn list_asset_transactions(
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("asset not found"),
         Err(e) => {
-            tracing::error!("DB error fetching asset {id}: {e}");
+            tracing::error!(asset_id = %id, error = %e, "DB error fetching asset");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -486,7 +486,7 @@ pub async fn list_asset_transactions(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_asset_transactions: {e}");
+            tracing::error!(asset_id = %id, error = %e, "DB error in list_asset_transactions");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };

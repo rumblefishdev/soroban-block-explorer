@@ -642,8 +642,11 @@ query bounded.
 
 ### 6.5 Response Caching
 
-Per task 0055, every public endpoint sets an explicit `Cache-Control` header
-that the API Gateway stage cache (CDK config — task 0097) honours. Constants
+Per task 0055, every public endpoint sets an explicit `Cache-Control` header.
+Its consumer today is the **user's browser** (plus any future edge cache) —
+the API Gateway stage cache was never enabled and stays off by decision
+(2026-08-14, task 0455; rationale and return condition in
+[`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md)). Constants
 live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
 
 | Tier             | `Cache-Control`                      | Endpoints                                                                                                                                                                                                                                                                                                                                                                      |
@@ -859,7 +862,10 @@ inconsistent results or duplicated logic across screens.
 
 - **Ingestion lag** - if the Galexie pipeline falls behind, the API continues serving
   data from the database with a freshness indicator showing the highest indexed ledger
-  sequence. A CloudWatch alarm fires at >60 s lag.
+  sequence. A CloudWatch alarm fires when no new ledger file lands in S3 for the
+  configured lag window (5 min in production); see
+  `docs/architecture/technical-design-general-overview.md` §3.7 for the full
+  alarm set.
 - **Lambda cold starts** - mitigated via Rust's fast startup on ARM/Graviton2 and provisioned concurrency
   at higher traffic tiers.
 - **Connection handling** - the `clickhouse` HTTP client reuses a hyper connection

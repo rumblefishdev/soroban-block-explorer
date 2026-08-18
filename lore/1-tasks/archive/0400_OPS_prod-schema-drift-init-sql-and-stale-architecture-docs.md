@@ -2,7 +2,7 @@
 id: '0400'
 title: 'OPS: prod-only CH schema objects missing from init.sql + architecture docs describe a retired Postgres world'
 type: OPS
-status: backlog
+status: completed
 related_adr: ['0032']
 related_tasks: ['0357', '0356', '0281']
 tags: [priority-medium, effort-medium, layer-clickhouse, phase-post-launch]
@@ -67,6 +67,62 @@ history:
       prod today (columns, types, engines, sort keys, skip indexes, projections,
       views, dictionaries): the only structural gaps are `net_settled` and
       `idx_oaa_transaction_id`, both owned by 0419.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Re-measured all four items on prod (read-only, via 0455 work).
+      (1) assets_pre0339: GONE - dropped since July, resolved. (2)
+      transaction_hash_dict element_count=1: explained, not an anomaly - the
+      dictionary layout is ComplexKeyCache, so element_count reports entries
+      currently cached, not source size; 1 = cold cache. (3)
+      idx_oaa_transaction_id: still missing on prod - 0419 deployed the
+      net_settled column but not the index; orphaned half, needs
+      ALTER ADD INDEX + MATERIALIZE (operator). (4) net_settled: EXISTS on
+      prod now, resolved. NEW fifth item: prod carries
+      idx_oa_asset_issuer_id on operations_appearances, which init.sql
+      deliberately omits (comment says DROP frees ~97 MiB) - a decided but
+      never-executed DROP, reverse-direction drift; operator decision.
+      Structural layer closes with those two ALTERs; the docs half
+      (architecture describing the retired PG world) remains.
+  - date: 2026-08-06
+    status: backlog
+    who: karolkow
+    note: >
+      Structural layer reconciled: idx_oa_asset_issuer_id dropped on prod
+      (0381's recorded decision executed), idx_oaa_transaction_id
+      added+materialized then re-audited as consumer-less (19.87 GiB for a
+      withdrawn read path - see 0419's same-day entry; resolved same day:
+      dropped on BOTH sides - prod and init.sql, with the consumer story
+      recorded at the removal site). Lesson for this task's
+      docs half: declared-vs-actual drift can sit in the DECLARATION -
+      init.sql carried an index for a read that no longer exists, so
+      reconciling prod TOWARD init.sql was reconciling toward a stale claim.
+      The comparator must flag both directions, and init.sql entries need
+      their consumer named.
+  - date: 2026-08-14
+    status: completed
+    who: karolkow
+    note: >
+      Docs half closed, task archived. Survey found the header/banner layer
+      already fixed earlier (clickhouse-pilot.md carries a HISTORICAL banner
+      since 0248; database-schema-overview.md's header declares CH the sole
+      store with init.sql as physical authority, PG DDL blocks in section 4
+      explicitly retained as shape notation). What was still live-tense
+      Postgres: section 6.1 "Indexing Strategy" described GIN/trigram/
+      partial/text_pattern_ops indexes as the current design - rewritten to
+      the CH model (sort key as primary index, the six deployed skip
+      indexes as a table with consumers and measurements, the
+      transaction_hash_dict with its ComplexKeyCache element_count gotcha,
+      projections impossible on RMT per Code 344/0353, plus the two 0400
+      conventions: every index names its consumer, drift is a defect in
+      both directions). Also fixed: 6.3 retention still claimed PG-era
+      pre-created partitions; 4.6 narrated the nonexistent search_vector
+      column as live (CH search is positionCaseInsensitive in
+      crates/api/src/search/queries.rs). Structural layer was already
+      reconciled 2026-08-06/10. The one remaining AC - a scheduled drift
+      gate - is owned verbatim by 0455's comparator acceptance criterion
+      and is deferred there, not dropped.
 ---
 
 # OPS: prod-only CH schema objects missing from init.sql + stale architecture docs
@@ -157,14 +213,22 @@ checkbox on any schema PR is a formality that cannot be met in good faith.
 
 ## Acceptance Criteria
 
-- [ ] Every prod CH table's deployed DDL is reconciled with `init.sql` (enumerated, not sampled)
-- [ ] `assets_pre0339` is either dropped or documented in `init.sql` as a
-      deliberate prod-only soak backup, with an owner and a removal trigger
-- [ ] A drift gate exists that fails/alerts when deployed DDL diverges from `init.sql`
-- [ ] `docs/architecture/database-schema/**` describes ClickHouse as production; Postgres content is marked historical or removed
-- [ ] Skip indexes + projections are documented where the ADR 0032 gate points reviewers
-- [ ] **Docs updated** — this task IS the docs update; see criterion above
-- [ ] **API types regenerated** — N/A (schema/ops only; no API surface change)
+- [x] Every prod CH table's deployed DDL is reconciled with `init.sql`
+      (enumerated, not sampled — 2026-07-21 inventory, re-verified 2026-07-29,
+      closed out 2026-08-06/10 in both directions)
+- [x] `assets_pre0339` is either dropped or documented — dropped on prod
+      (verified gone 2026-08-06)
+- [ ] A drift gate exists that fails/alerts when deployed DDL diverges from
+      `init.sql` (deferred to [[0455]] — its open comparator AC owns exactly
+      this: scheduled schema + CDK delta report seen by a human)
+- [x] `docs/architecture/database-schema/**` describes ClickHouse as
+      production; Postgres content is marked historical or removed
+      (2026-08-14 — §6.1/§6.3/§4.6 were the last live-tense PG claims)
+- [x] Skip indexes + projections are documented where the ADR 0032 gate
+      points reviewers (§6.1 rewrite: six-index inventory with consumers;
+      projections documented as impossible on RMT)
+- [x] **Docs updated** — this task IS the docs update; see criterion above
+- [x] **API types regenerated** — N/A (schema/ops only; no API surface change)
 
 ## Notes
 

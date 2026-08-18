@@ -48,7 +48,7 @@ export function createApp({
     cargoWorkspacePath,
   });
 
-  new IngestionStack(app, `${prefix}-Ingestion`, {
+  const ingestion = new IngestionStack(app, `${prefix}-Ingestion`, {
     env,
     config,
     vpc: network.vpc,
@@ -82,9 +82,12 @@ export function createApp({
     config,
     apiFunction: compute.apiFunction,
     processorFunction: compute.processorFunction,
+    ingestQueue: compute.ingestQueue,
     deadLetterQueue: compute.deadLetterQueue,
     enrichmentDlq: compute.enrichmentDlq,
     enrichmentWorkerFunction: compute.enrichmentWorkerFunction,
+    galexieCluster: ingestion.cluster,
+    galexieService: ingestion.liveService,
     restApi: apiGateway.api,
     spaDistributionDomainName: delivery.distribution.distributionDomainName,
   });

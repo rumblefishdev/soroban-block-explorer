@@ -86,7 +86,7 @@ pub async fn list_participants(
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in pool_exists({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in pool_exists");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     }
@@ -94,7 +94,7 @@ pub async fn list_participants(
     let mut rows = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in fetch_participants({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_participants");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -309,7 +309,7 @@ pub async fn list_pools(
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_pools: {e}");
+            tracing::error!(error = %e, "DB error in list_pools");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -364,7 +364,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in get_pool({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in get_pool");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -483,7 +483,7 @@ pub async fn list_pool_transactions(
         Ok(Some(ids)) => ids,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in fetch_pool_asset_ids({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -501,7 +501,7 @@ pub async fn list_pool_transactions(
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in fetch_pool_transactions({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_transactions");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -683,7 +683,7 @@ pub async fn get_pool_chart(
         Ok(Some(ctx)) => ctx,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!("DB error in fetch_pool_price_context({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_price_context");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -694,7 +694,7 @@ pub async fn get_pool_chart(
     let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in fetch_pool_chart({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_chart");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
