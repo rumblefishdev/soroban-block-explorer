@@ -312,6 +312,11 @@ function activityColumns(
       id: 'account',
       header: 'Account',
       width: 160,
+      // First column off the boat on a phone: a truncated G-string is the
+      // least scannable cell here, and the op detail page one tap away names
+      // it anyway. Dropping it narrows the table for real — `hideBelow` also
+      // removes its share of the scroll width.
+      hideBelow: 'sm',
       cell: (row) => (
         <IdentifierWithCopy value={row.source_account} type="account" />
       ),
@@ -325,7 +330,12 @@ function activityColumns(
           <RelativeTimestamp timestamp={row.created_at} />
           <Typography
             variant="bodyXsRegular"
-            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            sx={(theme) => ({
+              color: theme.palette.text.tertiary,
+              // The relative time carries the story on a phone; the exact
+              // UTC stamp is a desktop affordance.
+              display: { xs: 'none', sm: 'block' },
+            })}
           >
             {formatAbsoluteUtc(row.created_at)}
           </Typography>

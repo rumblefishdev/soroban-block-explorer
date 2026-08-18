@@ -9,6 +9,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { type ReactNode } from 'react';
 
@@ -38,6 +40,14 @@ export interface ExplorerTableColumn<T> {
   align?: 'left' | 'right' | 'center';
   width?: number | string;
   sortable?: boolean;
+  /**
+   * Drop this column below the given breakpoint. The mobile answer for every
+   * table is a horizontal scroll inside the container; this trims the least
+   * essential columns so that scroll covers screens, not screenfuls. The
+   * hidden column also leaves the `minWidth` sum, so the table genuinely
+   * narrows instead of scrolling the same distance with a gap in it.
+   */
+  hideBelow?: 'sm' | 'md';
   cell: (row: T, index: number) => ReactNode;
 }
 
@@ -157,10 +167,19 @@ export function ExplorerTable<T>({
   // keep a content-sized PIXEL width that never compresses below the data. The
   // table's `minWidth` is the sum of those pixel widths, so on a narrow screen
   // the container scrolls horizontally instead of squeezing/truncating cells
+  const theme = useTheme();
+  // In jsdom (tests) `matchMedia` reports no match, so every column stays
+  // visible — the desktop layout — unless a test stubs it deliberately.
+  const belowSm = useMediaQuery(theme.breakpoints.down('sm'));
+  const belowMd = useMediaQuery(theme.breakpoints.down('md'));
+  const visibleColumns = columns.filter((c) =>
+    c.hideBelow === 'sm' ? !belowSm : c.hideBelow === 'md' ? !belowMd : true
+  );
+
   // (cols are sized in px in each table; falls back to a sane default if a
   // table only uses % / no widths).
   const minWidth =
-    columns.reduce(
+    visibleColumns.reduce(
       (sum, c) => sum + (typeof c.width === 'number' ? c.width : 0),
       0
     ) || 720;
@@ -178,7 +197,7 @@ export function ExplorerTable<T>({
           })}
         >
           <TableRow>
-            {columns.map((col) => {
+            {visibleColumns.map((col) => {
               const isSorted = sortBy === col.id;
               return (
                 <TableCell
@@ -232,7 +251,7 @@ export function ExplorerTable<T>({
                   })}
                   data-testid="explorer-table-skeleton-row"
                 >
-                  {columns.map((col, c) => (
+                  {visibleColumns.map((col, c) => (
                     <TableCell
                       key={col.id}
                       align={col.align ?? 'left'}
@@ -263,7 +282,7 @@ export function ExplorerTable<T>({
               emptyState !== undefined && (
                 <TableRow>
                   <TableCell
-                    colSpan={columns.length}
+                    colSpan={visibleColumns.length}
                     sx={{ borderBottom: 'none' }}
                   >
                     <Box
@@ -290,7 +309,7 @@ export function ExplorerTable<T>({
                     height: rowHeight,
                   })}
                 >
-                  {columns.map((col) => (
+                  {visibleColumns.map((col) => (
                     <TableCell
                       key={col.id}
                       align={col.align ?? 'left'}
