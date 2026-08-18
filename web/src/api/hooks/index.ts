@@ -25,4 +25,8 @@ export { usePoolsList } from './usePoolsList.js';
 export { usePoolDetail } from './usePoolDetail.js';
 export { usePoolActivity } from './usePoolActivity.js';
 export { usePoolParticipants } from './usePoolParticipants.js';
-export { usePoolChart, type ChartPeriod } from './usePoolChart.js';
+export {
+  usePoolChart,
+  periodBucketMs,
+  type ChartPeriod,
+} from './usePoolChart.js';
