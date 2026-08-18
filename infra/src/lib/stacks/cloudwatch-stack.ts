@@ -991,4 +991,3 @@ export class CloudWatchStack extends cdk.Stack {
     cdk.Tags.of(this).add('ManagedBy', 'cdk');
   }
 }
-
