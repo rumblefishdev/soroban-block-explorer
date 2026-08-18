@@ -109,11 +109,55 @@ Filter control on the section header.
       detail page
 - [ ] `filter[event]` returns trades / deposits / withdrawals, and the mixed
       bundle that motivated this appears under each type it actually contains
-- [ ] Pagination is stable across the new cursor, including at a page boundary
-      that falls inside a multi-operation transaction
-- [ ] Read path stays a PK-prefix seek with the same partition prune — measure
-      `read_rows` before and after; more rows per page must not mean a scan
+- [x] Pagination is stable across the new cursor, including at a page boundary
+      that falls inside a multi-operation transaction — verified on prod, see
+      [Verification](#verification-on-prod-2026-08-18)
+- [x] Read path stays a PK-prefix seek with the same partition prune — measure
+      `read_rows` before and after; more rows per page must not mean a scan —
+      measured, and it caught a regression; see below
 - [ ] 0490's cap is removed or confirmed dead, not left as unreachable code
 - [ ] **Docs updated** — per ADR 0032, the endpoint contract and the canonical
       SQL under `docs/architecture/**`
 - [ ] **API types regenerated** — required, the response shape changes
+
+## Verification on prod (2026-08-18)
+
+Run against `sorban-prod` / `app-clickhouse-1` as read-only SELECTs, on the
+pool with the most recent activity (`7a042a04…0e6e`, 1.68M leg rows).
+
+### read_rows — the measurement rejected the first implementation
+
+Returning 21 operations. **Medians of 3**: a cold run of _either_ shape reads
+0.7–1.0M rows, so one sample each inverts the comparison.
+
+| shape                                            | read_rows   | ms    | memory     |
+| ------------------------------------------------ | ----------- | ----- | ---------- |
+| `GROUP BY` pivot (first cut)                     | 2 597 380   | 109   | 182 MiB    |
+| + `optimize_aggregation_in_order`                | 2 597 297   | 253   | 230 MiB    |
+| + `FINAL`                                        | 3 174 852   | 110   | 195 MiB    |
+| **read-in-order + pair in Rust (shipped)**       | **114 888** | **9** | **11 MiB** |
+| per-transaction endpoint 20 (what this replaces) | 159 021     | 11    | 11 MiB     |
+
+The first implementation was a **regression** against the endpoint it
+replaces: a `GROUP BY` must consume the pool's whole slice before
+`ORDER BY … LIMIT` can pick the newest 21. Reading in sort-key order stops at
+the window, because `asset_id` is the last key component and an operation's two
+legs are therefore adjacent — Rust folds them without an aggregation.
+
+Two hypotheses died here and are recorded so they are not retried: `FINAL` was
+never the cost (+22%, not an order of magnitude), and
+`optimize_aggregation_in_order` bought nothing while doubling latency.
+
+### Cursor at a boundary inside a multi-operation transaction
+
+Transaction `4849775023734824275` in ledger `64007288` runs **11 operations**
+against this pool, occupying positions 4–14, so any page shorter than 13 splits
+it. Walking 4 pages of 5 with the shipped keyset returned 20 rows, 20 distinct,
+byte-identical to the top-20 taken in one shot — no duplicates, no gaps. Pages 3
+and 4 both open and close _inside_ that transaction (cursors at `ao` 14, 9, 1).
+
+The test is not a tautology. The same walk with a transaction-level keyset
+`(ledger_sequence, transaction_id)` — the shape the retired endpoint's cursor
+used — jumps from `ao = 13` straight to the next ledger, silently dropping the
+remaining 12 operations of that transaction. Carrying `application_order` in the
+cursor is what the per-operation row unit requires.
