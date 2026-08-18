@@ -84,6 +84,13 @@ jobs:
       - run: npx nx format:check --all
       - run: npx nx run-many -t lint build typecheck test
 
+      # The release tag → deploy scope mapping. Cheap, and the only guard on
+      # the case that matters: a plain `production-*` tag must stay
+      # Compute-only, never `--all` (task 0455). Runs here because the
+      # `typescript` filter already covers `infra/**`.
+      - name: Deploy-scope mapping self-check
+        run: ./infra/scripts/deploy-scope.sh --self-check
+
   api-types-codegen:
     name: API types freshness
     needs: changes

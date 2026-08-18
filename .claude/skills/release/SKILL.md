@@ -46,9 +46,31 @@ git diff --shortstat <last-tag>...origin/develop
 
 ## Step 2 — separate what deploys from what merely merged
 
-**This is the step that stops a false "it's live".** A tag run deploys the
-Compute stack and the SPA. Compute is exactly three Lambdas — check, do not
-recall:
+**This is the step that stops a false "it's live".** The tag's suffix picks the
+scope, so the honest answer depends on which tag you are about to hand over —
+decide the scope here, in Step 2, not at Step 5:
+
+| Tag                                 | CDK                           | SPA |
+| ----------------------------------- | ----------------------------- | --- |
+| `production-<date>-<N>`             | `Explorer-production-Compute` | yes |
+| `production-<date>-<N>-all`         | every stack that differs      | yes |
+| `production-<date>-<N>-<StackName>` | that stack, `--exclusively`   | no  |
+| `production-<date>-<N>-web`         | nothing                       | yes |
+
+The mapping is `infra/scripts/deploy-scope.sh` — run it rather than reasoning
+about the workflow's `if:` conditions:
+
+```bash
+./infra/scripts/deploy-scope.sh production-2026.08.18-1-CloudWatch
+```
+
+**Default to the plain tag.** `-all` is the only path that can ship drift
+nobody reviewed — a delta parked by another task goes out as a stowaway — so
+reach for it only after reading the diff, and prefer naming the one stack you
+mean. The single-stack form is also the answer when infra changed and code did
+not: two tags, each with its own diff, beats one `-all` nobody can audit.
+
+Compute is exactly three Lambdas — check, do not recall:
 
 ```bash
 grep -n "new RustFunction" infra/src/lib/stacks/compute-stack.ts
@@ -60,6 +82,19 @@ worker. Anything else in `crates/**` **is not deployed by the tag**.
 fixes ride the release into the repo and reach production only at the next
 manual build there. Say so explicitly in the release note — a green tag has
 been read as "the incident fix is live" when it was not.
+
+The same question applies to `infra/**`. Diff it against the scope you chose,
+and list every stack the tag leaves behind:
+
+```bash
+git diff --stat <last-tag>...origin/develop -- infra/src
+```
+
+One trap worth stating in the note: **the SPA step is not a Delivery deploy.**
+It reads that stack's `SpaBucketName` / `DistributionId` outputs and syncs S3,
+nothing more. So a change to `delivery-stack.ts` — cache policy, the CloudFront
+function, the cert — does _not_ ship on a plain tag no matter how green the
+frontend smoke is. It needs `-Delivery` or `-all`.
 
 Also flag the inverse: a crate whose _behaviour_ does not change even though
 its binary does. Adding a `pub fn` to a shared crate relinks the indexer
@@ -129,20 +164,33 @@ After the human merges. `-N` is the release counter **for that date**:
 git fetch origin --quiet && git tag --list "production-$(date -u +%Y.%m.%d)-*"
 ```
 
-Hand over the command — do not run it:
+Hand over the command — do not run it. Append the Step 2 selector, or nothing
+for the standard Compute + SPA release:
 
 ```bash
 git fetch origin && git tag production-<YYYY.MM.DD>-<N> origin/master && git push origin production-<YYYY.MM.DD>-<N>
 ```
 
-Three details that matter:
+An infra-only release names its stack, and shipping both halves is two tags,
+not one — separate diffs, separate blast radii, and `-N` just increments:
+
+```bash
+git fetch origin && git tag production-<YYYY.MM.DD>-<N>-CloudWatch origin/master && git push origin production-<YYYY.MM.DD>-<N>-CloudWatch
+```
+
+Four details that matter:
 
 - **`origin/master`, not `master`.** A worktree's local `master` is routinely
   stale, and the environment's tag policy will happily deploy an old commit.
 - **Push the tag by name, not `--tags`**, which also pushes every stale local
   tag.
 - **The workflow runs at the tagged commit.** Fixing the workflow means a new
-  tag, never a re-run.
+  tag, never a re-run. This includes the selector grammar itself: a tag cut
+  before the selector shipped deploys the old way, whatever its name says.
+- **The selector is case-sensitive** — it is pasted onto `Explorer-production-`
+  verbatim. `-cloudwatch` fails in `cdk`; `-CloudWatch` is the stack. A typo
+  fails before anything deploys, which is the intended failure mode, but it
+  costs a whole run.
 
 ## Step 6 — watch, then verify
 
@@ -150,11 +198,19 @@ Three details that matter:
 gh run watch --exit-status $(gh run list --workflow deploy-production.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-**Budget ~15 minutes and do not promise a faster next one.** `cdk diff` builds
-all three Lambdas during synth from a cold Rust cache on _every_ tag — the
-cache is written under the tag's own ref and no tag can read another's. The
-diff is ~11 min of that; everything after it is seconds. Full reasoning in
-`docs/deployment.md` § Releases.
+**Budget ~15 minutes; expect less, promise nothing.** `cdk diff` builds all
+three Lambdas during synth. Since 2026-08-18 the tag run restores the Rust
+cache CI writes on every `master` push (same arm runner, same `ci-rust-lambda`
+key), so a warm run compiles only the workspace crates — but the cache can be
+evicted, and a cold run is the old ~11-minute diff. A `-web` tag skips the
+build entirely. Full reasoning in `docs/deployment.md` § Releases.
+
+**Read the `cdk diff` step even on a green run.** It covers _every_ stack, not
+just the deployed ones (`-web` runs are the exception — they skip the build and
+print no diff), which makes it the one place a delta parked in an undeployed
+stack becomes visible. Anything it lists outside your tag's scope is
+still-not-live: either cut a second tag for it or say so in the note. Silence
+here is the honest signal that nothing is left behind.
 
 **Green is not verified.** Two traps, both hit in practice:
 

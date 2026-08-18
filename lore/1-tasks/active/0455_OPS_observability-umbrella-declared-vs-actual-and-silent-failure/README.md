@@ -126,6 +126,30 @@ history:
       CH-write-failures widgets (with the guard learning
       MetricFilter-minted names), cost graph, runbook matrix cells,
       open decisions (Slack-chain witness, X-Ray, canary, retention).
+  - date: 2026-08-18
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Release-scope slice, found while assembling the release note for the
+      next tag: the CDK app declares ten stacks, the tag deployed one, and
+      nothing compared the two - this task's own alarm set was sitting in
+      exactly that gap, invisible because `cdk diff` only ever covered the
+      stack being deployed. Two changes, deliberately separate. (1) The diff
+      is now wider than the deploy - `cdk diff --strict` over ALL stacks on
+      every run, as the release's drift record. (2) The tag carries a
+      selector: `production-<date>-<N>[-SELECTOR]` where empty keeps today's
+      Compute+SPA default, `all` deploys every differing stack, `web` is
+      SPA-only, and anything else is pasted onto `Explorer-production-`
+      verbatim. Mapping in `infra/scripts/deploy-scope.sh` with a
+      `--self-check` wired into the typescript CI job. `--fail` on the diff
+      (auto-deploy whatever differs) was REJECTED: cdk diffs against deployed
+      state, not against the last tag, so it fires on parked deltas and
+      console edits and would ship them unreviewed - the 0312 stowaway, which
+      is why the Makefile grew a typed `yes` the same week. Grammar is now
+      anchored, closing a real hole: the trigger is `production-*`, so any tag
+      matching that glob used to deploy the release set. Docs: deployment.md
+      Releases section rewritten, TL;DR and CloudWatch rows note the tag form,
+      /release skill steps 2/5/6 updated.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -345,6 +369,46 @@ deploy. Per-project budgets are **dropped** (decision 2026-08-10, recorded in
 [[0449]]): attribution + anomaly detection suffice for two people, and the
 slow-creep gap is accepted and named in the costs runbook.
 
+### 5. The release tag declares its own scope ([[0390]] follow-on) — **in code 2026-08-18**
+
+Same defect class as the rest of this task, on the deploy plane: the CDK app
+declares **ten** stacks, a release tag deployed **one**, and nothing at release
+time compared the two. The gap was invisible by construction — `cdk diff` ran
+only over the stack being deployed, so a delta parked in CloudWatch or
+Ingestion produced no output anywhere. This task's own alarm set spent a full
+release cycle in exactly that state.
+
+Two changes, deliberately separate:
+
+- **The diff got wider than the deploy.** `cdk diff --strict` now covers every
+  stack on every run. It is the release's drift record: what a tag leaves
+  behind is printed in front of whoever cut it. `--strict` because without it
+  `cdk diff` hides non-ASCII entries (measured under [[0312]]).
+- **The tag got a selector.** `production-<date>-<N>[-SELECTOR]`, where the
+  selector is empty (Compute + SPA, unchanged), `all`, `web`, or a stack name
+  pasted onto `Explorer-production-` verbatim. Mapping in
+  `infra/scripts/deploy-scope.sh`.
+
+**`--fail` on the diff was considered and rejected.** "Deploy whatever
+differs" is `--all` with extra steps, and CDK diffs against _deployed state_,
+not against the last tag — so it fires on another task's parked delta or on a
+console edit, and CI would ship it unreviewed. That is precisely the stowaway
+[[0312]] hit and the reason `infra/Makefile` grew a typed `yes` on the same
+day. Widening a release stays a human act; `-all` is how it is spelled.
+
+The tag grammar is now **anchored**: the trigger is `production-*`, so before
+this any tag matching that glob deployed the release set — `production-test`
+included. Malformed tags are rejected in the plan step, before the build.
+
+Guard: `infra/scripts/deploy-scope.sh --self-check` pins the mapping table and
+runs in CI. Its first version was wrong in a way worth recording — the script
+emitted TAB-separated fields for the workflow to re-split, and TAB is IFS
+whitespace, so `read` collapsed the empty ones and the `-web` selector came
+back with the stack set to `true`. The self-check passed anyway, because it
+tested the script's output rather than what CI consumed. Fixed by deleting the
+seam: the script emits the final `key=value` lines and the workflow appends
+them verbatim.
+
 ## Tooling decision — no external log platform yet
 
 Considered and rejected for now (Datadog / Grafana Cloud / Axiom):
@@ -386,6 +450,12 @@ month is unanswerable by construction.
       test-message gate)
 - [ ] Comparator runs on a schedule and reports schema + CDK deltas; its output is
       seen by a human without anyone asking for it
+- [ ] The CDK half of that comparison exists at release time, not only on a
+      schedule: `cdk diff` covers all ten declared stacks on every tag run, and
+      a tag can deploy any of them (in code 2026-08-18,
+      `infra/scripts/deploy-scope.sh` + selector grammar; AC checks off when a
+      real `-<StackName>` tag has deployed a non-Compute stack and the diff of
+      an undeployed one was read in the job log)
 - [x] Alarm filter strings verified against the strings the code actually emits
       (2026-08-06 — `declared-vs-emitted.spec.ts`, enforced in CI)
 - [ ] 0403's deferred measurement executed after the next deploy + a drain:
