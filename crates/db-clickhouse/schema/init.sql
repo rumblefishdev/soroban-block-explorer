@@ -466,6 +466,13 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 -- load-bearing: the CH driver rejects inserts client-side when the table has a
 -- column the writer's struct does not know AND the column has no default, so
 -- the default is what lets the `ALTER` land before the writer deploys.
+-- PROD: `CREATE TABLE IF NOT EXISTS` does NOT add a column to an existing
+-- table, so an already-created database needs the ALTERs run by hand — the
+-- same convention as `assets.id` above. Both are metadata-only (no data
+-- rewrite) and were applied to production on 2026-08-18, verified with
+-- `DESCRIBE TABLE balances` / `lp_positions`:
+--     ALTER TABLE balances     ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
+--     ALTER TABLE lp_positions ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
 CREATE TABLE IF NOT EXISTS balances (
     holder_id           Int64,
     asset_id            Int64,

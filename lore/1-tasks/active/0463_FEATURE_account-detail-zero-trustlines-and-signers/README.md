@@ -198,6 +198,8 @@ Asymmetry explained: the RPC bootstrap (task 0492) seeded accounts + native
 balances, never trustlines — so native measures complete while classic misses
 19.3M.
 
+| finding                                           | count                                              | note                                                                                                                                                                                          |
+| ------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | pool-share positions (NOT seeded, rides ADR 0056) | network **77,048** live vs our **40,738** positive | our `lp_positions` holds 108,579 pairs, 67,841 at zero — the SAME live-zero vs closed ambiguity as `balances`, measured 2026-08-18; the LP merge inherits both the gap and the disambiguation |
 
 ### Decisions taken (recorded in the map ticket + seed module docs)

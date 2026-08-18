@@ -205,15 +205,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
-    /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
-    /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
-    /// wrapped asset via `asset_sac`, ADR 0051). Enumerates holders from the
-    /// `soroban_events` stream, reads their current `Balance(Address)` ledger
-    /// entries from Soroban RPC (`getLedgerEntries`), and upserts `balances`
-    /// (ReplacingMergeTree). Reads CURRENT chain state, so it is correct regardless
-    /// of indexer lag; live ingest supersedes it on catch-up. Requires
-    /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
     /// Tally the history-archive checkpoint snapshot: fetch the bucket list and
     /// stream-decode every bucket, reporting live/dead counts per ledger entry
     /// type. READ-ONLY — writes nothing, anywhere.
@@ -286,6 +277,15 @@ enum Command {
         execute: bool,
     },
 
+    /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
+    /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
+    /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
+    /// wrapped asset via `asset_sac`, ADR 0051). Enumerates holders from the
+    /// `soroban_events` stream, reads their current `Balance(Address)` ledger
+    /// entries from Soroban RPC (`getLedgerEntries`), and upserts `balances`
+    /// (ReplacingMergeTree). Reads CURRENT chain state, so it is correct regardless
+    /// of indexer lag; live ingest supersedes it on catch-up. Requires
+    /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
     /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
         #[arg(long)]

@@ -115,7 +115,11 @@ already cheap. PG snapshot the pilot was sized against:
 | `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                                                                                                                                                                                                                                                                                                                          |
 | `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                                                                                                                                                                                                                                                                                                                          |
 
-CH net schema: **17 tables + 1 `Dictionary`** (PG had 18; `_sqlx_migrations` dropped).
+CH net schema at the pivot: **17 tables + 1 `Dictionary`** (PG had 18;
+`_sqlx_migrations` dropped). The table above is the PG→CH mirror as of the
+pivot and is deliberately not re-lettered each time a table lands; `init.sql`
+today defines **30 tables, 2 materialized views and 1 dictionary** (counted
+2026-08-18) — it, not this table, is the inventory of record.
 
 ## 4. Deliberate divergences
 
