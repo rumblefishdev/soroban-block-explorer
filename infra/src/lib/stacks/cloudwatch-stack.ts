@@ -445,15 +445,21 @@ export class CloudWatchStack extends cdk.Stack {
           period: cdk.Duration.minutes(5),
           statistic: cloudwatch.Stats.SUM,
         }),
-        // Threshold in DOORBELL-INVOCATION units (one failure line per
-        // failed reconcile, task 0241 — not per ledger): a sustained CH
-        // outage fails ~50-60 fresh doorbells per 5-min window (one per
-        // ledger close every ~5-6 s), far above 10, so it fires in the
-        // first window. A planned ~30 s Caddy reload is absorbed by the
-        // in-band retry envelope; worst case ≤6 failure lines < 10 = no
-        // page. Raise only on observed false-alarms during routine
-        // maintenance.
-        threshold: 10,
+        // Zero-tolerance threshold (operator decision 2026-08-18, same
+        // rule as the 5xx alarm): ONE failure line = page. A line here is
+        // already post-filter — it means a reconcile exhausted the whole
+        // in-band retry envelope, not a single flaky request — so it is
+        // never routine. An earlier draft used >10 to absorb a planned
+        // Caddy reload (worst case ~6 lines), but that is exactly the
+        // suppression logic this task rejected for pauses and for 5xx:
+        // one knowing page during own maintenance is cheap, and >10
+        // would ALSO hide the slow modes forever — a single poison-pill
+        // ledger (the 0454 shape) emits only 1-2 lines per window and
+        // would never cross 10. Raise the threshold only with a
+        // measurement: if routine maintenance pages more than about once
+        // a month, record the observed line counts and set it just above
+        // them.
+        threshold: 0,
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,
