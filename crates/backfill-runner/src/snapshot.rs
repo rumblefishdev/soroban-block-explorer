@@ -117,6 +117,14 @@ pub async fn fetch_bucket_list(
                 && h != EMPTY
                 && !h.is_empty()
             {
+                // A malformed hash produces a 404 on the bucket URL, which
+                // reads as "the archive is down" rather than "the manifest is
+                // wrong". Fail here, where the cause is still visible.
+                if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(BackfillError::Incomplete(format!(
+                        "manifest bucket hash is not 64 hex chars: {h:?}"
+                    )));
+                }
                 hashes.push(h.to_string());
             }
         }
@@ -218,13 +226,21 @@ const ENTRY_TYPE_NAMES: [&str; 10] = [
     "ttl",
 ];
 
+/// Discriminants are bounded to the tally arrays' length: a protocol upgrade
+/// adding an 11th entry type would otherwise index out of bounds and panic a
+/// read-only measurement pass. Unknown types simply go uncounted, which the
+/// caller already reports as unmodelled.
 fn entry_type_index(d: &LedgerEntryData) -> Option<usize> {
-    Some(d.discriminant() as i32 as usize)
+    usize::try_from(d.discriminant() as i32)
+        .ok()
+        .filter(|i| *i < ENTRY_TYPE_NAMES.len())
 }
 
 fn ledger_key_index(k: &LedgerKey) -> Option<usize> {
     let t: LedgerEntryType = k.discriminant();
-    Some(t as i32 as usize)
+    usize::try_from(t as i32)
+        .ok()
+        .filter(|i| *i < ENTRY_TYPE_NAMES.len())
 }
 
 /// Download one bucket to an unnamed temp file and stream-decode it from there.
@@ -387,7 +403,12 @@ enum SnapItem {
     /// this much native XLM. Native is not a trustline — it lives on the
     /// account — so "absent from the snapshot" for a native holding means the
     /// ACCOUNT is gone. That is the ~52k merged-account ghost case.
-    Account { holder_id: i64, entry: SnapEntry },
+    Account {
+        holder_id: i64,
+        entry: SnapEntry,
+        /// Only built when the caller asked for details (the seed pass).
+        detail: Option<Box<AccountDetail>>,
+    },
     /// A classic credit trustline, keyed onto our surrogate pair.
     Trustline { key: HoldingKey, entry: SnapEntry },
     /// A pool-share trustline. Same ledger entry type, DIFFERENT table on our
@@ -400,7 +421,31 @@ enum SnapItem {
     },
 }
 
+/// Everything an `AccountEntry` carries beyond its native balance: identity for
+/// dimension stubs, signers + thresholds for `account_signers`. Captured only
+/// when [`SnapshotState::with_details`] asks for it — the compare pass does not
+/// need it and it is the bulk of the memory.
+#[derive(Debug)]
+pub struct AccountDetail {
+    pub strkey: String,
+    pub seq_num: i64,
+    pub home_domain: String,
+    /// `[master, low, med, high]`, raw from the XDR.
+    pub thresholds: [u8; 4],
+    pub flags: u32,
+    /// `(signer strkey, weight, type name)`. The MASTER KEY IS NOT HERE — its
+    /// weight is thresholds byte 0. Horizon synthesizes a master entry into its
+    /// signers array; the ledger does not carry one, and neither do we.
+    pub signers: Vec<(String, u32, &'static str)>,
+}
+
 /// The deduplicated snapshot, ready to compare against our tables.
+///
+/// ONE fold of the bucket stream serves both consumers: the comparison
+/// (`snapshot_compare`) and the seed (`snapshot_seed`). They previously kept
+/// separate state types with separate first-wins logic — two chances to
+/// disagree about what the network says. `with_details` is the only difference
+/// between the two passes.
 #[derive(Debug, Default)]
 pub struct SnapshotState {
     /// `holder_id` → the account's existence and its NATIVE holding.
@@ -409,12 +454,18 @@ pub struct SnapshotState {
     pub trustlines: std::collections::HashMap<HoldingKey, SnapEntry>,
     /// Pool shares, kept separate — see [`SnapItem::PoolShare`].
     pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), SnapEntry>,
+    /// Populated only when `capture_details` is set (the seed pass).
+    pub account_details: std::collections::HashMap<i64, AccountDetail>,
+    /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
+    /// Bounded by network asset cardinality (~391k), not trustline count.
+    pub asset_registry: std::collections::HashMap<i64, (String, String)>,
     /// Records of entry types this comparison does not model (offers, contract
     /// data, TTL, …). Reported so the pass never looks more complete than it is.
     pub unmodelled: u64,
     /// Records superseded by an earlier (newer) record for the same key. This
     /// is the number first-wins actually suppressed.
     pub superseded: u64,
+    capture_details: bool,
 }
 
 impl SnapshotState {
@@ -436,7 +487,21 @@ impl SnapshotState {
             };
         }
         match item {
-            SnapItem::Account { holder_id, entry } => first_wins!(self.accounts, holder_id, entry),
+            SnapItem::Account {
+                holder_id,
+                entry,
+                detail,
+            } => {
+                // The detail must follow the SAME first-wins rule as the entry,
+                // or a superseded older AccountEntry could overwrite the live
+                // signer set — the resurrection bug, one field deeper.
+                if !self.accounts.contains_key(&holder_id)
+                    && let Some(d) = detail
+                {
+                    self.account_details.insert(holder_id, *d);
+                }
+                first_wins!(self.accounts, holder_id, entry)
+            }
             SnapItem::Trustline { key, entry } => first_wins!(self.trustlines, key, entry),
             SnapItem::PoolShare {
                 holder_id,
@@ -445,6 +510,36 @@ impl SnapshotState {
             } => {
                 first_wins!(self.pool_shares, (holder_id, pool_id), entry)
             }
+        }
+    }
+
+    /// Ask the fold to also capture per-account detail (signers, thresholds,
+    /// identity) and the asset registry. The seed needs both; the comparison
+    /// does not, and they are the bulk of the memory.
+    pub fn with_details() -> Self {
+        Self {
+            capture_details: true,
+            ..Self::default()
+        }
+    }
+
+    /// Classify one decoded record and fold it in. The single entry point both
+    /// the comparison and the seed use, so they cannot disagree about what the
+    /// snapshot says.
+    pub fn absorb_record(&mut self, rec: &SnapshotRecord) {
+        match classify(rec, self.capture_details) {
+            Some(item) => {
+                if self.capture_details
+                    && let SnapItem::Trustline { key, .. } = &item
+                    && let Some((code, issuer)) = trustline_identity(rec)
+                {
+                    self.asset_registry
+                        .entry(key.asset_id)
+                        .or_insert((code, issuer));
+                }
+                self.absorb(item);
+            }
+            None => self.unmodelled += 1,
         }
     }
 
@@ -484,15 +579,67 @@ fn trustline_asset_id(asset: &stellar_xdr::TrustLineAsset) -> Option<i64> {
     }
 }
 
+/// `(code, issuer strkey)` of a live classic trustline record — the identity
+/// behind the surrogate, needed only for `assets` dimension stubs.
+fn trustline_identity(rec: &SnapshotRecord) -> Option<(String, String)> {
+    use stellar_xdr::{LedgerEntryData as D, TrustLineAsset as A};
+    let SnapshotRecord::Live(e) = rec else {
+        return None;
+    };
+    let D::Trustline(t) = &e.data else {
+        return None;
+    };
+    match &t.asset {
+        A::CreditAlphanum4(a) => Some((
+            xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
+            a.issuer.to_string(),
+        )),
+        A::CreditAlphanum12(a) => Some((
+            xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
+            a.issuer.to_string(),
+        )),
+        A::Native | A::PoolShare(_) => None,
+    }
+}
+
+/// Build the per-account detail the seed needs (signers, thresholds, identity).
+fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
+    AccountDetail {
+        strkey: a.account_id.to_string(),
+        seq_num: i64::from(a.seq_num.clone()),
+        home_domain: String::from_utf8_lossy(a.home_domain.as_slice()).to_string(),
+        thresholds: a.thresholds.0,
+        flags: a.flags,
+        signers: a
+            .signers
+            .iter()
+            .map(|sg| (sg.key.to_string(), sg.weight, signer_type_name(&sg.key)))
+            .collect(),
+    }
+}
+
+/// Total over every `SignerKey` arm — a new arm must be named, never silently
+/// bucketed. Same vocabulary the live parser emits.
+fn signer_type_name(key: &stellar_xdr::SignerKey) -> &'static str {
+    use stellar_xdr::SignerKey as K;
+    match key {
+        K::Ed25519(_) => "ed25519",
+        K::PreAuthTx(_) => "preauth_tx",
+        K::HashX(_) => "hash_x",
+        K::Ed25519SignedPayload(_) => "ed25519_signed_payload",
+    }
+}
+
 /// Classify one decoded record into our key space, or `None` for an entry type
 /// this comparison does not model.
-fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
+fn classify(rec: &SnapshotRecord, with_detail: bool) -> Option<SnapItem> {
     use stellar_xdr::{LedgerEntryData as D, LedgerKey as K, TrustLineAsset as A};
     match rec {
         SnapshotRecord::Live(e) => match &e.data {
             D::Account(a) => Some(SnapItem::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
                 entry: SnapEntry::live(e.last_modified_ledger_seq, a.balance),
+                detail: with_detail.then(|| Box::new(account_detail(a))),
             }),
             D::Trustline(t) => {
                 let holder_id = ids::address_id(&t.account_id.to_string());
@@ -519,6 +666,7 @@ fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
             K::Account(a) => Some(SnapItem::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
                 entry: SnapEntry::dead(),
+                detail: None,
             }),
             K::Trustline(t) => {
                 let holder_id = ids::address_id(&t.account_id.to_string());
@@ -550,17 +698,14 @@ fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
 pub async fn build_state(
     client: &reqwest::Client,
     list: &BucketList,
+    mut state: SnapshotState,
     mut on_bucket: impl FnMut(usize, u64, f64),
 ) -> Result<SnapshotState, BackfillError> {
-    let mut state = SnapshotState::default();
     for (i, hash) in list.hashes.iter().enumerate() {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
         let bytes = stream_bucket_from_url(client, &url, |rec| {
-            match classify(&rec) {
-                Some(item) => state.absorb(item),
-                None => state.unmodelled += 1,
-            }
+            state.absorb_record(&rec);
             Ok(())
         })
         .await?;
@@ -583,9 +728,14 @@ pub async fn dedup_command() -> Result<(), BackfillError> {
         list.hashes.len()
     );
     let take = list.hashes.len();
-    let state = build_state(&client, &list, |i, bytes, secs| {
-        println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-    })
+    let state = build_state(
+        &client,
+        &list,
+        SnapshotState::default(),
+        |i, bytes, secs| {
+            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
+        },
+    )
     .await?;
 
     report_state(
@@ -653,10 +803,12 @@ mod tests {
     /// default because it reaches the network; run explicitly with
     /// `cargo test -p backfill-runner -- --ignored snapshot`.
     ///
-    /// This is the check that the format assumption holds: a gzipped stream of
-    /// XDR `BucketEntry`, not a framed or length-prefixed container. If
-    /// stellar-core ever changes the encoding, this fails loudly instead of
-    /// the seed silently reading zero entries.
+    /// This is the check that the format assumption holds: a gzipped, FRAMED
+    /// stream of XDR `BucketEntry` — each record behind a 4-byte big-endian
+    /// length prefix whose top bit marks the last fragment. (An earlier version
+    /// of this comment claimed the opposite; decoding a real bucket is what
+    /// settled it.) If stellar-core ever changes the encoding, this fails
+    /// loudly instead of the seed silently reading zero entries.
     #[tokio::test]
     #[ignore = "network"]
     async fn decodes_a_real_bucket_from_the_archive() {

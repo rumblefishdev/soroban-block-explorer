@@ -358,9 +358,11 @@ fn compare_from_tsv(
         let mut it = line.split('\t');
         let mut next = |what: &str| -> Result<i128, BackfillError> {
             it.next()
-                .ok_or_else(|| BackfillError::Incomplete(format!("line {lineno}: missing {what}")))?
+                .ok_or_else(|| {
+                    BackfillError::Incomplete(format!("line {}: missing {what}", lineno + 1))
+                })?
                 .parse::<i128>()
-                .map_err(|e| BackfillError::Incomplete(format!("line {lineno} {what}: {e}")))
+                .map_err(|e| BackfillError::Incomplete(format!("line {} {what}: {e}", lineno + 1)))
         };
         let row = OurBalance {
             holder_id: next("holder_id")? as i64,
@@ -481,10 +483,11 @@ pub async fn compare_command(
     );
 
     let take = list.hashes.len();
-    let mut state = snapshot::build_state(&http, &list, |i, bytes, secs| {
-        println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-    })
-    .await?;
+    let mut state =
+        snapshot::build_state(&http, &list, SnapshotState::default(), |i, bytes, secs| {
+            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
+        })
+        .await?;
     report_state(
         &state,
         list.checkpoint_ledger,

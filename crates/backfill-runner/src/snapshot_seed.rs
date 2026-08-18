@@ -60,194 +60,19 @@
 //! which survives. Stubs are additionally emitted only for ids absent from
 //! the exported known-id set, so they never contend with an existing row.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::BufRead;
 use std::path::Path;
 
-use db_clickhouse::persist::ids;
-use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, BalanceRow};
-use stellar_xdr::{LedgerEntryData, LedgerKey, SignerKey, TrustLineAsset};
-
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{BucketList, PUBNET_ARCHIVE, SnapshotRecord, fetch_bucket_list};
+use crate::snapshot::{BucketList, HoldingKey, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list};
 use crate::util::insert_rows;
+use db_clickhouse::persist::ids;
+use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, BalanceRow};
 
 /// Insert batch size. RowBinary streams; this only bounds peak buffering.
 const INSERT_CHUNK: usize = 500_000;
-
-/// First-wins state of one holding, seed-flavoured: the compare pass proved
-/// the shape; this adds nothing per-trustline beyond what corrections need.
-#[derive(Clone, Copy)]
-struct SeedEntry {
-    live: bool,
-    ledger: u32,
-    amount: i64,
-    matched: bool,
-}
-
-/// Everything the seed needs per live account beyond the holding itself:
-/// identity for dimension stubs, signers + thresholds for `account_signers`.
-struct AccountDetail {
-    strkey: String,
-    seq_num: i64,
-    home_domain: String,
-    thresholds: [u8; 4],
-    flags: u32,
-    /// (key strkey, weight, type name) — master NOT in the list (raw XDR
-    /// truth; Horizon synthesizes it, we must not).
-    signers: Vec<(String, u32, &'static str)>,
-}
-
-fn signer_type_name(key: &SignerKey) -> &'static str {
-    match key {
-        SignerKey::Ed25519(_) => "ed25519",
-        SignerKey::PreAuthTx(_) => "preauth_tx",
-        SignerKey::HashX(_) => "hash_x",
-        SignerKey::Ed25519SignedPayload(_) => "ed25519_signed_payload",
-    }
-}
-
-/// The whole snapshot folded for seeding, first-wins per key (bucket order is
-/// newest-first; see the snapshot module docs).
-#[derive(Default)]
-struct SeedState {
-    accounts: HashMap<i64, SeedEntry>,
-    account_details: HashMap<i64, AccountDetail>,
-    trustlines: HashMap<crate::snapshot::HoldingKey, SeedEntry>,
-    /// asset surrogate → (code, issuer strkey). Shared across trustlines, so
-    /// this stays at network asset cardinality (~400k), not trustline count.
-    asset_registry: HashMap<i64, (String, String)>,
-    superseded: u64,
-    unmodelled: u64,
-}
-
-impl SeedState {
-    fn absorb(&mut self, rec: &SnapshotRecord) {
-        use std::collections::hash_map::Entry;
-        match rec {
-            SnapshotRecord::Live(e) => match &e.data {
-                LedgerEntryData::Account(a) => {
-                    let id = ids::address_id(&a.account_id.to_string());
-                    match self.accounts.entry(id) {
-                        Entry::Vacant(slot) => {
-                            slot.insert(SeedEntry {
-                                live: true,
-                                ledger: e.last_modified_ledger_seq,
-                                amount: a.balance,
-                                matched: false,
-                            });
-                            self.account_details.insert(
-                                id,
-                                AccountDetail {
-                                    strkey: a.account_id.to_string(),
-                                    seq_num: i64::from(a.seq_num.clone()),
-                                    home_domain: String::from_utf8_lossy(a.home_domain.as_slice())
-                                        .to_string(),
-                                    thresholds: a.thresholds.0,
-                                    flags: a.flags,
-                                    signers: a
-                                        .signers
-                                        .iter()
-                                        .map(|s| {
-                                            (s.key.to_string(), s.weight, signer_type_name(&s.key))
-                                        })
-                                        .collect(),
-                                },
-                            );
-                        }
-                        Entry::Occupied(_) => self.superseded += 1,
-                    }
-                }
-                LedgerEntryData::Trustline(t) => {
-                    let holder_id = ids::address_id(&t.account_id.to_string());
-                    match asset_identity(&t.asset) {
-                        Some((asset_id, code, issuer)) => {
-                            match self.trustlines.entry(crate::snapshot::HoldingKey {
-                                holder_id,
-                                asset_id,
-                            }) {
-                                Entry::Vacant(slot) => {
-                                    slot.insert(SeedEntry {
-                                        live: true,
-                                        ledger: e.last_modified_ledger_seq,
-                                        amount: t.balance,
-                                        matched: false,
-                                    });
-                                    self.asset_registry
-                                        .entry(asset_id)
-                                        .or_insert_with(|| (code, issuer));
-                                }
-                                Entry::Occupied(_) => self.superseded += 1,
-                            }
-                        }
-                        // Pool shares — deliberately out; see module docs.
-                        None => self.unmodelled += 1,
-                    }
-                }
-                _ => self.unmodelled += 1,
-            },
-            SnapshotRecord::Dead(k) => match k.as_ref() {
-                LedgerKey::Account(a) => {
-                    let id = ids::address_id(&a.account_id.to_string());
-                    if let Entry::Vacant(slot) = self.accounts.entry(id) {
-                        slot.insert(SeedEntry {
-                            live: false,
-                            ledger: 0,
-                            amount: 0,
-                            matched: false,
-                        });
-                    } else {
-                        self.superseded += 1;
-                    }
-                }
-                LedgerKey::Trustline(t) => {
-                    let holder_id = ids::address_id(&t.account_id.to_string());
-                    if let Some((asset_id, _, _)) = asset_identity(&t.asset) {
-                        match self.trustlines.entry(crate::snapshot::HoldingKey {
-                            holder_id,
-                            asset_id,
-                        }) {
-                            Entry::Vacant(slot) => {
-                                slot.insert(SeedEntry {
-                                    live: false,
-                                    ledger: 0,
-                                    amount: 0,
-                                    matched: false,
-                                });
-                            }
-                            Entry::Occupied(_) => self.superseded += 1,
-                        }
-                    } else {
-                        self.unmodelled += 1;
-                    }
-                }
-                _ => self.unmodelled += 1,
-            },
-        }
-    }
-}
-
-/// Surrogate + identity for a classic trustline asset; `None` for pool shares.
-/// EXACTLY the writer's derivation (canonical code normalizer + the shared
-/// `credit_asset_id` formula) — verified end-to-end by the RPC spot-check:
-/// 60/60 sampled "missing" entries FOUND on chain with byte-equal balances.
-fn asset_identity(asset: &TrustLineAsset) -> Option<(i64, String, String)> {
-    match asset {
-        TrustLineAsset::Native => Some((ids::NATIVE_ASSET_ID, String::new(), String::new())),
-        TrustLineAsset::CreditAlphanum4(a) => {
-            let code = xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice());
-            let issuer = a.issuer.to_string();
-            Some((ids::credit_asset_id(&code, &issuer), code, issuer))
-        }
-        TrustLineAsset::CreditAlphanum12(a) => {
-            let code = xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice());
-            let issuer = a.issuer.to_string();
-            Some((ids::credit_asset_id(&code, &issuer), code, issuer))
-        }
-        TrustLineAsset::PoolShare(_) => None,
-    }
-}
 
 /// All correction rows, still in memory, ready to insert or count.
 #[derive(Default)]
@@ -300,7 +125,7 @@ struct OurRow {
 
 fn fold_our_row(
     row: &OurRow,
-    state: &mut SeedState,
+    state: &mut SnapshotState,
     checkpoint: u32,
     out: &mut Corrections,
     ghost_log: &mut Vec<String>,
@@ -318,7 +143,7 @@ fn fold_our_row(
     let entry = if asset_id == ids::NATIVE_ASSET_ID {
         state.accounts.get_mut(&holder_id)
     } else {
-        state.trustlines.get_mut(&crate::snapshot::HoldingKey {
+        state.trustlines.get_mut(&HoldingKey {
             holder_id,
             asset_id,
         })
@@ -369,7 +194,7 @@ fn fold_our_row(
 /// dimension id sets) — deterministic, so a re-run against the same inputs
 /// produces identical rows and RMT collapses them.
 fn build_corrections(
-    state: &mut SeedState,
+    state: &mut SnapshotState,
     our_rows: &Path,
     known_assets: &HashSet<i64>,
     known_accounts: &HashSet<i64>,
@@ -557,12 +382,12 @@ pub async fn seed_command(
         known_accounts.len()
     );
 
-    let mut state = SeedState::default();
+    let mut state = SnapshotState::with_details();
     for (i, hash) in list.hashes.iter().enumerate() {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
         crate::snapshot::stream_bucket_from_url(&http, &url, |rec| {
-            state.absorb(&rec);
+            state.absorb_record(&rec);
             Ok(())
         })
         .await?;
