@@ -184,12 +184,26 @@ jobs:
           CLICKHOUSE_URL: http://localhost:8123
           CLICKHOUSE_PASSWORD: clickhouse
         run: |
+          # Both legs ALWAYS run, then the job fails on any of them. Under the
+          # default `bash -e`, a red first leg aborted the step, so the
+          # #[ignore] leg and its count guard never ran — one red run told you
+          # about one half. `--no-fail-fast` already buys completeness inside a
+          # leg; this buys it across legs, which is the same reason this job
+          # exists (no silent skips).
+          set +e
           cargo test --no-fail-fast -p db-clickhouse -p backfill-runner -- --test-threads=1
+          gated_status=$?
           cargo test --no-fail-fast -p backfill-enrichment-runner -p enrichment-shared -- --ignored --test-threads=1 \
             select_sep1_chunk select_nft_chunk filter_drops | tee ignored-run.log
+          ignored_status=${PIPESTATUS[0]}
+          set -e
           passed=$(grep -Eo '[0-9]+ passed' ignored-run.log | awk '{s+=$1} END {print s}')
           if [ "${passed:-0}" -lt 5 ]; then
             echo "::error::expected >=5 CH-only #[ignore] tests to pass, got ${passed:-0} — did the name filters drift?"
+            exit 1
+          fi
+          if [ "$gated_status" -ne 0 ] || [ "$ignored_status" -ne 0 ]; then
+            echo "::error::ClickHouse e2e failed (env-gated leg: $gated_status, #[ignore] leg: $ignored_status)"
             exit 1
           fi
 

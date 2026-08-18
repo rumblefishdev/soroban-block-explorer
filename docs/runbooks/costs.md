@@ -1,11 +1,14 @@
 # Costs — how to answer "whose is it" and "why did it spike"
 
 The account (`750702271865`) is shared by two projects —
-`soroban-block-explorer` and `stellar-prices-api` — and both tag every
-resource with `Project`. The `Project` cost-allocation tag is **active** in
-Billing (activated 2026-08 from the organization management account, with a
-historical backfill requested), so cost attribution is a filter, not an
-investigation.
+`soroban-block-explorer` and `stellar-prices-api` — and both tag their
+**CDK-managed taggable** resources with `Project`. That is not the same as
+every resource: some AWS charges cannot carry a tag at all, and
+hand-provisioned resources only carry one if someone tagged them (both
+enumerated under "untagged remainder" below). The `Project` cost-allocation
+tag is **active** in Billing (activated 2026-08 from the organization
+management account, with a historical backfill requested), so attribution is
+a filter rather than an investigation — for everything the tag reaches.
 
 ## "How much does each project cost?"
 
@@ -21,10 +24,15 @@ contents (measured 2026-08-10, ~0.6 USD/day after the Galexie fix below):
 - **Inherently untaggable** (AWS limitation, permanent): public IPv4 hours,
   X-Ray traces, most CloudWatch metric/alarm charges. Small and stable — a
   step change HERE is still caught by anomaly detection (below).
-- **Fixable leftovers**: hand-provisioned secrets (mTLS bundles, CA key,
-  operator env, deploy SSH key) carry no tags — tag them once with
-  `aws secretsmanager tag-resource` when touched; CDK-created secrets are
-  tagged automatically.
+- **Hand-provisioned secrets** (mTLS bundles, CA key, operator env, deploy
+  SSH key): tagged in the 2026-08-10 operator pass (8 secrets,
+  `Project/Environment/ManagedBy=manual`; 13 of the account's 15 carried
+  `Project` afterwards, the remaining 2 being the co-tenant's). CDK-created
+  secrets are tagged automatically. The gap reopens for any secret created
+  by hand later — tag it with `aws secretsmanager tag-resource` at creation
+  (`--region eu-central-1`: an admin session defaults to us-east-1 and the
+  call bounces off `ResourceNotFound`). Durable fix owed in task 0227: tag
+  at provisioning time.
 
 Historical caveats: Galexie Fargate tasks are tagged only from the
 `propagateTags` deploy (2026-08); billing data before tag backfill coverage

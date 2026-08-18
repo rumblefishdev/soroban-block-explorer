@@ -447,11 +447,14 @@ asset codes, pool IDs, and NFT identifiers. Full-text search on metadata via
 
 Caching operates at two levels:
 
-- **API Gateway response caching** — responses for immutable data (historical
-  transactions, closed ledgers) are cached with long TTLs at the API ingress layer. Mutable
-  data (recent transactions, network stats) uses short TTLs (5–15 seconds). CloudFront is
-  used for static frontend assets and is not assumed to be the primary cache layer for API
-  responses in the initial topology.
+- **Browser caching via `Cache-Control`** — every public endpoint advertises a
+  per-endpoint TTL (task 0055: 10 s / 60 s / 300 s tiers, `no-store` on search
+  and on every non-2xx). The consumer today is the **user's browser**. The API
+  Gateway stage cache that was once planned to consume these headers is **not
+  enabled and stays off by decision** (2026-08-14, task 0455) — see
+  [`backend/api-gateway-cache-spec.md`](./backend/api-gateway-cache-spec.md)
+  for the measurement, the rationale and the return condition. CloudFront
+  serves static frontend assets and is not a cache layer for API responses.
 - **Backend in-memory caching** — frequently accessed reference data (contract metadata,
   network stats) is cached in the Lambda execution environment with TTLs of 30–60 seconds
   to reduce database round-trips. All in-process caches are built on the

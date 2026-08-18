@@ -24,11 +24,22 @@
 ///   buys nothing; the `''` sentinel closes the case and an operator
 ///   `--retry-sentinels` run repairs the rare host that comes back.
 ///   (Supersedes the narrower DNS-only carve-out from task 0335.)
+/// - **Refused redirect**: **permanent**. The NFT fetcher runs
+///   `redirect::Policy::limited(0)` as an SSRF guard, so a redirecting
+///   gateway surfaces as a statusless error that is not connect-level — the
+///   bare `!is_connect()` rule below called that transient and burned the
+///   retry budget on a deterministic gateway-config fault (found in review,
+///   PR #422; pinned by `refused_redirect_is_permanent`). Both fetchers
+///   already document 3xx as permanent in their own error modules; this
+///   makes the shared rule agree with them instead of quietly overriding it.
 /// - **No HTTP status, past connect** (timeout mid-request, reset, truncated
 ///   body): transient — the host exists and was answering; measured zero
 ///   occurrences, kept retryable because these ARE plausible one-off blips.
 ///   If timeouts ever show up as a dead-host signature, move them across.
 pub fn is_transient_reqwest(err: &reqwest::Error) -> bool {
+    if err.is_redirect() {
+        return false;
+    }
     match err.status() {
         Some(s) => s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS,
         None => !err.is_connect(),
@@ -127,6 +138,43 @@ mod tests {
         assert!(
             is_transient_reqwest(&err),
             "post-connect timeout must stay transient"
+        );
+    }
+
+    /// A refused redirect must classify PERMANENT. The NFT fetcher runs
+    /// `redirect::Policy::limited(0)` as an SSRF guard, so a redirecting
+    /// gateway raises a `reqwest::Error` with no status and
+    /// `is_connect() == false` — which the bare `!is_connect()` rule read as
+    /// transient, sending a deterministic gateway-config fault around the
+    /// retry loop and into the DLQ. Same shape as the dead-domain class this
+    /// module was written to fix (CodeRabbit, PR #422).
+    #[tokio::test]
+    async fn refused_redirect_is_permanent() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("location", "https://example.com/moved"),
+            )
+            .mount(&server)
+            .await;
+        let err = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(0))
+            .build()
+            .expect("client")
+            .get(server.uri())
+            .send()
+            .await
+            .expect_err("limited(0) must refuse to follow the 302");
+        assert!(err.is_redirect(), "precondition: a redirect-policy error");
+        assert!(
+            err.status().is_none(),
+            "precondition: no HTTP status carried"
+        );
+        assert!(!err.is_connect(), "precondition: connect succeeded");
+        assert!(
+            !is_transient_reqwest(&err),
+            "a refused redirect repeats identically — must be permanent"
         );
     }
 
