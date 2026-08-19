@@ -156,8 +156,13 @@ history:
 
 ## Summary
 
-Sixteen open tasks looked like sixteen problems. They are a small number of
-recurring defects, each with several instances:
+Eight open tasks turned out to be instances of a small number of recurring
+defects. (The original framing said sixteen; a triage found eight genuine
+instances, three that form a separate cost cluster, and five that do not
+belong — the inflated headline is corrected here rather than left standing at
+the top while the Notes refute it further down.)
+
+The defects, each with several instances:
 
 1. **Declared vs actual, never compared.** We write down how things should be,
    reality drifts, and nothing continuously checks one against the other.
@@ -434,20 +439,26 @@ month is unanswerable by construction.
 ## Acceptance Criteria
 
 - [x] Read-only AWS principal exists and is usable from the assistant workspace
-- [x] The planned-pause constraint has a stated answer — resolved 2026-08-10
+- [ ] The planned-pause constraint has a stated answer — resolved 2026-08-10
       the opposite way from the first draft: pauses are NOT machine-readable;
       one knowing page per pause is the accepted design (ADR 0054 rule 4).
-      Verified at deploy by pausing and confirming exactly one page
+      **Un-ticked 2026-08-19**: the box was checked against a verification
+      that was never run. Worse, the deploy window it referred to is the one
+      in which no alarm could deliver at all (see the mute incident below),
+      so "exactly one page" was unobservable by construction. Re-ticks after
+      pausing the event-source mapping and counting the pages that arrive
 - [ ] An alarm fires on ingestion stall — in code
       (`production-ingestion-backlog-age`); AC checks off after a simulated
       stall against the deployed alarm
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
-- [x] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
+- [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
       latched and mute (2026-08-11 — DLQs: drain per `docs/runbooks/dlq.md`,
       standing content never accepted; Galexie disk: act-before-ceiling
-      comment; latch-proofing verified at deploy by the drained-DLQ
-      test-message gate)
+      comment). **Latch-proofing partially verified 2026-08-19**: purging the
+      ledger DLQ moved its alarm ALARM -> OK after five days latched, which
+      proves the drain half; the other half — that a re-dirtied queue pages
+      again — needs the test-message gate and has not run
 - [ ] Comparator runs on a schedule and reports schema + CDK deltas; its output is
       seen by a human without anyone asking for it
 - [ ] The CDK half of that comparison exists at release time, not only on a
@@ -485,6 +496,55 @@ month is unanswerable by construction.
       hatch, and the feedback rule; plus `api-5xx.md`, `dlq.md`, `costs.md`
       shipped earlier)
 - [ ] **API types regenerated** — N/A, no API surface change
+
+## Incident 2026-08-18 — this task's own deploy muted every alarm for 19 h
+
+The defining event of this task, and it is ours. Recorded here rather than in
+a child task because it invalidates two acceptance criteria and rewrites one
+open decision from optional to blocking.
+
+**What happened.** Adding a cost-anomaly grant to the alarm topic
+synthesised an `AWS::SNS::TopicPolicy`, and that resource REPLACES a topic's
+access policy rather than extending it. The replaced policy was the default
+SNS attaches at topic creation — the statement CloudWatch publishes under.
+From the deploy at 14:52 until 09:58 the next morning, every alarm evaluated
+correctly, changed state correctly, and could not deliver.
+
+**Why nothing caught it.** Three reasons, each worth keeping:
+
+1. The deploy was green. Nothing failed — the resource was created exactly as
+   written. Losing the implied statement is obedient behaviour, not an error.
+2. A refused publish is nobody's alarm. It surfaces only in an alarm's action
+   history, which no one reads unless already suspicious.
+3. The post-deploy verification checked alarm STATES and metric flow, both
+   healthy. It did not check action EXECUTION — and could not, because for
+   26 hours no alarm attempted a delivery. The first attempt was the DLQ
+   returning to OK after a purge, which is how this was found: by accident,
+   during unrelated work.
+
+**Measurement that settled it**: three `Failed to execute action` entries on
+our topic in the window, against twelve `Successfully executed` on the
+co-tenant's topic in the same window — a topic-scoped cause, not a service
+fault.
+
+**What it changes here.**
+
+- The Slack-chain witness stops being an open decision and becomes a
+  precondition. ADR 0054 named this exact failure under Negative consequences
+  and listed two cheap mitigations; the work identified the hole, wrote it
+  down, and walked into it. An ADR that governs alarms but says nothing about
+  the channel they travel is incomplete — the channel needs a rule.
+- Verification gates must run immediately after a deploy, not "later". The
+  drained-DLQ test-message gate existed precisely for this and would have
+  exposed it in a minute; it was deferred and the defect lived 19 hours.
+- Two acceptance criteria were ticked against proofs that never ran, one of
+  them referring to the very window in which no page could arrive. Both are
+  un-ticked above.
+
+**Fix**: `ops/0455_sns-topic-policy-mute-fix` — the policy now lists every
+principal explicitly (owner account, cost anomalies with a source-account
+condition), with a comment recording the replacement semantics so the next
+grant is added to the list rather than on top of it.
 
 ## Carried to the follow-up PR (raised in PR #422 review, decided not to widen)
 
