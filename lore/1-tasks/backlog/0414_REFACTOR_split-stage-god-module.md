@@ -20,6 +20,13 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from the 393/410 architecture audit (finding A1). Pre-existing (not caused by 393/410); whole-ingest scope.'
+  - date: 2026-08-19
+    status: backlog
+    who: karolkow
+    note: >
+      Absorbed 0455 review finding 15 — the live and backfill write paths carry
+      different insert semantics, and the form the live path uses is the one the
+      sink's own docs call legacy. Same file, same concern as this split.
 ---
 
 # REFACTOR: split the stage.rs ingest god-module into per-concern builders
@@ -54,6 +61,23 @@ pipeline: any new ingest feature bloats it further.
   that calls them and assembles the `StagedLedger`.
 - Preserve behaviour exactly (this is a pure refactor — the existing e2e + unit
   tests are the safety net). Move-first, edit-never per commit discipline.
+
+## Also here: the two write paths do not agree (0455 finding 15)
+
+Verified 2026-08-19 from the code's own documentation. `backfill-runner`'s sink
+drives the partition-writer lifecycle — `open_partition` -> `write_ledger` x N
+-> `commit` / `abort` — so the server-side inserts open once per partition.
+`Sink::persist_ledger` is described in that same module as "legacy ... kept as a
+thin wrapper for tests and any caller that wants per-ledger semantics", and
+per-ledger is what the live indexer path uses.
+
+So the two paths that write the same tables carry different insert semantics,
+and the form the live path uses is the one the code calls legacy. That is the
+same file and the same concern this split touches, so it is decided here rather
+than in its own task. The decision is not necessarily "make them identical" —
+per-ledger may be correct for a live stream of one ledger at a time. What is not
+acceptable is that the difference is undocumented outside a doc comment that
+calls one side legacy.
 
 ## Acceptance Criteria
 
