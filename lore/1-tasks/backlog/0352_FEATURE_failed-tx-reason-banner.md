@@ -83,6 +83,27 @@ history:
       real archive on the 7af6d0ed… fixture. Steps 1-2 (ScError decode with
       numeric code, error-event picking) and Step 4 (code→name via ABI)
       remain. Fruit lands at the next backend deploy.
+  - date: '2026-08-19'
+    status: backlog
+    who: karolkow
+    note: >
+      Deployed and hardened since the last note. The classic half and the banner
+      line shipped in 645c0711 and went out with the 2026-08-17/18 production
+      deploys, so "live page check pending backend deploy" is no longer pending.
+      cdc07522 (2026-08-18) then fixed the op-to-result-code join: it mapped a
+      1-based operation_index onto a 0-based array with saturating_sub, so an
+      index of 0 would have shown operation 1's code beside the wrong operation —
+      a real code in the wrong place, which reads as fact and nothing contradicts.
+      checked_sub makes that an absence, and two offline unit tests now cover the
+      arithmetic that only a network-gated #[ignore]d test had touched.
+      Remaining scope is narrower than the step list implies: Step 2 is largely
+      covered by 0462's execution trace, which already shows the diagnostic
+      message and its numeric code at the stop point. What is genuinely left is
+      Step 1 (scval.rs still renders an error ScVal as e.name() only, dropping the
+      code) plus feeding that ScError into the existing banner line, so a Soroban
+      failure reads Auth/ExistingValue - "nonce already exists for address"
+      instead of the truthful but generic Invoke Host Function #1 - TRAPPED.
+      Step 4 (contract code to name via ABI) stays optional and unstarted.
 ---
 
 # FEATURE: prominent fail-reason banner on failed transactions
@@ -105,7 +126,7 @@ not exposed by the API at all. See Step 6.
 - **Have it (on-demand):** the tx detail endpoint's `heavy` block (ADR 0029,
   archive XDR decode) already returns `diagnostic_events` + `result_code`. The
   advanced view renders diagnostic events
-  (`web/src/pages/transaction-detail/advanced/EventsSection.tsx`).
+  (`web/src/pages/transaction-detail/sections/EventsSection.tsx`).
 - **NOT indexed:** diagnostic events / the error are **not** in ClickHouse — no
   result/error column on `transactions`. They are decoded live per request. (We
   index _contract_ events in `soroban_events`, but not _diagnostic_ events.)
@@ -187,18 +208,28 @@ Change the error ScVal render so it carries `type` + `code` (not just
 `{ type: "<Type>", code: "<ScErrorCode>" }`. Keep back-compat for existing
 consumers (add code alongside, don't break the `value` field).
 
-### Step 2 — pick the fail reason
+### Step 2 — pick the fail reason — 🟡 mostly covered by 0462
 
-Server- or FE-side: from `heavy.diagnostic_events`, select the primary error
-event (topic `[Symbol("error"), Error(...)]`) and its `data` message; combine
-with `result_code`. Prefer the innermost contract error over the wrapping
-"escalating error to VM trap…" event.
+0462's execution trace already selects the failure diagnostic and renders its
+message with the numeric code inline — `error("failing with contract error", 7)`
+— and marks the node where execution stopped
+(`web/src/pages/transaction-detail/op-card/ExecutionTrace.tsx`). So the _why_ is
+on the page today, one level below the banner.
 
-### Step 3 — banner UI (transaction-detail, normal view)
+What is left of this step is promoting that reason into the top line: pick the
+primary error event (topic `[Symbol("error"), Error(...)]`) and its `data`
+message, preferring the innermost contract error over the wrapping "escalating
+error to VM trap…" event, and hand it to the existing `opFailReason` slot in
+`TransactionSummary.tsx`.
 
-Render a compact banner near the `Failed` status:
-`Failed · <Type>/<code> — "<message>"`. Only on failed txs. Keep the full
-Diagnostic events list in advanced as-is.
+### Step 3 — banner UI — ✅ DELIVERED (645c0711, deployed 2026-08-17/18)
+
+The failed-status strip renders on failed txs and carries the per-op reason via
+`opFailReason` (`web/src/pages/transaction-detail/sections/TransactionSummary.tsx`):
+`Create Account #2 — LOW_RESERVE`, with `(+N more failed)` when several ops
+failed, `· reason unavailable` when `heavy` is missing, and the tx-level code
+only when it says more than the sentence already did. The `<Type>/<code> —
+"<message>"` shape for Soroban failures is what Steps 1–2 still add.
 
 ### Step 4 (optional, separate) — contract code → name
 
@@ -211,7 +242,7 @@ If a fail-reason is wanted on the tx LIST or as a filter, index error type+code
 into CH at ingestion (the list can't archive-fetch per row). Out of scope for
 the detail banner.
 
-### Step 6 (REQUIRED, added 2026-07-28) — classic operation failures
+### Step 6 (REQUIRED, added 2026-07-28) — classic operation failures — ✅ DELIVERED
 
 Steps 1–3 only ever explain Soroban failures. A transaction with no contract in
 it has no diagnostic events, so the banner would stay blank on exactly the case
@@ -279,8 +310,9 @@ The classic half (Step 6) + the banner line are BUILT; awaiting deploy:
       code at the stop point
 - [x] **Classic-failure fixture also verified** — `7af6d0ed…` asserts
       `Success/LowReserve/OpNoAccount` end-to-end against the real archive
-      (network-gated test); banner render pinned by unit test. Live page
-      check pending backend deploy.
+      (network-gated test); banner render pinned by unit test. Shipped to
+      production with the 2026-08-17/18 deploys; the index-mapping bug found
+      afterwards is fixed and covered offline (`cdc07522`).
 - [x] Per-operation result codes exposed on the operation DTO
 - [x] Advanced Diagnostic events section unchanged (still available)
 - [x] **Docs updated** — frontend-overview §6.4 + xdr-parsing-overview
