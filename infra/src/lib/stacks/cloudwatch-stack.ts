@@ -152,6 +152,10 @@ export class CloudWatchStack extends cdk.Stack {
     // Nothing noticed, because the delivery chain has no witness (ADR 0054,
     // open decision). So: every principal that must publish here is listed
     // EXPLICITLY below, and anything added later goes in the same list.
+    // Same-account alarms publish AS THE ACCOUNT, so the owner statement is
+    // the one that matters; a `cloudwatch.amazonaws.com` service-principal
+    // grant is only needed for cross-account topics and was dropped as
+    // redundant here.
     alarmTopic.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowOwnerAccountPublish',
@@ -165,20 +169,6 @@ export class CloudWatchStack extends cdk.Stack {
     );
     alarmTopic.addToResourcePolicy(
       new iam.PolicyStatement({
-        sid: 'AllowCloudWatchAlarmsPublish',
-        // Belt and braces: alarms are also documented to publish via this
-        // service principal, and the account-scoped condition keeps the
-        // grant from widening beyond our own alarms.
-        principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
-        actions: ['sns:Publish'],
-        resources: [alarmTopic.topicArn],
-        conditions: {
-          StringEquals: { 'AWS:SourceAccount': cdk.Stack.of(this).account },
-        },
-      })
-    );
-    alarmTopic.addToResourcePolicy(
-      new iam.PolicyStatement({
         sid: 'AllowCostAnomalyDetectionPublish',
         // Cost Anomaly Detection publishes from this service principal;
         // without the explicit topic-policy grant, subscription delivery
@@ -186,6 +176,14 @@ export class CloudWatchStack extends cdk.Stack {
         principals: [new iam.ServicePrincipal('costalerts.amazonaws.com')],
         actions: ['sns:Publish'],
         resources: [alarmTopic.topicArn],
+        // Confused-deputy guard: a service principal is not an identity, it
+        // is "any caller reaching us through that service". Without this the
+        // grant reads "Cost Anomaly Detection may publish here on behalf of
+        // ANY account" — a stranger could point their monitor at our topic.
+        // Scoping to our own account keeps the grant to our own anomalies.
+        conditions: {
+          StringEquals: { 'AWS:SourceAccount': cdk.Stack.of(this).account },
+        },
       })
     );
     const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
