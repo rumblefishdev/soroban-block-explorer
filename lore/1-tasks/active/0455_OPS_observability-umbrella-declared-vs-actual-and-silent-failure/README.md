@@ -348,11 +348,21 @@ be readable.
   SSOT/codegen variant was built, judged overkill at 2 contracts, and
   reverted (return threshold recorded in the guard's commit message)
 
-### 3. The comparator
+### 3. The comparator — the schedule withdrawn, the requirement kept
 
-One scheduled job printing deltas for every row of defect 1, publishing to the
-SNS topic that already reaches the team. Start with the two that already bit us —
-schema and CDK — then alarm filters vs emitted strings, then tests vs CI.
+A single scheduled job printing deltas for every row of defect 1 was the first
+answer, and it is **not being built**. ADR 0054 records why: the infrastructure
+comparison already runs (`make diff-production`); its output was read on
+2026-06-22, measured again on 2026-07-27, and the delta was still pending on
+2026-08-04. The gap was never detection. Putting the same report on a timer
+produces it more often, to the same effect.
+
+What survives is the requirement inside the idea: **a human sees the delta
+without asking for it.** That is now bound to the release instead of to a
+clock — `cdk diff` covers all ten declared stacks on every tag run
+(`infra/scripts/deploy-scope.sh`), so the delta arrives at the moment a change
+ships, which is also the moment someone can act on it. Same principle as
+ADR 0054 rule 5: verify on change, not on a schedule.
 
 ### 4. Cost attribution and cost detection ([[0449]]) — **done 2026-08-10** (detection live after deploy)
 
@@ -459,8 +469,12 @@ month is unanswerable by construction.
       ledger DLQ moved its alarm ALARM -> OK after five days latched, which
       proves the drain half; the other half — that a re-dirtied queue pages
       again — needs the test-message gate and has not run
-- [ ] Comparator runs on a schedule and reports schema + CDK deltas; its output is
-      seen by a human without anyone asking for it
+- [ ] The declared-vs-actual delta reaches a human without anyone asking for it.
+      **Re-scoped 2026-08-19** from "a comparator runs on a schedule": the
+      schedule is withdrawn (ADR 0054, and the measured six weeks of a read-but-
+      unacted delta), the requirement is not. The mechanism is the tag run's
+      `cdk diff` over all ten stacks — so this criterion now ticks with the one
+      below, which gates that same run
 - [ ] The CDK half of that comparison exists at release time, not only on a
       schedule: `cdk diff` covers all ten declared stacks on every tag run, and
       a tag can deploy any of them (in code 2026-08-18,

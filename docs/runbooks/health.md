@@ -45,6 +45,11 @@ rules).
 | Frontend errors                                                   | ➖ out of the umbrella's scope (task 0087 owns it when activated)                                                                                                                                                                                                                                                                                                                                                | —                                    | —                                                     | ➖                                                 |
 | Slack delivery chain itself breaks                                | ➖ DECIDED 2026-08-19 — ADR 0054 rule 5: the alarm stack's deploy is not finished until one message is seen in the channel. Chosen because a deploy is what broke it (2026-08-18/19: a topic-policy change revoked CloudWatch's publish right, every alarm action failed for 19 h, found by accident). Email co-subscriber rejected — the denial was above the subscribers. Dead-man's-switch named, not adopted | —                                    | —                                                     | ➖                                                 |
 
+Thresholds quoted in this table are **restatements**. The source is
+`infra/envs/production.json` (range-validated in `infra/src/lib/types.ts`),
+read by `infra/src/lib/stacks/cloudwatch-stack.ts`. If a number here disagrees
+with the config, the config is what pages you — fix the table.
+
 ## Symptom → first move
 
 - **"Ingestion is behind"** → alarm history of `galexie-ingestion-lag`

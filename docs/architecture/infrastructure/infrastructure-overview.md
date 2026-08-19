@@ -674,7 +674,8 @@ The deployed alarms (production; authoritative definitions in
   the alarm signal, S3 listing is only a diagnostic cross-check), missing data
   treated as breaching
 - Galexie ephemeral storage above 60% sustained 3×5 min
-- Ingest backlog age above 120 s for 3 consecutive minutes — the consumer-side
+- Ingest backlog age above 120 s for 3 consecutive minutes (set by
+  `ingestionBacklogAgeSeconds` in `infra/envs/production.json`) — the consumer-side
   counterpart to the lag alarm (a planned indexer pause pages once, knowingly)
 - Ledger Processor error rate above 1% of Lambda invocations
 - Indexer ClickHouse write failures — **any** post-retry hard-failure log line
