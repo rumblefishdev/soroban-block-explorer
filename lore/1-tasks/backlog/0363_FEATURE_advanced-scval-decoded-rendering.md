@@ -1,6 +1,6 @@
 ---
 id: '0363'
-title: 'FEATURE: advanced tx-detail — decode ScVals to typed chips + collapse (kill the raw-JSON wall)'
+title: 'FEATURE: tx-detail — decode ScVals to typed chips (kill the raw-JSON wall)'
 type: FEATURE
 status: backlog
 related_adr: []
@@ -51,33 +51,59 @@ history:
       and reverted; stage is informational only. New debt in Future Work: the
       trace renders the diagnostic copy, not the consensus event.
       Task stays backlog — A, B and C-lite's semantic line are open.
+  - date: '2026-08-19'
+    status: backlog
+    who: karolkow
+    note: >
+      Re-checked against develop. NOT superseded — 0453 and 0462 deliberately
+      wrote around this task and defer to it: 0453 README "this task decides
+      WHERE the decoded events live; 0363 decides HOW they render", and 0462
+      "event leaves humanized via the 0363 event templates when those land;
+      raw chip until then". Since 2026-08-05: F deployed (issue #378 closed,
+      production tags 2026.08.17/18); A landed under 0453 wave 5 (Events
+      section collapsed by default); the fn(args) to result sub-call tree
+      landed as 0462's execution trace. What is left is B and C-lite's
+      semantic line — still zero ScValView in the tree, HighlightedJson still
+      the renderer at five call sites including inside 0462's trace nodes.
+      New implementation route recorded from 0462: source the event formatter
+      from stellar-expert's MIT tx-meta-effects-parser rather than hand-rolling
+      it; 0462 ships a local ~40-line stopgap until then. Stale references
+      corrected in the body (the advanced/ path, the "advanced mode" framing —
+      that split no longer exists).
 ---
 
-# FEATURE: decoded ScVal rendering in advanced tx detail
+# FEATURE: decoded ScVal rendering in tx detail
 
 ## Summary
 
-The advanced transaction-detail view renders Soroban event **topics/data** and
-operation **arguments** as raw, pretty-printed ScVal JSON (`{type,value}` trees)
-via `HighlightedJson`. A tx with ~30 events becomes a ~13,000px scroll wall where
-the meaning is buried under JSON scaffolding. The input is already a **typed
-discriminated union** (`{type, value}`) — so a type-aware renderer is
-straightforward. Adopt the pattern every mature explorer uses: **decoded typed
-chips as the primary view, raw behind a toggle/collapse.**
+The transaction-detail view renders Soroban event **topics/data** and operation
+**arguments** as raw, pretty-printed ScVal JSON (`{type,value}` trees) via
+`HighlightedJson`. A tx with ~30 events was a ~13,000px scroll wall where the
+meaning is buried under JSON scaffolding.
+
+> **Two framing corrections, 2026-08-19.** There is no "advanced" view any more —
+> 0453 replaced the Normal/Advanced split with one progressive page, so this is
+> now the only view. And the wall is collapsed by default (0453 wave 5), so the
+> pain is on expand rather than on load: less urgent, equally unreadable. The input is already a **typed
+> discriminated union** (`{type, value}`) — so a type-aware renderer is
+> straightforward. Adopt the pattern every mature explorer uses: **decoded typed
+> chips as the primary view, raw behind a toggle/collapse.**
 
 ## Current state (what we have vs the options)
 
 Options considered (A ⊂ B ⊂ C; D=lib, E=raw):
 
-| Option                                    | Have it?                 | Evidence                                                                                                                                                                                                                                          |
-| ----------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **E — raw JSON** _(baseline)_             | ✅ this is us now        | Events `topics`+`data`, ops `args/return/auth` → `HighlightedJson` = blind `{type,value}` dump (`web/src/pages/transaction-detail/advanced/HighlightedJson.tsx`).                                                                                 |
-| **A — collapse / progressive disclosure** | 🟡 partial, wrong place  | ✅ raw XDR section (`XdrRow.tsx`, collapsed+expand+copy). ❌ NOT on Events/Operations — always fully expanded (the wall). Pattern exists, not applied where it hurts.                                                                             |
-| **B — semantic ScValView**                | 🟡 fragments only (~10%) | `inlineScalar` (bool/number/short-string → Chip) in `OperationJsonDetail.tsx`; `IdentifierDisplay` only on the Contract column; `categoryChip` Soroban/Classic. No `switch(.type)` renderer — addresses/amounts INSIDE topics/data/args stay raw. |
-| **C — "assets moved" / event decode**     | ❌ no                    | —                                                                                                                                                                                                                                                 |
-| **D — JSON-viewer lib**                   | ❌ no                    | `HighlightedJson` hand-rolled.                                                                                                                                                                                                                    |
+| Option                                    | Have it?                   | Evidence                                                                                                                                                                                                                                          |
+| ----------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **E — raw JSON** _(baseline)_             | ✅ this is us now          | Events `topics`+`data`, ops `args/return/auth` → `HighlightedJson` = blind `{type,value}` dump (`web/src/pages/transaction-detail/op-card/HighlightedJson.tsx`).                                                                                  |
+| **A — collapse / progressive disclosure** | ✅ done, under 0453 wave 5 | Was: raw-XDR section only (`XdrRow.tsx`), Events/Operations always fully expanded. Now the Events section is collapsed by default — `EventsSection.tsx` ("a fully expanded raw-JSON table is a wall of pixels"). Delivered by 0453, not here.     |
+| **B — semantic ScValView**                | 🟡 fragments only (~10%)   | `inlineScalar` (bool/number/short-string → Chip) in `OperationJsonDetail.tsx`; `IdentifierDisplay` only on the Contract column; `categoryChip` Soroban/Classic. No `switch(.type)` renderer — addresses/amounts INSIDE topics/data/args stay raw. |
+| **C — "assets moved" / event decode**     | 🟡 trace only              | 0462's execution trace inlines a per-event summary (`transfer(GC4Q…K7XQ, …)`, `error("failing with contract error", 7)`) from a local ~40-line stopgap formatter. No semantic line in the Events section, no tx-level "assets moved" summary.     |
+| **D — JSON-viewer lib**                   | ❌ no                      | `HighlightedJson` hand-rolled.                                                                                                                                                                                                                    |
 
-**So: E + a slice of A (raw-XDR only) + scattered B.** Target = **A + B + C-lite.**
+**Was (2026-07-07):** E + a slice of A (raw-XDR only) + scattered B.
+**Now (2026-08-19):** A is done (0453), the call tree is done (0462), C exists only
+inside the trace. **The open target is B + C-lite's semantic line.**
 
 ## Reference — how mature explorers do it (researched)
 
@@ -126,22 +152,38 @@ contract_instance, ledger_key_nonce, ledger_key_contract_instance`.
 Keep a per-node/section **"raw"** affordance that falls back to today's
 `HighlightedJson` (devs keep the raw).
 
-### A — collapse Events/Operations
+### A — collapse Events/Operations — ✅ DELIVERED (0453 wave 5)
 
-Wrap each event / operation in the `XdrRow`-style collapsed row: decoded summary
-line visible; expand for the full decoded detail; raw JSON one more click in.
-Default collapsed for large sets (mirror stellar.expert's "Show operation
-details" / N-more spoiler).
+> Done outside this task. The Events section is collapsed by default —
+> `EventsSection.tsx`: "Collapsed by default since this section is on the
+> one-and-only view now (0453 wave 5) — a fully expanded raw-JSON table is a
+> wall of pixels." What remains of the original wording below is the _decoded
+> summary line_ on the collapsed row, which needs B and belongs to C-lite.
+
+Original scope, for reference: wrap each event / operation in the `XdrRow`-style
+collapsed row: decoded summary line visible; expand for the full decoded detail;
+raw JSON one more click in. Default collapsed for large sets (mirror
+stellar.expert's "Show operation details" / N-more spoiler).
 
 ### C-lite — semantic layer
 
 - **Events:** for known shapes (`transfer/mint/burn/approve`, SAC) render a
   one-line summary `Transfer 326,131,711 · GX…4P → GY…8K` above the decoded
   topics/data.
-- **Invocation:** render `fn(args) → result` signature + nested sub-call tree
-  with return values, instead of a flat `arguments` blob.
+- **Invocation:** ✅ **delivered by 0462** as the execution trace — `fn(args) →
+result` with the nested sub-call tree and return values. Do not rebuild.
 - **Named params (bonus):** we ingest ABIs (`wasm_interface_metadata`) → map
   positional args to `#[contractfn]` param names (stellar.expert's ⓘ pattern).
+
+**Implementation route for the event formatter (recorded from 0462, 2026-08-19).**
+Do not hand-roll it. 0462 investigated the same problem and concluded the
+reusable piece is the EVENT FORMATTER, to be sourced from stellar-expert's MIT
+`tx-meta-effects-parser`; it shipped a local ~40-line stopgap covering token
+events, error diagnostics and a generic elided fallback, explicitly "until
+0363/0457 land". So the C-lite semantic line starts from that library, and the
+stopgap in `ExecutionTrace.tsx` is what it replaces. 0457
+(effects-from-ledger-entry-changes) is the sibling consumer of the same parser —
+check it before starting so the two do not adopt it twice.
 
 ### F — event taxonomy (issue #378, added 2026-08-04)
 
