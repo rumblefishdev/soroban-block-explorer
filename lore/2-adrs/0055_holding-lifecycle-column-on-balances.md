@@ -1,7 +1,7 @@
 ---
 id: '0055'
 title: 'Holding lifecycle lives as a column on `balances`, never as a deleted row'
-status: proposed
+status: accepted
 deciders: [karolkow]
 related_tasks: ['0463', '0464', '0492', '0331', '0420']
 related_adrs: ['0029']
@@ -17,6 +17,17 @@ history:
       read-time-RPC design sketched in task 0463's earlier notes and the
       `trustlines`-table shape sketched in task 0464; both are recorded below
       with the reasons they lost.
+  - date: '2026-08-18'
+    status: accepted
+    who: karolkow
+    note: >
+      Accepted after the writer landed and the checkpoint-snapshot seed was
+      built and dry-run verified. Two facts in the original text are corrected
+      inline and struck through rather than deleted: the "~7 %" gap is really
+      19,290,231 live trustlines (60%), and signers backward completeness is
+      NOT free. Both errors came from the same cause — probes that sampled
+      accounts we already hold cannot see what we never ingested. The
+      checkpoint snapshot is the first source that can.
 ---
 
 # ADR 0055: holding lifecycle is a column on `balances`
@@ -56,16 +67,16 @@ disappearance, not of trustlines.
 
 ### Verified state of production (2026-08-17)
 
-| Fact                                                                                                                            | Source                    |
-| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `balances`: 76,179,053 rows, 7 active parts, 1.01 GiB                                                                           | `system.parts`            |
-| `ENGINE = ReplacingMergeTree(last_updated_ledger) ORDER BY (holder_id, asset_id)`                                               | `SHOW CREATE TABLE`, prod |
-| `balance_aggregates_mv` is **refreshable**: `REFRESH EVERY 2 MINUTE`, full recompute `FROM balances FINAL`, atomic swap         | `SHOW CREATE`, prod       |
-| Readers of `balances`: exactly three — `accounts/queries.rs:237`, `:405`, and the MV                                            | grep over the API crate   |
-| Writer: exactly one (task 0331 "single-write")                                                                                  | `stage.rs:1786-1834`      |
-| No production code path deletes rows; every `ALTER … DELETE` in the repo is test cleanup                                        | grep                      |
-| ~7 % of live zero trustlines have no row at all in our index                                                                    | task 0463 `notes/R-`      |
-| Accounts dormant since before our ledger floor: **0**, measured over 123,772 accounts including a census of all 139,741 issuers | task 0463 map, ticket T4  |
+| Fact                                                                                                                                                                                                                                      | Source                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `balances`: 76,179,053 rows, 7 active parts, 1.01 GiB                                                                                                                                                                                     | `system.parts`                                                         |
+| `ENGINE = ReplacingMergeTree(last_updated_ledger) ORDER BY (holder_id, asset_id)`                                                                                                                                                         | `SHOW CREATE TABLE`, prod                                              |
+| `balance_aggregates_mv` is **refreshable**: `REFRESH EVERY 2 MINUTE`, full recompute `FROM balances FINAL`, atomic swap                                                                                                                   | `SHOW CREATE`, prod                                                    |
+| Readers of `balances`: exactly three — `accounts/queries.rs:237`, `:405`, and the MV                                                                                                                                                      | grep over the API crate                                                |
+| Writer: exactly one (task 0331 "single-write")                                                                                                                                                                                            | `stage.rs:1786-1834`                                                   |
+| No production code path deletes rows; every `ALTER … DELETE` in the repo is test cleanup                                                                                                                                                  | grep                                                                   |
+| ~~~7 % of live zero trustlines have no row at all~~ **SUPERSEDED 2026-08-18: the real gap is 19,290,231 live trustlines — 60%.** The probe sampled accounts we already hold, so lines dormant since before the floor were invisible to it | task 0463 `notes/R-`, corrected by the checkpoint-snapshot measurement |
+| ~~Accounts dormant since before our ledger floor: **0**~~ **SUPERSEDED**: the same blind spot. Forward-only indexing would leave ~94% of accounts without a signers row after a month; the seed carries 10,865,408 signer rows            | task 0463 map T4, corrected by the full-network fold                   |
 
 ---
 
@@ -151,8 +162,9 @@ A one-off seed from the history archive's checkpoint bucket list — measured at
 **4.54 GB gzipped across 21 files**, decoded to confirm content — closes it.
 The seed does **two** things:
 
-1. **Fills the missing ~7 %**: live zero-balance entries absent from our index
-   are inserted, versioned on each entry's own `lastModifiedLedgerSeq`.
+1. **Fills the gap** (measured 2026-08-18 at **19,290,231** live trustlines,
+   not the ~7 % first estimated): entries absent from our index are inserted,
+   versioned on each entry's own `lastModifiedLedgerSeq`.
 2. **Marks the closures**: `{our zero rows} − {live in snapshot}` are exactly
    the closed relationships, written with `closed_at_ledger`.
 
@@ -179,9 +191,11 @@ Independent of the above, and settled by the same map:
 - Storage is a side table `account_signers` keyed by `account_id`, RMT
   versioned by ledger, with a single writer — not a column on `accounts`,
   whose whole-row replacement makes a bolt-on column unsafe.
-- **Backward completeness is free**: the dormant-account set is empty
-  (0 of 123,772 measured, including all 139,741 issuers), so indexing forward
-  reaches every account that exists.
+- ~~**Backward completeness is free**~~ — **WRONG, corrected 2026-08-18.** The
+  dormant-account census (0 of 123,772) only sampled accounts we already hold.
+  Measured against the network: forward-only indexing leaves ~94% of accounts
+  without a signers row after a month, so signers ride the same checkpoint seed
+  as the holdings — 10,865,408 rows.
 
 ### Standing rule adopted with this decision
 
@@ -245,17 +259,17 @@ cases, and one path recommended for reclassification — recorded as task 0492.
 
 ### Rejected alternatives
 
-| Alternative                      | Reason                                                                                                                                                                                                                                               |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read-time Soroban RPC            | Verified to work (131–139 ms, both halves of #377 in one round trip) but structurally cannot reach backward completeness — no enumeration primitive, so ~7 % stays invisible forever. Also puts an unverifiable third-party answer on a page render. |
-| Read-time S3 XDR archive         | Correct but strictly dominated: 2.5 MB raw XDR per ledger, and the bucket is the public `aws-public-blockchain`, read unsigned — someone else's infrastructure exactly as much as RPC.                                                               |
-| Horizon                          | Third-party interpretation of chain data. Excluded by the standing rule. Measurement oracle only.                                                                                                                                                    |
-| `trustlines` entity table        | Entity boundary too narrow (classic-only), partially reverses task 0331's unification, forces repointing the MV that produces public `total_supply` / `holder_count`, and needs a second mechanism for Soroban holdings.                             |
-| Separate closures table          | Two sources of truth for one fact, plus a JOIN on the latency-critical per-account read.                                                                                                                                                             |
-| Numeric sentinel (`amount = -1`) | Poisons `sum(amount) AS total_supply`.                                                                                                                                                                                                               |
-| `Nullable(Int128)` sentinel      | Column rewrite on 76 M rows, worse compression, less legible meaning.                                                                                                                                                                                |
-| RMT `is_deleted`                 | Correctness would depend on merges reaching one part; task 0420 measured that they do not.                                                                                                                                                           |
-| Balance-history time series      | Would subsume this decision entirely — and remains the right long-term shape — but it is a separate project. Task 0464 is rewritten to carry it.                                                                                                     |
+| Alternative                      | Reason                                                                                                                                                                                                                                                                                               |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read-time Soroban RPC            | Verified to work (131–139 ms, both halves of #377 in one round trip) but structurally cannot reach backward completeness — no enumeration primitive, so the gap (measured at 60%, not the ~7 % assumed here) stays invisible forever. Also puts an unverifiable third-party answer on a page render. |
+| Read-time S3 XDR archive         | Correct but strictly dominated: 2.5 MB raw XDR per ledger, and the bucket is the public `aws-public-blockchain`, read unsigned — someone else's infrastructure exactly as much as RPC.                                                                                                               |
+| Horizon                          | Third-party interpretation of chain data. Excluded by the standing rule. Measurement oracle only.                                                                                                                                                                                                    |
+| `trustlines` entity table        | Entity boundary too narrow (classic-only), partially reverses task 0331's unification, forces repointing the MV that produces public `total_supply` / `holder_count`, and needs a second mechanism for Soroban holdings.                                                                             |
+| Separate closures table          | Two sources of truth for one fact, plus a JOIN on the latency-critical per-account read.                                                                                                                                                                                                             |
+| Numeric sentinel (`amount = -1`) | Poisons `sum(amount) AS total_supply`.                                                                                                                                                                                                                                                               |
+| `Nullable(Int128)` sentinel      | Column rewrite on 76 M rows, worse compression, less legible meaning.                                                                                                                                                                                                                                |
+| RMT `is_deleted`                 | Correctness would depend on merges reaching one part; task 0420 measured that they do not.                                                                                                                                                                                                           |
+| Balance-history time series      | Would subsume this decision entirely — and remains the right long-term shape — but it is a separate project. Task 0464 is rewritten to carry it.                                                                                                                                                     |
 
 ---
 

@@ -186,13 +186,13 @@ Everything below is measured on production data and RPC-verified, not estimated.
 
 ### The measured truth (checkpoint 64,010,495; RPC-verified 260/260 sampled)
 
-| finding                                            | count                                 | note                                                                                                                                                                                                                                            |
-| -------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| live trustlines the network has, we hold NO row    | **19,290,231**                        | the real gap is **60%**, not the ~7% the 200-account probe suggested — that probe sampled accounts WE hold; dormant-since-floor lines were invisible to it. 99.997% have `lastModifiedLedgerSeq` below our floor: dormancy, not a parser defect |
-| our zero rows that are REAL closures               | **24,474,026**                        | the ghost set the read flip must not resurrect                                                                                                                                                                                                  |
-| native ghosts (account deleted, we still show XLM) | **1,035,265** carrying **45.51M XLM** | task 0321's class, 17× its own measurement — its method only saw merges we ingested; RPC check: 100/100 sampled accounts absent on chain                                                                                                        |
-| assets we have never seen at all                   | **97,139**                            | network has 391,092 live assets, we know 344,989, intersection ~294k (we also hold ~51k dead ones)                                                                                                                                              |
-| signers rows ready to seed                         | **10,865,408**                        | every live account, versioned on each entry's own ledger                                                                                                                                                                                        |
+| finding                                                         | count              | note                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| live trustlines the network has, we hold NO row                 | **19,290,231**     | the real gap is **60%**, not the ~7% the 200-account probe suggested — that probe sampled accounts WE hold; dormant-since-floor lines were invisible to it. 99.997% have `lastModifiedLedgerSeq` below our floor: dormancy, not a parser defect |
+| our zero rows that are REAL closures                            | **24,474,026**     | the ghost set the read flip must not resurrect                                                                                                                                                                                                  |
+| native ghosts (account deleted, we still show a native balance) | **1,035,265** rows | task 0321's class, 17× its own measurement — its method only saw merges we ingested; RPC check: 100/100 sampled accounts absent on chain                                                                                                        |
+| assets we have never seen at all                                | **97,139**         | network has 391,092 live assets, we know 344,989, intersection ~294k (we also hold ~51k dead ones)                                                                                                                                              |
+| signers rows ready to seed                                      | **10,865,408**     | every live account, versioned on each entry's own ledger                                                                                                                                                                                        |
 
 Asymmetry explained: the RPC bootstrap (task 0492) seeded accounts + native
 balances, never trustlines — so native measures complete while classic misses
@@ -229,7 +229,7 @@ balances, never trustlines — so native measures complete while classic misses
 5. Only then: flip the read filter, ship signers API/DTO/UI (explicit
    "not indexed" state until then), regenerate API types, update docs.
 
-### Findings 2026-08-18 (second sweep — Karol's "omit nothing" pass)
+### Findings 2026-08-18 (second sweep — the "omit nothing" pass)
 
 - **The RPC bootstrap is NOT a one-off**: `bootstrap.rs` runs once per backfill
   window inside `run` (fills skeleton accounts via per-key RPC, task 0214).
@@ -252,7 +252,7 @@ balances, never trustlines — so native measures complete while classic misses
 
 ### Library audit 2026-08-18 — what upstream already does, and what it does not
 
-Checked our hand-rolled pieces against the ecosystem (Karol's standing
+Checked our hand-rolled pieces against the ecosystem (the standing
 prefer-the-official-library rule) rather than assuming:
 
 - **Dedup + ordering VALIDATED against the reference implementation.**
@@ -264,10 +264,10 @@ prefer-the-official-library rule) rather than assuming:
 - **No Rust equivalent exists** for bucket decoding or state reconstruction.
   SDF's `stellar-archivist` (rs-stellar-archivist, first release 2025-07) does
   cover manifest parsing, bucket-URL layout and checkpoint math — but it never
-  decodes a bucket (`grep -c BucketEntry src/` = 0). Adoption is a judgement
-  call on a 4-star, ~23-download crate whose default features pull five cloud
-  backends; our three small functions are byte-for-byte equivalent to its
-  `history_format` module. Left as-is, documented, revisit in 0502.
+  decodes a bucket (`grep -c BucketEntry src/` = 0). Adoption would pull its
+  default feature set (five cloud storage backends) for three small functions
+  that are byte-for-byte equivalent to its `history_format` module. Left as-is,
+  documented, revisit in 0502.
 - **`next` correctly ignored** — Go's `BucketList.Hash()` folds only `curr` and
   `snap`, so `next` (an in-flight merge) is by definition not committed state.
   Caveat recorded: today's manifest shows `state: 0` everywhere, but historical
@@ -282,6 +282,47 @@ prefer-the-official-library rule) rather than assuming:
   `SHA256(live, hotArchive)` — hash verification must fold both.
 - Hardening applied: METAENTRY is now required at record 1 (Go errors on this
   too) instead of being silently skipped anywhere.
+
+### Decision 2026-08-18 — ONE seed run, and the direction is the reusable tool
+
+A five-agent audit recommended splitting the seed in two (closures only first,
+the 19.3M backward fill later) on the grounds that no acceptance criterion
+needs the fill and it carries all the production risk.
+
+**Rejected.** The point of this work is not to close issue #377 at minimum
+cost; it is to make the index complete and to grow the snapshot reader into
+the reusable capability task 0502 describes. Splitting optimises for shipping
+the issue and moves AWAY from that. One run, done properly.
+
+What that decision obliges, in place of the split:
+
+- The aggregates WILL move (`balance_aggregates_mv` recomputes every two
+  minutes). Capture `total_supply` / `holder_count` before the run and verify
+  the delta against RPC — the acceptance criterion is rewritten accordingly.
+- Up to ~97k previously-unknown assets enter the public assets list and search
+  (`assets` list query filters nothing). That is correct — they are real
+  network assets — but it is a visible product change, not a silent one.
+- The seed's own inputs must be trustworthy: buckets are SHA-256 verified
+  against the manifest hashes, the checkpoint is pinnable so `--execute` runs
+  the snapshot the dry-run reviewed, and truncated input files are refused.
+
+### Audit findings 2026-08-18 — five agents over the full branch diff
+
+One defect blocked deploy and is fixed: **`account_signers` rows were not
+deduplicated per account.** States arrive one per transaction and every state
+in a ledger carries that ledger as its RMT version, so two `SetOptions` on one
+account in one ledger wrote two rows at the SAME version — the merge picks
+arbitrarily, and a REMOVED signer could win. The balances path beside it
+already guarded exactly this. Fixed with a per-account fold plus a regression
+test; a keyless signer now warns instead of silently shrinking the set.
+
+Surviving objections worth carrying (each now has a fix in this branch or a
+named owner): the missing-bucket verdicts are the least verifiable ones (the
+sample files carry surrogates, and reversing them runs through our own
+incomplete tables); 260 RPC samples cannot bound the error on 44.9M
+corrections; `--execute` re-fetched the manifest, so it would not have run the
+snapshot the dry-run reviewed; rows the writer had already closed were counted
+as missing because the early return skipped the matched flag.
 
 ### Open follow-ups spawned along the way
 
@@ -308,7 +349,14 @@ prefer-the-official-library rule) rather than assuming:
       an empty list that reads as "not multisig"
 - [ ] Seed coverage measured for BOTH trustlines and accounts, and
       cross-checked against the RPC route regardless of the measured result
-- [ ] `total_supply` and `holder_count` unchanged for a spot-checked asset
+- [ ] `total_supply` and `holder_count` move **only in the direction the
+      network justifies**, spot-verified against RPC for at least one asset.
+      (Rewritten 2026-08-18: the original criterion said "unchanged", which a
+      correct seed cannot satisfy — `balance_aggregates_mv` recomputes
+      `sum(amount)` / `countIf(amount > 0)` from `balances` every two minutes,
+      and the seed inserts ~19.3M live holdings carrying real amounts while
+      zeroing ~1.04M native ghosts. Capture both aggregates BEFORE the run so
+      the delta can be checked rather than discovered.)
 - [ ] The 200-account probe from `notes/R-` returns zero accounts where the
       chain holds more live zero trustlines than we do
 - [ ] **Verified on production**, not at merge — the destination is a shipped,

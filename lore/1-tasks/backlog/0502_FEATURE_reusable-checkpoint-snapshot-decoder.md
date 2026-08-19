@@ -87,7 +87,7 @@ crate; compare/seed stay behind as backfill-runner consumers.
 
 ## The window discriminator — carry it into the tool's contract
 
-Karol's rule (2026-08-18), proven on the first full pass: for any
+Standing rule (2026-08-18), proven on the first full pass: for any
 discrepancy, the entry's own `lastModifiedLedgerSeq` against our ledger floor
 is the verdict —
 
