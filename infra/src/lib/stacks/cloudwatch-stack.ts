@@ -17,6 +17,23 @@ import type { Construct } from 'constructs';
 import { originLockCanaryCode } from '../canaries/origin-lock.js';
 import type { EnvironmentConfig } from '../types.js';
 
+/**
+ * ASCII ONLY in anything that reaches the synthesized template - alarm
+ * descriptions, dashboard titles, markdown widgets.
+ *
+ * Not a style preference. `cdk diff` reads the deployed template back through
+ * a path that mangles non-ASCII: byte-checked 2026-08-19, the live alarm
+ * carries `e2 80 94` (an em dash) while the template read returns `3f` (`?`),
+ * so every such string shows as a change that survives being deployed. Nine
+ * alarm descriptions and one dashboard title were producing ten permanent
+ * false entries in the diff - the diff an operator is asked to read before
+ * every production deploy. A gate that always shows noise teaches people to
+ * scroll past it, and that is what happened to the change that muted every
+ * alarm for 19 hours on 2026-08-18.
+ *
+ * Comments are unaffected; they never reach the template. Use `-` for an em
+ * dash and `->` for an arrow.
+ */
 export interface CloudWatchStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
   readonly apiFunction: lambda.IFunction;
@@ -257,7 +274,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'GalexieLagAlarm', {
         alarmName: `${config.envName}-galexie-ingestion-lag`,
         alarmDescription:
-          'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window — Galexie may have stopped writing.',
+          'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window - Galexie may have stopped writing.',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'NumberOfMessagesSent',
@@ -307,7 +324,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'IngestBacklogAgeAlarm', {
         alarmName: `${config.envName}-ingestion-backlog-age`,
         alarmDescription:
-          'Queued ledgers are not being consumed — oldest doorbell exceeded the age threshold. Real stall (lore-0454 shape) OR a paused/forgotten event-source mapping; if you just paused the indexer on purpose, this page is expected. Runbook: docs/deployment.md (pause procedure) + docs/runbooks/live-tail-cutover.md.',
+          'Queued ledgers are not being consumed - oldest doorbell exceeded the age threshold. Real stall (lore-0454 shape) OR a paused/forgotten event-source mapping; if you just paused the indexer on purpose, this page is expected. Runbook: docs/deployment.md (pause procedure) + docs/runbooks/live-tail-cutover.md.',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateAgeOfOldestMessage',
@@ -362,7 +379,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'GalexieEphemeralStorageAlarm', {
         alarmName: `${config.envName}-galexie-ephemeral-storage`,
         alarmDescription:
-          'Galexie captive-core ephemeral disk >60% — approaching the deadlock ceiling; plan a disk bump.',
+          'Galexie captive-core ephemeral disk >60% - approaching the deadlock ceiling; plan a disk bump.',
         metric: new cloudwatch.MathExpression({
           expression: '(used / reserved) * 100',
           usingMetrics: { used: ephemeralUsed, reserved: ephemeralReserved },
@@ -399,7 +416,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'ProcessorErrorRateAlarm', {
         alarmName: `${config.envName}-ledger-processor-error-rate`,
         alarmDescription:
-          'Ledger Processor error rate exceeded threshold — ledgers may be failing to index.',
+          'Ledger Processor error rate exceeded threshold - ledgers may be failing to index.',
         metric: new cloudwatch.MathExpression({
           expression: 'errors / invocations',
           usingMetrics: {
@@ -528,7 +545,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
         alarmName: `${config.envName}-ledger-processor-dlq-depth`,
         alarmDescription:
-          'Ledger Processor DLQ has messages — reconcile failed repeatedly during an incident. Runbook: docs/runbooks/dlq.md (inspect, fix cause, then purge — doorbells carry no data).',
+          'Ledger Processor DLQ has messages - reconcile failed repeatedly during an incident. Runbook: docs/runbooks/dlq.md (inspect, fix cause, then purge - doorbells carry no data).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -565,7 +582,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'EnrichmentDlqDepthAlarm', {
         alarmName: `${config.envName}-enrichment-dlq-depth`,
         alarmDescription:
-          'Enrichment worker DLQ has messages — a DB incident or a poison-pill message (dead-domain fetches sentinel instead of landing here). Runbook: docs/runbooks/dlq.md (inspect, fix cause, then redrive).',
+          'Enrichment worker DLQ has messages - a DB incident or a poison-pill message (dead-domain fetches sentinel instead of landing here). Runbook: docs/runbooks/dlq.md (inspect, fix cause, then redrive).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -601,7 +618,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'EnrichmentWorkerErrorRateAlarm', {
         alarmName: `${config.envName}-enrichment-worker-error-rate`,
         alarmDescription:
-          'Enrichment worker Lambda error rate exceeded threshold — DB / network / SEP-1 issues.',
+          'Enrichment worker Lambda error rate exceeded threshold - DB / network / SEP-1 issues.',
         metric: new cloudwatch.MathExpression({
           expression: 'errors / invocations',
           usingMetrics: {
@@ -658,7 +675,7 @@ export class CloudWatchStack extends cdk.Stack {
         // history restarts, accepted (same call as the DLQ growth renames).
         alarmName: `${config.envName}-api-gateway-5xx`,
         alarmDescription:
-          'An API request returned 5xx — a user saw a server error. Every 5xx is a defect: query the API log group in Logs Insights (filter level="ERROR", group by fields.error) and account for each error; do not tune this alarm.',
+          'An API request returned 5xx - a user saw a server error. Every 5xx is a defect: query the API log group in Logs Insights (filter level="ERROR", group by fields.error) and account for each error; do not tune this alarm.',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/ApiGateway',
           metricName: '5XXError',
@@ -724,7 +741,7 @@ export class CloudWatchStack extends cdk.Stack {
         new cloudwatch.Alarm(this, 'OriginLockCanaryAlarm', {
           alarmName: `${config.envName}-origin-lock-bypass`,
           alarmDescription:
-            'Origin-lockdown canary failed — a direct origin (execute-api / *.cloudfront.net) is answering instead of returning 403. Possible Cloudflare-bypass regression.',
+            'Origin-lockdown canary failed - a direct origin (execute-api / *.cloudfront.net) is answering instead of returning 403. Possible Cloudflare-bypass regression.',
           metric: canary.metricSuccessPercent({
             period: cdk.Duration.minutes(15),
           }),
@@ -784,7 +801,7 @@ export class CloudWatchStack extends cdk.Stack {
         // drain to the DLQ the main queue empties and age reads green.
         [
           new cloudwatch.GraphWidget({
-            title: 'Galexie doorbell rate (ledgers → ingest queue/min)',
+            title: 'Galexie doorbell rate (ledgers -> ingest queue/min)',
             left: [
               new cloudwatch.Metric({
                 namespace: 'AWS/SQS',
