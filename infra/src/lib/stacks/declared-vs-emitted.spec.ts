@@ -31,6 +31,38 @@
  *
  * Recommendation: stay on A, jump to B when a heuristic is added or a filter
  * is, and only reach for C at the contract count that made it lose.
+ *
+ * ## Resolved 2026-08-19: stay on A, and do not extend it
+ *
+ * A review raised two gaps — this test checks neither the metric DIMENSIONS an
+ * alarm reads nor which log group a filter reads against which crate emits the
+ * literal. Both are real. Neither is being fixed here, and the reason is the
+ * trigger above: closing them inside A means adding two more heuristics to a
+ * source-text scraper, which is the move that was already ruled to mean "go
+ * to B instead".
+ *
+ * Going to B today buys exactness for ONE filter, ONE namespace, TWO metric
+ * names and ONE log group, and costs a stack fixture for a constructor that
+ * takes two Lambdas, three queues, an ECS cluster and a REST API. Measured
+ * the same way every other cleanup in this task was measured, it does not pay
+ * yet.
+ *
+ * What was measured before deciding (2026-08-19), so the next reader does not
+ * repeat it:
+ *   - The filter-literal half is EXACT, not approximate. Renaming the emit
+ *     site fails the test with the right message; renaming it to a SUPERSTRING
+ *     of the declared literal also fails, because the pair regex requires the
+ *     closing quote. Both verified by breaking the Rust source and running it.
+ *   - The metric-name half is the inexact one (±400-character proximity), and
+ *     it is already fail-closed through the explicit FILTER_MINTED_METRICS
+ *     list below.
+ *   - Nx tracks the Rust sources this test reads: breaking an emit site
+ *     invalidates the cache and the test re-runs. Verified, because a cached
+ *     pass here would be a silent skip of the guard against silent skips.
+ *
+ * Added trigger, on top of the two above: **an emit site moving out of
+ * `crates/indexer`**. That is the one live scenario the log-group gap would
+ * hide, and it is invisible to this test by construction.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
