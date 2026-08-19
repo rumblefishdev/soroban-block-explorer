@@ -16,11 +16,22 @@ history:
       spanning five domains (contract deployments, account states, LPs,
       assets, NFTs) — the crate's god module and the graph's densest hotspot
       (pre-existing, not introduced by 0453).
+  - date: 2026-08-19
+    status: backlog
+    who: karolkow
+    note: >
+      Confirmed as the owner of the state.rs split; task 0418 section C withdrew
+      its overlapping claim the same day.
 ---
 
 # REFACTOR: split xdr-parser state.rs by domain
 
 ## Scope
+
+**This task owns the `state.rs` split.** Task 0418 section C also described it
+until 2026-08-19; that claim was withdrawn there in favour of this task, which
+has the narrower axis and the stricter gate. `stage.rs` is task 0414 — a
+different file, no overlap.
 
 Split along the file's own documented "Step" sections into per-domain
 modules (deployments / accounts / liquidity-pools / assets / nft), keeping
