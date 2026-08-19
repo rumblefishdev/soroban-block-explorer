@@ -81,13 +81,14 @@ The transaction-detail view renders Soroban event **topics/data** and operation
 `HighlightedJson`. A tx with ~30 events was a ~13,000px scroll wall where the
 meaning is buried under JSON scaffolding.
 
+The input is already a **typed discriminated union** (`{type, value}`) — so a
+type-aware renderer is straightforward. Adopt the pattern every mature explorer
+uses: **decoded typed chips as the primary view, raw behind a toggle/collapse.**
+
 > **Two framing corrections, 2026-08-19.** There is no "advanced" view any more —
 > 0453 replaced the Normal/Advanced split with one progressive page, so this is
 > now the only view. And the wall is collapsed by default (0453 wave 5), so the
-> pain is on expand rather than on load: less urgent, equally unreadable. The input is already a **typed
-> discriminated union** (`{type, value}`) — so a type-aware renderer is
-> straightforward. Adopt the pattern every mature explorer uses: **decoded typed
-> chips as the primary view, raw behind a toggle/collapse.**
+> pain is on expand rather than on load: less urgent, equally unreadable.
 
 ## Current state (what we have vs the options)
 
