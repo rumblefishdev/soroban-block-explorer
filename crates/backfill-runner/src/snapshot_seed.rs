@@ -286,7 +286,12 @@ fn build_corrections(
         let Some(d) = state.account_details.get(holder_id) else {
             continue; // referenced but not a live account in the snapshot
         };
-        let entry = state.accounts[holder_id];
+        // `get`, not `[]`: safe today only because `absorb` fills `accounts`
+        // and `account_details` together, which is an invariant rather than a
+        // type guarantee — and this path runs after 4.5 GB of decode.
+        let Some(entry) = state.accounts.get(holder_id).copied() else {
+            continue;
+        };
         out.account_stubs.push(AccountRow {
             id: *holder_id,
             account_id: d.strkey.clone(),

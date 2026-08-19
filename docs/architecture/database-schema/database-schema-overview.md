@@ -152,7 +152,7 @@ Derived explorer entities:
   **Lifecycle** (ADR 0055 / task 0463): `closed_at_ledger Int64 DEFAULT 0` — `0` while the holding
   relationship is live, otherwise the ledger the entry disappeared in; rows are never deleted. A
   live-but-empty holding and a removed one both write `amount = 0`, so the amount alone CANNOT
-  carry liveness — the read path filters `closed_at_ledger = 0`, never `amount != 0`. The writer
+  carry liveness — the read path **will** filter `closed_at_ledger = 0` rather than `amount != 0` (the flip ships with the signers API in the follow-up; today `accounts/queries.rs` still filters on the amount, which is why a live zero is still hidden). The writer
   stamps closures exactly; rows seeded from the checkpoint snapshot carry the run's checkpoint
   ledger, meaning "closed at or before"
 - `account_signers` — signers + thresholds per account (task 0463, issue #377): one row per

@@ -292,6 +292,23 @@ ORDER BY (contract_id);
 --    verified 0/411654 rows populated in prod). Every read resolves the display
 --    name/icon from `asset_enrichment` (curated) coalesced over
 --    `soroban_contract_metadata` (on-chain) — never from `assets`.
+CREATE TABLE IF NOT EXISTS assets (
+    asset_type      Int16,
+    asset_code      LowCardinality(String),
+    issuer_id       Int64,            -- 0 for native / soroban-native
+    contract_id     Int64,            -- 0 for native / classic-credit
+    -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
+    -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
+    -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`
+    -- references it. NOT in ORDER BY (natural key unchanged; additive, non-breaking).
+    -- PROD: existing table needs `ALTER TABLE assets ADD COLUMN id Int64` + a
+    -- one-time backfill of `id` for existing rows (maintenance window) — CREATE IF
+    -- NOT EXISTS won't add it. Default 0 until a row is rewritten/backfilled.
+    id              Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
 -- Signers + thresholds side table (task 0463 / issue #377). ONE row per
 -- account carrying the FULL signer set as parallel arrays: the protocol caps
 -- signers at 20 and rewrites AccountEntry wholesale, so RMT atomically
@@ -321,23 +338,6 @@ CREATE TABLE IF NOT EXISTS account_signers (
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (account_id);
-
-CREATE TABLE IF NOT EXISTS assets (
-    asset_type      Int16,
-    asset_code      LowCardinality(String),
-    issuer_id       Int64,            -- 0 for native / soroban-native
-    contract_id     Int64,            -- 0 for native / classic-credit
-    -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
-    -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
-    -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`
-    -- references it. NOT in ORDER BY (natural key unchanged; additive, non-breaking).
-    -- PROD: existing table needs `ALTER TABLE assets ADD COLUMN id Int64` + a
-    -- one-time backfill of `id` for existing rows (maintenance window) — CREATE IF
-    -- NOT EXISTS won't add it. Default 0 until a row is rewritten/backfilled.
-    id              Int64 DEFAULT 0
-)
-ENGINE = ReplacingMergeTree
-ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
 -- SAC facet side table (ADR 0051 / task 0339). One logical row per SAC-having
 -- classic_credit / native asset, keyed byte-for-byte like `assets` and joined at

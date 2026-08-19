@@ -222,6 +222,11 @@ enum Command {
         buckets: Option<usize>,
     },
 
+    /// Print the per-slice export SQL the comparison and the seed expect, so
+    /// the operator copies a statement instead of transcribing it out of Rust
+    /// source. READ-ONLY — prints, runs nothing.
+    SnapshotExportSql,
+
     /// Step 3b — decode the snapshot and report DISTINCT entries after
     /// first-wins deduplication. `snapshot-tally` counts RECORDS, which cannot
     /// be compared with our tables: a key appears once per version across the
@@ -421,6 +426,7 @@ async fn main() {
                 .await
                 .expect("snapshot tally failed — read-only, safe to re-run");
         }
+        Command::SnapshotExportSql => snapshot_compare::print_export_sql(),
         Command::SnapshotDedup => {
             snapshot::dedup_command()
                 .await

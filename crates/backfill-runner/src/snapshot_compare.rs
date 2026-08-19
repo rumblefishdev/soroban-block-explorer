@@ -317,6 +317,25 @@ pub fn slice_sql(from: i128, to: i128) -> String {
     )
 }
 
+/// Print the exact export the comparison and the seed expect, one statement per
+/// key slice.
+///
+/// Without this the runbook tells an operator to "reproduce the sliced argMax
+/// query in `slice_sql`" — i.e. to hand-transcribe SQL out of Rust source, in a
+/// binary crate where `pub` buys nothing. A transcription slip does not fail;
+/// it silently changes which rows the comparison sees.
+pub fn print_export_sql() {
+    println!(
+        "-- {} statements. Run each, append the TabSeparated output to one file,\n\
+         -- and pass that file as --our-rows. Guard on the BODY containing\n\
+         -- 'DB::Exception': the client exits 0 on a server error.",
+        KEY_SLICES
+    );
+    for (from, to) in key_slices() {
+        println!("{} FORMAT TabSeparated;", slice_sql(from, to));
+    }
+}
+
 /// The slice boundaries the export must use, so a TSV produced outside this
 /// binary covers the key space exactly once.
 pub fn key_slices() -> impl Iterator<Item = (i128, i128)> {

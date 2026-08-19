@@ -2671,6 +2671,49 @@ fn signer_rows_full_set_replace_semantics() {
     assert_eq!(emp.master_weight, 1);
 }
 
+/// The Soroban (type-3) closure stamp. A holder who spent down to zero and a
+/// holder whose `ContractData` entry was REMOVED both carry `balance = 0`, so
+/// `closed` is the only thing separating them — the same ambiguity as a classic
+/// trustline, in a different write path (ADR 0055). In scope for this task and
+/// previously asserted nowhere.
+#[test]
+fn soroban_removal_stamps_closed_at_ledger_but_a_spent_down_holder_does_not() {
+    use xdr_parser::ExtractedSorobanBalance;
+
+    let spent = ExtractedSorobanBalance {
+        contract_id: "CTOKEN".to_string(),
+        holder: "GSPENT".to_string(),
+        balance: 0,
+        ledger: 100,
+        closed: false,
+    };
+    let removed = ExtractedSorobanBalance {
+        holder: "GREMOVED".to_string(),
+        closed: true,
+        ..spent.clone()
+    };
+
+    let rows = stage::build_balance_rows(&[spent, removed], &HashMap::new());
+    let by = |strkey: &str| {
+        rows.iter()
+            .find(|r| r.holder_id == ids::address_id(strkey))
+            .expect("row")
+    };
+
+    assert_eq!(by("GSPENT").amount, 0);
+    assert_eq!(
+        by("GSPENT").closed_at_ledger,
+        0,
+        "a live holder at zero must stay live — this is the whole bug"
+    );
+    assert_eq!(by("GREMOVED").amount, 0);
+    assert_eq!(
+        by("GREMOVED").closed_at_ledger,
+        100,
+        "a removed entry must carry the ledger it disappeared in"
+    );
+}
+
 /// Two transactions in ONE ledger touching the same account must collapse to a
 /// single `account_signers` row carrying the LAST state.
 ///

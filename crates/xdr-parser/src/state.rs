@@ -402,6 +402,7 @@ pub fn extract_account_states(
 ) -> Vec<ExtractedAccountState> {
     use std::collections::HashMap;
 
+    #[derive(Default)]
     struct AccountAccum {
         native_balance: Option<i64>,
         sequence_number: Option<i64>,
@@ -448,18 +449,9 @@ pub fn extract_account_states(
                 continue;
             }
             let entry = map.entry(account_id).or_insert_with(|| AccountAccum {
-                native_balance: None,
-                sequence_number: None,
-                home_domain: None,
-                is_creation: false,
                 ledger_sequence: change.ledger_sequence,
                 created_at: change.created_at,
-                trustline_balances: Vec::new(),
-                removed_trustlines: Vec::new(),
-                account_removed: false,
-                signers: None,
-                thresholds: None,
-                flags: None,
+                ..Default::default()
             });
             entry.native_balance = Some(0);
             entry.account_removed = true;
@@ -497,18 +489,9 @@ pub fn extract_account_states(
         let is_creation = matches!(change.change_type.as_str(), "created" | "restored");
 
         let entry = map.entry(account_id).or_insert_with(|| AccountAccum {
-            native_balance: None,
-            sequence_number: None,
-            home_domain: None,
-            is_creation: false,
             ledger_sequence: change.ledger_sequence,
             created_at: change.created_at,
-            trustline_balances: Vec::new(),
-            removed_trustlines: Vec::new(),
-            account_removed: false,
-            signers: None,
-            thresholds: None,
-            flags: None,
+            ..Default::default()
         });
         entry.native_balance = Some(balance);
         entry.sequence_number = Some(seq);
@@ -587,18 +570,9 @@ pub fn extract_account_states(
                 };
 
                 let entry = map.entry(account_id).or_insert_with(|| AccountAccum {
-                    native_balance: None,
-                    sequence_number: None,
-                    home_domain: None,
-                    is_creation: false,
                     ledger_sequence: change.ledger_sequence,
                     created_at: change.created_at,
-                    trustline_balances: Vec::new(),
-                    removed_trustlines: Vec::new(),
-                    account_removed: false,
-                    signers: None,
-                    thresholds: None,
-                    flags: None,
+                    ..Default::default()
                 });
 
                 // Dedup: remove existing entry for same asset, then add new
@@ -657,18 +631,9 @@ pub fn extract_account_states(
                 };
 
                 let entry = map.entry(account_id).or_insert_with(|| AccountAccum {
-                    native_balance: None,
-                    sequence_number: None,
-                    home_domain: None,
-                    is_creation: false,
                     ledger_sequence: change.ledger_sequence,
                     created_at: change.created_at,
-                    trustline_balances: Vec::new(),
-                    removed_trustlines: Vec::new(),
-                    account_removed: false,
-                    signers: None,
-                    thresholds: None,
-                    flags: None,
+                    ..Default::default()
                 });
 
                 // Also remove from trustline_balances if it was added in same tx
