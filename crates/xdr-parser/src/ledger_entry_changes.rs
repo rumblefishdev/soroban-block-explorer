@@ -315,7 +315,13 @@ fn account_key(a: &AccountEntry) -> Value {
 
 /// XDR arm → the wire word for a signer key kind. Total over `SignerKey` on
 /// purpose — a new arm must fail compilation here, never pass through blank.
-fn signer_type_name(key: &SignerKey) -> &'static str {
+///
+/// `pub` because the checkpoint-snapshot seed writes into the SAME
+/// `account_signers.signer_types` column as this writer. A second copy of these
+/// four words would split the stored vocabulary by whichever path last touched
+/// the account — silently. Sharing the function makes that a compile-time
+/// guarantee instead of a promise in a comment.
+pub fn signer_type_name(key: &SignerKey) -> &'static str {
     match key {
         SignerKey::Ed25519(_) => "ed25519",
         SignerKey::PreAuthTx(_) => "preauth_tx",

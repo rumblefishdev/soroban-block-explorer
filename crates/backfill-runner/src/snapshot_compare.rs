@@ -44,9 +44,7 @@ use serde::Deserialize;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{
-    self, HoldingKey, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list, report_state,
-};
+use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list, report_state};
 
 /// Our indexer's ledger floor. The single most important discriminator for the
 /// `missing` bucket: an entry whose own `lastModifiedLedgerSeq` is below this
@@ -96,8 +94,8 @@ impl Stride {
 /// be spot-checked against RPC instead of trusted.
 struct Samples {
     closure_classic: Stride,
-    anomaly_classic: Stride,
-    anomaly_native: Stride,
+    ghost_classic: Stride,
+    ghost_native: Stride,
     divergent_classic: Stride,
     divergent_native: Stride,
     agree_classic: Stride,
@@ -108,16 +106,18 @@ struct Samples {
     /// Finer histogram of the ABOVE-floor missing — these are the suspicious
     /// ones, and their shape says whether they cluster somewhere.
     missing_above_by_2m: std::collections::BTreeMap<u32, u64>,
+    /// The checkpoint the verdicts are judged against.
+    checkpoint: u32,
 }
 
 impl Samples {
-    fn new() -> Self {
+    fn new(checkpoint: u32) -> Self {
         Self {
             // Strides sized so the caps are reached across the measured
             // populations (22M closures / 1M anomalies / 19M missing).
             closure_classic: Stride::new(11_000),
-            anomaly_classic: Stride::new(1),
-            anomaly_native: Stride::new(500),
+            ghost_classic: Stride::new(1),
+            ghost_native: Stride::new(500),
             divergent_classic: Stride::new(1),
             divergent_native: Stride::new(10),
             agree_classic: Stride::new(6_500),
@@ -125,6 +125,7 @@ impl Samples {
             missing_below_floor: 0,
             missing_above_floor: 0,
             missing_above_by_2m: std::collections::BTreeMap::new(),
+            checkpoint,
         }
     }
 }
@@ -133,6 +134,9 @@ impl Samples {
 /// measured for 1/64 of the key space — two orders under the server's limit.
 const KEY_SLICES: i128 = 64;
 
+/// The ClickHouse-cursor shape. Converted straight into the shared
+/// [`snapshot::OurRow`] so the live-cursor and TSV transports classify through
+/// one code path.
 #[derive(Row, Deserialize)]
 struct OurBalance {
     holder_id: i64,
@@ -142,104 +146,104 @@ struct OurBalance {
     closed_at_ledger: i64,
 }
 
+impl From<&OurBalance> for snapshot::OurRow {
+    fn from(b: &OurBalance) -> Self {
+        Self {
+            holder_id: b.holder_id,
+            asset_id: b.asset_id,
+            amount: b.amount,
+            last_updated_ledger: b.last_updated_ledger,
+            closed_at_ledger: b.closed_at_ledger,
+        }
+    }
+}
+
 /// Counts for one entity. Every field is a direction, never a ratio.
 #[derive(Debug, Default)]
-pub struct FourWay {
+pub struct Tally {
     /// In the snapshot as LIVE, no row on our side.
     pub missing: u64,
     /// We hold zero, the snapshot says the entry is gone. The intended closures.
     pub closure: u64,
-    /// We hold a POSITIVE amount, the snapshot says the entry is gone.
-    /// An ingestion gap, never a silent closure.
-    pub anomaly: u64,
-    /// Both sides hold it, amounts disagree.
-    pub divergent: u64,
+    /// We hold a POSITIVE amount, the snapshot says the entry is gone. Called
+    /// GHOST throughout — the docs, the seed and the artifact file all use that
+    /// word. Never folded into `closure`: it marks an ingestion gap.
+    pub ghost: u64,
+    /// Both hold it, amounts disagree, snapshot strictly newer — the seed heals.
+    pub heal: u64,
+    /// Both hold it, amounts disagree, our row at least as new — report only.
+    pub divergent_ours_newer: u64,
     /// Both sides hold it, our row is older than the snapshot entry.
     pub stale: u64,
     /// Both sides agree.
     pub agree: u64,
     /// Rows we already marked closed (nothing to do).
     pub already_closed: u64,
-    /// Sum of the positive amounts behind `anomaly`, in stroops — the value at
+    /// Our row is newer than the checkpoint, so the SNAPSHOT is the stale side.
+    pub newer_than_checkpoint: u64,
+    /// Sum of the positive amounts behind `ghost`, in stroops — the value at
     /// stake, because a count alone does not say whether a gap matters.
-    pub anomaly_stroops: i128,
+    pub ghost_stroops: i128,
 }
 
-impl FourWay {
-    fn print(&self, label: &str) {
+impl Tally {
+    /// Count one verdict. The seed acts on the same enum, so the report and the
+    /// write cannot describe different populations.
+    fn observe(&mut self, v: snapshot::Verdict, amount: i128) {
+        use snapshot::Verdict as V;
+        match v {
+            V::AlreadyClosed => self.already_closed += 1,
+            V::Agree => self.agree += 1,
+            V::HealFromSnapshot => self.heal += 1,
+            V::DivergentOursNewer => self.divergent_ours_newer += 1,
+            V::Stale => self.stale += 1,
+            V::Closure => self.closure += 1,
+            V::Ghost => {
+                self.ghost += 1;
+                self.ghost_stroops += amount;
+            }
+            V::NewerThanCheckpoint => self.newer_than_checkpoint += 1,
+        }
+    }
+
+    fn print(&self, label: &str, native: bool) {
         println!("\n  {label}");
-        println!("    missing (network has, we do not)  {:>12}", self.missing);
-        println!("    closure (we hold 0, network gone) {:>12}", self.closure);
-        println!("    ANOMALY (we hold >0, network gone){:>12}", self.anomaly);
         println!(
-            "    divergent amount                  {:>12}",
-            self.divergent
+            "    missing (network has, we do not)   {:>12}",
+            self.missing
         );
-        println!("    stale (our ledger behind)         {:>12}", self.stale);
-        println!("    agree                             {:>12}", self.agree);
         println!(
-            "    already marked closed             {:>12}",
+            "    closure (we hold 0, network gone)  {:>12}",
+            self.closure
+        );
+        println!("    GHOST   (we hold >0, network gone) {:>12}", self.ghost);
+        println!("    heal    (snapshot newer)           {:>12}", self.heal);
+        println!(
+            "    divergent (ours newer, kept)       {:>12}",
+            self.divergent_ours_newer
+        );
+        println!("    stale   (our ledger behind)        {:>12}", self.stale);
+        println!("    agree                              {:>12}", self.agree);
+        println!(
+            "    already marked closed              {:>12}",
             self.already_closed
         );
-        if self.anomaly > 0 {
-            println!(
-                "    value behind the anomalies        {:>12} stroops ({:.7} units)",
-                self.anomaly_stroops,
-                self.anomaly_stroops as f64 / 1e7
-            );
-        }
-    }
-}
-
-/// Which bucket a row landed in — returned so the caller can sample it.
-#[derive(Clone, Copy, PartialEq)]
-enum Verdict {
-    AlreadyClosed,
-    Divergent,
-    Stale,
-    Agree,
-    Closure,
-    Anomaly,
-}
-
-/// Classify one of our rows against the snapshot entry for the same key.
-fn classify_row(
-    row: &OurBalance,
-    snap: Option<&mut snapshot::SnapEntry>,
-    out: &mut FourWay,
-) -> Verdict {
-    if row.closed_at_ledger != 0 {
-        out.already_closed += 1;
-        return Verdict::AlreadyClosed;
-    }
-    match snap {
-        // The network still has it: compare value, then freshness.
-        Some(e) if e.live => {
-            e.matched = true;
-            if i128::from(e.amount) != row.amount {
-                out.divergent += 1;
-                Verdict::Divergent
-            } else if row.last_updated_ledger < i64::from(e.ledger) {
-                out.stale += 1;
-                Verdict::Stale
+        println!(
+            "    newer than checkpoint (left alone) {:>12}",
+            self.newer_than_checkpoint
+        );
+        if self.ghost > 0 {
+            // Only native sums to a meaningful unit. Summing classic amounts
+            // across different assets is a unit-less number — an early run
+            // printed 796 billion "XLM" that way.
+            if native {
+                println!(
+                    "    value behind the ghosts            {:>12} stroops ({:.7} XLM)",
+                    self.ghost_stroops,
+                    self.ghost_stroops as f64 / 1e7
+                );
             } else {
-                out.agree += 1;
-                Verdict::Agree
-            }
-        }
-        // Present in the snapshot but DEAD, or absent from it entirely. Both
-        // mean the same thing for us: the network does not have this holding.
-        other => {
-            if let Some(e) = other {
-                e.matched = true;
-            }
-            if row.amount == 0 {
-                out.closure += 1;
-                Verdict::Closure
-            } else {
-                out.anomaly += 1;
-                out.anomaly_stroops += row.amount;
-                Verdict::Anomaly
+                println!("    (classic ghost amounts are per-asset units — see the dump)");
             }
         }
     }
@@ -252,9 +256,9 @@ async fn compare_our_rows(
     state: &mut SnapshotState,
     native_asset_id: i64,
     samples: &mut Samples,
-) -> Result<(FourWay, FourWay), BackfillError> {
-    let mut classic = FourWay::default();
-    let mut native = FourWay::default();
+) -> Result<(Tally, Tally), BackfillError> {
+    let mut classic = Tally::default();
+    let mut native = Tally::default();
     let mut seen_rows = 0u64;
 
     for (i, (from, to)) in key_slices().enumerate() {
@@ -342,11 +346,11 @@ fn compare_from_tsv(
     state: &mut SnapshotState,
     native_asset_id: i64,
     samples: &mut Samples,
-) -> Result<(FourWay, FourWay), BackfillError> {
+) -> Result<(Tally, Tally), BackfillError> {
     let file = std::fs::File::open(path)
         .map_err(|e| BackfillError::Incomplete(format!("open {}: {e}", path.display())))?;
-    let mut classic = FourWay::default();
-    let mut native = FourWay::default();
+    let mut classic = Tally::default();
+    let mut native = Tally::default();
     let mut seen = 0u64;
 
     for (lineno, line) in std::io::BufReader::new(file).lines().enumerate() {
@@ -401,37 +405,44 @@ fn compare_from_tsv(
 /// Route one row to the right entity and classify it. Shared by both
 /// transports so they cannot drift apart.
 fn fold_row(
-    row: &OurBalance,
+    b: &OurBalance,
     state: &mut SnapshotState,
     native_asset_id: i64,
-    classic: &mut FourWay,
-    native: &mut FourWay,
+    classic: &mut Tally,
+    native: &mut Tally,
     samples: &mut Samples,
 ) {
+    let row: snapshot::OurRow = b.into();
     let line = || {
         format!(
             "{}\t{}\t{}\t{}",
             row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
         )
     };
-    if row.asset_id == native_asset_id {
-        match classify_row(row, state.accounts.get_mut(&row.holder_id), native) {
-            Verdict::Anomaly => samples.anomaly_native.offer(line),
-            Verdict::Divergent => samples.divergent_native.offer(line),
-            _ => {}
+    let is_native = row.asset_id == native_asset_id;
+    let out = if is_native { native } else { classic };
+    let v = snapshot::verdict(
+        &row,
+        snapshot::snap_entry_for(state, &row),
+        samples.checkpoint,
+    );
+    out.observe(v, row.amount);
+    // Sample the buckets a human has to adjudicate. `Agree` is sampled too: it
+    // is the positive control — if the surrogate derivation were wrong, this
+    // bucket would be empty, so a non-empty sample of it is evidence the whole
+    // comparison is keyed correctly.
+    match (v, is_native) {
+        (snapshot::Verdict::Ghost, true) => samples.ghost_native.offer(line),
+        (snapshot::Verdict::Ghost, false) => samples.ghost_classic.offer(line),
+        (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, true) => {
+            samples.divergent_native.offer(line)
         }
-    } else {
-        let key = HoldingKey {
-            holder_id: row.holder_id,
-            asset_id: row.asset_id,
-        };
-        match classify_row(row, state.trustlines.get_mut(&key), classic) {
-            Verdict::Closure => samples.closure_classic.offer(line),
-            Verdict::Anomaly => samples.anomaly_classic.offer(line),
-            Verdict::Divergent => samples.divergent_classic.offer(line),
-            Verdict::Agree => samples.agree_classic.offer(line),
-            _ => {}
+        (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, false) => {
+            samples.divergent_classic.offer(line)
         }
+        (snapshot::Verdict::Closure, false) => samples.closure_classic.offer(line),
+        (snapshot::Verdict::Agree, false) => samples.agree_classic.offer(line),
+        _ => {}
     }
 }
 
@@ -440,8 +451,8 @@ fn fold_row(
 /// data.
 fn fill_missing(
     state: &SnapshotState,
-    classic: &mut FourWay,
-    native: &mut FourWay,
+    classic: &mut Tally,
+    native: &mut Tally,
     samples: &mut Samples,
 ) {
     native.missing = state
@@ -506,7 +517,7 @@ pub async fn compare_command(
     );
 
     let native_id = db_clickhouse::persist::ids::NATIVE_ASSET_ID;
-    let mut samples = Samples::new();
+    let mut samples = Samples::new(list.checkpoint_ledger);
     let (classic, native) = match our_rows {
         Some(path) => {
             println!("\n  folding our balances from {}…", path.display());
@@ -537,8 +548,8 @@ pub async fn compare_command(
             .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", dir.display())))?;
         println!("\n  sample dumps (holder_id\tasset_id\tamount\tledger):");
         samples.closure_classic.write(dir, "closure_classic.tsv")?;
-        samples.anomaly_classic.write(dir, "anomaly_classic.tsv")?;
-        samples.anomaly_native.write(dir, "anomaly_native.tsv")?;
+        samples.ghost_classic.write(dir, "ghosts_classic.tsv")?;
+        samples.ghost_native.write(dir, "ghosts_native.tsv")?;
         samples
             .divergent_classic
             .write(dir, "divergent_classic.tsv")?;
@@ -549,8 +560,8 @@ pub async fn compare_command(
         samples.missing_classic.write(dir, "missing_classic.tsv")?;
     }
 
-    classic.print("CLASSIC CREDIT trustlines");
-    native.print("NATIVE XLM holdings (AccountEntry, not a trustline)");
+    classic.print("CLASSIC CREDIT trustlines", false);
+    native.print("NATIVE XLM holdings (AccountEntry, not a trustline)", true);
 
     // Excluded on purpose — printed so the pass never reads as exhaustive when
     // it is not. Only queried in client mode; a TSV run reports the exclusions

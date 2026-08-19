@@ -753,20 +753,16 @@ fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
         signers: a
             .signers
             .iter()
-            .map(|sg| (sg.key.to_string(), sg.weight, signer_type_name(&sg.key)))
+            .map(|sg| {
+                (
+                    sg.key.to_string(),
+                    sg.weight,
+                    // The live writer's own helper — one vocabulary, enforced
+                    // by the compiler rather than promised in a comment.
+                    xdr_parser::ledger_entry_changes::signer_type_name(&sg.key),
+                )
+            })
             .collect(),
-    }
-}
-
-/// Total over every `SignerKey` arm — a new arm must be named, never silently
-/// bucketed. Same vocabulary the live parser emits.
-fn signer_type_name(key: &stellar_xdr::SignerKey) -> &'static str {
-    use stellar_xdr::SignerKey as K;
-    match key {
-        K::Ed25519(_) => "ed25519",
-        K::PreAuthTx(_) => "preauth_tx",
-        K::HashX(_) => "hash_x",
-        K::Ed25519SignedPayload(_) => "ed25519_signed_payload",
     }
 }
 
@@ -828,6 +824,144 @@ fn classify(rec: &SnapshotRecord, with_detail: bool) -> Option<SnapItem> {
             }
             _ => None,
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The verdict — ONE rule, rendered by the compare pass and acted on by the seed
+// ---------------------------------------------------------------------------
+
+/// One of our rows as the export carries it. Shared so the two transports and
+/// the two consumers cannot drift into different column meanings.
+#[derive(Debug, Clone, Copy)]
+pub struct OurRow {
+    pub holder_id: i64,
+    pub asset_id: i64,
+    pub amount: i128,
+    pub last_updated_ledger: i64,
+    pub closed_at_ledger: i64,
+}
+
+impl OurRow {
+    /// Parse one export line. Rejects out-of-range values rather than casting:
+    /// `as i64` would TRUNCATE a malformed export silently and misclassify the
+    /// row under a wrong surrogate, which is indistinguishable from a real gap.
+    pub fn parse(line: &str, lineno: usize) -> Result<Self, BackfillError> {
+        let mut it = line.split('\t');
+        let mut field = |what: &str| -> Result<i128, BackfillError> {
+            it.next()
+                .ok_or_else(|| BackfillError::Incomplete(format!("line {lineno}: missing {what}")))?
+                .trim()
+                .parse::<i128>()
+                .map_err(|e| BackfillError::Incomplete(format!("line {lineno} {what}: {e}")))
+        };
+        let narrow = |v: i128, what: &str| -> Result<i64, BackfillError> {
+            i64::try_from(v).map_err(|_| {
+                BackfillError::Incomplete(format!("line {lineno} {what}: {v} out of i64 range"))
+            })
+        };
+        let holder_id = narrow(field("holder_id")?, "holder_id")?;
+        let asset_id = narrow(field("asset_id")?, "asset_id")?;
+        let amount = field("amount")?;
+        let last_updated_ledger = narrow(field("last_updated_ledger")?, "last_updated_ledger")?;
+        let closed_at_ledger = narrow(field("closed_at_ledger")?, "closed_at_ledger")?;
+        Ok(Self {
+            holder_id,
+            asset_id,
+            amount,
+            last_updated_ledger,
+            closed_at_ledger,
+        })
+    }
+}
+
+/// What the snapshot says about one of our rows. The compare pass COUNTS these;
+/// the seed ACTS on them. They were two separate implementations that had
+/// already drifted — the report an operator signs off on did not predict what
+/// `--execute` would write. One rule, two consumers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Our writer already stamped this closed. Nothing to do, nothing to report.
+    AlreadyClosed,
+    /// Both sides hold it and agree.
+    Agree,
+    /// Both hold it, amounts differ, and the SNAPSHOT is strictly newer — the
+    /// seed heals these.
+    HealFromSnapshot,
+    /// Both hold it, amounts differ, but our row is at least as new. The live
+    /// parser knows better; report only.
+    DivergentOursNewer,
+    /// Both hold it with equal amounts, but our ledger is behind the entry's.
+    Stale,
+    /// The network does not have it and we hold zero — a real closure.
+    Closure,
+    /// The network does not have it and we hold a POSITIVE amount. Never folded
+    /// into `Closure`: it is the signal of an ingestion gap, and treating it as
+    /// routine would let a false number pass as a resolved one.
+    Ghost,
+    /// The network does not have it, but our row is NEWER than the checkpoint —
+    /// the snapshot is the stale side. Closing it would delete a holding the
+    /// network created in the gap.
+    NewerThanCheckpoint,
+}
+
+/// The single classification rule. `snap` is the snapshot's entry for this key
+/// (`None` = the network has no such entry at all); it is marked matched here,
+/// so whatever stays unmatched afterwards is exactly what the network holds and
+/// we do not.
+pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> Verdict {
+    if row.closed_at_ledger != 0 {
+        // Mark it matched anyway: the entry IS accounted for on our side, and
+        // leaving it unmatched would count our own closure as a network gap and
+        // re-insert it as live.
+        if let Some(e) = snap {
+            e.matched = true;
+        }
+        return Verdict::AlreadyClosed;
+    }
+    match snap {
+        Some(e) if e.live => {
+            e.matched = true;
+            if i128::from(e.amount) != row.amount {
+                if i64::from(e.ledger) > row.last_updated_ledger {
+                    Verdict::HealFromSnapshot
+                } else {
+                    Verdict::DivergentOursNewer
+                }
+            } else if row.last_updated_ledger < i64::from(e.ledger) {
+                Verdict::Stale
+            } else {
+                Verdict::Agree
+            }
+        }
+        // Present but DEAD, or absent entirely — both mean the network does not
+        // hold this relationship.
+        other => {
+            if let Some(e) = other {
+                e.matched = true;
+            }
+            if row.last_updated_ledger > i64::from(checkpoint) {
+                Verdict::NewerThanCheckpoint
+            } else if row.amount == 0 {
+                Verdict::Closure
+            } else {
+                Verdict::Ghost
+            }
+        }
+    }
+}
+
+/// Look up the snapshot entry for one of our rows. Native lives on the
+/// `AccountEntry`, everything else is a trustline — the split both consumers
+/// need, spelled once.
+pub fn snap_entry_for<'a>(state: &'a mut SnapshotState, row: &OurRow) -> Option<&'a mut SnapEntry> {
+    if row.asset_id == ids::NATIVE_ASSET_ID {
+        state.accounts.get_mut(&row.holder_id)
+    } else {
+        state.trustlines.get_mut(&HoldingKey {
+            holder_id: row.holder_id,
+            asset_id: row.asset_id,
+        })
     }
 }
 
@@ -926,6 +1060,141 @@ pub fn report_state(state: &SnapshotState, checkpoint_ledger: u32, secs: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(amount: i128, last_updated: i64, closed_at: i64) -> OurRow {
+        OurRow {
+            holder_id: 1,
+            asset_id: 2,
+            amount,
+            last_updated_ledger: last_updated,
+            closed_at_ledger: closed_at,
+        }
+    }
+
+    fn live(amount: i64, ledger: u32) -> SnapEntry {
+        SnapEntry {
+            live: true,
+            ledger,
+            amount,
+            matched: false,
+        }
+    }
+
+    /// FIRST-WINS is the whole anti-resurrection guarantee: the bucket list is
+    /// newest-first, so a DeadEntry seen first must not be overwritten by an
+    /// older LiveEntry below it. Inverting this comparison would resurrect
+    /// every closed trustline on the network, and nothing else in the suite
+    /// would notice.
+    #[test]
+    fn first_wins_keeps_the_newest_record_and_a_tombstone_is_not_resurrected() {
+        let mut st = SnapshotState::default();
+        let key = HoldingKey {
+            holder_id: 7,
+            asset_id: 9,
+        };
+        st.absorb(SnapItem::Trustline {
+            key,
+            entry: SnapEntry::dead(),
+        });
+        st.absorb(SnapItem::Trustline {
+            key,
+            entry: live(500, 60_000_000),
+        });
+        st.absorb(SnapItem::Trustline {
+            key,
+            entry: live(900, 50_000_000),
+        });
+
+        let e = st.trustlines[&key];
+        assert!(
+            !e.live,
+            "the tombstone was seen FIRST — an older live record must not revive it"
+        );
+        assert_eq!(
+            st.superseded, 2,
+            "both older records are superseded history"
+        );
+        assert_eq!(st.live_trustlines(), 0);
+    }
+
+    /// The verdict is the one rule the compare pass reports and the seed acts
+    /// on. Each arm below is a production decision: mis-mapping any one of them
+    /// either hides a live holding or writes a false number.
+    #[test]
+    fn verdict_covers_every_bucket() {
+        const CP: u32 = 100;
+
+        // Our writer already closed it — no correction, but the snapshot entry
+        // is still MATCHED, or our own closure would be counted as a network
+        // gap and re-inserted as live.
+        let mut e = live(5, 90);
+        assert_eq!(
+            verdict(&row(0, 90, 90), Some(&mut e), CP),
+            Verdict::AlreadyClosed
+        );
+        assert!(
+            e.matched,
+            "an already-closed row must still claim its entry"
+        );
+
+        let mut e = live(5, 90);
+        assert_eq!(verdict(&row(5, 90, 0), Some(&mut e), CP), Verdict::Agree);
+
+        // Amounts differ: who is newer decides whether we adopt or keep.
+        let mut e = live(5, 95);
+        assert_eq!(
+            verdict(&row(9, 90, 0), Some(&mut e), CP),
+            Verdict::HealFromSnapshot
+        );
+        let mut e = live(5, 90);
+        assert_eq!(
+            verdict(&row(9, 95, 0), Some(&mut e), CP),
+            Verdict::DivergentOursNewer
+        );
+
+        let mut e = live(5, 95);
+        assert_eq!(verdict(&row(5, 90, 0), Some(&mut e), CP), Verdict::Stale);
+
+        // Absent from the snapshot: zero is a closure, positive is a ghost —
+        // never folded together, because the second means our data lies.
+        assert_eq!(verdict(&row(0, 90, 0), None, CP), Verdict::Closure);
+        assert_eq!(verdict(&row(42, 90, 0), None, CP), Verdict::Ghost);
+
+        // Present but dead reads the same as absent.
+        let mut dead = SnapEntry::dead();
+        assert_eq!(
+            verdict(&row(0, 90, 0), Some(&mut dead), CP),
+            Verdict::Closure
+        );
+
+        // Our row is newer than the checkpoint, so the SNAPSHOT is the stale
+        // side; closing here would delete a holding created in the gap.
+        assert_eq!(
+            verdict(&row(0, 101, 0), None, CP),
+            Verdict::NewerThanCheckpoint
+        );
+        assert_eq!(
+            verdict(&row(42, 101, 0), None, CP),
+            Verdict::NewerThanCheckpoint
+        );
+    }
+
+    /// A truncated or malformed export must fail loudly. `as i64` would wrap an
+    /// out-of-range value into a plausible surrogate and misclassify the row
+    /// under a key that is not its own.
+    #[test]
+    fn our_row_parse_rejects_out_of_range_and_short_lines() {
+        let ok = OurRow::parse("1\t2\t300\t400\t0", 1).expect("valid line");
+        assert_eq!((ok.holder_id, ok.asset_id, ok.amount), (1, 2, 300));
+
+        assert!(OurRow::parse("1\t2\t3\t4", 1).is_err(), "short line");
+        assert!(
+            OurRow::parse("9223372036854775808\t2\t3\t4\t0", 1).is_err(),
+            "holder_id past i64::MAX must be rejected, never truncated"
+        );
+        // amount is i128 on purpose — a large but valid balance must pass.
+        assert!(OurRow::parse("1\t2\t170141183460469231731687303715884105727\t4\t0", 1).is_ok());
+    }
 
     /// The archive's fan-out layout, pinned. A wrong split silently 404s every
     /// bucket, which reads as "the archive is down" rather than "our URL is

@@ -324,6 +324,22 @@ corrections; `--execute` re-fetched the manifest, so it would not have run the
 snapshot the dry-run reviewed; rows the writer had already closed were counted
 as missing because the early return skipped the matched flag.
 
+### Export freshness is the biggest lever on correction volume — measured
+
+Re-running the comparison with a stale `--our-rows` export against a much later
+checkpoint moved the amount-disagreement bucket from **25,346 to 809,418** for
+classic trustlines (native: 16,813 divergent + 41,815 heal). The population is
+the same; only the gap between export and checkpoint grew. Earlier readings on
+narrower gaps gave ~1.5k.
+
+That is not corruption — it is ordinary network churn the comparison correctly
+attributes to whichever side is newer — but it means **the seed's correction
+count is dominated by export staleness, not by real defects.** Export minutes
+before the run, not hours. The unified verdict makes this legible: `heal`
+(snapshot strictly newer, seed adopts) is now reported apart from
+`divergent ours-newer` (kept, live parser knows better), where the old single
+"divergent" number hid the direction entirely.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from

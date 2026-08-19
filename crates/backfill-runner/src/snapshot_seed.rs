@@ -66,7 +66,7 @@ use std::path::Path;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{BucketList, HoldingKey, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list};
+use crate::snapshot::{self, BucketList, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list};
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, BalanceRow};
@@ -125,71 +125,49 @@ fn read_id_set(path: &Path) -> Result<HashSet<i64>, BackfillError> {
     Ok(out)
 }
 
-/// Fold one of our exported rows into corrections. Mirrors the compare pass's
-/// classification 1:1 — the shape RPC verification confirmed.
-/// One row of our export, parsed.
-struct OurRow {
-    holder_id: i64,
-    asset_id: i64,
-    amount: i128,
-    last_updated: i64,
-    closed_at: i64,
-}
-
+/// Fold one of our exported rows into corrections, acting on the SHARED
+/// verdict the compare pass reports. One rule, two consumers — the report an
+/// operator signs off on now predicts exactly what `--execute` writes.
 fn fold_our_row(
-    row: &OurRow,
+    row: &snapshot::OurRow,
     state: &mut SnapshotState,
     checkpoint: u32,
     out: &mut Corrections,
     ghost_log: &mut Vec<String>,
 ) {
-    let OurRow {
+    use snapshot::Verdict as V;
+    let snapshot::OurRow {
         holder_id,
         asset_id,
         amount,
-        last_updated,
-        closed_at,
+        last_updated_ledger,
+        ..
     } = *row;
-    if closed_at != 0 {
-        return; // already stamped by the writer — nothing to correct
-    }
-    let entry = if asset_id == ids::NATIVE_ASSET_ID {
-        state.accounts.get_mut(&holder_id)
-    } else {
-        state.trustlines.get_mut(&HoldingKey {
-            holder_id,
-            asset_id,
-        })
-    };
-    match entry {
-        Some(e) if e.live => {
-            e.matched = true;
-            // Self-heal only where the snapshot is STRICTLY newer; ties and
-            // newer-ours mean the live parser already knows better.
-            if i128::from(e.amount) != amount && i64::from(e.ledger) > last_updated {
-                out.n_heal += 1;
-                out.balances.push(BalanceRow {
-                    holder_id,
-                    asset_id,
-                    amount: i128::from(e.amount),
-                    last_updated_ledger: i64::from(e.ledger),
-                    closed_at_ledger: 0,
-                });
-            }
-        }
-        other => {
-            if let Some(e) = other {
-                e.matched = true;
-            }
-            // The snapshot's silence is only evidence AS OF its checkpoint. A
-            // row our writer touched AFTER that ledger is fresher than the
-            // snapshot: closing it would delete a holding the network created
-            // in the gap. Skip and report — never guess against newer data.
-            if last_updated > i64::from(checkpoint) {
-                out.n_newer_than_checkpoint += 1;
+    match snapshot::verdict(row, snapshot::snap_entry_for(state, row), checkpoint) {
+        // Nothing to write: either both sides agree, or our side is the fresher
+        // one and the live parser already knows better.
+        V::AlreadyClosed | V::Agree | V::DivergentOursNewer => {}
+        V::NewerThanCheckpoint => out.n_newer_than_checkpoint += 1,
+        // The snapshot is strictly newer, so adopt its amount at ITS ledger.
+        V::HealFromSnapshot | V::Stale => {
+            let Some(e) = snapshot::snap_entry_for(state, row) else {
                 return;
+            };
+            let (amount, ledger) = (i128::from(e.amount), i64::from(e.ledger));
+            if amount == row.amount {
+                return; // Stale but equal — nothing to correct.
             }
-            if amount == 0 {
+            out.n_heal += 1;
+            out.balances.push(BalanceRow {
+                holder_id,
+                asset_id,
+                amount,
+                last_updated_ledger: ledger,
+                closed_at_ledger: 0,
+            });
+        }
+        v @ (V::Closure | V::Ghost) => {
+            if v == V::Closure {
                 out.n_closure += 1;
             } else {
                 if asset_id == ids::NATIVE_ASSET_ID {
@@ -198,7 +176,9 @@ fn fold_our_row(
                 } else {
                     out.n_ghost_classic += 1;
                 }
-                ghost_log.push(format!("{holder_id}\t{asset_id}\t{amount}\t{last_updated}"));
+                ghost_log.push(format!(
+                    "{holder_id}\t{asset_id}\t{amount}\t{last_updated_ledger}"
+                ));
             }
             out.balances.push(BalanceRow {
                 holder_id,
@@ -228,27 +208,12 @@ fn build_corrections(
     let mut rows_read = 0u64;
     let file = std::fs::File::open(our_rows)
         .map_err(|e| BackfillError::Incomplete(format!("open {}: {e}", our_rows.display())))?;
-    for line in std::io::BufReader::new(file).lines() {
+    for (lineno, line) in std::io::BufReader::new(file).lines().enumerate() {
         let line = line.map_err(|e| BackfillError::Incomplete(format!("read rows: {e}")))?;
         if line.is_empty() {
             continue;
         }
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() != 5 {
-            return Err(BackfillError::Incomplete(format!(
-                "our-rows line has {} fields, want 5",
-                f.len()
-            )));
-        }
-        let parse_err =
-            |e: std::num::ParseIntError| BackfillError::Incomplete(format!("our-rows parse: {e}"));
-        let row = OurRow {
-            holder_id: f[0].parse().map_err(parse_err)?,
-            asset_id: f[1].parse().map_err(parse_err)?,
-            amount: f[2].parse().map_err(parse_err)?,
-            last_updated: f[3].parse().map_err(parse_err)?,
-            closed_at: f[4].parse().map_err(parse_err)?,
-        };
+        let row = snapshot::OurRow::parse(&line, lineno + 1)?;
         rows_read += 1;
         fold_our_row(&row, state, checkpoint, &mut out, ghost_log);
     }
