@@ -45,9 +45,11 @@ access to production monitoring dashboards (CloudWatch).
 
 ## Outcome
 
-Closed without implementation. No standing read-only IAM role exists — a grep of
-`infra/lib` and `infra/bin` finds no read-only role, and none is planned. Access
-will be provisioned if and when the Stellar team asks for it.
+Closed without implementation. No standing read-only IAM role exists — the CDK
+sources under `infra/src` define no such role (the only `stellar*` hit is
+`stellarNetworkPassphrase` in `types.ts`), and none is planned. Live IAM was not
+queried; this is a source-level check. Access will be provisioned if and when the
+Stellar team asks for it.
 
 What the Milestone 3 package says today: `docs/scf/milestone-3-evidence.md` § 3
 (Live Endpoints and Reviewer Access) — "Read-only access for the Stellar team is
