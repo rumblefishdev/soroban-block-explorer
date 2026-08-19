@@ -72,6 +72,18 @@ history:
       rule 2's new carve-out with re-arm answers in comments;
       docs/runbooks/dlq.md carries the drain procedure;
       --retry-sentinels repairs any host that returns from the dead.
+  - date: 2026-08-19
+    status: proposed
+    who: karolkow
+    note: >
+      Rule 5 added after the delivery chain broke exactly as the consequences
+      section predicted: a topic-policy addition revoked CloudWatch's publish
+      right and all nine alarms were mute for 19 hours, found by accident. The
+      ADR already carried the diagnosis and a suggested mitigation, but as a
+      note rather than a rule, so nothing enforced it. Half of that suggested
+      mitigation — an email co-subscriber — is withdrawn in the same pass: the
+      denial happened above the subscribers, so email would have gone silent
+      too. The external dead-man's-switch stays named and unadopted.
 ---
 
 # ADR 0054: One alarm engine for AWS signals, and three rules an alarm must satisfy
@@ -165,6 +177,24 @@ event source is indistinguishable from a declared pause — queue growing,
 nothing polling, silence forever). Prefer the bare signal. Revisit only if
 knowing pages become genuinely noisy — with a count, not a feeling.
 
+**5. The delivery path is verified on every change to it, before the change
+is called done.** Rules 2-4 govern individual alarms; this one governs the
+single path they all share. A deploy of the alarm stack is not finished until
+one message has travelled the whole chain — CloudWatch → SNS → Chatbot →
+Slack — and been seen in the channel.
+
+Why a rule rather than a habit: on 2026-08-18 a topic-policy addition revoked
+CloudWatch's right to publish to the alarm topic, and all nine alarms were
+mute for 19 hours. Nothing paged about the silence; it was found by accident.
+The change that broke it was a deploy, so a check bound to deploys catches
+this class by construction.
+
+Scope is the alarm stack, every time it deploys — including deploys that do
+not appear to touch delivery, because this break was a side effect of an
+unrelated policy statement. What counts as verification is a message that
+arrives, not a diff that looks right: the diff for the breaking change was
+read and approved.
+
 ---
 
 ## Considered and withdrawn
@@ -187,6 +217,15 @@ often, to the same effect. The gap is not detection.
 Two further problems, either of which would have sunk it: undeployed work is
 indistinguishable from drift without a second system to tell them apart, and
 this account has a demonstrated 15-to-32-day tolerance for ignored alarms.
+
+**A second subscriber on the alarm topic (email — native, free, one line).**
+Named in this ADR's own consequences as the cheap half of a delivery
+mitigation; withdrawn 2026-08-19 once the outage measured it. The break was a
+topic-policy denial, so the publish was rejected before any subscriber was
+reached — an email subscriber would have gone silent alongside Slack. It
+defends the lower half of the chain (Chatbot, Slack) while the observed break
+was in the upper half. Reconsider only together with a witness that sits
+outside the topic.
 
 **Mandating that the database host publish metrics to CloudWatch.** It would add
 an AWS credential to that host to carry exactly one boolean (a pending-reboot
@@ -349,11 +388,14 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
   Accepted for now; revisit with Alternative 1.
 - One engine means one delivery chain: SNS → Chatbot → Slack has no witness, so
   a broken link anywhere in it silences everything at once — and nothing pages
-  about the silence. Cheap mitigation: a second subscriber on the topic (email
-  is native and free) plus a Chatbot test message after every CloudWatch
-  deploy. The full answer is an external dead-man's-switch (see "Considered and
-  withdrawn"), which also witnesses CloudWatch itself. Which mitigation to take
-  is an open decision, not yet made.
+  about the silence. **This is no longer a prediction.** It happened on
+  2026-08-18, eight days after the sentence above was written, and stood for 19
+  hours. Rule 5 is the answer taken: verification bound to the deploy, because
+  a deploy is what broke it. The email co-subscriber is withdrawn — it sits
+  below the break. The full answer remains an external dead-man's-switch (see
+  "Considered and withdrawn"), which also witnesses CloudWatch itself; still
+  not adopted, and its return condition is a break that a deploy-time check
+  cannot see.
 
 ---
 
@@ -367,6 +409,8 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
       datapoint)
 - [ ] One alarm landed under each of rules 2, 3 and 4, so they are demonstrated
       rather than asserted
+- [ ] Rule 5 demonstrated once: a deploy of the alarm stack followed by a
+      message seen in the channel
 - [x] Our alarm set cross-checked against CloudWatch's out-of-the-box
       recommended alarms (2026-08-11, SQS/Lambda/ECS/APIGW/SNS/CloudFront/S3)
       — every recommendation has a deliberate verdict; no gaps adopted, two

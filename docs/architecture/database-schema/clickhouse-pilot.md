@@ -509,13 +509,20 @@ concrete consumer lands.
 ##### What this does not cover (yet)
 
 The Phase 1 implementation snapshots `AccountEntry` only — including
-the native XLM balance. The trustline pass
+the native XLM balance. The trustline pass over RPC
 (`LedgerKey::Trustline(...)` for each `(account, asset)` pair
-referenced in the window) is left as a Phase 3 follow-up; the
-`decode_trustline_snapshot` and `rebuild_trustline_asset` helpers
-are already on the public surface of `rpc_snapshot.rs` ready to wire
-in when the asset-aggregate port of PG task 0194's
-`recompute_asset_aggregates` lands on the CH side.
+referenced in the window) was **abandoned**, not deferred: Soroban
+RPC's `getLedgerEntries` has no enumeration primitive, so a caller
+must guess every `(account, asset)` pair, and the pairs it cannot
+guess are exactly the ones missing from our stream — the completeness
+gap is unreachable by construction. `trustline_ledger_key` and
+`rebuild_trustline_asset` were removed with that route (task 0362
+item 3). Holding lifecycle instead lands as a column on `balances`
+([ADR 0055](../../../lore/2-adrs/0055_holding-lifecycle-column-on-balances.md),
+task 0463), seeded backwards from the history-archive checkpoint
+buckets (task 0502). `decode_trustline_snapshot` survives that change
+— it decodes `LedgerEntryData::Trustline`, which is the shape the
+bucket entries carry.
 
 #### Partition-aligned streaming inserts
 
