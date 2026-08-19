@@ -229,7 +229,8 @@ where
             BucketEntry::Metaentry(_) => {
                 if count != 1 {
                     return Err(BackfillError::Incomplete(format!(
-                        "METAENTRY at record {count}, expected only at record 1 —                          bucket format is not what this reader assumes"
+                        "METAENTRY at record {count}, expected only at record 1 \
+                         — bucket format is not what this reader assumes"
                     )));
                 }
             }

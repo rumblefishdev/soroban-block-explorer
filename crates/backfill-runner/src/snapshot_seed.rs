@@ -75,6 +75,16 @@ use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, Bala
 const INSERT_CHUNK: usize = 500_000;
 
 /// All correction rows, still in memory, ready to insert or count.
+///
+/// **Deliberately materialised rather than streamed.** A dry-run over the full
+/// network measured 4.5 GB peak RSS for ~44.9M balance rows plus 10.9M signer
+/// rows — comfortable on the operator box, and holding them lets the run
+/// report exact counts and write `summary.txt` BEFORE any insert, which is the
+/// property that makes `--execute` reviewable. Streaming inserts per batch
+/// would halve the memory but would start writing before the totals are known.
+/// If this ever needs to run somewhere smaller, stream passes 1/2/4 and keep
+/// only the counters — the insert ORDER (dimension stubs before the balances
+/// that reference them) must be preserved.
 #[derive(Default)]
 struct Corrections {
     balances: Vec<BalanceRow>,
