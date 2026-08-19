@@ -101,6 +101,10 @@ struct Corrections {
     ghost_native_stroops: i128,
     n_ghost_classic: u64,
     n_heal: u64,
+    /// We stamped closed, the network says live at a newer ledger — re-opened.
+    n_closed_but_live: u64,
+    /// Same ledger, different amount. Counted and reported, never written.
+    n_divergent_same_ledger: u64,
     /// Rows the snapshot does not have but WE touched after the checkpoint —
     /// the snapshot is the stale side, so they are left alone.
     n_newer_than_checkpoint: u64,
@@ -147,6 +151,25 @@ fn fold_our_row(
         // Nothing to write: either both sides agree, or our side is the fresher
         // one and the live parser already knows better.
         V::AlreadyClosed | V::Agree | V::DivergentOursNewer => {}
+        // Same ledger, different amount — one parser is wrong and freshness
+        // cannot arbitrate. Reported, never auto-healed: picking a winner would
+        // bury the only evidence that something mis-parsed.
+        V::DivergentSameLedger => out.n_divergent_same_ledger += 1,
+        // We hid a holding the network says is live at a NEWER ledger. Re-open
+        // it at the entry's own ledger, which outversions our wrong closure.
+        V::ClosedButLive => {
+            let Some(e) = snapshot::snap_entry_for(state, row) else {
+                return;
+            };
+            out.n_closed_but_live += 1;
+            out.balances.push(BalanceRow {
+                holder_id,
+                asset_id,
+                amount: i128::from(e.amount),
+                last_updated_ledger: i64::from(e.ledger),
+                closed_at_ledger: 0,
+            });
+        }
         V::NewerThanCheckpoint => out.n_newer_than_checkpoint += 1,
         // The snapshot is strictly newer, so adopt its amount at ITS ledger.
         V::HealFromSnapshot | V::Stale => {
@@ -219,7 +242,11 @@ fn build_corrections(
     }
     // Reported, not assumed: an empty or truncated `--our-rows` would otherwise
     // present as "the network has everything and we have nothing".
-    const MIN_OUR_ROWS: u64 = 10_000_000;
+    // The real population measured 48.6M distinct (holder, asset) pairs. A floor
+    // of 10M would pass an export missing 45 of its 64 slices, and every missing
+    // row becomes an unmatched snapshot entry INSERTED as a live holding — an
+    // over-insert in the tens of millions. Sit just under the measured value.
+    const MIN_OUR_ROWS: u64 = 40_000_000;
     if rows_read < MIN_OUR_ROWS {
         return Err(BackfillError::Incomplete(format!(
             "our-rows export holds {rows_read} rows, expected at least {MIN_OUR_ROWS} \
@@ -465,6 +492,8 @@ pub async fn seed_command(
            native ghosts zeroed  {}   ({:.7} XLM — full list in ghosts.tsv)\n\
            classic ghosts zeroed {}   (amounts are per-asset units; see ghosts.tsv)\n\
            self-heals          {}\n\
+           re-opened (we hid a live holding) {}\n\
+           divergent SAME ledger (defect?)   {}   NOT written — investigate\n\
            left alone (ours newer than checkpoint) {}\n\
          account_signers rows: {}\n\
          asset stubs:          {}\n\
@@ -477,6 +506,8 @@ pub async fn seed_command(
         corr.ghost_native_stroops as f64 / 1e7,
         corr.n_ghost_classic,
         corr.n_heal,
+        corr.n_closed_but_live,
+        corr.n_divergent_same_ledger,
         corr.n_newer_than_checkpoint,
         corr.signers.len(),
         corr.asset_stubs.len(),

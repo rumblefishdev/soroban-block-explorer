@@ -242,10 +242,14 @@ enum Command {
         /// the mTLS material lives with the operator's read-only wrapper.
         #[arg(long)]
         our_rows: Option<PathBuf>,
-        /// Write per-bucket sample TSVs here (closure/anomaly/divergent/agree/
+        /// Write per-bucket sample TSVs here (closure/ghost/divergent/agree/
         /// missing), for RPC spot-verification of every verdict.
         #[arg(long)]
         dump_dir: Option<PathBuf>,
+        /// Pin the snapshot to a `manifest.json`, so the report describes the
+        /// SAME checkpoint the seed will execute against.
+        #[arg(long)]
+        pinned_manifest: Option<PathBuf>,
     },
 
     /// Verify sampled comparison verdicts against Soroban RPC (raw XDR — the
@@ -255,6 +259,11 @@ enum Command {
     SnapshotVerify {
         #[arg(long)]
         samples: PathBuf,
+        /// The checkpoint the verdicts were judged at. RPC answers about state
+        /// NOW; without this the check cannot distinguish "already gone at the
+        /// checkpoint" from "closed since", and proves far less than it looks.
+        #[arg(long)]
+        checkpoint: Option<u32>,
     },
 
     /// Step 3d — THE seed (ADR 0055): build every correction the comparison
@@ -432,17 +441,29 @@ async fn main() {
                 .await
                 .expect("snapshot dedup failed — read-only, safe to re-run");
         }
-        Command::SnapshotCompare { our_rows, dump_dir } => {
-            snapshot_compare::compare_command(&sink, our_rows.as_deref(), dump_dir.as_deref())
-                .await
-                .expect("snapshot compare failed — read-only, safe to re-run");
+        Command::SnapshotCompare {
+            our_rows,
+            dump_dir,
+            pinned_manifest,
+        } => {
+            snapshot_compare::compare_command(
+                &sink,
+                our_rows.as_deref(),
+                dump_dir.as_deref(),
+                pinned_manifest.as_deref(),
+            )
+            .await
+            .expect("snapshot compare failed — read-only, safe to re-run");
         }
-        Command::SnapshotVerify { samples } => {
+        Command::SnapshotVerify {
+            samples,
+            checkpoint,
+        } => {
             let rpc = cli
                 .soroban_rpc_url
                 .as_deref()
                 .expect("snapshot-verify requires --soroban-rpc-url");
-            snapshot_compare::verify_command(rpc, &samples)
+            snapshot_compare::verify_command(rpc, &samples, checkpoint)
                 .await
                 .expect("snapshot verify failed — read-only, safe to re-run");
         }

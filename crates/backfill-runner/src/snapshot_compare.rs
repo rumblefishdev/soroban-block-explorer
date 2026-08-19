@@ -58,6 +58,10 @@ const LEDGER_FLOOR: u32 = 50_457_424;
 /// re-runnable, no RNG (which the workflow environment forbids anyway).
 const SAMPLE_CAP: usize = 2_000;
 
+/// Sampling density for the `missing` bucket, whose iteration order is not
+/// stable. Chosen so ~19.3M entries yield a few thousand samples.
+const MISSING_SAMPLE_EVERY: u64 = 4_096;
+
 /// Deterministic every-Nth sampler.
 struct Stride {
     stride: u64,
@@ -73,6 +77,15 @@ impl Stride {
             rows: Vec::new(),
         }
     }
+    /// Take the row when `selected` — for populations whose iteration order is
+    /// not stable, where position-based striding would be irreproducible.
+    fn offer_if(&mut self, selected: bool, make_line: impl FnOnce() -> String) {
+        self.seen += 1;
+        if selected && self.rows.len() < SAMPLE_CAP {
+            self.rows.push(make_line());
+        }
+    }
+
     fn offer(&mut self, make_line: impl FnOnce() -> String) {
         self.seen += 1;
         // (seen-1) % stride — `seen % stride == 1` never fires for stride 1,
@@ -100,6 +113,10 @@ struct Samples {
     divergent_native: Stride,
     agree_classic: Stride,
     missing_classic: Stride,
+    /// Both new buckets are sampled at stride 1: they should be rare, and each
+    /// one is a defect candidate that a human must adjudicate.
+    closed_but_live: Stride,
+    divergent_same_ledger: Stride,
     /// `missing` split by the entry's own last-modified ledger vs our floor.
     missing_below_floor: u64,
     missing_above_floor: u64,
@@ -122,6 +139,8 @@ impl Samples {
             divergent_native: Stride::new(10),
             agree_classic: Stride::new(6_500),
             missing_classic: Stride::new(9_600),
+            closed_but_live: Stride::new(1),
+            divergent_same_ledger: Stride::new(1),
             missing_below_floor: 0,
             missing_above_floor: 0,
             missing_above_by_2m: std::collections::BTreeMap::new(),
@@ -177,8 +196,14 @@ pub struct Tally {
     pub stale: u64,
     /// Both sides agree.
     pub agree: u64,
-    /// Rows we already marked closed (nothing to do).
+    /// Rows we already marked closed and the snapshot does not contradict.
     pub already_closed: u64,
+    /// We say CLOSED, the network says LIVE at a newer ledger. Our closure is
+    /// wrong and the holding is hidden — the costliest bucket here.
+    pub closed_but_live: u64,
+    /// Same ledger, different amount. Not freshness: a parsing defect on one
+    /// side or the other, and worth a human look.
+    pub divergent_same_ledger: u64,
     /// Our row is newer than the checkpoint, so the SNAPSHOT is the stale side.
     pub newer_than_checkpoint: u64,
     /// Sum of the positive amounts behind `ghost`, in stroops — the value at
@@ -193,6 +218,8 @@ impl Tally {
         use snapshot::Verdict as V;
         match v {
             V::AlreadyClosed => self.already_closed += 1,
+            V::ClosedButLive => self.closed_but_live += 1,
+            V::DivergentSameLedger => self.divergent_same_ledger += 1,
             V::Agree => self.agree += 1,
             V::HealFromSnapshot => self.heal += 1,
             V::DivergentOursNewer => self.divergent_ours_newer += 1,
@@ -227,6 +254,14 @@ impl Tally {
         println!(
             "    already marked closed              {:>12}",
             self.already_closed
+        );
+        println!(
+            "    CLOSED BUT LIVE (we hide it)       {:>12}",
+            self.closed_but_live
+        );
+        println!(
+            "    divergent SAME ledger (defect?)    {:>12}",
+            self.divergent_same_ledger
         );
         println!(
             "    newer than checkpoint (left alone) {:>12}",
@@ -378,32 +413,16 @@ fn compare_from_tsv(
         if line.is_empty() {
             continue;
         }
-        let mut it = line.split('\t');
-        let mut next = |what: &str| -> Result<i128, BackfillError> {
-            it.next()
-                .ok_or_else(|| {
-                    BackfillError::Incomplete(format!("line {}: missing {what}", lineno + 1))
-                })?
-                .parse::<i128>()
-                .map_err(|e| BackfillError::Incomplete(format!("line {} {what}: {e}", lineno + 1)))
-        };
-        // `as i64` would TRUNCATE a malformed export silently and misclassify
-        // the row under a wrong surrogate; reject instead. `amount` stays i128
-        // — the column is Int128 and large-supply tokens use the range.
-        let as_i64 = |v: i128, what: &str| -> Result<i64, BackfillError> {
-            i64::try_from(v).map_err(|_| {
-                BackfillError::Incomplete(format!(
-                    "line {}: {what} out of i64 range: {v}",
-                    lineno + 1
-                ))
-            })
-        };
+        // The SHARED parser — compare's own copy had already drifted (it did
+        // not trim, so a CRLF export was rejected here and accepted by the
+        // seed). One reader, one meaning.
+        let row = snapshot::OurRow::parse(&line, lineno + 1)?;
         let row = OurBalance {
-            holder_id: as_i64(next("holder_id")?, "holder_id")?,
-            asset_id: as_i64(next("asset_id")?, "asset_id")?,
-            amount: next("amount")?,
-            last_updated_ledger: as_i64(next("last_updated_ledger")?, "last_updated_ledger")?,
-            closed_at_ledger: as_i64(next("closed_at_ledger")?, "closed_at_ledger")?,
+            holder_id: row.holder_id,
+            asset_id: row.asset_id,
+            amount: row.amount,
+            last_updated_ledger: row.last_updated_ledger,
+            closed_at_ledger: row.closed_at_ledger,
         };
         seen += 1;
         fold_row(
@@ -417,6 +436,16 @@ fn compare_from_tsv(
     }
 
     println!("    {seen} rows read from {}", path.display());
+    // The report is what an operator signs off on, so a truncated export must
+    // not present here as a giant `missing` bucket. Same floor the seed applies
+    // before it writes.
+    const MIN_ROWS: u64 = 40_000_000;
+    if seen < MIN_ROWS {
+        return Err(BackfillError::Incomplete(format!(
+            "our-rows export holds {seen} rows, expected at least {MIN_ROWS} — a short \
+             export reports our own holdings as a phantom network gap"
+        )));
+    }
     fill_missing(state, &mut classic, &mut native, samples);
     Ok((classic, native))
 }
@@ -459,6 +488,8 @@ fn fold_row(
         (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, false) => {
             samples.divergent_classic.offer(line)
         }
+        (snapshot::Verdict::ClosedButLive, _) => samples.closed_but_live.offer(line),
+        (snapshot::Verdict::DivergentSameLedger, _) => samples.divergent_same_ledger.offer(line),
         (snapshot::Verdict::Closure, false) => samples.closure_classic.offer(line),
         (snapshot::Verdict::Agree, false) => samples.agree_classic.offer(line),
         _ => {}
@@ -497,12 +528,22 @@ fn fill_missing(
                 .entry(e.ledger / 2_000_000 * 2_000_000)
                 .or_default() += 1;
         }
-        samples.missing_classic.offer(|| {
-            format!(
-                "{}\t{}\t{}\t{}",
-                key.holder_id, key.asset_id, e.amount, e.ledger
-            )
-        });
+        // Position-based striding is NOT deterministic here: this iterates a
+        // HashMap whose hasher is seeded per process, so the sample differed on
+        // every run and could not be re-verified or compared before/after.
+        // Select on a function of the KEY instead — same expected density,
+        // reproducible, and independent of any structure in the data.
+        samples.missing_classic.offer_if(
+            (key.holder_id ^ key.asset_id)
+                .unsigned_abs()
+                .is_multiple_of(MISSING_SAMPLE_EVERY),
+            || {
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    key.holder_id, key.asset_id, e.amount, e.ledger
+                )
+            },
+        );
     }
     classic.missing = missing;
 }
@@ -513,10 +554,17 @@ pub async fn compare_command(
     sink: &Sink,
     our_rows: Option<&Path>,
     dump_dir: Option<&Path>,
+    pinned_manifest: Option<&Path>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
     let http = snapshot::archive_client()?;
-    let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
+    // Pin the same snapshot the seed will run, or the report describes a
+    // different checkpoint than the write — and the shared verdict rule then
+    // guarantees only that the two would agree on inputs they never share.
+    let list = match pinned_manifest {
+        Some(path) => snapshot::bucket_list_from_manifest(path)?,
+        None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
+    };
     println!(
         "checkpoint ledger {} — {} buckets",
         list.checkpoint_ledger,
@@ -577,6 +625,10 @@ pub async fn compare_command(
             .write(dir, "divergent_native.tsv")?;
         samples.agree_classic.write(dir, "agree_classic.tsv")?;
         samples.missing_classic.write(dir, "missing_classic.tsv")?;
+        samples.closed_but_live.write(dir, "closed_but_live.tsv")?;
+        samples
+            .divergent_same_ledger
+            .write(dir, "divergent_same_ledger.tsv")?;
     }
 
     classic.print("CLASSIC CREDIT trustlines", false);
@@ -662,7 +714,11 @@ fn trustline_ledger_key(holder: &str, code: &str, issuer: &str) -> Option<stella
 /// `account` or `trustline`. Emits one line per key: `FOUND balance ledger` or
 /// `ABSENT`. **Absence from the response means the entry does not exist** —
 /// that is the deleted-account / removed-trustline test.
-pub async fn verify_command(rpc_url: &str, samples: &Path) -> Result<(), BackfillError> {
+pub async fn verify_command(
+    rpc_url: &str,
+    samples: &Path,
+    checkpoint: Option<u32>,
+) -> Result<(), BackfillError> {
     use crate::rpc_snapshot::{RpcClient, account_ledger_key};
 
     let body = std::fs::read_to_string(samples)
@@ -728,6 +784,18 @@ pub async fn verify_command(rpc_url: &str, samples: &Path) -> Result<(), Backfil
 
     let mut n_found = 0u64;
     let mut n_absent = 0u64;
+    // The point-in-time argument, which the earlier check discarded even though
+    // the data was already in hand:
+    //
+    //   an entry present NOW whose `lastModifiedLedgerSeq` is <= the checkpoint
+    //   existed CONTINUOUSLY and unchanged over that span — a delete-and-recreate
+    //   would have bumped the ledger.
+    //
+    // So FOUND with `L <= checkpoint` is proof about the checkpoint, not merely
+    // about now. FOUND with `L > checkpoint` proves nothing either way, and the
+    // share of those measures how much power the whole check has.
+    let mut n_proven = 0u64;
+    let mut n_inconclusive = 0u64;
     for (k, label) in keys.iter().zip(&labels) {
         use stellar_xdr::{Limits, WriteXdr};
         let bytes = k
@@ -736,7 +804,19 @@ pub async fn verify_command(rpc_url: &str, samples: &Path) -> Result<(), Backfil
         match by_key.get(&bytes) {
             Some((bal, led)) => {
                 n_found += 1;
-                println!("FOUND\t{label}\tbalance={bal}\tledger={led}");
+                match checkpoint {
+                    Some(cp) if *led <= cp => {
+                        n_proven += 1;
+                        println!(
+                            "FOUND\tPROVEN-AT-CHECKPOINT\t{label}\tbalance={bal}\tledger={led}"
+                        );
+                    }
+                    Some(_) => {
+                        n_inconclusive += 1;
+                        println!("FOUND\tCHANGED-SINCE\t{label}\tbalance={bal}\tledger={led}");
+                    }
+                    None => println!("FOUND\t{label}\tbalance={bal}\tledger={led}"),
+                }
             }
             None => {
                 n_absent += 1;
@@ -748,5 +828,28 @@ pub async fn verify_command(rpc_url: &str, samples: &Path) -> Result<(), Backfil
         "\nverified {} keys: {n_found} FOUND, {n_absent} ABSENT",
         keys.len()
     );
+    if let Some(cp) = checkpoint {
+        let power = if n_found == 0 {
+            0.0
+        } else {
+            n_proven as f64 / n_found as f64
+        };
+        println!(
+            "  against checkpoint {cp}: {n_proven} proven unchanged since, \
+             {n_inconclusive} changed after it"
+        );
+        println!(
+            "  statistical power {:.1}% — an ABSENT result proves nothing on its own; \
+             only FOUND with a ledger at or below the checkpoint is decisive, so divide \
+             any error bound by this share",
+            power * 100.0
+        );
+    } else {
+        println!(
+            "  NOTE: no --checkpoint given, so every result is about state NOW, not about \
+             the checkpoint the verdicts were judged at. 'ABSENT now' is equally consistent \
+             with a correct verdict and with an entry closed after the checkpoint."
+        );
+    }
     Ok(())
 }

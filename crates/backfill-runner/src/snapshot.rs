@@ -881,16 +881,28 @@ impl OurRow {
 /// `--execute` would write. One rule, two consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// Our writer already stamped this closed. Nothing to do, nothing to report.
+    /// Our writer already stamped this closed, and the snapshot agrees (or is
+    /// older). Nothing to do.
     AlreadyClosed,
+    /// We stamped it CLOSED, but the network holds it LIVE at a NEWER ledger.
+    /// Our closure is wrong and the holding is invisible on the page — the
+    /// costliest outcome in this whole comparison, because it hides funds a
+    /// user actually has. Before this verdict existed the row was marked
+    /// matched and dropped, so it was never re-inserted and never reported.
+    ClosedButLive,
     /// Both sides hold it and agree.
     Agree,
     /// Both hold it, amounts differ, and the SNAPSHOT is strictly newer — the
     /// seed heals these.
     HealFromSnapshot,
-    /// Both hold it, amounts differ, but our row is at least as new. The live
+    /// Both hold it, amounts differ, and our row is strictly newer. The live
     /// parser knows better; report only.
     DivergentOursNewer,
+    /// Both hold it at the SAME ledger and the amounts still differ. One of us
+    /// parsed that ledger wrong, and it cannot be us-versus-them freshness —
+    /// so this is a defect signal, not routine drift. Reported apart and never
+    /// auto-healed: guessing a winner would bury the evidence.
+    DivergentSameLedger,
     /// Both hold it with equal amounts, but our ledger is behind the entry's.
     Stale,
     /// The network does not have it and we hold zero — a real closure.
@@ -911,11 +923,20 @@ pub enum Verdict {
 /// we do not.
 pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> Verdict {
     if row.closed_at_ledger != 0 {
-        // Mark it matched anyway: the entry IS accounted for on our side, and
-        // leaving it unmatched would count our own closure as a network gap and
+        // Mark it matched: the entry IS accounted for on our side, and leaving
+        // it unmatched would count our own closure as a network gap and
         // re-insert it as live.
+        //
+        // But "accounted for" is not "correctly closed". If the network holds
+        // the entry LIVE at a ledger newer than our closure, our closure is the
+        // stale fact and the holding is hidden. Marking matched without this
+        // check suppressed exactly that case from both the report and the
+        // re-insert — silently, and permanently.
         if let Some(e) = snap {
             e.matched = true;
+            if e.live && i64::from(e.ledger) > row.last_updated_ledger {
+                return Verdict::ClosedButLive;
+            }
         }
         return Verdict::AlreadyClosed;
     }
@@ -923,10 +944,12 @@ pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> V
         Some(e) if e.live => {
             e.matched = true;
             if i128::from(e.amount) != row.amount {
-                if i64::from(e.ledger) > row.last_updated_ledger {
-                    Verdict::HealFromSnapshot
-                } else {
-                    Verdict::DivergentOursNewer
+                match i64::from(e.ledger).cmp(&row.last_updated_ledger) {
+                    std::cmp::Ordering::Greater => Verdict::HealFromSnapshot,
+                    std::cmp::Ordering::Less => Verdict::DivergentOursNewer,
+                    // Same ledger, different amount — freshness cannot explain
+                    // it, so one of the two parsers is wrong.
+                    std::cmp::Ordering::Equal => Verdict::DivergentSameLedger,
                 }
             } else if row.last_updated_ledger < i64::from(e.ledger) {
                 Verdict::Stale
@@ -940,7 +963,12 @@ pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> V
             if let Some(e) = other {
                 e.matched = true;
             }
-            if row.last_updated_ledger > i64::from(checkpoint) {
+            // `>=`, not `>`: a row last touched AT the checkpoint would be
+            // written back at that same ledger, and ReplacingMergeTree resolves
+            // an equal version arbitrarily — the closure might lose and the
+            // ghost survive, nondeterministically and undetectably. Ceding a
+            // handful of legitimate closures is the fail-safe direction.
+            if row.last_updated_ledger >= i64::from(checkpoint) {
                 Verdict::NewerThanCheckpoint
             } else if row.amount == 0 {
                 Verdict::Closure
@@ -1177,6 +1205,61 @@ mod tests {
             verdict(&row(42, 101, 0), None, CP),
             Verdict::NewerThanCheckpoint
         );
+
+        // AT the checkpoint counts as too fresh to close. Writing here would
+        // land at the SAME RMT version as the row already in the table, and the
+        // merge would pick a winner arbitrarily — the closure could lose and
+        // the ghost survive, undetectably.
+        assert_eq!(
+            verdict(&row(0, i64::from(CP), 0), None, CP),
+            Verdict::NewerThanCheckpoint,
+            "a row last touched at the checkpoint must not be closed at that same version"
+        );
+
+        // Same ledger, different amount: freshness cannot arbitrate, so this is
+        // a parser-defect signal and must not hide inside 'ours newer, kept'.
+        let mut e = live(5, 90);
+        assert_eq!(
+            verdict(&row(9, 90, 0), Some(&mut e), CP),
+            Verdict::DivergentSameLedger
+        );
+    }
+
+    /// The costliest outcome this comparison can produce: our row says CLOSED
+    /// while the network holds the entry LIVE at a newer ledger. Marking it
+    /// matched without checking liveness suppressed it from the report AND from
+    /// the re-insert, hiding funds a user actually has — permanently, silently.
+    #[test]
+    fn a_closure_the_network_contradicts_is_reported_not_swallowed() {
+        const CP: u32 = 100;
+
+        // Our closure at 90, network alive at 95 — our closure is the stale fact.
+        let mut newer = live(5, 95);
+        assert_eq!(
+            verdict(&row(0, 90, 90), Some(&mut newer), CP),
+            Verdict::ClosedButLive,
+            "the network says live at a NEWER ledger — our closure is wrong"
+        );
+        assert!(
+            newer.matched,
+            "still matched: pass 2 must not ALSO re-insert it blindly"
+        );
+
+        // Our closure at 90, network's evidence of life is older — our closure
+        // stands, and this is the ordinary case.
+        let mut older = live(5, 85);
+        assert_eq!(
+            verdict(&row(0, 90, 90), Some(&mut older), CP),
+            Verdict::AlreadyClosed
+        );
+
+        // Network agrees the entry is gone.
+        let mut dead = SnapEntry::dead();
+        assert_eq!(
+            verdict(&row(0, 90, 90), Some(&mut dead), CP),
+            Verdict::AlreadyClosed
+        );
+        assert!(dead.matched, "our own closure is not a network gap");
     }
 
     /// A truncated or malformed export must fail loudly. `as i64` would wrap an
