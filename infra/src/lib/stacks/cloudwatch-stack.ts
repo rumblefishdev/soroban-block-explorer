@@ -244,47 +244,6 @@ export class CloudWatchStack extends cdk.Stack {
       return alarm;
     };
 
-    // Helper: a Lambda error-RATE alarm (errors / invocations, 5-min window).
-    // The two callers previously differed in 5 lines out of 19, so the shape
-    // had to be changed twice or the two diverged unnoticed.
-    //
-    // `threshold` and `treatMissingData` are NOT defaulted: the number stays
-    // visible where the alarm is declared, and "no datapoint" means something
-    // different for each Lambda — ADR 0054 rule 3 wants that reason next to
-    // the alarm, not hidden in a default.
-    const errorRateAlarm = (opts: {
-      id: string;
-      alarmName: string;
-      alarmDescription: string;
-      fn: lambda.IFunction;
-      label: string;
-      threshold: number;
-      treatMissingData: cloudwatch.TreatMissingData;
-    }): cloudwatch.Alarm => {
-      const period = cdk.Duration.minutes(5);
-      const stat = { period, statistic: cloudwatch.Stats.SUM };
-      return withActions(
-        new cloudwatch.Alarm(this, opts.id, {
-          alarmName: opts.alarmName,
-          alarmDescription: opts.alarmDescription,
-          metric: new cloudwatch.MathExpression({
-            expression: 'errors / invocations',
-            usingMetrics: {
-              errors: opts.fn.metricErrors(stat),
-              invocations: opts.fn.metricInvocations(stat),
-            },
-            period,
-            label: opts.label,
-          }),
-          threshold: opts.threshold,
-          comparisonOperator:
-            cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-          evaluationPeriods: 1,
-          treatMissingData: opts.treatMissingData,
-        })
-      );
-    };
-
     // ---------------------
     // Alarm 1: Galexie ingestion lag
     // Fires when NO new ledger has landed in S3 for `galexieLagMinutes` — i.e.
@@ -440,23 +399,43 @@ export class CloudWatchStack extends cdk.Stack {
     // Alarm 2: Ledger Processor error rate
     // Uses a MathExpression: errors / invocations > threshold.
     // ---------------------
-    // NOT_BREACHING: the ratio has no datapoint when invocations are 0, and
-    // 0 invocations is not an error-RATE problem — it is either a planned
-    // pause (must not page) or a dead input, which is the lag alarm's job
-    // (BREACHING there). Beware what this alarm can NOT see: a total stall
-    // never reaches Lambda `Errors` at all — measured 0 through every lag
-    // event of a 30-day window (0454). Absence coverage is the backlog-age
-    // alarm's job (Alarm 1a), not this alarm's.
-    errorRateAlarm({
-      id: 'ProcessorErrorRateAlarm',
-      alarmName: `${config.envName}-ledger-processor-error-rate`,
-      alarmDescription:
-        'Ledger Processor error rate exceeded threshold - ledgers may be failing to index.',
-      fn: processorFunction,
-      label: 'Error Rate',
-      threshold: config.processorErrorRateThreshold,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    const processorErrors = processorFunction.metricErrors({
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.SUM,
     });
+    const processorInvocations = processorFunction.metricInvocations({
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.SUM,
+    });
+    withActions(
+      new cloudwatch.Alarm(this, 'ProcessorErrorRateAlarm', {
+        alarmName: `${config.envName}-ledger-processor-error-rate`,
+        alarmDescription:
+          'Ledger Processor error rate exceeded threshold - ledgers may be failing to index.',
+        metric: new cloudwatch.MathExpression({
+          expression: 'errors / invocations',
+          usingMetrics: {
+            errors: processorErrors,
+            invocations: processorInvocations,
+          },
+          period: cdk.Duration.minutes(5),
+          label: 'Error Rate',
+        }),
+        threshold: config.processorErrorRateThreshold,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): the ratio has
+        // no datapoint when invocations are 0, and 0 invocations is not an
+        // error-RATE problem — it is either a planned pause (must not page)
+        // or a dead input, which is the lag alarm's job (BREACHING there).
+        // Beware what this alarm can NOT see: a total stall never reaches
+        // Lambda `Errors` at all — measured 0 through every lag event of a
+        // 30-day window (0454). Absence coverage is the backlog-age alarm's
+        // job (Alarm 1a), not this alarm's.
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
 
     // ---------------------
     // Alarm 2b: Indexer ClickHouse write / mTLS init failure (task 0241)
@@ -620,22 +599,40 @@ export class CloudWatchStack extends cdk.Stack {
     // Lambda. Uses the same threshold config — both Lambdas have
     // similar acceptable error rates.
     // ---------------------
-    // NOT_BREACHING for a DIFFERENT reason than the processor alarm above:
-    // no datapoint means 0 invocations, and for this worker that is a NORMAL
-    // state — the consumer is deliberately gated off in prod until the 0301
-    // rollout, and even enabled it only runs when the producer publishes
-    // misses. BREACHING would page continuously. Two alarms, one shape, two
-    // reasons — which is why the helper does not default this.
-    errorRateAlarm({
-      id: 'EnrichmentWorkerErrorRateAlarm',
-      alarmName: `${config.envName}-enrichment-worker-error-rate`,
-      alarmDescription:
-        'Enrichment worker Lambda error rate exceeded threshold - DB / network / SEP-1 issues.',
-      fn: enrichmentWorkerFunction,
-      label: 'Worker Error Rate',
-      threshold: config.processorErrorRateThreshold,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    const workerErrors = enrichmentWorkerFunction.metricErrors({
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.SUM,
     });
+    const workerInvocations = enrichmentWorkerFunction.metricInvocations({
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.SUM,
+    });
+    withActions(
+      new cloudwatch.Alarm(this, 'EnrichmentWorkerErrorRateAlarm', {
+        alarmName: `${config.envName}-enrichment-worker-error-rate`,
+        alarmDescription:
+          'Enrichment worker Lambda error rate exceeded threshold - DB / network / SEP-1 issues.',
+        metric: new cloudwatch.MathExpression({
+          expression: 'errors / invocations',
+          usingMetrics: {
+            errors: workerErrors,
+            invocations: workerInvocations,
+          },
+          period: cdk.Duration.minutes(5),
+          label: 'Worker Error Rate',
+        }),
+        threshold: config.processorErrorRateThreshold,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        // NOT_BREACHING is correct here (task 0455 review): no datapoint
+        // means 0 invocations, and for this worker that is a NORMAL
+        // state — the consumer is deliberately gated off in prod until
+        // the 0301 rollout, and even enabled it only runs when the
+        // producer publishes misses. BREACHING would page continuously.
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
 
     // ---------------------
     // Alarm 6: any API Gateway 5xx
