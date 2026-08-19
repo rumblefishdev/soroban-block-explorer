@@ -3,11 +3,30 @@ id: '0362'
 title: 'Post-0244 loose ends: stale RDS docs, 0214 mis-archive, Phase-3 trustline pointer, galexie metadata validation'
 type: REFACTOR
 status: backlog
-related_adr: ['0032', '0051']
-related_tasks: ['0244', '0239', '0214', '0304', '0310', '0331', '0339']
+related_adr: ['0032', '0051', '0055']
+related_tasks:
+  ['0244', '0239', '0214', '0304', '0310', '0331', '0339', '0463', '0502']
 tags: [cleanup, docs, follow-up, lore-hygiene, priority-low, effort-small]
 links: []
 history:
+  - date: '2026-08-19'
+    status: backlog
+    who: karolkow
+    note: >
+      Items 3 and 4 closed; all four items now resolved. Item 3 — the RPC
+      trustline route is dropped (0463 measured the same wall: getLedgerEntries
+      has no enumeration primitive), the work moves to ADR 0055 + the
+      checkpoint-bucket seed in 0502. Removed trustline_ledger_key,
+      rebuild_trustline_asset and their 2 tests (rpc_snapshot.rs 1004 -> 899
+      lines); kept decode_trustline_snapshot as a pure LedgerEntryData decoder
+      the checkpoint route reuses. cargo check clean, 53 tests pass. Item 4 —
+      metadata created-vs-updated confirmed on prod (2,669 written at the deploy
+      ledger, 1,227 later, 0 impossible, of 3,896 contracts) and name/symbol/
+      decimals cross-checked against on-chain instance storage for 3 contracts,
+      3/3 exact; used live Soroban RPC rather than the galexie archive, stated
+      in the item. Also corrected item 2's note: 0214 was moved back to
+      archive/completed on 2026-07-23 (4336250d), reversing the day-old call the
+      note described.
   - date: 2026-07-07
     status: backlog
     who: karolkow
@@ -103,6 +122,20 @@ item 3) so location and status agree, and move the Phase-3 pointer to item 3 her
 > reader; the live one is `balances` at 89,634,237 rows). Flagged in 0214 for
 > rewriting, and the dead table flagged to 0310.
 
+> **Reversed again the next day, 2026-07-23 — and that is where it stands.**
+> The task-currency sweep (`4336250d`) moved 0214 back to `archive/` with
+> `status: completed`. Verified on `develop` today (2026-08-19):
+> `lore/1-tasks/archive/0214_FEATURE_ch-initial-snapshot-account-state.md`,
+> `status: completed`. So the note above describes a state that lasted one day.
+>
+> The sweep's reason is not the one this item argued about: 0214's deliverable
+> — the backfill-start snapshot mechanism — shipped in PR #189, and the
+> residual skeleton accounts that looked like a 0214 gap are **0421's
+> first_seen/sequence_number clobber**, proven by decoding raw
+> `tx_changes_before`. Same evidence (`GARDNV3Q7…` still broken), different
+> owner. Item 2's acceptance criterion — location and status agree — is
+> satisfied either way; only the prose above was stale.
+
 ### 3. Phase-3 trustline pass — POINTER ONLY (design-gated, do NOT implement here)
 
 The parked trustline scaffolding in `crates/backfill-runner/src/rpc_snapshot.rs`
@@ -126,10 +159,48 @@ It is **deferred, not skipped**. Why it is not a wire-up:
 exists, spawn a dedicated FEATURE task (this is not it) and repoint the code
 comments away from archived 0214.
 
-**AC:** `- [ ]` No code change. Either: a pairing strategy is decided + a dedicated
-FEATURE task spawned, OR a decision to permanently drop trustline-balances is
-recorded and the parked code removed. (Tracking only — closing this item = making
-that call, not implementing.)
+**AC:** `- [x]` **Decided 2026-08-19 — the RPC route is dropped, and its
+half of the parked code with it. Trustline balances are NOT dropped; they
+arrive by a different route.**
+
+The call was not a preference. Task 0463 settled the same question
+independently, with a 200-account probe: the read-time-RPC design is
+**superseded because `getLedgerEntries` has no enumeration primitive**, so it
+cannot reach backward completeness. That is the same wall this item recorded as
+"`collect_trustline_candidates` is a phantom" — the pairing IS the problem, and
+it has no solution on the RPC path: the pairs you cannot guess are exactly the
+ones missing from our stream.
+
+What replaces it:
+
+- **Lifecycle** — [ADR 0055](../../2-adrs/0055_holding-lifecycle-column-on-balances.md):
+  `closed_at_ledger` on `balances`, rows never deleted, read path filters on it
+  instead of `amount != 0` (task 0463).
+- **Backward completeness** — a one-off seed from the SDF history archive's
+  checkpoint bucket list (task 0502), which publishes full pubnet state as raw
+  XDR. Enumeration is not needed there: the buckets already contain every
+  `TrustLineEntry`.
+
+**Code removed** (`crates/backfill-runner/src/rpc_snapshot.rs`, 1,004 → 899
+lines):
+
+| symbol                                                                       | why it went                                                                    |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `trustline_ledger_key`                                                       | builds a `LedgerKey::Trustline` for an RPC request — the request is never made |
+| `rebuild_trustline_asset`                                                    | reverses key → asset for the RPC round trip only                               |
+| `rebuild_trustline_asset_alphanum4_round_trip` + `..._rejects_oversize_code` | covered only the removed function                                              |
+| `LedgerKeyTrustLine` import                                                  | unused after the above                                                         |
+
+**Code deliberately kept**, with its comment repointed away from archived 0214:
+`decode_trustline_snapshot` and the `Trustline{Snapshot,Asset,AssetType}` types.
+These are a **pure decoder of `LedgerEntryData::Trustline`** — not RPC-shaped —
+and that is exactly the shape a checkpoint bucket entry carries, so 0502 reuses
+them rather than rewriting them. Deleting them would have been the tidier-looking
+call and the more expensive one.
+
+Verified: `cargo check -p backfill-runner --all-targets` clean (0 warnings),
+`cargo test -p backfill-runner` 53 passed / 0 failed, and no reference to the
+removed symbols survives outside archived lore.
 
 ### 4. Galexie created-vs-updated metadata validation (0304 nice-to-have)
 
@@ -138,8 +209,56 @@ confirmation of a `soroban_contract_metadata` write on a representative deploy v
 the galexie archive, cross-checking decimals/symbol/name against an independent
 source. Manual/ops (needs archive access). Carried here so it is not lost.
 
-**AC:** `- [ ]` One representative deploy's metadata cross-checked vs an
-independent source, OR the check is explicitly declined as not worth the effort.
+**AC:** `- [x]` **Done 2026-08-19 — cross-checked, 3 of 3 exact, both write
+paths confirmed on production.**
+
+**Created vs updated — both paths are live.** Comparing each contract's first
+`soroban_contract_metadata` version against its deploy ledger, on production:
+
+| first metadata write                           | contracts |
+| ---------------------------------------------- | --------- |
+| at the deploy ledger (`created` change)        | 2,669     |
+| at a later ledger (`updated` / `state` change) | 1,227     |
+| before the deploy ledger (impossible)          | 0         |
+| no matching `soroban_contracts` row            | 0         |
+| **total**                                      | **3,896** |
+
+So both branches of `entry_token_metadata`
+(`crates/xdr-parser/src/ledger_entry_changes.rs:143,147`) are exercised by real
+traffic, and no row is stamped earlier than the contract it belongs to. The
+parser-level halves already had unit cover
+(`contract_instance_metadata_extracted_on_created` / `..._on_updated`); this is
+the production counterpart they lacked.
+
+**Value cross-check — against chain state, not the archive.** Read each
+contract's instance storage `Symbol("METADATA")` map live from a public Soroban
+RPC node (`stellar contract read --id … --rpc-url https://mainnet.sorobanrpc.com`,
+CLI 26.0.0) and compared it to what we store:
+
+| contract        | cohort    | our `name` / `symbol` / `decimals`           | on-chain  | match |
+| --------------- | --------- | -------------------------------------------- | --------- | ----- |
+| `CA26OJGB…F2F2` | at deploy | 蛇年欢庆 (Snake Year Celebration) / SMOL / 0 | identical | ✅    |
+| `CA25XTGH…R2KQ` | later     | DeFindex-Vault-TurboTestVaultD2 / TTVD / 7   | identical | ✅    |
+| `CCAOOEX2…U3F`  | later     | Splyce Concord Share / sUSDC / 7             | identical | ✅    |
+
+Two findings worth keeping:
+
+- **The map key for decimals is not stable across contracts** — `decimal`
+  (DeFindex) vs `decimals` (the other two). Both decoded correctly, so
+  `extract_token_metadata` already handles the pair; nothing to fix, but any
+  future rewrite of that decoder must keep both spellings.
+- **Metadata mutation is unobserved on production.** Only 6 of 3,896 contracts
+  carry more than one row, and in every one of those the name / symbol /
+  decimals are byte-identical across versions — i.e. RMT copies of the same
+  value (see 0420), not a value that changed. There is currently no real
+  overwrite to test the update path's _correctness_ against.
+
+**Deviation from the AC as written, stated plainly:** the AC named the galexie
+archive; this used live RPC instance state instead. The archive would prove
+"what was written at that ledger"; RPC proves "what the chain says now". They
+coincide only while the value has not changed since — which the bullet above
+measures as true for every contract we hold. Good enough to close the item; if
+someone later needs the stronger claim, it needs the archive read, not this.
 
 ## Acceptance Criteria
 
@@ -157,12 +276,26 @@ independent source, OR the check is explicitly declined as not worth the effort.
       > part is the measurement (0 rows vs 89,634,237) and that 0214 still
       > carries it as an acceptance criterion.
 
-- [ ] Item 3 — Phase-3 pairing decided + dedicated task spawned, OR trustline
-      code dropped by decision. (Tracking only — no code here.)
-- [ ] Item 4 — galexie metadata cross-check done or explicitly declined.
-- [ ] **Docs updated** — item 1 IS the doc update; items 2–4 are lore/ops, N/A
-      for `docs/architecture/**` beyond item 1.
-- [ ] **API types regenerated** — N/A (no `crates/api/**` change).
+- [x] Item 3 — **decided 2026-08-19: the RPC pairing route is dropped**, its
+      code removed, the pure decoder kept for the checkpoint route (ADR 0055 +
+      task 0502). No new task spawned: 0463 and 0502 already own the work, and
+      spawning a third would duplicate them.
+
+      > Deviation from the AC as written: it said "no code change here". The
+      > decision made ~105 lines provably unreachable, so they went in the same
+      > pass rather than being left for a future reader to re-derive. The AC's
+      > second branch ("the parked code removed") anticipated exactly this.
+
+- [x] Item 4 — **galexie metadata cross-check done 2026-08-19**, 3 of 3 exact,
+      both write paths confirmed on production (2,669 at deploy / 1,227 later).
+      Substituted live RPC instance state for the archive read — stated in the
+      item.
+- [x] **Docs updated** — item 1 was done by 0248;
+      `docs/architecture/database-schema/clickhouse-pilot.md` §"What this does
+      not cover (yet)" rewritten under item 3 (it advertised
+      `rebuild_trustline_asset` as "ready to wire in"). Items 2 and 4 are
+      lore/ops — `N/A` for `docs/architecture/**`.
+- [x] **API types regenerated** — N/A (no `crates/api/**` change).
 
 ## Notes
 
