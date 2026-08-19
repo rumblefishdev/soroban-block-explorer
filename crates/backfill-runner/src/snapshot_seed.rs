@@ -225,6 +225,7 @@ fn build_corrections(
     let mut out = Corrections::default();
 
     // Pass 1: our rows → closures, ghosts, self-heals.
+    let mut rows_read = 0u64;
     let file = std::fs::File::open(our_rows)
         .map_err(|e| BackfillError::Incomplete(format!("open {}: {e}", our_rows.display())))?;
     for line in std::io::BufReader::new(file).lines() {
@@ -248,8 +249,19 @@ fn build_corrections(
             last_updated: f[3].parse().map_err(parse_err)?,
             closed_at: f[4].parse().map_err(parse_err)?,
         };
+        rows_read += 1;
         fold_our_row(&row, state, checkpoint, &mut out, ghost_log);
     }
+    // Reported, not assumed: an empty or truncated `--our-rows` would otherwise
+    // present as "the network has everything and we have nothing".
+    const MIN_OUR_ROWS: u64 = 10_000_000;
+    if rows_read < MIN_OUR_ROWS {
+        return Err(BackfillError::Incomplete(format!(
+            "our-rows export holds {rows_read} rows, expected at least {MIN_OUR_ROWS} \
+             — a short export turns our own holdings into a phantom network gap"
+        )));
+    }
+    println!("  folded {rows_read} of our rows");
 
     // Pass 2: unmatched live snapshot entries → missing-holding inserts.
     let mut referenced_assets: HashSet<i64> = HashSet::new();
@@ -360,20 +372,36 @@ where
 
 /// The seed. Without `--execute`: decodes, folds, writes artifacts, inserts
 /// NOTHING. With `--execute`: additionally inserts the four row sets.
+#[allow(clippy::too_many_arguments)]
 pub async fn seed_command(
     sink: &Sink,
     our_rows: &Path,
     assets_ids: &Path,
     accounts_ids: &Path,
     artifacts: &Path,
+    pinned_manifest: Option<&Path>,
     execute: bool,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
     std::fs::create_dir_all(artifacts)
         .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
 
-    let http = reqwest::Client::new();
-    let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
+    let http = crate::snapshot::archive_client()?;
+    // A pinned manifest makes `--execute` decode the SAME snapshot the dry-run
+    // reported on. Without it the manifest advances mid-review and summary.txt
+    // describes a run that never happened.
+    let list = match pinned_manifest {
+        Some(path) => crate::snapshot::bucket_list_from_manifest(path)?,
+        None => {
+            if execute {
+                println!(
+                    "  WARNING: no --pinned-manifest. This run fetches the LATEST checkpoint,\n\
+                     \x20 which is not the one any earlier dry-run reported on."
+                );
+            }
+            fetch_bucket_list(&http, PUBNET_ARCHIVE).await?
+        }
+    };
     println!(
         "checkpoint ledger {} — {} buckets{}",
         list.checkpoint_ledger,
@@ -402,12 +430,29 @@ pub async fn seed_command(
         known_assets.len(),
         known_accounts.len()
     );
+    // A truncated export is indistinguishable from a real one to everything
+    // downstream: fewer known ids means more "absent" ids means more stubs, and
+    // fewer of our rows means more of the network looks missing. Both directions
+    // over-write. These floors are far below the measured populations (344,989
+    // assets / 14.5M accounts as of 2026-08-18) — they catch a broken export,
+    // not a shrinking network.
+    const MIN_ASSET_IDS: usize = 100_000;
+    const MIN_ACCOUNT_IDS: usize = 5_000_000;
+    if known_assets.len() < MIN_ASSET_IDS || known_accounts.len() < MIN_ACCOUNT_IDS {
+        return Err(BackfillError::Incomplete(format!(
+            "dimension export looks truncated ({} assets, {} accounts; expected at least \
+             {MIN_ASSET_IDS} and {MIN_ACCOUNT_IDS}). Re-export before seeding — a short \
+             file silently becomes an over-insert.",
+            known_assets.len(),
+            known_accounts.len()
+        )));
+    }
 
     let mut state = SnapshotState::with_details();
     for (i, hash) in list.hashes.iter().enumerate() {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
-        crate::snapshot::stream_bucket_from_url(&http, &url, |rec| {
+        crate::snapshot::stream_bucket_from_url(&http, &url, Some(hash), |rec| {
             state.absorb_record(&rec);
             Ok(())
         })

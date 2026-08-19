@@ -485,7 +485,7 @@ pub async fn compare_command(
     dump_dir: Option<&Path>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
-    let http = reqwest::Client::new();
+    let http = snapshot::archive_client()?;
     let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
     println!(
         "checkpoint ledger {} — {} buckets",

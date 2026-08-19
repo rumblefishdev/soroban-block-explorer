@@ -61,6 +61,10 @@ async-trait = "0.1"
 # `pool-ids-backfill` (task 0266): pool-id hex encode/decode for the
 # gross_volume_a aggregation keyed by raw 32-byte pool id.
 hex = { workspace = true }
+# Task 0463: the history archive is content-addressed — bucket bytes are hashed
+# as they stream and checked against the manifest's hash, so "verified source"
+# is a check rather than a claim about TLS.
+sha2 = { workspace = true }
 # Task 0296: `ContractEventType::Contract` to build `ExtractedEvent`s for the
 # CH-direct NFT re-parse (`nft_reparse`). Runtime dep of the main bin, not just
 # tests — the dev-dependency below is for pool-ids-backfill tests only.

@@ -272,6 +272,12 @@ enum Command {
         /// Directory for provenance artifacts (manifest, summary, ghost list).
         #[arg(long)]
         artifacts: PathBuf,
+        /// Pin the snapshot to a previously written `manifest.json` instead of
+        /// fetching the latest checkpoint. REQUIRED in practice for `--execute`:
+        /// without it the run decodes a different snapshot than the dry-run
+        /// reported on, so `summary.txt` describes a run that never happened.
+        #[arg(long)]
+        pinned_manifest: Option<PathBuf>,
         /// Actually insert. Without this flag the run is read-only.
         #[arg(long)]
         execute: bool,
@@ -439,6 +445,7 @@ async fn main() {
             assets_ids,
             accounts_ids,
             artifacts,
+            pinned_manifest,
             execute,
         } => {
             snapshot_seed::seed_command(
@@ -447,6 +454,7 @@ async fn main() {
                 &assets_ids,
                 &accounts_ids,
                 &artifacts,
+                pinned_manifest.as_deref(),
                 execute,
             )
             .await

@@ -73,6 +73,7 @@
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 
 use flate2::read::GzDecoder;
+use sha2::{Digest, Sha256};
 use stellar_xdr::{
     BucketEntry, Frame, LedgerEntryData, LedgerEntryType, LedgerKey, Limited, Limits, ReadXdr,
 };
@@ -108,6 +109,19 @@ impl BucketList {
             &hash[4..6]
         )
     }
+}
+
+/// HTTP client for archive reads. `reqwest`'s default is NO timeout, so a
+/// stalled connection on a 2.47 GB bucket would hang the pass forever. The
+/// budget is per-request and generous: the largest bucket takes ~3.5 minutes on
+/// a good link, so 30 minutes tolerates a very slow one without hanging.
+pub fn archive_client() -> Result<reqwest::Client, BackfillError> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .user_agent("soroban-block-explorer/backfill-runner/0.1")
+        .build()
+        .map_err(|e| BackfillError::Incomplete(format!("archive client build failed: {e}")))
 }
 
 /// Fetch and parse the archive manifest.
@@ -162,6 +176,49 @@ pub async fn fetch_bucket_list(
         checkpoint_ledger,
         buckets = hashes.len(),
         "history archive bucket list"
+    );
+    Ok(BucketList {
+        checkpoint_ledger,
+        hashes,
+    })
+}
+
+/// Load a bucket list from a previously written `manifest.json` instead of the
+/// live archive.
+///
+/// The manifest advances every 64 ledgers (~5 min) and a full pass takes ~6, so
+/// a run that re-fetches it decodes a DIFFERENT snapshot than the dry-run
+/// reported on. That makes `summary.txt` describe a run that never happened —
+/// the opposite of the reviewability the dry-run exists to provide. Pinning is
+/// what makes `--execute` run the thing that was reviewed, and what makes a
+/// failed run resumable against the same state.
+pub fn bucket_list_from_manifest(path: &std::path::Path) -> Result<BucketList, BackfillError> {
+    let body = std::fs::read_to_string(path)
+        .map_err(|e| BackfillError::Incomplete(format!("read {}: {e}", path.display())))?;
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| BackfillError::Incomplete(format!("manifest {}: {e}", path.display())))?;
+    let checkpoint_ledger = v
+        .get("checkpoint_ledger")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| BackfillError::Incomplete("manifest has no checkpoint_ledger".into()))?
+        as u32;
+    let hashes: Vec<String> = v
+        .get("buckets")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| BackfillError::Incomplete("manifest has no buckets".into()))?
+        .iter()
+        .filter_map(|h| h.as_str().map(str::to_string))
+        .collect();
+    if hashes.is_empty() {
+        return Err(BackfillError::Incomplete(
+            "pinned manifest lists no buckets — refusing to run a no-op that reports success"
+                .into(),
+        ));
+    }
+    info!(
+        checkpoint_ledger,
+        buckets = hashes.len(),
+        "bucket list PINNED from manifest"
     );
     Ok(BucketList {
         checkpoint_ledger,
@@ -303,6 +360,7 @@ fn ledger_key_index(k: &LedgerKey) -> Option<usize> {
 pub(crate) async fn stream_bucket_from_url<F>(
     client: &reqwest::Client,
     url: &str,
+    expect_hash: Option<&str>,
     f: F,
 ) -> Result<u64, BackfillError>
 where
@@ -312,7 +370,11 @@ where
         .get(url)
         .send()
         .await
-        .map_err(|e| BackfillError::Incomplete(format!("bucket fetch failed: {e}")))?;
+        .map_err(|e| BackfillError::Incomplete(format!("bucket fetch failed: {e}")))?
+        // Without this a 404 body (XML) reaches the gzip reader and surfaces as
+        // "bucket XDR decode failed" — the wrong cause, in the wrong layer.
+        .error_for_status()
+        .map_err(|e| BackfillError::Incomplete(format!("bucket HTTP status: {e}")))?;
 
     let mut tmp = tempfile::tempfile()
         .map_err(|e| BackfillError::Incomplete(format!("bucket temp file failed: {e}")))?;
@@ -329,6 +391,36 @@ where
     tmp.seek(SeekFrom::Start(0))
         .map_err(|e| BackfillError::Incomplete(format!("bucket rewind failed: {e}")))?;
 
+    // The archive is CONTENT-ADDRESSED, and the hash covers the DECOMPRESSED
+    // XDR — `.gz` is transport the publisher adds, so hashing the downloaded
+    // bytes fails on every bucket. Verified empirically against a real one:
+    // gunzip then SHA-256 reproduces the file name exactly. Checking it turns
+    // "we trust TLS and DNS" into "we checked", which is what lets this source
+    // be called verified at all.
+    if let Some(want) = expect_hash {
+        let mut gz = GzDecoder::new(&tmp);
+        let mut digest = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = gz
+                .read(&mut buf)
+                .map_err(|e| BackfillError::Incomplete(format!("bucket verify read: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            digest.update(&buf[..n]);
+        }
+        let got = hex::encode(digest.finalize());
+        if got != want {
+            return Err(BackfillError::Incomplete(format!(
+                "bucket content hash mismatch: manifest says {want}, decompressed bytes \
+                 hash to {got} — a substituted or truncated bucket, NOT a decode problem"
+            )));
+        }
+        tmp.seek(SeekFrom::Start(0))
+            .map_err(|e| BackfillError::Incomplete(format!("bucket rewind failed: {e}")))?;
+    }
+
     stream_bucket(BufReader::new(&tmp), f)?;
     Ok(bytes)
 }
@@ -337,7 +429,7 @@ where
 /// every bucket, report per-entry-type counts and wall-clock. Writes nothing.
 pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
-    let client = reqwest::Client::new();
+    let client = archive_client()?;
     let list = fetch_bucket_list(&client, PUBNET_ARCHIVE).await?;
 
     let take = limit.unwrap_or(list.hashes.len()).min(list.hashes.len());
@@ -354,7 +446,7 @@ pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
         let before = tally.records;
-        let bytes = stream_bucket_from_url(&client, &url, |rec| {
+        let bytes = stream_bucket_from_url(&client, &url, Some(hash), |rec| {
             tally.observe(&rec);
             Ok(())
         })
@@ -752,7 +844,7 @@ pub async fn build_state(
     for (i, hash) in list.hashes.iter().enumerate() {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
-        let bytes = stream_bucket_from_url(client, &url, |rec| {
+        let bytes = stream_bucket_from_url(client, &url, Some(hash), |rec| {
             state.absorb_record(&rec);
             Ok(())
         })
@@ -768,7 +860,7 @@ pub async fn build_state(
 /// as many buckets as it has versions.
 pub async fn dedup_command() -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
-    let client = reqwest::Client::new();
+    let client = archive_client()?;
     let list = fetch_bucket_list(&client, PUBNET_ARCHIVE).await?;
     println!(
         "checkpoint ledger {} — {} buckets",
@@ -860,7 +952,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "network"]
     async fn decodes_a_real_bucket_from_the_archive() {
-        let client = reqwest::Client::new();
+        let client = archive_client().expect("client");
         let list = fetch_bucket_list(&client, PUBNET_ARCHIVE)
             .await
             .expect("manifest");
