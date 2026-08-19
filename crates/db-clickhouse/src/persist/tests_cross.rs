@@ -2670,3 +2670,68 @@ fn signer_rows_full_set_replace_semantics() {
     );
     assert_eq!(emp.master_weight, 1);
 }
+
+/// Two transactions in ONE ledger touching the same account must collapse to a
+/// single `account_signers` row carrying the LAST state.
+///
+/// `extract_account_states` runs per transaction and every state in a ledger
+/// carries that ledger as its watermark, so two rows would share the RMT
+/// version — and `ReplacingMergeTree` resolves a tie arbitrarily. The loser
+/// could be the newer one, leaving a REMOVED signer as the surviving row: the
+/// exact ghost the whole-set-replacement design promises is impossible.
+#[test]
+fn two_states_for_one_account_in_one_ledger_collapse_to_the_last() {
+    let ledger = synthetic_ledger();
+    // tx #1 — signer S is present.
+    let added = ExtractedAccountState {
+        account_id: "GTWICE".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 7,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: Some(vec![serde_json::json!({
+            "key": "GS1", "weight": 1, "type": "ed25519"
+        })]),
+        thresholds: Some("01020202".to_string()),
+        flags: Some(0),
+    };
+    // tx #5, SAME ledger — signer S removed. This is the state that must win.
+    let removed = ExtractedAccountState {
+        signers: Some(vec![]),
+        ..added.clone()
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[added, removed],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(
+        staged.account_signer_rows.len(),
+        1,
+        "two same-ledger states must not emit two rows at the same RMT version — \
+         the merge would pick a winner arbitrarily"
+    );
+    assert!(
+        staged.account_signer_rows[0].signer_keys.is_empty(),
+        "last state in ledger/tx order wins; a surviving 'GS1' means a removed \
+         signer ghosted"
+    );
+}

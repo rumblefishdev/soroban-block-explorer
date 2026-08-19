@@ -1799,6 +1799,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // the Horizon alphanum4/12 split into one `classic-credit` key. amount is the
     // same scaled-i128 (decimals=7 at read); accounts resolve via `accounts`.
     let mut balance_dedup: HashMap<(i64, i64), BalanceRow> = HashMap::new();
+    // Signers dedup by account, LAST occurrence wins — the same hazard
+    // `build_balance_rows` guards against, for the same reason. States arrive one
+    // per TRANSACTION (`process.rs` calls `extract_account_states` per tx and
+    // concatenates), and every state in a ledger carries that ledger as its
+    // watermark. Two `SetOptions` on one account in one ledger would therefore
+    // emit two `account_signers` rows at the SAME RMT version, and the merge
+    // resolves a tie arbitrarily — a removed signer could survive as the winner,
+    // which is exactly what the whole-set-replacement design promises cannot
+    // happen. Ledger/tx order puts the final state last, so last-wins is right.
+    let mut signers_dedup: HashMap<i64, AccountSignersRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1856,7 +1866,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                         let key = sg.get("key").and_then(Value::as_str).unwrap_or("");
                         let weight = sg.get("weight").and_then(Value::as_u64).unwrap_or(0) as u32;
                         let typ = sg.get("type").and_then(Value::as_str).unwrap_or("unknown");
+                        // A keyless signer would silently shrink the set — a
+                        // 3-of-5 stored as 3-of-4, which reads as a real
+                        // threshold rather than as missing data. Cannot happen
+                        // from `account_data` (the key is always emitted), so
+                        // reaching this means the producer changed shape.
                         if key.is_empty() {
+                            tracing::warn!(
+                                account = %st.account_id,
+                                "signer entry carries no key — DROPPED from the set; \
+                                 the stored signer count is now lower than the chain's"
+                            );
                             continue;
                         }
                         // The protocol constrains non-master weights to 1-255
@@ -1874,18 +1894,21 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                         signer_weights.push(weight);
                         signer_types.push(typ.to_string());
                     }
-                    out.account_signer_rows.push(AccountSignersRow {
-                        account_id: account_id_int,
-                        signer_keys,
-                        signer_weights,
-                        signer_types,
-                        master_weight,
-                        threshold_low,
-                        threshold_med,
-                        threshold_high,
-                        flags: st.flags.unwrap_or(0),
-                        last_updated_ledger: watermark,
-                    });
+                    signers_dedup.insert(
+                        account_id_int,
+                        AccountSignersRow {
+                            account_id: account_id_int,
+                            signer_keys,
+                            signer_weights,
+                            signer_types,
+                            master_weight,
+                            threshold_low,
+                            threshold_med,
+                            threshold_high,
+                            flags: st.flags.unwrap_or(0),
+                            last_updated_ledger: watermark,
+                        },
+                    );
                 }
                 None => tracing::warn!(
                     account = %st.account_id,
@@ -1915,6 +1938,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
     out.unified_balance_rows.extend(balance_dedup.into_values());
+    out.account_signer_rows.extend(signers_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {
@@ -2028,8 +2052,6 @@ fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
 }
 
-/// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
-/// the newest `last_updated_ledger` (RMT version semantics resolved at stage time).
 /// 4-byte `Thresholds` hex → [master_weight, low, med, high]. `None` on any
 /// malformation — the caller skips the row rather than fabricating zeros.
 fn parse_thresholds(hex_str: &str) -> Option<[u8; 4]> {
@@ -2037,6 +2059,8 @@ fn parse_thresholds(hex_str: &str) -> Option<[u8; 4]> {
     <[u8; 4]>::try_from(bytes.as_slice()).ok()
 }
 
+/// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
+/// the newest `last_updated_ledger` (RMT version semantics resolved at stage time).
 fn upsert_balance(
     map: &mut HashMap<(i64, i64), BalanceRow>,
     holder_id: i64,
