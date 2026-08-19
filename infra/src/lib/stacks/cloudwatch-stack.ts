@@ -140,6 +140,43 @@ export class CloudWatchStack extends cdk.Stack {
     // service) has produced a week of honestly-attributed data — today the
     // Project tag sees ~9% of this project's real spend.
     // ---------------------
+    // DANGER, read before touching this block. `addToResourcePolicy` on a
+    // Topic synthesises an `AWS::SNS::TopicPolicy`, and that resource
+    // REPLACES the topic's access policy outright — it does not merge with
+    // the default policy SNS creates alongside a new topic. Adding the cost
+    // grant alone therefore revoked the default owner statement that lets
+    // CloudWatch publish, and every operational alarm went mute while still
+    // evaluating and changing state perfectly: measured 2026-08-18 14:52 to
+    // 2026-08-19 09:58, three `Failed to execute action` entries on this
+    // topic while the co-tenant's topic delivered twelve in the same window.
+    // Nothing noticed, because the delivery chain has no witness (ADR 0054,
+    // open decision). So: every principal that must publish here is listed
+    // EXPLICITLY below, and anything added later goes in the same list.
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowOwnerAccountPublish',
+        // The default statement SNS would have created, restored by hand:
+        // CloudWatch alarms publish under the topic owner's account, so
+        // without this every alarm action fails.
+        principals: [new iam.AccountPrincipal(cdk.Stack.of(this).account)],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+      })
+    );
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudWatchAlarmsPublish',
+        // Belt and braces: alarms are also documented to publish via this
+        // service principal, and the account-scoped condition keeps the
+        // grant from widening beyond our own alarms.
+        principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+        conditions: {
+          StringEquals: { 'AWS:SourceAccount': cdk.Stack.of(this).account },
+        },
+      })
+    );
     alarmTopic.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCostAnomalyDetectionPublish',
