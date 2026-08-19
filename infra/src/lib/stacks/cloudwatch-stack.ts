@@ -260,7 +260,7 @@ export class CloudWatchStack extends cdk.Stack {
     // fast: 5 min with zero new objects ≈ 50 missed writes = Galexie stopped.
     // A deliberate indexer pause (concurrency 0) does NOT trip this — doorbells
     // still land in the queue; that is the point of measuring the input, not
-    // the consumer (indexer health is covered by the alarms below).
+    // the consumer.
     //
     // treatMissingData: BREACHING is REQUIRED, not cosmetic. SQS (like Lambda)
     // publishes no datapoint when idle — a true stop makes the metric go
@@ -299,14 +299,9 @@ export class CloudWatchStack extends cdk.Stack {
     // all seven alarms stayed green, and this metric tracked it perfectly
     // (0 → 1421 s) with nothing reading it.
     //
-    // Deliberately a BARE threshold — no pause/failure discrimination. A
-    // planned indexer pause (event-source-mapping disabled) WILL page once
-    // when the backlog crosses the threshold; the operator who just paused it
-    // knows exactly why, and that one knowing page also bounds the
-    // forgot-to-re-enable case, which a discriminator would hide forever. An
-    // `IF(received > 0, age, 0)` discriminator was designed, measured and
-    // withdrawn as overcomplication — see ADR 0054, "Considered and
-    // withdrawn".
+    // Deliberately a BARE threshold: one knowing page per planned pause is
+    // the accepted cost (ADR 0054 rule 4, which also records the measured
+    // `IF(received > 0, age, 0)` discriminator and why it was withdrawn).
     //
     // Threshold and window are measured, not guessed (732 h to 2026-08-04):
     // the hourly max age had median 0 s / p90 1 s, and every hour above 60 s
@@ -502,12 +497,10 @@ export class CloudWatchStack extends cdk.Stack {
         // already post-filter — it means a reconcile exhausted the whole
         // in-band retry envelope, not a single flaky request — so it is
         // never routine. An earlier draft used >10 to absorb a planned
-        // Caddy reload (worst case ~6 lines), but that is exactly the
-        // suppression logic this task rejected for pauses and for 5xx:
-        // one knowing page during own maintenance is cheap, and >10
-        // would ALSO hide the slow modes forever — a single poison-pill
-        // ledger (the 0454 shape) emits only 1-2 lines per window and
-        // would never cross 10. Raise the threshold only with a
+        // Caddy reload (worst case ~6 lines); rejected under ADR 0054
+        // rule 4, and it would ALSO hide the slow modes forever — a
+        // single poison-pill ledger (the 0454 shape) emits only 1-2
+        // lines per window and would never cross 10. Raise it only with a
         // measurement: if routine maintenance pages more than about once
         // a month, record the observed line counts and set it just above
         // them.
@@ -652,13 +645,9 @@ export class CloudWatchStack extends cdk.Stack {
     // alarm is a bare count: no ratio math (percent-of-a-tiny-denominator
     // was the old alarm's noise source — 28 notifications for those 80
     // errors), no threshold knob. If this alarm starts paging regularly,
-    // the fix is to repair the 5xx class it points at — never to widen
-    // this alarm. Investigate with Logs Insights on the API log group:
-    // filter level="ERROR", group by fields.error / fields.message.
-    //
-    // Paging shape: CloudWatch notifies on state transition, so a burst is
-    // one page (ALARM holds while errors continue) and the alarm re-arms
-    // itself after one clean window — rule 2 of ADR 0054.
+    // repair the 5xx class it points at rather than widening the alarm.
+    // Investigate with Logs Insights on the API log group: filter
+    // level="ERROR", group by fields.error / fields.message.
     //
     // Caveat: gateway 5XXError also counts 502/504 the Lambda log never
     // sees (no access logging on the stage — deliberate, add only when a
