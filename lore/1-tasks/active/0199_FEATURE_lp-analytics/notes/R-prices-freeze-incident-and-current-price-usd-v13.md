@@ -531,6 +531,24 @@ columns identity + bucket + close_usd), so their leave-and-document
 scope is fine for us — but never sum `volume_quote_usd` in future
 work.
 
+**Historical corrections LANDED (08-19):** 567,760 USDT-quoted candles
+corrected (~7.4× deflation) across all five granularities, scoped to
+2021-02-07 onward (before the June-2022 depeg the old $1 numbers were
+right and were deliberately left); separately ~54M candles that sat at
+`close_usd = 0` since ~April 2022 now carry real values. Consumer-visible
+effects on us: 30D/1Y chart history self-corrected in place the moment it
+landed (compute-at-read, no caching anywhere on the chart path — nothing
+to recompute), and chart gaps FILL IN where our `close_usd > 0` filter
+used to yield dashes. Post-fill coverage (pinned 08-19, 52,580 pools):
+priceable-ever 52,112 (99.1%), never-priced down to 468, p90 71.0%, p48
+unchanged as expected. The USDT exclusion on AC validation is LIFTED —
+this completes the re-enrichment we were waiting for. One nuance vs their
+message: our release HAD shipped by then (writer fix preceded it, so
+list/detail were always right; only USDT-pool chart history was briefly
+inflated between our deploy and the correction). `volume_quote_usd` on
+corrected rows remains at USDT=$1 by design — restated to them that we
+read only `close_usd`, so document-and-leave stands.
+
 **The USDC hole spanned THREE surfaces; one is fixed (08-12 status).**
 `price_usd_series` / `_1h` — fixed (the peg fill above, re-measured by us).
 `GET /assets/{USDC}/ohlcv` — still an empty 200 (their 0170;
