@@ -96,3 +96,61 @@ describe('ExplorerTable', () => {
     expect(screen.getByTestId('empty')).toHaveTextContent('nothing here');
   });
 });
+
+describe('hideBelow', () => {
+  /** MUI's `useMediaQuery` consults `window.matchMedia`; jsdom has none, so
+   *  the default is "no match" — desktop. Stubbing it to match every
+   *  `(max-width…)` query simulates the narrow viewport. */
+  function stubNarrowViewport() {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: query.includes('max-width'),
+          media: query,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          onchange: null,
+          dispatchEvent: () => false,
+        } as MediaQueryList)
+    );
+  }
+
+  const hideable: ExplorerTableColumn<Row>[] = [
+    { id: 'hash', header: 'Hash', cell: (r) => r.hash },
+    {
+      id: 'ledger',
+      header: 'Ledger',
+      hideBelow: 'sm',
+      cell: (r) => r.ledger,
+    },
+  ];
+
+  it('keeps every column on a desktop viewport', () => {
+    render(
+      withTheme(
+        <ExplorerTable columns={hideable} rows={ROWS} rowKey={(r) => r.id} />
+      )
+    );
+    expect(screen.getByText('Ledger')).toBeInTheDocument();
+  });
+
+  it('drops a hideBelow column under the breakpoint, minWidth included', () => {
+    stubNarrowViewport();
+    try {
+      render(
+        withTheme(
+          <ExplorerTable columns={hideable} rows={ROWS} rowKey={(r) => r.id} />
+        )
+      );
+      expect(screen.queryByText('Ledger')).not.toBeInTheDocument();
+      // The header cell count is what drives layout — one column, not a
+      // hidden gap.
+      expect(screen.getAllByRole('columnheader')).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

@@ -91,9 +91,12 @@ system.mutations` under their credentials.
 
 ## Acceptance Criteria
 
-- [ ] Both grants live on prod, verified by the prices owner from their side —
-      live confirmed via `SHOW GRANTS` (08-12); the owner-side check moves to
-      the prices repo (see 2026-08-13 history entry)
+- [x] Both grants live on prod, verified by the prices owner from their side —
+      live via `SHOW GRANTS` (08-12) AND owner-verified the same day:
+      their `SELECT count() FROM system.mutations` returned 34 under
+      prices_writer credentials (evidence arrived on the PR branch after
+      the merge — commit 6f945c4b never reached develop, so the 08-13
+      archive pass could not see it; completed retroactively 08-19)
 - [x] Repo (`services.xml`) matches the box file byte-for-byte after merge —
       PR #399 merged, released to master in #402
 - [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`

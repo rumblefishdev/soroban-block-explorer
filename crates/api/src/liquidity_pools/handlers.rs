@@ -1,5 +1,5 @@
 //! Handlers for the liquidity-pool endpoints (participants from task 0126;
-//! list / detail / transactions / chart from task 0052).
+//! list / detail / activity / chart from tasks 0052 and 0491).
 
 #![allow(clippy::result_large_err)]
 
@@ -18,13 +18,13 @@ use crate::common::pool_asset_codes::normalize_asset_codes;
 use crate::common::strkey::{pool_id_from_text, pool_id_hex_to_strkey};
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
-use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
-    ChartParams, ChartResponse, ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor,
-    PoolListParams, PoolTransactionItem, SharesCursor,
+    ChartParams, ChartResponse, ParticipantItem, PoolActivityCursor, PoolActivityItem,
+    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolListCursor, PoolListParams,
+    SharesCursor,
 };
-use super::queries::{self, PoolRow, PoolTxRow, ResolvedPoolListParams};
+use super::queries::{self, PoolRow, ResolvedPoolListParams};
 
 #[utoipa::path(
     get,
@@ -136,7 +136,7 @@ pub async fn list_participants(
 }
 
 // ---------------------------------------------------------------------------
-// List / Detail / Transactions / Chart (task 0052)
+// List / Detail / Activity / Chart (tasks 0052, 0491)
 // ---------------------------------------------------------------------------
 
 // `normalize_asset_codes` used to live here. It moved to
@@ -412,24 +412,28 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     resp
 }
 
-/// `true` when the decoded cursor is a current (CH) cursor. A stale cursor
-/// minted under the retired PG backend is rejected as `invalid_cursor`.
-fn pool_tx_cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
-}
+/// The `allowed` list a `filter[event]` rejection returns. Derived from the
+/// enum's own spellings rather than retyped, so it cannot advertise a value
+/// `PoolEvent::from_param` would then refuse.
+const ALLOWED_EVENTS: [&str; 3] = [
+    PoolEvent::Trade.as_param(),
+    PoolEvent::Deposit.as_param(),
+    PoolEvent::Withdrawal.as_param(),
+];
 
-/// Build the next/prev cursor from a boundary row. CH keys on
-/// `(ledger_sequence, transaction_id)` — `transaction_id` == `transactions.id`.
-fn pool_tx_cursor_for(r: &PoolTxRow) -> TxListCursor {
-    TxListCursor::Ch {
-        ledger_sequence: r.ledger_sequence,
-        tiebreak: r.id,
-    }
-}
-
+/// `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
+/// (task 0491, issue #371).
+///
+/// Supersedes `/transactions`, whose row was a transaction. That unit could
+/// not carry an honest `Event` chip (a bundled deposit + trade collapsed to
+/// one label), forced the Amount cell to stack figures that must not be
+/// summed, and made a trades filter inexpressible — "trades only" has no
+/// truthful answer for a transaction that deposits *and* trades. The old path
+/// stays mounted until the frontend moves to this one (task 0491 step 3),
+/// which is also when its handler, DTO and query go.
 #[utoipa::path(
     get,
-    path = "/liquidity-pools/{pool_id}/transactions",
+    path = "/liquidity-pools/{pool_id}/activity",
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
@@ -439,43 +443,32 @@ fn pool_tx_cursor_for(r: &PoolTxRow) -> TxListCursor {
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query,
          description = "Opaque pagination cursor from a previous response."),
+        ("filter[event]" = Option<String>, Query,
+         description = "Restrict to `trade`, `deposit` or `withdrawal`."),
     ),
     responses(
-        (status = 200, description = "Paginated pool transactions",
-         body = Paginated<PoolTransactionItem>),
-        (status = 400, description = "Invalid pool_id, limit, or cursor", body = ErrorEnvelope),
+        (status = 200, description = "Paginated pool activity, one row per operation",
+         body = Paginated<PoolActivityItem>),
+        (status = 400, description = "Invalid pool_id, limit, cursor, or event", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
         (status = 500, description = "Database error",  body = ErrorEnvelope),
     )
 )]
-pub async fn list_pool_transactions(
+pub async fn list_pool_activity(
     State(state): State<AppState>,
     Path(pool_id): Path<String>,
-    pagination: Pagination<TxListCursor>,
+    pagination: Pagination<PoolActivityCursor>,
+    Query(params): Query<PoolActivityParams>,
 ) -> Response {
     let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
         Ok(hex) => hex,
         Err(resp) => return resp,
     };
 
-    // Reject a stale cursor minted under the retired PG backend: its keyset
-    // values are meaningless under CH, so fail with `invalid_cursor` rather
-    // than silently mis-paginating (ADR 0008). Mirrors `transactions::list`.
-    if let Some(cursor) = pagination.cursor.as_ref()
-        && !pool_tx_cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     // The pool's two leg surrogates, which double as this path's existence
-    // check (task 0279): the rows' `asset_id` maps onto them, so the response
-    // can carry `amount_a` / `amount_b` aligned with the legs the page already
-    // renders — one seek instead of a separate `pool_exists`.
-    //
-    // Stays SERIAL: the page read now CONSUMES `asset_ids`, so there is nothing
-    // to overlap. This supersedes task 0446's pairing of the old `pool_exists`
-    // gate with the page — a gate that also carries data is strictly better
-    // than two queries run concurrently.
+    // check: the driver pivots `lp_operation_amounts.asset_id` onto them, so
+    // the read cannot run without them and a missing pool is one seek away
+    // (task 0279's pairing, kept).
     let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
@@ -488,46 +481,74 @@ pub async fn list_pool_transactions(
         }
     };
 
-    let fetched = queries::fetch_pool_transactions(
+    // Validated here rather than by serde on the way in, so a bad value gets
+    // this API's error envelope with the allowed list — same shape the chart's
+    // `interval` returns.
+    let event = match params.event.as_deref() {
+        Some(s) => match PoolEvent::from_param(s) {
+            Some(e) => Some(e),
+            None => {
+                return errors::bad_request_with_details(
+                    errors::INVALID_FILTER,
+                    "filter[event] must be one of: trade, deposit, withdrawal",
+                    serde_json::json!({
+                        "param": "filter[event]",
+                        "received": s,
+                        "allowed": ALLOWED_EVENTS,
+                    }),
+                );
+            }
+        },
+        None => None,
+    };
+
+    let fetched = queries::fetch_pool_activity(
         &state.ch(),
         &pool_id_hex,
         asset_ids,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
+        event,
     )
     .await
     .map_err(|e| e.to_string());
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_transactions");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_activity");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    // Cursor payload differs by datasource (PG keys on `(created_at, id)`;
-    // CH on `(ledger_sequence, transaction_id)`) but stays opaque on the wire.
     let page = finalize_page(
         &mut rows,
         pagination.limit,
         pagination.direction,
         pagination.has_predecessor(),
-        |dir, r| cursor::encode(&pool_tx_cursor_for(r), dir),
+        |dir, r| {
+            cursor::encode(
+                &PoolActivityCursor {
+                    ledger_sequence: r.ledger_sequence,
+                    transaction_id: r.transaction_id,
+                    application_order: r.application_order,
+                },
+                dir,
+            )
+        },
     );
-    let data: Vec<PoolTransactionItem> = rows
+    let data: Vec<PoolActivityItem> = rows
         .into_iter()
-        .map(|r| PoolTransactionItem {
-            hash: r.hash,
+        .map(|r| PoolActivityItem {
+            transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
+            application_order: r.application_order,
+            event: r.event,
+            amount_a: r.amount_a,
+            amount_b: r.amount_b,
             source_account: r.source_account,
-            fee_charged: r.fee_charged,
-            successful: r.successful,
-            operation_count: r.operation_count,
-            has_soroban: r.has_soroban,
-            operation_types: r.operation_types,
+            pools_crossed: r.pools_crossed,
             created_at: r.created_at,
-            amounts: r.amounts,
         })
         .collect();
 
@@ -535,7 +556,6 @@ pub async fn list_pool_transactions(
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
-
 const ALLOWED_INTERVALS: &[&str] = &["1h", "1d", "1w"];
 
 /// Hard cap on the number of buckets a single chart request can produce.
