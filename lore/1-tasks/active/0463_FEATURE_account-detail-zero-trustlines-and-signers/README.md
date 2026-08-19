@@ -340,6 +340,50 @@ before the run, not hours. The unified verdict makes this legible: `heal`
 `divergent ours-newer` (kept, live parser knows better), where the old single
 "divergent" number hid the direction entirely.
 
+### Pre-existing defect found while auditing same-ledger ties — and the seed repairs it
+
+Audited EVERY ledger-versioned ReplacingMergeTree table for the hazard that
+`account_signers` had (two states in one ledger → two rows at the same RMT
+version → the merge picks arbitrarily). Measured on production:
+
+| table                   | keys with >1 content at the same version |
+| ----------------------- | ---------------------------------------- |
+| `accounts`              | 0                                        |
+| `soroban_contracts`     | 0                                        |
+| `liquidity_pools`       | 0                                        |
+| `lp_positions`          | 0                                        |
+| `nfts` / `nfts_pending` | 0                                        |
+| **`balances`**          | **1,238,583**                            |
+
+Every other writer already folds per key before emitting. `balances` has
+`upsert_balance`, but it only dedups WITHIN one `prepare()` call — it cannot see
+rows written by a different pass.
+
+The shape is specific: **100% native XLM, and 100% of them are `0` versus a real
+amount** at the same ledger. By ledger band: 54M→658, 56M→3,338, 58M→6,970,
+60M→6,913, 62M→1,460 per 1/64 slice, and **nothing above 63.04M** — the
+generating process stopped ~2 months ago, so the live indexer is not the source.
+Consistent with the same ledger being parsed twice by different code (a
+`--reindex` pass): first run wrote 0, second wrote the real amount, both at the
+same version.
+
+**Why it matters here:** our export uses `argMax(amount, last_updated_ledger)`,
+and `argMax` on a tie is also arbitrary — so those 1.24M keys enter the
+comparison as a coin flip, landing in `closure` or `ghost` depending on which
+row the merge happened to keep.
+
+**The seed largely repairs it as a side effect.** The tie ledgers are 54M-63M
+and the checkpoint is above 64M, so for any of those accounts still alive the
+snapshot entry is strictly newer → `HealFromSnapshot` → we adopt the network's
+amount and the tie is resolved with the correct value. For accounts merged since
+→ `Closure`/`Ghost` → zeroed and stamped. The residue is the dormant subset
+whose entry has not changed since the tie ledger.
+
+Nearest existing task is 0316 (RMT whole-row clobber), but that is the OTHER
+mechanism — a higher-version partial row deterministically overwriting good
+data. This is equal versions resolved nondeterministically. Needs its own task
+or an explicit 0316 extension; filed on develop, not from this branch.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from
