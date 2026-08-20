@@ -177,6 +177,15 @@ versions: the arbiter is the NETWORK, via the snapshot reconciliation — see
 
 ## Acceptance criteria
 
+- [ ] **TOTALITY: every one of the snapshot's 10 entry types appears in the
+      report** — either as a four-way diff against our table, or as an explicit
+      exemption naming the owner task (offers/claimable/data/ttl/config → 0504,
+      pool shares → 0499 until the merge). A type silently missing from the
+      report fails this audit even if every reported number is right — "we
+      never got to it" produced the 60% gap
+- [ ] `account_signers` diffed against `AccountEntry` signers on every run
+      AFTER the 0463 seed (first fill has nothing to compare; from then on a
+      divergence is a writer defect, not a gap)
 - [ ] Four-way counts per entity, with the method stated per number
 - [ ] Value-at-stake reported wherever the entity carries value
 - [ ] Every non-trivial gap filed as its own task with its measured scale
