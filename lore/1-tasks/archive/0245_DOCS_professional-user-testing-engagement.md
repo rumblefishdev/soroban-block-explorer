@@ -2,7 +2,7 @@
 id: '0245'
 title: 'DOCS+OPS: Professional user testing engagement before mainnet launch'
 type: DOCS
-status: backlog
+status: done
 related_adr: []
 related_tasks: ['0127']
 tags:
@@ -25,6 +25,15 @@ history:
       Spawned from M1-M3 sequencing plan (2026-05-20). Implements the D3 spec
       "Professional user testing completed" (tech design §7.4 Deliverable 3).
       Required before M3 prod launch — captures critical findings as bug tasks.
+  - date: '2026-08-19'
+    status: done
+    who: karolkow
+    note: >
+      Closed without running the engagement. Launch happened 2026-07-17, so the
+      pre-launch premise expired. Post-launch community feedback stood in for it
+      and is what the Milestone 3 package reports (milestone-3-evidence.md § 6).
+      Verified against the approved submission: professional user testing is in
+      the Deliverable 3 prose, not among the six numbered acceptance criteria.
 ---
 
 # Professional user testing engagement
@@ -72,7 +81,7 @@ Author `docs/post-launch/user-testing-plan.md`:
 
 Options:
 
-- (a) External user testing service (UserTesting.com, Maze, etc.) — ~$200-500/user
+- (a) External user testing service — paid, per-tester pricing
 - (b) Recruit from the Stellar community via Twitter / Discord — free but
   slower
 - (c) Internal RumbleFish team test — supplemental only, not primary
@@ -107,20 +116,56 @@ For each "blocker" or "major" finding, spawn a backlog task with:
 
 ## Acceptance Criteria
 
-- [ ] `docs/post-launch/user-testing-plan.md` authored and reviewed by the team
-- [ ] N ≥ 5 testers completed the full user journey
-- [ ] Findings captured in `docs/audits/post-launch-user-testing-YYYY-MM-DD.md`
-- [ ] Critical findings (blocker + major) spawned as bug tasks
-- [ ] Blocker bug tasks addressed before M3 prod deploy
-- [ ] Minor findings logged in the post-launch backlog (do not block launch)
+- [ ] `docs/post-launch/user-testing-plan.md` authored and reviewed by the team —
+      not authored; no moderated engagement was run
+- [ ] N ≥ 5 testers completed the full user journey — not run
+- [ ] Findings captured in `docs/audits/post-launch-user-testing-YYYY-MM-DD.md` —
+      superseded by the public issue tracker as the findings record
+- [x] Critical findings (blocker + major) spawned as bug tasks — via community
+      reports on the public tracker, not via a testing engagement
+- [ ] Blocker bug tasks addressed before M3 prod deploy — window expired,
+      launch was 2026-07-17
+- [x] Minor findings logged in the post-launch backlog (do not block launch)
 - [ ] **Docs updated** — N/A — task creates docs, does not modify
       architecture docs
 - [ ] **API types regenerated** — N/A — task does not touch API code
 
 ## Notes
 
-- Budget consideration: external service ~$1k-2.5k for N=5 testers. Folded
-  into the M3 budget (40% of project total).
+- The external-service route is a paid engagement, funded from the M3
+  allocation.
 - Timing: after M2 done (staging stable), before M3 prod deploy. Minimum
   2-week buffer for findings remediation.
 - Team alignment before engagement — fmazur signoff required.
+
+## Outcome
+
+Closed without running the engagement. The task was written 2026-05-20 as a
+pre-launch gate — test plan, N ≥ 5 moderated testers, blocker findings fixed
+before prod deploy, two-week remediation buffer. Launch happened 2026-07-17.
+The window the plan depends on is gone, and moderated testing now answers a
+question the live system already answered.
+
+**What stood in for it.** `docs/scf/milestone-3-evidence.md` § 6 reports
+post-launch community feedback in this slot: real users on live mainnet data
+since launch, improvement reports filed on the public issue tracker by the team
+on the reporters' behalf, and roughly half of them already resolved and shipped
+(operation readability, failed-transaction cause, issuer home domain). Findings
+came from real usage rather than a scripted journey, and they produced merged
+fixes — which is what step 5 of the plan was for.
+
+**Status against the approved submission.** Checked against the approved
+proposal rather than our own tech-design doc: "Professional user testing
+completed" appears in the Deliverable 3 prose and in its budget line, but is
+**not** one of the six numbered acceptance criteria (those are public access,
+public repo + reproducible deploy, monitoring dashboard, load test, security
+checklist, 7-day report). So this is a prose-level deliverable that was
+substituted, not a gating criterion that was missed.
+
+**Undeclared substitution.** As with [[0129]], § Scope Refinement in the
+evidence package lists three deviations — the p95 miss, the RDS-specific
+data-at-rest wording, and the one raised alarm — and does not list this one.
+Community feedback in place of a moderated engagement is a further deviation the
+package presents as equivalent without saying so. If the package is ever
+revised, one Scope Refinement point should cover this and the on-request
+monitoring access together.
