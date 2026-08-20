@@ -140,6 +140,20 @@ touching the same entity, where the writer must keep chain-application order.
 | presence (collapse intended)             | `transaction_participants`, `operation_pools`, `soroban_invocations_appearances`, `operation_asset_appearances` (presence half)                                                                        | one row per (entity, tx) is the SEMANTIC — no order needed                                                                                                                                                                                                                                                                          |
 | snapshot-per-ledger                      | `liquidity_pool_snapshots` (pool, ledger; no version)                                                                                                                                                  | several pool ops in one ledger emit rows under one key; RMT keeps the last inserted = last in apply order = end-of-ledger state, which IS the table's meaning. Deterministic under one code version; cross-run divergence falls under mechanism (a)                                                                                 |
 
+**Fact tables measured for between-run divergence too (2026-08-19):** the
+version-less fact tables cannot tie (no version column) but CAN hold
+duplicates with different content if a re-parse changed what the parser
+emits. Probed with `GROUP BY <full sort key> HAVING uniqExact(<content>) > 1`
+over three 2k-ledger windows — 58.0M and 60.5M (inside the re-parsed band
+that produced the `balances` ties) and 63.5M (fresh) — across `transactions`,
+`operations_appearances`, `soroban_events`, `lp_operation_amounts`,
+`nft_ownership`, `liquidity_pool_snapshots`: **zero divergent keys in all 18
+probes**. The June re-parse changed only the account-state path, and the fact
+writers emitted byte-identical rows. Sampled, not exhaustive — the full-census
+version of this probe belongs to this audit's recurring run.
+(`transaction_participants` is divergence-proof by construction: its key is
+its entire content.)
+
 Verdict for (b): **no table can lose or misorder an intra-ledger sequence
 today.** The residual risk is untested folds (state-table column above) and any
 FUTURE writer added without an order column — both are review-time checks.
