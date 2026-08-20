@@ -162,6 +162,17 @@ history:
       updated here: the dashboard/alarm one advanced with the second slice, the
       latch-proofing one now records that production contradicts it knowingly,
       and the child-task one names what was spawned.
+  - date: 2026-08-19
+    status: active
+    who: karolkow
+    note: >
+      Acceptance criteria triaged. Two closed: the cost one on the deploy, with
+      the read-only evidence and the unproven last hop both stated; the API
+      types one because a stated N/A is answered, not pending. Of the eight
+      left, four need a production window, one is a measurement now runnable,
+      one is in flight with PR #427, one is an operator decision, and one — no
+      alarm sits latched and mute — is dead as written, because the alarm that
+      breaks it was skipped knowingly. Recorded with the two honest ways out.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -507,9 +518,15 @@ month is unanswerable by construction.
       the sep1 issuer resolve reads ~24.6k rows/call in `system.query_log`
       (not ~24.9M), and the `dev_read` vs `ingestion_writer` read-count
       discrepancy explained or recorded as still open
-- [ ] Cost allocation tags active; a per-project cost answer takes minutes, and a
+- [x] Cost allocation tags active; a per-project cost answer takes minutes, and a
       step change in spend raises an alert (tags active + backfill, runbook
-      shipped; anomaly detection committed — checks off after deploy)
+      shipped; anomaly detection committed — checks off after deploy).
+      **Ticked 2026-08-19 on the deploy**, and the boundary is stated rather
+      than glossed: read-only checks confirm the monitor exists
+      (`production-cost-anomaly-by-service`, DIMENSIONAL/SERVICE, created
+      2026-08-18) and that an IMMEDIATE subscription routes it to the alarm
+      topic. What is NOT proven is the last hop to the channel — that is true
+      of every alarm here and is what ADR 0054 rule 5 gates from now on
 - [ ] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
       without widgets) — including a stated dashboard answer for the new
       cost-anomaly alert. First slice in PR #422 (two dead widgets removed,
@@ -540,7 +557,38 @@ month is unanswerable by construction.
       matrix with every cell decided, symptom→first-move paths, an escape
       hatch, and the feedback rule; plus `api-5xx.md`, `dlq.md`, `costs.md`
       shipped earlier)
-- [ ] **API types regenerated** — N/A, no API surface change
+- [x] **API types regenerated** — N/A, no API surface change (an N/A with a
+      reason is answered, not pending)
+
+### Where the remaining eight stand (triaged 2026-08-19)
+
+Triaged once so nobody re-derives it. Three shapes: an **operator window**
+(needs a deliberate action in production and cannot be done from a keyboard
+here), a **measurement** (runnable now), or **dead as written**.
+
+| Criterion                                  | Shape               | What unblocks it                                                                                                                             |
+| ------------------------------------------ | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planned pause pages exactly once           | operator window     | pause the event-source mapping, count the pages that arrive                                                                                  |
+| Alarm fires on ingestion stall             | operator window     | simulate a stall against the deployed alarm                                                                                                  |
+| CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                            |
+| 0403's deferred measurement                | measurement         | a deploy has now happened; the `system.query_log` read and the `dev_read` vs `ingestion_writer` discrepancy can be run                       |
+| Dashboard↔alarm coverage                   | in flight           | PR #427 carries the two widgets and the cost section; the stated dashboard answer for the cost alert and three per-decision leftovers remain |
+| Each child task closed or re-scoped        | operator decision   | the re-scope of the five non-instances                                                                                                       |
+| Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                    |
+| No alarm sits latched and mute             | **dead as written** | see below                                                                                                                                    |
+
+**The latched-alarm criterion cannot be ticked, and that is a decision, not a
+backlog item.** `production-enrichment-dlq-depth` has been in ALARM since
+2026-07-03 and was skipped deliberately on 2026-08-19. The rule it states —
+standing content is never accepted — is being knowingly broken. Two honest
+ways out, both the operator's: drain that queue and let the criterion mean what
+it says, or narrow the criterion to exclude it with the reason written down.
+Leaving it open and unexplained is the one option that makes the task lie.
+
+**Four of the remaining seven need a production window, not code.** That is the
+real state of this umbrella: the building is done, the proving is not, and the
+proving is deliberately not something that can be faked from here — which is
+the whole point of a task named "declared vs actual, never compared".
 
 ## Review sweep 2026-08-19 — 68 findings, and what survived measuring them
 
