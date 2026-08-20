@@ -54,18 +54,30 @@ use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list, re
 /// separates "expected blind spot" from "bug".
 const LEDGER_FLOOR: u32 = 50_457_424;
 
-/// Cap per sample file. Stride sampling (every Nth hit) — deterministic,
-/// re-runnable, no RNG (which the workflow environment forbids anyway).
-const SAMPLE_CAP: usize = 2_000;
+/// Default cap per sample file. 2,000 suits eyeballing; the pre-execute
+/// verification wants tens of thousands (the rule of three: bounding 24.5M
+/// closures at ≤2,500 wrong rows needs ~27k verified keys), so the cap is a
+/// CLI flag and the per-bucket strides derive from it.
+const DEFAULT_SAMPLE_CAP: usize = 2_000;
 
-/// Sampling density for the `missing` bucket, whose iteration order is not
-/// stable. Chosen so ~19.3M entries yield a few thousand samples.
-const MISSING_SAMPLE_EVERY: u64 = 4_096;
+/// Measured bucket populations (2026-08-18 full pass), used ONLY to derive a
+/// stride that lands near the requested cap — a stale estimate skews sample
+/// density, never correctness, and the cap is still enforced exactly.
+const EST_CLOSURE: u64 = 24_500_000;
+const EST_GHOST_NATIVE: u64 = 1_040_000;
+const EST_DIVERGENT_NATIVE: u64 = 60_000;
+const EST_AGREE: u64 = 13_000_000;
+const EST_MISSING: u64 = 19_300_000;
+
+fn stride_for(population: u64, cap: usize) -> u64 {
+    (population / cap.max(1) as u64).max(1)
+}
 
 /// Deterministic every-Nth sampler.
 struct Stride {
     stride: u64,
     seen: u64,
+    cap: usize,
     /// (surrogate line, verify-format line). The second is what
     /// `snapshot-verify` consumes directly — real StrKeys from the snapshot
     /// itself, so checking a sample never routes through our own tables.
@@ -73,9 +85,10 @@ struct Stride {
 }
 
 impl Stride {
-    fn new(stride: u64) -> Self {
+    fn new(stride: u64, cap: usize) -> Self {
         Self {
             stride,
+            cap,
             seen: 0,
             rows: Vec::new(),
         }
@@ -89,7 +102,7 @@ impl Stride {
         make_key: impl FnOnce() -> Option<String>,
     ) {
         self.seen += 1;
-        if selected && self.rows.len() < SAMPLE_CAP {
+        if selected && self.rows.len() < self.cap {
             self.rows.push((make_line(), make_key()));
         }
     }
@@ -102,7 +115,7 @@ impl Stride {
         self.seen += 1;
         // (seen-1) % stride — `seen % stride == 1` never fires for stride 1,
         // which silently produced EMPTY sample files on the first run.
-        if (self.seen - 1).is_multiple_of(self.stride) && self.rows.len() < SAMPLE_CAP {
+        if (self.seen - 1).is_multiple_of(self.stride) && self.rows.len() < self.cap {
             self.rows.push((make_line(), make_key()));
         }
     }
@@ -155,19 +168,20 @@ struct Samples {
 }
 
 impl Samples {
-    fn new(checkpoint: u32) -> Self {
+    fn new(checkpoint: u32, cap: usize) -> Self {
         Self {
-            // Strides sized so the caps are reached across the measured
-            // populations (22M closures / 1M anomalies / 19M missing).
-            closure_classic: Stride::new(11_000),
-            ghost_classic: Stride::new(1),
-            ghost_native: Stride::new(500),
-            divergent_classic: Stride::new(1),
-            divergent_native: Stride::new(10),
-            agree_classic: Stride::new(6_500),
-            missing_classic: Stride::new(9_600),
-            closed_but_live: Stride::new(1),
-            divergent_same_ledger: Stride::new(1),
+            // Strides derive from the requested cap over the measured
+            // populations. Defect-signal buckets stay at stride 1: every hit
+            // is a candidate a human must adjudicate.
+            closure_classic: Stride::new(stride_for(EST_CLOSURE, cap), cap),
+            ghost_classic: Stride::new(1, cap),
+            ghost_native: Stride::new(stride_for(EST_GHOST_NATIVE, cap), cap),
+            divergent_classic: Stride::new(1, cap),
+            divergent_native: Stride::new(stride_for(EST_DIVERGENT_NATIVE, cap), cap),
+            agree_classic: Stride::new(stride_for(EST_AGREE, cap), cap),
+            missing_classic: Stride::new(stride_for(EST_MISSING, cap), cap),
+            closed_but_live: Stride::new(1, cap),
+            divergent_same_ledger: Stride::new(1, cap),
             missing_below_floor: 0,
             missing_above_floor: 0,
             missing_above_by_2m: std::collections::BTreeMap::new(),
@@ -588,10 +602,11 @@ fn fill_missing(
             last_updated_ledger: 0,
             closed_at_ledger: 0,
         };
+        let missing_stride = samples.missing_classic.stride;
         samples.missing_classic.offer_if(
             (key.holder_id ^ key.asset_id)
                 .unsigned_abs()
-                .is_multiple_of(MISSING_SAMPLE_EVERY),
+                .is_multiple_of(missing_stride),
             || {
                 format!(
                     "{}\t{}\t{}\t{}",
@@ -611,6 +626,7 @@ pub async fn compare_command(
     our_rows: Option<&Path>,
     dump_dir: Option<&Path>,
     pinned_manifest: Option<&Path>,
+    sample_cap: Option<usize>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
     let http = snapshot::archive_client()?;
@@ -654,7 +670,10 @@ pub async fn compare_command(
     );
 
     let native_id = db_clickhouse::persist::ids::NATIVE_ASSET_ID;
-    let mut samples = Samples::new(list.checkpoint_ledger);
+    let mut samples = Samples::new(
+        list.checkpoint_ledger,
+        sample_cap.unwrap_or(DEFAULT_SAMPLE_CAP),
+    );
     let (classic, native) = match our_rows {
         Some(path) => {
             println!("\n  folding our balances from {}…", path.display());

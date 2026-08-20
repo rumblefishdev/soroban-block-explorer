@@ -250,6 +250,11 @@ enum Command {
         /// SAME checkpoint the seed will execute against.
         #[arg(long)]
         pinned_manifest: Option<PathBuf>,
+        /// Rows per sample dump (default 2000). The pre-execute verification
+        /// wants ~27k on the closure bucket to bound its error at ≤2,500 wrong
+        /// rows with 95% confidence; per-bucket strides scale automatically.
+        #[arg(long)]
+        sample_cap: Option<usize>,
     },
 
     /// Verify sampled comparison verdicts against Soroban RPC (raw XDR — the
@@ -445,12 +450,14 @@ async fn main() {
             our_rows,
             dump_dir,
             pinned_manifest,
+            sample_cap,
         } => {
             snapshot_compare::compare_command(
                 &sink,
                 our_rows.as_deref(),
                 dump_dir.as_deref(),
                 pinned_manifest.as_deref(),
+                sample_cap,
             )
             .await
             .expect("snapshot compare failed — read-only, safe to re-run");
