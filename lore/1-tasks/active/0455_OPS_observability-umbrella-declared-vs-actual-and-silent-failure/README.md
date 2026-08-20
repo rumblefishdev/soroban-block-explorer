@@ -150,6 +150,18 @@ history:
       matching that glob used to deploy the release set. Docs: deployment.md
       Releases section rewritten, TL;DR and CloudWatch rows note the tag form,
       /release skill steps 2/5/6 updated.
+  - date: 2026-08-19
+    status: active
+    who: karolkow
+    note: >
+      Second slice opened as PR #427 and the post-incident review sweep closed
+      out: 68 findings, every one dispositioned. 17 fixed, 31 already covered
+      by open tasks, 10 rejected once measured, 5 verified healthy, 3 skipped
+      on the operator's call, 2 handed off or refuted. Five tasks spawned
+      (0507-0511), four existing ones extended. Three acceptance criteria
+      updated here: the dashboard/alarm one advanced with the second slice, the
+      latch-proofing one now records that production contradicts it knowingly,
+      and the child-task one names what was spawned.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -468,7 +480,15 @@ month is unanswerable by construction.
       comment). **Latch-proofing partially verified 2026-08-19**: purging the
       ledger DLQ moved its alarm ALARM -> OK after five days latched, which
       proves the drain half; the other half — that a re-dirtied queue pages
-      again — needs the test-message gate and has not run
+      again — needs the test-message gate and has not run.
+      **Contradicted in production, knowingly, 2026-08-19**: measured the same
+      day, `production-enrichment-dlq-depth` has been in ALARM without
+      interruption since 2026-07-03 — 47 days — with 6 messages standing and
+      the depth never returning to zero across message expiries. CloudWatch
+      notifies on transition, so that alarm is mute by construction and the
+      topic-policy fix did not revive it. Skipped on the operator's call, so
+      this criterion cannot be ticked as written: the rule says standing
+      content is never accepted, and it is being accepted
 - [ ] The declared-vs-actual delta reaches a human without anyone asking for it.
       **Re-scoped 2026-08-19** from "a comparator runs on a schedule": the
       schedule is withdrawn (ADR 0054, and the measured six weeks of a read-but-
@@ -494,15 +514,26 @@ month is unanswerable by construction.
       without widgets) — including a stated dashboard answer for the new
       cost-anomaly alert. First slice in PR #422 (two dead widgets removed,
       freshness widget on the alarm's signal, backlog-age widget with
-      threshold line); still open for the second PR: worker-errors +
-      CH-write-failures widgets, the cost graph + stated answer, and the
+      threshold line). **Second slice in PR #427**: worker-errors and
+      CH-write-failures widgets and the cost section are in. Still open: the
+      stated dashboard answer for the cost-anomaly alert, and the
       per-decision leftovers (Galexie disk %, cost reading note, ledger
-      RATE series)
+      RATE series). Deliberately NOT taken: sharing one metric constant
+      between an alarm and its widget (review finding 39) — the arithmetic
+      favoured it and it was skipped anyway, so alarm/widget equality stays
+      an assertion in a comment
 - [ ] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
       0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
       deploy-gated verifications; re-scope of the five non-instances is with
-      the operator)
+      the operator). **2026-08-19**: 0449 moved backlog -> active, because its
+      detection half has been live since the 2026-08-18 release while the file
+      still read "not started". Five further tasks spawned from the review
+      sweep below — 0507 (schema migration ladder), 0508 (crate boundaries),
+      0509 (RPC pools and declared egress), 0510 (auth path missing from the
+      API schema), 0511 (infrastructure configuration is not one thing) — and
+      four existing tasks absorbed findings rather than spawn near-duplicates
+      (0103, 0414, 0418, 0458)
 - [x] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
       naming the signals and where they live (2026-08-11:
       `docs/runbooks/health.md` — the four-sentence convention, the coverage
@@ -510,6 +541,61 @@ month is unanswerable by construction.
       hatch, and the feedback rule; plus `api-5xx.md`, `dlq.md`, `costs.md`
       shipped earlier)
 - [ ] **API types regenerated** — N/A, no API surface change
+
+## Review sweep 2026-08-19 — 68 findings, and what survived measuring them
+
+After the mute incident, six review passes were run over the merged first
+slice plus a whole-repo architecture audit, and their output was tracked to a
+disposition each. The register itself is deliberately not in git (it names
+files and shapes for one finding that must not be described in a public repo);
+what belongs here is the outcome and the lesson.
+
+**Where the 68 went**
+
+| Disposition                                    | Count |
+| ---------------------------------------------- | ----- |
+| Fixed                                          | 17    |
+| Already covered by an open task                | 31    |
+| Examined and rejected on measurement           | 10    |
+| Verified healthy, recorded so nobody re-audits | 5     |
+| Skipped on the operator's call                 | 3     |
+| Handed off / refuted outright                  | 2     |
+
+**What shipped from it.** The alarm-mute fix (the only finding that was
+actually breaking production, deployed 2026-08-19 13:59 UTC and verified
+live); ADR 0054 rule 5; the comparator re-scope; threshold sources named; the
+trash policy's worktree hole closed; the task-status correction on 0449;
+ASCII-only synthesized strings; four alarms stripped of a re-derived ADR rule;
+the T4 decision recorded inside the guard.
+
+**The lesson, because it cost most of the session.** Every finding that named
+a file and a line held up. Every _aggregate characterisation_ did not:
+
+- "the alarm blocks are ~600 lines of copy-paste" — all ten together are 226,
+  and roughly 30 are recoverable;
+- "~30 findings on other people's files" — the range carries nine files from
+  other tasks, all of them this operator's;
+- "four near-identical justification essays" — one argument repeated four
+  times, 11 lines net;
+- "a magic count guard instead of an exact filter" — the exact filter is
+  already there, and the count is the guard **on** it;
+- "the Makefile reinvents an approval flag" — the flag guards
+  security-broadening changes, the confirm guards a parked delta, and both are
+  in use.
+
+Ten findings died that way. The pattern is pattern-recognition without
+arithmetic: the direction was right every time, the magnitude was never
+computed. **Verify the summary at least as hard as the finding.** The same
+discipline is why the alarm factory, the error-rate helper and the shared
+metric constants were all rejected or reverted rather than shipped on the
+strength of three reviewers agreeing.
+
+A second, narrower lesson: `npx --prefix <dir> nx …` does not change the
+working directory, so several verification runs this session measured the main
+checkout while the work sat in a worktree. It reported four passing guard
+tests where the worktree has five, and it reported green while a deliberately
+broken emit site sat on disk. Verification commands must be run from the tree
+they claim to verify.
 
 ## Incident 2026-08-18 — this task's own deploy muted every alarm for 19 h
 
