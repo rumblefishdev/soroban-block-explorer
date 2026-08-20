@@ -1408,7 +1408,8 @@ fn enum_discriminants_lock_in_with_schema() {
 use domain::NftEventType;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
-    ContractFunction, ExtractedContractInterface, ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
+    ContractFunction, ExtractedContractInterface, ExtractedLiquidityPool, ExtractedLpPosition,
+    ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
 };
 
 fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
@@ -2711,6 +2712,178 @@ fn soroban_removal_stamps_closed_at_ledger_but_a_spent_down_holder_does_not() {
         by("GREMOVED").closed_at_ledger,
         100,
         "a removed entry must carry the ledger it disappeared in"
+    );
+}
+
+/// The in-ledger last-wins fold, for the four state writers that lacked a
+/// regression test (full-schema audit, task 0503): two states for one key in
+/// ONE ledger must collapse to a single row carrying the LAST state in
+/// application order. Two rows would tie the RMT version and the merge would
+/// pick arbitrarily — the `balances` defect, in any other table.
+#[test]
+fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
+    let ledger = synthetic_ledger();
+    let seq = i64::from(ledger.sequence);
+
+    // -- accounts: sequence bump then home_domain set, same ledger --
+    let first = ExtractedAccountState {
+        account_id: "GFOLD".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: ledger.sequence,
+        sequence_number: 7,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: None,
+        thresholds: None,
+        flags: None,
+    };
+    let second = ExtractedAccountState {
+        sequence_number: 9,
+        home_domain: Some("example.org".to_string()),
+        ..first.clone()
+    };
+
+    // -- lp_positions: deposit then partial withdraw, same ledger --
+    let pool_hex = "ab".repeat(32);
+    let deposit = ExtractedLpPosition {
+        pool_id: pool_hex.clone(),
+        account_id: "GFOLD".to_string(),
+        shares: "2.0000000".to_string(),
+        first_deposit_ledger: Some(ledger.sequence),
+        last_updated_ledger: ledger.sequence,
+        closed: false,
+    };
+    let withdraw = ExtractedLpPosition {
+        shares: "1.0000000".to_string(),
+        first_deposit_ledger: None,
+        ..deposit.clone()
+    };
+
+    // -- liquidity_pools: created then touched again, same ledger --
+    let pool = ExtractedLiquidityPool {
+        pool_id: pool_hex.clone(),
+        asset_a: serde_json::json!("native"),
+        asset_b: serde_json::json!({"type": "credit_alphanum4", "code": "USDC", "issuer": "GISS"}),
+        fee_bps: 30,
+        reserves: serde_json::json!({}),
+        total_shares: "2.0000000".to_string(),
+        tvl: None,
+        created_at_ledger: Some(ledger.sequence),
+        last_updated_ledger: ledger.sequence,
+        created_at: 1_700_000_000,
+    };
+    let pool_again = ExtractedLiquidityPool {
+        created_at_ledger: None,
+        total_shares: "1.0000000".to_string(),
+        ..pool.clone()
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[first, second],
+        &[pool, pool_again],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[deposit, withdraw],
+    )
+    .expect("prepare");
+
+    let acct = staged
+        .account_rows
+        .iter()
+        .find(|r| r.account_id == "GFOLD")
+        .expect("one account row");
+    assert_eq!(
+        staged
+            .account_rows
+            .iter()
+            .filter(|r| r.account_id == "GFOLD")
+            .count(),
+        1,
+        "two same-ledger states must not emit two rows at one RMT version"
+    );
+    assert_eq!(acct.sequence_number, 9, "last state in tx order wins");
+    assert_eq!(acct.home_domain.as_deref(), Some("example.org"));
+
+    assert_eq!(staged.lp_position_rows.len(), 1);
+    assert_eq!(
+        staged.lp_position_rows[0].shares, 10_000_000,
+        "the withdraw (last in order) is the surviving share count"
+    );
+    assert_eq!(
+        staged.lp_position_rows[0].first_deposit_ledger, seq,
+        "first_deposit survives the overwrite via min-preservation"
+    );
+
+    assert_eq!(
+        staged.pool_rows.len(),
+        1,
+        "one pool row per ledger, not one per touch"
+    );
+}
+
+/// Two ownership events for one NFT in ONE ledger: the later event's owner is
+/// the row that survives — mirrors the `>=` in the hot-bucket fold.
+#[test]
+fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x91);
+    let contract = "C".to_string() + &"B".repeat(55);
+    let wasm_hex = "22".repeat(32);
+    let iface = nft_classified_interface(&wasm_hex);
+    let dep = ExtractedContractDeployment {
+        contract_id: contract.clone(),
+        wasm_hash: Some(wasm_hex.clone()),
+        deployer_account: None,
+        deployed_at_ledger: 10,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        sac_asset: None,
+    };
+    let minted = ExtractedNft {
+        owner_account: Some("GFIRST".to_string()),
+        ..synthetic_nft(&contract, "tk1")
+    };
+    let transferred = ExtractedNft {
+        owner_account: Some("GSECOND".to_string()),
+        ..minted.clone()
+    };
+    let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        std::slice::from_ref(&iface),
+        std::slice::from_ref(&dep),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[minted, transferred],
+        std::slice::from_ref(&ev),
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.nft_rows.len(), 1, "one row per token per ledger");
+    assert_eq!(
+        staged.nft_rows[0].current_owner_id,
+        Some(ids::account_id("GSECOND")),
+        "the LAST transfer in application order owns the token at ledger end"
     );
 }
 
