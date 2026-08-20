@@ -627,6 +627,7 @@ pub async fn compare_command(
         list.hashes.len()
     );
 
+    snapshot::verify_bucket_list_hash(&http, PUBNET_ARCHIVE, &list).await?;
     let take = list.hashes.len();
     let mut state = snapshot::build_state(
         &http,

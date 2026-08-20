@@ -96,6 +96,14 @@ pub struct BucketList {
     /// Bucket hashes in NEWEST-FIRST order. Position is meaning: see the
     /// module docs on first-wins.
     pub hashes: Vec<String>,
+    /// RAW (curr, snap) per level, zeros INCLUDED — the header's bucket-list
+    /// hash folds every level slot, so verification needs the full structure,
+    /// not the downloadable subset.
+    pub levels: Vec<(String, String)>,
+    /// `hotArchiveBuckets` raw (curr, snap) per level. Post-protocol-23 the
+    /// header hash is SHA256(live, hotArchive), so these fold in even though
+    /// this reader never decodes their contents (CAP-0062; see module docs).
+    pub hot_levels: Vec<(String, String)>,
 }
 
 impl BucketList {
@@ -148,26 +156,46 @@ pub async fn fetch_bucket_list(
     // An all-zero hash is an empty slot, not a bucket. Levels run newest to
     // oldest and `curr` precedes `snap` within a level — preserve that order.
     const EMPTY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-    let mut hashes = Vec::new();
-    for level in body
-        .get("currentBuckets")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| BackfillError::Incomplete("manifest has no currentBuckets".into()))?
-    {
-        for slot in ["curr", "snap"] {
-            if let Some(h) = level.get(slot).and_then(serde_json::Value::as_str)
-                && h != EMPTY
-                && !h.is_empty()
-            {
-                // A malformed hash produces a 404 on the bucket URL, which
-                // reads as "the archive is down" rather than "the manifest is
-                // wrong". Fail here, where the cause is still visible.
-                if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+    let read_levels =
+        |field: &str, required: bool| -> Result<Vec<(String, String)>, BackfillError> {
+            let Some(arr) = body.get(field).and_then(serde_json::Value::as_array) else {
+                if required {
                     return Err(BackfillError::Incomplete(format!(
-                        "manifest bucket hash is not 64 hex chars: {h:?}"
+                        "manifest has no {field}"
                     )));
                 }
-                hashes.push(h.to_string());
+                return Ok(Vec::new());
+            };
+            let mut out = Vec::with_capacity(arr.len());
+            for level in arr {
+                let mut pair = [String::new(), String::new()];
+                for (i, slot) in ["curr", "snap"].iter().enumerate() {
+                    let h = level
+                        .get(*slot)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(EMPTY);
+                    // A malformed hash produces a 404 on the bucket URL, which
+                    // reads as "the archive is down" rather than "the manifest
+                    // is wrong". Fail here, where the cause is still visible.
+                    if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(BackfillError::Incomplete(format!(
+                            "manifest {field} hash is not 64 hex chars: {h:?}"
+                        )));
+                    }
+                    pair[i] = h.to_string();
+                }
+                let [curr, snap] = pair;
+                out.push((curr, snap));
+            }
+            Ok(out)
+        };
+    let levels = read_levels("currentBuckets", true)?;
+    let hot_levels = read_levels("hotArchiveBuckets", false)?;
+    let mut hashes = Vec::new();
+    for (curr, snap) in &levels {
+        for h in [curr, snap] {
+            if h != EMPTY {
+                hashes.push(h.clone());
             }
         }
     }
@@ -180,7 +208,127 @@ pub async fn fetch_bucket_list(
     Ok(BucketList {
         checkpoint_ledger,
         hashes,
+        levels,
+        hot_levels,
     })
+}
+
+/// Verify the manifest's bucket list against the LEDGER HEADER's
+/// `bucket_list_hash` — the value the validators agreed on in consensus.
+///
+/// Without this, every per-bucket SHA-256 check only proves the buckets match
+/// the MANIFEST; nothing proves the manifest itself, so the chain of trust
+/// ended at TLS and DNS. The header closes it: its hash is part of the
+/// hash-chained, SCP-signed ledger stream.
+///
+/// The fold mirrors stellar-core's `BucketListBase::getHash` — per level
+/// `SHA256(curr || snap)` over the raw 32-byte hashes (zero slots INCLUDED),
+/// then `SHA256` over the concatenated level hashes. Post-protocol-23
+/// (CAP-0062) the header value is `SHA256(liveHash || hotArchiveHash)`, so the
+/// hot-archive list folds in even though its contents are never decoded here.
+///
+/// The header comes from the archive's own `ledger` category. That is the same
+/// PUBLISHER as the manifest, but not the same trust class: headers are
+/// hash-chained to each other and to SCP signatures, while the manifest is a
+/// bare JSON file — forging a header chain is a different order of attack than
+/// serving a stale or tampered manifest.
+pub async fn verify_bucket_list_hash(
+    client: &reqwest::Client,
+    archive: &str,
+    list: &BucketList,
+) -> Result<(), BackfillError> {
+    use stellar_xdr::LedgerHeaderHistoryEntry;
+
+    if list.levels.is_empty() {
+        println!(
+            "  WARNING: pinned manifest carries no raw levels — header-hash \
+             verification SKIPPED, the buckets are only proven against the \
+             manifest itself"
+        );
+        return Ok(());
+    }
+
+    let fold = |levels: &[(String, String)]| -> Result<[u8; 32], BackfillError> {
+        let mut outer = Sha256::new();
+        for (curr, snap) in levels {
+            let mut level = Sha256::new();
+            for h in [curr, snap] {
+                let bytes = hex::decode(h)
+                    .map_err(|e| BackfillError::Incomplete(format!("level hash hex: {e}")))?;
+                level.update(&bytes);
+            }
+            outer.update(level.finalize());
+        }
+        Ok(outer.finalize().into())
+    };
+
+    let live = fold(&list.levels)?;
+    let computed: [u8; 32] = if list.hot_levels.is_empty() {
+        live
+    } else {
+        let hot = fold(&list.hot_levels)?;
+        let mut both = Sha256::new();
+        both.update(live);
+        both.update(hot);
+        both.finalize().into()
+    };
+
+    // The checkpoint's ledger file holds the headers of its 64-ledger window,
+    // framed exactly like buckets, under the checkpoint's hex fan-out.
+    let cp_hex = format!("{:08x}", list.checkpoint_ledger);
+    let url = format!(
+        "{archive}/ledger/{}/{}/{}/ledger-{cp_hex}.xdr.gz",
+        &cp_hex[0..2],
+        &cp_hex[2..4],
+        &cp_hex[4..6]
+    );
+    let bytes = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| BackfillError::Incomplete(format!("ledger header fetch failed: {e}")))?
+        .error_for_status()
+        .map_err(|e| BackfillError::Incomplete(format!("ledger header HTTP: {e}")))?
+        .bytes()
+        .await
+        .map_err(|e| BackfillError::Incomplete(format!("ledger header body: {e}")))?;
+
+    let gz = GzDecoder::new(&bytes[..]);
+    let mut limited = Limited::new(gz, Limits::none());
+    let mut header_hash: Option<[u8; 32]> = None;
+    for entry in Frame::<LedgerHeaderHistoryEntry>::read_xdr_iter(&mut limited) {
+        let entry = entry
+            .map_err(|e| BackfillError::Incomplete(format!("ledger header decode: {e}")))?
+            .0;
+        if entry.header.ledger_seq == list.checkpoint_ledger {
+            header_hash = Some(entry.header.bucket_list_hash.0);
+        }
+    }
+    let Some(want) = header_hash else {
+        return Err(BackfillError::Incomplete(format!(
+            "checkpoint {} not present in its own ledger-header file",
+            list.checkpoint_ledger
+        )));
+    };
+
+    if computed != want {
+        return Err(BackfillError::Incomplete(format!(
+            "bucket-list hash mismatch at checkpoint {}: header (consensus) says {}, \
+             manifest folds to {} — the manifest does not describe the state the \
+             validators signed",
+            list.checkpoint_ledger,
+            hex::encode(want),
+            hex::encode(computed)
+        )));
+    }
+    println!(
+        "  bucket list VERIFIED against the ledger header at checkpoint {} \
+         (SHA256 over {} live + {} hot-archive levels)",
+        list.checkpoint_ledger,
+        list.levels.len(),
+        list.hot_levels.len()
+    );
+    Ok(())
 }
 
 /// Load a bucket list from a previously written `manifest.json` instead of the
@@ -215,6 +363,26 @@ pub fn bucket_list_from_manifest(path: &std::path::Path) -> Result<BucketList, B
                 .into(),
         ));
     }
+    let read_pairs = |field: &str| -> Vec<(String, String)> {
+        v.get(field)
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|lvl| {
+                        Some((
+                            lvl.get(0)?.as_str()?.to_string(),
+                            lvl.get(1)?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // Older manifests carry only the downloadable hashes; without the raw
+    // levels the header-hash verification is impossible and is SKIPPED with a
+    // warning rather than silently passed.
+    let levels = read_pairs("levels");
+    let hot_levels = read_pairs("hot_levels");
     info!(
         checkpoint_ledger,
         buckets = hashes.len(),
@@ -223,6 +391,8 @@ pub fn bucket_list_from_manifest(path: &std::path::Path) -> Result<BucketList, B
     Ok(BucketList {
         checkpoint_ledger,
         hashes,
+        levels,
+        hot_levels,
     })
 }
 
@@ -431,6 +601,7 @@ pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
     let client = archive_client()?;
     let list = fetch_bucket_list(&client, PUBNET_ARCHIVE).await?;
+    verify_bucket_list_hash(&client, PUBNET_ARCHIVE, &list).await?;
 
     let take = limit.unwrap_or(list.hashes.len()).min(list.hashes.len());
     println!(
@@ -1029,6 +1200,7 @@ pub async fn dedup_command() -> Result<(), BackfillError> {
         list.checkpoint_ledger,
         list.hashes.len()
     );
+    verify_bucket_list_hash(&client, PUBNET_ARCHIVE, &list).await?;
     let take = list.hashes.len();
     let state = build_state(
         &client,

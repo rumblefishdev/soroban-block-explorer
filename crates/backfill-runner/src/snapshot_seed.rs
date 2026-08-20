@@ -409,10 +409,15 @@ pub async fn seed_command(
     // Provenance artifact: the exact bucket list this run decoded. The archive
     // is content-addressed, so this manifest alone re-derives the identical
     // snapshot later (the LP-merge pass will need exactly that).
+    crate::snapshot::verify_bucket_list_hash(&http, PUBNET_ARCHIVE, &list).await?;
     let manifest = serde_json::json!({
         "checkpoint_ledger": list.checkpoint_ledger,
         "archive": PUBNET_ARCHIVE,
         "buckets": list.hashes,
+        // Raw levels (zeros included) so a PINNED re-run can re-verify against
+        // the ledger header instead of skipping the check.
+        "levels": list.levels,
+        "hot_levels": list.hot_levels,
     });
     std::fs::write(
         artifacts.join("manifest.json"),
