@@ -102,6 +102,27 @@ Proven live already: the 0463 comparison put 99.997% of 19.29M missing
 trustlines below the floor and the 648 in-window ones were all post-export
 churn — the parser's first full-population correctness pass.
 
+## Standing check: same-version content ties (added 2026-08-19)
+
+For every ledger-versioned RMT table, count keys carrying more than one
+distinct content at the same version — ReplacingMergeTree resolves such a tie
+arbitrarily, and `argMax` reads flip a coin:
+
+```sql
+SELECT count() FROM (
+  SELECT <key cols>, <version col> FROM <table>
+  GROUP BY <key cols>, <version col>
+  HAVING uniqExact(<content cols>) > 1
+);  -- slice big tables on the leading ORDER BY column
+```
+
+Baseline 2026-08-19: zero everywhere except `balances` (1,238,583 — root
+cause proven in task 0463: the 2026-06-23 merge-tombstone fix vs a re-parse
+of 54M–63.04M; fully repaired by the 0463 seed). Identical duplicate rows are
+harmless (RMT collapses them); ONLY differing content at one version counts.
+The mechanism recurs whenever a state writer's semantics change and old
+windows are re-parsed — which is exactly what this audit exists to catch.
+
 ## Rules for the audit itself
 
 - **Read-only.** This measures; remediation is a separate task per finding.

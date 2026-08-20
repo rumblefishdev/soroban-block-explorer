@@ -372,17 +372,34 @@ and `argMax` on a tie is also arbitrary — so those 1.24M keys enter the
 comparison as a coin flip, landing in `closure` or `ghost` depending on which
 row the merge happened to keep.
 
-**The seed largely repairs it as a side effect.** The tie ledgers are 54M-63M
-and the checkpoint is above 64M, so for any of those accounts still alive the
-snapshot entry is strictly newer → `HealFromSnapshot` → we adopt the network's
-amount and the tie is resolved with the correct value. For accounts merged since
-→ `Closure`/`Ghost` → zeroed and stamped. The residue is the dormant subset
-whose entry has not changed since the tie ledger.
+**Root cause PROVEN (2026-08-19).** Commit `80552009`, deployed 2026-06-23
+("fix(lore-0295): zero native balance on account merge (removed tombstone)"),
+is the dividing line — and ledger 63.04M IS 2026-06-23. Before it, a merge
+left the account's last balance X in `balances`; after it, a merge writes a
+native 0 tombstone at the merge ledger. A re-parse of 54M–63.04M with the
+post-fix code then wrote the 0 rows at the SAME versions where the pre-fix
+live writer had written X. Evidence: all 5 sampled tie accounts have
+`last_seen == tie ledger` (the merge was their last act), amounts are
+pre-merge dust (1.5 XLM, 5 XLM, 1 stroop), 5/5 RPC-verified ABSENT from
+chain, 3/5 sit in `ghosts.tsv` and 2/5 in the closure bucket — the argMax
+coin flip observed directly. Not the RPC bootstrap (0 of 19,339 tie ledgers
+on a 64k boundary) and not the legacy-table migration
+(`account_balances_current` holds NO rows for these accounts).
 
-Nearest existing task is 0316 (RMT whole-row clobber), but that is the OTHER
-mechanism — a higher-version partial row deterministically overwriting good
-data. This is equal versions resolved nondeterministically. Needs its own task
-or an explicit 0316 extension; filed on develop, not from this branch.
+**Therefore the seed repairs ALL harmful ties, not just most.** A tombstone-0
+is only ever written at a merge, so every tie key is a merged account — gone
+from the snapshot — and gets a `Closure`/`Ghost` correction at the checkpoint
+version, which outversions BOTH tie rows deterministically. Keys with
+activity after the tie ledger were never harmed (argMax picks the newer row).
+No separate repair task needed; the standing tie-audit query moves to 0503 as
+a recurring check, because the mechanism (semantic writer change + re-parse
+of old windows at equal versions) can recur.
+
+**Burn-account verification (2026-08-19), closing the supply question:**
+`GALAXYVOID…LUTO` holds **55,442,115,247 XLM** in our data — our 105.41B
+total minus the burn account = 49.97B, exactly the public circulating figure.
+Our sum is correct; burned XLM sit on a signerless account and never left
+`total_coins`.
 
 ### Open follow-ups spawned along the way
 
