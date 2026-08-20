@@ -409,15 +409,38 @@ Question raised: how do we make BOTH tie sources impossible? Answer recorded:
   (state writers fold last-wins in application order; fact tables carry order
   columns or aggregate per tx; presence tables collapse by design). Gap: some
   folds lack regression tests.
-- **Between runs** — impossible to prevent in-schema without lying. An
-  insert-time tiebreaker was considered and REJECTED: it makes whichever run
-  wrote later win deterministically, so a regressed re-parse would silently
-  clobber good data — strictly worse than a detectable tie. The fundamental
-  arbiter is the network: snapshot reconciliation (tie query + compare + seed)
-  is now a MANDATORY post-re-parse step in `docs/backfills.md`. Dead-entity
-  ties are auto-repaired; live-entity same-ledger divergences are quarantined
-  as `DivergentSameLedger` for a human call, because auto-adopting either side
-  would bury the evidence of which parser was wrong.
+- **Between runs** — impossible to prevent in-schema without a second version
+  dimension. The first argument recorded here (an insert-time tiebreaker
+  rejected because "a regressed re-parse would clobber good data") was
+  CHALLENGED and the challenge stands: a backfill is run precisely because the
+  new writer is declared better, so refusing to let it win defeats the
+  backfill's purpose — the June re-parse's own tombstones losing half their
+  coin flips is the proof. Determinism is the goal. The revised position: the
+  MECHANISM for determinism should be the network's value, not insert time —
+  reconciliation (tie query + compare + seed) supersedes both sides with the
+  chain's own truth at the checkpoint version, needs no fleet-wide engine
+  migration, and catches a regressed writer instead of trusting whoever ran
+  last. It is now a MANDATORY post-re-parse step in `docs/backfills.md`.
+  Dead-entity ties are auto-repaired outright. Live-entity same-ledger
+  divergences are currently quarantined as `DivergentSameLedger`; a
+  `--heal-same-ledger` mode (adopt the NETWORK amount at the checkpoint
+  version, full list to an artifact) is the agreed direction if the quarantine
+  bucket proves noisy — it delivers the "new data wins" outcome from a source
+  better than either run.
+
+### Steps 1-2 of the hardening list — done 2026-08-19
+
+- Fold regression tests added for the four state writers that lacked them
+  (accounts, lp_positions, liquidity_pools, nfts): two states in one ledger
+  collapse to one row carrying the LAST state; first_deposit/minted survive
+  via min-preservation.
+- **The bucket list is now verified against the ledger header** — the value
+  validators signed — using stellar-core's fold (per-level SHA256(curr||snap),
+  zeros included, SHA256 over level hashes, and the CAP-0062 post-protocol-23
+  composition SHA256(live||hotArchive)). Confirmed live on the first run.
+  Wired into all four snapshot commands; `manifest.json` now carries raw
+  levels so pinned re-runs re-verify instead of skipping (a level-less pin
+  skips LOUDLY). The chain of trust no longer ends at TLS.
 
 ### Open follow-ups spawned along the way
 
