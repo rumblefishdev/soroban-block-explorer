@@ -399,6 +399,33 @@ that manifest alone re-derives the identical snapshot later — the planned LP
 merge (ADR 0056) depends on this. `ghosts.tsv` records every positive-amount
 row the seed zeroed.
 
+## After any historical re-parse: reconcile against the snapshot (MANDATORY)
+
+A re-parse of already-ingested ledgers with CHANGED writer code writes rows at
+the SAME ReplacingMergeTree versions the old code used. Where the new code
+emits different content, the table holds two rows at one version and the merge
+picks a winner **arbitrarily** — and `argMax` reads flip the same coin. This is
+not hypothetical: the 2026-06-23 merge-tombstone fix plus a re-parse of
+54M–63.04M left **1,238,583** such keys in `balances`, every one a merged
+account randomly showing 0 or its stale pre-merge balance.
+
+There is no in-schema defence. A "later insert wins" tiebreaker would make a
+REGRESSED re-parse deterministically overwrite good data — worse than a
+detectable tie. The arbiter is the network:
+
+1. After the re-parse, run the standing tie query (task 0503 carries it per
+   table): keys with more than one distinct content at one version.
+2. Run `snapshot-compare` against a fresh checkpoint with a fresh export.
+   Between-runs ties surface as `divergent SAME ledger` (live entities) and as
+   closure/ghost corrections (dead ones).
+3. Run `snapshot-seed` (dry-run → review → `--execute`): dead-entity ties are
+   repaired outright at the checkpoint version; same-ledger divergences on
+   LIVE entities are reported for a human call — one of two parser versions is
+   wrong, and auto-adopting either would bury the evidence.
+
+This is the same tooling as the one-off 0463 seed; the seed is one-off, the
+reconciliation is not.
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)

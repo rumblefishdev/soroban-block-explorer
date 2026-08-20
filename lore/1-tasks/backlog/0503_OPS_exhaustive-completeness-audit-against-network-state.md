@@ -123,6 +123,31 @@ harmless (RMT collapses them); ONLY differing content at one version counts.
 The mechanism recurs whenever a state writer's semantics change and old
 windows are re-parsed — which is exactly what this audit exists to catch.
 
+## In-ledger ordering audit (2026-08-19) — the SECOND tie source, checked table by table
+
+Two distinct mechanisms can put two different contents under one key+version:
+**(a) between runs** — a semantic writer change plus a re-parse of old windows
+(the `balances` case above), and **(b) within one ledger** — two transactions
+touching the same entity, where the writer must keep chain-application order.
+
+(b) audited across the full schema:
+
+| class                                    | tables                                                                                                                                                                                                 | verdict                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| state (final-state-per-ledger semantics) | `accounts`, `balances`, `account_signers`, `soroban_contracts`, `liquidity_pools`, `lp_positions`, `nfts`, `nfts_pending`                                                                              | every writer folds per key with LAST-wins in tx/op application order before insert (each verified at its emit site); chain order comes from processing txs in ledger order and changes in meta order. Regression tests exist for balances, signers, merge-then-recreate; MISSING for accounts/lp/pools/nfts folds — listed as a gap |
+| fact with order column                   | `transactions` (application_order), `operations_appearances` (application_order), `soroban_events` (event_index), `nft_ownership(+_pending)` (event_order), `lp_operation_amounts` (application_order) | key distinguishes intra-ledger order — two real events cannot collapse                                                                                                                                                                                                                                                              |
+| fact with per-tx aggregation             | `operation_asset_appearances` (`net_settled` computed per (tx, asset) BEFORE insert — `amount_by_tx_asset`)                                                                                            | collapse impossible by construction; the value is a per-tx net, not per-op                                                                                                                                                                                                                                                          |
+| presence (collapse intended)             | `transaction_participants`, `operation_pools`, `soroban_invocations_appearances`, `operation_asset_appearances` (presence half)                                                                        | one row per (entity, tx) is the SEMANTIC — no order needed                                                                                                                                                                                                                                                                          |
+| snapshot-per-ledger                      | `liquidity_pool_snapshots` (pool, ledger; no version)                                                                                                                                                  | several pool ops in one ledger emit rows under one key; RMT keeps the last inserted = last in apply order = end-of-ledger state, which IS the table's meaning. Deterministic under one code version; cross-run divergence falls under mechanism (a)                                                                                 |
+
+Verdict for (b): **no table can lose or misorder an intra-ledger sequence
+today.** The residual risk is untested folds (state-table column above) and any
+FUTURE writer added without an order column — both are review-time checks.
+
+Mechanism (a) has no in-schema defence and never will without lying about
+versions: the arbiter is the NETWORK, via the snapshot reconciliation — see
+`docs/backfills.md`, which now makes it a mandatory post-re-parse step.
+
 ## Rules for the audit itself
 
 - **Read-only.** This measures; remediation is a separate task per finding.

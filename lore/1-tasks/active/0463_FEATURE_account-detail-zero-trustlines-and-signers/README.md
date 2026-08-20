@@ -401,6 +401,24 @@ total minus the burn account = 49.97B, exactly the public circulating figure.
 Our sum is correct; burned XLM sit on a signerless account and never left
 `total_coins`.
 
+### Decision 2026-08-19 — reconciliation-after-re-parse is the fundamental fix
+
+Question raised: how do we make BOTH tie sources impossible? Answer recorded:
+
+- **Within one ledger** — already impossible today: full-schema audit in 0503
+  (state writers fold last-wins in application order; fact tables carry order
+  columns or aggregate per tx; presence tables collapse by design). Gap: some
+  folds lack regression tests.
+- **Between runs** — impossible to prevent in-schema without lying. An
+  insert-time tiebreaker was considered and REJECTED: it makes whichever run
+  wrote later win deterministically, so a regressed re-parse would silently
+  clobber good data — strictly worse than a detectable tie. The fundamental
+  arbiter is the network: snapshot reconciliation (tie query + compare + seed)
+  is now a MANDATORY post-re-parse step in `docs/backfills.md`. Dead-entity
+  ties are auto-repaired; live-entity same-ledger divergences are quarantined
+  as `DivergentSameLedger` for a human call, because auto-adopting either side
+  would bury the evidence of which parser was wrong.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from
