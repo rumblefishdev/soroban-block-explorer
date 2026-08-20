@@ -66,7 +66,10 @@ const MISSING_SAMPLE_EVERY: u64 = 4_096;
 struct Stride {
     stride: u64,
     seen: u64,
-    rows: Vec<String>,
+    /// (surrogate line, verify-format line). The second is what
+    /// `snapshot-verify` consumes directly — real StrKeys from the snapshot
+    /// itself, so checking a sample never routes through our own tables.
+    rows: Vec<(String, Option<String>)>,
 }
 
 impl Stride {
@@ -79,26 +82,50 @@ impl Stride {
     }
     /// Take the row when `selected` — for populations whose iteration order is
     /// not stable, where position-based striding would be irreproducible.
-    fn offer_if(&mut self, selected: bool, make_line: impl FnOnce() -> String) {
+    fn offer_if(
+        &mut self,
+        selected: bool,
+        make_line: impl FnOnce() -> String,
+        make_key: impl FnOnce() -> Option<String>,
+    ) {
         self.seen += 1;
         if selected && self.rows.len() < SAMPLE_CAP {
-            self.rows.push(make_line());
+            self.rows.push((make_line(), make_key()));
         }
     }
 
-    fn offer(&mut self, make_line: impl FnOnce() -> String) {
+    fn offer(
+        &mut self,
+        make_line: impl FnOnce() -> String,
+        make_key: impl FnOnce() -> Option<String>,
+    ) {
         self.seen += 1;
         // (seen-1) % stride — `seen % stride == 1` never fires for stride 1,
         // which silently produced EMPTY sample files on the first run.
         if (self.seen - 1).is_multiple_of(self.stride) && self.rows.len() < SAMPLE_CAP {
-            self.rows.push(make_line());
+            self.rows.push((make_line(), make_key()));
         }
     }
     fn write(&self, dir: &Path, name: &str) -> Result<(), BackfillError> {
         let path = dir.join(name);
-        std::fs::write(&path, self.rows.join("\n") + "\n")
+        let surrogates: Vec<&str> = self.rows.iter().map(|(l, _)| l.as_str()).collect();
+        std::fs::write(&path, surrogates.join("\n") + "\n")
             .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", path.display())))?;
-        println!("    wrote {} rows -> {}", self.rows.len(), path.display());
+        // The companion file feeds `snapshot-verify` as-is. Rows whose identity
+        // the snapshot does not carry (an asset with no live trustline
+        // anywhere) are counted rather than silently dropped.
+        let keys: Vec<&str> = self.rows.iter().filter_map(|(_, k)| k.as_deref()).collect();
+        let unresolved = self.rows.len() - keys.len();
+        let key_path = dir.join(name.replace(".tsv", "_keys.tsv"));
+        std::fs::write(&key_path, keys.join("\n") + "\n")
+            .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", key_path.display())))?;
+        println!(
+            "    wrote {} rows -> {} ({} with verify keys, {} unresolved)",
+            self.rows.len(),
+            path.display(),
+            keys.len(),
+            unresolved
+        );
         Ok(())
     }
 }
@@ -475,24 +502,45 @@ fn fold_row(
         samples.checkpoint,
     );
     out.observe(v, row.amount);
+    // Real identities for the verify-format companion file, straight from the
+    // snapshot (populated only in detail mode). This is what breaks the
+    // circularity the audit called out: reversing our surrogates through our
+    // own tables meant auditing the tables with themselves.
+    let key = key_line(state, &row, is_native);
     // Sample the buckets a human has to adjudicate. `Agree` is sampled too: it
     // is the positive control — if the surrogate derivation were wrong, this
     // bucket would be empty, so a non-empty sample of it is evidence the whole
     // comparison is keyed correctly.
     match (v, is_native) {
-        (snapshot::Verdict::Ghost, true) => samples.ghost_native.offer(line),
-        (snapshot::Verdict::Ghost, false) => samples.ghost_classic.offer(line),
+        (snapshot::Verdict::Ghost, true) => samples.ghost_native.offer(line, || key),
+        (snapshot::Verdict::Ghost, false) => samples.ghost_classic.offer(line, || key),
         (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, true) => {
-            samples.divergent_native.offer(line)
+            samples.divergent_native.offer(line, || key)
         }
         (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, false) => {
-            samples.divergent_classic.offer(line)
+            samples.divergent_classic.offer(line, || key)
         }
-        (snapshot::Verdict::ClosedButLive, _) => samples.closed_but_live.offer(line),
-        (snapshot::Verdict::DivergentSameLedger, _) => samples.divergent_same_ledger.offer(line),
-        (snapshot::Verdict::Closure, false) => samples.closure_classic.offer(line),
-        (snapshot::Verdict::Agree, false) => samples.agree_classic.offer(line),
+        (snapshot::Verdict::ClosedButLive, _) => samples.closed_but_live.offer(line, || key),
+        (snapshot::Verdict::DivergentSameLedger, _) => {
+            samples.divergent_same_ledger.offer(line, || key)
+        }
+        (snapshot::Verdict::Closure, false) => samples.closure_classic.offer(line, || key),
+        (snapshot::Verdict::Agree, false) => samples.agree_classic.offer(line, || key),
         _ => {}
+    }
+}
+
+/// The `snapshot-verify` input line for one row, from snapshot-carried
+/// identities. `None` when detail mode is off, or when the snapshot holds no
+/// identity for the key (an asset with no live trustline anywhere — those are
+/// counted as unresolved by the dump, never silently dropped).
+fn key_line(state: &SnapshotState, row: &snapshot::OurRow, is_native: bool) -> Option<String> {
+    let holder = &state.account_details.get(&row.holder_id)?.strkey;
+    if is_native {
+        Some(format!("account\t{holder}"))
+    } else {
+        let (code, issuer) = state.asset_registry.get(&row.asset_id)?;
+        Some(format!("trustline\t{holder}\t{code}\t{issuer}"))
     }
 }
 
@@ -533,6 +581,13 @@ fn fill_missing(
         // every run and could not be re-verified or compared before/after.
         // Select on a function of the KEY instead — same expected density,
         // reproducible, and independent of any structure in the data.
+        let row_for_key = snapshot::OurRow {
+            holder_id: key.holder_id,
+            asset_id: key.asset_id,
+            amount: 0,
+            last_updated_ledger: 0,
+            closed_at_ledger: 0,
+        };
         samples.missing_classic.offer_if(
             (key.holder_id ^ key.asset_id)
                 .unsigned_abs()
@@ -543,6 +598,7 @@ fn fill_missing(
                     key.holder_id, key.asset_id, e.amount, e.ledger
                 )
             },
+            || key_line(state, &row_for_key, false),
         );
     }
     classic.missing = missing;
@@ -572,11 +628,24 @@ pub async fn compare_command(
     );
 
     let take = list.hashes.len();
-    let mut state =
-        snapshot::build_state(&http, &list, SnapshotState::default(), |i, bytes, secs| {
+    let mut state = snapshot::build_state(
+        &http,
+        &list,
+        // Details (StrKeys, asset identities) cost ~2 GB extra and exist so the
+        // sample dumps can carry REAL keys next to the surrogates. Without them
+        // verifying a "missing" entry meant reversing a one-way hash through
+        // our own incomplete tables — the very tables under audit. Only paid
+        // when dumps were asked for.
+        if dump_dir.is_some() {
+            SnapshotState::with_details()
+        } else {
+            SnapshotState::default()
+        },
+        |i, bytes, secs| {
             println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-        })
-        .await?;
+        },
+    )
+    .await?;
     report_state(
         &state,
         list.checkpoint_ledger,
