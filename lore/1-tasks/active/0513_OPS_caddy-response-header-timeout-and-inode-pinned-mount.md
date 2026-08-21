@@ -184,6 +184,17 @@ nothing; deferring it costs the proxy a second bounce later.
 - [ ] **API types regenerated** — N/A, nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**`.
 
+## Issues Encountered
+
+- **`--inplace` alone does not run.** `ansible.posix.synchronize` passes
+  `--delay-updates` by default and rsync refuses the combination outright:
+  `rsync: --inplace cannot be used with --delay-updates`. They are opposites —
+  `--delay-updates` stages every file and renames the batch at the end, which
+  is the exact rename that re-inodes the mount. Fixed with
+  `delay_updates: false` on both sync tasks. Caught by
+  `ansible-playbook --tags app --check --diff` before any deploy, which is the
+  argument for running the dry run rather than trusting a one-line change.
+
 ## Notes
 
 **Neither route applies this change on its own.** `--tags app` syncs the
