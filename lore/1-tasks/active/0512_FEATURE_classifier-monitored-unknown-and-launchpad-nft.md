@@ -2,7 +2,7 @@
 id: '0512'
 title: 'FEATURE: classifier 80/20 — monitored-UNKNOWN + launchpad-NFT discriminator (drain the pending residual)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0309', '0294', '0308', '0303']
 tags:
@@ -18,6 +18,21 @@ tags:
   ]
 links: []
 history:
+  - date: 2026-08-21
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active. This task now holds all the executable work for the
+      NFT-completeness outcome that 0392 owns: the classifier 80/20 discriminator
+      *and* the parser gate added on 2026-08-21. 0392's own promote mechanism is
+      sequenced behind this task, because only landing this one produces a
+      contract whose verdict actually flips — until then there is nothing to
+      observe promoting.
+      Entry state, measured against prod the same day: 66 contracts carry a
+      decisive `Nft` verdict and hold zero rows anywhere (692 events lost with no
+      trace); 67 contracts sit quarantined as `Other` across 18 WASM templates,
+      of which the top four cover 48 (72%). Read 0308's recovered event-shape
+      catalog before designing the discriminator.
   - date: 2026-06-23
     status: backlog
     who: karolkow

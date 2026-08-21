@@ -200,7 +200,7 @@ one outcome:
 
 0392 owns that outcome and the sequencing. It does not hold all the code:
 the classifier and parser work is executed in
-[0512](../../backlog/0512_FEATURE_classifier-monitored-unknown-and-launchpad-nft.md)
+[0512](../../active/0512_FEATURE_classifier-monitored-unknown-and-launchpad-nft.md)
 (renumbered from 0317).
 
 ## The three gaps, in dependency order

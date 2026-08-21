@@ -31,7 +31,7 @@ history:
 How SHOULD our contract/event parser + classifier be designed so it **never silently misses** a
 category (NFT, fungible, …)? Is our current approach (keyword/function-name classifier + fixed
 event-shape allow-list) the right paradigm, or is there a fundamentally better one? This task is the
-strategic counterpart to [0512](../0512_FEATURE_classifier-monitored-unknown-and-launchpad-nft.md)
+strategic counterpart to [0512](../../active/0512_FEATURE_classifier-monitored-unknown-and-launchpad-nft.md)
 (the tactical NFT fix). It exists so the design research is not lost; the refactor itself is
 **deferred** by decision (close NFTs first, rebuild later).
 
