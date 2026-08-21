@@ -184,6 +184,17 @@ mod tests {
     /// pins the NXDOMAIN half. `.invalid` (RFC 6761) never resolves; no real
     /// egress. `#[ignore]` (needs a working resolver). Run:
     /// `cargo test -p enrichment-shared nxdomain -- --ignored --nocapture`
+    ///
+    /// KEEP. A review (lore-0455) called this redundant against
+    /// `connect_failure_is_permanent` above. It is not: that test connects to
+    /// an IP literal on the discard port, so the resolver is never consulted
+    /// and the failure is a TCP refusal. This one never opens a socket at all
+    /// — the resolver answers "no such name". Both land on `is_connect()`
+    /// *today*, and that equivalence is exactly what is under test: it is a
+    /// property of reqwest/hyper, not of our code. If a future version routed
+    /// resolver failures to a different error kind, the test above would stay
+    /// green while every dead issuer domain silently went back to transient —
+    /// the regression that cost three DLQ cycles per asset in task 0335.
     #[tokio::test]
     #[ignore = "needs a resolver; verifies NXDOMAIN classifies permanent via is_connect"]
     async fn nxdomain_is_permanent_via_connect_rule() {

@@ -148,7 +148,19 @@ Derived explorer entities:
   `account_balances_current`, type-3 from `ContractData Balance(Address)` ledger state.
   `holder_id = cityhash64(holder StrKey)` (G-account or C-contract) in the one surrogate space
   shared with `accounts.id` / `soroban_contracts.id`; resolve back to a StrKey via `accounts` (G) /
-  `soroban_contracts` (C) — there is no dedicated address dimension
+  `soroban_contracts` (C) — there is no dedicated address dimension.
+  **Lifecycle** (ADR 0055 / task 0463): `closed_at_ledger Int64 DEFAULT 0` — `0` while the holding
+  relationship is live, otherwise the ledger the entry disappeared in; rows are never deleted. A
+  live-but-empty holding and a removed one both write `amount = 0`, so the amount alone CANNOT
+  carry liveness — the read path **will** filter `closed_at_ledger = 0` rather than `amount != 0` (the flip ships with the signers API in the follow-up; today `accounts/queries.rs` still filters on the amount, which is why a live zero is still hidden). The writer
+  stamps closures exactly; rows seeded from the checkpoint snapshot carry the run's checkpoint
+  ledger, meaning "closed at or before"
+- `account_signers` — signers + thresholds per account (task 0463, issue #377): one row per
+  account, the FULL signer set as parallel arrays (`signer_keys/weights/types`), plus
+  `master_weight` + `threshold_low/med/high` + account `flags`; RMT(`last_updated_ledger`) keyed on
+  `account_id` — whole-set replacement so removed signers cannot ghost. Raw-XDR truth: the master
+  key is NOT in the signer list (its weight is thresholds byte 0); Horizon synthesizes a master
+  entry, we must not. An account with no row here reads "not indexed", never "no signers"
 - `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum`) /
   `holder_count` (`countIf(amount > 0)`) over `balances`
 - `asset_aggregates` / `soroban_token_supply` — **DROPPED (task 0331)**. Classic supply/holders now

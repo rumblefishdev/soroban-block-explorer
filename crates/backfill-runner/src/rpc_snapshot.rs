@@ -40,8 +40,8 @@
 //!
 //! Soroban RPC rate-limits per-IP. Empirical sustained throughput is
 //! ~50 req/s with ~200 keys per request → ~10 k keys / s. A 64 k-ledger
-//! window referencing 100 k accounts plus their trustlines therefore
-//! costs roughly 30–60 s of wall time on the bootstrap step. **Today
+//! window referencing 100 k accounts therefore costs roughly
+//! 30–60 s of wall time on the bootstrap step. **Today
 //! the client batches sequentially** (one in-flight RPC at a time) —
 //! the per-batch size cap is [`MAX_KEYS_PER_REQUEST`] (200, matching
 //! mainnet RPC's advertised soft limit). A parallel-request knob
@@ -58,8 +58,8 @@
 //!
 //! - `AccountEntry { account_id, balance, seq_num, home_domain, ... }`
 //!   for `LedgerKey::Account` requests.
-//! - `TrustLineEntry { account_id, asset, balance, flags, ... }` for
-//!   `LedgerKey::Trustline` requests.
+//! - `ContractDataEntry` holding a token's per-holder balance for
+//!   `LedgerKey::ContractData` requests (task 0331 seed).
 //!
 //! Missing entries are silently dropped: an account that exists in
 //! `transaction_participants` but has no current `AccountEntry`
@@ -75,8 +75,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use stellar_xdr::{
     AccountId, ContractDataDurability, ContractId, Hash, LedgerEntryData, LedgerKey,
-    LedgerKeyAccount, LedgerKeyContractData, LedgerKeyTrustLine, Limits, PublicKey, ReadXdr,
-    ScAddress, ScSymbol, ScVal, ScVec, TrustLineAsset, Uint256, WriteXdr,
+    LedgerKeyAccount, LedgerKeyContractData, Limits, PublicKey, ReadXdr, ScAddress, ScSymbol,
+    ScVal, ScVec, TrustLineAsset, Uint256, WriteXdr,
 };
 use tracing::warn;
 
@@ -226,18 +226,16 @@ impl RpcClient {
 
 /// One decoded live entry from a `getLedgerEntries` response.
 ///
-/// `data` is the `LedgerEntryData` XDR variant — for the bootstrap
-/// path the caller pattern-matches on `Account(...)` and
-/// `Trustline(...)`. Other variants are dropped by the bootstrap
-/// (we only request Account / Trustline keys, but the type is
-/// generic enough that a future caller could reuse this for any
-/// `LedgerKey` shape).
+/// `data` is the `LedgerEntryData` XDR variant — the bootstrap path
+/// pattern-matches on `Account(...)`, the balance seed on
+/// `ContractData(...)`. Other variants are dropped (we only request
+/// those two key kinds, but the type is generic enough that a future
+/// caller could reuse this for any `LedgerKey` shape).
 ///
 /// `key` and `last_modified_ledger` are unused by the current
 /// bootstrap caller (which only needs `data`) but kept on the
-/// public surface — both are needed for the trustline-pairing pass
-/// (`rebuild_trustline_asset` ↔ owner StrKey) we leave as
-/// follow-up.
+/// public surface: they are what a checkpoint-bucket reader needs to
+/// attribute an entry to its owner without a second request.
 #[derive(Debug, Clone)]
 pub struct LedgerEntryRecord {
     #[allow(dead_code)]
@@ -361,36 +359,6 @@ fn sc_address(strkey: &str) -> Option<ScAddress> {
     }
 }
 
-/// Build a `LedgerKey::Trustline` for the given account / asset.
-/// Returns `None` on malformed StrKey (account or issuer).
-///
-/// `asset` carries the trustline's asset shape — native is **never**
-/// a valid trustline key (native balances live on the account entry
-/// itself), so callers must pass an alphanum asset. The bootstrap
-/// step derives trustline keys after decoding `TrustLineEntry`s from
-/// a prior account-state batch, so the caller already knows the asset.
-///
-/// Unused by the current bootstrap path (Phase 1 only snapshots
-/// `AccountEntry` and leaves trustlines for the per-ledger ingest +
-/// post-bootstrap top-up pass). Kept on the public surface so the
-/// follow-up trustline + asset-aggregate task (Phase 3 in the
-/// 0214 task body) can reuse it.
-#[allow(dead_code)]
-pub fn trustline_ledger_key(account_strkey: &str, asset: TrustLineAsset) -> Option<LedgerKey> {
-    let pk = match stellar_strkey::ed25519::PublicKey::from_string(account_strkey) {
-        Ok(pk) => pk,
-        Err(err) => {
-            warn!(strkey = account_strkey, %err, "rpc_snapshot: invalid trustline account StrKey; skipping");
-            return None;
-        }
-    };
-    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
-    Some(LedgerKey::Trustline(LedgerKeyTrustLine {
-        account_id,
-        asset,
-    }))
-}
-
 /// Pure decoder: shape a `LedgerEntryData::Account` into the three
 /// fields the CH writer's account staging consumes. Kept separate
 /// from the HTTP client so it's unit-testable against fixed XDR
@@ -426,10 +394,10 @@ pub fn decode_account_snapshot(data: &LedgerEntryData) -> Option<AccountSnapshot
 /// `TrustLineAsset::Native` defensively even though the network
 /// should never emit such a trustline.
 ///
-/// Unused by the Phase 1 bootstrap path (which only snapshots
-/// `AccountEntry`); kept on the public surface for the follow-up
-/// trustline pass + the unit-test coverage that locks the decoding
-/// contract in.
+/// No caller today — see the note on [`TrustlineSnapshot`]: the RPC
+/// route to trustlines is abandoned, this decoder is kept for the
+/// checkpoint-bucket route and for the unit-test coverage that locks
+/// the decoding contract in.
 #[allow(dead_code)]
 pub fn decode_trustline_snapshot(data: &LedgerEntryData) -> Option<TrustlineSnapshot> {
     let LedgerEntryData::Trustline(entry) = data else {
@@ -460,59 +428,6 @@ pub fn decode_trustline_snapshot(data: &LedgerEntryData) -> Option<TrustlineSnap
     })
 }
 
-/// Helper: pull every `TrustLineAsset` shape out of an
-/// `AccountEntry`'s signers/sub-entries is **not** something the RPC
-/// gives us directly. Soroban RPC's `getLedgerEntries` requires
-/// trustline keys to be enumerated by the caller; there is no "all
-/// trustlines for account X" primitive.
-///
-/// The bootstrap step gets around this by relying on the parser's
-/// observed-asset universe — every `assets` row referenced in the
-/// window's event/operation stream is a candidate trustline key for
-/// every account in the window. That's an over-shoot but bounded
-/// (~few thousand assets × ~100 k accounts at worst → a few
-/// hundred-thousand RPC keys, well within the budget). See
-/// `crate::bootstrap::collect_trustline_candidates` for the actual
-/// pairing logic.
-///
-/// Unused today — the trustline pairing pass is Phase 3 follow-up.
-#[allow(dead_code)]
-pub fn rebuild_trustline_asset(
-    asset_type: TrustlineAssetType,
-    code: &str,
-    issuer_strkey: &str,
-) -> Option<TrustLineAsset> {
-    use stellar_xdr::{AlphaNum4, AlphaNum12, AssetCode4, AssetCode12};
-    let issuer_pk = stellar_strkey::ed25519::PublicKey::from_string(issuer_strkey).ok()?;
-    let issuer = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(issuer_pk.0)));
-    match asset_type {
-        TrustlineAssetType::Alphanum4 => {
-            let code_bytes = code.as_bytes();
-            if code_bytes.len() > 4 {
-                return None;
-            }
-            let mut padded = [0u8; 4];
-            padded[..code_bytes.len()].copy_from_slice(code_bytes);
-            Some(TrustLineAsset::CreditAlphanum4(AlphaNum4 {
-                asset_code: AssetCode4(padded),
-                issuer,
-            }))
-        }
-        TrustlineAssetType::Alphanum12 => {
-            let code_bytes = code.as_bytes();
-            if code_bytes.len() > 12 {
-                return None;
-            }
-            let mut padded = [0u8; 12];
-            padded[..code_bytes.len()].copy_from_slice(code_bytes);
-            Some(TrustLineAsset::CreditAlphanum12(AlphaNum12 {
-                asset_code: AssetCode12(padded),
-                issuer,
-            }))
-        }
-    }
-}
-
 /// Decoded `AccountEntry` view. Lean: only the fields the CH writer's
 /// account staging consumes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -525,8 +440,13 @@ pub struct AccountSnapshot {
     pub home_domain: Option<String>,
 }
 
-/// Decoded `TrustLineEntry` view. Unused by Phase 1; kept on the
-/// public surface for the Phase 3 trustline pass.
+/// Decoded `TrustLineEntry` view. No caller today: the RPC route to
+/// trustlines was abandoned (task 0362 item 3) because
+/// `getLedgerEntries` has no enumeration primitive, so the keys can
+/// never be complete backwards. Kept because it is a *pure* decoder
+/// of `LedgerEntryData::Trustline` — the shape the history-archive
+/// checkpoint buckets carry — and that is the route the lifecycle
+/// work actually takes (ADR 0055, task 0502).
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustlineSnapshot {
@@ -765,30 +685,6 @@ mod tests {
         assert!(account_ledger_key("MAAAAAAAAAAAAAA").is_none());
     }
 
-    #[test]
-    fn rebuild_trustline_asset_alphanum4_round_trip() {
-        let issuer_strkey = "GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55";
-        let asset = rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "USDC", issuer_strkey)
-            .expect("alphanum4 round trip");
-        let TrustLineAsset::CreditAlphanum4(an) = asset else {
-            panic!("expected CreditAlphanum4 variant");
-        };
-        assert_eq!(&an.asset_code.0, b"USDC");
-        assert_eq!(an.issuer.to_string(), issuer_strkey);
-    }
-
-    #[test]
-    fn rebuild_trustline_asset_rejects_oversize_code() {
-        // Use a valid issuer StrKey so the test specifically exercises
-        // the oversize-code branch — an invalid issuer would return
-        // None regardless of the code length and mask the regression
-        // we want to catch.
-        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-        assert!(
-            rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "TOOLONG", issuer).is_none()
-        );
-    }
-
     // --- task 0331: per-holder token balance key + entry decode (RPC seed) ---
 
     use stellar_xdr::{
@@ -919,6 +815,7 @@ mod tests {
             holder,
             balance,
             ledger: 63_280_279,
+            closed: false,
         };
         let sac_surrogate = ids::contract_id(&token);
 

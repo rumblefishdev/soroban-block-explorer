@@ -14,6 +14,11 @@
 mv <file> .trash/
 ```
 
+`.trash/` is gitignored, so it holds the only copy of anything that was never
+committed. Move files to the **main checkout's** `.trash/`, never a worktree's:
+removing a merged or abandoned worktree deletes its trash with it, and the
+policy is then satisfied in letter while the file is gone.
+
 ## Task-Gated Development
 
 **Writing code without an active task is FORBIDDEN.**

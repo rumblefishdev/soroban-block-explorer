@@ -844,8 +844,16 @@ than creating duplicates. Derived-state upserts (`accounts`, `assets`, `nfts`,
 the stored watermark (`last_seen_ledger` / `last_updated_ledger`), so an older backfill
 batch cannot overwrite fresher live state.
 
-**Schema migrations:** versioned, managed via AWS CDK and run as part of the CI/CD
-pipeline before deploying new Lambda code.
+**Schema migrations:** there is no migration mechanism. The single
+`crates/db-clickhouse/schema/init.sql` is applied idempotently
+(`CREATE ... IF NOT EXISTS`) and IS the schema of record — the crate's README
+says so in as many words. Evolving a live table is a hand-run `ALTER` on the
+box, and because the ClickHouse driver validates inserts client-side, a
+struct/table mismatch fails writers at runtime rather than at build time, so
+the ALTER and the redeploy are one manual window. (Corrected 2026-08-19: this
+paragraph previously claimed versioned migrations managed via CDK and run in
+CI/CD, which was never true. A numbered migration ladder is proposed work,
+not current state.)
 
 **Protocol upgrades:** when Stellar introduces a new CAP that changes `LedgerCloseMeta`
 structure, we update the pinned `stellar-xdr` Rust crate version; the frontend consumes

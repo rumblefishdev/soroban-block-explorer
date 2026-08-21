@@ -1,0 +1,255 @@
+---
+id: '0513'
+title: 'OPS: Caddy response_header_timeout cuts long ClickHouse queries — and the mount that would have swallowed the fix'
+type: OPS
+status: active
+related_adr: []
+related_tasks: ['0331', '0455', '0511', '0314']
+tags:
+  [
+    'infra-hetzner',
+    'caddy',
+    'clickhouse',
+    'deploy',
+    'silent-failure',
+    'cross-team',
+    'priority-high',
+    'effort-small',
+  ]
+links: []
+history:
+  - date: '2026-08-21'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Raised by the prices team (their 0111): their enrichment worker has
+      failed every run since 2026-07-26, 18/18 measured at exactly 30.0 s.
+      Verified on the box — the limit is real and live in the running
+      process. Found a second defect while verifying: the Caddyfile bind
+      mount is inode-pinned, so the fix would not have reached Caddy.
+---
+
+# OPS: Caddy response_header_timeout cuts long ClickHouse queries
+
+## Summary
+
+`infra-hetzner/Caddyfile` states a policy — timeouts "cover the longest
+legitimate analytical query", a 7200 s window — and then contradicts it with
+one knob: `response_header_timeout 30s`. Any query that cannot put a first
+byte on the wire within 30 s is disconnected by the proxy while ClickHouse
+runs it to completion, writes its rows and logs `QueryFinish`. The work
+happens; the caller is told it failed.
+
+This has cost another team 26 days of a broken pipeline and cost us one
+operator intervention in 0331. Raising the knob to 7200 s is a one-line
+change. Making it actually reach the running proxy is not — see Context B.
+
+## Context A — the limit, verified on the box 2026-08-21
+
+| what                             | measured                                                 |
+| -------------------------------- | -------------------------------------------------------- |
+| `Caddyfile` on the box           | `response_header_timeout 30s` (line 242)                 |
+| Caddy admin API, in-memory       | `"response_header_timeout":30000000000` — 30 s, live     |
+| `read_timeout` / `write_timeout` | `7200000000000` — the policy the same block declares     |
+| `app-caddy-1`                    | `StartedAt 2026-06-29T07:36:53Z`, `RestartCount 0`       |
+| last deploy                      | `DEPLOYED_INFO` — sha `8eafc3b6`, `2026-07-06T14:01:36Z` |
+
+The value is not just declared in a file; it is what the process enforces.
+
+### It is not a property of `INSERT … SELECT`
+
+The knob bounds **time to first byte**, nothing else. A streaming `SELECT`
+emits headers in milliseconds and may then run for the full two hours. A
+query that buffers — `INSERT … SELECT`, `CREATE TABLE AS`, a heavy
+`GROUP BY`, `OPTIMIZE` — puts nothing on the wire until it finishes, so it
+dies at 30 s regardless of shape. Ours died this way in 0331: a ~6 min,
+~9.5 bn row scan, a plain `SELECT`.
+
+The consequence matters for the "we are removing a safeguard" objection:
+**30 s never bounded a runaway.** A runaway streams, so it passes. What the
+knob selected for was the class of query doing real work.
+
+### Nothing changed on our side on 2026-07-26
+
+Caddy has not restarted since 2026-06-29 and the config has not changed
+since 2026-07-02. The reporting team's own explanation — their query crossed
+30 s as their table grew and never came back under — is the only one the
+evidence supports. Recorded because the first hypothesis on our side (a
+deploy reverted an operator's fix) was wrong and should not be repeated.
+
+### Our exposure is worse than a red log line
+
+`crates/db-clickhouse/src/persist.rs:303` propagates the error and aborts the
+ledger/partition so it retries. If ClickHouse committed while Caddy
+disconnected us, the retry writes a second copy. Most tables are RMT and
+absorb that; the 12 Tier-1 columns needing MIN semantics do not, which is why
+`repair-tier1` exists (`docs/backfills.md`). The candidate for hitting this
+first is `query_sac_classic_map` — a `GROUP BY` over all of `asset_sac`,
+buffering, growing with the table. Exactly the shape that crossed the
+threshold for the other team.
+
+## Context B — the mount would have swallowed the fix
+
+`/srv/app/infra-hetzner/Caddyfile` is bind-mounted as a **single file**, which
+pins the inode. Ansible syncs the subtree with rsync, which writes temp + rename
+— a new inode every time.
+
+| path                                    | inode      | mtime               |
+| --------------------------------------- | ---------- | ------------------- |
+| host `/srv/app/infra-hetzner/Caddyfile` | `16777224` | 2026-06-09 08:10    |
+| container `/etc/caddy/Caddyfile`        | `16777223` | 2026-07-02 13:59:41 |
+
+Two different files. Since the 2026-07-06 deploy the container has been
+reading an orphan — the file the operator edited and reverted during 0331.
+Nothing broke only because both copies happen to say 30 s.
+
+Had we shipped the one-liner the normal way, the result would have been a
+phantom deploy: rsync rewrites inode `…224`, the checksum sentinel correctly
+reports "changed" and fires `Reload caddy`, `caddy reload` re-reads
+`/etc/caddy/Caddyfile` — still the orphan, still 30 s. Repo green, box green,
+handler green, nothing changed.
+
+Same class as the 2026-07-06 `prices_writer` grant incident (0314), where a
+`users.d` XML change needed `--force-recreate clickhouse`; the box still shows
+it — clickhouse `StartedAt 2026-07-06T14:58`, caddy `2026-06-29`. The snippet
+mount already avoids this by mounting a directory; the Caddyfile does not.
+
+## Implementation
+
+### Step 1 — raise the knob
+
+`infra-hetzner/Caddyfile`: `response_header_timeout 30s` → `7200s`. The
+comment above it justifies the tighter value as "tighter than the CH-side
+timeout so Caddy releases the upstream socket first on stalls" — true of a
+stalled upstream, false of a working query. Correct it rather than delete it.
+
+### Step 2 — stop the inode from escaping
+
+`infra-hetzner/ansible/roles/app/tasks/main.yml`: add `--inplace` to
+`rsync_opts` on **both** sync tasks. rsync then writes into the existing file
+instead of replacing it, the inode survives every deploy, and the existing
+caddy-only restart handler starts meaning something again. The trade — a torn
+write is no longer impossible — is acceptable because Caddy validates its
+config on start and refuses to come up on a parse error rather than serving
+half a file.
+
+Worth recording that the playbook already knew: the `Restart compose stack`
+handler's own comment says "single-file bind mounts preserve the original
+inode after host-side atomic replace, so a recreate is the only way the
+container sees new content". The knowledge was there — the Caddyfile checksum
+task simply notifies `Reload caddy` (a per-service **restart**, which does not
+re-anchor a mount) instead. `--inplace` is the cheaper answer than routing it
+to the recreate handler: with the inode stable, a restart is enough and no
+service has to be recreated at all.
+
+The second task (`Sync ClickHouse config + schema`) has the identical defect
+and a prior victim: ten `config.d/*.xml` + `users.d/*.xml` files are
+bind-mounted into `app-clickhouse-1` individually, and the 2026-07-06
+`prices_writer` grant change synced cleanly, reported success and did nothing
+until the container was force-recreated (0314). Same root cause, found only
+because this task named it.
+
+`--inplace` does not rescue the current container: it is already pinned to the
+orphan. One `--force-recreate caddy` at this deploy re-anchors it.
+
+### Step 3 — write down both, next to the sibling that is already documented
+
+`infra-hetzner/README.md`: a note beside the existing `--force-recreate
+clickhouse` log-rotation gotcha, and a line in "Post-deploy verification" that
+reads the timeout back **from the admin API**, not from the file.
+
+### Step 4 — cap the Caddy log, because the recreate is the only free ride
+
+`docker-compose.prod.yml`: the caddy service has no `logging:` block, so it
+inherits an unbounded json-file driver. Measured 2026-08-21: **63 GB**, on the
+same filesystem as ClickHouse's data — the shape of the 2026-08-13 disk-fill
+outage (0488). A logging option only applies to a container created after it
+lands, and Step 2 already forces exactly one recreate. Bundling it here costs
+nothing; deferring it costs the proxy a second bounce later.
+
+## Acceptance Criteria
+
+- [ ] Caddy's admin API reports `"response_header_timeout":7200000000000` on
+      the production box
+- [ ] `docker inspect -f '{{.HostConfig.LogConfig}}' app-caddy-1` shows
+      `max-size:100m max-file:5`, and the 63 GB log is gone with the old
+      container
+- [ ] Host and container inode for the Caddyfile are identical after the deploy
+- [ ] A subsequent `--tags app` run leaves the inode unchanged (`--inplace`
+      verified, not assumed)
+- [ ] The reporting team confirms their worker's 30 s failures stopped
+- [ ] **Docs updated** — `infra-hetzner/README.md` carries the mount gotcha and
+      the admin-API verification. `docs/architecture/**` N/A: a timeout value
+      and a deploy mechanic are not the shape of the system.
+- [ ] **API types regenerated** — N/A, nothing under `crates/api/**`,
+      `Cargo.{toml,lock}` or `libs/api-types/**`.
+
+## Issues Encountered
+
+- **The first deploy failed on a landmine from 0244, six weeks old.** Task 0244
+  removed the three Postgres services from `docker-compose.yml` on 2026-07-07
+  but left their port-guard overrides in `docker-compose.prod.yml`. An override
+  for a service that no longer exists does not degrade to a no-op — it DEFINES
+  that service with neither image nor build context, and Compose rejects the
+  entire project. The deploy synced the new files, then died at
+  `Bring up (or update) the production compose stack`, leaving the box with
+  valid containers but an **invalid compose project**: every `docker compose`
+  call against `/srv/app` failed, including the `soroban-stack.service` unit
+  that brings the stack up at boot. Running containers were unaffected; a
+  reboot in that window would not have come back. Fixed forward by deleting the
+  three dead overrides.
+
+  This is the same shape as the task itself: a change that can only be falsified
+  at deploy time, in a repo where deploys are manual and rare. Nothing between
+  2026-07-07 and 2026-08-21 could have caught it — `docker compose config` is
+  not run anywhere in CI.
+
+- **The checksum sentinel was already spent by the failed run.** It recorded the
+  new Caddyfile hash before the play died, so the re-run reports `ok` and does
+  NOT notify `Reload caddy`. Harmless here — the compose recreate is what
+  applies the change — but worth knowing before reading the second run's output
+  as "nothing happened".
+
+- **`--inplace` alone does not run.** `ansible.posix.synchronize` passes
+  `--delay-updates` by default and rsync refuses the combination outright:
+  `rsync: --inplace cannot be used with --delay-updates`. They are opposites —
+  `--delay-updates` stages every file and renames the batch at the end, which
+  is the exact rename that re-inodes the mount. Fixed with
+  `delay_updates: false` on both sync tasks. Caught by
+  `ansible-playbook --tags app --check --diff` before any deploy, which is the
+  argument for running the dry run rather than trusting a one-line change.
+
+## Notes
+
+**Neither route applies this change on its own.** `--tags app` syncs the
+Caddyfile, flips the checksum sentinel and fires `Reload caddy` — which is
+`state: restarted`, a per-service restart, and a restart does not re-anchor a
+bind mount. And the `Sync compose files` task carries **no `notify:` at all**,
+so the new `logging:` block reaches the box and waits. One
+`up -d --force-recreate caddy` is mandatory exactly once, whichever route
+ships it; after that `--inplace` keeps the inode stable and the restart
+handler is sufficient forever. Left as-is deliberately: routing the compose
+sync to `Restart compose stack` would bounce ClickHouse on every compose edit,
+which is a much larger blast radius than the problem. Recorded for 0455/0511
+rather than fixed here.
+
+An instance for [0455](0455_OPS_observability-umbrella-declared-vs-actual-and-silent-failure/README.md)'s
+defect 1, with a twist worth recording: here "declared vs actual" is not repo
+versus box — both agreed — but **the file on the box versus the memory of the
+process reading it**. The probe already exists and nothing calls it; it is the
+container's own healthcheck endpoint:
+
+```bash
+ssh sorban-prod 'docker exec app-caddy-1 wget -qO- http://127.0.0.1:2019/config/' \
+  | tr '{,}' '\n' | grep -i timeout
+```
+
+Adjacent but not overlapping: [0511](0511_REFACTOR_infra-config-is-not-one-thing.md)
+covers three other places where one declaration has two homes.
+
+The other team is setting `max_execution_time` per caller on their side. We are
+not adding one to the write profiles (`write_no_ddl`, `prices_write_ddl`,
+`admin`) in this task: they have never had one, the 30 s knob never provided
+it, and no query has actually run away. `api_reader` already caps at 30 s
+CH-side (`crates/db-clickhouse/users.d/profiles.xml:27`), so the read path is
+bounded where it should be. One line per profile if that ever changes.

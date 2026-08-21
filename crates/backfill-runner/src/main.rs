@@ -17,6 +17,9 @@ mod repair_tier1;
 mod rpc_snapshot;
 mod run;
 mod sink;
+mod snapshot;
+mod snapshot_compare;
+mod snapshot_seed;
 mod status;
 mod sync;
 mod util;
@@ -202,6 +205,59 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Step 3c — four-way comparison of `balances` against the snapshot:
+    /// missing / closure / anomaly / divergent / stale, reported separately for
+    /// classic trustlines and native holdings. Reads our side straight from
+    /// ClickHouse; no manual exports. READ-ONLY — writes nothing.
+    SnapshotCompare {
+        /// Write per-bucket sample TSVs here (closure/ghost/divergent/agree/
+        /// missing), for RPC spot-verification of every verdict.
+        #[arg(long)]
+        dump_dir: Option<PathBuf>,
+        /// Pin the snapshot to a `manifest.json`, so the report describes the
+        /// SAME checkpoint the seed will execute against.
+        #[arg(long)]
+        pinned_manifest: Option<PathBuf>,
+    },
+
+    /// Verify sampled comparison verdicts against Soroban RPC (raw XDR — the
+    /// arbiter). Input: a dump file from `snapshot-compare --dump-dir`, as-is.
+    /// Absence from the response means the entry does not exist. Requires
+    /// `--soroban-rpc-url`. READ-ONLY.
+    SnapshotVerify {
+        #[arg(long)]
+        samples: PathBuf,
+        /// The checkpoint the verdicts were judged at. RPC answers about state
+        /// NOW; without this the check cannot distinguish "already gone at the
+        /// checkpoint" from "closed since", and proves far less than it looks.
+        #[arg(long)]
+        checkpoint: Option<u32>,
+    },
+
+    /// Step 3d — THE seed (ADR 0055): build every correction the comparison
+    /// proved necessary. Reads our balances and dimension ids straight from
+    /// ClickHouse — no manual exports. Default is a DRY-RUN that reads,
+    /// decodes, folds and writes artifacts (manifest.json, summary.txt,
+    /// ghosts.tsv) without inserting anything; `--execute` performs the
+    /// inserts. Deployment order is load-bearing: deploy the lifecycle writer
+    /// FIRST, then seed from a checkpoint taken after that deploy (see the
+    /// module docs).
+    SnapshotSeed {
+        /// Directory for provenance artifacts (manifest, summary, ghost list).
+        #[arg(long)]
+        artifacts: PathBuf,
+        /// Pin the snapshot to a previously written `manifest.json` instead of
+        /// fetching the latest checkpoint. Optional — the freshest checkpoint
+        /// is complete by construction (the archive manifest is written LAST,
+        /// an atomic commit point) and is the better input; the pin exists for
+        /// exact reproduction of an earlier run (the ADR 0056 LP merge).
+        #[arg(long)]
+        pinned_manifest: Option<PathBuf>,
+        /// Actually insert. Without this flag the run is read-only.
+        #[arg(long)]
+        execute: bool,
+    },
+
     /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
     /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
     /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
@@ -334,6 +390,39 @@ async fn main() {
                 "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
+        }
+        Command::SnapshotCompare {
+            dump_dir,
+            pinned_manifest,
+        } => {
+            snapshot_compare::compare_command(
+                &sink,
+                dump_dir.as_deref(),
+                pinned_manifest.as_deref(),
+            )
+            .await
+            .expect("snapshot compare failed — read-only, safe to re-run");
+        }
+        Command::SnapshotVerify {
+            samples,
+            checkpoint,
+        } => {
+            let rpc = cli
+                .soroban_rpc_url
+                .as_deref()
+                .expect("snapshot-verify requires --soroban-rpc-url");
+            snapshot_compare::verify_command(rpc, &samples, checkpoint)
+                .await
+                .expect("snapshot verify failed — read-only, safe to re-run");
+        }
+        Command::SnapshotSeed {
+            artifacts,
+            pinned_manifest,
+            execute,
+        } => {
+            snapshot_seed::seed_command(&sink, &artifacts, pinned_manifest.as_deref(), execute)
+                .await
+                .expect("snapshot seed failed");
         }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse

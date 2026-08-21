@@ -36,6 +36,16 @@ history:
       `-c galexieImageTag=${GITHUB_SHA}` makes `cdk diff` report a change on every
       commit, docs-only included, so any diff-based early exit is defeated unless
       the tag is handled separately.
+  - date: 2026-08-19
+    status: backlog
+    who: karolkow
+    note: >
+      Absorbed 0455 review finding 66. Measured rather than assumed: the
+      committed config pins a digest, the shipped workflow never passes the
+      context tag (zero mentions of Galexie), so the override is an unused
+      input reachable only by a hand-run deploy — and CDK context never shows in
+      a diff. Three exclusive ways to close it recorded above; the choice is
+      this task's, since option 1 is the criterion it already carries.
 ---
 
 # CI/CD: Production deployment workflow
@@ -49,6 +59,38 @@ Add GitHub Actions workflow for manual production deployment with approval gate.
 Task 0039 defined the CI workflow (Rust + TypeScript CI jobs), CDK OIDC/deploy roles, and staging deployment workflow. The production deployment workflow was designed but deferred — not needed until production environment is ready.
 
 The workflow file (`deploy-production.yml`) was drafted in task 0039 and can be used as starting point.
+
+## The image-tag override, as it actually stands (0455 finding 66)
+
+Measured 2026-08-19, because a review flagged the context override as a way to
+deploy an image the repository does not name. What is actually true:
+
+- `infra/src/lib/stacks/ingestion-stack.ts:87-89` reads `galexieImageTag` from
+  CDK **context**, falling back to the committed config. That is the mechanism
+  this task designed.
+- `infra/envs/production.json` pins a **digest** (`sha256:…`), not a mutable
+  tag. That is the safe half and it is already in place.
+- `.github/workflows/deploy-production.yml` does not mention Galexie at all —
+  **zero occurrences**. The `-c galexieImageTag=${GITHUB_SHA}` step in the
+  acceptance criteria below was never implemented in the shipped workflow.
+
+So the override is not a CI path that drifted; it is an unused input that only a
+hand-run `cdk deploy -c galexieImageTag=…` can reach. Reaching it replaces a
+digest pin with whatever string is typed, and CDK **context never appears in a
+diff** — so the one gate the deploy relies on cannot show it.
+
+Three ways to close this, to decide when this task is picked up:
+
+1. Implement the criterion as written — CI passes the tag, and the committed
+   digest stops being the source. Trades a pin for a pipeline.
+2. Delete the context read. The committed digest becomes the only way to change
+   the image, which is what production does today anyway.
+3. Keep it and make it loud — refuse a context override unless it is also a
+   digest, and print it prominently.
+
+Option 2 is the smallest and matches current practice; option 1 is what this
+task originally specified. They are mutually exclusive, so the choice belongs
+here rather than in a separate task.
 
 ## Acceptance Criteria
 

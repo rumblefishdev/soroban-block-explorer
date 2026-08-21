@@ -54,6 +54,27 @@ history:
       surrogate recompute, not just the rename — 5 resolve-subqueries still live
       in `nfts/queries.rs`. Re-verified that the rename is still undone and the
       collision still present in all 13 columns.
+  - date: 2026-08-19
+    status: backlog
+    who: karolkow
+    note: >
+      Scope overlap resolved. Section C claimed the state.rs split, which task
+      0459 already owns with a narrower axis and its own acceptance criteria;
+      stage.rs was already deferred to 0414. Three tasks were describing two
+      files. C now points at both and keeps only what is genuinely this task's:
+      the ordering constraint between 0414 and section D, whose contract_id
+      rename touches 85 call sites in the same file. Found by the 0455 review
+      sweep while checking whether its findings already had tasks.
+  - date: 2026-08-19
+    status: backlog
+    who: karolkow
+    note: >
+      Absorbed two 0455 review findings rather than spawning tasks for them:
+      a third oversized module (api liquidity-pools queries, 2599 lines) as the
+      first thing the conventions ADR should be measured against, and a
+      re-measurement of change amplification — contract_id reaches 106 files in
+      11 crates, three times the reported figure and every crate in the
+      workspace.
 ---
 
 # REFACTOR/ARCH: asset-vocabulary consolidation + module conventions + god-module split
@@ -110,9 +131,46 @@ next AssetIdentity saga. Fits the ADR-0032 evergreen-docs discipline.
 Biggest source files (2026-07-20): **`xdr-parser/src/state.rs` = 3290 LOC**,
 `db-clickhouse/src/persist/stage.rs` = 2568, `db-clickhouse/src/persist/tests_cross.rs`
 = 2413, `xdr-parser/src/invocation.rs` = 1580. A 3000-line file cannot "say what's
-inside." `stage.rs` split is already **task 0414**; this task adds **`state.rs`**
-(the larger offender — extract_assets / accounts / LPs / NFTs / balances / SAC
-identities all in one module) as its twin.
+inside."
+
+**Neither split belongs to this task.** `stage.rs` is **task 0414**; `state.rs`
+is **task 0459**, spawned later from the 0453 architecture review with its own
+split axis (the file's own "Step" sections) and its own gate (public API
+unchanged, `cargo test -p xdr-parser` green with no test edits). This section
+originally claimed `state.rs` as 0414's twin, which left three tasks describing
+two files — resolved 2026-08-19 in favour of the dedicated tasks.
+
+What stays here is the **ordering constraint**, which is real: section D's
+`contract_id` rename touches 85 call sites in `stage.rs` and 21 in `crates/api`.
+Two wide mechanical diffs through the same file, landed independently, will
+conflict. Land 0414 first, then D — or land them together — but do not run them
+in parallel.
+
+### C.1 A third oversized module, outside the parser (0455 finding 23)
+
+`crates/api/src/liquidity_pools/queries.rs` is **2599 lines** (measured
+2026-08-19) and the highest-churn file in the API. It has no task of its own.
+It belongs to section B rather than to 0414/0459: the question it raises is not
+"split this file" but "what is the limit, and what happens when a file passes
+it" — which is exactly what the module-conventions ADR is for. Name the limit,
+then this file is the first thing measured against it.
+
+### C.2 Change amplification, measured (0455 finding 25)
+
+The review reported "one column spans 34 files across 6 crates". Re-measured
+2026-08-19 across `crates/`:
+
+| Identifier    | Files   | Crates |
+| ------------- | ------- | ------ |
+| `asset_id`    | 33      | 5      |
+| `ledger_seq`  | 93      | 7      |
+| `contract_id` | **106** | **11** |
+
+The reported figure matches `asset_id`. `contract_id` — the identifier section D
+renames — is three times worse and reaches every crate in the workspace. This is
+evidence for section B, not separate work: it is the number that says why a
+written convention is worth having, and it is the number section D's blast
+radius should be judged against.
 
 ## D. `contract_id` names two different things (handed over from 0398)
 

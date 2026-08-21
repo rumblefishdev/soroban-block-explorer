@@ -6,12 +6,18 @@ describe('formatFee', () => {
   it('converts stroops to XLM and trims trailing zeros', () => {
     expect(formatFee(0)).toBe('0 XLM');
     expect(formatFee(100)).toBe('0.00001 XLM');
+    expect(formatFee(1_000)).toBe('0.0001 XLM');
+    expect(formatFee(10_000_000)).toBe('1 XLM');
     expect(formatFee(25_000_000)).toBe('2.5 XLM');
   });
 
   it('returns em-dash for non-finite / negative input', () => {
+    // Negative input guards against BigInt-modulo padded-minus-sign
+    // corruption; it is bad data, never a real fee.
     expect(formatFee(Number.NaN)).toBe('—');
+    expect(formatFee(Number.POSITIVE_INFINITY)).toBe('—');
     expect(formatFee(-100)).toBe('—');
+    expect(formatFee(-10_000_000)).toBe('—');
   });
 });
 

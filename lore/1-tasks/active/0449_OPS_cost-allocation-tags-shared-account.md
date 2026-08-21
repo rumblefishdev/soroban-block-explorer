@@ -2,7 +2,7 @@
 id: '0449'
 title: 'OPS: cost allocation tags — the AWS account bills two projects as one'
 type: OPS
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0447']
 tags: [phase-future, effort-small, priority-medium, ops, cost, aws]
@@ -108,6 +108,17 @@ history:
       slow-creep gap Budgets would have covered is accepted and named in
       docs/runbooks/costs.md. This closes the last open scope item; the
       task archives once the anomaly-detection deploy is verified.
+  - date: 2026-08-19
+    status: active
+    who: karolkow
+    note: >
+      Moved backlog -> active. The status contradicted production: the
+      detection half of this task (account-wide Cost Anomaly Detection, its
+      SNS route and the topic policy grant) has been deployed and live since
+      the 2026-08-18 release, while the file still claimed the task had not
+      started. All seven acceptance criteria remain unticked and genuinely
+      open — none were verified — so this is a status correction, not a
+      completion. Found by the 0455 review sweep (finding 36).
 ---
 
 # The AWS account bills two projects as one
