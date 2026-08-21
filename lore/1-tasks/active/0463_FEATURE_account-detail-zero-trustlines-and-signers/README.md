@@ -539,6 +539,41 @@ error propagates. Freshness — the measured dominant lever on correction
 volume — moves from runbook discipline into the tool itself. Net −~200
 lines; operator flow: dry-run → read summary → `--execute --pinned-manifest`.
 
+### CI red 2026-08-20 — not this branch: Rust 1.98.0 vs zig's linker
+
+The PR's `Rust (lambda build)` check went red on a **docs-only commit**
+(`a8a98bbd`, three markdown files) while clippy, fmt, tests and API-types all
+stayed green. Cause is external toolchain drift, proven from the run log:
+
+```
+stable-aarch64-unknown-linux-gnu updated - rustc 1.98.0 (2026-08-18)
+                                           (from rustc 1.97.1 (2026-07-14))
+error: unsupported linker arg: --fix-cortex-a53-843419
+error: could not compile `crc-fast` (lib)
+```
+
+Rust 1.98.0 shipped 2026-08-20 and passes `--fix-cortex-a53-843419` to the
+linker for `aarch64-unknown-linux-gnu`. `cargo lambda build --arm64` links
+through zig, which rejects the argument. `cargo-zigbuild` filters it from
+0.23.0 (PR #452, 2026-06-10), but cargo-lambda 1.9.1 — the newest release —
+hard-depends on `cargo-zigbuild = "0.20.1"`, so upgrading cargo-lambda does
+not help and installing a newer standalone zigbuild does nothing (it is a
+vendored library, not a binary on PATH).
+
+Fix applied: pin the toolchain to 1.97.1 in the two jobs that build lambdas —
+`ci.yml`'s `rust-lambda` and `deploy-production.yml` (which has the identical
+setup, so **the next production deploy would have failed the same way**). The
+other Rust jobs stay on `@stable`; they build natively, never through zig, and
+are green on 1.98.0. Unpin both together when cargo-lambda ships a release
+depending on cargo-zigbuild >= 0.23.0.
+
+Worth noting the vector: `dtolnay/rust-toolchain@stable` plus an unpinned
+`pip3 install cargo-lambda` means CI's Rust build is not reproducible — the
+same commit builds differently on different days. This fix pins one half of
+that; pinning cargo-lambda itself is the obvious follow-up. The fix belongs on
+develop rather than this feature branch, since it blocks every Rust PR in the
+repo.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from
