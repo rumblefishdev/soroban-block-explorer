@@ -216,3 +216,110 @@ git show ec160781:lore/1-tasks/active/0308_FEATURE_custom-abi-nft-parser-classif
 
 Read it before designing the discriminator. Do not resurrect 0308 itself — the
 abandonment was deliberate and this task carries the scope now.
+
+## Design settled — 2026-08-21, after primary-source research
+
+Full research note:
+[`0309/notes/R-spec-driven-classification-2026-08-21.md`](../backlog/0309_RESEARCH_parser-classification-design/notes/R-spec-driven-classification-2026-08-21.md)
+(801 lines, every claim sourced). What follows is the decision it produced.
+
+### The premise this task was built on is refuted by the standard
+
+Our code states, and ADR 0046 encodes, that NFT and fungible `transfer` events are
+byte-identical and only WASM classification can separate them. SEP-48 says
+otherwise, in prose aimed directly at parser authors:
+
+> "Event parsers can use the types of parameters to distinguish one type of event
+> from another in the case where events share the same prefix topics, as is the
+> case in some contract interfaces, e.g. [SEP-41]."
+
+The same section carries a second instruction we also violate:
+
+> "When matching, parsers should tolerate static topics being of the `SCVal` type
+> `SCV_SYMBOL` or `SCV_STRING` because some contracts have emitted their topics
+> as strings."
+
+`topic_symbol_value` requires a Symbol. That is a documented conformance failure,
+and it is the whole explanation for the 470 NULL-signature events.
+
+### What we throw away
+
+`crates/xdr-parser/src/contract.rs:148` keeps `ScSpecEntry::FunctionV0` and
+discards every other variant — including `EventV0`, which is the contract's own
+machine-readable decoding instructions: `prefixTopics`, each param's type and
+`location` (`TOPIC_LIST` vs `DATA`), and `dataFormat` (`SINGLE_VALUE`/`VEC`/`MAP`).
+No dependency change is needed; we already build against `stellar-xdr` 27.0.0,
+which has `ScSpecEntry::EventV0`.
+
+Of the 66 contracts with a decisive `Nft` verdict and zero rows anywhere,
+**18 declare full event specs** (333 entries) and 10 more declare `*Event` UDT
+structs — 42% decodable today from data we already discard.
+
+### Why the rest do not declare — a reason code, not a mystery
+
+`#[contractevent]` landed in soroban-sdk v23.0.0 (2025-09-03), and the SDK stamps
+`rssdkver` into every Wasm. Cross-tabulated over the 66:
+
+| SDK   | contracts | with event specs                |
+| ----- | --------- | ------------------------------- |
+| < 23  | 30        | **0** — the macro did not exist |
+| >= 23 | 35        | 18 declare, 17 did not          |
+
+We do not parse `contractmetav0` at ingest at all, so this reason code is
+available and unused.
+
+### Decoding cascade — the design
+
+1. **Declared event spec** (`EventV0`) — decode against it. No guessing.
+2. **`*Event` UDT structs** — same idea, weaker signal.
+3. **Self-describing map payloads** — decodable with no spec at all (key names).
+4. **SCVal type discriminator** — measured on prod: `Nft`-verdict `transfer`
+   emits `u32` 8,487 / `map` 71 / `vec` 3; `Fungible`-verdict emits `i128`
+   797,376 / `map` 17,512 / `u64` 13. **No overlap on the scalar types**; `map`
+   is the only ambiguous tag and is already resolved by key (`token_id` vs
+   `amount`). Caveat recorded honestly: this distribution is grouped by _our own_
+   verdict, so it is strong evidence, not proof.
+5. **Named UNKNOWN with a reason code** — never a silent drop.
+
+Note the `i128` nuance that reverted "Patch C" historically: the SEP-39 contract
+`CDA5FGE4…` does carry an `i128` token id, but **inside a `vec`**, so the
+top-level tag is `vec`, not `i128`. The old counter-example does not contradict
+tier 4.
+
+### Classification
+
+Structural conformance to SEP-50's 11 mandatory functions, computed from the
+SEP-48 spec we already store — not a five-name match whose result depends on
+which `if` runs first. Measured network-wide: **85 contracts conform, and our
+classifier stamps all 85 `Nft`** — plus 48 it guessed, of which **51 of 133
+verdicts** come from contracts carrying _both_ an NFT-name and a fungible-name
+marker and are decided purely by `if` order.
+
+`spec_export = false` / spec-shaking was raised as a threat to this test and
+**checked**: of the 48 non-conforming `Nft`-verdict contracts, exactly **one
+contract, one event** emits a canonical `(3 topics, u32)` transfer. Spec
+stripping is not materially affecting classification. Limit of that check: a
+fully-stripped contract would be stamped `Other` and fall outside the sample.
+
+### Standards reality, for whoever reads this later
+
+- **SEP-50 is a dormant Draft v0.1.0** — no content change since 2025-04-08, no
+  open PR. It contradicts itself on the `approve` event shape (trait doc-comment
+  vs prose); OpenZeppelin implements the prose. It specifies **no `mint`**.
+- **OpenZeppelin is the de facto standard**, not SEP-50. developers.stellar.org
+  deleted its own NFT pages on 2026-08-04 and now links only to OZ; SDF's own
+  demo app imports `stellar_non_fungible`; no NFT implementation exists under
+  `github.com/stellar/*`.
+- **OZ emits no `sep` meta entry** (zero `contractmeta` in the repo), so SEP-47
+  discovery cannot identify an OZ NFT. The SEP-48 spec section is the only
+  reliable on-chain signal.
+- **SEP-47 is Draft and self-asserted** — the spec warns contracts may lie.
+
+### Not in this task
+
+The quarantine's shape is 0392's call, but the research changes the input: the
+`graph-node` precedent is a state enum on the row **and** a detail table **and** a
+permanence flag, with fail-closed reads. Its deterministic/non-deterministic
+split explains 0392's F1 exactly — the quarantine holds _deterministic_ failures
+being handled by a _non-deterministic_ wait-and-retry, which is why a reconcile
+moves zero rows.
