@@ -44,6 +44,20 @@ services:
     # behaviour from drifting silently.
     image: caddy:2.8-alpine
     restart: unless-stopped
+    # Bounded logs, same rationale as the clickhouse service below —
+    # and here it was not hypothetical. Caddy logs one JSON line per
+    # proxied request; measured 2026-08-21, this container's log had
+    # reached **63 GB** on the same filesystem ClickHouse writes to.
+    # An unbounded writer next to the database is the shape of the
+    # 2026-08-13 disk-fill outage (task 0488). A logging change only
+    # takes effect on a container CREATED after it lands, so this
+    # rides the same recreate as the timeout fix (task 0513) rather
+    # than costing the proxy a second bounce.
+    logging:
+      driver: json-file
+      options:
+        max-size: '100m'
+        max-file: '5'
     ports:
       # Public ingress. 443 carries mTLS + TLS; 80 exists solely
       # for the Let's Encrypt http-01 challenge and the HTTP→HTTPS

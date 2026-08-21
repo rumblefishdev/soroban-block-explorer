@@ -128,9 +128,19 @@ stalled upstream, false of a working query. Correct it rather than delete it.
 `infra-hetzner/ansible/roles/app/tasks/main.yml`: add `--inplace` to
 `rsync_opts` on **both** sync tasks. rsync then writes into the existing file
 instead of replacing it, the inode survives every deploy, and the existing
-zero-downtime `caddy reload` handler starts meaning something again. The trade
-— a torn write is no longer impossible — is acceptable because Caddy validates
-on reload and keeps the old config on a parse error.
+caddy-only restart handler starts meaning something again. The trade — a torn
+write is no longer impossible — is acceptable because Caddy validates its
+config on start and refuses to come up on a parse error rather than serving
+half a file.
+
+Worth recording that the playbook already knew: the `Restart compose stack`
+handler's own comment says "single-file bind mounts preserve the original
+inode after host-side atomic replace, so a recreate is the only way the
+container sees new content". The knowledge was there — the Caddyfile checksum
+task simply notifies `Reload caddy` (a per-service **restart**, which does not
+re-anchor a mount) instead. `--inplace` is the cheaper answer than routing it
+to the recreate handler: with the inode stable, a restart is enough and no
+service has to be recreated at all.
 
 The second task (`Sync ClickHouse config + schema`) has the identical defect
 and a prior victim: ten `config.d/*.xml` + `users.d/*.xml` files are
@@ -148,10 +158,22 @@ orphan. One `--force-recreate caddy` at this deploy re-anchors it.
 clickhouse` log-rotation gotcha, and a line in "Post-deploy verification" that
 reads the timeout back **from the admin API**, not from the file.
 
+### Step 4 — cap the Caddy log, because the recreate is the only free ride
+
+`docker-compose.prod.yml`: the caddy service has no `logging:` block, so it
+inherits an unbounded json-file driver. Measured 2026-08-21: **63 GB**, on the
+same filesystem as ClickHouse's data — the shape of the 2026-08-13 disk-fill
+outage (0488). A logging option only applies to a container created after it
+lands, and Step 2 already forces exactly one recreate. Bundling it here costs
+nothing; deferring it costs the proxy a second bounce later.
+
 ## Acceptance Criteria
 
 - [ ] Caddy's admin API reports `"response_header_timeout":7200000000000` on
       the production box
+- [ ] `docker inspect -f '{{.HostConfig.LogConfig}}' app-caddy-1` shows
+      `max-size:100m max-file:5`, and the 63 GB log is gone with the old
+      container
 - [ ] Host and container inode for the Caddyfile are identical after the deploy
 - [ ] A subsequent `--tags app` run leaves the inode unchanged (`--inplace`
       verified, not assumed)

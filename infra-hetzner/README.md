@@ -287,9 +287,12 @@ ansible-playbook ... --tags storagebox
 > keeps the inode. This is not theoretical on either side: the 2026-07-06
 > `prices_writer` grant needed a `--force-recreate clickhouse` before the XML
 > took effect, and from that same deploy until task 0513 found it, Caddy served
-> a Caddyfile that no longer existed at that path — where a `caddy reload`
-> would have re-read the same orphan: repo green, box green, handler green,
-> nothing changed.
+> a Caddyfile that no longer existed at that path — where neither the
+> `Reload caddy` handler (a per-service **restart**) nor a manual
+> `caddy reload` would have helped: both re-read the same orphan. Repo green,
+> box green, handler green, nothing changed. The `Restart compose stack`
+> handler's own comment already describes this trap; the Caddyfile checksum
+> task just notifies the other one.
 >
 > A container already pinned to an orphan needs one recreate to re-anchor:
 >
