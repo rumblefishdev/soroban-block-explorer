@@ -275,20 +275,28 @@ ansible-playbook ... --tags storagebox
 > ```
 
 > **Single-file bind mounts pin the inode — an edit can reach the box and
-> still not reach the process.** `Caddyfile` and `ca/ca.crt` are mounted into
-> `app-caddy-1` as individual files, and a single-file bind mount follows the
-> **inode**, not the path. rsync's default temp-file + rename hands every sync
-> a new inode, so the container keeps reading the pre-sync file. From the
-> 2026-07-06 deploy until task 0513 found it, Caddy served a Caddyfile that no
-> longer existed at that path — and a `caddy reload` would have re-read the
-> same orphan: repo green, box green, handler green, nothing changed. The
-> subtree sync now passes `--inplace`, which keeps the inode. A container
-> already pinned to an orphan needs one recreate to re-anchor:
+> still not reach the process.** Twelve files are mounted into a container
+> individually rather than as a directory: `Caddyfile` and `ca/ca.crt` into
+> `app-caddy-1`, and ten `config.d/*.xml` + `users.d/*.xml` into
+> `app-clickhouse-1`. A single-file bind mount follows the **inode**, not the
+> path, and rsync's default temp-file + rename hands every sync a new one — so
+> the container goes on reading the pre-sync file no matter how correct the
+> deploy looked.
+>
+> Both sync tasks now pass `--inplace`, which writes into the existing file and
+> keeps the inode. This is not theoretical on either side: the 2026-07-06
+> `prices_writer` grant needed a `--force-recreate clickhouse` before the XML
+> took effect, and from that same deploy until task 0513 found it, Caddy served
+> a Caddyfile that no longer existed at that path — where a `caddy reload`
+> would have re-read the same orphan: repo green, box green, handler green,
+> nothing changed.
+>
+> A container already pinned to an orphan needs one recreate to re-anchor:
 >
 > ```bash
 > docker compose -f /srv/app/docker-compose.yml \
 >                -f /srv/app/docker-compose.prod.yml up -d --force-recreate caddy
-> # the two must agree afterwards:
+> # the two must agree afterwards (same check works for clickhouse):
 > stat -c %i /srv/app/infra-hetzner/Caddyfile
 > docker exec app-caddy-1 stat -c %i /etc/caddy/Caddyfile
 > ```

@@ -125,12 +125,19 @@ stalled upstream, false of a working query. Correct it rather than delete it.
 
 ### Step 2 — stop the inode from escaping
 
-`infra-hetzner/ansible/roles/app/tasks/main.yml`, the `Sync infra-hetzner/
-subtree` task: add `--inplace` to `rsync_opts`. rsync then writes into the
-existing file instead of replacing it, the inode survives every deploy, and
-the existing zero-downtime `caddy reload` handler starts meaning something
-again. The trade — a torn write is no longer impossible — is acceptable
-because Caddy validates on reload and keeps the old config on a parse error.
+`infra-hetzner/ansible/roles/app/tasks/main.yml`: add `--inplace` to
+`rsync_opts` on **both** sync tasks. rsync then writes into the existing file
+instead of replacing it, the inode survives every deploy, and the existing
+zero-downtime `caddy reload` handler starts meaning something again. The trade
+— a torn write is no longer impossible — is acceptable because Caddy validates
+on reload and keeps the old config on a parse error.
+
+The second task (`Sync ClickHouse config + schema`) has the identical defect
+and a prior victim: ten `config.d/*.xml` + `users.d/*.xml` files are
+bind-mounted into `app-clickhouse-1` individually, and the 2026-07-06
+`prices_writer` grant change synced cleanly, reported success and did nothing
+until the container was force-recreated (0314). Same root cause, found only
+because this task named it.
 
 `--inplace` does not rescue the current container: it is already pinned to the
 orphan. One `--force-recreate caddy` at this deploy re-anchors it.
