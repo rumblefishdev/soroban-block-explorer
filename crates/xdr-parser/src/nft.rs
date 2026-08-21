@@ -836,6 +836,83 @@ mod tests {
         assert!(nft_events.is_empty());
     }
 
+    // Parked until task 0512's decoding cascade lands. These two assert on real
+    // mainnet payloads that today produce zero rows; the assertion stays true
+    // under the new design, but the mechanism that satisfies it changed. Both
+    // contracts declare no SEP-48 event spec (built on soroban-sdk 23.4.0, before
+    // `#[contractevent]`), so they are cascade tier 4 — the SCVal type
+    // discriminator — not the ad-hoc fourth shape originally drafted here.
+    #[test]
+    #[ignore = "0512: needs the decoding cascade; red on purpose"]
+    fn real_mainnet_domain_registry_transfer_token_id_in_topic() {
+        // Task 0512 / lore 0392 F4. Real mainnet payload from
+        // CB2SIYGHFGQMKEYQUWCTF3HCWBCPFUSRGVWXOPV3LIJR7K5LRPFXZEYK, a domain
+        // registry NFT whose WASM declares
+        // `transfer(env, domain: String, from: Address, to: Address)`.
+        //
+        // The token identity is a String and rides in a TOPIC, while the
+        // addresses ride in the data Vec — the mirror image of Shape A/B, which
+        // both assume addresses-in-topics. The contract carries a decisive `Nft`
+        // verdict, so this row belongs in hot `nfts`; today it is dropped.
+        let event = make_event(
+            "CB2SIYGHFGQMKEYQUWCTF3HCWBCPFUSRGVWXOPV3LIJR7K5LRPFXZEYK",
+            vec![
+                json!({"type": "sym", "value": "transfer"}),
+                json!({"type": "string", "value": "api"}),
+            ],
+            json!({"type": "vec", "value": [
+                {"type": "address", "value": "GD5BYURYSE3G2QAHEGV7KISA5WZBPLFAPXQG5FV5WKJAO43JUNB34F4S"},
+                {"type": "address", "value": "GBCBXHGCFGESA55JA4CWVP7KKJHSOBSRD2DGMWRDXO2T4LZVH2XP5MYO"},
+            ]}),
+        );
+
+        let nft_events = detect_nft_events(&[event]);
+        assert_eq!(
+            nft_events.len(),
+            1,
+            "domain-registry transfer must not be dropped"
+        );
+        assert_eq!(nft_events[0].event_kind, "transfer");
+        assert_eq!(
+            nft_events[0].from.as_deref(),
+            Some("GD5BYURYSE3G2QAHEGV7KISA5WZBPLFAPXQG5FV5WKJAO43JUNB34F4S")
+        );
+        assert_eq!(
+            nft_events[0].to.as_deref(),
+            Some("GBCBXHGCFGESA55JA4CWVP7KKJHSOBSRD2DGMWRDXO2T4LZVH2XP5MYO")
+        );
+        assert_eq!(nft_events[0].token_id["value"], "api");
+    }
+
+    #[test]
+    #[ignore = "0512: needs the decoding cascade; red on purpose"]
+    fn real_mainnet_domain_registry_mint_token_id_in_topic() {
+        // Same contract, `mint`: topics = [Symbol("mint"), String(domain)],
+        // data = the owner Address. Canonical SEP-50 is the exact inverse
+        // (topics = [mint, to], data = token_id).
+        let event = make_event(
+            "CB2SIYGHFGQMKEYQUWCTF3HCWBCPFUSRGVWXOPV3LIJR7K5LRPFXZEYK",
+            vec![
+                json!({"type": "sym", "value": "mint"}),
+                json!({"type": "string", "value": "xlmns"}),
+            ],
+            json!({"type": "address", "value": "GD5BYURYSE3G2QAHEGV7KISA5WZBPLFAPXQG5FV5WKJAO43JUNB34F4S"}),
+        );
+
+        let nft_events = detect_nft_events(&[event]);
+        assert_eq!(
+            nft_events.len(),
+            1,
+            "domain-registry mint must not be dropped"
+        );
+        assert_eq!(nft_events[0].event_kind, "mint");
+        assert_eq!(
+            nft_events[0].to.as_deref(),
+            Some("GD5BYURYSE3G2QAHEGV7KISA5WZBPLFAPXQG5FV5WKJAO43JUNB34F4S")
+        );
+        assert_eq!(nft_events[0].token_id["value"], "xlmns");
+    }
+
     #[test]
     fn detect_real_mainnet_bachini_mint_event() {
         // Ground-truth regression test against the ACTUAL on-chain event of the
