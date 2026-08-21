@@ -209,6 +209,10 @@ pub struct StagedLedger {
 
     pub ledger_rows: Vec<LedgerRow>,
     pub account_rows: Vec<AccountRow>,
+    /// `account_signers` rows — one per account whose `AccountEntry` was
+    /// OBSERVED this change set (full-set replace; trustline-only appearances
+    /// never emit one). lore-0463.
+    pub account_signer_rows: Vec<AccountSignersRow>,
     pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
     pub contract_rows: Vec<SorobanContractRow>,
     /// On-chain Soroban token metadata side table (task 0297). Populated inside
@@ -477,6 +481,9 @@ pub fn build_balance_rows(
             asset_id,
             amount: b.balance,
             last_updated_ledger: i64::from(b.ledger),
+            // The `ContractData` entry was removed, as opposed to a holder who
+            // merely spent down to zero — ADR 0055.
+            closed_at_ledger: if b.closed { i64::from(b.ledger) } else { 0 },
         };
         match idx.get(&(holder_id, asset_id)) {
             Some(&i) => rows[i] = row,
@@ -1089,6 +1096,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             shares: decimal7_string_to_i128(&pos.shares)?,
             first_deposit_ledger: first,
             last_updated_ledger: last,
+            // The pool-share trustline was removed — the participant left the
+            // pool, as opposed to withdrawing to zero and staying. ADR 0055.
+            closed_at_ledger: if pos.closed { last } else { 0 },
         };
         match lp_dedup.entry((pool_id, acct_id)) {
             Entry::Occupied(mut occ) => {
@@ -1789,6 +1799,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // the Horizon alphanum4/12 split into one `classic-credit` key. amount is the
     // same scaled-i128 (decimals=7 at read); accounts resolve via `accounts`.
     let mut balance_dedup: HashMap<(i64, i64), BalanceRow> = HashMap::new();
+    // Signers dedup by account, LAST occurrence wins — the same hazard
+    // `build_balance_rows` guards against, for the same reason. States arrive one
+    // per TRANSACTION (`process.rs` calls `extract_account_states` per tx and
+    // concatenates), and every state in a ledger carries that ledger as its
+    // watermark. Two `SetOptions` on one account in one ledger would therefore
+    // emit two `account_signers` rows at the SAME RMT version, and the merge
+    // resolves a tie arbitrarily — a removed signer could survive as the winner,
+    // which is exactly what the whole-set-replacement design promises cannot
+    // happen. Ledger/tx order puts the final state last, so last-wins is right.
+    let mut signers_dedup: HashMap<i64, AccountSignersRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1812,13 +1832,90 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 }
                 ids::credit_asset_id(code, issuer)
             };
+            // The account entry itself was removed (`account_merge`) — the
+            // native 0 below is a tombstone, not a balance. Every other row
+            // here is live: a zero trustline balance is a real, open trustline.
+            // ADR 0055.
+            let closed_at = if st.account_removed && asset_type == AssetType::Native {
+                watermark
+            } else {
+                0
+            };
             upsert_balance(
                 &mut balance_dedup,
                 account_id_int,
                 asset_id,
                 amount,
                 watermark,
+                closed_at,
             );
+        }
+
+        // Signers/thresholds side row — ONLY when the AccountEntry itself was
+        // observed (`thresholds.is_some()`); a trustline-only accum must not
+        // touch the set. Deleted accounts (`account_removed`) emit nothing:
+        // the page gates on `deleted`, and a merge cannot change signers.
+        if let (Some(th_hex), false) = (&st.thresholds, st.account_removed) {
+            match parse_thresholds(th_hex) {
+                Some([master_weight, threshold_low, threshold_med, threshold_high]) => {
+                    let signers = st.signers.as_deref().unwrap_or_default();
+                    let mut signer_keys = Vec::with_capacity(signers.len());
+                    let mut signer_weights = Vec::with_capacity(signers.len());
+                    let mut signer_types = Vec::with_capacity(signers.len());
+                    for sg in signers {
+                        let key = sg.get("key").and_then(Value::as_str).unwrap_or("");
+                        let weight = sg.get("weight").and_then(Value::as_u64).unwrap_or(0) as u32;
+                        let typ = sg.get("type").and_then(Value::as_str).unwrap_or("unknown");
+                        // A keyless signer would silently shrink the set — a
+                        // 3-of-5 stored as 3-of-4, which reads as a real
+                        // threshold rather than as missing data. Cannot happen
+                        // from `account_data` (the key is always emitted), so
+                        // reaching this means the producer changed shape.
+                        if key.is_empty() {
+                            tracing::warn!(
+                                account = %st.account_id,
+                                "signer entry carries no key — DROPPED from the set; \
+                                 the stored signer count is now lower than the chain's"
+                            );
+                            continue;
+                        }
+                        // The protocol constrains non-master weights to 1-255
+                        // (SetOptions deletes at 0). Store what the chain
+                        // carried; out-of-range is an anomaly worth a trace,
+                        // never a silent clamp.
+                        if weight == 0 || weight > 255 {
+                            tracing::warn!(
+                                account = %st.account_id,
+                                weight,
+                                "signer weight outside protocol range 1-255 — stored as carried"
+                            );
+                        }
+                        signer_keys.push(key.to_string());
+                        signer_weights.push(weight);
+                        signer_types.push(typ.to_string());
+                    }
+                    signers_dedup.insert(
+                        account_id_int,
+                        AccountSignersRow {
+                            account_id: account_id_int,
+                            signer_keys,
+                            signer_weights,
+                            signer_types,
+                            master_weight,
+                            threshold_low,
+                            threshold_med,
+                            threshold_high,
+                            flags: st.flags.unwrap_or(0),
+                            last_updated_ledger: watermark,
+                        },
+                    );
+                }
+                None => tracing::warn!(
+                    account = %st.account_id,
+                    thresholds = %th_hex,
+                    "unparseable thresholds hex — signers row skipped, not fabricated"
+                ),
+            }
         }
 
         for rm in &st.removed_trustlines {
@@ -1828,10 +1925,20 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             }
             let asset_id = ids::credit_asset_id(code, issuer);
-            upsert_balance(&mut balance_dedup, account_id_int, asset_id, 0, watermark);
+            // The trustline was REMOVED — this is the closure the read path
+            // could never see, because it looked identical to a live zero.
+            upsert_balance(
+                &mut balance_dedup,
+                account_id_int,
+                asset_id,
+                0,
+                watermark,
+                watermark,
+            );
         }
     }
     out.unified_balance_rows.extend(balance_dedup.into_values());
+    out.account_signer_rows.extend(signers_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {
@@ -1945,6 +2052,13 @@ fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
 }
 
+/// 4-byte `Thresholds` hex → [master_weight, low, med, high]. `None` on any
+/// malformation — the caller skips the row rather than fabricating zeros.
+fn parse_thresholds(hex_str: &str) -> Option<[u8; 4]> {
+    let bytes = hex::decode(hex_str).ok()?;
+    <[u8; 4]>::try_from(bytes.as_slice()).ok()
+}
+
 /// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
 /// the newest `last_updated_ledger` (RMT version semantics resolved at stage time).
 fn upsert_balance(
@@ -1953,6 +2067,7 @@ fn upsert_balance(
     asset_id: i64,
     amount: i128,
     last_updated_ledger: i64,
+    closed_at_ledger: i64,
 ) {
     use std::collections::hash_map::Entry;
     let row = BalanceRow {
@@ -1960,6 +2075,7 @@ fn upsert_balance(
         asset_id,
         amount,
         last_updated_ledger,
+        closed_at_ledger,
     };
     match map.entry((holder_id, asset_id)) {
         Entry::Occupied(mut occ) => {
@@ -2745,6 +2861,7 @@ mod balance_tests {
             holder: "GHOLDER1".into(),
             balance: 800_009_446_178_i128,
             ledger: 100,
+            closed: false,
         }];
         // No SAC map → type-3 keying: asset_id == the token's contract surrogate.
         let rows = build_balance_rows(&extracted, &HashMap::new());
@@ -2769,12 +2886,14 @@ mod balance_tests {
                     holder: "CPOOL".into(),
                     balance: 100,
                     ledger: 10,
+                    closed: false,
                 },
                 ExtractedSorobanBalance {
                     contract_id: "CTOKEN3".into(),
                     holder: "GHOLDER".into(),
                     balance: 200,
                     ledger: 10,
+                    closed: false,
                 },
             ],
             &sac_classic,

@@ -349,6 +349,90 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 > reads `first_seen_ledger` — which is why "the write finished" is not the same
 > as "the backfill is done".
 
+## Checkpoint-snapshot passes (task 0463 / ADR 0055)
+
+The SDF history archive publishes the **complete state of pubnet** at each
+checkpoint as a bucket list (~4.5 GB gzipped, 21 files). This is a different
+kind of source from everything above: backfills replay **changes** we already
+hold, while the snapshot answers **"what does the network have that we do
+not?"** — the only question a change-stream can never answer (78.85% of chain
+history predates our ledger floor).
+
+Three subcommands, all read-only except the seed's explicit `--execute`.
+There are NO manual exports: each command reads our side straight from
+ClickHouse through the same mTLS connection `--execute` inserts through, like
+every other corrective command in this crate. (The research-phase probes
+`snapshot-tally`/`snapshot-dedup`, the `snapshot-export-sql` helper and the
+hand-exported-TSV transport were removed in the 2026-08-20 review;
+`snapshot-compare` prints the distinct-entry report itself.)
+
+| Subcommand                                                                        | What it does                                                                                                                                                                                                                        | Writes                                                                      |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `snapshot-compare [--dump-dir <dir>]`                                             | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with sample dumps and a ledger-floor histogram                                                                           | nothing                                                                     |
+| `snapshot-verify --samples <dump.tsv> --checkpoint N` (needs `--soroban-rpc-url`) | spot-check a `--dump-dir` file against live chain state via `getLedgerEntries` raw XDR — absence from the response means the entry does not exist                                                                                   | nothing                                                                     |
+| `snapshot-seed --artifacts <dir> [--pinned-manifest …] [--execute]`               | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; optional `--pinned-manifest` re-decodes a recorded snapshot (exact reproduction, e.g. the ADR 0056 LP merge) | `balances`, `account_signers`, `assets`, `accounts` — only with `--execute` |
+
+**The seed's ordering contract (do not reorder):**
+
+1. Deploy the lifecycle writer (the indexer that stamps `closed_at_ledger`)
+   FIRST.
+2. Run `snapshot-seed --execute` against a checkpoint taken
+   AFTER the deploy. Reversed, every removal between checkpoint and deploy is
+   written by the old writer as a plain zero with a HIGHER version than the
+   seed's closure — the ghost resurrects. The tool reads our rows itself at
+   run time, so input freshness — measured as the dominant lever on correction
+   volume — is no longer an operator concern. Churn between the dry-run read
+   and the execute read is absorbed by the `>= checkpoint` guard (such rows
+   are classified newer-than-checkpoint and left alone), so the dry-run's
+   `summary.txt` is a close estimate of the execute's counts, never a
+   contradiction of them.
+
+**No indexer stop is needed.** Every seeded row versions on a real ledger:
+live data on the entry's own `lastModifiedLedgerSeq`, closures on the run's
+checkpoint ledger (semantics: "closed at or before"). ReplacingMergeTree keeps
+the higher version, so the live writer's newer rows always win regardless of
+load order.
+
+**After the seed (standing requirement, not advice):** measure the coverage
+achieved for trustlines and accounts separately, AND cross-check a sample
+against the RPC route regardless of the result. The 200-account probe from
+task 0463's notes is the repeatable check: zero accounts where the chain holds
+more live zero trustlines than we do, and zero where we show more than the
+chain.
+
+**Provenance:** the run writes `manifest.json` (checkpoint ledger + the 21
+bucket hashes) into the artifacts dir. The archive is content-addressed, so
+that manifest alone re-derives the identical snapshot later — the planned LP
+merge (ADR 0056) depends on this. `ghosts.tsv` records every positive-amount
+row the seed zeroed.
+
+## After any historical re-parse: reconcile against the snapshot (MANDATORY)
+
+A re-parse of already-ingested ledgers with CHANGED writer code writes rows at
+the SAME ReplacingMergeTree versions the old code used. Where the new code
+emits different content, the table holds two rows at one version and the merge
+picks a winner **arbitrarily** — and `argMax` reads flip the same coin. This is
+not hypothetical: the 2026-06-23 merge-tombstone fix plus a re-parse of
+54M–63.04M left **1,238,583** such keys in `balances`, every one a merged
+account randomly showing 0 or its stale pre-merge balance.
+
+There is no in-schema defence. A "later insert wins" tiebreaker would make a
+REGRESSED re-parse deterministically overwrite good data — worse than a
+detectable tie. The arbiter is the network:
+
+1. After the re-parse, run the standing tie query (task 0503 carries it per
+   table): keys with more than one distinct content at one version.
+2. Run `snapshot-compare` against a fresh checkpoint with a fresh export.
+   Between-runs ties surface as `divergent SAME ledger` (live entities) and as
+   closure/ghost corrections (dead ones).
+3. Run `snapshot-seed` (dry-run → review → `--execute`): dead-entity ties are
+   repaired outright at the checkpoint version; same-ledger divergences on
+   LIVE entities are reported for a human call — one of two parser versions is
+   wrong, and auto-adopting either would bury the evidence.
+
+This is the same tooling as the one-off 0463 seed; the seed is one-off, the
+reconciliation is not.
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)

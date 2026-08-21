@@ -77,6 +77,51 @@ load order — never on a window boundary (the task 0492 defect).
 - A repeatable drift check: "our state versus the network's", runnable on a
   schedule instead of discovered by accident.
 
+## Built in 0463 already (extract, do not rebuild)
+
+`crates/backfill-runner/src/snapshot.rs` + `snapshot_compare.rs` +
+`snapshot_seed.rs` are the working implementation this task extracts from:
+framed-XDR streaming (13.5 MB peak on 4.44 GB, measured), first-wins dedup,
+four-way compare, RPC verifier, seed. The decoder module moves to its own
+crate; compare/seed stay behind as backfill-runner consumers.
+
+## The window discriminator — carry it into the tool's contract
+
+Standing rule (2026-08-18), proven on the first full pass: for any
+discrepancy, the entry's own `lastModifiedLedgerSeq` against our ledger floor
+is the verdict —
+
+- **before the floor** = never indexed (coverage gap, expected);
+- **inside our window** = the change passed through our parser and the stored
+  result is wrong: **we index incorrectly**. A defect WITH its reproduction
+  ledger attached.
+- **post-seed**, the first category vanishes for seeded entities, so the
+  comparison becomes a pure indexing-correctness monitor.
+
+The reusable tool must expose this split (histogram + per-bucket counts), not
+leave it to each caller to reinvent. The 0463 run: 99.997% below floor, 648
+in-window all explained by export-vs-snapshot skew — the parser's first
+full-population pass, and it passed.
+
+## Also fold in
+
+- `--at-ledger`: the archive keeps every 64-ledger checkpoint's manifest, so
+  a historical snapshot is choosable; today only the newest is fetched.
+- **Retiring the per-window RPC bootstrap** (`bootstrap.rs`, task 0214/0492):
+  it fills skeleton accounts each backfill window via per-key RPC. Once the
+  0463 seed lands and verifies, the snapshot covers its purpose strictly
+  better (complete, verified transport, real-ledger versions, no synthetic
+  watermarks). Retire ONLY after the seed verifies on prod, as its own
+  change — it is live backfill-flow behaviour, not a spent one-shot.
+- **Deleting `snapshot-verify`** (decided 2026-08-20, over-engineering
+  review): the RPC spot-check is not a check of the network — the snapshot
+  outranks RPC as a source (hash-verified + enumerable vs per-key JSON on
+  trust). It exists as a one-time independent oracle over the snapshot
+  decoder for the 0463 production seed. Once that seed verifies on prod
+  (satisfying 0463's "cross-check RPC regardless of result" AC), the command
+  and its `trustline_ledger_key` helper come out; standing decoder confidence
+  is the ignored network test plus 0503's recurring audit.
+
 ## Acceptance criteria
 
 - [ ] A caller can request a typed entry stream for a given entry type without

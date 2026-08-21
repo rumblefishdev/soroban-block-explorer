@@ -309,6 +309,36 @@ CREATE TABLE IF NOT EXISTS assets (
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
+-- Signers + thresholds side table (task 0463 / issue #377). ONE row per
+-- account carrying the FULL signer set as parallel arrays: the protocol caps
+-- signers at 20 and rewrites AccountEntry wholesale, so RMT atomically
+-- replaces the whole set — a removed signer cannot survive as a ghost, no
+-- lifecycle column needed. A SIDE table, not columns on `accounts`, because
+-- `accounts` takes whole-row writes from more than one path (participant
+-- skeletons, RPC bootstrap) and a bolt-on column would be clobbered — the
+-- proven failure mode of tasks 0492/0500. Written ONLY when an AccountEntry
+-- was observed in the change set; trustline-only appearances never touch it.
+-- Master weight is thresholds byte 0 and is NOT in the arrays (Horizon
+-- synthesizes a master entry into its list; raw XDR does not — we store raw
+-- truth, and any cross-check must diff against getLedgerEntries XDR, not
+-- Horizon). signer_weights is UInt32 as in XDR; protocol constrains 0-255
+-- and SetOptions deletes at 0, so out-of-range or zero weights are logged as
+-- anomalies at persist, stored as carried.
+CREATE TABLE IF NOT EXISTS account_signers (
+    account_id          Int64,
+    signer_keys         Array(String),
+    signer_weights      Array(UInt32),
+    signer_types        Array(LowCardinality(String)),
+    master_weight       UInt8,
+    threshold_low       UInt8,
+    threshold_med       UInt8,
+    threshold_high      UInt8,
+    flags               UInt32,
+    last_updated_ledger Int64
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (account_id);
+
 -- SAC facet side table (ADR 0051 / task 0339). One logical row per SAC-having
 -- classic_credit / native asset, keyed byte-for-byte like `assets` and joined at
 -- read (`… GROUP BY key` with `max()`). Written by the INDEXER (not the enricher)
@@ -428,11 +458,27 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 -- `soroban_contracts` (C) — there is no dedicated address dimension). `asset_id`
 -- → the `assets.id` surrogate (`ids::asset_id`). RMT version = `last_updated_ledger`;
 -- a removed/zeroed balance writes 0 so a fully-spent holder collapses.
+-- `closed_at_ledger` (ADR 0055): 0 = the holding relationship is live, >0 = the
+-- ledger in which the entry disappeared from the chain. Before it existed a
+-- removal was written as `amount = 0`, byte-identical to a live-but-empty
+-- holding, so the read path could not tell them apart and hid both. Ledger 0
+-- does not exist (genesis is 1), so 0 is a safe live sentinel. `DEFAULT 0` is
+-- load-bearing: the CH driver rejects inserts client-side when the table has a
+-- column the writer's struct does not know AND the column has no default, so
+-- the default is what lets the `ALTER` land before the writer deploys.
+-- PROD: `CREATE TABLE IF NOT EXISTS` does NOT add a column to an existing
+-- table, so an already-created database needs the ALTERs run by hand — the
+-- same convention as `assets.id` above. Both are metadata-only (no data
+-- rewrite) and were applied to production on 2026-08-18, verified with
+-- `DESCRIBE TABLE balances` / `lp_positions`:
+--     ALTER TABLE balances     ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
+--     ALTER TABLE lp_positions ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
 CREATE TABLE IF NOT EXISTS balances (
     holder_id           Int64,
     asset_id            Int64,
     amount              Int128,
-    last_updated_ledger Int64
+    last_updated_ledger Int64,
+    closed_at_ledger    Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 -- holder_id FIRST: the account-detail read is a per-holder PK-prefix seek (the
@@ -531,12 +577,16 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
 
+-- `closed_at_ledger`: same lifecycle semantics as `balances` (ADR 0055) — a
+-- withdrawn position was written as `shares = 0`, indistinguishable from a
+-- position that still exists at zero.
 CREATE TABLE IF NOT EXISTS lp_positions (
     pool_id              FixedString(32),
     account_id           Int64,
     shares               Decimal128(7),
     first_deposit_ledger Int64,
-    last_updated_ledger  Int64
+    last_updated_ledger  Int64,
+    closed_at_ledger     Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id, account_id);

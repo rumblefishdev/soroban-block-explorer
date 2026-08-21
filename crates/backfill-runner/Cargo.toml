@@ -43,6 +43,10 @@ tracing-indicatif = "0.3"
 # Task 0214: HTTP client for the Soroban RPC bootstrap call. Same
 # defaults the audit-harness uses (rustls-tls + json, no native-tls).
 reqwest = { workspace = true }
+# Task 0463: history-archive buckets are gzipped XDR streams. flate2 is already
+# in the dependency tree transitively; promoted to a direct dep for the decoder.
+flate2 = "1"
+
 # Task 0214: base64-encode `LedgerKey` XDR bytes for the JSON-RPC
 # request body, and decode `LedgerEntryData` XDR bytes from the
 # response. Workspace baseline.
@@ -57,15 +61,20 @@ async-trait = "0.1"
 # `pool-ids-backfill` (task 0266): pool-id hex encode/decode for the
 # gross_volume_a aggregation keyed by raw 32-byte pool id.
 hex = { workspace = true }
+# Task 0463: the history archive is content-addressed — bucket bytes are hashed
+# as they stream and checked against the manifest's hash, so "verified source"
+# is a check rather than a claim about TLS.
+sha2 = { workspace = true }
 # Task 0296: `ContractEventType::Contract` to build `ExtractedEvent`s for the
 # CH-direct NFT re-parse (`nft_reparse`). Runtime dep of the main bin, not just
 # tests — the dev-dependency below is for pool-ids-backfill tests only.
 domain = { path = "../domain" }
+# Task 0463: checkpoint-snapshot buckets are spilled to an unnamed temp file
+# instead of being buffered — the largest is 2.47 GB. Was a dev-dependency
+# (sync.rs fixtures) until the snapshot reader needed it at runtime.
+tempfile = "3"
 
 [dev-dependencies]
-# Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture
-# directories without polluting the developer's filesystem.
-tempfile = "3"
 # `pool-ids-backfill` tests construct `ExtractedOperation` whose `op_type`
 # field is a `domain::OperationType`.
 domain = { path = "../domain" }
