@@ -157,10 +157,18 @@ clauses 1–4 first, because the answer is usually `run --reindex` or a live fix
 
 ### Checkpoint-snapshot subcommands (task 0463) — read clause 4 carefully
 
-`snapshot-tally`, `snapshot-dedup`, `snapshot-compare`, `snapshot-verify`,
-`snapshot-export-sql` and `snapshot-seed`. All read-only except the seed's
-explicit `--execute` (note the inversion of this crate's usual `--dry-run`
-default: writing here is opt-in, so a forgotten flag fails safe).
+`snapshot-compare`, `snapshot-verify` and `snapshot-seed` (research probes
+`snapshot-tally` / `snapshot-dedup`, the `snapshot-export-sql` helper and the
+hand-exported-TSV transport were removed in the 2026-08-20 review — compare
+prints the distinct-entry report itself, and both compare and seed read our
+side straight from ClickHouse like every other corrective command here). All
+read-only except the seed's explicit `--execute` (note the inversion of this
+crate's usual `--dry-run` default: writing here is opt-in, so a forgotten
+flag fails safe). The freshest checkpoint is complete by construction — the
+archive's `.well-known` manifest is stellar-core's atomic commit point,
+written last — so `--execute` simply takes it; `--pinned-manifest` exists for
+exact reproduction of an earlier run (the ADR 0056 LP merge re-derives the
+seed's snapshot from `artifacts/manifest.json`).
 
 **They pass clause 1** — nothing re-implements the ingest path. The source is
 the SDF history archive's checkpoint bucket list, a full STATE snapshot of

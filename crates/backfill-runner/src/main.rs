@@ -205,43 +205,11 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Tally the history-archive checkpoint snapshot: fetch the bucket list and
-    /// stream-decode every bucket, reporting live/dead counts per ledger entry
-    /// type. READ-ONLY — writes nothing, anywhere.
-    ///
-    /// This is the measurement task 0463's seed must publish before it is
-    /// allowed to write: how many entries of each type the network actually
-    /// holds, and what a full pass costs in wall-clock. Our own tables cannot
-    /// answer the first question — 78.85% of chain history predates our ledger
-    /// floor, so entries that never moved have no row here to count.
-    ///
-    /// `--buckets N` limits the pass to the N newest buckets for a cheap probe;
-    /// omit it for the full ~4.5 GB.
-    SnapshotTally {
-        #[arg(long)]
-        buckets: Option<usize>,
-    },
-
-    /// Print the per-slice export SQL the comparison and the seed expect, so
-    /// the operator copies a statement instead of transcribing it out of Rust
-    /// source. READ-ONLY — prints, runs nothing.
-    SnapshotExportSql,
-
-    /// Step 3b — decode the snapshot and report DISTINCT entries after
-    /// first-wins deduplication. `snapshot-tally` counts RECORDS, which cannot
-    /// be compared with our tables: a key appears once per version across the
-    /// bucket levels. READ-ONLY.
-    SnapshotDedup,
-
     /// Step 3c — four-way comparison of `balances` against the snapshot:
     /// missing / closure / anomaly / divergent / stale, reported separately for
-    /// classic trustlines and native holdings. READ-ONLY — writes nothing.
+    /// classic trustlines and native holdings. Reads our side straight from
+    /// ClickHouse; no manual exports. READ-ONLY — writes nothing.
     SnapshotCompare {
-        /// Fold our rows from a TSV export (the `slice_sql` column list)
-        /// instead of querying ClickHouse directly — the transport used when
-        /// the mTLS material lives with the operator's read-only wrapper.
-        #[arg(long)]
-        our_rows: Option<PathBuf>,
         /// Write per-bucket sample TSVs here (closure/ghost/divergent/agree/
         /// missing), for RPC spot-verification of every verdict.
         #[arg(long)]
@@ -250,17 +218,12 @@ enum Command {
         /// SAME checkpoint the seed will execute against.
         #[arg(long)]
         pinned_manifest: Option<PathBuf>,
-        /// Rows per sample dump (default 2000). The pre-execute verification
-        /// wants ~27k on the closure bucket to bound its error at ≤2,500 wrong
-        /// rows with 95% confidence; per-bucket strides scale automatically.
-        #[arg(long)]
-        sample_cap: Option<usize>,
     },
 
     /// Verify sampled comparison verdicts against Soroban RPC (raw XDR — the
-    /// arbiter). Input TSV: `account<TAB>G…` or
-    /// `trustline<TAB>G…<TAB>CODE<TAB>G-issuer`. Absence from the response
-    /// means the entry does not exist. Requires `--soroban-rpc-url`. READ-ONLY.
+    /// arbiter). Input: a dump file from `snapshot-compare --dump-dir`, as-is.
+    /// Absence from the response means the entry does not exist. Requires
+    /// `--soroban-rpc-url`. READ-ONLY.
     SnapshotVerify {
         #[arg(long)]
         samples: PathBuf,
@@ -272,29 +235,22 @@ enum Command {
     },
 
     /// Step 3d — THE seed (ADR 0055): build every correction the comparison
-    /// proved necessary. Default is a DRY-RUN that decodes, folds and writes
-    /// artifacts (manifest.json, summary.txt, ghosts.tsv) without touching the
-    /// database; `--execute` performs the inserts. Deployment order is
-    /// load-bearing: deploy the lifecycle writer FIRST, then seed from a
-    /// checkpoint taken after that deploy (see the module docs).
+    /// proved necessary. Reads our balances and dimension ids straight from
+    /// ClickHouse — no manual exports. Default is a DRY-RUN that reads,
+    /// decodes, folds and writes artifacts (manifest.json, summary.txt,
+    /// ghosts.tsv) without inserting anything; `--execute` performs the
+    /// inserts. Deployment order is load-bearing: deploy the lifecycle writer
+    /// FIRST, then seed from a checkpoint taken after that deploy (see the
+    /// module docs).
     SnapshotSeed {
-        /// Our deduplicated balances export (the `slice_sql` column list).
-        #[arg(long)]
-        our_rows: PathBuf,
-        /// One-column TSV: `SELECT id FROM assets` — existing asset ids.
-        #[arg(long)]
-        assets_ids: PathBuf,
-        /// One-column TSV: `SELECT id FROM accounts GROUP BY id` — existing
-        /// account ids.
-        #[arg(long)]
-        accounts_ids: PathBuf,
         /// Directory for provenance artifacts (manifest, summary, ghost list).
         #[arg(long)]
         artifacts: PathBuf,
         /// Pin the snapshot to a previously written `manifest.json` instead of
-        /// fetching the latest checkpoint. REQUIRED in practice for `--execute`:
-        /// without it the run decodes a different snapshot than the dry-run
-        /// reported on, so `summary.txt` describes a run that never happened.
+        /// fetching the latest checkpoint. Optional — the freshest checkpoint
+        /// is complete by construction (the archive manifest is written LAST,
+        /// an atomic commit point) and is the better input; the pin exists for
+        /// exact reproduction of an earlier run (the ADR 0056 LP merge).
         #[arg(long)]
         pinned_manifest: Option<PathBuf>,
         /// Actually insert. Without this flag the run is read-only.
@@ -435,29 +391,14 @@ async fn main() {
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
-        Command::SnapshotTally { buckets } => {
-            snapshot::tally_command(buckets)
-                .await
-                .expect("snapshot tally failed — read-only, safe to re-run");
-        }
-        Command::SnapshotExportSql => snapshot_compare::print_export_sql(),
-        Command::SnapshotDedup => {
-            snapshot::dedup_command()
-                .await
-                .expect("snapshot dedup failed — read-only, safe to re-run");
-        }
         Command::SnapshotCompare {
-            our_rows,
             dump_dir,
             pinned_manifest,
-            sample_cap,
         } => {
             snapshot_compare::compare_command(
                 &sink,
-                our_rows.as_deref(),
                 dump_dir.as_deref(),
                 pinned_manifest.as_deref(),
-                sample_cap,
             )
             .await
             .expect("snapshot compare failed — read-only, safe to re-run");
@@ -475,24 +416,13 @@ async fn main() {
                 .expect("snapshot verify failed — read-only, safe to re-run");
         }
         Command::SnapshotSeed {
-            our_rows,
-            assets_ids,
-            accounts_ids,
             artifacts,
             pinned_manifest,
             execute,
         } => {
-            snapshot_seed::seed_command(
-                &sink,
-                &our_rows,
-                &assets_ids,
-                &accounts_ids,
-                &artifacts,
-                pinned_manifest.as_deref(),
-                execute,
-            )
-            .await
-            .expect("snapshot seed failed");
+            snapshot_seed::seed_command(&sink, &artifacts, pinned_manifest.as_deref(), execute)
+                .await
+                .expect("snapshot seed failed");
         }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse

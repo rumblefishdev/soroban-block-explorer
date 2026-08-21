@@ -58,10 +58,7 @@
 //!   alone remains the authority on what is live and this reader classifies an
 //!   evicted holding as gone — correct. What the hot archive would ADD is the
 //!   ability to say "archived but restorable" instead of "gone", a display
-//!   distinction (task 0463's T8 question, resolved in our favour). It also
-//!   becomes load-bearing for anyone validating the bucket-list hash against a
-//!   ledger header: post-23 that hash is
-//!   `SHA256(liveStateBucketListHash, hotArchiveHash)`.
+//!   distinction (task 0463's T8 question, resolved in our favour).
 //!
 //! ## Staleness contract
 //!
@@ -74,18 +71,19 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
-use stellar_xdr::{
-    BucketEntry, Frame, LedgerEntryData, LedgerEntryType, LedgerKey, Limited, Limits, ReadXdr,
-};
+use stellar_xdr::{BucketEntry, Frame, Limited, Limits, ReadXdr};
 use tracing::info;
 
 use db_clickhouse::persist::ids;
 
 use crate::error::BackfillError;
 
-/// Public SDF history archive for pubnet. A hash-chained transport anchored to
-/// SCP, so it is a VERIFIED source rather than an API answer taken on trust —
-/// the distinction the 0463 map's standing rule draws.
+/// Public SDF history archive for pubnet. Content-addressed: every downloaded
+/// bucket is SHA-256-checked against the manifest's hash, so a truncated or
+/// substituted file fails loudly. The manifest itself is taken on trust
+/// (TLS + SDF) — verifying it against the consensus-signed ledger header was
+/// built, live-verified once, and then deliberately removed as over-engineering
+/// (2026-08-20 review); resurrect from git history if a mirror is ever added.
 pub const PUBNET_ARCHIVE: &str = "https://history.stellar.org/prd/core-live/core_live_001";
 
 /// One checkpoint's bucket list, newest-first.
@@ -96,14 +94,6 @@ pub struct BucketList {
     /// Bucket hashes in NEWEST-FIRST order. Position is meaning: see the
     /// module docs on first-wins.
     pub hashes: Vec<String>,
-    /// RAW (curr, snap) per level, zeros INCLUDED — the header's bucket-list
-    /// hash folds every level slot, so verification needs the full structure,
-    /// not the downloadable subset.
-    pub levels: Vec<(String, String)>,
-    /// `hotArchiveBuckets` raw (curr, snap) per level. Post-protocol-23 the
-    /// header hash is SHA256(live, hotArchive), so these fold in even though
-    /// this reader never decodes their contents (CAP-0062; see module docs).
-    pub hot_levels: Vec<(String, String)>,
 }
 
 impl BucketList {
@@ -156,46 +146,27 @@ pub async fn fetch_bucket_list(
     // An all-zero hash is an empty slot, not a bucket. Levels run newest to
     // oldest and `curr` precedes `snap` within a level — preserve that order.
     const EMPTY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-    let read_levels =
-        |field: &str, required: bool| -> Result<Vec<(String, String)>, BackfillError> {
-            let Some(arr) = body.get(field).and_then(serde_json::Value::as_array) else {
-                if required {
-                    return Err(BackfillError::Incomplete(format!(
-                        "manifest has no {field}"
-                    )));
-                }
-                return Ok(Vec::new());
-            };
-            let mut out = Vec::with_capacity(arr.len());
-            for level in arr {
-                let mut pair = [String::new(), String::new()];
-                for (i, slot) in ["curr", "snap"].iter().enumerate() {
-                    let h = level
-                        .get(*slot)
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(EMPTY);
-                    // A malformed hash produces a 404 on the bucket URL, which
-                    // reads as "the archive is down" rather than "the manifest
-                    // is wrong". Fail here, where the cause is still visible.
-                    if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
-                        return Err(BackfillError::Incomplete(format!(
-                            "manifest {field} hash is not 64 hex chars: {h:?}"
-                        )));
-                    }
-                    pair[i] = h.to_string();
-                }
-                let [curr, snap] = pair;
-                out.push((curr, snap));
-            }
-            Ok(out)
-        };
-    let levels = read_levels("currentBuckets", true)?;
-    let hot_levels = read_levels("hotArchiveBuckets", false)?;
+    let arr = body
+        .get("currentBuckets")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| BackfillError::Incomplete("manifest has no currentBuckets".into()))?;
     let mut hashes = Vec::new();
-    for (curr, snap) in &levels {
-        for h in [curr, snap] {
+    for level in arr {
+        for slot in ["curr", "snap"] {
+            let h = level
+                .get(slot)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(EMPTY);
+            // A malformed hash produces a 404 on the bucket URL, which reads as
+            // "the archive is down" rather than "the manifest is wrong". Fail
+            // here, where the cause is still visible.
+            if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(BackfillError::Incomplete(format!(
+                    "manifest currentBuckets hash is not 64 hex chars: {h:?}"
+                )));
+            }
             if h != EMPTY {
-                hashes.push(h.clone());
+                hashes.push(h.to_string());
             }
         }
     }
@@ -208,127 +179,7 @@ pub async fn fetch_bucket_list(
     Ok(BucketList {
         checkpoint_ledger,
         hashes,
-        levels,
-        hot_levels,
     })
-}
-
-/// Verify the manifest's bucket list against the LEDGER HEADER's
-/// `bucket_list_hash` — the value the validators agreed on in consensus.
-///
-/// Without this, every per-bucket SHA-256 check only proves the buckets match
-/// the MANIFEST; nothing proves the manifest itself, so the chain of trust
-/// ended at TLS and DNS. The header closes it: its hash is part of the
-/// hash-chained, SCP-signed ledger stream.
-///
-/// The fold mirrors stellar-core's `BucketListBase::getHash` — per level
-/// `SHA256(curr || snap)` over the raw 32-byte hashes (zero slots INCLUDED),
-/// then `SHA256` over the concatenated level hashes. Post-protocol-23
-/// (CAP-0062) the header value is `SHA256(liveHash || hotArchiveHash)`, so the
-/// hot-archive list folds in even though its contents are never decoded here.
-///
-/// The header comes from the archive's own `ledger` category. That is the same
-/// PUBLISHER as the manifest, but not the same trust class: headers are
-/// hash-chained to each other and to SCP signatures, while the manifest is a
-/// bare JSON file — forging a header chain is a different order of attack than
-/// serving a stale or tampered manifest.
-pub async fn verify_bucket_list_hash(
-    client: &reqwest::Client,
-    archive: &str,
-    list: &BucketList,
-) -> Result<(), BackfillError> {
-    use stellar_xdr::LedgerHeaderHistoryEntry;
-
-    if list.levels.is_empty() {
-        println!(
-            "  WARNING: pinned manifest carries no raw levels — header-hash \
-             verification SKIPPED, the buckets are only proven against the \
-             manifest itself"
-        );
-        return Ok(());
-    }
-
-    let fold = |levels: &[(String, String)]| -> Result<[u8; 32], BackfillError> {
-        let mut outer = Sha256::new();
-        for (curr, snap) in levels {
-            let mut level = Sha256::new();
-            for h in [curr, snap] {
-                let bytes = hex::decode(h)
-                    .map_err(|e| BackfillError::Incomplete(format!("level hash hex: {e}")))?;
-                level.update(&bytes);
-            }
-            outer.update(level.finalize());
-        }
-        Ok(outer.finalize().into())
-    };
-
-    let live = fold(&list.levels)?;
-    let computed: [u8; 32] = if list.hot_levels.is_empty() {
-        live
-    } else {
-        let hot = fold(&list.hot_levels)?;
-        let mut both = Sha256::new();
-        both.update(live);
-        both.update(hot);
-        both.finalize().into()
-    };
-
-    // The checkpoint's ledger file holds the headers of its 64-ledger window,
-    // framed exactly like buckets, under the checkpoint's hex fan-out.
-    let cp_hex = format!("{:08x}", list.checkpoint_ledger);
-    let url = format!(
-        "{archive}/ledger/{}/{}/{}/ledger-{cp_hex}.xdr.gz",
-        &cp_hex[0..2],
-        &cp_hex[2..4],
-        &cp_hex[4..6]
-    );
-    let bytes = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| BackfillError::Incomplete(format!("ledger header fetch failed: {e}")))?
-        .error_for_status()
-        .map_err(|e| BackfillError::Incomplete(format!("ledger header HTTP: {e}")))?
-        .bytes()
-        .await
-        .map_err(|e| BackfillError::Incomplete(format!("ledger header body: {e}")))?;
-
-    let gz = GzDecoder::new(&bytes[..]);
-    let mut limited = Limited::new(gz, Limits::none());
-    let mut header_hash: Option<[u8; 32]> = None;
-    for entry in Frame::<LedgerHeaderHistoryEntry>::read_xdr_iter(&mut limited) {
-        let entry = entry
-            .map_err(|e| BackfillError::Incomplete(format!("ledger header decode: {e}")))?
-            .0;
-        if entry.header.ledger_seq == list.checkpoint_ledger {
-            header_hash = Some(entry.header.bucket_list_hash.0);
-        }
-    }
-    let Some(want) = header_hash else {
-        return Err(BackfillError::Incomplete(format!(
-            "checkpoint {} not present in its own ledger-header file",
-            list.checkpoint_ledger
-        )));
-    };
-
-    if computed != want {
-        return Err(BackfillError::Incomplete(format!(
-            "bucket-list hash mismatch at checkpoint {}: header (consensus) says {}, \
-             manifest folds to {} — the manifest does not describe the state the \
-             validators signed",
-            list.checkpoint_ledger,
-            hex::encode(want),
-            hex::encode(computed)
-        )));
-    }
-    println!(
-        "  bucket list VERIFIED against the ledger header at checkpoint {} \
-         (SHA256 over {} live + {} hot-archive levels)",
-        list.checkpoint_ledger,
-        list.levels.len(),
-        list.hot_levels.len()
-    );
-    Ok(())
 }
 
 /// Load a bucket list from a previously written `manifest.json` instead of the
@@ -363,26 +214,6 @@ pub fn bucket_list_from_manifest(path: &std::path::Path) -> Result<BucketList, B
                 .into(),
         ));
     }
-    let read_pairs = |field: &str| -> Vec<(String, String)> {
-        v.get(field)
-            .and_then(serde_json::Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|lvl| {
-                        Some((
-                            lvl.get(0)?.as_str()?.to_string(),
-                            lvl.get(1)?.as_str()?.to_string(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    // Older manifests carry only the downloadable hashes; without the raw
-    // levels the header-hash verification is impossible and is SKIPPED with a
-    // warning rather than silently passed.
-    let levels = read_pairs("levels");
-    let hot_levels = read_pairs("hot_levels");
     info!(
         checkpoint_ledger,
         buckets = hashes.len(),
@@ -391,8 +222,6 @@ pub fn bucket_list_from_manifest(path: &std::path::Path) -> Result<BucketList, B
     Ok(BucketList {
         checkpoint_ledger,
         hashes,
-        levels,
-        hot_levels,
     })
 }
 
@@ -464,58 +293,6 @@ where
         }
     }
     Ok(count)
-}
-
-/// Per-entry-type tally, for the measurement the seed must publish before it
-/// is allowed to write anything.
-#[derive(Debug, Default, Clone)]
-pub struct EntryTally {
-    pub live: [u64; 10],
-    pub dead: [u64; 10],
-    pub records: u64,
-}
-
-impl EntryTally {
-    pub fn observe(&mut self, rec: &SnapshotRecord) {
-        self.records += 1;
-        let (slot, idx) = match rec {
-            SnapshotRecord::Live(e) => (&mut self.live, entry_type_index(&e.data)),
-            SnapshotRecord::Dead(k) => (&mut self.dead, ledger_key_index(k)),
-        };
-        if let Some(i) = idx {
-            slot[i] += 1;
-        }
-    }
-}
-
-const ENTRY_TYPE_NAMES: [&str; 10] = [
-    "account",
-    "trustline",
-    "offer",
-    "data",
-    "claimable_balance",
-    "liquidity_pool",
-    "contract_data",
-    "contract_code",
-    "config_setting",
-    "ttl",
-];
-
-/// Discriminants are bounded to the tally arrays' length: a protocol upgrade
-/// adding an 11th entry type would otherwise index out of bounds and panic a
-/// read-only measurement pass. Unknown types simply go uncounted, which the
-/// caller already reports as unmodelled.
-fn entry_type_index(d: &LedgerEntryData) -> Option<usize> {
-    usize::try_from(d.discriminant() as i32)
-        .ok()
-        .filter(|i| *i < ENTRY_TYPE_NAMES.len())
-}
-
-fn ledger_key_index(k: &LedgerKey) -> Option<usize> {
-    let t: LedgerEntryType = k.discriminant();
-    usize::try_from(t as i32)
-        .ok()
-        .filter(|i| *i < ENTRY_TYPE_NAMES.len())
 }
 
 /// Download one bucket to an unnamed temp file and stream-decode it from there.
@@ -593,63 +370,6 @@ where
 
     stream_bucket(BufReader::new(&tmp), f)?;
     Ok(bytes)
-}
-
-/// Read-only pass over the checkpoint snapshot: fetch the bucket list, stream
-/// every bucket, report per-entry-type counts and wall-clock. Writes nothing.
-pub async fn tally_command(limit: Option<usize>) -> Result<(), BackfillError> {
-    let started = std::time::Instant::now();
-    let client = archive_client()?;
-    let list = fetch_bucket_list(&client, PUBNET_ARCHIVE).await?;
-    verify_bucket_list_hash(&client, PUBNET_ARCHIVE, &list).await?;
-
-    let take = limit.unwrap_or(list.hashes.len()).min(list.hashes.len());
-    println!(
-        "checkpoint ledger {} — {} of {} buckets",
-        list.checkpoint_ledger,
-        take,
-        list.hashes.len()
-    );
-
-    let mut tally = EntryTally::default();
-    let mut bytes_total = 0u64;
-    for (i, hash) in list.hashes.iter().take(take).enumerate() {
-        let url = BucketList::url(PUBNET_ARCHIVE, hash);
-        let t0 = std::time::Instant::now();
-        let before = tally.records;
-        let bytes = stream_bucket_from_url(&client, &url, Some(hash), |rec| {
-            tally.observe(&rec);
-            Ok(())
-        })
-        .await?;
-        bytes_total += bytes;
-        println!(
-            "  [{:>2}/{take}] {:>10} B  {:>9} records  {:>6.1}s  {}",
-            i + 1,
-            bytes,
-            tally.records - before,
-            t0.elapsed().as_secs_f64(),
-            &hash[..12]
-        );
-    }
-
-    println!("\n  entry type          live         dead");
-    for (i, name) in ENTRY_TYPE_NAMES.iter().enumerate() {
-        if tally.live[i] > 0 || tally.dead[i] > 0 {
-            println!("  {name:<18} {:>10} {:>12}", tally.live[i], tally.dead[i]);
-        }
-    }
-    println!(
-        "\n  total {} records, {:.2} GB downloaded, {:.1}s",
-        tally.records,
-        bytes_total as f64 / 1e9,
-        started.elapsed().as_secs_f64()
-    );
-    println!(
-        "  NOTE: counts are RECORDS, not distinct entries — a key may appear in\n\
-         \x20 several buckets and only the FIRST occurrence is live state."
-    );
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,48 +722,23 @@ fn classify(rec: &SnapshotRecord, with_detail: bool) -> Option<SnapItem> {
 // The verdict — ONE rule, rendered by the compare pass and acted on by the seed
 // ---------------------------------------------------------------------------
 
-/// One of our rows as the export carries it. Shared so the two transports and
-/// the two consumers cannot drift into different column meanings.
-#[derive(Debug, Clone, Copy)]
+/// Floor on the our-rows read, shared by the compare and the seed. A short
+/// read (wrong database, a dropped key slice) is indistinguishable from a real
+/// one downstream: every missing row becomes an unmatched snapshot entry, i.e.
+/// a phantom network gap the seed would INSERT as a live holding. The real
+/// population measured 48.6M distinct (holder, asset) pairs — sit just under.
+pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
+
+/// One of our deduplicated `balances` rows, exactly the SELECT list of
+/// `snapshot_compare::slice_sql`. Shared by the compare and the seed so the
+/// two consumers cannot drift into different column meanings.
+#[derive(Debug, Clone, Copy, clickhouse::Row, serde::Deserialize)]
 pub struct OurRow {
     pub holder_id: i64,
     pub asset_id: i64,
     pub amount: i128,
     pub last_updated_ledger: i64,
     pub closed_at_ledger: i64,
-}
-
-impl OurRow {
-    /// Parse one export line. Rejects out-of-range values rather than casting:
-    /// `as i64` would TRUNCATE a malformed export silently and misclassify the
-    /// row under a wrong surrogate, which is indistinguishable from a real gap.
-    pub fn parse(line: &str, lineno: usize) -> Result<Self, BackfillError> {
-        let mut it = line.split('\t');
-        let mut field = |what: &str| -> Result<i128, BackfillError> {
-            it.next()
-                .ok_or_else(|| BackfillError::Incomplete(format!("line {lineno}: missing {what}")))?
-                .trim()
-                .parse::<i128>()
-                .map_err(|e| BackfillError::Incomplete(format!("line {lineno} {what}: {e}")))
-        };
-        let narrow = |v: i128, what: &str| -> Result<i64, BackfillError> {
-            i64::try_from(v).map_err(|_| {
-                BackfillError::Incomplete(format!("line {lineno} {what}: {v} out of i64 range"))
-            })
-        };
-        let holder_id = narrow(field("holder_id")?, "holder_id")?;
-        let asset_id = narrow(field("asset_id")?, "asset_id")?;
-        let amount = field("amount")?;
-        let last_updated_ledger = narrow(field("last_updated_ledger")?, "last_updated_ledger")?;
-        let closed_at_ledger = narrow(field("closed_at_ledger")?, "closed_at_ledger")?;
-        Ok(Self {
-            holder_id,
-            asset_id,
-            amount,
-            last_updated_ledger,
-            closed_at_ledger,
-        })
-    }
 }
 
 /// What the snapshot says about one of our rows. The compare pass COUNTS these;
@@ -1187,41 +882,9 @@ pub async fn build_state(
     Ok(state)
 }
 
-/// Read-only: decode the snapshot and report DISTINCT entries after first-wins.
-/// Writes nothing. This is the number that can be compared with our tables —
-/// the raw record counts from `snapshot-tally` cannot, because a key appears in
-/// as many buckets as it has versions.
-pub async fn dedup_command() -> Result<(), BackfillError> {
-    let started = std::time::Instant::now();
-    let client = archive_client()?;
-    let list = fetch_bucket_list(&client, PUBNET_ARCHIVE).await?;
-    println!(
-        "checkpoint ledger {} — {} buckets",
-        list.checkpoint_ledger,
-        list.hashes.len()
-    );
-    verify_bucket_list_hash(&client, PUBNET_ARCHIVE, &list).await?;
-    let take = list.hashes.len();
-    let state = build_state(
-        &client,
-        &list,
-        SnapshotState::default(),
-        |i, bytes, secs| {
-            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-        },
-    )
-    .await?;
-
-    report_state(
-        &state,
-        list.checkpoint_ledger,
-        started.elapsed().as_secs_f64(),
-    );
-    Ok(())
-}
-
-/// Shared reporting so the dedup pass and the comparison pass cannot drift into
-/// describing the same numbers differently.
+/// DISTINCT-entry report after first-wins, printed by the compare pass before
+/// it folds our rows in — the raw record count cannot be compared with our
+/// tables, because a key appears in as many buckets as it has versions.
 pub fn report_state(state: &SnapshotState, checkpoint_ledger: u32, secs: f64) {
     let dead_accounts = state.accounts.len() - state.live_accounts();
     let dead_trustlines = state.trustlines.len() - state.live_trustlines();
@@ -1434,23 +1097,6 @@ mod tests {
         assert!(dead.matched, "our own closure is not a network gap");
     }
 
-    /// A truncated or malformed export must fail loudly. `as i64` would wrap an
-    /// out-of-range value into a plausible surrogate and misclassify the row
-    /// under a key that is not its own.
-    #[test]
-    fn our_row_parse_rejects_out_of_range_and_short_lines() {
-        let ok = OurRow::parse("1\t2\t300\t400\t0", 1).expect("valid line");
-        assert_eq!((ok.holder_id, ok.asset_id, ok.amount), (1, 2, 300));
-
-        assert!(OurRow::parse("1\t2\t3\t4", 1).is_err(), "short line");
-        assert!(
-            OurRow::parse("9223372036854775808\t2\t3\t4\t0", 1).is_err(),
-            "holder_id past i64::MAX must be rejected, never truncated"
-        );
-        // amount is i128 on purpose — a large but valid balance must pass.
-        assert!(OurRow::parse("1\t2\t170141183460469231731687303715884105727\t4\t0", 1).is_ok());
-    }
-
     /// The archive's fan-out layout, pinned. A wrong split silently 404s every
     /// bucket, which reads as "the archive is down" rather than "our URL is
     /// wrong".
@@ -1524,9 +1170,11 @@ mod tests {
         }
         assert!(!bytes.is_empty(), "empty bucket body");
 
-        let mut tally = EntryTally::default();
+        let mut state = SnapshotState::default();
+        let mut handed = 0u64;
         let records = stream_bucket(&bytes[..], |rec| {
-            tally.observe(&rec);
+            handed += 1;
+            state.absorb_record(&rec);
             Ok(())
         })
         .expect("decode");
@@ -1534,37 +1182,26 @@ mod tests {
         assert!(records > 0, "a real bucket decoded to zero records");
         // Decoded includes the leading METAENTRY, which is not a ledger record
         // and is deliberately not handed to the callback.
-        assert!(
-            tally.records < records,
-            "expected at least one metadata record to be skipped"
-        );
         assert_eq!(
-            records - tally.records,
+            records - handed,
             1,
             "exactly one METAENTRY expected per bucket"
         );
-        let total_live: u64 = tally.live.iter().sum();
-        let total_dead: u64 = tally.dead.iter().sum();
         assert!(
-            total_live + total_dead > 0,
-            "records decoded but none classified — the entry-type indexing is wrong"
+            state.accounts.len() + state.trustlines.len() + state.pool_shares.len() > 0
+                || state.unmodelled > 0,
+            "records decoded but none classified — the classification is wrong"
         );
-        // Print the tally directly: the test asserts shape, but the NUMBERS are
-        // the deliverable — this is the measurement the seed ticket demands
-        // before any write path is designed.
-        for (i, name) in ENTRY_TYPE_NAMES.iter().enumerate() {
-            if tally.live[i] > 0 || tally.dead[i] > 0 {
-                println!(
-                    "  {name:<18} live={:<8} dead={}",
-                    tally.live[i], tally.dead[i]
-                );
-            }
-        }
         println!(
-            "  checkpoint={} bucket={} records={}",
+            "  checkpoint={} bucket={} records={} accounts={} trustlines={} \
+             pool_shares={} unmodelled={}",
             list.checkpoint_ledger,
             url.rsplit('/').next().unwrap_or(""),
-            records
+            records,
+            state.accounts.len(),
+            state.trustlines.len(),
+            state.pool_shares.len(),
+            state.unmodelled
         );
     }
 }

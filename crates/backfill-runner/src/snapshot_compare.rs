@@ -36,11 +36,7 @@
 //! - **Pool shares** — same ledger entry type as a trustline, but our side
 //!   keeps them in `lp_positions`. Tallied from the snapshot, not compared.
 
-use std::io::BufRead;
 use std::path::Path;
-
-use clickhouse::Row;
-use serde::Deserialize;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
@@ -54,55 +50,37 @@ use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list, re
 /// separates "expected blind spot" from "bug".
 const LEDGER_FLOOR: u32 = 50_457_424;
 
-/// Default cap per sample file. 2,000 suits eyeballing; the pre-execute
-/// verification wants tens of thousands (the rule of three: bounding 24.5M
-/// closures at ≤2,500 wrong rows needs ~27k verified keys), so the cap is a
-/// CLI flag and the per-bucket strides derive from it.
-const DEFAULT_SAMPLE_CAP: usize = 2_000;
+/// Rows per sample file. Decoder defects are SYSTEMATIC — a wrong surrogate
+/// derivation or a wrong first-wins order hits every row of a class, not a
+/// random one-in-a-million — so 1,000 samples per bucket detect anything a
+/// larger sample would, and a per-row error bound would be theatre. (A
+/// `--sample-cap` flag with population estimates and rule-of-three arithmetic
+/// existed briefly and was removed as over-engineering, 2026-08-20 review.)
+const SAMPLE_CAP: usize = 1_000;
 
-/// Measured bucket populations (2026-08-18 full pass), used ONLY to derive a
-/// stride that lands near the requested cap — a stale estimate skews sample
-/// density, never correctness, and the cap is still enforced exactly.
-const EST_CLOSURE: u64 = 24_500_000;
-const EST_GHOST_NATIVE: u64 = 1_040_000;
-const EST_DIVERGENT_NATIVE: u64 = 60_000;
-const EST_AGREE: u64 = 13_000_000;
-const EST_MISSING: u64 = 19_300_000;
-
-fn stride_for(population: u64, cap: usize) -> u64 {
-    (population / cap.max(1) as u64).max(1)
-}
-
-/// Deterministic every-Nth sampler.
-struct Stride {
-    stride: u64,
-    seen: u64,
-    cap: usize,
-    /// (surrogate line, verify-format line). The second is what
-    /// `snapshot-verify` consumes directly — real StrKeys from the snapshot
-    /// itself, so checking a sample never routes through our own tables.
+/// First-N sample collector.
+struct Sample {
+    /// (surrogate line, verify-format key). The key is real StrKeys from the
+    /// snapshot itself, so checking a sample never routes through our own
+    /// tables; `None` when detail mode is off or the snapshot carries no
+    /// identity for the key. Both land in ONE dump file per bucket, key first,
+    /// which `snapshot-verify` consumes directly.
     rows: Vec<(String, Option<String>)>,
 }
 
-impl Stride {
-    fn new(stride: u64, cap: usize) -> Self {
-        Self {
-            stride,
-            cap,
-            seen: 0,
-            rows: Vec::new(),
-        }
+impl Sample {
+    fn new() -> Self {
+        Self { rows: Vec::new() }
     }
     /// Take the row when `selected` — for populations whose iteration order is
-    /// not stable, where position-based striding would be irreproducible.
+    /// not stable, where first-N would be irreproducible across runs.
     fn offer_if(
         &mut self,
         selected: bool,
         make_line: impl FnOnce() -> String,
         make_key: impl FnOnce() -> Option<String>,
     ) {
-        self.seen += 1;
-        if selected && self.rows.len() < self.cap {
+        if selected && self.rows.len() < SAMPLE_CAP {
             self.rows.push((make_line(), make_key()));
         }
     }
@@ -112,31 +90,32 @@ impl Stride {
         make_line: impl FnOnce() -> String,
         make_key: impl FnOnce() -> Option<String>,
     ) {
-        self.seen += 1;
-        // (seen-1) % stride — `seen % stride == 1` never fires for stride 1,
-        // which silently produced EMPTY sample files on the first run.
-        if (self.seen - 1).is_multiple_of(self.stride) && self.rows.len() < self.cap {
-            self.rows.push((make_line(), make_key()));
-        }
+        self.offer_if(true, make_line, make_key);
     }
     fn write(&self, dir: &Path, name: &str) -> Result<(), BackfillError> {
         let path = dir.join(name);
-        let surrogates: Vec<&str> = self.rows.iter().map(|(l, _)| l.as_str()).collect();
-        std::fs::write(&path, surrogates.join("\n") + "\n")
+        // One file per bucket: verify key first (what `snapshot-verify` parses;
+        // it ignores the trailing surrogate columns), surrogates after. Rows
+        // whose identity the snapshot does not carry (an asset with no live
+        // trustline anywhere) are prefixed `unresolved` and counted rather than
+        // silently dropped.
+        let mut unresolved = 0usize;
+        let mut lines = Vec::with_capacity(self.rows.len());
+        for (line, key) in &self.rows {
+            match key {
+                Some(k) => lines.push(format!("{k}\t{line}")),
+                None => {
+                    unresolved += 1;
+                    lines.push(format!("unresolved\t{line}"));
+                }
+            }
+        }
+        std::fs::write(&path, lines.join("\n") + "\n")
             .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", path.display())))?;
-        // The companion file feeds `snapshot-verify` as-is. Rows whose identity
-        // the snapshot does not carry (an asset with no live trustline
-        // anywhere) are counted rather than silently dropped.
-        let keys: Vec<&str> = self.rows.iter().filter_map(|(_, k)| k.as_deref()).collect();
-        let unresolved = self.rows.len() - keys.len();
-        let key_path = dir.join(name.replace(".tsv", "_keys.tsv"));
-        std::fs::write(&key_path, keys.join("\n") + "\n")
-            .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", key_path.display())))?;
         println!(
-            "    wrote {} rows -> {} ({} with verify keys, {} unresolved)",
+            "    wrote {} rows -> {} ({} unresolved identities)",
             self.rows.len(),
             path.display(),
-            keys.len(),
             unresolved
         );
         Ok(())
@@ -146,17 +125,15 @@ impl Stride {
 /// Sample collectors for every bucket of the comparison, so each verdict can
 /// be spot-checked against RPC instead of trusted.
 struct Samples {
-    closure_classic: Stride,
-    ghost_classic: Stride,
-    ghost_native: Stride,
-    divergent_classic: Stride,
-    divergent_native: Stride,
-    agree_classic: Stride,
-    missing_classic: Stride,
-    /// Both new buckets are sampled at stride 1: they should be rare, and each
-    /// one is a defect candidate that a human must adjudicate.
-    closed_but_live: Stride,
-    divergent_same_ledger: Stride,
+    closure_classic: Sample,
+    ghost_classic: Sample,
+    ghost_native: Sample,
+    divergent_classic: Sample,
+    divergent_native: Sample,
+    agree_classic: Sample,
+    missing_classic: Sample,
+    closed_but_live: Sample,
+    divergent_same_ledger: Sample,
     /// `missing` split by the entry's own last-modified ledger vs our floor.
     missing_below_floor: u64,
     missing_above_floor: u64,
@@ -168,20 +145,17 @@ struct Samples {
 }
 
 impl Samples {
-    fn new(checkpoint: u32, cap: usize) -> Self {
+    fn new(checkpoint: u32) -> Self {
         Self {
-            // Strides derive from the requested cap over the measured
-            // populations. Defect-signal buckets stay at stride 1: every hit
-            // is a candidate a human must adjudicate.
-            closure_classic: Stride::new(stride_for(EST_CLOSURE, cap), cap),
-            ghost_classic: Stride::new(1, cap),
-            ghost_native: Stride::new(stride_for(EST_GHOST_NATIVE, cap), cap),
-            divergent_classic: Stride::new(1, cap),
-            divergent_native: Stride::new(stride_for(EST_DIVERGENT_NATIVE, cap), cap),
-            agree_classic: Stride::new(stride_for(EST_AGREE, cap), cap),
-            missing_classic: Stride::new(stride_for(EST_MISSING, cap), cap),
-            closed_but_live: Stride::new(1, cap),
-            divergent_same_ledger: Stride::new(1, cap),
+            closure_classic: Sample::new(),
+            ghost_classic: Sample::new(),
+            ghost_native: Sample::new(),
+            divergent_classic: Sample::new(),
+            divergent_native: Sample::new(),
+            agree_classic: Sample::new(),
+            missing_classic: Sample::new(),
+            closed_but_live: Sample::new(),
+            divergent_same_ledger: Sample::new(),
             missing_below_floor: 0,
             missing_above_floor: 0,
             missing_above_by_2m: std::collections::BTreeMap::new(),
@@ -194,28 +168,44 @@ impl Samples {
 /// measured for 1/64 of the key space — two orders under the server's limit.
 const KEY_SLICES: i128 = 64;
 
-/// The ClickHouse-cursor shape. Converted straight into the shared
-/// [`snapshot::OurRow`] so the live-cursor and TSV transports classify through
-/// one code path.
-#[derive(Row, Deserialize)]
-struct OurBalance {
-    holder_id: i64,
-    asset_id: i64,
-    amount: i128,
-    last_updated_ledger: i64,
-    closed_at_ledger: i64,
-}
-
-impl From<&OurBalance> for snapshot::OurRow {
-    fn from(b: &OurBalance) -> Self {
-        Self {
-            holder_id: b.holder_id,
-            asset_id: b.asset_id,
-            amount: b.amount,
-            last_updated_ledger: b.last_updated_ledger,
-            closed_at_ledger: b.closed_at_ledger,
+/// Stream our deduplicated `balances` in `holder_id` slices, invoking `f` per
+/// row. The ONE read path both the comparison and the seed use — like every
+/// other corrective command in this crate, the tool reads its own inputs
+/// through `sink.client()`; there is no manual export step. (A hand-exported
+/// TSV transport existed during the research phase and was removed in the
+/// 2026-08-20 review: the binary holds the same connection for `--execute`
+/// inserts anyway, and a cursor error propagates loudly where the operator
+/// CLI's exit-0-on-server-error trap did not.)
+///
+/// Errors below [`snapshot::MIN_OUR_ROWS`] rows: a short read (wrong database,
+/// dropped slice) would silently report our own holdings as a phantom network
+/// gap.
+pub(crate) async fn stream_our_rows(
+    sink: &Sink,
+    mut f: impl FnMut(&snapshot::OurRow),
+) -> Result<u64, BackfillError> {
+    let mut seen = 0u64;
+    for (i, (from, to)) in key_slices().enumerate() {
+        // `argMax` collapses the ReplacingMergeTree duplicates the way a read
+        // must: prod tables carry unmerged parts, so a plain SELECT double-counts.
+        let mut cursor = sink
+            .client()
+            .query(&slice_sql(from, to))
+            .fetch::<snapshot::OurRow>()?;
+        while let Some(row) = cursor.next().await? {
+            seen += 1;
+            f(&row);
         }
+        println!("    slice {:>2}/{KEY_SLICES} — {seen} rows so far", i + 1);
     }
+    if seen < snapshot::MIN_OUR_ROWS {
+        return Err(BackfillError::Incomplete(format!(
+            "our balances read returned {seen} rows, expected at least {} — a short \
+             read reports our own holdings as a phantom network gap (wrong database?)",
+            snapshot::MIN_OUR_ROWS
+        )));
+    }
+    Ok(seen)
 }
 
 /// Counts for one entity. Every field is a direction, never a ratio.
@@ -325,51 +315,10 @@ impl Tally {
     }
 }
 
-/// Stream our `balances` in `holder_id` slices and fold each row into the
-/// comparison. Read-only.
-async fn compare_our_rows(
-    sink: &Sink,
-    state: &mut SnapshotState,
-    native_asset_id: i64,
-    samples: &mut Samples,
-) -> Result<(Tally, Tally), BackfillError> {
-    let mut classic = Tally::default();
-    let mut native = Tally::default();
-    let mut seen_rows = 0u64;
-
-    for (i, (from, to)) in key_slices().enumerate() {
-        let slice = i as i128;
-        // `argMax` collapses the ReplacingMergeTree duplicates the way a read
-        // must: prod tables carry unmerged parts, so a plain SELECT double-counts.
-        let mut cursor = sink
-            .client()
-            .query(&slice_sql(from, to))
-            .fetch::<OurBalance>()?;
-        while let Some(row) = cursor.next().await? {
-            seen_rows += 1;
-            fold_row(
-                &row,
-                state,
-                native_asset_id,
-                &mut classic,
-                &mut native,
-                samples,
-            );
-        }
-        println!(
-            "    slice {:>2}/{KEY_SLICES} — {seen_rows} rows so far",
-            slice + 1
-        );
-    }
-
-    fill_missing(state, &mut classic, &mut native, samples);
-    Ok((classic, native))
-}
-
-/// The per-slice read. Spelled once so the live cursor and any exported TSV
-/// carry the SAME columns in the SAME order — a mismatch would silently
-/// misclassify every row rather than fail.
-pub fn slice_sql(from: i128, to: i128) -> String {
+/// The per-slice read. Its SELECT list IS the field order of
+/// [`snapshot::OurRow`] — a mismatch would silently misclassify every row
+/// rather than fail.
+fn slice_sql(from: i128, to: i128) -> String {
     // The aggregates are aliased INSIDE a subquery and renamed outside. Aliasing
     // `max(last_updated_ledger) AS last_updated_ledger` directly shadows the
     // column, so the next `argMax(..., last_updated_ledger)` binds the alias and
@@ -393,28 +342,8 @@ pub fn slice_sql(from: i128, to: i128) -> String {
     )
 }
 
-/// Print the exact export the comparison and the seed expect, one statement per
-/// key slice.
-///
-/// Without this the runbook tells an operator to "reproduce the sliced argMax
-/// query in `slice_sql`" — i.e. to hand-transcribe SQL out of Rust source, in a
-/// binary crate where `pub` buys nothing. A transcription slip does not fail;
-/// it silently changes which rows the comparison sees.
-pub fn print_export_sql() {
-    println!(
-        "-- {} statements. Run each, append the TabSeparated output to one file,\n\
-         -- and pass that file as --our-rows. Guard on the BODY containing\n\
-         -- 'DB::Exception': the client exits 0 on a server error.",
-        KEY_SLICES
-    );
-    for (from, to) in key_slices() {
-        println!("{} FORMAT TabSeparated;", slice_sql(from, to));
-    }
-}
-
-/// The slice boundaries the export must use, so a TSV produced outside this
-/// binary covers the key space exactly once.
-pub fn key_slices() -> impl Iterator<Item = (i128, i128)> {
+/// The slice boundaries, covering the i64 key space exactly once.
+fn key_slices() -> impl Iterator<Item = (i128, i128)> {
     let lo = i128::from(i64::MIN);
     let hi = i128::from(i64::MAX);
     let step = (hi - lo + 1) / KEY_SLICES;
@@ -429,79 +358,15 @@ pub fn key_slices() -> impl Iterator<Item = (i128, i128)> {
     })
 }
 
-/// Fold rows from a TSV export instead of a live ClickHouse cursor.
-///
-/// The columns are exactly the SELECT list in [`slice_sql`]. This exists
-/// because the operator transport for prod ClickHouse is a sanctioned
-/// read-only wrapper holding the mTLS material; a comparison run must not
-/// require handing those credentials to another binary. Same classification
-/// either way — only the transport differs.
-fn compare_from_tsv(
-    path: &Path,
-    state: &mut SnapshotState,
-    native_asset_id: i64,
-    samples: &mut Samples,
-) -> Result<(Tally, Tally), BackfillError> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| BackfillError::Incomplete(format!("open {}: {e}", path.display())))?;
-    let mut classic = Tally::default();
-    let mut native = Tally::default();
-    let mut seen = 0u64;
-
-    for (lineno, line) in std::io::BufReader::new(file).lines().enumerate() {
-        let line =
-            line.map_err(|e| BackfillError::Incomplete(format!("read line {lineno}: {e}")))?;
-        if line.is_empty() {
-            continue;
-        }
-        // The SHARED parser — compare's own copy had already drifted (it did
-        // not trim, so a CRLF export was rejected here and accepted by the
-        // seed). One reader, one meaning.
-        let row = snapshot::OurRow::parse(&line, lineno + 1)?;
-        let row = OurBalance {
-            holder_id: row.holder_id,
-            asset_id: row.asset_id,
-            amount: row.amount,
-            last_updated_ledger: row.last_updated_ledger,
-            closed_at_ledger: row.closed_at_ledger,
-        };
-        seen += 1;
-        fold_row(
-            &row,
-            state,
-            native_asset_id,
-            &mut classic,
-            &mut native,
-            samples,
-        );
-    }
-
-    println!("    {seen} rows read from {}", path.display());
-    // The report is what an operator signs off on, so a truncated export must
-    // not present here as a giant `missing` bucket. Same floor the seed applies
-    // before it writes.
-    const MIN_ROWS: u64 = 40_000_000;
-    if seen < MIN_ROWS {
-        return Err(BackfillError::Incomplete(format!(
-            "our-rows export holds {seen} rows, expected at least {MIN_ROWS} — a short \
-             export reports our own holdings as a phantom network gap"
-        )));
-    }
-    fill_missing(state, &mut classic, &mut native, samples);
-    Ok((classic, native))
-}
-
-/// Route one row to the right entity and classify it. Shared by both
-/// transports so they cannot drift apart.
+/// Route one row to the right entity and classify it.
 fn fold_row(
-    b: &OurBalance,
+    row: &snapshot::OurRow,
     state: &mut SnapshotState,
     native_asset_id: i64,
     classic: &mut Tally,
     native: &mut Tally,
     samples: &mut Samples,
 ) {
-    let row: snapshot::OurRow = b.into();
     let line = || {
         format!(
             "{}\t{}\t{}\t{}",
@@ -511,8 +376,8 @@ fn fold_row(
     let is_native = row.asset_id == native_asset_id;
     let out = if is_native { native } else { classic };
     let v = snapshot::verdict(
-        &row,
-        snapshot::snap_entry_for(state, &row),
+        row,
+        snapshot::snap_entry_for(state, row),
         samples.checkpoint,
     );
     out.observe(v, row.amount);
@@ -520,7 +385,7 @@ fn fold_row(
     // snapshot (populated only in detail mode). This is what breaks the
     // circularity the audit called out: reversing our surrogates through our
     // own tables meant auditing the tables with themselves.
-    let key = key_line(state, &row, is_native);
+    let key = key_line(state, row, is_native);
     // Sample the buckets a human has to adjudicate. `Agree` is sampled too: it
     // is the positive control — if the surrogate derivation were wrong, this
     // bucket would be empty, so a non-empty sample of it is evidence the whole
@@ -590,11 +455,13 @@ fn fill_missing(
                 .entry(e.ledger / 2_000_000 * 2_000_000)
                 .or_default() += 1;
         }
-        // Position-based striding is NOT deterministic here: this iterates a
-        // HashMap whose hasher is seeded per process, so the sample differed on
-        // every run and could not be re-verified or compared before/after.
-        // Select on a function of the KEY instead — same expected density,
-        // reproducible, and independent of any structure in the data.
+        // First-N is NOT deterministic here: this iterates a HashMap whose
+        // hasher is seeded per process, so the sample differed on every run and
+        // could not be re-verified or compared before/after. Select on a
+        // function of the KEY instead — reproducible, and independent of any
+        // structure in the data. The modulus is sized so ~19M missing rows
+        // yield on the order of the cap.
+        const MISSING_SAMPLE_MODULUS: u64 = 16_384;
         let row_for_key = snapshot::OurRow {
             holder_id: key.holder_id,
             asset_id: key.asset_id,
@@ -602,11 +469,10 @@ fn fill_missing(
             last_updated_ledger: 0,
             closed_at_ledger: 0,
         };
-        let missing_stride = samples.missing_classic.stride;
         samples.missing_classic.offer_if(
             (key.holder_id ^ key.asset_id)
                 .unsigned_abs()
-                .is_multiple_of(missing_stride),
+                .is_multiple_of(MISSING_SAMPLE_MODULUS),
             || {
                 format!(
                     "{}\t{}\t{}\t{}",
@@ -623,10 +489,8 @@ fn fill_missing(
 /// our rows, prints the counts. **Writes nothing, anywhere.**
 pub async fn compare_command(
     sink: &Sink,
-    our_rows: Option<&Path>,
     dump_dir: Option<&Path>,
     pinned_manifest: Option<&Path>,
-    sample_cap: Option<usize>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
     let http = snapshot::archive_client()?;
@@ -643,7 +507,6 @@ pub async fn compare_command(
         list.hashes.len()
     );
 
-    snapshot::verify_bucket_list_hash(&http, PUBNET_ARCHIVE, &list).await?;
     let take = list.hashes.len();
     let mut state = snapshot::build_state(
         &http,
@@ -670,20 +533,22 @@ pub async fn compare_command(
     );
 
     let native_id = db_clickhouse::persist::ids::NATIVE_ASSET_ID;
-    let mut samples = Samples::new(
-        list.checkpoint_ledger,
-        sample_cap.unwrap_or(DEFAULT_SAMPLE_CAP),
-    );
-    let (classic, native) = match our_rows {
-        Some(path) => {
-            println!("\n  folding our balances from {}…", path.display());
-            compare_from_tsv(path, &mut state, native_id, &mut samples)?
-        }
-        None => {
-            println!("\n  streaming our balances in {KEY_SLICES} key slices…");
-            compare_our_rows(sink, &mut state, native_id, &mut samples).await?
-        }
-    };
+    let mut samples = Samples::new(list.checkpoint_ledger);
+    let mut classic = Tally::default();
+    let mut native = Tally::default();
+    println!("\n  streaming our balances in {KEY_SLICES} key slices…");
+    stream_our_rows(sink, |row| {
+        fold_row(
+            row,
+            &mut state,
+            native_id,
+            &mut classic,
+            &mut native,
+            &mut samples,
+        );
+    })
+    .await?;
+    fill_missing(&state, &mut classic, &mut native, &mut samples);
 
     // The missing-bucket discriminator: below our floor is the expected blind
     // spot; above it is a defect signal that must be chased, not explained.
@@ -724,9 +589,8 @@ pub async fn compare_command(
     native.print("NATIVE XLM holdings (AccountEntry, not a trustline)", true);
 
     // Excluded on purpose — printed so the pass never reads as exhaustive when
-    // it is not. Only queried in client mode; a TSV run reports the exclusions
-    // from the export side rather than pretending to zero.
-    if our_rows.is_none() {
+    // it is not.
+    {
         let excluded_contract: u64 = sink
             .client()
             .query(
@@ -797,12 +661,15 @@ fn trustline_ledger_key(holder: &str, code: &str, issuer: &str) -> Option<stella
     }))
 }
 
-/// Verify sampled verdicts against Soroban RPC, the raw-XDR arbiter.
+/// Verify sampled verdicts against Soroban RPC — an independent ~100-line
+/// oracle over the snapshot decoder, for the one pre-`--execute` check.
 ///
-/// Input TSV: `kind<TAB>holder_strkey[<TAB>code<TAB>issuer]` where kind is
-/// `account` or `trustline`. Emits one line per key: `FOUND balance ledger` or
-/// `ABSENT`. **Absence from the response means the entry does not exist** —
-/// that is the deleted-account / removed-trustline test.
+/// Input: the dump files `snapshot-compare --dump-dir` writes, as-is. Each
+/// line starts `account<TAB>G…` or `trustline<TAB>G…<TAB>CODE<TAB>G-issuer`;
+/// trailing surrogate columns are ignored, and `unresolved` lines (identity
+/// not carried by the snapshot) are counted and skipped. Emits one line per
+/// key: `FOUND balance ledger` or `ABSENT`. **Absence from the response means
+/// the entry does not exist** — the deleted-account / removed-trustline test.
 pub async fn verify_command(
     rpc_url: &str,
     samples: &Path,
@@ -814,17 +681,23 @@ pub async fn verify_command(
         .map_err(|e| BackfillError::Incomplete(format!("read {}: {e}", samples.display())))?;
     let mut keys = Vec::new();
     let mut labels = Vec::new();
+    let mut n_unresolved = 0u64;
     for (n, line) in body.lines().enumerate() {
         if line.is_empty() {
             continue;
         }
         let f: Vec<&str> = line.split('\t').collect();
         let key = match f.as_slice() {
-            ["account", holder] => account_ledger_key(holder),
-            ["trustline", holder, code, issuer] => trustline_ledger_key(holder, code, issuer),
+            ["account", holder, ..] => account_ledger_key(holder),
+            ["trustline", holder, code, issuer, ..] => trustline_ledger_key(holder, code, issuer),
+            ["unresolved", ..] => {
+                n_unresolved += 1;
+                continue;
+            }
             _ => {
                 return Err(BackfillError::Incomplete(format!(
-                    "line {n}: expected 'account<TAB>G…' or 'trustline<TAB>G…<TAB>CODE<TAB>G…'"
+                    "line {n}: expected 'account<TAB>G…' or 'trustline<TAB>G…<TAB>CODE<TAB>G…' \
+                     (a snapshot-compare dump file)"
                 )));
             }
         };
@@ -835,6 +708,9 @@ pub async fn verify_command(
             }
             None => println!("SKIP\t{line}\t(malformed strkey)"),
         }
+    }
+    if n_unresolved > 0 {
+        println!("  {n_unresolved} unresolved-identity lines skipped");
     }
 
     let client = RpcClient::new(rpc_url)
@@ -881,10 +757,9 @@ pub async fn verify_command(
     //   would have bumped the ledger.
     //
     // So FOUND with `L <= checkpoint` is proof about the checkpoint, not merely
-    // about now. FOUND with `L > checkpoint` proves nothing either way, and the
-    // share of those measures how much power the whole check has.
+    // about now. FOUND with `L > checkpoint` proves nothing either way.
     let mut n_proven = 0u64;
-    let mut n_inconclusive = 0u64;
+    let mut n_changed_since = 0u64;
     for (k, label) in keys.iter().zip(&labels) {
         use stellar_xdr::{Limits, WriteXdr};
         let bytes = k
@@ -901,7 +776,7 @@ pub async fn verify_command(
                         );
                     }
                     Some(_) => {
-                        n_inconclusive += 1;
+                        n_changed_since += 1;
                         println!("FOUND\tCHANGED-SINCE\t{label}\tbalance={bal}\tledger={led}");
                     }
                     None => println!("FOUND\t{label}\tbalance={bal}\tledger={led}"),
@@ -918,20 +793,9 @@ pub async fn verify_command(
         keys.len()
     );
     if let Some(cp) = checkpoint {
-        let power = if n_found == 0 {
-            0.0
-        } else {
-            n_proven as f64 / n_found as f64
-        };
         println!(
             "  against checkpoint {cp}: {n_proven} proven unchanged since, \
-             {n_inconclusive} changed after it"
-        );
-        println!(
-            "  statistical power {:.1}% — an ABSENT result proves nothing on its own; \
-             only FOUND with a ledger at or below the checkpoint is decisive, so divide \
-             any error bound by this share",
-            power * 100.0
+             {n_changed_since} changed after it (those prove nothing either way)"
         );
     } else {
         println!(

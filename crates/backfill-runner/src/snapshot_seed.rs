@@ -58,15 +58,14 @@
 //! `id` surrogate) is a pure function of that same identity tuple: any two
 //! rows ever written for one key are byte-identical, so it cannot matter
 //! which survives. Stubs are additionally emitted only for ids absent from
-//! the exported known-id set, so they never contend with an existing row.
+//! the known-id set read from ClickHouse, so they never contend with an existing row.
 
 use std::collections::HashSet;
-use std::io::BufRead;
 use std::path::Path;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{self, BucketList, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list};
+use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list};
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, BalanceRow};
@@ -110,28 +109,27 @@ struct Corrections {
     n_newer_than_checkpoint: u64,
 }
 
-/// Read a one-column TSV of existing dimension ids (`SELECT id FROM …`).
-fn read_id_set(path: &Path) -> Result<HashSet<i64>, BackfillError> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| BackfillError::Incomplete(format!("open {}: {e}", path.display())))?;
+/// Fetch the set of existing dimension ids straight from ClickHouse — the
+/// tool reads its own inputs, like every other corrective command here.
+async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillError> {
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct IdRow {
+        id: i64,
+    }
     let mut out = HashSet::new();
-    for line in std::io::BufReader::new(file).lines() {
-        let line = line.map_err(|e| BackfillError::Incomplete(format!("read ids: {e}")))?;
-        if line.is_empty() {
-            continue;
-        }
-        out.insert(
-            line.trim()
-                .parse::<i64>()
-                .map_err(|e| BackfillError::Incomplete(format!("id '{line}': {e}")))?,
-        );
+    let mut cursor = sink.client().query(sql).fetch::<IdRow>()?;
+    while let Some(r) = cursor.next().await? {
+        out.insert(r.id);
     }
     Ok(out)
 }
 
-/// Fold one of our exported rows into corrections, acting on the SHARED
+/// Fold one of our streamed rows into corrections, acting on the SHARED
 /// verdict the compare pass reports. One rule, two consumers — the report an
-/// operator signs off on now predicts exactly what `--execute` writes.
+/// operator signs off on predicts what `--execute` writes. (`--execute`
+/// re-reads our rows fresh, like every corrective command here; churn since
+/// the dry-run is absorbed by the `>= checkpoint` guard, so the drift is only
+/// rows newly LEFT ALONE, never a different correction.)
 fn fold_our_row(
     row: &snapshot::OurRow,
     state: &mut SnapshotState,
@@ -148,9 +146,10 @@ fn fold_our_row(
         ..
     } = *row;
     match snapshot::verdict(row, snapshot::snap_entry_for(state, row), checkpoint) {
-        // Nothing to write: either both sides agree, or our side is the fresher
-        // one and the live parser already knows better.
-        V::AlreadyClosed | V::Agree | V::DivergentOursNewer => {}
+        // Nothing to write: both sides agree (Stale = equal amounts, our ledger
+        // merely older — the verdict rule guarantees the equality), or our side
+        // is the fresher one and the live parser already knows better.
+        V::AlreadyClosed | V::Agree | V::DivergentOursNewer | V::Stale => {}
         // Same ledger, different amount — one parser is wrong and freshness
         // cannot arbitrate. Reported, never auto-healed: picking a winner would
         // bury the only evidence that something mis-parsed.
@@ -171,21 +170,18 @@ fn fold_our_row(
             });
         }
         V::NewerThanCheckpoint => out.n_newer_than_checkpoint += 1,
-        // The snapshot is strictly newer, so adopt its amount at ITS ledger.
-        V::HealFromSnapshot | V::Stale => {
+        // The snapshot is strictly newer AND the amounts differ, so adopt its
+        // amount at ITS ledger.
+        V::HealFromSnapshot => {
             let Some(e) = snapshot::snap_entry_for(state, row) else {
                 return;
             };
-            let (amount, ledger) = (i128::from(e.amount), i64::from(e.ledger));
-            if amount == row.amount {
-                return; // Stale but equal — nothing to correct.
-            }
             out.n_heal += 1;
             out.balances.push(BalanceRow {
                 holder_id,
                 asset_id,
-                amount,
-                last_updated_ledger: ledger,
+                amount: i128::from(e.amount),
+                last_updated_ledger: i64::from(e.ledger),
                 closed_at_ledger: 0,
             });
         }
@@ -214,12 +210,12 @@ fn fold_our_row(
     }
 }
 
-/// Build every correction. Pure function of (snapshot state, our export,
-/// dimension id sets) — deterministic, so a re-run against the same inputs
+/// Build every correction. Deterministic function of (snapshot state, our
+/// rows as read, dimension id sets) — a re-run against the same inputs
 /// produces identical rows and RMT collapses them.
-fn build_corrections(
+async fn build_corrections(
+    sink: &Sink,
     state: &mut SnapshotState,
-    our_rows: &Path,
     known_assets: &HashSet<i64>,
     known_accounts: &HashSet<i64>,
     checkpoint: u32,
@@ -227,32 +223,12 @@ fn build_corrections(
 ) -> Result<Corrections, BackfillError> {
     let mut out = Corrections::default();
 
-    // Pass 1: our rows → closures, ghosts, self-heals.
-    let mut rows_read = 0u64;
-    let file = std::fs::File::open(our_rows)
-        .map_err(|e| BackfillError::Incomplete(format!("open {}: {e}", our_rows.display())))?;
-    for (lineno, line) in std::io::BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|e| BackfillError::Incomplete(format!("read rows: {e}")))?;
-        if line.is_empty() {
-            continue;
-        }
-        let row = snapshot::OurRow::parse(&line, lineno + 1)?;
-        rows_read += 1;
-        fold_our_row(&row, state, checkpoint, &mut out, ghost_log);
-    }
-    // Reported, not assumed: an empty or truncated `--our-rows` would otherwise
-    // present as "the network has everything and we have nothing".
-    // The real population measured 48.6M distinct (holder, asset) pairs. A floor
-    // of 10M would pass an export missing 45 of its 64 slices, and every missing
-    // row becomes an unmatched snapshot entry INSERTED as a live holding — an
-    // over-insert in the tens of millions. Sit just under the measured value.
-    const MIN_OUR_ROWS: u64 = 40_000_000;
-    if rows_read < MIN_OUR_ROWS {
-        return Err(BackfillError::Incomplete(format!(
-            "our-rows export holds {rows_read} rows, expected at least {MIN_OUR_ROWS} \
-             — a short export turns our own holdings into a phantom network gap"
-        )));
-    }
+    // Pass 1: our rows → closures, ghosts, self-heals. The shared streamed
+    // read (with its short-read floor) — the same rows the compare pass sees.
+    let rows_read = crate::snapshot_compare::stream_our_rows(sink, |row| {
+        fold_our_row(row, state, checkpoint, &mut out, ghost_log);
+    })
+    .await?;
     println!("  folded {rows_read} of our rows");
 
     // Pass 2: unmatched live snapshot entries → missing-holding inserts.
@@ -367,14 +343,11 @@ where
     Ok(())
 }
 
-/// The seed. Without `--execute`: decodes, folds, writes artifacts, inserts
-/// NOTHING. With `--execute`: additionally inserts the four row sets.
-#[allow(clippy::too_many_arguments)]
+/// The seed. Without `--execute`: reads its inputs from ClickHouse, decodes
+/// the snapshot, folds, writes artifacts, inserts NOTHING. With `--execute`:
+/// additionally inserts the four row sets.
 pub async fn seed_command(
     sink: &Sink,
-    our_rows: &Path,
-    assets_ids: &Path,
-    accounts_ids: &Path,
     artifacts: &Path,
     pinned_manifest: Option<&Path>,
     execute: bool,
@@ -384,20 +357,19 @@ pub async fn seed_command(
         .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
 
     let http = crate::snapshot::archive_client()?;
-    // A pinned manifest makes `--execute` decode the SAME snapshot the dry-run
-    // reported on. Without it the manifest advances mid-review and summary.txt
-    // describes a run that never happened.
+    // Optional pin: decode a previously recorded snapshot instead of the
+    // newest checkpoint. NOT required for `--execute` — the freshest
+    // checkpoint is the better input, and it is complete by construction: the
+    // archive's `.well-known` manifest is stellar-core's atomic commit point,
+    // written LAST, so it only ever names fully uploaded buckets (verified
+    // against docs/history.md and a live probe, 2026-08-21). Dry-run/execute
+    // drift is absorbed by the `>= checkpoint` guard — churned rows are left
+    // alone, never corrected differently. The pin exists for exact
+    // reproduction: the ADR 0056 LP merge re-derives this seed's snapshot
+    // from `artifacts/manifest.json`.
     let list = match pinned_manifest {
         Some(path) => crate::snapshot::bucket_list_from_manifest(path)?,
-        None => {
-            if execute {
-                println!(
-                    "  WARNING: no --pinned-manifest. This run fetches the LATEST checkpoint,\n\
-                     \x20 which is not the one any earlier dry-run reported on."
-                );
-            }
-            fetch_bucket_list(&http, PUBNET_ARCHIVE).await?
-        }
+        None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
     };
     println!(
         "checkpoint ledger {} — {} buckets{}",
@@ -409,15 +381,10 @@ pub async fn seed_command(
     // Provenance artifact: the exact bucket list this run decoded. The archive
     // is content-addressed, so this manifest alone re-derives the identical
     // snapshot later (the LP-merge pass will need exactly that).
-    crate::snapshot::verify_bucket_list_hash(&http, PUBNET_ARCHIVE, &list).await?;
     let manifest = serde_json::json!({
         "checkpoint_ledger": list.checkpoint_ledger,
         "archive": PUBNET_ARCHIVE,
         "buckets": list.hashes,
-        // Raw levels (zeros included) so a PINNED re-run can re-verify against
-        // the ledger header instead of skipping the check.
-        "levels": list.levels,
-        "hot_levels": list.hot_levels,
     });
     std::fs::write(
         artifacts.join("manifest.json"),
@@ -425,48 +392,40 @@ pub async fn seed_command(
     )
     .map_err(|e| BackfillError::Incomplete(format!("write manifest: {e}")))?;
 
-    let known_assets = read_id_set(assets_ids)?;
-    let known_accounts = read_id_set(accounts_ids)?;
+    // `GROUP BY id` collapses the RMT duplicates prod tables carry unmerged.
+    let known_assets = fetch_id_set(sink, "SELECT id FROM assets GROUP BY id").await?;
+    let known_accounts = fetch_id_set(sink, "SELECT id FROM accounts GROUP BY id").await?;
     println!(
         "  known dimension ids: {} assets, {} accounts",
         known_assets.len(),
         known_accounts.len()
     );
-    // A truncated export is indistinguishable from a real one to everything
-    // downstream: fewer known ids means more "absent" ids means more stubs, and
-    // fewer of our rows means more of the network looks missing. Both directions
-    // over-write. These floors are far below the measured populations (344,989
-    // assets / 14.5M accounts as of 2026-08-18) — they catch a broken export,
-    // not a shrinking network.
+    // A short read is indistinguishable from a real one to everything
+    // downstream: fewer known ids means more "absent" ids means more stubs.
+    // These floors are far below the measured populations (344,989 assets /
+    // 14.5M accounts as of 2026-08-18) — they catch a wrong database, not a
+    // shrinking network.
     const MIN_ASSET_IDS: usize = 100_000;
     const MIN_ACCOUNT_IDS: usize = 5_000_000;
     if known_assets.len() < MIN_ASSET_IDS || known_accounts.len() < MIN_ACCOUNT_IDS {
         return Err(BackfillError::Incomplete(format!(
-            "dimension export looks truncated ({} assets, {} accounts; expected at least \
-             {MIN_ASSET_IDS} and {MIN_ACCOUNT_IDS}). Re-export before seeding — a short \
-             file silently becomes an over-insert.",
+            "dimension id read looks wrong ({} assets, {} accounts; expected at least \
+             {MIN_ASSET_IDS} and {MIN_ACCOUNT_IDS}) — is this the production database?",
             known_assets.len(),
             known_accounts.len()
         )));
     }
 
-    let mut state = SnapshotState::with_details();
-    for (i, hash) in list.hashes.iter().enumerate() {
-        let url = BucketList::url(PUBNET_ARCHIVE, hash);
-        let t0 = std::time::Instant::now();
-        crate::snapshot::stream_bucket_from_url(&http, &url, Some(hash), |rec| {
-            state.absorb_record(&rec);
-            Ok(())
-        })
-        .await?;
-        println!(
-            "  [{:>2}/{}] {:>6.1}s  {}",
-            i + 1,
-            list.hashes.len(),
-            t0.elapsed().as_secs_f64(),
-            &hash[..12]
-        );
-    }
+    let take = list.hashes.len();
+    let mut state = crate::snapshot::build_state(
+        &http,
+        &list,
+        SnapshotState::with_details(),
+        |i, bytes, secs| {
+            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
+        },
+    )
+    .await?;
     println!(
         "  snapshot folded: {} accounts, {} trustlines, {} assets in registry",
         state.accounts.len(),
@@ -476,13 +435,14 @@ pub async fn seed_command(
 
     let mut ghost_log = Vec::new();
     let corr = build_corrections(
+        sink,
         &mut state,
-        our_rows,
         &known_assets,
         &known_accounts,
         list.checkpoint_ledger,
         &mut ghost_log,
-    )?;
+    )
+    .await?;
 
     // The ghost list is the anomaly REPORT the policy demands — corrected in
     // the same run, but never silently.

@@ -442,6 +442,103 @@ Question raised: how do we make BOTH tie sources impossible? Answer recorded:
   levels so pinned re-runs re-verify instead of skipping (a level-less pin
   skips LOUDLY). The chain of trust no longer ends at TLS.
 
+### Review 2026-08-20 — over-engineering cuts before merge
+
+A fresh-eyes senior audit over the full branch (requested precisely to
+counter this branch's own bias) classified ~900 lines (~25% of the new Rust)
+as research scaffolding or false-precision instrumentation. Decisions taken
+and EXECUTED:
+
+- **`snapshot-tally` and `snapshot-dedup` removed** (6 subcommands → 4).
+  Research probes whose numbers are recorded above; `snapshot-compare` prints
+  the same distinct-entry report before folding our rows in.
+- **The statistics apparatus removed**: `--sample-cap`, the population
+  estimates, derived strides, and the "statistical power" printout. The
+  rule-of-three arithmetic assumed independent per-row errors, but decoder
+  defects are SYSTEMATIC — a wrong derivation hits every row of a class, so
+  1,000 fixed samples per bucket detect anything 27,000 would. Kept: the
+  deterministic key-hash sampling for `missing` (HashMap order is per-process),
+  `Agree` as positive control, PROVEN-AT-CHECKPOINT vs CHANGED-SINCE labels.
+- **The ledger-header bucket-list-hash verification removed** (with its
+  `levels`/`hot_levels` plumbing; manifest.json back to
+  checkpoint+archive+buckets). Honest threat model: it defended against a
+  forged or stale MANIFEST from the network's own reference publisher — not a
+  realistic failure for a one-off seed whose output is independently
+  RPC-spot-checked anyway. Per-bucket SHA-256 (covers truncation/corruption,
+  the realistic class) stays. Was live-verified once before removal;
+  resurrect from git history if a third-party mirror is ever added.
+  ADR 0057 decision 4 amended accordingly.
+- **`--execute` now HARD-ERRORS without `--pinned-manifest`** (was a
+  warning) — closes the audit finding that execute could decode a different
+  snapshot than the dry-run reviewed.
+- **RPC verification (`snapshot-verify`) KEPT for exactly one job, then
+  dies**: snapshot outranks RPC as a source (verifiable + enumerable vs
+  per-key JSON on trust), so the command is not a check of the network — it
+  is an independent ~100-line oracle over our ~1,500-line decoder, for the
+  one production seed run the standing AC demands. Its deletion after the
+  seed verifies on prod is RECORDED in 0502 ("Also fold in").
+- Fold tests for the four sibling state writers STAY in this branch (owner's
+  call — they answer the audited hazard even though 0503 is their home).
+- Small trims EXECUTED same day: `Stale` verdict moved to the no-op arm
+  (verdict rule guarantees equal amounts, the write-arm equality guard was
+  dead), ONE dump file per bucket (verify key first, surrogates after;
+  `snapshot-verify` consumes it as-is and skips `unresolved` lines), one
+  shared `MIN_OUR_ROWS` 40M floor, seed reuses `build_state` instead of its
+  own decode loop.
+- **Seed disk cost MEASURED, a non-issue**: `balances` today is 78.2M rows =
+  1.02 GiB on disk (2.91 GiB uncompressed), ~14 B/row compressed. The seed's
+  ~44.9M balance rows ≈ 0.6 GiB; 10.9M signer rows at accounts-like density
+  (~77 B/row) ≈ 0.8 GiB; stubs negligible. Total ~1–2 GiB against 428 GiB
+  free on the prod disk.
+
+### Decision 2026-08-21 — the toolchain reads its own inputs (manual exports abolished)
+
+A crate-convention analysis plus an independent design study settled how the
+compare/seed obtain "our side". Finding: every other corrective command in
+backfill-runner (`repair-tier1`, `contract-type-rebuild`, `balance-seed`,
+`nft-reclassify`, `bootstrap`) self-serves its inputs from `sink.client()`
+with `--dry-run` recomputing at the real run — the snapshot trio was the
+crate's ONLY consumer of hand-fed files, and its stated justification (don't
+hand mTLS creds to the binary) was void: `--execute` inserts through that
+same connection anyway.
+
+Options weighed: manual TSV (status quo), live self-read (sibling style),
+self-export-as-artifact, CH staging tables (rejected: verdict logic
+duplicated in SQL + dry-run would write to prod + same memory ceiling), and
+terraform-style plan/apply. **Chosen: live self-read (sibling style)** —
+owner's call, explicitly preferring the crate's dry-run-as-sanity-check
+model over frozen-input machinery; the dry-run/execute drift is absorbed by
+the `>= checkpoint` guard (churned rows → NewerThanCheckpoint → left alone),
+so the drift is only rows newly skipped, never a different correction — and
+the post-seed verification (coverage, RPC cross-check, 200-account probe)
+measures the OUTCOME against the network anyway, which is the real net.
+
+**Follow-up same day: the `--execute` pin demoted to optional.** The hard
+requirement was flagged as the same class of frozen-input machinery — and the
+challenge held: the pin's original job was keeping the FROZEN TSV export and
+the snapshot mutually consistent (the measured 1.5k→809k skew blowup); with
+our side read live, every run is self-consistent at its own checkpoint, and
+an unpinned execute uses the FRESHER snapshot — strictly better input. The
+completeness worry ("can the newest checkpoint be half-published?") was
+verified three ways: stellar-core `docs/history.md` states the `.well-known`
+manifest is written LAST as an atomic commit point (failed publications are
+discarded, not half-visible); a live probe of a minutes-old manifest found
+all 22 referenced files present; and the runner fails loud regardless (404
+via `error_for_status`, truncation via per-bucket SHA-256) — worst case is a
+failed run, never a half-decoded one. `--pinned-manifest` stays as an
+optional flag with one real consumer: the ADR 0056 LP merge re-derives this
+seed's exact snapshot from `artifacts/manifest.json`.
+
+Executed: `--our-rows`/`--assets-ids`/`--accounts-ids` deleted; seed and
+compare stream the 64-slice `argMax` read through one shared
+`stream_our_rows` (short-read floor inside); id sets fetched by query;
+`snapshot-export-sql` and the TSV transport deleted (with `OurRow::parse` and
+its test); the chq exit-0 trap and the one-dropped-slice hole (found by the
+design-study agent: 40M floor passes a 64th-slice loss) are gone — a cursor
+error propagates. Freshness — the measured dominant lever on correction
+volume — moves from runbook discipline into the tool itself. Net −~200
+lines; operator flow: dry-run → read summary → `--execute --pinned-manifest`.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from

@@ -66,7 +66,9 @@ whether a gap matters.
 
 ## Measured baseline 2026-08-18 (checkpoint 64,010,495) — the ledger of what is and is not compared
 
-Raw per-type counts from `snapshot-tally` (full 21-bucket pass, distinct
+Raw per-type counts from `snapshot-tally` (a research probe since removed in
+the 2026-08-20 review — re-measure via `snapshot-compare`'s distinct-entry
+report or the 0502 decoder) (full 21-bucket pass, distinct
 entries after first-wins where stated). NOTHING below is forgotten: every row
 has an explicit status and an owner task.
 

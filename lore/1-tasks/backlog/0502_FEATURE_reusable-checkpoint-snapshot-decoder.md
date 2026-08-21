@@ -113,6 +113,14 @@ full-population pass, and it passed.
   better (complete, verified transport, real-ledger versions, no synthetic
   watermarks). Retire ONLY after the seed verifies on prod, as its own
   change — it is live backfill-flow behaviour, not a spent one-shot.
+- **Deleting `snapshot-verify`** (decided 2026-08-20, over-engineering
+  review): the RPC spot-check is not a check of the network — the snapshot
+  outranks RPC as a source (hash-verified + enumerable vs per-key JSON on
+  trust). It exists as a one-time independent oracle over the snapshot
+  decoder for the 0463 production seed. Once that seed verifies on prod
+  (satisfying 0463's "cross-check RPC regardless of result" AC), the command
+  and its `trustline_ledger_key` helper come out; standing decoder confidence
+  is the ignored network test plus 0503's recurring audit.
 
 ## Acceptance criteria
 

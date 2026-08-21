@@ -358,27 +358,34 @@ hold, while the snapshot answers **"what does the network have that we do
 not?"** — the only question a change-stream can never answer (78.85% of chain
 history predates our ledger floor).
 
-Five subcommands, all read-only except the seed's explicit `--execute`:
+Three subcommands, all read-only except the seed's explicit `--execute`.
+There are NO manual exports: each command reads our side straight from
+ClickHouse through the same mTLS connection `--execute` inserts through, like
+every other corrective command in this crate. (The research-phase probes
+`snapshot-tally`/`snapshot-dedup`, the `snapshot-export-sql` helper and the
+hand-exported-TSV transport were removed in the 2026-08-20 review;
+`snapshot-compare` prints the distinct-entry report itself.)
 
-| Subcommand                                                                                 | What it does                                                                                                                                                                                                                                                                                                                                       | Writes                                                                      |
-| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `snapshot-tally`                                                                           | download + decode all buckets, count records per entry type                                                                                                                                                                                                                                                                                        | nothing                                                                     |
-| `snapshot-dedup`                                                                           | first-wins per key → DISTINCT live/dead entries                                                                                                                                                                                                                                                                                                    | nothing                                                                     |
-| `snapshot-compare [--our-rows <tsv>] [--dump-dir <dir>]`                                   | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with samples and a ledger-floor histogram. Omit `--our-rows` to stream our side straight from ClickHouse; pass it to fold a local TSV export instead (the transport when the mTLS material lives with the operator's read-only wrapper) | nothing                                                                     |
-| `snapshot-verify --samples <tsv>` (needs `--soroban-rpc-url`)                              | spot-check any sample against live chain state via `getLedgerEntries` raw XDR — absence from the response means the entry does not exist                                                                                                                                                                                                           | nothing                                                                     |
-| `snapshot-seed --our-rows … --assets-ids … --accounts-ids … --artifacts <dir> [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default                                                                                                                                                                                                                              | `balances`, `account_signers`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                                                        | What it does                                                                                                                                                                                                                        | Writes                                                                      |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `snapshot-compare [--dump-dir <dir>]`                                             | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with sample dumps and a ledger-floor histogram                                                                           | nothing                                                                     |
+| `snapshot-verify --samples <dump.tsv> --checkpoint N` (needs `--soroban-rpc-url`) | spot-check a `--dump-dir` file against live chain state via `getLedgerEntries` raw XDR — absence from the response means the entry does not exist                                                                                   | nothing                                                                     |
+| `snapshot-seed --artifacts <dir> [--pinned-manifest …] [--execute]`               | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; optional `--pinned-manifest` re-decodes a recorded snapshot (exact reproduction, e.g. the ADR 0056 LP merge) | `balances`, `account_signers`, `assets`, `accounts` — only with `--execute` |
 
 **The seed's ordering contract (do not reorder):**
 
 1. Deploy the lifecycle writer (the indexer that stamps `closed_at_ledger`)
    FIRST.
-2. Export fresh inputs minutes before the run (`our_balances` via the sliced
-   `argMax` query in `snapshot_compare::slice_sql`, plus `SELECT id FROM
-assets/accounts`); the skew window measurably grows false divergents.
-3. Run `snapshot-seed --execute` against a checkpoint taken AFTER the deploy.
-   Reversed, every removal between checkpoint and deploy is written by the old
-   writer as a plain zero with a HIGHER version than the seed's closure — the
-   ghost resurrects.
+2. Run `snapshot-seed --execute` against a checkpoint taken
+   AFTER the deploy. Reversed, every removal between checkpoint and deploy is
+   written by the old writer as a plain zero with a HIGHER version than the
+   seed's closure — the ghost resurrects. The tool reads our rows itself at
+   run time, so input freshness — measured as the dominant lever on correction
+   volume — is no longer an operator concern. Churn between the dry-run read
+   and the execute read is absorbed by the `>= checkpoint` guard (such rows
+   are classified newer-than-checkpoint and left alone), so the dry-run's
+   `summary.txt` is a close estimate of the execute's counts, never a
+   contradiction of them.
 
 **No indexer stop is needed.** Every seeded row versions on a real ledger:
 live data on the entry's own `lastModifiedLedgerSeq`, closures on the run's

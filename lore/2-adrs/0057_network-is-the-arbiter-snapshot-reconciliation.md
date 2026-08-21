@@ -67,12 +67,17 @@ Concretely:
    the agreed extension is a heal-from-NETWORK mode (adopt the chain's value
    at the checkpoint version, full list to an artifact) — the "new data wins"
    outcome, sourced from something better than either run.
-4. **Every snapshot consumer verifies the chain of trust**: each bucket's
-   SHA-256 against the manifest, and the manifest's bucket list against the
-   `bucket_list_hash` in the checkpoint's own ledger header — the value the
-   validators signed (post-protocol-23: the CAP-0062 live+hotArchive
-   composition). A pinned manifest without raw levels skips the header check
-   LOUDLY, never silently.
+4. **Every snapshot consumer verifies bucket content**: each downloaded
+   bucket's SHA-256 (over the decompressed XDR) against the manifest's hash,
+   so a truncated or substituted file fails loudly. The manifest itself is
+   taken on trust (TLS + the SDF archive). A further check of the manifest
+   against the consensus-signed `bucket_list_hash` in the ledger header was
+   built, live-verified once, and REMOVED in the 2026-08-20 review as
+   over-engineering: it defended against a forged-or-stale manifest from the
+   network's own reference publisher, while the realistic failure modes (bad
+   download, wrong decode) are covered by the per-bucket hashes and the RPC
+   spot-check. Resurrect from git history if a third-party mirror is ever
+   added as a source.
 5. **A new state table joins the reconciliation or records why not.** Any
    future table derived from ledger entries MUST either be added to the
    snapshot comparison (0503's per-entity table names every entry type's
@@ -90,8 +95,9 @@ Concretely:
   run after a backfill is not optional hygiene; it is what makes the
   backfill's intent actually take effect under equal-version inserts.
 - The snapshot toolchain becomes standing infrastructure (task 0502 extracts
-  the decoder; 0503 runs the audit on a schedule). Its inputs are
-  content-verified end to end, so "verified source" is a checked property.
+  the decoder; 0503 runs the audit on a schedule). Its bucket inputs are
+  content-verified against the manifest, so a corrupted download is a loud
+  failure, never a silent misread.
 - Rows are never deleted; wrongness is superseded. The pre-correction export
   is therefore the only pre-image and must be archived before every
   `--execute`.
