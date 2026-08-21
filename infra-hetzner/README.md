@@ -274,6 +274,25 @@ ansible-playbook ... --tags storagebox
 > docker inspect -f '{{.HostConfig.LogConfig}}' clickhouse   # → max-size:100m max-file:5
 > ```
 
+> **Single-file bind mounts pin the inode — an edit can reach the box and
+> still not reach the process.** `Caddyfile` and `ca/ca.crt` are mounted into
+> `app-caddy-1` as individual files, and a single-file bind mount follows the
+> **inode**, not the path. rsync's default temp-file + rename hands every sync
+> a new inode, so the container keeps reading the pre-sync file. From the
+> 2026-07-06 deploy until task 0513 found it, Caddy served a Caddyfile that no
+> longer existed at that path — and a `caddy reload` would have re-read the
+> same orphan: repo green, box green, handler green, nothing changed. The
+> subtree sync now passes `--inplace`, which keeps the inode. A container
+> already pinned to an orphan needs one recreate to re-anchor:
+>
+> ```bash
+> docker compose -f /srv/app/docker-compose.yml \
+>                -f /srv/app/docker-compose.prod.yml up -d --force-recreate caddy
+> # the two must agree afterwards:
+> stat -c %i /srv/app/infra-hetzner/Caddyfile
+> docker exec app-caddy-1 stat -c %i /etc/caddy/Caddyfile
+> ```
+
 ## Post-deploy verification
 
 After the first deploy and after any potentially disruptive
@@ -288,6 +307,13 @@ docker compose -f /srv/app/docker-compose.yml \
 
 # CH responds intra-host.
 docker exec clickhouse clickhouse-client -q 'SELECT version()'
+
+# Caddy enforces what the Caddyfile says. Read it back from the RUNNING
+# process — the file on disk has already been the wrong answer once (see
+# the inode gotcha above). All four values should read 7200 s except
+# dial_timeout at 10 s.
+docker exec app-caddy-1 wget -qO- http://127.0.0.1:2019/config/ \
+  | tr '{,}' '\n' | grep -i timeout
 
 # CH responds via Caddy with a valid client cert.
 exit
