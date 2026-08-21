@@ -186,6 +186,30 @@ nothing; deferring it costs the proxy a second bounce later.
 
 ## Issues Encountered
 
+- **The first deploy failed on a landmine from 0244, six weeks old.** Task 0244
+  removed the three Postgres services from `docker-compose.yml` on 2026-07-07
+  but left their port-guard overrides in `docker-compose.prod.yml`. An override
+  for a service that no longer exists does not degrade to a no-op — it DEFINES
+  that service with neither image nor build context, and Compose rejects the
+  entire project. The deploy synced the new files, then died at
+  `Bring up (or update) the production compose stack`, leaving the box with
+  valid containers but an **invalid compose project**: every `docker compose`
+  call against `/srv/app` failed, including the `soroban-stack.service` unit
+  that brings the stack up at boot. Running containers were unaffected; a
+  reboot in that window would not have come back. Fixed forward by deleting the
+  three dead overrides.
+
+  This is the same shape as the task itself: a change that can only be falsified
+  at deploy time, in a repo where deploys are manual and rare. Nothing between
+  2026-07-07 and 2026-08-21 could have caught it — `docker compose config` is
+  not run anywhere in CI.
+
+- **The checksum sentinel was already spent by the failed run.** It recorded the
+  new Caddyfile hash before the play died, so the re-run reports `ok` and does
+  NOT notify `Reload caddy`. Harmless here — the compose recreate is what
+  applies the change — but worth knowing before reading the second run's output
+  as "nothing happened".
+
 - **`--inplace` alone does not run.** `ansible.posix.synchronize` passes
   `--delay-updates` by default and rsync refuses the combination outright:
   `rsync: --inplace cannot be used with --delay-updates`. They are opposites —

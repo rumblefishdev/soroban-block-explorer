@@ -250,32 +250,17 @@ services:
     # `docker compose up` because the sidecar exits 0 after
     # applying init.sql; CH itself does not re-trigger it.
 
-  # The dev Postgres service is profile-gated out of the default
-  # composition. `docker compose up` (no --profile) skips it
-  # entirely in production; `--profile local-only` is never passed
-  # in prod, so this service never starts on the Hetzner box.
-  #
-  # `ports: !override []` is defensive — even if an operator
-  # accidentally invokes `--profile local-only` in prod (copying
-  # a dev command), the service starts with no published ports
-  # rather than exposing a default-credential Postgres publicly.
-  postgres:
-    profiles: [local-only]
-    ports: !override []
-
-  # `postgres-merge` and `postgres-snapshot-source` are gated by
-  # the `db-merge` profile in the base compose file with public
-  # bindings on 5436/5437 and default credentials `postgres/postgres`.
-  # The prod overlay does not need these services and a
-  # `--profile db-merge` invocation here would expose two
-  # publicly-accessible Postgres instances with trivially-known
-  # credentials. Force ports off the public network as a
-  # belt-and-suspenders guard against operator error.
-  postgres-merge:
-    ports: !override []
-
-  postgres-snapshot-source:
-    ports: !override []
+  # The three Postgres port-guard overrides that used to live here
+  # (`postgres`, `postgres-merge`, `postgres-snapshot-source`) are gone
+  # with the services themselves — task 0244 dropped them from the base
+  # compose file on 2026-07-07. An override for a service that no longer
+  # exists is not inert: it DEFINES that service, with neither an image
+  # nor a build context, and Compose rejects the whole project
+  # ("service \"postgres-merge\" has neither an image nor a build context
+  # specified: invalid compose project"). That broke the first deploy
+  # after 0244, six weeks later, because these files are only ever
+  # validated at deploy time and deploys here are manual and rare
+  # (task 0513).
 
 volumes:
   caddy-data:
