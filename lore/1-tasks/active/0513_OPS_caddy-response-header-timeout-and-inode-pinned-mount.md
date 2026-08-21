@@ -186,6 +186,18 @@ nothing; deferring it costs the proxy a second bounce later.
 
 ## Notes
 
+**Neither route applies this change on its own.** `--tags app` syncs the
+Caddyfile, flips the checksum sentinel and fires `Reload caddy` — which is
+`state: restarted`, a per-service restart, and a restart does not re-anchor a
+bind mount. And the `Sync compose files` task carries **no `notify:` at all**,
+so the new `logging:` block reaches the box and waits. One
+`up -d --force-recreate caddy` is mandatory exactly once, whichever route
+ships it; after that `--inplace` keeps the inode stable and the restart
+handler is sufficient forever. Left as-is deliberately: routing the compose
+sync to `Restart compose stack` would bounce ClickHouse on every compose edit,
+which is a much larger blast radius than the problem. Recorded for 0455/0511
+rather than fixed here.
+
 An instance for [0455](0455_OPS_observability-umbrella-declared-vs-actual-and-silent-failure/README.md)'s
 defect 1, with a twist worth recording: here "declared vs actual" is not repo
 versus box — both agreed — but **the file on the box versus the memory of the
