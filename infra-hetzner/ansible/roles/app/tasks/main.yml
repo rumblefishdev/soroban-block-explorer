@@ -192,11 +192,20 @@
   # handler below can actually see what this task wrote. A container
   # already pinned to an orphan needs one `up -d --force-recreate`
   # to re-anchor — see infra-hetzner/README.md.
+  #
+  # `delay_updates: false` is required, not stylistic: the module
+  # passes `--delay-updates` by default and rsync refuses the pair
+  # outright ("--inplace cannot be used with --delay-updates"). The
+  # two are opposites — `--delay-updates` stages every file and
+  # renames the batch at the end, which is precisely the rename that
+  # breaks the mount. Losing it costs cross-file atomicity on a
+  # config-only subtree we sync from one operator at a time.
   ansible.posix.synchronize:
     src: '{{ playbook_dir }}/../../infra-hetzner/'
     dest: '{{ app_repo_dest }}/infra-hetzner/'
     delete: true
     recursive: true
+    delay_updates: false
     rsync_opts:
       - '--inplace'
       - '--chmod=D755,F644'
@@ -237,11 +246,14 @@
   # cleanly, reported success, and did nothing until the container was
   # force-recreated (task 0314). Writing in place keeps the inode, so a
   # restart is enough to pick up an XML edit.
+  # `delay_updates: false` for the same reason as the sync above —
+  # rsync rejects `--inplace` outright while `--delay-updates` is on.
   ansible.posix.synchronize:
     src: '{{ playbook_dir }}/../../crates/db-clickhouse/{{ item }}/'
     dest: '{{ app_repo_dest }}/crates/db-clickhouse/{{ item }}/'
     delete: true
     recursive: true
+    delay_updates: false
     rsync_opts:
       - '--inplace'
       - '--chmod=D755,F644'
