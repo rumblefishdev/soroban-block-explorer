@@ -8,6 +8,36 @@ related_tasks: ['0391', '0283', '0217', '0306', '0296']
 tags: [priority-high, effort-medium, layer-indexer, layer-db, nft, clickhouse]
 links: []
 history:
+  - date: 2026-08-21
+    status: active
+    who: karolkow
+    note: >
+      **Re-verified a month on — every checkable claim in this task still holds;
+      only the scale shrank.**
+      Code, on `origin/develop` (`eb7e817c`): the promote half is still absent.
+      `promote_or_count` exists solely inside
+      `crates/backfill-runner/src/nft_reclassify.rs`, and that file is still
+      present — the only drain is still a human. `route_for` is unchanged in
+      behaviour (`persist/stage.rs:1648`; the body cites 1444, the line drifted,
+      the semantics did not): `Token|Fungible -> Drop`, `Nft -> Hot`, everything
+      else -> `Pending`.
+      Prod, measured 2026-08-21 (chain tip 64,054,678): `nfts_pending` holds
+      **278 rows across 67 contracts** (274 / 66 a month ago). A whole month's
+      intake is **+4 rows, +1 contract** — against ~6,575 rows/day before PR #341.
+      The last pending write was ledger 63,836,382, **~12.6 days ago**. Hot `nfts`
+      is at 64,054,630, **48 ledgers off the tip (~4 min)**, holding 13,326 rows
+      over those same 67 contracts. The frozen-surface failure is gone.
+      The decisive split is unchanged from last month: across every row of
+      `soroban_contracts` for those 67 contracts, duplicates included, the only
+      `contract_type` ever stamped is `1` — `groupUniqArray` returns `[1]`.
+      **0 carry a decisive verdict, 0 resolved-but-stranded.** Enum, for the
+      record, since the ordering is not the obvious one:
+      `Token = 0, Other = 1, Nft = 2, Fungible = 3`.
+      So the defect is real and unfixed, but it is now a ~4-rows-a-month leak
+      with an empty resolved queue — a different problem from the one this task
+      was written for. The urgency numbers still quoted in the body (33 days
+      frozen, 6,575 rows/day) remain stale. Restarted from scratch on
+      `fix/0392_nft-pending-drain-gap`.
   - date: 2026-07-21
     status: active
     who: karolkow
@@ -259,3 +289,97 @@ _only_ genuinely-unresolved contracts, and reconciles them once resolved.
   task is the _live_ continuous half neither covers.
 - Do NOT implement as a live mirror of `nft_reclassify`'s `ALTER … DELETE` — that
   treats the symptom and races the ingest inserts.
+
+## Restart measurements — 2026-08-21
+
+Re-derived from scratch against prod ClickHouse and, where it matters, against
+the chain via the official `stellar` CLI 26.0.0. Nothing here is carried over
+from earlier sessions; figures that disagree with the body above supersede it.
+
+### F1 — the quarantine holds nobody this task can drain
+
+Of the 67 contracts in `nfts_pending`, split by when their WASM was uploaded
+relative to their first pending row:
+
+| Bucket                                                      | Contracts | Rows |
+| ----------------------------------------------------------- | --------- | ---- |
+| A — WASM never observed                                     | **0**     | 0    |
+| B — WASM known _before_ the first event                     | **66**    | 274  |
+| C — WASM arrived _after_ the first event (late, strandable) | **1**     | 4    |
+
+Bucket B is the whole quarantine. For those 66 the verdict _was_ available at
+write time — `route_for` asked, and the answer was `Other`. They are not
+deferred-for-timing; they are classifier misses. A reconcile cannot move them:
+their verdict is already computed and it is not decisive.
+
+Bucket C — one contract, 4 rows — is the entire population Step 1 was designed
+for. Even it would not promote, because its verdict is also `Other`.
+
+**So Step 1, implemented exactly as written, would move zero rows today.**
+
+### F2 — an acceptance criterion describes an empty set
+
+The AC _"genuinely-unresolved contracts (WASM never observed) still quarantine
+correctly"_ has no members: bucket A is 0. The stated design intent of the
+quarantine — hold contracts whose WASM has not been seen — is not what the
+quarantine actually contains.
+
+### F3 — the larger defect is next door, and it is silent
+
+Contracts carrying a decisive `Nft` verdict, measured against every NFT table:
+
+|                                       | Contracts | Events  |
+| ------------------------------------- | --------- | ------- |
+| have rows in `nfts` + `nft_ownership` | 67        | 25,110  |
+| **have rows nowhere at all**          | **66**    | **692** |
+
+Those 66 are not quarantined. They are absent — no hot row, no ownership row,
+no pending row. The quarantine sits at the _classifier_ gate only; nothing
+guards the _parser_ gate, so a known-NFT contract whose events the parser cannot
+shape simply produces nothing, with no record that anything was dropped.
+
+### F4 — cause of F3, confirmed on-chain not from our tables
+
+`stellar contract info interface --network mainnet` on two of the 66, reading
+the deployed WASM:
+
+- `CB2SIYGHFGQMKEYQUWCTF3HCWBCPFUSRGVWXOPV3LIJR7K5LRPFXZEYK` —
+  `transfer(env, domain: String, from: Address, to: Address)` and
+  `owner_of(domain: String)`. Token identity is a **String**, and it is the
+  **first** argument. Canonical is `(from, to, token_id)`. The shape cannot
+  match, so every transfer is dropped. This contract emits a perfectly
+  canonical `transfer` event name — name matching alone would not have saved it.
+- `CBT5JMDOUAU3BJF7YZR42LVODLMZSQE4LIJUJNUBKEC2VZOXIF4JFBRU` —
+  `owner_of(token_id: u32)`, `transfer`, `mint_badge`, `total_supply`.
+  Unambiguously an NFT; mints via `mint_badge`, emits `init` / `minted`.
+
+Event signatures across the 66, by volume: `(null)` 470 (5 contracts),
+`minted` 63, `uri_upd` 58, `mint` 46, plus `identity_minted`, `mint_event`,
+`transfer_event`, `set_uri_event`, `approval_for_transfer_event`. The 470
+undecoded signatures are the single largest slice and are not yet explained.
+
+### F5 — current intake
+
+Two contracts wrote pending rows in the last month:
+`CAHDANGTQY4TOXV7LYYXRTFIUKJKJUXWNRUMKRPBJG2QOGSATYTRX6HP` (5 rows, ledgers
+63,636,969–63,836,382) and
+`CBGMSY35IZMHNVBFQQY22PA62VWJVXIKC4TU2CTAKRGIJOACZE4EEIWW` (2 rows). The net
+count moved 274 → 278; the prior 274/66 figure comes from an earlier session and
+was not re-verified, so treat the delta as approximate. What is solid: two
+contracts, single-digit rows, one month.
+
+### F6 — measurement trap for whoever works this next
+
+`soroban_contracts` is RMT and unmerged. `CAHDANG…` carries two disagreeing
+rows — a pre-WASM placeholder (`contract_type` NULL, `wasm_uploaded_at_ledger` 0) and a later stamp (`63,207,509`, `contract_type` 1). Any join to
+`soroban_contracts` without deduping fans out and double-counts; it inflated one
+of my own intermediate counts 5 → 10 before I caught it. Dedup with
+`argMax(contract_type, wasm_uploaded_at_ledger)` grouped by `id`.
+
+### What this implies for the restart
+
+The drain gap is real as a mechanism and unfixed in code, but its addressable
+population is one contract and four rows, none of which would move. The defect
+that is actually costing data is the parser's ABI coverage (F3/F4), which is
+0309 / 0317 territory, not this task's. That is the input to the design
+decision, not the decision itself.
