@@ -3,7 +3,7 @@
 //!
 //! One home for the analysis, separate from the command that renders it: the
 //! numbers are computed from the shared
-//! [`snapshot::verdict`] rule, and any consumer that folds our rows through
+//! [`snapshot_verdict::verdict`] rule, and any consumer that folds our rows through
 //! that rule can produce the identical report.
 
 use std::path::Path;
@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 
 use crate::error::BackfillError;
 use crate::snapshot::{self, SnapshotState};
+use crate::snapshot_verdict;
 
 /// Our indexer's ledger floor. The single most important discriminator for the
 /// `missing` bucket: an entry whose own `lastModifiedLedgerSeq` is below this
@@ -170,8 +171,8 @@ pub(crate) struct Tally {
 impl Tally {
     /// Count one verdict. The seed acts on the same enum, so the report and the
     /// write cannot describe different populations.
-    pub(crate) fn observe(&mut self, v: snapshot::Verdict, amount: i128) {
-        use snapshot::Verdict as V;
+    pub(crate) fn observe(&mut self, v: snapshot_verdict::Verdict, amount: i128) {
+        use snapshot_verdict::Verdict as V;
         match v {
             V::AlreadyClosed => self.already_closed += 1,
             V::ClosedButLive => self.closed_but_live += 1,
@@ -246,7 +247,7 @@ impl Tally {
 /// counted as unresolved by the dump, never silently dropped).
 pub(crate) fn key_line(
     state: &SnapshotState,
-    row: &snapshot::OurRow,
+    row: &snapshot_verdict::OurRow,
     is_native: bool,
 ) -> Option<String> {
     let holder = &state.account_details.get(&row.holder_id)?.strkey;
@@ -286,9 +287,9 @@ impl Report {
     /// back to the caller.
     pub(crate) fn observe(
         &mut self,
-        row: &snapshot::OurRow,
+        row: &snapshot_verdict::OurRow,
         state: &mut SnapshotState,
-    ) -> snapshot::Verdict {
+    ) -> snapshot_verdict::Verdict {
         let line = || {
             format!(
                 "{}\t{}\t{}\t{}",
@@ -296,9 +297,9 @@ impl Report {
             )
         };
         let is_native = row.asset_id == self.native_asset_id;
-        let v = snapshot::verdict(
+        let v = snapshot_verdict::verdict(
             row,
-            snapshot::snap_entry_for(state, row),
+            snapshot_verdict::snap_entry_for(state, row),
             self.samples.checkpoint,
         );
         let out = if is_native {
@@ -311,7 +312,7 @@ impl Report {
         // it is the positive control — if the surrogate derivation were wrong
         // that bucket would be empty, so a non-empty sample of it is evidence
         // the whole comparison is keyed correctly.
-        use snapshot::Verdict as V;
+        use snapshot_verdict::Verdict as V;
         let s = &mut self.samples;
         let bucket = match (v, is_native) {
             (V::Ghost, true) => Some(&mut s.ghost_native),
@@ -364,7 +365,7 @@ impl Report {
         // function of the KEY instead — reproducible, and independent of any
         // structure in the data.
         const MISSING_SAMPLE_MODULUS: u64 = 16_384;
-        let row_for_key = snapshot::OurRow {
+        let row_for_key = snapshot_verdict::OurRow {
             holder_id: key.holder_id,
             asset_id: key.asset_id,
             amount: 0,

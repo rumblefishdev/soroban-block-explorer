@@ -65,8 +65,10 @@ use std::path::Path;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState};
+use crate::snapshot::{self, SnapshotState};
+use crate::snapshot_archive::PUBNET_ARCHIVE;
 use crate::snapshot_report::Report;
+use crate::snapshot_verdict;
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow, BalanceRow};
@@ -106,12 +108,12 @@ const KEY_SLICES: i128 = 64;
 /// inserts anyway, and a cursor error propagates loudly where the operator
 /// CLI's exit-0-on-server-error trap did not.)
 ///
-/// Errors below [`snapshot::MIN_OUR_ROWS`] rows: a short read (wrong database,
+/// Errors below [`snapshot_verdict::MIN_OUR_ROWS`] rows: a short read (wrong database,
 /// dropped slice) would silently report our own holdings as a phantom network
 /// gap.
 async fn stream_our_rows(
     sink: &Sink,
-    mut f: impl FnMut(&snapshot::OurRow),
+    mut f: impl FnMut(&snapshot_verdict::OurRow),
 ) -> Result<u64, BackfillError> {
     let mut seen = 0u64;
     for (i, (from, to)) in key_slices().enumerate() {
@@ -120,25 +122,25 @@ async fn stream_our_rows(
         let mut cursor = sink
             .client()
             .query(&slice_sql(from, to))
-            .fetch::<snapshot::OurRow>()?;
+            .fetch::<snapshot_verdict::OurRow>()?;
         while let Some(row) = cursor.next().await? {
             seen += 1;
             f(&row);
         }
         println!("    slice {:>2}/{KEY_SLICES} — {seen} rows so far", i + 1);
     }
-    if seen < snapshot::MIN_OUR_ROWS {
+    if seen < snapshot_verdict::MIN_OUR_ROWS {
         return Err(BackfillError::Incomplete(format!(
             "our balances read returned {seen} rows, expected at least {} — a short \
              read reports our own holdings as a phantom network gap (wrong database?)",
-            snapshot::MIN_OUR_ROWS
+            snapshot_verdict::MIN_OUR_ROWS
         )));
     }
     Ok(seen)
 }
 
 /// The per-slice read. Its SELECT list IS the field order of
-/// [`snapshot::OurRow`] — a mismatch would silently misclassify every row
+/// [`snapshot_verdict::OurRow`] — a mismatch would silently misclassify every row
 /// rather than fail.
 fn slice_sql(from: i128, to: i128) -> String {
     // The aggregates are aliased INSIDE a subquery and renamed outside. Aliasing
@@ -203,15 +205,15 @@ async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillEr
 /// `>= checkpoint` guard, so the drift is only rows newly LEFT ALONE, never a
 /// different correction.)
 fn fold_our_row(
-    row: &snapshot::OurRow,
-    verdict: snapshot::Verdict,
+    row: &snapshot_verdict::OurRow,
+    verdict: snapshot_verdict::Verdict,
     state: &mut SnapshotState,
     checkpoint: u32,
     out: &mut Corrections,
     ghost_log: &mut Vec<String>,
 ) {
-    use snapshot::Verdict as V;
-    let snapshot::OurRow {
+    use snapshot_verdict::Verdict as V;
+    let snapshot_verdict::OurRow {
         holder_id,
         asset_id,
         amount,
@@ -235,7 +237,7 @@ fn fold_our_row(
         // the snapshot is strictly newer AND the amounts differ, so adopt its
         // amount at ITS ledger.
         V::ClosedButLive | V::HealFromSnapshot => {
-            let Some(e) = snapshot::snap_entry_for(state, row) else {
+            let Some(e) = snapshot_verdict::snap_entry_for(state, row) else {
                 return;
             };
             out.balances.push(BalanceRow {

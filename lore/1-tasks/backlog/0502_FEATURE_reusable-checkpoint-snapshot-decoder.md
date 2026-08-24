@@ -79,11 +79,22 @@ load order — never on a window boundary (the task 0492 defect).
 
 ## Built in 0463 already (extract, do not rebuild)
 
-`crates/backfill-runner/src/snapshot.rs` + `snapshot_report.rs` +
-`snapshot_seed.rs` are the working implementation this task extracts from:
-framed-XDR streaming (13.5 MB peak on 4.44 GB, measured), first-wins dedup,
-four-way compare, seed. The decoder module moves to its own crate;
-compare/seed stay behind as backfill-runner consumers.
+Five modules under `crates/backfill-runner/src/`, split along the seam this
+task needs (2026-08-24):
+
+| module             | lines | concern                                             |
+| ------------------ | ----- | --------------------------------------------------- |
+| `snapshot_archive` | 393   | manifest, buckets, framed XDR, per-bucket SHA-256   |
+| `snapshot`         | 530   | classify + first-wins dedup into `SnapshotState`    |
+| `snapshot_verdict` | 297   | the ten-way comparison rule against one of our rows |
+| `snapshot_report`  | 432   | counters, samples, `summary.txt`                    |
+| `snapshot_seed`    | 555   | reads our `balances`, builds and writes corrections |
+
+**`snapshot_archive` + `snapshot` are what moves to the new crate** — the
+first knows nothing about our tables, the second knows nothing about
+comparison. `snapshot_verdict` / `report` / `seed` stay behind as
+backfill-runner consumers. Measured: framed-XDR streaming at 13.5 MB peak on
+4.44 GB, first-wins dedup, four-way compare, seed.
 
 ## The window discriminator — carry it into the tool's contract
 
