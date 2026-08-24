@@ -9,9 +9,11 @@
 
 ## File Deletion Policy
 
-**Using `rm` is FORBIDDEN.** To delete files, move them to `.trash/` instead:
+**Using `rm` is FORBIDDEN.** To delete files, move them to the MAIN
+checkout's `.trash/` instead — resolve it rather than typing a relative path,
+which lands in whatever worktree you happen to be in:
 ```bash
-mv <file> .trash/
+mv <file> "$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')/.trash/"
 ```
 
 `.trash/` is gitignored, so it holds the only copy of anything that was never

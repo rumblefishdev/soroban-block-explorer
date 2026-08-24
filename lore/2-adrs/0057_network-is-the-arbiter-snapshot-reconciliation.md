@@ -18,6 +18,18 @@ history:
       durable POLICY decisions; the reusable tool's shape stays in task 0502,
       the recurring audit in 0503, the operational runbook in
       docs/backfills.md.
+  - date: '2026-08-20'
+    status: accepted
+    who: karolkow
+    note: >
+      Decision 4 amended: the manifest-versus-consensus check (folding the
+      bucket list and comparing it against the ledger header's
+      bucket_list_hash) was built, live-verified once, and REMOVED as
+      over-engineering. It defended against a forged or stale manifest from
+      the network's own reference publisher, while the realistic failure
+      modes — bad download, truncation, substituted file — are covered by the
+      per-bucket SHA-256 that stays. Resurrect from git history if a
+      third-party mirror is ever added as a source.
 ---
 
 # ADR 0057: the network is the arbiter

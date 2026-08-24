@@ -110,9 +110,12 @@ deleted, not repaired.
 
 ## Acceptance criteria
 
-- [ ] The five sampled accounts render as deleted; Horizon agrees on each
-- [ ] A recycled account (merged, then recreated — ~47 % of one measured
-      window's merge sources) still renders as alive
+- [ ] The five sampled accounts render as deleted; `getLedgerEntries` on the
+      raw XDR agrees on each (NOT Horizon — legacy, and it synthesizes)
+- [ ] A recycled account (merged, then recreated) still renders as alive.
+      Rate depends on the window: 3.7% of merged sources in 55.0M-55.2M
+      (4,195 of 112,080, measured 2026-08-24). An earlier filing cited ~47%
+      from an unnamed window; treat that figure as unverified.
 - [ ] Scale measured and recorded before the fix, re-measured zero after
 - [ ] `fetch_deleted_status`'s old derivation is removed, not left dormant
 - [ ] Sequenced AFTER the 0463 seed has run and verified — the column is only

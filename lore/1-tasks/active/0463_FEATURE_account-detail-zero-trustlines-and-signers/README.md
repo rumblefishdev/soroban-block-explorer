@@ -470,7 +470,12 @@ and EXECUTED:
   ADR 0057 decision 4 amended accordingly.
 - **`--execute` now HARD-ERRORS without `--pinned-manifest`** (was a
   warning) — closes the audit finding that execute could decode a different
-  snapshot than the dry-run reviewed.
+  snapshot than the dry-run reviewed. **SUPERSEDED 2026-08-21 → deleted
+  2026-08-24**: the pin's job was keeping a FROZEN TSV export consistent with
+  the snapshot; with our side read live every run is self-consistent at its
+  own checkpoint, and an unpinned run decodes the fresher one. Demoted to
+  optional that day, then removed entirely — `manifest.json` is still written,
+  so the ADR 0056 LP merge can identify which checkpoint this seed used.
 - **RPC verification (`snapshot-verify`) DELETED 2026-08-21** — recorded in 0502. The snapshot outranks RPC as a source (content-hash verified +
   enumerable, vs per-key JSON on trust), so a permanent RPC comparator earns
   nothing. It had done its one job already: 260/260 samples and the 100/100

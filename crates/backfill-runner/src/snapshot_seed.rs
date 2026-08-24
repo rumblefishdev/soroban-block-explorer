@@ -461,10 +461,16 @@ pub async fn seed_command(
     // call every one of them a phantom; type-3 is the same reason, different
     // entry type; pool shares are the same ledger entry type but live in
     // `lp_positions` on our side (ADR 0056 merges them).
+    // `uniqExact`, not `count()`: production tables carry unmerged
+    // ReplacingMergeTree parts, so a raw row count is 2-3x the number of
+    // holdings (measured 182,370 rows over 70,347 keys). The compared
+    // population is counted per KEY — see `slice_sql`'s GROUP BY — and a
+    // report that mixes the two bases invites exactly the comparison its
+    // reader will make.
     let excluded_contract: u64 = sink
         .client()
         .query(
-            "SELECT count() FROM balances \
+            "SELECT uniqExact((holder_id, asset_id)) FROM balances \
              WHERE asset_id IN (SELECT id FROM assets WHERE asset_type IN (0, 1)) \
                AND holder_id IN (SELECT id FROM soroban_contracts)",
         )
@@ -473,7 +479,7 @@ pub async fn seed_command(
     let excluded_type3: u64 = sink
         .client()
         .query(
-            "SELECT count() FROM balances \
+            "SELECT uniqExact((holder_id, asset_id)) FROM balances \
              WHERE asset_id IN (SELECT id FROM assets WHERE asset_type = 3)",
         )
         .fetch_one()

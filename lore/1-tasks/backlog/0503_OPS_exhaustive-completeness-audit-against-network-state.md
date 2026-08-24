@@ -170,17 +170,17 @@ The 0463 seed's `summary.txt` prints a **NOT COMPARED** block so the report can
 never read as exhaustive. Those three lines are this task's inbox. Measured on
 production the same day:
 
-| population              | our rows      | network side                 | owner     |
-| ----------------------- | ------------- | ---------------------------- | --------- |
-| contract-held classic   | **1,189,717** | `ContractData` (SAC balance) | this task |
-| Soroban type-3 holdings | **150,499**   | `ContractData` (token)       | this task |
-| pool shares             | 40,652 live   | 77,048 live `TrustLineEntry` | 0499      |
+| population              | our rows    | network side                 | owner     |
+| ----------------------- | ----------- | ---------------------------- | --------- |
+| contract-held classic   | **70,347**  | `ContractData` (SAC balance) | this task |
+| Soroban type-3 holdings | **72,369**  | `ContractData` (token)       | this task |
+| pool shares             | 40,652 live | 77,048 live `TrustLineEntry` | 0499      |
 
 ### The first two are ONE piece of work, not two
 
 A contract holding USDC and a contract holding a Soroban token are the **same
 ledger entry**: `ContractData`. A contract has no trustline, so the snapshot's
-`TrustLineEntry` set would call all 1.19M of our rows phantoms — which is why
+`TrustLineEntry` set would call every one of those holdings a phantom — which is why
 they are excluded rather than diffed. `snapshot.rs` today counts every
 `ContractData` record into `unmodelled` and drops it.
 
@@ -189,7 +189,13 @@ One decoder unlocks both: recognise the SAC/token balance key shape
 value. It belongs beside the existing `classify()` arm, and is the natural
 first extension after 0502 extracts the module.
 
-Until it exists, **1.34M of our holding rows have never been checked against
+Counts are DISTINCT `(holder_id, asset_id)` keys. A first pass recorded
+1,189,717 / 150,499 here — raw row counts, inflated 2-3x by unmerged
+ReplacingMergeTree parts (and, for the first figure, by a JOIN against an
+`assets` table carrying its own duplicates). Corrected 2026-08-24; the same
+defect in the seed's own NOT COMPARED query was fixed the same day.
+
+Until it exists, **~143k of our holdings have never been checked against
 the network in either direction** — no ghost check, no missing check. The
 classic gap measured 60% and the pool-share gap 47%; treating this population
 as probably-fine is exactly the assumption this audit exists to kill.
@@ -222,8 +228,8 @@ folds pool shares into `balances`.
       pool shares → 0499 until the merge). A type silently missing from the
       report fails this audit even if every reported number is right — "we
       never got to it" produced the 60% gap
-- [ ] `ContractData` balance entries decoded and diffed — the 1.34M
-      contract-held + type-3 rows the 0463 seed could only count
+- [ ] `ContractData` balance entries decoded and diffed — the ~143k
+      contract-held + type-3 holdings the 0463 seed could only count
 - [ ] `account_entry_state` diffed against `AccountEntry` signers on every run
       AFTER the 0463 seed (first fill has nothing to compare; from then on a
       divergence is a writer defect, not a gap)
