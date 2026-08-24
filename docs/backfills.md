@@ -398,6 +398,10 @@ correction written against a row already AT that ledger would be a
 same-version ReplacingMergeTree tie, resolved arbitrarily — the exact
 nondeterminism this tool exists to remove.
 
+Both defect signals get their own sample dump (`divergent_same_ledger.tsv`,
+`closed_but_live_conflict.tsv`) — they write nothing, so the dump is the only
+way to look at one.
+
 **The two defect signals never auto-heal.** `divergent SAME ledger` means one
 of two parsers misread that ledger; `CLOSED vs LIVE conflict` means something
 closed a holding the network still has, at a ledger no honest version can

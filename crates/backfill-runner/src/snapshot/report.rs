@@ -103,6 +103,9 @@ pub(crate) struct Samples {
     pub(crate) agree_classic: Sample,
     pub(crate) missing_classic: Sample,
     pub(crate) closed_but_live: Sample,
+    /// The OTHER defect signal. It writes nothing, so this dump is the only
+    /// way to look at one — the same reason `divergent_same_ledger` has one.
+    pub(crate) closed_but_live_conflict: Sample,
     pub(crate) divergent_same_ledger: Sample,
     /// `missing` split by the entry's own last-modified ledger vs our floor.
     pub(crate) missing_below_floor: u64,
@@ -123,6 +126,7 @@ impl Samples {
             agree_classic: Sample::new(),
             missing_classic: Sample::new(),
             closed_but_live: Sample::new(),
+            closed_but_live_conflict: Sample::new(),
             divergent_same_ledger: Sample::new(),
             missing_below_floor: 0,
             missing_above_floor: 0,
@@ -327,6 +331,7 @@ impl Report {
             (V::HealFromSnapshot | V::DivergentOursNewer, true) => Some(&mut s.divergent_native),
             (V::HealFromSnapshot | V::DivergentOursNewer, false) => Some(&mut s.divergent_classic),
             (V::ClosedButLive, _) => Some(&mut s.closed_but_live),
+            (V::ClosedButLiveConflict, _) => Some(&mut s.closed_but_live_conflict),
             (V::DivergentSameLedger, _) => Some(&mut s.divergent_same_ledger),
             (V::Closure, false) => Some(&mut s.closure_classic),
             (V::Agree, false) => Some(&mut s.agree_classic),
@@ -426,6 +431,8 @@ impl Report {
         s.agree_classic.write(dir, "agree_classic.tsv")?;
         s.missing_classic.write(dir, "missing_classic.tsv")?;
         s.closed_but_live.write(dir, "closed_but_live.tsv")?;
+        s.closed_but_live_conflict
+            .write(dir, "closed_but_live_conflict.tsv")?;
         s.divergent_same_ledger
             .write(dir, "divergent_same_ledger.tsv")?;
         Ok(())
