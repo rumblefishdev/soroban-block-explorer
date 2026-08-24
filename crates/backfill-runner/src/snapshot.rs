@@ -182,49 +182,6 @@ pub async fn fetch_bucket_list(
     })
 }
 
-/// Load a bucket list from a previously written `manifest.json` instead of the
-/// live archive.
-///
-/// The manifest advances every 64 ledgers (~5 min) and a full pass takes ~6, so
-/// a run that re-fetches it decodes a DIFFERENT snapshot than the dry-run
-/// reported on. That makes `summary.txt` describe a run that never happened —
-/// the opposite of the reviewability the dry-run exists to provide. Pinning is
-/// what makes `--execute` run the thing that was reviewed, and what makes a
-/// failed run resumable against the same state.
-pub fn bucket_list_from_manifest(path: &std::path::Path) -> Result<BucketList, BackfillError> {
-    let body = std::fs::read_to_string(path)
-        .map_err(|e| BackfillError::Incomplete(format!("read {}: {e}", path.display())))?;
-    let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| BackfillError::Incomplete(format!("manifest {}: {e}", path.display())))?;
-    let checkpoint_ledger = v
-        .get("checkpoint_ledger")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| BackfillError::Incomplete("manifest has no checkpoint_ledger".into()))?
-        as u32;
-    let hashes: Vec<String> = v
-        .get("buckets")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| BackfillError::Incomplete("manifest has no buckets".into()))?
-        .iter()
-        .filter_map(|h| h.as_str().map(str::to_string))
-        .collect();
-    if hashes.is_empty() {
-        return Err(BackfillError::Incomplete(
-            "pinned manifest lists no buckets — refusing to run a no-op that reports success"
-                .into(),
-        ));
-    }
-    info!(
-        checkpoint_ledger,
-        buckets = hashes.len(),
-        "bucket list PINNED from manifest"
-    );
-    Ok(BucketList {
-        checkpoint_ledger,
-        hashes,
-    })
-}
-
 /// What a decoded bucket record carries. `Dead` is as load-bearing as `Live`:
 /// seen first for a key it means "deleted", and dropping it would let an older
 /// `Live` record resurrect the entry.
@@ -847,24 +804,19 @@ pub fn snap_entry_for<'a>(state: &'a mut SnapshotState, row: &OurRow) -> Option<
 /// [`SnapshotState`]: build the HTTP client, take the pinned or freshest
 /// checkpoint, stream all 21 buckets, print the distinct-entry report.
 ///
-/// `pinned_manifest` decodes a previously recorded bucket list instead of the
-/// freshest checkpoint. Optional by design: the newest checkpoint is complete
-/// by construction (the archive's `.well-known` manifest is stellar-core's
-/// atomic commit point, written LAST), so the pin exists for exact
-/// reproduction of an earlier run, not for safety.
+/// The checkpoint is always the freshest the archive advertises. That is
+/// complete by construction — stellar-core writes the `.well-known` manifest
+/// LAST, as an atomic commit point, and discards a failed publication rather
+/// than exposing half of it.
 ///
 /// Memory is the distinct-entry count, not the record count: ~124M records
 /// collapse onto the accounts + trustlines the network actually holds.
 pub(crate) async fn open_snapshot(
-    pinned_manifest: Option<&std::path::Path>,
     label: &str,
 ) -> Result<(BucketList, SnapshotState), BackfillError> {
     let started = std::time::Instant::now();
     let http = archive_client()?;
-    let list = match pinned_manifest {
-        Some(path) => bucket_list_from_manifest(path)?,
-        None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
-    };
+    let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
     let take = list.hashes.len();
     println!(
         "checkpoint ledger {} — {take} buckets{label}",

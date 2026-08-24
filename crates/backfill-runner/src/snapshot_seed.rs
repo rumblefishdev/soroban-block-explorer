@@ -405,26 +405,23 @@ where
 /// additionally inserts the four row sets.
 pub async fn seed_command(
     sink: &Sink,
-    artifacts: &Path,
-    pinned_manifest: Option<&Path>,
+    artifacts_root: &Path,
     execute: bool,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
+
+    let (list, mut state) =
+        snapshot::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
+
+    // One directory per checkpoint, so a run never overwrites the record of an
+    // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
+    let artifacts = &artifacts_root.join(list.checkpoint_ledger.to_string());
     std::fs::create_dir_all(artifacts)
         .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
-
-    // Dry-run/execute drift is absorbed by the `>= checkpoint` guard — churned
-    // rows are left alone, never corrected differently — so the pin is
-    // optional here and exists for exact reproduction (the ADR 0056 LP merge
-    // re-derives this seed's snapshot from `artifacts/manifest.json`).
-    let (list, mut state) = snapshot::open_snapshot(
-        pinned_manifest,
-        if execute { " [EXECUTE]" } else { " [dry-run]" },
-    )
-    .await?;
+    println!("  artifacts → {}", artifacts.display());
 
     // Provenance artifact: the exact bucket list this run decoded. The archive
-    // is content-addressed, so this manifest alone re-derives the identical
+    // is content-addressed, so this manifest alone identifies the identical
     // snapshot later (the LP-merge pass will need exactly that).
     let manifest = serde_json::json!({
         "checkpoint_ledger": list.checkpoint_ledger,

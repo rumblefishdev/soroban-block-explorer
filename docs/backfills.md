@@ -367,9 +367,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                                          | What it does                                                                                                                                                                                                                        | Writes                                                                          |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `snapshot-seed --artifacts <dir> [--pinned-manifest …] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; optional `--pinned-manifest` re-decodes a recorded snapshot (exact reproduction, e.g. the ADR 0056 LP merge) | `balances`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                          |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The seed's ordering contract (do not reorder):**
 
@@ -400,9 +400,10 @@ more live zero trustlines than we do, and zero where we show more than the
 chain.
 
 **Provenance:** the run writes `manifest.json` (checkpoint ledger + the 21
-bucket hashes) into the artifacts dir. The archive is content-addressed, so
-that manifest alone re-derives the identical snapshot later — the planned LP
-merge (ADR 0056) depends on this. `ghosts.tsv` records every positive-amount
+bucket hashes) into `<artifacts>/<checkpoint_ledger>/`. The archive is
+content-addressed, so that manifest alone IDENTIFIES the snapshot a run
+decoded — the planned LP merge (ADR 0056) reads it to know which checkpoint
+this seed used. `ghosts.tsv` records every positive-amount
 row the seed zeroed.
 
 ## After any historical re-parse: reconcile against the snapshot (MANDATORY)

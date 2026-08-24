@@ -32,6 +32,7 @@ use clap::{Parser, Subcommand};
 /// overrides. Single source of truth — `run` and `status` both receive
 /// it via their `execute` args, no duplicated constant.
 const DEFAULT_TEMP_DIR: &str = ".temp/backfill-runner";
+const DEFAULT_ARTIFACTS_DIR: &str = ".artifacts/snapshot-seed";
 
 #[derive(Parser)]
 #[command(name = "backfill-runner", version, about)]
@@ -214,16 +215,11 @@ enum Command {
     /// FIRST, then seed from a checkpoint taken after that deploy (see the
     /// module docs).
     SnapshotSeed {
-        /// Directory for provenance artifacts (manifest, summary, ghost list).
-        #[arg(long)]
+        /// Parent directory for provenance artifacts. Each run writes into
+        /// `<artifacts>/<checkpoint_ledger>/` (manifest, summary, ghost list,
+        /// dumps), so a run never overwrites the record of an earlier one.
+        #[arg(long, env = "BACKFILL_ARTIFACTS_DIR", default_value = DEFAULT_ARTIFACTS_DIR)]
         artifacts: PathBuf,
-        /// Pin the snapshot to a previously written `manifest.json` instead of
-        /// fetching the latest checkpoint. Optional — the freshest checkpoint
-        /// is complete by construction (the archive manifest is written LAST,
-        /// an atomic commit point) and is the better input; the pin exists for
-        /// exact reproduction of an earlier run (the ADR 0056 LP merge).
-        #[arg(long)]
-        pinned_manifest: Option<PathBuf>,
         /// Actually insert. Without this flag the run is read-only.
         #[arg(long)]
         execute: bool,
@@ -362,12 +358,8 @@ async fn main() {
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
-        Command::SnapshotSeed {
-            artifacts,
-            pinned_manifest,
-            execute,
-        } => {
-            snapshot_seed::seed_command(&sink, &artifacts, pinned_manifest.as_deref(), execute)
+        Command::SnapshotSeed { artifacts, execute } => {
+            snapshot_seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");
         }

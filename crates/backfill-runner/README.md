@@ -166,9 +166,9 @@ read-only except the seed's explicit `--execute` (note the inversion of this
 crate's usual `--dry-run` default: writing here is opt-in, so a forgotten
 flag fails safe). The freshest checkpoint is complete by construction — the
 archive's `.well-known` manifest is stellar-core's atomic commit point,
-written last — so `--execute` simply takes it; `--pinned-manifest` exists for
-exact reproduction of an earlier run (the ADR 0056 LP merge re-derives the
-seed's snapshot from `artifacts/manifest.json`).
+written last — so every run simply takes it. Artifacts land in
+`<artifacts>/<checkpoint_ledger>/`, one directory per checkpoint, so a run
+never overwrites the record of an earlier one.
 
 **They pass clause 1** — nothing re-implements the ingest path. The source is
 the SDF history archive's checkpoint bucket list, a full STATE snapshot of
