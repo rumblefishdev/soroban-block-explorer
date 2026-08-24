@@ -62,6 +62,39 @@ Scale unmeasured; the sampling that found it was not designed to measure it.
 Measure before fixing: dead accounts (type-8 sources, successful, never
 recreated) whose `last_seen_ledger` exceeds their merge ledger.
 
+## Scale MEASURED 2026-08-24 (the pre-fix measurement this task required)
+
+Window 55,000,000–55,200,000 (200k ledgers), successful `account_merge`
+sources joined against deduplicated `accounts`:
+
+| population                                         | count       | share |
+| -------------------------------------------------- | ----------- | ----- |
+| merged sources in window                           | **112,080** |       |
+| `last_seen_ledger` bumped past the merge ledger    | 20,382      | 18.2% |
+| …of which the NEWEST row is a participant skeleton | **16,187**  | 14.4% |
+| (`sequence_number = 0` — not a recreation)         |             |       |
+
+The 16,187 are the false-negative floor for this window: dead accounts the
+chip renders as alive. The remaining ~4,195 bumped rows have a real
+`sequence_number` at their newest version — recreation candidates, correctly
+alive. **5 of 5 sampled skeleton-bumped accounts verified ABSENT on chain**
+via `getLedgerEntries` (raw XDR, per the no-Horizon rule), including
+`GA274C3GJHBJIG7BC7SF6F5HFMHIPDEFVAY7IO7ZTTNGXHSQ4653DQ4C` — merged at
+55,126,142, bumped to 60,541,934 (~10 months past its death) and still
+rendering as an ordinary live account.
+
+Extrapolation is not linear across the chain (merge density varies), but at
+~14% of merged sources per window the affected population is in the hundreds
+of thousands. The decided fix (native `closed_at_ledger != 0` after the 0463
+seed) covers every one of these by construction: the seed zeroes the ghost
+and stamps the closure regardless of what later participation did to
+`last_seen_ledger`. Re-measure zero AFTER the seed, per the AC.
+
+Also confirmed while measuring: a NEW-column-on-accounts alternative stays
+rejected — `accounts` takes whole-row skeleton writes (task 0421, 55.6% of
+active rows have `sequence_number = 0`), so a `deleted` column there would be
+clobbered by exactly the participation writes that cause this bug.
+
 ## The fundamental fix is already decided — do not patch the old derivation
 
 ADR 0055 gives `balances` a lifecycle column, and the 0463 writer already
