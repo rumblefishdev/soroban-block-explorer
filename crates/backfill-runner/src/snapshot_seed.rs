@@ -419,7 +419,6 @@ pub async fn seed_command(
     // re-derives this seed's snapshot from `artifacts/manifest.json`).
     let snapshot::SnapshotPass { list, mut state } = crate::snapshot::open_snapshot(
         pinned_manifest,
-        true,
         if execute { " [EXECUTE]" } else { " [dry-run]" },
     )
     .await?;

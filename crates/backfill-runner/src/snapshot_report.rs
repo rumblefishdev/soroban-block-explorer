@@ -33,8 +33,8 @@ const SAMPLE_CAP: usize = 1_000;
 pub(crate) struct Sample {
     /// (surrogate line, real-identity key). The key is StrKeys from the
     /// snapshot itself, so reading a sample never routes through our own
-    /// tables; `None` when detail mode is off or the snapshot carries no
-    /// identity for the key. Both land in ONE dump file per bucket, key first.
+    /// tables; `None` when the snapshot carries no identity for the key.
+    /// Both land in ONE dump file per bucket, key first.
     rows: Vec<(String, Option<String>)>,
 }
 
@@ -238,8 +238,8 @@ impl Tally {
 }
 
 /// The real-identity line for one row, from snapshot-carried
-/// identities. `None` when detail mode is off, or when the snapshot holds no
-/// identity for the key (an asset with no live trustline anywhere — those are
+/// identities. `None` when the snapshot holds no identity for the key
+/// (an asset with no live trustline anywhere — those are
 /// counted as unresolved by the dump, never silently dropped).
 pub(crate) fn key_line(
     state: &SnapshotState,
@@ -304,8 +304,8 @@ impl Report {
             &mut self.classic
         };
         out.observe(v, row.amount);
-        // Real identities for the dump, straight from the snapshot (detail mode
-        // only). This is what breaks the circularity the audit called out:
+        // Real identities for the dump, straight from the snapshot. This is
+        // what breaks the circularity the audit called out:
         // reversing our surrogates through our own tables meant auditing the
         // tables with themselves.
         let key = key_line(state, row, is_native);

@@ -453,9 +453,7 @@ enum SnapItem {
 }
 
 /// Everything an `AccountEntry` carries beyond its native balance: identity for
-/// dimension stubs, signers + thresholds for `account_entry_state`. Captured only
-/// when [`SnapshotState::with_details`] asks for it — the compare pass does not
-/// need it and it is the bulk of the memory.
+/// dimension stubs, signers + thresholds for `account_entry_state`.
 #[derive(Debug)]
 pub struct AccountDetail {
     pub strkey: String,
@@ -475,8 +473,7 @@ pub struct AccountDetail {
 /// ONE fold of the bucket stream serves both consumers: the comparison
 /// (`snapshot_report`) and the write (`snapshot_seed`). They previously kept
 /// separate state types with separate first-wins logic — two chances to
-/// disagree about what the network says. `with_details` is the only difference
-/// between the two passes.
+/// disagree about what the network says.
 #[derive(Debug, Default)]
 pub struct SnapshotState {
     /// `holder_id` → the account's existence and its NATIVE holding.
@@ -485,7 +482,7 @@ pub struct SnapshotState {
     pub trustlines: std::collections::HashMap<HoldingKey, SnapEntry>,
     /// Pool shares, kept separate — see [`SnapItem::PoolShare`].
     pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), SnapEntry>,
-    /// Populated only when `capture_details` is set (the seed pass).
+    /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
     /// Bounded by network asset cardinality (~391k), not trustline count.
@@ -496,7 +493,6 @@ pub struct SnapshotState {
     /// Records superseded by an earlier (newer) record for the same key. This
     /// is the number first-wins actually suppressed.
     pub superseded: u64,
-    capture_details: bool,
 }
 
 impl SnapshotState {
@@ -544,24 +540,13 @@ impl SnapshotState {
         }
     }
 
-    /// Ask the fold to also capture per-account detail (signers, thresholds,
-    /// identity) and the asset registry. The seed needs both; the comparison
-    /// does not, and they are the bulk of the memory.
-    pub fn with_details() -> Self {
-        Self {
-            capture_details: true,
-            ..Self::default()
-        }
-    }
-
-    /// Classify one decoded record and fold it in. The single entry point both
-    /// the comparison and the seed use, so they cannot disagree about what the
+    /// Classify one decoded record and fold it in. The single entry point the
+    /// report and the write share, so they cannot disagree about what the
     /// snapshot says.
     pub fn absorb_record(&mut self, rec: &SnapshotRecord) {
-        match classify(rec, self.capture_details) {
+        match classify(rec) {
             Some(item) => {
-                if self.capture_details
-                    && let SnapItem::Trustline { key, .. } = &item
+                if let SnapItem::Trustline { key, .. } = &item
                     && let Some((code, issuer)) = trustline_identity(rec)
                 {
                     self.asset_registry
@@ -659,14 +644,14 @@ fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
 
 /// Classify one decoded record into our key space, or `None` for an entry type
 /// this comparison does not model.
-fn classify(rec: &SnapshotRecord, with_detail: bool) -> Option<SnapItem> {
+fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
     use stellar_xdr::{LedgerEntryData as D, LedgerKey as K, TrustLineAsset as A};
     match rec {
         SnapshotRecord::Live(e) => match &e.data {
             D::Account(a) => Some(SnapItem::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
                 entry: SnapEntry::live(e.last_modified_ledger_seq, a.balance),
-                detail: with_detail.then(|| Box::new(account_detail(a))),
+                detail: Some(Box::new(account_detail(a))),
             }),
             D::Trustline(t) => {
                 let holder_id = ids::address_id(&t.account_id.to_string());
@@ -871,9 +856,7 @@ pub struct SnapshotPass {
     pub state: SnapshotState,
 }
 
-/// Open a snapshot pass. `with_details` asks the fold to also capture per-
-/// account identity, signers and the asset registry — ~2 GB extra, needed by
-/// any consumer that writes rows or emits real StrKeys.
+/// Open a snapshot pass.
 ///
 /// `pinned_manifest` decodes a previously recorded bucket list instead of the
 /// freshest checkpoint. Optional by design: the newest checkpoint is complete
@@ -882,7 +865,6 @@ pub struct SnapshotPass {
 /// reproduction of an earlier run, not for safety.
 pub async fn open_snapshot(
     pinned_manifest: Option<&std::path::Path>,
-    with_details: bool,
     label: &str,
 ) -> Result<SnapshotPass, BackfillError> {
     let started = std::time::Instant::now();
@@ -898,18 +880,9 @@ pub async fn open_snapshot(
     );
 
     let take = list.hashes.len();
-    let state = build_state(
-        &http,
-        &list,
-        if with_details {
-            SnapshotState::with_details()
-        } else {
-            SnapshotState::default()
-        },
-        |i, bytes, secs| {
-            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-        },
-    )
+    let state = build_state(&http, &list, SnapshotState::default(), |i, bytes, secs| {
+        println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
+    })
     .await?;
     report_state(
         &state,
