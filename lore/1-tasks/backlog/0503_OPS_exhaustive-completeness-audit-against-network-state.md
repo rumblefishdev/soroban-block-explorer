@@ -164,6 +164,43 @@ Mechanism (a) has no in-schema defence and never will without lying about
 versions: the arbiter is the NETWORK, via the snapshot reconciliation — see
 `docs/backfills.md`, which now makes it a mandatory post-re-parse step.
 
+## Deferred from 0463 (2026-08-24) — the three populations the seed counts but does not diff
+
+The 0463 seed's `summary.txt` prints a **NOT COMPARED** block so the report can
+never read as exhaustive. Those three lines are this task's inbox. Measured on
+production the same day:
+
+| population              | our rows      | network side                 | owner     |
+| ----------------------- | ------------- | ---------------------------- | --------- |
+| contract-held classic   | **1,189,717** | `ContractData` (SAC balance) | this task |
+| Soroban type-3 holdings | **150,499**   | `ContractData` (token)       | this task |
+| pool shares             | 40,652 live   | 77,048 live `TrustLineEntry` | 0499      |
+
+### The first two are ONE piece of work, not two
+
+A contract holding USDC and a contract holding a Soroban token are the **same
+ledger entry**: `ContractData`. A contract has no trustline, so the snapshot's
+`TrustLineEntry` set would call all 1.19M of our rows phantoms — which is why
+they are excluded rather than diffed. `snapshot.rs` today counts every
+`ContractData` record into `unmodelled` and drops it.
+
+One decoder unlocks both: recognise the SAC/token balance key shape
+(`ScVec[ScSymbol("Balance"), ScAddress]`) and read the amount out of the entry
+value. It belongs beside the existing `classify()` arm, and is the natural
+first extension after 0502 extracts the module.
+
+Until it exists, **1.34M of our holding rows have never been checked against
+the network in either direction** — no ghost check, no missing check. The
+classic gap measured 60% and the pool-share gap 47%; treating this population
+as probably-fine is exactly the assumption this audit exists to kill.
+
+### Pool shares are 0499's, with a number attached
+
+Already decoded and deduplicated in `SnapshotState::pool_shares`, just never
+diffed against `lp_positions`. Measured 47% short; recorded in 0499 with the
+~100-line comparator sketch. It leaves this task's list when the ADR 0056 merge
+folds pool shares into `balances`.
+
 ## Rules for the audit itself
 
 - **Read-only.** This measures; remediation is a separate task per finding.
@@ -185,6 +222,8 @@ versions: the arbiter is the NETWORK, via the snapshot reconciliation — see
       pool shares → 0499 until the merge). A type silently missing from the
       report fails this audit even if every reported number is right — "we
       never got to it" produced the 60% gap
+- [ ] `ContractData` balance entries decoded and diffed — the 1.34M
+      contract-held + type-3 rows the 0463 seed could only count
 - [ ] `account_entry_state` diffed against `AccountEntry` signers on every run
       AFTER the 0463 seed (first fill has nothing to compare; from then on a
       divergence is a writer defect, not a gap)
