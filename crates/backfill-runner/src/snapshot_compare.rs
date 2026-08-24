@@ -40,7 +40,7 @@ use std::path::Path;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list, report_state};
+use crate::snapshot::{self, SnapshotState};
 
 /// Our indexer's ledger floor. The single most important discriminator for the
 /// `missing` bucket: an entry whose own `lastModifiedLedgerSeq` is below this
@@ -491,44 +491,13 @@ pub async fn compare_command(
     pinned_manifest: Option<&Path>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
-    let http = snapshot::archive_client()?;
-    // Pin the same snapshot the seed will run, or the report describes a
-    // different checkpoint than the write — and the shared verdict rule then
-    // guarantees only that the two would agree on inputs they never share.
-    let list = match pinned_manifest {
-        Some(path) => snapshot::bucket_list_from_manifest(path)?,
-        None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
-    };
-    println!(
-        "checkpoint ledger {} — {} buckets",
-        list.checkpoint_ledger,
-        list.hashes.len()
-    );
-
-    let take = list.hashes.len();
-    let mut state = snapshot::build_state(
-        &http,
-        &list,
-        // Details (StrKeys, asset identities) cost ~2 GB extra and exist so the
-        // sample dumps can carry REAL keys next to the surrogates. Without them
-        // verifying a "missing" entry meant reversing a one-way hash through
-        // our own incomplete tables — the very tables under audit. Only paid
-        // when dumps were asked for.
-        if dump_dir.is_some() {
-            SnapshotState::with_details()
-        } else {
-            SnapshotState::default()
-        },
-        |i, bytes, secs| {
-            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-        },
-    )
-    .await?;
-    report_state(
-        &state,
-        list.checkpoint_ledger,
-        started.elapsed().as_secs_f64(),
-    );
+    // Details (StrKeys, asset identities) cost ~2 GB extra and exist so the
+    // sample dumps can carry REAL keys next to the surrogates. Without them
+    // verifying a "missing" entry meant reversing a one-way hash through our
+    // own incomplete tables — the very tables under audit. Only paid when
+    // dumps were asked for.
+    let snapshot::SnapshotPass { list, mut state } =
+        snapshot::open_snapshot(pinned_manifest, dump_dir.is_some(), "").await?;
 
     let native_id = db_clickhouse::persist::ids::NATIVE_ASSET_ID;
     let mut samples = Samples::new(list.checkpoint_ledger);

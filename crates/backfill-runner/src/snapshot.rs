@@ -859,6 +859,67 @@ pub fn snap_entry_for<'a>(state: &'a mut SnapshotState, row: &OurRow) -> Option<
     }
 }
 
+/// One opened snapshot pass: the bucket list this run decoded and the
+/// deduplicated state folded out of it.
+///
+/// Every consumer needs the same four steps in the same order — build the HTTP
+/// client, resolve the bucket list (pinned or freshest), announce the
+/// checkpoint, stream every bucket into a [`SnapshotState`]. Spelled once here
+/// so two commands cannot drift into decoding the archive differently.
+pub struct SnapshotPass {
+    pub list: BucketList,
+    pub state: SnapshotState,
+}
+
+/// Open a snapshot pass. `with_details` asks the fold to also capture per-
+/// account identity, signers and the asset registry — ~2 GB extra, needed by
+/// any consumer that writes rows or emits real StrKeys.
+///
+/// `pinned_manifest` decodes a previously recorded bucket list instead of the
+/// freshest checkpoint. Optional by design: the newest checkpoint is complete
+/// by construction (the archive's `.well-known` manifest is stellar-core's
+/// atomic commit point, written LAST), so the pin exists for exact
+/// reproduction of an earlier run, not for safety.
+pub async fn open_snapshot(
+    pinned_manifest: Option<&std::path::Path>,
+    with_details: bool,
+    label: &str,
+) -> Result<SnapshotPass, BackfillError> {
+    let started = std::time::Instant::now();
+    let http = archive_client()?;
+    let list = match pinned_manifest {
+        Some(path) => bucket_list_from_manifest(path)?,
+        None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
+    };
+    println!(
+        "checkpoint ledger {} — {} buckets{label}",
+        list.checkpoint_ledger,
+        list.hashes.len()
+    );
+
+    let take = list.hashes.len();
+    let state = build_state(
+        &http,
+        &list,
+        if with_details {
+            SnapshotState::with_details()
+        } else {
+            SnapshotState::default()
+        },
+        |i, bytes, secs| {
+            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
+        },
+    )
+    .await?;
+    report_state(
+        &state,
+        list.checkpoint_ledger,
+        started.elapsed().as_secs_f64(),
+    );
+
+    Ok(SnapshotPass { list, state })
+}
+
 /// Stream every bucket and fold it into a deduplicated [`SnapshotState`].
 ///
 /// Memory is the distinct-entry count, not the record count: ~124M records

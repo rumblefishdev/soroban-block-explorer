@@ -65,7 +65,7 @@ use std::path::Path;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState, fetch_bucket_list};
+use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState};
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, BalanceRow};
@@ -356,27 +356,16 @@ pub async fn seed_command(
     std::fs::create_dir_all(artifacts)
         .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
 
-    let http = crate::snapshot::archive_client()?;
-    // Optional pin: decode a previously recorded snapshot instead of the
-    // newest checkpoint. NOT required for `--execute` — the freshest
-    // checkpoint is the better input, and it is complete by construction: the
-    // archive's `.well-known` manifest is stellar-core's atomic commit point,
-    // written LAST, so it only ever names fully uploaded buckets (verified
-    // against docs/history.md and a live probe, 2026-08-21). Dry-run/execute
-    // drift is absorbed by the `>= checkpoint` guard — churned rows are left
-    // alone, never corrected differently. The pin exists for exact
-    // reproduction: the ADR 0056 LP merge re-derives this seed's snapshot
-    // from `artifacts/manifest.json`.
-    let list = match pinned_manifest {
-        Some(path) => crate::snapshot::bucket_list_from_manifest(path)?,
-        None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
-    };
-    println!(
-        "checkpoint ledger {} — {} buckets{}",
-        list.checkpoint_ledger,
-        list.hashes.len(),
-        if execute { " [EXECUTE]" } else { " [dry-run]" }
-    );
+    // Dry-run/execute drift is absorbed by the `>= checkpoint` guard — churned
+    // rows are left alone, never corrected differently — so the pin is
+    // optional here and exists for exact reproduction (the ADR 0056 LP merge
+    // re-derives this seed's snapshot from `artifacts/manifest.json`).
+    let snapshot::SnapshotPass { list, mut state } = crate::snapshot::open_snapshot(
+        pinned_manifest,
+        true,
+        if execute { " [EXECUTE]" } else { " [dry-run]" },
+    )
+    .await?;
 
     // Provenance artifact: the exact bucket list this run decoded. The archive
     // is content-addressed, so this manifest alone re-derives the identical
@@ -415,23 +404,6 @@ pub async fn seed_command(
             known_accounts.len()
         )));
     }
-
-    let take = list.hashes.len();
-    let mut state = crate::snapshot::build_state(
-        &http,
-        &list,
-        SnapshotState::with_details(),
-        |i, bytes, secs| {
-            println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-        },
-    )
-    .await?;
-    println!(
-        "  snapshot folded: {} accounts, {} trustlines, {} assets in registry",
-        state.accounts.len(),
-        state.trustlines.len(),
-        state.asset_registry.len()
-    );
 
     let mut ghost_log = Vec::new();
     let corr = build_corrections(
