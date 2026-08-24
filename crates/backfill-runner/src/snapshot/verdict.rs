@@ -93,6 +93,30 @@ pub enum Verdict {
 /// it forced propagated into the seed, which mutates nothing and paid a second
 /// lookup of the key the report had just found.
 pub fn verdict(row: &OurRow, snap: Option<&NetHolding>, checkpoint: u32) -> Verdict {
+    // A row the live writer touched after the snapshot was taken is one the
+    // snapshot CANNOT know about, so no comparison against it means anything.
+    // This has to come first, before both the closure branch and the live-entry
+    // match, or ordinary post-checkpoint churn is filed as disagreement:
+    //
+    // - measured on the 2026-08-24 dry-run, 1000 of 1000 sampled rows in BOTH
+    //   `divergent ours-newer` buckets were simply newer than the checkpoint —
+    //   the bucket an operator reads as "our parser and the network disagree"
+    //   held no disagreement at all;
+    // - worse, a trustline our writer CLOSES between the checkpoint and the run
+    //   would meet a snapshot that still calls it live and be reported as
+    //   `ClosedButLiveConflict`, a defect signal. That bucket reads 0 today
+    //   only because the lifecycle writer is not deployed yet; the deployment
+    //   order puts the writer FIRST, so the false positives would have started
+    //   with the very run this exists to make trustworthy.
+    //
+    // `>=`, not `>`: a row last touched AT the checkpoint would be written back
+    // at that same ledger, and ReplacingMergeTree resolves an equal version
+    // arbitrarily — the closure might lose and the ghost survive,
+    // nondeterministically and undetectably. Ceding a handful of legitimate
+    // closures is the fail-safe direction.
+    if row.last_updated_ledger >= i64::from(checkpoint) {
+        return Verdict::NewerThanCheckpoint;
+    }
     if row.closed_at_ledger != 0 {
         // "Accounted for" is not "correctly closed". If the network holds the
         // entry LIVE, our closure is contradicted — before this check the row
@@ -128,20 +152,9 @@ pub fn verdict(row: &OurRow, snap: Option<&NetHolding>, checkpoint: u32) -> Verd
         }
         // Present but DEAD, or absent entirely — both mean the network does not
         // hold this relationship.
-        _ => {
-            // `>=`, not `>`: a row last touched AT the checkpoint would be
-            // written back at that same ledger, and ReplacingMergeTree resolves
-            // an equal version arbitrarily — the closure might lose and the
-            // ghost survive, nondeterministically and undetectably. Ceding a
-            // handful of legitimate closures is the fail-safe direction.
-            if row.last_updated_ledger >= i64::from(checkpoint) {
-                Verdict::NewerThanCheckpoint
-            } else if row.amount == 0 {
-                Verdict::Closure
-            } else {
-                Verdict::Ghost
-            }
-        }
+        // Rows newer than the checkpoint already returned above.
+        _ if row.amount == 0 => Verdict::Closure,
+        _ => Verdict::Ghost,
     }
 }
 
@@ -368,6 +381,51 @@ mod tests {
     /// verdict. An unclaimed entry is counted as a network gap and re-inserted
     /// as a live holding — so a row that claims nothing would resurrect our own
     /// closure. Native and classic take different maps; both must claim.
+    /// Anything the live writer touched after the checkpoint is churn the
+    /// snapshot cannot see, whatever the snapshot happens to say about it.
+    ///
+    /// The second case is the one that bites in production: the deployment
+    /// order runs the lifecycle writer BEFORE this seed, so between the
+    /// checkpoint and the run our writer really does close trustlines the
+    /// snapshot still lists as live. Comparing them yields a `ClosedButLive*`
+    /// verdict — one of the two defect signals — for a row that is simply
+    /// newer. The whole point of that signal is that it should never fire on
+    /// healthy data.
+    #[test]
+    fn post_checkpoint_rows_are_churn_not_disagreement() {
+        const CP: u32 = 1_000;
+        for (name, snap) in [
+            ("network says live, different amount", Some(live(50, 900))),
+            ("network says live, same amount", Some(live(10, 900))),
+            ("network has nothing", None),
+        ] {
+            for closed_at in [0, 1_005] {
+                let r = row(10, 1_005, closed_at);
+                assert_eq!(
+                    verdict(&r, snap.as_ref(), CP),
+                    Verdict::NewerThanCheckpoint,
+                    "{name}, closed_at {closed_at}"
+                );
+                assert_eq!(
+                    correction(verdict(&r, snap.as_ref(), CP), snap.as_ref(), CP),
+                    None,
+                    "a post-checkpoint row must never be written back"
+                );
+            }
+        }
+        // The boundary itself is ceded on purpose: an equal RMT version is
+        // resolved arbitrarily, so a row AT the checkpoint is left alone too.
+        assert_eq!(
+            verdict(&row(10, i64::from(CP), 0), None, CP),
+            Verdict::NewerThanCheckpoint
+        );
+        assert_eq!(
+            verdict(&row(0, i64::from(CP) - 1, 0), None, CP),
+            Verdict::Closure,
+            "one ledger below the checkpoint is still comparable"
+        );
+    }
+
     #[test]
     fn every_row_claims_its_entry_whatever_the_verdict() {
         use crate::snapshot::network_state::HoldingKey;
