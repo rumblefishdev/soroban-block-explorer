@@ -101,8 +101,8 @@ const KEY_SLICES: i128 = 64;
 /// row. Like every
 /// other corrective command in this crate, the tool reads its own inputs
 /// through `sink.client()`; there is no manual export step. (A hand-exported
-/// TSV transport existed during the research phase and was removed in the
-/// 2026-08-20 review: the binary holds the same connection for `--execute`
+/// TSV transport existed during the research phase and was removed with the
+/// 2026-08-21 self-read decision: the binary holds the same connection for `--execute`
 /// inserts anyway, and a cursor error propagates loudly where the operator
 /// CLI's exit-0-on-server-error trap did not.)
 ///

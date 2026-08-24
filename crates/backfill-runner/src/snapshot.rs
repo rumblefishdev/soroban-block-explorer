@@ -703,10 +703,10 @@ fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
 }
 
 // ---------------------------------------------------------------------------
-// The verdict — ONE rule, rendered by the compare pass and acted on by the seed
+// The verdict — ONE rule, counted by the report and acted on by the seed
 // ---------------------------------------------------------------------------
 
-/// Floor on the our-rows read, shared by the compare and the seed. A short
+/// Floor on the our-rows read. A short
 /// read (wrong database, a dropped key slice) is indistinguishable from a real
 /// one downstream: every missing row becomes an unmatched snapshot entry, i.e.
 /// a phantom network gap the seed would INSERT as a live holding. The real
@@ -725,7 +725,7 @@ pub struct OurRow {
     pub closed_at_ledger: i64,
 }
 
-/// What the snapshot says about one of our rows. The compare pass COUNTS these;
+/// What the snapshot says about one of our rows. The report COUNTS these;
 /// the seed ACTS on them. They were two separate implementations that had
 /// already drifted — the report an operator signs off on did not predict what
 /// `--execute` would write. One rule, two consumers.
@@ -895,8 +895,8 @@ pub(crate) async fn open_snapshot(
     Ok((list, state))
 }
 
-/// DISTINCT-entry report after first-wins, printed by the compare pass before
-/// it folds our rows in — the raw record count cannot be compared with our
+/// DISTINCT-entry report after first-wins, printed before our rows are folded
+/// in — the raw record count cannot be compared with our
 /// tables, because a key appears in as many buckets as it has versions.
 pub fn report_state(state: &SnapshotState, checkpoint_ledger: u32, secs: f64) {
     let dead_accounts = state.accounts.len() - state.live_accounts();
@@ -993,8 +993,8 @@ mod tests {
         assert_eq!(st.live_trustlines(), 0);
     }
 
-    /// The verdict is the one rule the compare pass reports and the seed acts
-    /// on. Each arm below is a production decision: mis-mapping any one of them
+    /// The verdict is the one rule the report counts and the seed acts on.
+    /// Each arm below is a production decision: mis-mapping any one of them
     /// either hides a live holding or writes a false number.
     #[test]
     fn verdict_covers_every_bucket() {

@@ -189,8 +189,11 @@ impl Tally {
         }
     }
 
-    /// The eleven buckets as text. They sum to the rows read — a completeness
-    /// invariant, so a row cannot vanish from the report unnoticed.
+    /// The eleven buckets as text. The TEN verdict buckets sum to the rows
+    /// read — a completeness invariant, so one of our rows cannot vanish from
+    /// the report unnoticed. `missing` is the eleventh and does not belong to
+    /// that sum: it is counted from the snapshot side, over entries we hold no
+    /// row for at all.
     pub(crate) fn render(&self, label: &str, native: bool) -> String {
         let mut out = format!("\n  {label}\n");
         let rows = [
@@ -255,7 +258,7 @@ pub(crate) fn key_line(
     }
 }
 
-/// The whole analysis of one comparison pass: per-population counters, the
+/// The whole analysis of one snapshot pass: per-population counters, the
 /// sample dumps and the ledger-floor histogram.
 ///
 /// Owned by whoever renders it. [`Report::observe`] RETURNS the verdict it
