@@ -187,6 +187,12 @@ pub struct NetworkState {
     /// Records of entry types this comparison does not model (offers, contract
     /// data, TTL, …). Reported so the pass never looks more complete than it is.
     pub unmodelled: u64,
+    /// TrustLineEntry records whose asset is NATIVE. The protocol forbids them
+    /// (`changeTrust` on native is rejected), so this must stay 0 — but
+    /// "impossible" folded into `unmodelled` would sit invisible among tens of
+    /// millions of offers and contract data. Counted apart so a protocol change
+    /// or a decode defect announces itself instead of being assumed away.
+    pub native_trustlines: u64,
     /// Records superseded by an earlier (newer) record for the same key. This
     /// is the number first-wins actually suppressed.
     pub superseded: u64,
@@ -268,6 +274,7 @@ impl NetworkState {
                 }
                 self.absorb(item);
             }
+            None if is_native_trustline(rec) => self.native_trustlines += 1,
             None => self.unmodelled += 1,
         }
     }
@@ -280,6 +287,25 @@ impl NetworkState {
     }
     pub fn live_pool_shares(&self) -> usize {
         self.pool_shares.values().filter(|e| e.live).count()
+    }
+}
+
+/// A TrustLineEntry (live or dead) whose asset is NATIVE — the one shape
+/// [`trustline_asset_id`] rejects that is not routed elsewhere by [`classify`].
+///
+/// Spelled out rather than inferred from "`classify` returned `None`": that
+/// would make the count depend on the ORDER of `classify`'s match arms, where
+/// `A::PoolShare` is handled before the `None` fallthrough. Reorder those arms
+/// and every pool share would silently become a native trustline in the report.
+fn is_native_trustline(rec: &SnapshotRecord) -> bool {
+    use stellar_xdr::{LedgerEntryData as D, LedgerKey as K, TrustLineAsset as A};
+    match rec {
+        SnapshotRecord::Live(e) => {
+            matches!(&e.data, D::Trustline(t) if matches!(t.asset, A::Native))
+        }
+        SnapshotRecord::Dead(k) => {
+            matches!(k.as_ref(), K::Trustline(t) if matches!(t.asset, A::Native))
+        }
     }
 }
 
@@ -545,6 +571,17 @@ pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) -> 
         "  {} records of entry types this comparison does not model          (offers, contract data, TTL, claimable balances, …)",
         state.unmodelled
     );
+    // Printed only when non-zero, and loudly: the protocol forbids a native
+    // trustline, so any count here is a protocol change or a decode defect,
+    // and the surrounding numbers should not be trusted until it is explained.
+    if state.native_trustlines > 0 {
+        let _ = writeln!(
+            out,
+            "  !! {} TrustLineEntry records carry the NATIVE asset — the protocol \
+             forbids these; the comparison skipped them",
+            state.native_trustlines
+        );
+    }
     let _ = writeln!(out, "  {secs:.1}s");
     out
 }
