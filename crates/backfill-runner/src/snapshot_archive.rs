@@ -269,16 +269,10 @@ where
     // be called verified at all.
     let mut gz = GzDecoder::new(&tmp);
     let mut digest = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = gz
-            .read(&mut buf)
-            .map_err(|e| BackfillError::Incomplete(format!("bucket verify read: {e}")))?;
-        if n == 0 {
-            break;
-        }
-        digest.update(&buf[..n]);
-    }
+    // `Sha256` is itself an `io::Write` sink, so the whole decompressed stream
+    // goes through in one statement — no hand-driven buffer to check.
+    std::io::copy(&mut gz, &mut digest)
+        .map_err(|e| BackfillError::Incomplete(format!("bucket verify read: {e}")))?;
     let got = hex::encode(digest.finalize());
     if got != expect_hash {
         return Err(BackfillError::Incomplete(format!(

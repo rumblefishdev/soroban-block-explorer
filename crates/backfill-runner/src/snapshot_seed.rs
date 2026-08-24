@@ -93,11 +93,22 @@ struct Corrections {
     entry_states: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
+    /// One line per row this run zeroes while it still held a positive amount
+    /// — the anomaly report, and the only pre-image of what `--execute` takes
+    /// away. It belongs to what the run produced, like the four row sets.
+    ghosts: Vec<String>,
 }
 
 /// Number of `holder_id` slices. 64 keeps each chunk near the ~760k groups
 /// measured for 1/64 of the key space — two orders under the server's limit.
 const KEY_SLICES: i128 = 64;
+
+/// Floor on the our-rows read. A short
+/// read (wrong database, a dropped key slice) is indistinguishable from a real
+/// one downstream: every missing row becomes an unmatched snapshot entry, i.e.
+/// a phantom network gap the seed would INSERT as a live holding. The real
+/// population measured 48.6M distinct (holder, asset) pairs — sit just under.
+pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
 
 /// Stream our deduplicated `balances` in `holder_id` slices, invoking `f` per
 /// row. Like every
@@ -108,7 +119,7 @@ const KEY_SLICES: i128 = 64;
 /// inserts anyway, and a cursor error propagates loudly where the operator
 /// CLI's exit-0-on-server-error trap did not.)
 ///
-/// Errors below [`snapshot_verdict::MIN_OUR_ROWS`] rows: a short read (wrong database,
+/// Errors below [`MIN_OUR_ROWS`] rows: a short read (wrong database,
 /// dropped slice) would silently report our own holdings as a phantom network
 /// gap.
 async fn stream_our_rows(
@@ -129,11 +140,11 @@ async fn stream_our_rows(
         }
         println!("    slice {:>2}/{KEY_SLICES} — {seen} rows so far", i + 1);
     }
-    if seen < snapshot_verdict::MIN_OUR_ROWS {
+    if seen < MIN_OUR_ROWS {
         return Err(BackfillError::Incomplete(format!(
             "our balances read returned {seen} rows, expected at least {} — a short \
              read reports our own holdings as a phantom network gap (wrong database?)",
-            snapshot_verdict::MIN_OUR_ROWS
+            MIN_OUR_ROWS
         )));
     }
     Ok(seen)
@@ -210,16 +221,15 @@ fn fold_our_row(
     state: &mut NetworkState,
     checkpoint: u32,
     out: &mut Corrections,
-    ghost_log: &mut Vec<String>,
 ) {
     use snapshot_verdict::Verdict as V;
     if verdict == V::Ghost {
-        ghost_log.push(format!(
+        out.ghosts.push(format!(
             "{}\t{}\t{}\t{}",
             row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
         ));
     }
-    let net = snapshot_verdict::holding_for(state, row).map(|e| *e);
+    let net = snapshot_verdict::holding_for(state, row).copied();
     let Some(c) = snapshot_verdict::correction(verdict, net.as_ref(), checkpoint) else {
         return;
     };
@@ -242,7 +252,6 @@ async fn build_corrections(
     known_accounts: &HashSet<i64>,
     checkpoint: u32,
     report: &mut Report,
-    ghost_log: &mut Vec<String>,
 ) -> Result<Corrections, BackfillError> {
     let mut out = Corrections::default();
 
@@ -251,7 +260,7 @@ async fn build_corrections(
     println!("\n  streaming our balances in {KEY_SLICES} key slices…");
     let rows_read = stream_our_rows(sink, |row| {
         let v = report.observe(row, state);
-        fold_our_row(row, v, state, checkpoint, &mut out, ghost_log);
+        fold_our_row(row, v, state, checkpoint, &mut out);
     })
     .await?;
     println!("  folded {rows_read} of our rows");
@@ -427,7 +436,6 @@ pub async fn seed_command(
         )));
     }
 
-    let mut ghost_log = Vec::new();
     let mut report = Report::new(list.checkpoint_ledger);
     let corr = build_corrections(
         sink,
@@ -436,16 +444,15 @@ pub async fn seed_command(
         &known_accounts,
         list.checkpoint_ledger,
         &mut report,
-        &mut ghost_log,
     )
     .await?;
 
     // The ghost list is the anomaly REPORT the policy demands — corrected in
     // the same run, but never silently.
-    std::fs::write(artifacts.join("ghosts.tsv"), ghost_log.join("\n") + "\n")
+    std::fs::write(artifacts.join("ghosts.tsv"), corr.ghosts.join("\n") + "\n")
         .map_err(|e| BackfillError::Incomplete(format!("write ghosts: {e}")))?;
 
-    // The summary IS the four-way comparison — the same eleven buckets per
+    // The summary IS the four-way comparison — the same twelve buckets per
     // population the report renders, from one `Report`, plus
     // what this run would insert. An operator signs off on one document.
     report.write_dumps(&artifacts.join("dumps"))?;

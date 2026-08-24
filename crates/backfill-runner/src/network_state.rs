@@ -134,7 +134,7 @@ enum NetFact {
     Account {
         holder_id: i64,
         entry: NetHolding,
-        /// Only built when the caller asked for details (the seed pass).
+        /// `None` only for a DEAD account — a tombstone carries a key, no entry.
         detail: Option<Box<AccountDetail>>,
     },
     /// A classic credit trustline, keyed onto our surrogate pair.
@@ -433,9 +433,9 @@ pub(crate) async fn open_snapshot(
     let started = std::time::Instant::now();
     let http = archive_client()?;
     let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
-    let take = list.hashes.len();
+    let n_buckets = list.hashes.len();
     println!(
-        "checkpoint ledger {} — {take} buckets{label}",
+        "checkpoint ledger {} — {n_buckets} buckets{label}",
         list.checkpoint_ledger
     );
 
@@ -449,7 +449,7 @@ pub(crate) async fn open_snapshot(
         })
         .await?;
         println!(
-            "  [{:>2}/{take}] {bytes:>10} B  {:>6.1}s",
+            "  [{:>2}/{n_buckets}] {bytes:>10} B  {:>6.1}s",
             i + 1,
             t0.elapsed().as_secs_f64()
         );

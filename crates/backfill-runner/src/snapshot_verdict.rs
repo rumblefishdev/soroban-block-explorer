@@ -1,6 +1,6 @@
 //! The comparison rule — one of our rows against what the network holds.
 //!
-//! Ten verdicts, one function. The report COUNTS them and the seed ACTS on
+//! Eleven verdicts, one function. The report COUNTS them and the seed ACTS on
 //! them, and both go through [`verdict`], so they cannot describe different
 //! populations. Every arm is a production decision: mis-mapping one either
 //! hides a live holding or writes a false number.
@@ -12,13 +12,6 @@ use crate::network_state::{HoldingKey, NetHolding, NetworkState};
 // ---------------------------------------------------------------------------
 // The verdict — ONE rule, counted by the report and acted on by the seed
 // ---------------------------------------------------------------------------
-
-/// Floor on the our-rows read. A short
-/// read (wrong database, a dropped key slice) is indistinguishable from a real
-/// one downstream: every missing row becomes an unmatched snapshot entry, i.e.
-/// a phantom network gap the seed would INSERT as a live holding. The real
-/// population measured 48.6M distinct (holder, asset) pairs — sit just under.
-pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
 
 /// One of our deduplicated `balances` rows, exactly the SELECT list of
 /// `snapshot_seed::slice_sql`. Shared by the report and the write so the

@@ -110,12 +110,10 @@ pub(crate) struct Samples {
     /// Finer histogram of the ABOVE-floor missing — these are the suspicious
     /// ones, and their shape says whether they cluster somewhere.
     pub(crate) missing_above_by_2m: std::collections::BTreeMap<u32, u64>,
-    /// The checkpoint the verdicts are judged against.
-    pub(crate) checkpoint: u32,
 }
 
 impl Samples {
-    pub(crate) fn new(checkpoint: u32) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             closure_classic: Sample::new(),
             ghost_classic: Sample::new(),
@@ -129,7 +127,6 @@ impl Samples {
             missing_below_floor: 0,
             missing_above_floor: 0,
             missing_above_by_2m: std::collections::BTreeMap::new(),
-            checkpoint,
         }
     }
 }
@@ -196,7 +193,7 @@ impl Tally {
 
     /// The twelve buckets as text. The ELEVEN verdict buckets sum to the rows
     /// read — a completeness invariant, so one of our rows cannot vanish from
-    /// the report unnoticed. `missing` is the eleventh and does not belong to
+    /// the report unnoticed. `missing` is the twelfth and does NOT belong to
     /// that sum: it is counted from the snapshot side, over entries we hold no
     /// row for at all.
     pub(crate) fn render(&self, label: &str, native: bool) -> String {
@@ -255,14 +252,15 @@ impl Tally {
 /// counted as unresolved by the dump, never silently dropped).
 pub(crate) fn key_line(
     state: &NetworkState,
-    row: &snapshot_verdict::OurRow,
+    holder_id: i64,
+    asset_id: i64,
     is_native: bool,
 ) -> Option<String> {
-    let holder = &state.account_details.get(&row.holder_id)?.strkey;
+    let holder = &state.account_details.get(&holder_id)?.strkey;
     if is_native {
         Some(format!("account\t{holder}"))
     } else {
-        let (code, issuer) = state.asset_registry.get(&row.asset_id)?;
+        let (code, issuer) = state.asset_registry.get(&asset_id)?;
         Some(format!("trustline\t{holder}\t{code}\t{issuer}"))
     }
 }
@@ -277,8 +275,10 @@ pub(crate) fn key_line(
 pub(crate) struct Report {
     pub(crate) classic: Tally,
     pub(crate) native: Tally,
+    /// The checkpoint every verdict is judged against. It has nothing to do
+    /// with sampling, which is where it used to live.
+    checkpoint: u32,
     samples: Samples,
-    native_asset_id: i64,
 }
 
 impl Report {
@@ -286,8 +286,8 @@ impl Report {
         Self {
             classic: Tally::default(),
             native: Tally::default(),
-            samples: Samples::new(checkpoint),
-            native_asset_id: db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+            samples: Samples::new(),
+            checkpoint,
         }
     }
 
@@ -304,11 +304,11 @@ impl Report {
                 row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
             )
         };
-        let is_native = row.asset_id == self.native_asset_id;
+        let is_native = row.asset_id == db_clickhouse::persist::ids::NATIVE_ASSET_ID;
         let v = snapshot_verdict::verdict(
             row,
             snapshot_verdict::holding_for(state, row),
-            self.samples.checkpoint,
+            self.checkpoint,
         );
         let out = if is_native {
             &mut self.native
@@ -339,7 +339,9 @@ impl Report {
         // audit called out: reversing our surrogates through our own tables
         // meant auditing the tables with themselves.
         if let Some(bucket) = bucket {
-            bucket.offer(line, || key_line(state, row, is_native));
+            bucket.offer(line, || {
+                key_line(state, row.holder_id, row.asset_id, is_native)
+            });
         }
         v
     }
@@ -373,13 +375,6 @@ impl Report {
         // function of the KEY instead — reproducible, and independent of any
         // structure in the data.
         const MISSING_SAMPLE_MODULUS: u64 = 16_384;
-        let row_for_key = snapshot_verdict::OurRow {
-            holder_id: key.holder_id,
-            asset_id: key.asset_id,
-            amount: 0,
-            last_updated_ledger: 0,
-            closed_at_ledger: 0,
-        };
         self.samples.missing_classic.offer_if(
             (key.holder_id ^ key.asset_id)
                 .unsigned_abs()
@@ -390,7 +385,7 @@ impl Report {
                     key.holder_id, key.asset_id, entry.balance, entry.ledger
                 )
             },
-            || key_line(state, &row_for_key, false),
+            || key_line(state, key.holder_id, key.asset_id, false),
         );
     }
 
@@ -403,7 +398,6 @@ impl Report {
     /// The missing-bucket discriminator, rendered: below our floor is the
     /// expected blind spot, above it is a defect signal to chase.
     pub(crate) fn render_missing_histogram(&self) -> String {
-        use std::fmt::Write as _;
         let s = &self.samples;
         let mut out = format!(
             "\n  missing trustlines by the entry's own lastModifiedLedgerSeq:\n    \
