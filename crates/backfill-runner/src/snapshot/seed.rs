@@ -216,15 +216,34 @@ fn key_slices() -> impl Iterator<Item = (i128, i128)> {
 
 /// Fetch the set of existing dimension ids straight from ClickHouse — the
 /// tool reads its own inputs, like every other corrective command here.
-async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillError> {
+///
+/// Sliced on `id`, for the same reason [`stream_our_rows`] is. The unsliced
+/// version read `accounts` in one query and timed out on the third production
+/// run: 14.58M ids do not fit the operator profile's `max_execution_time = 30`,
+/// which counts the time spent SENDING rows, not just aggregating them (the
+/// aggregation alone measures 0.4s). It had succeeded twice before that, which
+/// is the worst kind of limit — one that depends on how busy the server is.
+///
+/// Failure was loud, and stayed loud: a cursor error propagates, so a partial
+/// id set can never be mistaken for a real one. That matters more here than
+/// almost anywhere else in the run, because fewer known ids means more ids
+/// judged absent, which means more dimension stubs — a truncated read would
+/// manufacture rows for entities that already exist.
+async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, BackfillError> {
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct IdRow {
         id: i64,
     }
     let mut out = HashSet::new();
-    let mut cursor = sink.client().query(sql).fetch::<IdRow>()?;
-    while let Some(r) = cursor.next().await? {
-        out.insert(r.id);
+    for (from, to) in key_slices() {
+        // `GROUP BY id` collapses the RMT duplicates prod tables carry
+        // unmerged. The HashSet would dedup anyway; doing it server-side keeps
+        // ~8% of rows off the wire, which is the resource actually constrained.
+        let sql = format!("SELECT id FROM {table} WHERE id BETWEEN {from} AND {to} GROUP BY id");
+        let mut cursor = sink.client().query(&sql).fetch::<IdRow>()?;
+        while let Some(r) = cursor.next().await? {
+            out.insert(r.id);
+        }
     }
     Ok(out)
 }
@@ -546,9 +565,8 @@ pub async fn seed_command(
     )
     .map_err(|e| BackfillError::Incomplete(format!("write manifest: {e}")))?;
 
-    // `GROUP BY id` collapses the RMT duplicates prod tables carry unmerged.
-    let known_assets = fetch_id_set(sink, "SELECT id FROM assets GROUP BY id").await?;
-    let known_accounts = fetch_id_set(sink, "SELECT id FROM accounts GROUP BY id").await?;
+    let known_assets = fetch_id_set(sink, "assets").await?;
+    let known_accounts = fetch_id_set(sink, "accounts").await?;
     println!(
         "  known dimension ids: {} assets, {} accounts",
         known_assets.len(),
