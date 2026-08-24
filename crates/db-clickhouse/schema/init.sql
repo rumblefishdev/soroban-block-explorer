@@ -309,8 +309,26 @@ CREATE TABLE IF NOT EXISTS assets (
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
--- Signers + thresholds side table (task 0463 / issue #377). ONE row per
--- account carrying the FULL signer set as parallel arrays: the protocol caps
+-- Account-entry state side table (task 0463 / issue #377). Holds what ONLY an
+-- observed `AccountEntry` can supply: the full signer set, the thresholds, and
+-- the account's issuer flags. Named for the SOURCE rather than for `signers`
+-- because the write CONDITION is what defines it — `accounts` beside it takes
+-- whole-row writes from paths that carry no entry at all (participant
+-- skeletons, RPC bootstrap), and RMT replaces the whole row, so anything only
+-- an entry can know would be clobbered there. Task 0421 is expected to move
+-- `sequence_number` and `home_domain` in here for exactly that reason; the
+-- name is already correct for them.
+--
+-- `flags` (AccountFlags: AUTH_REQUIRED / AUTH_REVOCABLE / AUTH_IMMUTABLE /
+-- AUTH_CLAWBACK_ENABLED) rides along because it shares all three properties —
+-- same source, same write condition, same version. It is stored RAW, not
+-- interpreted: the account page needs it to say whether the issuer of a held
+-- asset can freeze or claw back that holding (USDC's issuer, for one, carries
+-- AUTH_REVOCABLE).
+--
+-- ONE row per account carrying the FULL signer set as parallel arrays
+-- (index i of signer_keys / signer_weights / signer_types is one signer, the
+-- ClickHouse `Nested` idiom spelled out): the protocol caps
 -- signers at 20 and rewrites AccountEntry wholesale, so RMT atomically
 -- replaces the whole set — a removed signer cannot survive as a ghost, no
 -- lifecycle column needed. A SIDE table, not columns on `accounts`, because
@@ -324,7 +342,14 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- Horizon). signer_weights is UInt32 as in XDR; protocol constrains 0-255
 -- and SetOptions deletes at 0, so out-of-range or zero weights are logged as
 -- anomalies at persist, stored as carried.
-CREATE TABLE IF NOT EXISTS account_signers (
+-- PROD: this table shipped as `account_signers` and was renamed before the
+-- writer was ever deployed — the rename was free then (table present but
+-- EMPTY, no consumers, 0 of 76,334,267 `balances` rows carried a closure) and
+-- would not have been afterwards. `CREATE TABLE IF NOT EXISTS` does not
+-- rename an existing table, so a database created before 2026-08-21 needs:
+--     RENAME TABLE account_signers TO account_entry_state;
+-- Metadata-only, instant, nothing to move.
+CREATE TABLE IF NOT EXISTS account_entry_state (
     account_id          Int64,
     signer_keys         Array(String),
     signer_weights      Array(UInt32),

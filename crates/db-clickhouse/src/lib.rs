@@ -170,7 +170,7 @@ mod tests {
         // the acclist browse) + its refreshable `accounts_recent_mv`. 29 → 31.
         // task 0279: added `lp_operation_amounts` — per-(op, pool, asset) amounts
         // behind the pool page's "Amount" column (issue #371). 31 → 32.
-        // task 0463: added `account_signers` — signers + thresholds side table
+        // task 0463: added `account_entry_state` — signers + thresholds side table
         // (issue #377); side table, not columns on `accounts`, because that
         // table takes whole-row writes from more than one path. 32 → 33.
         assert_eq!(

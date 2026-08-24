@@ -317,7 +317,7 @@ fn account_key(a: &AccountEntry) -> Value {
 /// purpose — a new arm must fail compilation here, never pass through blank.
 ///
 /// `pub` because the checkpoint-snapshot seed writes into the SAME
-/// `account_signers.signer_types` column as this writer. A second copy of these
+/// `account_entry_state.signer_types` column as this writer. A second copy of these
 /// four words would split the stored vocabulary by whichever path last touched
 /// the account — silently. Sharing the function makes that a compile-time
 /// guarantee instead of a promise in a comment.

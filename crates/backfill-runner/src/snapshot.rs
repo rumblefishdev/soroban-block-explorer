@@ -453,7 +453,7 @@ enum SnapItem {
 }
 
 /// Everything an `AccountEntry` carries beyond its native balance: identity for
-/// dimension stubs, signers + thresholds for `account_signers`. Captured only
+/// dimension stubs, signers + thresholds for `account_entry_state`. Captured only
 /// when [`SnapshotState::with_details`] asks for it — the compare pass does not
 /// need it and it is the bulk of the memory.
 #[derive(Debug)]

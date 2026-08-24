@@ -188,7 +188,7 @@ Independent of the above, and settled by the same map:
   (`ledger_entry_changes.rs:316`, `state.rs:470`); `rpc_snapshot.rs:402` holds
   them in memory before discarding them too. This is an **extraction gap, not
   a data gap**.
-- Storage is a side table `account_signers` keyed by `account_id`, RMT
+- Storage is a side table `account_entry_state` keyed by `account_id`, RMT
   versioned by ledger, with a single writer — not a column on `accounts`,
   whose whole-row replacement makes a bolt-on column unsafe.
 - ~~**Backward completeness is free**~~ — **WRONG, corrected 2026-08-18.** The

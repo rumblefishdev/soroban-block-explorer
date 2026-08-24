@@ -109,7 +109,7 @@ ambiguity affects Soroban and LP holdings, and task 0331 already unified every
 holding kind into this one table. The read path filters on
 `closed_at_ledger = 0` instead of `amount != 0`.
 
-Signers take a side table `account_signers` (single writer, RMT by ledger) —
+Signers take a side table `account_entry_state` (single writer, RMT by ledger) —
 not a column on `accounts`, whose whole-row replacement makes a bolt-on unsafe.
 
 Backward completeness comes from a one-off seed of the history archive's
@@ -170,7 +170,7 @@ Everything below is measured on production data and RPC-verified, not estimated.
 1. **Lifecycle writer** — the indexer now stamps `closed_at_ledger` (and zeroes
    the amount) when a trustline is removed and when an account is merged, for
    classic, native, Soroban and LP write paths. It also extracts signers +
-   thresholds into `account_signers`. This is NOT deployed yet.
+   thresholds into `account_entry_state`. This is NOT deployed yet.
 2. **Checkpoint-snapshot toolchain** (`backfill-runner` subcommands, all
    read-only except the seed's explicit `--execute`):
    - `snapshot-tally` — decode the archive's full-state snapshot, count records
@@ -308,7 +308,7 @@ What that decision obliges, in place of the split:
 
 ### Audit findings 2026-08-18 — five agents over the full branch diff
 
-One defect blocked deploy and is fixed: **`account_signers` rows were not
+One defect blocked deploy and is fixed: **`account_entry_state` rows were not
 deduplicated per account.** States arrive one per transaction and every state
 in a ledger carries that ledger as its RMT version, so two `SetOptions` on one
 account in one ledger wrote two rows at the SAME version — the merge picks
@@ -343,7 +343,7 @@ before the run, not hours. The unified verdict makes this legible: `heal`
 ### Pre-existing defect found while auditing same-ledger ties — and the seed repairs it
 
 Audited EVERY ledger-versioned ReplacingMergeTree table for the hazard that
-`account_signers` had (two states in one ledger → two rows at the same RMT
+`account_entry_state` had (two states in one ledger → two rows at the same RMT
 version → the merge picks arbitrarily). Measured on production:
 
 | table                   | keys with >1 content at the same version |

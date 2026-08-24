@@ -71,13 +71,13 @@ pub struct AccountRow {
     pub home_domain: Option<String>,
 }
 
-/// `account_signers` — state, RMT(last_updated_ledger), PK = account_id.
+/// `account_entry_state` — state, RMT(last_updated_ledger), PK = account_id.
 /// ONE row per account, the FULL signer set as parallel arrays — atomic
 /// whole-set replacement, so removed signers cannot ghost. Master weight is
 /// thresholds byte 0, never in the arrays (raw XDR truth; Horizon
 /// synthesizes). lore-0463.
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct AccountSignersRow {
+pub struct AccountEntryStateRow {
     pub account_id: i64,
     pub signer_keys: Vec<String>,
     pub signer_weights: Vec<u32>,

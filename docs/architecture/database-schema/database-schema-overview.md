@@ -155,7 +155,7 @@ Derived explorer entities:
   carry liveness — the read path **will** filter `closed_at_ledger = 0` rather than `amount != 0` (the flip ships with the signers API in the follow-up; today `accounts/queries.rs` still filters on the amount, which is why a live zero is still hidden). The writer
   stamps closures exactly; rows seeded from the checkpoint snapshot carry the run's checkpoint
   ledger, meaning "closed at or before"
-- `account_signers` — signers + thresholds per account (task 0463, issue #377): one row per
+- `account_entry_state` — signers + thresholds per account (task 0463, issue #377): one row per
   account, the FULL signer set as parallel arrays (`signer_keys/weights/types`), plus
   `master_weight` + `threshold_low/med/high` + account `flags`; RMT(`last_updated_ledger`) keyed on
   `account_id` — whole-set replacement so removed signers cannot ghost. Raw-XDR truth: the master

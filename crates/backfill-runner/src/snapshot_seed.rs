@@ -9,7 +9,7 @@
 //! | closure (ours 0, gone) | ~22.2M classic + 2.3M native | checkpoint | checkpoint |
 //! | ghost (ours >0, gone) | ~1.04M native + ~2k classic | checkpoint | checkpoint |
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
-//! | `account_signers` full seed | every live account | the entry's own ledger | — |
+//! | `account_entry_state` full seed | every live account | the entry's own ledger | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
 //! ## The versioning contract (the load-bearing part)
@@ -68,7 +68,7 @@ use crate::sink::Sink;
 use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState};
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
-use db_clickhouse::persist::rows::{AccountRow, AccountSignersRow, AssetRow, BalanceRow};
+use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow, BalanceRow};
 
 /// Insert batch size. RowBinary streams; this only bounds peak buffering.
 const INSERT_CHUNK: usize = 500_000;
@@ -87,7 +87,7 @@ const INSERT_CHUNK: usize = 500_000;
 #[derive(Default)]
 struct Corrections {
     balances: Vec<BalanceRow>,
-    signers: Vec<AccountSignersRow>,
+    signers: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
     n_missing: u64,
@@ -316,7 +316,7 @@ async fn build_corrections(
         let Some(d) = state.account_details.get(id) else {
             continue;
         };
-        out.signers.push(AccountSignersRow {
+        out.signers.push(AccountEntryStateRow {
             account_id: *id,
             signer_keys: d.signers.iter().map(|(k, _, _)| k.clone()).collect(),
             signer_weights: d.signers.iter().map(|(_, w, _)| *w).collect(),
@@ -432,7 +432,7 @@ pub async fn seed_command(
            re-opened (we hid a live holding) {}\n\
            divergent SAME ledger (defect?)   {}   NOT written — investigate\n\
            left alone (ours newer than checkpoint) {}\n\
-         account_signers rows: {}\n\
+         account_entry_state rows: {}\n\
          asset stubs:          {}\n\
          account stubs:        {}\n",
         list.checkpoint_ledger,
@@ -459,7 +459,7 @@ pub async fn seed_command(
         insert_chunked(sink, "assets", &corr.asset_stubs).await?;
         insert_chunked(sink, "accounts", &corr.account_stubs).await?;
         insert_chunked(sink, "balances", &corr.balances).await?;
-        insert_chunked(sink, "account_signers", &corr.signers).await?;
+        insert_chunked(sink, "account_entry_state", &corr.signers).await?;
         println!("  inserts done.");
     } else {
         println!("  dry-run: nothing inserted. Re-run with --execute to write.");

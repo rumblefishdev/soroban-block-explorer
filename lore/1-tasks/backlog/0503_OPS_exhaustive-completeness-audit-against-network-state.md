@@ -43,15 +43,15 @@ designed to find them.
 For each entity we index, compare our deduplicated state against the
 snapshot and report **four** numbers, never a single "match" percentage:
 
-| Entity                    | Our table           | Snapshot entry                            |
-| ------------------------- | ------------------- | ----------------------------------------- |
-| accounts                  | `accounts`          | `AccountEntry`                            |
-| classic + native holdings | `balances`          | `TrustLineEntry` + `AccountEntry.balance` |
-| Soroban token holdings    | `balances` (type 3) | `ContractData` balance entries            |
-| LP positions              | `lp_positions`      | pool-share `TrustLineEntry`               |
-| pools                     | `liquidity_pools`   | `LiquidityPoolEntry`                      |
-| contracts                 | `soroban_contracts` | `ContractData` / `ContractCode`           |
-| signers + thresholds      | `account_signers`   | `AccountEntry`                            |
+| Entity                    | Our table             | Snapshot entry                            |
+| ------------------------- | --------------------- | ----------------------------------------- |
+| accounts                  | `accounts`            | `AccountEntry`                            |
+| classic + native holdings | `balances`            | `TrustLineEntry` + `AccountEntry.balance` |
+| Soroban token holdings    | `balances` (type 3)   | `ContractData` balance entries            |
+| LP positions              | `lp_positions`        | pool-share `TrustLineEntry`               |
+| pools                     | `liquidity_pools`     | `LiquidityPoolEntry`                      |
+| contracts                 | `soroban_contracts`   | `ContractData` / `ContractCode`           |
+| signers + thresholds      | `account_entry_state` | `AccountEntry`                            |
 
 Per entity, report:
 
@@ -136,7 +136,7 @@ touching the same entity, where the writer must keep chain-application order.
 
 | class                                    | tables                                                                                                                                                                                                 | verdict                                                                                                                                                                                                                                                                                                                             |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| state (final-state-per-ledger semantics) | `accounts`, `balances`, `account_signers`, `soroban_contracts`, `liquidity_pools`, `lp_positions`, `nfts`, `nfts_pending`                                                                              | every writer folds per key with LAST-wins in tx/op application order before insert (each verified at its emit site); chain order comes from processing txs in ledger order and changes in meta order. Regression tests exist for balances, signers, merge-then-recreate; MISSING for accounts/lp/pools/nfts folds — listed as a gap |
+| state (final-state-per-ledger semantics) | `accounts`, `balances`, `account_entry_state`, `soroban_contracts`, `liquidity_pools`, `lp_positions`, `nfts`, `nfts_pending`                                                                          | every writer folds per key with LAST-wins in tx/op application order before insert (each verified at its emit site); chain order comes from processing txs in ledger order and changes in meta order. Regression tests exist for balances, signers, merge-then-recreate; MISSING for accounts/lp/pools/nfts folds — listed as a gap |
 | fact with order column                   | `transactions` (application_order), `operations_appearances` (application_order), `soroban_events` (event_index), `nft_ownership(+_pending)` (event_order), `lp_operation_amounts` (application_order) | key distinguishes intra-ledger order — two real events cannot collapse                                                                                                                                                                                                                                                              |
 | fact with per-tx aggregation             | `operation_asset_appearances` (`net_settled` computed per (tx, asset) BEFORE insert — `amount_by_tx_asset`)                                                                                            | collapse impossible by construction; the value is a per-tx net, not per-op                                                                                                                                                                                                                                                          |
 | presence (collapse intended)             | `transaction_participants`, `operation_pools`, `soroban_invocations_appearances`, `operation_asset_appearances` (presence half)                                                                        | one row per (entity, tx) is the SEMANTIC — no order needed                                                                                                                                                                                                                                                                          |
@@ -185,7 +185,7 @@ versions: the arbiter is the NETWORK, via the snapshot reconciliation — see
       pool shares → 0499 until the merge). A type silently missing from the
       report fails this audit even if every reported number is right — "we
       never got to it" produced the 60% gap
-- [ ] `account_signers` diffed against `AccountEntry` signers on every run
+- [ ] `account_entry_state` diffed against `AccountEntry` signers on every run
       AFTER the 0463 seed (first fill has nothing to compare; from then on a
       divergence is a writer defect, not a gap)
 - [ ] Four-way counts per entity, with the method stated per number

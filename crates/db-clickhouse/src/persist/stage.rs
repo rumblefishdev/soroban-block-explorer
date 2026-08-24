@@ -209,10 +209,10 @@ pub struct StagedLedger {
 
     pub ledger_rows: Vec<LedgerRow>,
     pub account_rows: Vec<AccountRow>,
-    /// `account_signers` rows — one per account whose `AccountEntry` was
+    /// `account_entry_state` rows — one per account whose `AccountEntry` was
     /// OBSERVED this change set (full-set replace; trustline-only appearances
     /// never emit one). lore-0463.
-    pub account_signer_rows: Vec<AccountSignersRow>,
+    pub account_entry_state_rows: Vec<AccountEntryStateRow>,
     pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
     pub contract_rows: Vec<SorobanContractRow>,
     /// On-chain Soroban token metadata side table (task 0297). Populated inside
@@ -1804,11 +1804,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // per TRANSACTION (`process.rs` calls `extract_account_states` per tx and
     // concatenates), and every state in a ledger carries that ledger as its
     // watermark. Two `SetOptions` on one account in one ledger would therefore
-    // emit two `account_signers` rows at the SAME RMT version, and the merge
+    // emit two `account_entry_state` rows at the SAME RMT version, and the merge
     // resolves a tie arbitrarily — a removed signer could survive as the winner,
     // which is exactly what the whole-set-replacement design promises cannot
     // happen. Ledger/tx order puts the final state last, so last-wins is right.
-    let mut signers_dedup: HashMap<i64, AccountSignersRow> = HashMap::new();
+    let mut signers_dedup: HashMap<i64, AccountEntryStateRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1896,7 +1896,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                     }
                     signers_dedup.insert(
                         account_id_int,
-                        AccountSignersRow {
+                        AccountEntryStateRow {
                             account_id: account_id_int,
                             signer_keys,
                             signer_weights,
@@ -1938,7 +1938,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
     out.unified_balance_rows.extend(balance_dedup.into_values());
-    out.account_signer_rows.extend(signers_dedup.into_values());
+    out.account_entry_state_rows
+        .extend(signers_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {

@@ -81,7 +81,7 @@ pub struct PartitionWriter {
 #[derive(Default)]
 struct TableInserts {
     accounts: Option<Insert<AccountRow>>,
-    account_signers: Option<Insert<AccountSignersRow>>,
+    account_entry_state: Option<Insert<AccountEntryStateRow>>,
     wasm: Option<Insert<WasmInterfaceMetadataRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
     metadata: Option<Insert<SorobanContractMetadataRow>>,
@@ -184,9 +184,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.account_signers,
-            "account_signers",
-            &staged.account_signer_rows,
+            &mut self.inserts.account_entry_state,
+            "account_entry_state",
+            &staged.account_entry_state_rows,
         )
         .await?;
         write_rows(
@@ -368,7 +368,7 @@ impl PartitionWriter {
         // index → participants → pools/snapshots/positions → ops →
         // events → invocations → assets → nfts/ownership → balances).
         end(self.inserts.accounts).await?;
-        end(self.inserts.account_signers).await?;
+        end(self.inserts.account_entry_state).await?;
         end(self.inserts.wasm).await?;
         end(self.inserts.contracts).await?;
         end(self.inserts.metadata).await?;

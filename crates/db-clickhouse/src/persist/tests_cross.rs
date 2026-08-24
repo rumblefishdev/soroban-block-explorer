@@ -62,9 +62,9 @@ fn column_order_accounts() {
 }
 
 #[test]
-fn column_order_account_signers() {
-    assert_columns::<AccountSignersRow>(
-        "account_signers",
+fn column_order_account_entry_state() {
+    assert_columns::<AccountEntryStateRow>(
+        "account_entry_state",
         &[
             "account_id",
             "signer_keys",
@@ -2638,12 +2638,12 @@ fn signer_rows_full_set_replace_semantics() {
     .expect("prepare");
 
     assert_eq!(
-        staged.account_signer_rows.len(),
+        staged.account_entry_state_rows.len(),
         2,
         "exactly the two entry-observed accounts emit signer rows"
     );
     let obs = staged
-        .account_signer_rows
+        .account_entry_state_rows
         .iter()
         .find(|r| r.account_id == ids::account_id("GOBSERVED"))
         .expect("observed row");
@@ -2661,7 +2661,7 @@ fn signer_rows_full_set_replace_semantics() {
     assert_eq!(obs.last_updated_ledger, 100);
 
     let emp = staged
-        .account_signer_rows
+        .account_entry_state_rows
         .iter()
         .find(|r| r.account_id == ids::account_id("GEMPTIED"))
         .expect("emptied row");
@@ -2888,7 +2888,7 @@ fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
 }
 
 /// Two transactions in ONE ledger touching the same account must collapse to a
-/// single `account_signers` row carrying the LAST state.
+/// single `account_entry_state` row carrying the LAST state.
 ///
 /// `extract_account_states` runs per transaction and every state in a ledger
 /// carries that ledger as its watermark, so two rows would share the RMT
@@ -2940,13 +2940,13 @@ fn two_states_for_one_account_in_one_ledger_collapse_to_the_last() {
     .expect("prepare");
 
     assert_eq!(
-        staged.account_signer_rows.len(),
+        staged.account_entry_state_rows.len(),
         1,
         "two same-ledger states must not emit two rows at the same RMT version — \
          the merge would pick a winner arbitrarily"
     );
     assert!(
-        staged.account_signer_rows[0].signer_keys.is_empty(),
+        staged.account_entry_state_rows[0].signer_keys.is_empty(),
         "last state in ledger/tx order wins; a surviving 'GS1' means a removed \
          signer ghosted"
     );
