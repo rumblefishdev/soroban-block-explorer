@@ -11,7 +11,7 @@ use std::path::Path;
 use std::fmt::Write as _;
 
 use crate::error::BackfillError;
-use crate::snapshot::{self, SnapshotState};
+use crate::network_state::{self, NetworkState};
 use crate::snapshot_verdict;
 
 /// Our indexer's ledger floor. The single most important discriminator for the
@@ -246,7 +246,7 @@ impl Tally {
 /// (an asset with no live trustline anywhere — those are
 /// counted as unresolved by the dump, never silently dropped).
 pub(crate) fn key_line(
-    state: &SnapshotState,
+    state: &NetworkState,
     row: &snapshot_verdict::OurRow,
     is_native: bool,
 ) -> Option<String> {
@@ -288,7 +288,7 @@ impl Report {
     pub(crate) fn observe(
         &mut self,
         row: &snapshot_verdict::OurRow,
-        state: &mut SnapshotState,
+        state: &mut NetworkState,
     ) -> snapshot_verdict::Verdict {
         let line = || {
             format!(
@@ -299,7 +299,7 @@ impl Report {
         let is_native = row.asset_id == self.native_asset_id;
         let v = snapshot_verdict::verdict(
             row,
-            snapshot_verdict::snap_entry_for(state, row),
+            snapshot_verdict::holding_for(state, row),
             self.samples.checkpoint,
         );
         let out = if is_native {
@@ -341,9 +341,9 @@ impl Report {
     /// data. Counted, bucketed by the ledger floor, and sampled.
     pub(crate) fn observe_missing_trustline(
         &mut self,
-        key: &snapshot::HoldingKey,
-        entry: &snapshot::SnapEntry,
-        state: &SnapshotState,
+        key: &network_state::HoldingKey,
+        entry: &network_state::NetHolding,
+        state: &NetworkState,
     ) {
         self.classic.missing += 1;
         // The discriminator: below the floor we cannot have a row (dormant
@@ -379,7 +379,7 @@ impl Report {
             || {
                 format!(
                     "{}\t{}\t{}\t{}",
-                    key.holder_id, key.asset_id, entry.amount, entry.ledger
+                    key.holder_id, key.asset_id, entry.balance, entry.ledger
                 )
             },
             || key_line(state, &row_for_key, false),

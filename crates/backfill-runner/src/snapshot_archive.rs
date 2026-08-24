@@ -3,7 +3,7 @@
 //! Everything in this module is about GETTING the bytes and turning them into
 //! [`SnapshotRecord`]s. Nothing here knows what a trustline is, what our
 //! tables look like, or which record wins when a key appears twice; that is
-//! [`crate::snapshot`]'s job.
+//! [`crate::network_state`]'s job.
 //!
 //! ## Shape of the data
 //!
@@ -281,7 +281,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::SnapshotState;
+    use crate::network_state::NetworkState;
 
     /// The archive's fan-out layout, pinned. A wrong split silently 404s every
     /// bucket, which reads as "the archive is down" rather than "our URL is
@@ -356,7 +356,7 @@ mod tests {
         }
         assert!(!bytes.is_empty(), "empty bucket body");
 
-        let mut state = SnapshotState::default();
+        let mut state = NetworkState::default();
         let mut handed = 0u64;
         let records = stream_bucket(&bytes[..], |rec| {
             handed += 1;

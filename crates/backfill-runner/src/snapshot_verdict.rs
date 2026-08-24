@@ -7,7 +7,7 @@
 
 use db_clickhouse::persist::ids;
 
-use crate::snapshot::{HoldingKey, SnapEntry, SnapshotState};
+use crate::network_state::{HoldingKey, NetHolding, NetworkState};
 
 // ---------------------------------------------------------------------------
 // The verdict — ONE rule, counted by the report and acted on by the seed
@@ -78,7 +78,7 @@ pub enum Verdict {
 /// (`None` = the network has no such entry at all); it is marked matched here,
 /// so whatever stays unmatched afterwards is exactly what the network holds and
 /// we do not.
-pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> Verdict {
+pub fn verdict(row: &OurRow, snap: Option<&mut NetHolding>, checkpoint: u32) -> Verdict {
     if row.closed_at_ledger != 0 {
         // Mark it matched: the entry IS accounted for on our side, and leaving
         // it unmatched would count our own closure as a network gap and
@@ -100,7 +100,7 @@ pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> V
     match snap {
         Some(e) if e.live => {
             e.matched = true;
-            if i128::from(e.amount) != row.amount {
+            if i128::from(e.balance) != row.amount {
                 match i64::from(e.ledger).cmp(&row.last_updated_ledger) {
                     std::cmp::Ordering::Greater => Verdict::HealFromSnapshot,
                     std::cmp::Ordering::Less => Verdict::DivergentOursNewer,
@@ -139,7 +139,7 @@ pub fn verdict(row: &OurRow, snap: Option<&mut SnapEntry>, checkpoint: u32) -> V
 /// Look up the snapshot entry for one of our rows. Native lives on the
 /// `AccountEntry`, everything else is a trustline — the split both consumers
 /// need, spelled once.
-pub fn snap_entry_for<'a>(state: &'a mut SnapshotState, row: &OurRow) -> Option<&'a mut SnapEntry> {
+pub fn holding_for<'a>(state: &'a mut NetworkState, row: &OurRow) -> Option<&'a mut NetHolding> {
     if row.asset_id == ids::NATIVE_ASSET_ID {
         state.accounts.get_mut(&row.holder_id)
     } else {
@@ -164,11 +164,11 @@ mod tests {
         }
     }
 
-    fn live(amount: i64, ledger: u32) -> SnapEntry {
-        SnapEntry {
+    fn live(balance: i64, ledger: u32) -> NetHolding {
+        NetHolding {
             live: true,
             ledger,
-            amount,
+            balance,
             matched: false,
         }
     }
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(verdict(&row(42, 90, 0), None, CP), Verdict::Ghost);
 
         // Present but dead reads the same as absent.
-        let mut dead = SnapEntry::dead();
+        let mut dead = NetHolding::dead();
         assert_eq!(
             verdict(&row(0, 90, 0), Some(&mut dead), CP),
             Verdict::Closure
@@ -287,7 +287,7 @@ mod tests {
         );
 
         // Network agrees the entry is gone.
-        let mut dead = SnapEntry::dead();
+        let mut dead = NetHolding::dead();
         assert_eq!(
             verdict(&row(0, 90, 90), Some(&mut dead), CP),
             Verdict::AlreadyClosed

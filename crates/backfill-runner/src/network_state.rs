@@ -2,8 +2,9 @@
 //! entries, keyed the way our own tables key them (task 0463, issue #377).
 //!
 //! [`crate::snapshot_archive`] gets the bytes; this module decides what they
-//! MEAN. [`crate::snapshot_verdict`] then compares one of our rows against
-//! what is here.
+//! MEAN — every record becomes a [`NetFact`] keyed the way `balances` keys
+//! it, folded into one [`NetworkState`] of [`NetHolding`]s.
+//! [`crate::snapshot_verdict`] then compares one of our rows against it.
 //!
 //! ## Why this exists
 //!
@@ -89,25 +90,27 @@ pub struct HoldingKey {
 /// First-wins state of one entry. `live == false` means the newest record for
 /// this key was a `DeadEntry`, i.e. the entry is deleted as of the checkpoint.
 #[derive(Debug, Clone, Copy)]
-pub struct SnapEntry {
+pub struct NetHolding {
     pub live: bool,
     /// The entry's OWN `lastModifiedLedgerSeq`. Zero for a dead entry, which
     /// carries only a key. Anything seeded from this versions on it — never on
     /// a window boundary (the task 0492 defect).
     pub ledger: u32,
-    /// Stroops, exactly as the ledger carries them. Zero for a dead entry.
-    pub amount: i64,
+    /// What the holder holds, in the ledger's own units: stroops for a native
+    /// XLM holding, the asset's own smallest unit for a trustline. XDR types
+    /// both as `int64`. Zero for a dead entry.
+    pub balance: i64,
     /// Set during the comparison when a row on our side matched this key.
     /// Whatever stays false at the end is what the network has and we do not.
     pub matched: bool,
 }
 
-impl SnapEntry {
-    pub(crate) fn live(ledger: u32, amount: i64) -> Self {
+impl NetHolding {
+    pub(crate) fn live(ledger: u32, balance: i64) -> Self {
         Self {
             live: true,
             ledger,
-            amount,
+            balance,
             matched: false,
         }
     }
@@ -115,7 +118,7 @@ impl SnapEntry {
         Self {
             live: false,
             ledger: 0,
-            amount: 0,
+            balance: 0,
             matched: false,
         }
     }
@@ -123,26 +126,26 @@ impl SnapEntry {
 
 /// One classified record, in our key space. Entry types we do not model are
 /// counted, not silently dropped.
-enum SnapItem {
+enum NetFact {
     /// An `AccountEntry` carries TWO facts: the account exists, and it holds
     /// this much native XLM. Native is not a trustline — it lives on the
     /// account — so "absent from the snapshot" for a native holding means the
     /// ACCOUNT is gone. That is the ~52k merged-account ghost case.
     Account {
         holder_id: i64,
-        entry: SnapEntry,
+        entry: NetHolding,
         /// Only built when the caller asked for details (the seed pass).
         detail: Option<Box<AccountDetail>>,
     },
     /// A classic credit trustline, keyed onto our surrogate pair.
-    Trustline { key: HoldingKey, entry: SnapEntry },
+    Trustline { key: HoldingKey, entry: NetHolding },
     /// A pool-share trustline. Same ledger entry type, DIFFERENT table on our
     /// side (`lp_positions`), so it is tallied apart rather than folded into
     /// the `balances` comparison and counted as a phantom.
     PoolShare {
         holder_id: i64,
         pool_id: [u8; 32],
-        entry: SnapEntry,
+        entry: NetHolding,
     },
 }
 
@@ -169,13 +172,13 @@ pub struct AccountDetail {
 /// separate state types with separate first-wins logic — two chances to
 /// disagree about what the network says.
 #[derive(Debug, Default)]
-pub struct SnapshotState {
+pub struct NetworkState {
     /// `holder_id` → the account's existence and its NATIVE holding.
-    pub accounts: std::collections::HashMap<i64, SnapEntry>,
+    pub accounts: std::collections::HashMap<i64, NetHolding>,
     /// Classic credit trustlines.
-    pub trustlines: std::collections::HashMap<HoldingKey, SnapEntry>,
-    /// Pool shares, kept separate — see [`SnapItem::PoolShare`].
-    pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), SnapEntry>,
+    pub trustlines: std::collections::HashMap<HoldingKey, NetHolding>,
+    /// Pool shares, kept separate — see [`NetFact::PoolShare`].
+    pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), NetHolding>,
     /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
@@ -189,13 +192,13 @@ pub struct SnapshotState {
     pub superseded: u64,
 }
 
-impl SnapshotState {
+impl NetworkState {
     /// Insert under FIRST-WINS: the bucket list is ordered newest-first, so the
     /// first record seen for a key is the live state and every later one is
     /// history. A `DeadEntry` seen first must NOT be overwritten by an older
     /// `LiveEntry` further down — that is exactly the resurrection bug this
     /// whole effort is about, in the source format.
-    fn absorb(&mut self, item: SnapItem) {
+    fn absorb(&mut self, item: NetFact) {
         use std::collections::hash_map::Entry;
         macro_rules! first_wins {
             ($map:expr, $k:expr, $v:expr) => {
@@ -208,7 +211,7 @@ impl SnapshotState {
             };
         }
         match item {
-            SnapItem::Account {
+            NetFact::Account {
                 holder_id,
                 entry,
                 detail,
@@ -223,8 +226,8 @@ impl SnapshotState {
                 }
                 first_wins!(self.accounts, holder_id, entry)
             }
-            SnapItem::Trustline { key, entry } => first_wins!(self.trustlines, key, entry),
-            SnapItem::PoolShare {
+            NetFact::Trustline { key, entry } => first_wins!(self.trustlines, key, entry),
+            NetFact::PoolShare {
                 holder_id,
                 pool_id,
                 entry,
@@ -240,7 +243,7 @@ impl SnapshotState {
     pub fn absorb_record(&mut self, rec: &SnapshotRecord) {
         match classify(rec) {
             Some(item) => {
-                if let SnapItem::Trustline { key, .. } = &item
+                if let NetFact::Trustline { key, .. } = &item
                     && let Some((code, issuer)) = trustline_identity(rec)
                 {
                     self.asset_registry
@@ -338,25 +341,25 @@ fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
 
 /// Classify one decoded record into our key space, or `None` for an entry type
 /// this comparison does not model.
-fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
+fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
     use stellar_xdr::{LedgerEntryData as D, LedgerKey as K, TrustLineAsset as A};
     match rec {
         SnapshotRecord::Live(e) => match &e.data {
-            D::Account(a) => Some(SnapItem::Account {
+            D::Account(a) => Some(NetFact::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
-                entry: SnapEntry::live(e.last_modified_ledger_seq, a.balance),
+                entry: NetHolding::live(e.last_modified_ledger_seq, a.balance),
                 detail: Some(Box::new(account_detail(a))),
             }),
             D::Trustline(t) => {
                 let holder_id = ids::address_id(&t.account_id.to_string());
-                let entry = SnapEntry::live(e.last_modified_ledger_seq, t.balance);
+                let entry = NetHolding::live(e.last_modified_ledger_seq, t.balance);
                 match (&t.asset, trustline_asset_id(&t.asset)) {
-                    (A::PoolShare(p), _) => Some(SnapItem::PoolShare {
+                    (A::PoolShare(p), _) => Some(NetFact::PoolShare {
                         holder_id,
                         pool_id: p.0.0,
                         entry,
                     }),
-                    (_, Some(asset_id)) => Some(SnapItem::Trustline {
+                    (_, Some(asset_id)) => Some(NetFact::Trustline {
                         key: HoldingKey {
                             holder_id,
                             asset_id,
@@ -369,25 +372,25 @@ fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
             _ => None,
         },
         SnapshotRecord::Dead(k) => match k.as_ref() {
-            K::Account(a) => Some(SnapItem::Account {
+            K::Account(a) => Some(NetFact::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
-                entry: SnapEntry::dead(),
+                entry: NetHolding::dead(),
                 detail: None,
             }),
             K::Trustline(t) => {
                 let holder_id = ids::address_id(&t.account_id.to_string());
                 match (&t.asset, trustline_asset_id(&t.asset)) {
-                    (A::PoolShare(p), _) => Some(SnapItem::PoolShare {
+                    (A::PoolShare(p), _) => Some(NetFact::PoolShare {
                         holder_id,
                         pool_id: p.0.0,
-                        entry: SnapEntry::dead(),
+                        entry: NetHolding::dead(),
                     }),
-                    (_, Some(asset_id)) => Some(SnapItem::Trustline {
+                    (_, Some(asset_id)) => Some(NetFact::Trustline {
                         key: HoldingKey {
                             holder_id,
                             asset_id,
                         },
-                        entry: SnapEntry::dead(),
+                        entry: NetHolding::dead(),
                     }),
                     (_, None) => None,
                 }
@@ -398,7 +401,7 @@ fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
 }
 
 /// Resolve a bucket list and fold every bucket into a deduplicated
-/// [`SnapshotState`]: build the HTTP client, take the pinned or freshest
+/// [`NetworkState`]: build the HTTP client, take the pinned or freshest
 /// checkpoint, stream all 21 buckets, print the distinct-entry report.
 ///
 /// The checkpoint is always the freshest the archive advertises. That is
@@ -410,7 +413,7 @@ fn classify(rec: &SnapshotRecord) -> Option<SnapItem> {
 /// collapse onto the accounts + trustlines the network actually holds.
 pub(crate) async fn open_snapshot(
     label: &str,
-) -> Result<(BucketList, SnapshotState), BackfillError> {
+) -> Result<(BucketList, NetworkState), BackfillError> {
     let started = std::time::Instant::now();
     let http = archive_client()?;
     let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
@@ -420,7 +423,7 @@ pub(crate) async fn open_snapshot(
         list.checkpoint_ledger
     );
 
-    let mut state = SnapshotState::default();
+    let mut state = NetworkState::default();
     for (i, hash) in list.hashes.iter().enumerate() {
         let url = BucketList::url(PUBNET_ARCHIVE, hash);
         let t0 = std::time::Instant::now();
@@ -447,7 +450,7 @@ pub(crate) async fn open_snapshot(
 /// DISTINCT-entry report after first-wins, printed before our rows are folded
 /// in — the raw record count cannot be compared with our
 /// tables, because a key appears in as many buckets as it has versions.
-pub fn report_state(state: &SnapshotState, checkpoint_ledger: u32, secs: f64) {
+pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) {
     let dead_accounts = state.accounts.len() - state.live_accounts();
     let dead_trustlines = state.trustlines.len() - state.live_trustlines();
     println!(
@@ -486,11 +489,11 @@ pub fn report_state(state: &SnapshotState, checkpoint_ledger: u32, secs: f64) {
 mod tests {
     use super::*;
 
-    fn live(amount: i64, ledger: u32) -> SnapEntry {
-        SnapEntry {
+    fn live(balance: i64, ledger: u32) -> NetHolding {
+        NetHolding {
             live: true,
             ledger,
-            amount,
+            balance,
             matched: false,
         }
     }
@@ -502,20 +505,20 @@ mod tests {
     /// would notice.
     #[test]
     fn first_wins_keeps_the_newest_record_and_a_tombstone_is_not_resurrected() {
-        let mut st = SnapshotState::default();
+        let mut st = NetworkState::default();
         let key = HoldingKey {
             holder_id: 7,
             asset_id: 9,
         };
-        st.absorb(SnapItem::Trustline {
+        st.absorb(NetFact::Trustline {
             key,
-            entry: SnapEntry::dead(),
+            entry: NetHolding::dead(),
         });
-        st.absorb(SnapItem::Trustline {
+        st.absorb(NetFact::Trustline {
             key,
             entry: live(500, 60_000_000),
         });
-        st.absorb(SnapItem::Trustline {
+        st.absorb(NetFact::Trustline {
             key,
             entry: live(900, 50_000_000),
         });

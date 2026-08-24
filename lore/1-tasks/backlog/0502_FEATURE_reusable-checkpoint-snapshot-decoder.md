@@ -90,7 +90,7 @@ task needs (2026-08-24):
 | `snapshot_report`  | 432   | counters, samples, `summary.txt`                    |
 | `snapshot_seed`    | 555   | reads our `balances`, builds and writes corrections |
 
-**`snapshot_archive` + `snapshot` are what moves to the new crate** — the
+**`snapshot_archive` + `network_state` are what moves to the new crate** — the
 first knows nothing about our tables, the second knows nothing about
 comparison. `snapshot_verdict` / `report` / `seed` stay behind as
 backfill-runner consumers. Measured: framed-XDR streaming at 13.5 MB peak on

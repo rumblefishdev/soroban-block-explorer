@@ -64,8 +64,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::BackfillError;
+use crate::network_state::{self, NetworkState};
 use crate::sink::Sink;
-use crate::snapshot::{self, SnapshotState};
 use crate::snapshot_archive::PUBNET_ARCHIVE;
 use crate::snapshot_report::Report;
 use crate::snapshot_verdict;
@@ -207,7 +207,7 @@ async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillEr
 fn fold_our_row(
     row: &snapshot_verdict::OurRow,
     verdict: snapshot_verdict::Verdict,
-    state: &mut SnapshotState,
+    state: &mut NetworkState,
     checkpoint: u32,
     out: &mut Corrections,
     ghost_log: &mut Vec<String>,
@@ -237,13 +237,13 @@ fn fold_our_row(
         // the snapshot is strictly newer AND the amounts differ, so adopt its
         // amount at ITS ledger.
         V::ClosedButLive | V::HealFromSnapshot => {
-            let Some(e) = snapshot_verdict::snap_entry_for(state, row) else {
+            let Some(e) = snapshot_verdict::holding_for(state, row) else {
                 return;
             };
             out.balances.push(BalanceRow {
                 holder_id,
                 asset_id,
-                amount: i128::from(e.amount),
+                amount: i128::from(e.balance),
                 last_updated_ledger: i64::from(e.ledger),
                 closed_at_ledger: 0,
             });
@@ -270,7 +270,7 @@ fn fold_our_row(
 /// produces identical rows and RMT collapses them.
 async fn build_corrections(
     sink: &Sink,
-    state: &mut SnapshotState,
+    state: &mut NetworkState,
     known_assets: &HashSet<i64>,
     known_accounts: &HashSet<i64>,
     checkpoint: u32,
@@ -298,7 +298,7 @@ async fn build_corrections(
             out.balances.push(BalanceRow {
                 holder_id: key.holder_id,
                 asset_id: key.asset_id,
-                amount: i128::from(e.amount),
+                amount: i128::from(e.balance),
                 last_updated_ledger: i64::from(e.ledger),
                 closed_at_ledger: 0,
             });
@@ -312,7 +312,7 @@ async fn build_corrections(
             out.balances.push(BalanceRow {
                 holder_id: *id,
                 asset_id: ids::NATIVE_ASSET_ID,
-                amount: i128::from(e.amount),
+                amount: i128::from(e.balance),
                 last_updated_ledger: i64::from(e.ledger),
                 closed_at_ledger: 0,
             });
@@ -413,7 +413,7 @@ pub async fn seed_command(
     let started = std::time::Instant::now();
 
     let (list, mut state) =
-        snapshot::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
+        network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
 
     // One directory per checkpoint, so a run never overwrites the record of an
     // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
