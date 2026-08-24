@@ -19,6 +19,7 @@ mod run;
 mod sink;
 mod snapshot;
 mod snapshot_compare;
+mod snapshot_report;
 mod snapshot_seed;
 mod status;
 mod sync;
