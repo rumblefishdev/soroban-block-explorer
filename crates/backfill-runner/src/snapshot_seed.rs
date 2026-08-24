@@ -223,14 +223,16 @@ fn fold_our_row(
     match verdict {
         // Nothing to write: both sides agree (Stale = equal amounts, our ledger
         // merely older — the verdict rule guarantees the equality), our side is
-        // the fresher one, or the snapshot is the stale side. Same-ledger
-        // divergence is a defect signal: reported by the tally, never
-        // auto-healed — picking a winner would bury the only evidence.
+        // the fresher one, or the snapshot is the stale side. The two defect
+        // signals (same-ledger divergence, closed-but-live conflict) are
+        // reported by the tally and never auto-healed — picking a winner, or
+        // inventing a version, would bury the only evidence.
         V::AlreadyClosed
         | V::Agree
         | V::DivergentOursNewer
         | V::Stale
         | V::DivergentSameLedger
+        | V::ClosedButLiveConflict
         | V::NewerThanCheckpoint => {}
         // We hid a holding the network says is live at a NEWER ledger: re-open
         // at the entry's own ledger, which outversions our wrong closure. Heal:

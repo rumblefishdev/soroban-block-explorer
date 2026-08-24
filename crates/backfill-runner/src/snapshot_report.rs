@@ -158,6 +158,9 @@ pub(crate) struct Tally {
     /// We say CLOSED, the network says LIVE at a newer ledger. Our closure is
     /// wrong and the holding is hidden — the costliest bucket here.
     pub(crate) closed_but_live: u64,
+    /// We say CLOSED, the network says LIVE — but not at a newer ledger, so no
+    /// honest version can supersede our closure. Reported, never auto-healed.
+    pub(crate) closed_but_live_conflict: u64,
     /// Same ledger, different amount. Not freshness: a parsing defect on one
     /// side or the other, and worth a human look.
     pub(crate) divergent_same_ledger: u64,
@@ -176,6 +179,7 @@ impl Tally {
         match v {
             V::AlreadyClosed => self.already_closed += 1,
             V::ClosedButLive => self.closed_but_live += 1,
+            V::ClosedButLiveConflict => self.closed_but_live_conflict += 1,
             V::DivergentSameLedger => self.divergent_same_ledger += 1,
             V::Agree => self.agree += 1,
             V::HealFromSnapshot => self.heal += 1,
@@ -190,7 +194,7 @@ impl Tally {
         }
     }
 
-    /// The eleven buckets as text. The TEN verdict buckets sum to the rows
+    /// The twelve buckets as text. The ELEVEN verdict buckets sum to the rows
     /// read — a completeness invariant, so one of our rows cannot vanish from
     /// the report unnoticed. `missing` is the eleventh and does not belong to
     /// that sum: it is counted from the snapshot side, over entries we hold no
@@ -210,6 +214,10 @@ impl Tally {
             ("agree                             ", self.agree),
             ("already marked closed             ", self.already_closed),
             ("CLOSED BUT LIVE (re-opened)       ", self.closed_but_live),
+            (
+                "CLOSED vs LIVE conflict (defect?) ",
+                self.closed_but_live_conflict,
+            ),
             (
                 "divergent SAME ledger (defect?)   ",
                 self.divergent_same_ledger,

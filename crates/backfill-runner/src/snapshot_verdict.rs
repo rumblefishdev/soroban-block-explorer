@@ -47,6 +47,23 @@ pub enum Verdict {
     /// user actually has. Before this verdict existed the row was marked
     /// matched and dropped, so it was never re-inserted and never reported.
     ClosedButLive,
+    /// We stamped it CLOSED, and the network holds it LIVE — but at a ledger
+    /// NOT NEWER than our closure. The snapshot still contradicts us: an entry
+    /// present in the checkpoint bucket list is live AT the checkpoint whatever
+    /// its own last-modified ledger says. What is missing is a way to fix it
+    /// honestly — re-opening at the entry's own (older-or-equal) ledger cannot
+    /// outversion our closure row, and inventing a newer version would be a
+    /// synthetic stamp, the very defect task 0492 documents.
+    ///
+    /// So this is a DEFECT SIGNAL, not a correction: something closed a
+    /// holding the network still has. Unreachable on a first seed run (nothing
+    /// is stamped closed yet); it becomes the alarm on the reconciliation runs
+    /// ADR 0057 makes mandatory, where the closures under test are our own
+    /// previous output or the live writer's.
+    ///
+    /// It was previously folded into [`Verdict::AlreadyClosed`] — reported as
+    /// "we closed it and nothing contradicts us", which was exactly wrong.
+    ClosedButLiveConflict,
     /// Both sides hold it and agree.
     Agree,
     /// Both hold it, amounts differ, and the SNAPSHOT is strictly newer — the
@@ -91,8 +108,14 @@ pub fn verdict(row: &OurRow, snap: Option<&mut NetHolding>, checkpoint: u32) -> 
         // re-insert — silently, and permanently.
         if let Some(e) = snap {
             e.matched = true;
-            if e.live && i64::from(e.ledger) > row.last_updated_ledger {
-                return Verdict::ClosedButLive;
+            if e.live {
+                // The network holds it. Whether we can FIX that depends on
+                // whose ledger is newer; whether it is WRONG does not.
+                return if i64::from(e.ledger) > row.last_updated_ledger {
+                    Verdict::ClosedButLive
+                } else {
+                    Verdict::ClosedButLiveConflict
+                };
             }
         }
         return Verdict::AlreadyClosed;
@@ -185,10 +208,10 @@ mod tests {
     fn verdict_covers_every_bucket() {
         const CP: u32 = 100;
 
-        // Our writer already closed it — no correction, but the snapshot entry
-        // is still MATCHED, or our own closure would be counted as a network
-        // gap and re-inserted as live.
-        let mut e = live(5, 90);
+        // Our writer already closed it and the network agrees it is gone — no
+        // correction, but the snapshot entry is still MATCHED, or our own
+        // closure would be counted as a network gap and re-inserted as live.
+        let mut e = NetHolding::dead();
         assert_eq!(
             verdict(&row(0, 90, 90), Some(&mut e), CP),
             Verdict::AlreadyClosed
@@ -278,13 +301,21 @@ mod tests {
             "still matched: pass 2 must not ALSO re-insert it blindly"
         );
 
-        // Our closure at 90, network's evidence of life is older — our closure
-        // stands, and this is the ordinary case.
-        let mut older = live(5, 85);
-        assert_eq!(
-            verdict(&row(0, 90, 90), Some(&mut older), CP),
-            Verdict::AlreadyClosed
-        );
+        // Our closure at 90, network's evidence of life is OLDER (or equal).
+        // The snapshot still contradicts us — an entry in the checkpoint bucket
+        // list is live AT the checkpoint — but no honest version can supersede
+        // our closure row, so it is reported as a defect, never healed. This
+        // arm used to return `AlreadyClosed`: "we closed it and nothing
+        // contradicts us", while the network was contradicting us.
+        for entry_ledger in [85, 90] {
+            let mut older = live(5, entry_ledger);
+            assert_eq!(
+                verdict(&row(0, 90, 90), Some(&mut older), CP),
+                Verdict::ClosedButLiveConflict,
+                "network live at {entry_ledger} vs our closure at 90"
+            );
+            assert!(older.matched, "still matched: pass 2 must not re-insert it");
+        }
 
         // Network agrees the entry is gone.
         let mut dead = NetHolding::dead();
