@@ -469,9 +469,19 @@ pub(crate) async fn open_snapshot(
     // absence arm: tens of millions of live holdings zeroed and closed at the
     // checkpoint version, which outranks every row already in the table.
     //
-    // Floors are far below the measured population (2026-08-18: 21 buckets,
-    // 10,863,731 live accounts, 32,344,912 live trustlines) — they catch a
-    // truncated manifest or a half-decoded pass, not a shrinking network.
+    // What this actually guards is worth being precise about, because the
+    // obvious threat is NOT the one left. A bad download fails on the
+    // per-bucket SHA-256; a 404 on `error_for_status`; a manifest in an
+    // unexpected shape on the missing-slot check in `fetch_bucket_list`. What
+    // survives all three is a decode that SUCCEEDS and recognises less than it
+    // should — a protocol change `classify` does not model, or a regression in
+    // our own dedup. Every byte verifies, nothing errors, and the maps come
+    // back thin. That is OUR failure mode, not the archive's, and this is the
+    // only thing that catches it.
+    //
+    // Floors sit 2-3x below the measured population (2026-08-18: 21 buckets,
+    // 10,863,731 live accounts, 32,344,912 live trustlines), so they cannot
+    // fire on a shrinking network — only on a pass that stopped seeing things.
     const MIN_BUCKETS: usize = 10;
     const MIN_LIVE_ACCOUNTS: usize = 5_000_000;
     const MIN_LIVE_TRUSTLINES: usize = 15_000_000;
