@@ -159,6 +159,59 @@ pub fn verdict(row: &OurRow, snap: Option<&mut NetHolding>, checkpoint: u32) -> 
     }
 }
 
+/// The balance-row change a verdict implies, without the row's identity.
+///
+/// Split out of the seed's fold so the WRITE policy is testable the way the
+/// classification already is: `verdict()` says what we are looking at, this
+/// says what we do about it, and both are pure. A wrong arm here — a closure
+/// written open, a heal versioned on the wrong ledger — would otherwise be
+/// invisible until production.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Correction {
+    pub amount: i128,
+    /// Becomes `last_updated_ledger`, the ReplacingMergeTree version.
+    pub last_updated_ledger: i64,
+    pub closed_at_ledger: i64,
+}
+
+/// What a verdict writes, or `None` for the report-only ones.
+///
+/// `net` is the network's holding for this key; the live-adopting verdicts
+/// cannot be produced without one, so its absence yields `None` rather than a
+/// fabricated row.
+///
+/// Version discipline, in one place: a live fact versions on the ENTRY's own
+/// ledger, an absence fact (closure, ghost) on the checkpoint — "true at or
+/// before". Never a synthetic stamp (task 0492).
+pub fn correction(v: Verdict, net: Option<&NetHolding>, checkpoint: u32) -> Option<Correction> {
+    match v {
+        // Report-only. The two defect signals (same-ledger divergence,
+        // closed-but-live conflict) are here deliberately: picking a winner, or
+        // inventing a version, would bury the only evidence.
+        Verdict::AlreadyClosed
+        | Verdict::Agree
+        | Verdict::DivergentOursNewer
+        | Verdict::Stale
+        | Verdict::DivergentSameLedger
+        | Verdict::ClosedButLiveConflict
+        | Verdict::NewerThanCheckpoint => None,
+        // We hid a holding the network says is live at a NEWER ledger: re-open
+        // at the entry's own ledger, which outversions our wrong closure. Heal:
+        // the snapshot is strictly newer AND the amounts differ, so adopt its
+        // amount at ITS ledger.
+        Verdict::ClosedButLive | Verdict::HealFromSnapshot => net.map(|e| Correction {
+            amount: i128::from(e.balance),
+            last_updated_ledger: i64::from(e.ledger),
+            closed_at_ledger: 0,
+        }),
+        Verdict::Closure | Verdict::Ghost => Some(Correction {
+            amount: 0,
+            last_updated_ledger: i64::from(checkpoint),
+            closed_at_ledger: i64::from(checkpoint),
+        }),
+    }
+}
+
 /// Look up the snapshot entry for one of our rows. Native lives on the
 /// `AccountEntry`, everything else is a trustline — the split both consumers
 /// need, spelled once.
@@ -324,5 +377,59 @@ mod tests {
             Verdict::AlreadyClosed
         );
         assert!(dead.matched, "our own closure is not a network gap");
+    }
+
+    /// The WRITE half of the policy, held to the same standard as the
+    /// classification: every verdict either writes nothing, or writes a row
+    /// whose version is the ledger of the fact it records.
+    #[test]
+    fn every_verdict_writes_the_row_its_name_promises() {
+        const CP: u32 = 100;
+        use Verdict as V;
+        let net = live(7, 95);
+
+        for v in [
+            V::AlreadyClosed,
+            V::Agree,
+            V::DivergentOursNewer,
+            V::Stale,
+            V::DivergentSameLedger,
+            V::ClosedButLiveConflict,
+            V::NewerThanCheckpoint,
+        ] {
+            assert_eq!(correction(v, Some(&net), CP), None, "{v:?} must not write");
+        }
+
+        // Live-adopting: the network's amount, versioned on the ENTRY's ledger,
+        // and explicitly re-opened.
+        for v in [V::ClosedButLive, V::HealFromSnapshot] {
+            assert_eq!(
+                correction(v, Some(&net), CP),
+                Some(Correction {
+                    amount: 7,
+                    last_updated_ledger: 95,
+                    closed_at_ledger: 0,
+                }),
+                "{v:?} adopts the network fact at the network's ledger"
+            );
+            assert_eq!(
+                correction(v, None, CP),
+                None,
+                "{v:?} without a network fact must not fabricate one"
+            );
+        }
+
+        // Absence facts: zeroed, stamped, versioned at the checkpoint.
+        for v in [V::Closure, V::Ghost] {
+            assert_eq!(
+                correction(v, None, CP),
+                Some(Correction {
+                    amount: 0,
+                    last_updated_ledger: 100,
+                    closed_at_ledger: 100,
+                }),
+                "{v:?} closes at the checkpoint"
+            );
+        }
     }
 }

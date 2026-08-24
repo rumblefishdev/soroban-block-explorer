@@ -213,58 +213,23 @@ fn fold_our_row(
     ghost_log: &mut Vec<String>,
 ) {
     use snapshot_verdict::Verdict as V;
-    let snapshot_verdict::OurRow {
-        holder_id,
-        asset_id,
-        amount,
-        last_updated_ledger,
-        ..
-    } = *row;
-    match verdict {
-        // Nothing to write: both sides agree (Stale = equal amounts, our ledger
-        // merely older — the verdict rule guarantees the equality), our side is
-        // the fresher one, or the snapshot is the stale side. The two defect
-        // signals (same-ledger divergence, closed-but-live conflict) are
-        // reported by the tally and never auto-healed — picking a winner, or
-        // inventing a version, would bury the only evidence.
-        V::AlreadyClosed
-        | V::Agree
-        | V::DivergentOursNewer
-        | V::Stale
-        | V::DivergentSameLedger
-        | V::ClosedButLiveConflict
-        | V::NewerThanCheckpoint => {}
-        // We hid a holding the network says is live at a NEWER ledger: re-open
-        // at the entry's own ledger, which outversions our wrong closure. Heal:
-        // the snapshot is strictly newer AND the amounts differ, so adopt its
-        // amount at ITS ledger.
-        V::ClosedButLive | V::HealFromSnapshot => {
-            let Some(e) = snapshot_verdict::holding_for(state, row) else {
-                return;
-            };
-            out.balances.push(BalanceRow {
-                holder_id,
-                asset_id,
-                amount: i128::from(e.balance),
-                last_updated_ledger: i64::from(e.ledger),
-                closed_at_ledger: 0,
-            });
-        }
-        V::Closure | V::Ghost => {
-            if verdict == V::Ghost {
-                ghost_log.push(format!(
-                    "{holder_id}\t{asset_id}\t{amount}\t{last_updated_ledger}"
-                ));
-            }
-            out.balances.push(BalanceRow {
-                holder_id,
-                asset_id,
-                amount: 0,
-                last_updated_ledger: i64::from(checkpoint),
-                closed_at_ledger: i64::from(checkpoint),
-            });
-        }
+    if verdict == V::Ghost {
+        ghost_log.push(format!(
+            "{}\t{}\t{}\t{}",
+            row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
+        ));
     }
+    let net = snapshot_verdict::holding_for(state, row).map(|e| *e);
+    let Some(c) = snapshot_verdict::correction(verdict, net.as_ref(), checkpoint) else {
+        return;
+    };
+    out.balances.push(BalanceRow {
+        holder_id: row.holder_id,
+        asset_id: row.asset_id,
+        amount: c.amount,
+        last_updated_ledger: c.last_updated_ledger,
+        closed_at_ledger: c.closed_at_ledger,
+    });
 }
 
 /// Build every correction. Deterministic function of (snapshot state, our

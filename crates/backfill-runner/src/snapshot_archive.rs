@@ -36,6 +36,10 @@ use crate::error::BackfillError;
 /// (2026-08-20 review); resurrect from git history if a mirror is ever added.
 pub const PUBNET_ARCHIVE: &str = "https://history.stellar.org/prd/core-live/core_live_001";
 
+/// Ledgers per checkpoint. The archive publishes one checkpoint every 64
+/// ledgers, at sequences ≡ 63 (mod 64) — stellar-core `docs/history.md`.
+const CHECKPOINT_FREQUENCY: u32 = 64;
+
 /// One checkpoint's bucket list, newest-first.
 #[derive(Debug, Clone)]
 pub struct BucketList {
@@ -92,6 +96,18 @@ pub async fn fetch_bucket_list(
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| BackfillError::Incomplete("manifest has no currentLedger".into()))?
         as u32;
+
+    // Checkpoints are published every 64 ledgers, at sequences ≡ 63 (mod 64)
+    // (stellar-core `docs/history.md`). A `currentLedger` off that lattice is
+    // not a checkpoint, so the bucket list beside it is not a checkpoint's
+    // state — and every ledger number this run stamps into `closed_at_ledger`
+    // would be a fiction. Cheap check, load-bearing conclusion.
+    if checkpoint_ledger % CHECKPOINT_FREQUENCY != CHECKPOINT_FREQUENCY - 1 {
+        return Err(BackfillError::Incomplete(format!(
+            "manifest currentLedger {checkpoint_ledger} is not a checkpoint              (checkpoints are ≡ {} mod {CHECKPOINT_FREQUENCY}) — this is not a              checkpoint bucket list",
+            CHECKPOINT_FREQUENCY - 1
+        )));
+    }
 
     // An all-zero hash is an empty slot, not a bucket. Levels run newest to
     // oldest and `curr` precedes `snap` within a level — preserve that order.
@@ -286,6 +302,18 @@ mod tests {
     /// The archive's fan-out layout, pinned. A wrong split silently 404s every
     /// bucket, which reads as "the archive is down" rather than "our URL is
     /// wrong".
+    /// The manifest's `currentLedger` must sit on the checkpoint lattice.
+    /// Accepting an off-lattice value would mean decoding a bucket list that
+    /// is not a checkpoint's state, and stamping fictional ledger numbers.
+    #[test]
+    fn checkpoint_lattice_accepts_only_63_mod_64() {
+        let on = |l: u32| l % CHECKPOINT_FREQUENCY == CHECKPOINT_FREQUENCY - 1;
+        assert!(on(63), "the first checkpoint");
+        assert!(on(64_102_079), "a real manifest value, probed 2026-08-24");
+        assert!(!on(64_102_080));
+        assert!(!on(0));
+    }
+
     #[test]
     fn bucket_url_uses_the_three_byte_pair_fanout() {
         let h = "4a478392b7fd16baf9acf1290c687130e4106f961688c2a8f35b898653e51f22";
