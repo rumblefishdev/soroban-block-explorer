@@ -292,12 +292,14 @@ impl Report {
     }
 
     /// Classify one of our rows, count it, sample it — and hand the verdict
-    /// back to the caller.
+    /// back with the network holding it was judged against, so the caller
+    /// builds its correction from the same two facts and looks nothing up
+    /// twice.
     pub(crate) fn observe(
         &mut self,
         row: &snapshot_verdict::OurRow,
         state: &mut NetworkState,
-    ) -> snapshot_verdict::Verdict {
+    ) -> (snapshot_verdict::Verdict, Option<network_state::NetHolding>) {
         let line = || {
             format!(
                 "{}\t{}\t{}\t{}",
@@ -305,11 +307,8 @@ impl Report {
             )
         };
         let is_native = row.asset_id == db_clickhouse::persist::ids::NATIVE_ASSET_ID;
-        let v = snapshot_verdict::verdict(
-            row,
-            snapshot_verdict::holding_for(state, row),
-            self.checkpoint,
-        );
+        let net = snapshot_verdict::claim(state, row);
+        let v = snapshot_verdict::verdict(row, net.as_ref(), self.checkpoint);
         let out = if is_native {
             &mut self.native
         } else {
@@ -343,7 +342,7 @@ impl Report {
                 key_line(state, row.holder_id, row.asset_id, is_native)
             });
         }
-        v
+        (v, net)
     }
 
     /// One live snapshot trustline nothing on our side ever touched — the blind

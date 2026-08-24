@@ -218,7 +218,7 @@ async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillEr
 fn fold_our_row(
     row: &snapshot_verdict::OurRow,
     verdict: snapshot_verdict::Verdict,
-    state: &mut NetworkState,
+    net: Option<network_state::NetHolding>,
     checkpoint: u32,
     out: &mut Corrections,
 ) {
@@ -229,7 +229,6 @@ fn fold_our_row(
             row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
         ));
     }
-    let net = snapshot_verdict::holding_for(state, row).copied();
     let Some(c) = snapshot_verdict::correction(verdict, net.as_ref(), checkpoint) else {
         return;
     };
@@ -259,8 +258,8 @@ async fn build_corrections(
     // it hands back drives the correction. One classification, two outputs.
     println!("\n  streaming our balances in {KEY_SLICES} key slices…");
     let rows_read = stream_our_rows(sink, |row| {
-        let v = report.observe(row, state);
-        fold_our_row(row, v, state, checkpoint, &mut out);
+        let (v, net) = report.observe(row, state);
+        fold_our_row(row, v, net, checkpoint, &mut out);
     })
     .await?;
     println!("  folded {rows_read} of our rows");

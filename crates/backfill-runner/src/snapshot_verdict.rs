@@ -84,38 +84,34 @@ pub enum Verdict {
     NewerThanCheckpoint,
 }
 
-/// The single classification rule. `snap` is the snapshot's entry for this key
-/// (`None` = the network has no such entry at all); it is marked matched here,
-/// so whatever stays unmatched afterwards is exactly what the network holds and
-/// we do not.
-pub fn verdict(row: &OurRow, snap: Option<&mut NetHolding>, checkpoint: u32) -> Verdict {
+/// The single classification rule — a pure function of our row, what the
+/// network holds for that key (`None` = nothing at all), and the checkpoint.
+///
+/// Claiming the entry (`matched`) is the CALLER's job, done once at the single
+/// call site. It used to happen here, as a side effect in three separate arms;
+/// proving it was unconditional then meant walking all three, and the `&mut`
+/// it forced propagated into the seed, which mutates nothing and paid a second
+/// lookup of the key the report had just found.
+pub fn verdict(row: &OurRow, snap: Option<&NetHolding>, checkpoint: u32) -> Verdict {
     if row.closed_at_ledger != 0 {
-        // Mark it matched: the entry IS accounted for on our side, and leaving
-        // it unmatched would count our own closure as a network gap and
-        // re-insert it as live.
-        //
-        // But "accounted for" is not "correctly closed". If the network holds
-        // the entry LIVE at a ledger newer than our closure, our closure is the
-        // stale fact and the holding is hidden. Marking matched without this
-        // check suppressed exactly that case from both the report and the
-        // re-insert — silently, and permanently.
-        if let Some(e) = snap {
-            e.matched = true;
-            if e.live {
-                // The network holds it. Whether we can FIX that depends on
-                // whose ledger is newer; whether it is WRONG does not.
-                return if i64::from(e.ledger) > row.last_updated_ledger {
-                    Verdict::ClosedButLive
-                } else {
-                    Verdict::ClosedButLiveConflict
-                };
-            }
+        // "Accounted for" is not "correctly closed". If the network holds the
+        // entry LIVE, our closure is contradicted — before this check the row
+        // was simply reported as already-closed, silently and permanently.
+        if let Some(e) = snap
+            && e.live
+        {
+            // Whether we can FIX it depends on whose ledger is newer; whether
+            // it is WRONG does not.
+            return if i64::from(e.ledger) > row.last_updated_ledger {
+                Verdict::ClosedButLive
+            } else {
+                Verdict::ClosedButLiveConflict
+            };
         }
         return Verdict::AlreadyClosed;
     }
     match snap {
         Some(e) if e.live => {
-            e.matched = true;
             if i128::from(e.balance) != row.amount {
                 match i64::from(e.ledger).cmp(&row.last_updated_ledger) {
                     std::cmp::Ordering::Greater => Verdict::HealFromSnapshot,
@@ -132,10 +128,7 @@ pub fn verdict(row: &OurRow, snap: Option<&mut NetHolding>, checkpoint: u32) -> 
         }
         // Present but DEAD, or absent entirely — both mean the network does not
         // hold this relationship.
-        other => {
-            if let Some(e) = other {
-                e.matched = true;
-            }
+        _ => {
             // `>=`, not `>`: a row last touched AT the checkpoint would be
             // written back at that same ledger, and ReplacingMergeTree resolves
             // an equal version arbitrarily — the closure might lose and the
@@ -219,6 +212,24 @@ pub fn holding_for<'a>(state: &'a mut NetworkState, row: &OurRow) -> Option<&'a 
     }
 }
 
+/// Claim the network's holding for one of our rows and hand back a copy.
+///
+/// EVERY row of ours claims its entry, whatever the verdict turns out to be —
+/// including our own closures, which are accounted for even though they write
+/// nothing. Leaving one unclaimed would count it as a network gap and
+/// re-insert our own closure as a live holding.
+///
+/// Whatever stays unclaimed once every row has passed through is therefore
+/// exactly what the network holds and we do not. The mark is made HERE, once,
+/// rather than inside the classification rule: one place to read, one place to
+/// get it wrong.
+pub fn claim(state: &mut NetworkState, row: &OurRow) -> Option<NetHolding> {
+    holding_for(state, row).map(|e| {
+        e.matched = true;
+        *e
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,11 +253,6 @@ mod tests {
         }
     }
 
-    /// FIRST-WINS is the whole anti-resurrection guarantee: the bucket list is
-    /// newest-first, so a DeadEntry seen first must not be overwritten by an
-    /// older LiveEntry below it. Inverting this comparison would resurrect
-    /// every closed trustline on the network, and nothing else in the suite
-    /// would notice.
     /// The verdict is the one rule the report counts and the seed acts on.
     /// Each arm below is a production decision: mis-mapping any one of them
     /// either hides a live holding or writes a false number.
@@ -254,36 +260,30 @@ mod tests {
     fn verdict_covers_every_bucket() {
         const CP: u32 = 100;
 
-        // Our writer already closed it and the network agrees it is gone — no
-        // correction, but the snapshot entry is still MATCHED, or our own
-        // closure would be counted as a network gap and re-inserted as live.
-        let mut e = NetHolding::dead();
+        // Our writer already closed it and the network agrees it is gone.
+        let e = NetHolding::dead();
         assert_eq!(
-            verdict(&row(0, 90, 90), Some(&mut e), CP),
+            verdict(&row(0, 90, 90), Some(&e), CP),
             Verdict::AlreadyClosed
         );
-        assert!(
-            e.matched,
-            "an already-closed row must still claim its entry"
-        );
 
-        let mut e = live(5, 90);
-        assert_eq!(verdict(&row(5, 90, 0), Some(&mut e), CP), Verdict::Agree);
+        let e = live(5, 90);
+        assert_eq!(verdict(&row(5, 90, 0), Some(&e), CP), Verdict::Agree);
 
         // Amounts differ: who is newer decides whether we adopt or keep.
-        let mut e = live(5, 95);
+        let e = live(5, 95);
         assert_eq!(
-            verdict(&row(9, 90, 0), Some(&mut e), CP),
+            verdict(&row(9, 90, 0), Some(&e), CP),
             Verdict::HealFromSnapshot
         );
-        let mut e = live(5, 90);
+        let e = live(5, 90);
         assert_eq!(
-            verdict(&row(9, 95, 0), Some(&mut e), CP),
+            verdict(&row(9, 95, 0), Some(&e), CP),
             Verdict::DivergentOursNewer
         );
 
-        let mut e = live(5, 95);
-        assert_eq!(verdict(&row(5, 90, 0), Some(&mut e), CP), Verdict::Stale);
+        let e = live(5, 95);
+        assert_eq!(verdict(&row(5, 90, 0), Some(&e), CP), Verdict::Stale);
 
         // Absent from the snapshot: zero is a closure, positive is a ghost —
         // never folded together, because the second means our data lies.
@@ -291,11 +291,8 @@ mod tests {
         assert_eq!(verdict(&row(42, 90, 0), None, CP), Verdict::Ghost);
 
         // Present but dead reads the same as absent.
-        let mut dead = NetHolding::dead();
-        assert_eq!(
-            verdict(&row(0, 90, 0), Some(&mut dead), CP),
-            Verdict::Closure
-        );
+        let dead = NetHolding::dead();
+        assert_eq!(verdict(&row(0, 90, 0), Some(&dead), CP), Verdict::Closure);
 
         // Our row is newer than the checkpoint, so the SNAPSHOT is the stale
         // side; closing here would delete a holding created in the gap.
@@ -320,9 +317,9 @@ mod tests {
 
         // Same ledger, different amount: freshness cannot arbitrate, so this is
         // a parser-defect signal and must not hide inside 'ours newer, kept'.
-        let mut e = live(5, 90);
+        let e = live(5, 90);
         assert_eq!(
-            verdict(&row(9, 90, 0), Some(&mut e), CP),
+            verdict(&row(9, 90, 0), Some(&e), CP),
             Verdict::DivergentSameLedger
         );
     }
@@ -336,15 +333,11 @@ mod tests {
         const CP: u32 = 100;
 
         // Our closure at 90, network alive at 95 — our closure is the stale fact.
-        let mut newer = live(5, 95);
+        let newer = live(5, 95);
         assert_eq!(
-            verdict(&row(0, 90, 90), Some(&mut newer), CP),
+            verdict(&row(0, 90, 90), Some(&newer), CP),
             Verdict::ClosedButLive,
             "the network says live at a NEWER ledger — our closure is wrong"
-        );
-        assert!(
-            newer.matched,
-            "still matched: pass 2 must not ALSO re-insert it blindly"
         );
 
         // Our closure at 90, network's evidence of life is OLDER (or equal).
@@ -354,22 +347,73 @@ mod tests {
         // arm used to return `AlreadyClosed`: "we closed it and nothing
         // contradicts us", while the network was contradicting us.
         for entry_ledger in [85, 90] {
-            let mut older = live(5, entry_ledger);
+            let older = live(5, entry_ledger);
             assert_eq!(
-                verdict(&row(0, 90, 90), Some(&mut older), CP),
+                verdict(&row(0, 90, 90), Some(&older), CP),
                 Verdict::ClosedButLiveConflict,
                 "network live at {entry_ledger} vs our closure at 90"
             );
-            assert!(older.matched, "still matched: pass 2 must not re-insert it");
         }
 
         // Network agrees the entry is gone.
-        let mut dead = NetHolding::dead();
+        let dead = NetHolding::dead();
         assert_eq!(
-            verdict(&row(0, 90, 90), Some(&mut dead), CP),
+            verdict(&row(0, 90, 90), Some(&dead), CP),
             Verdict::AlreadyClosed
         );
-        assert!(dead.matched, "our own closure is not a network gap");
+    }
+
+    /// The rule that used to live inside `verdict` as a side effect, now with
+    /// a test of its own: EVERY row of ours claims its entry, whatever the
+    /// verdict. An unclaimed entry is counted as a network gap and re-inserted
+    /// as a live holding — so a row that claims nothing would resurrect our own
+    /// closure. Native and classic take different maps; both must claim.
+    #[test]
+    fn every_row_claims_its_entry_whatever_the_verdict() {
+        use crate::network_state::HoldingKey;
+
+        let mut state = NetworkState::default();
+        // Two rows that end in OPPOSITE verdicts: a healthy classic trustline
+        // and a closure whose entry the network still lists as dead.
+        state.trustlines.insert(
+            HoldingKey {
+                holder_id: 1,
+                asset_id: 2,
+            },
+            live(5, 90),
+        );
+        state.accounts.insert(1, NetHolding::dead());
+
+        let classic = row(5, 90, 0);
+        let native = OurRow {
+            asset_id: ids::NATIVE_ASSET_ID,
+            ..row(0, 90, 90)
+        };
+
+        let a = claim(&mut state, &classic).expect("the trustline is in the state");
+        assert_eq!((a.live, a.balance, a.ledger), (true, 5, 90));
+        let b = claim(&mut state, &native).expect("the account is in the state");
+        assert!(!b.live, "the network lists the account as gone");
+
+        assert!(
+            state.trustlines[&HoldingKey {
+                holder_id: 1,
+                asset_id: 2
+            }]
+                .matched,
+            "an ordinary agreeing row must claim its entry"
+        );
+        assert!(
+            state.accounts[&1].matched,
+            "our own closure is not a network gap — it must claim its entry too"
+        );
+
+        // A key the network does not hold claims nothing and says so.
+        let absent = OurRow {
+            holder_id: 999,
+            ..classic
+        };
+        assert!(claim(&mut state, &absent).is_none());
     }
 
     /// The WRITE half of the policy, held to the same standard as the
