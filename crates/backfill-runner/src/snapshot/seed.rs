@@ -97,6 +97,27 @@ struct Corrections {
     /// — the anomaly report, and the only pre-image of what `--execute` takes
     /// away. It belongs to what the run produced, like the four row sets.
     ghosts: Vec<String>,
+    dangling: Dangling,
+}
+
+/// References a seeded row introduces that resolve to no dimension row —
+/// neither already in ClickHouse nor stubbed by this run.
+///
+/// The three sites that produce these were silent `continue`s: an id the
+/// snapshot references but carries no identity for is simply not stubbed, and
+/// the balance pointing at it goes in anyway. That is the failure mode the
+/// stub pass exists to prevent, so it is counted, reported, and (for the two
+/// that break a balance) refused at `--execute` rather than skipped.
+#[derive(Default)]
+struct Dangling {
+    /// A seeded balance points at this asset; nothing will define it.
+    assets: u64,
+    /// A seeded balance belongs to this holder; nothing will define it.
+    holders: u64,
+    /// An asset stub names this issuer; nothing will define it. Cosmetic — it
+    /// blanks the issuer column, it never orphans a balance — and legitimate:
+    /// an issuer may merge while trustlines to its asset outlive it.
+    issuers: u64,
 }
 
 /// Number of `holder_id` slices. 64 keeps each chunk near the ~760k groups
@@ -298,11 +319,19 @@ async fn build_corrections(
     // Pass 3: dimension stubs — a seeded balance whose asset or holder has no
     // dimension row would render as a broken join, i.e. a new lie replacing an
     // old one. Issuers of stubbed assets count as referenced accounts too.
+    // Issuers are kept apart from balance holders: a missing issuer stub blanks
+    // a column, a missing holder stub orphans a balance. Only the second is a
+    // reason to refuse the write, so they cannot share a counter.
+    let mut referenced_issuers: HashSet<i64> = HashSet::new();
     for asset_id in &referenced_assets {
         if known_assets.contains(asset_id) {
             continue;
         }
         let Some((code, issuer)) = state.asset_registry.get(asset_id) else {
+            // The snapshot references this asset but carries no live trustline
+            // to recover its (code, issuer) from — so the balance above points
+            // at an `assets` row that will never exist.
+            out.dangling.assets += 1;
             continue;
         };
         let issuer_id = ids::account_id(issuer);
@@ -313,19 +342,31 @@ async fn build_corrections(
             contract_id: 0,
             id: *asset_id,
         });
-        referenced_holders.insert(issuer_id);
+        referenced_issuers.insert(issuer_id);
     }
-    for holder_id in &referenced_holders {
+    // `union`, not `chain`: an issuer that also holds a balance appears in both
+    // sets and would otherwise be stubbed twice.
+    for holder_id in referenced_holders.union(&referenced_issuers) {
         if known_accounts.contains(holder_id) {
             continue;
         }
+        let is_balance_holder = referenced_holders.contains(holder_id);
+        let unresolved = |d: &mut Dangling| {
+            if is_balance_holder {
+                d.holders += 1;
+            } else {
+                d.issuers += 1;
+            }
+        };
         let Some(d) = state.account_details.get(holder_id) else {
-            continue; // referenced but not a live account in the snapshot
+            unresolved(&mut out.dangling); // referenced, not a live snapshot account
+            continue;
         };
         // `get`, not `[]`: safe today only because `absorb` fills `accounts`
         // and `account_details` together, which is an invariant rather than a
         // type guarantee — and this path runs after 4.5 GB of decode.
         let Some(entry) = state.accounts.get(holder_id).copied() else {
+            unresolved(&mut out.dangling);
             continue;
         };
         out.account_stubs.push(AccountRow {
@@ -365,6 +406,100 @@ async fn build_corrections(
     }
 
     Ok(out)
+}
+
+/// Cap on the two row sets too large to dump whole. Truncation is always
+/// stated in the file itself — a dump that silently stops reads as a complete
+/// one to whoever audits it.
+const DUMP_CAP: usize = 5_000;
+
+/// Write `lines` to `dir/name`, capped, with the cut recorded in the file.
+fn write_dump(
+    dir: &Path,
+    name: &str,
+    total: usize,
+    lines: impl Iterator<Item = String>,
+) -> Result<(), BackfillError> {
+    let mut out: Vec<String> = lines.collect();
+    if total > out.len() {
+        out.push(format!("# TRUNCATED — {} of {total} rows shown", out.len()));
+    }
+    let path = dir.join(name);
+    std::fs::write(&path, out.join("\n") + "\n")
+        .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", path.display())))?;
+    println!(
+        "    wrote {} of {total} rows -> {}",
+        out.len(),
+        path.display()
+    );
+    Ok(())
+}
+
+/// Dump the three row sets the verdict samples never covered: the ones that
+/// invent an ENTITY rather than restate a holding. A wrong amount on a real
+/// asset is visible to anyone who looks the asset up; an asset that does not
+/// exist on chain is not, because nobody knows to look for it. Asset stubs are
+/// therefore dumped WHOLE — they are the smallest set and the only one that
+/// writes a new row into a dimension table.
+///
+/// The two capped dumps take an ARBITRARY prefix, not the deterministic
+/// bottom-k the verdict samples use: both vectors are built by iterating a
+/// `HashMap`, whose order is per-process, so these files are not comparable
+/// across runs. They exist to be eyeballed and chain-checked, not diffed.
+fn write_correction_dumps(
+    dir: &Path,
+    corr: &Corrections,
+    state: &NetworkState,
+) -> Result<(), BackfillError> {
+    write_dump(
+        dir,
+        "asset_stubs.tsv",
+        corr.asset_stubs.len(),
+        corr.asset_stubs.iter().map(|a| {
+            // The registry issuer is the StrKey the surrogate was derived from;
+            // printing both lets an audit recompute `credit_asset_id` offline.
+            let issuer = state
+                .asset_registry
+                .get(&a.id)
+                .map_or("?", |(_, issuer)| issuer.as_str());
+            format!("{}\t{}\t{}\t{}", a.asset_code, issuer, a.id, a.issuer_id)
+        }),
+    )?;
+    write_dump(
+        dir,
+        "account_stubs.tsv",
+        corr.account_stubs.len(),
+        corr.account_stubs
+            .iter()
+            .take(DUMP_CAP)
+            .map(|a| format!("{}\t{}\t{}", a.account_id, a.id, a.first_seen_ledger)),
+    )?;
+    write_dump(
+        dir,
+        "entry_states.tsv",
+        corr.entry_states.len(),
+        corr.entry_states.iter().take(DUMP_CAP).map(|s| {
+            // The StrKey, not the surrogate: a signer set is audited by asking
+            // the chain for the account, which needs the G-address.
+            let who = state
+                .account_details
+                .get(&s.account_id)
+                .map_or("?", |d| d.strkey.as_str());
+            format!(
+                "{who}\t{}/{}/{}/{}\t{}\t{}",
+                s.master_weight,
+                s.threshold_low,
+                s.threshold_med,
+                s.threshold_high,
+                s.signer_keys.join(","),
+                s.signer_weights
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }),
+    )
 }
 
 async fn insert_chunked<T>(sink: &Sink, table: &str, rows: &[T]) -> Result<(), BackfillError>
@@ -455,6 +590,7 @@ pub async fn seed_command(
     // population the report renders, from one `Report`, plus
     // what this run would insert. An operator signs off on one document.
     report.write_dumps(&artifacts.join("dumps"))?;
+    write_correction_dumps(&artifacts.join("dumps"), &corr, &state)?;
     // Excluded on purpose — reported so the pass never reads as exhaustive
     // when it is not. Contract-held classic balances live in the SAC's
     // `ContractData`, not a trustline, so the snapshot's trustline set would
@@ -495,7 +631,12 @@ pub async fn seed_command(
          account_entry_state   {:>12}\n    \
          asset stubs           {:>12}\n    \
          account stubs         {:>12}\n\
-         \n  ghosts.tsv holds every positive-amount row this run zeroes.\n",
+         \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
+         assets a seeded balance points at  {:>12}\n    \
+         holders a seeded balance is for    {:>12}\n    \
+         issuers an asset stub names        {:>12}  (blanks a column, never a balance)\n\
+         \n  ghosts.tsv holds every positive-amount row this run zeroes.\n  \
+         dumps/asset_stubs.tsv holds EVERY new assets row, for offline audit.\n",
         list.checkpoint_ledger,
         source_report,
         report.classic.render("CLASSIC CREDIT trustlines", false),
@@ -515,12 +656,26 @@ pub async fn seed_command(
         corr.entry_states.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
+        corr.dangling.assets,
+        corr.dangling.holders,
+        corr.dangling.issuers,
     );
     std::fs::write(artifacts.join("summary.txt"), &summary)
         .map_err(|e| BackfillError::Incomplete(format!("write summary: {e}")))?;
     println!("\n{summary}");
 
     if execute {
+        // A balance whose asset or holder resolves to no dimension row renders
+        // as a broken join — the "new lie replacing an old one" the stub pass
+        // exists to prevent. The dry-run reports it; the write refuses it.
+        if corr.dangling.assets > 0 || corr.dangling.holders > 0 {
+            return Err(BackfillError::Incomplete(format!(
+                "refusing to insert: {} seeded balances point at an undefined asset and {} at \
+                 an undefined holder — every such row would render as a broken join. See the \
+                 UNRESOLVED REFERENCES block in summary.txt",
+                corr.dangling.assets, corr.dangling.holders
+            )));
+        }
         println!("  inserting…");
         insert_chunked(sink, "assets", &corr.asset_stubs).await?;
         insert_chunked(sink, "accounts", &corr.account_stubs).await?;
