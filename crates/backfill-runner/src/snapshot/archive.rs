@@ -87,6 +87,11 @@ pub async fn fetch_bucket_list(
         .send()
         .await
         .map_err(|e| BackfillError::Incomplete(format!("history manifest fetch failed: {e}")))?
+        // Same reason the bucket fetch does this: without it a 404 or CDN
+        // error page reaches the JSON parser and surfaces as "manifest decode
+        // failed" — an archive outage reported as a format problem.
+        .error_for_status()
+        .map_err(|e| BackfillError::Incomplete(format!("history manifest HTTP status: {e}")))?
         .json()
         .await
         .map_err(|e| BackfillError::Incomplete(format!("history manifest decode failed: {e}")))?;
@@ -119,10 +124,21 @@ pub async fn fetch_bucket_list(
     let mut hashes = Vec::new();
     for level in arr {
         for slot in ["curr", "snap"] {
+            // NOT `unwrap_or(EMPTY)`: an absent or non-string slot would then
+            // be indistinguishable from a legitimately empty one, and the run
+            // would proceed with fewer buckets than the checkpoint has — the
+            // one input whose short read is catastrophic (see the floors in
+            // `open_snapshot`). Real manifests always carry both keys, so this
+            // arm is only reached when the manifest is not what we assume.
             let h = level
                 .get(slot)
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or(EMPTY);
+                .ok_or_else(|| {
+                    BackfillError::Incomplete(format!(
+                        "manifest currentBuckets level is missing a string `{slot}` — \
+                     the manifest is not the shape this reader assumes"
+                    ))
+                })?;
             // A malformed hash produces a 404 on the bucket URL, which reads as
             // "the archive is down" rather than "the manifest is wrong". Fail
             // here, where the cause is still visible.

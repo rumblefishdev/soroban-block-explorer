@@ -294,8 +294,14 @@ fn trustline_asset_id(asset: &stellar_xdr::TrustLineAsset) -> Option<i64> {
     use stellar_xdr::TrustLineAsset as A;
     match asset {
         // A native "trustline" does not exist on chain; native lives on the
-        // AccountEntry. Kept total rather than unreachable.
-        A::Native => Some(ids::NATIVE_ASSET_ID),
+        // AccountEntry, and `verdict::holding_for` routes every native row of
+        // ours to `accounts`. Mapping this to NATIVE_ASSET_ID would file such a
+        // record into `trustlines`, where nothing can ever claim it — it would
+        // read as a missing trustline and insert a SECOND native row for that
+        // holder. `None` counts it as unmodelled, like every other entry type
+        // this comparison does not handle: still total, and wrong in the
+        // direction that is merely visible instead of the one that corrupts.
+        A::Native => None,
         A::CreditAlphanum4(a) => Some(ids::credit_asset_id(
             &xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
             &a.issuer.to_string(),
@@ -417,7 +423,7 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
 }
 
 /// Resolve a bucket list and fold every bucket into a deduplicated
-/// [`NetworkState`]: build the HTTP client, take the pinned or freshest
+/// [`NetworkState`]: build the HTTP client, take the freshest
 /// checkpoint, stream all 21 buckets, print the distinct-entry report.
 ///
 /// The checkpoint is always the freshest the archive advertises. That is
@@ -429,7 +435,7 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
 /// collapse onto the accounts + trustlines the network actually holds.
 pub(crate) async fn open_snapshot(
     label: &str,
-) -> Result<(BucketList, NetworkState), BackfillError> {
+) -> Result<(BucketList, NetworkState, String), BackfillError> {
     let started = std::time::Instant::now();
     let http = archive_client()?;
     let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
@@ -454,51 +460,83 @@ pub(crate) async fn open_snapshot(
             t0.elapsed().as_secs_f64()
         );
     }
-    report_state(
+    // The snapshot is the input whose short read is CATASTROPHIC, and until
+    // now it was the only input without a floor. Our side has two
+    // (`MIN_OUR_ROWS`, the dimension-id floors) on the argument that a short
+    // read is indistinguishable from a real one downstream — but a short read
+    // of OURS over-inserts, which the live writer's newer rows correct, while a
+    // short read of the SNAPSHOT sends every unlisted key into the verdict's
+    // absence arm: tens of millions of live holdings zeroed and closed at the
+    // checkpoint version, which outranks every row already in the table.
+    //
+    // Floors are far below the measured population (2026-08-18: 21 buckets,
+    // 10,863,731 live accounts, 32,344,912 live trustlines) — they catch a
+    // truncated manifest or a half-decoded pass, not a shrinking network.
+    const MIN_BUCKETS: usize = 10;
+    const MIN_LIVE_ACCOUNTS: usize = 5_000_000;
+    const MIN_LIVE_TRUSTLINES: usize = 15_000_000;
+    let (accounts, trustlines) = (state.live_accounts(), state.live_trustlines());
+    if n_buckets < MIN_BUCKETS || accounts < MIN_LIVE_ACCOUNTS || trustlines < MIN_LIVE_TRUSTLINES {
+        return Err(BackfillError::Incomplete(format!(
+            "snapshot looks short: {n_buckets} buckets, {accounts} live accounts, \
+             {trustlines} live trustlines (floors {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / \
+             {MIN_LIVE_TRUSTLINES}) — refusing to read the gap as network-wide closures"
+        )));
+    }
+
+    let source_report = report_state(
         &state,
         list.checkpoint_ledger,
         started.elapsed().as_secs_f64(),
     );
+    println!("{source_report}");
 
-    Ok((list, state))
+    Ok((list, state, source_report))
 }
 
 /// DISTINCT-entry report after first-wins, printed before our rows are folded
-/// in — the raw record count cannot be compared with our
+/// in, and returned so the durable `summary.txt` carries the health of the
+/// SOURCE beside the health of the comparison — the raw record count cannot be
+/// compared with our
 /// tables, because a key appears in as many buckets as it has versions.
-pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) {
+pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) -> String {
+    use std::fmt::Write as _;
     let dead_accounts = state.accounts.len() - state.live_accounts();
     let dead_trustlines = state.trustlines.len() - state.live_trustlines();
-    println!(
-        "
-  DISTINCT entries at checkpoint {checkpoint_ledger} (first-wins applied)"
+    let mut out = format!(
+        "\n  DISTINCT entries at checkpoint {checkpoint_ledger} (first-wins applied)\n  \
+         entity            live         deleted\n"
     );
-    println!("  entity            live         deleted");
-    println!(
+    let _ = writeln!(
+        out,
         "  accounts     {:>10} {:>15}",
         state.live_accounts(),
         dead_accounts
     );
-    println!(
+    let _ = writeln!(
+        out,
         "  trustlines   {:>10} {:>15}",
         state.live_trustlines(),
         dead_trustlines
     );
-    println!(
+    let _ = writeln!(
+        out,
         "  pool shares  {:>10} {:>15}",
         state.live_pool_shares(),
         state.pool_shares.len() - state.live_pool_shares()
     );
-    println!(
-        "
-  {} records superseded by a newer one for the same key",
+    let _ = writeln!(
+        out,
+        "\n  {} records superseded by a newer one for the same key",
         state.superseded
     );
-    println!(
+    let _ = writeln!(
+        out,
         "  {} records of entry types this comparison does not model          (offers, contract data, TTL, claimable balances, …)",
         state.unmodelled
     );
-    println!("  {secs:.1}s");
+    let _ = writeln!(out, "  {secs:.1}s");
+    out
 }
 
 #[cfg(test)]

@@ -30,39 +30,93 @@ pub(crate) const LEDGER_FLOOR: u32 = 50_457_424;
 /// existed briefly and was removed as over-engineering, 2026-08-20 review.)
 const SAMPLE_CAP: usize = 1_000;
 
-/// First-N sample collector.
+/// Bounded sample collector: keeps the [`SAMPLE_CAP`] rows whose KEY hashes
+/// smallest, out of however many are offered.
+///
+/// The property that matters is not the size — it is that the kept set is a
+/// function of WHICH KEYS exist, and of nothing else. Two consequences the
+/// obvious alternative does not have:
+///
+/// - **Spread.** Our rows arrive in ascending key-slice order, so first-N
+///   would fill every bucket from the first ~1.6% of the key space, and a
+///   defect confined to some other part of it would be counted but never
+///   appear in any dump. Hashes are uniform, so these rows are drawn from the
+///   whole range.
+/// - **Reproducibility.** The result does not depend on arrival order, which
+///   matters because the missing-entry buckets are fed from a `HashMap` whose
+///   iteration order is seeded per process. The same population always yields
+///   the same sample, so a dump taken before the seed can be compared with one
+///   taken after.
+///
+/// A bucket smaller than the cap keeps EVERYTHING — the defect buckets
+/// (`divergent SAME ledger`, `closed but live`) are expected to hold a handful
+/// of rows, and those are the rows an operator reaches for first.
 pub(crate) struct Sample {
-    /// (surrogate line, real-identity key). The key is StrKeys from the
-    /// snapshot itself, so reading a sample never routes through our own
-    /// tables; `None` when the snapshot carries no identity for the key.
-    /// Both land in ONE dump file per bucket, key first.
-    rows: Vec<(String, Option<String>)>,
+    /// Max-heap on the key hash: the largest hash sits on top and is the next
+    /// to be evicted. Holds `(hash, surrogate line, real-identity key)`; the
+    /// key is StrKeys from the snapshot itself, so reading a sample never
+    /// routes through our own tables. `None` when the snapshot carries no
+    /// identity for the key. Both land in ONE dump file per bucket, key first.
+    heap: std::collections::BinaryHeap<(u64, String, Option<String>)>,
+}
+
+/// Spread a key over `u64`.
+///
+/// The XOR alone would very nearly do — `holder_id` and `asset_id` are already
+/// CityHash outputs, so it is uniform for the keys this actually sees. It is
+/// finalized anyway, because without it this function is the IDENTITY on the
+/// key, and taking the smallest identities means taking a contiguous run of
+/// the key space. That is invisible while the input happens to be
+/// hash-distributed and silent the moment it is not — a future bucket keyed by
+/// a ledger, a pool id, or anything else with structure. The mix is
+/// SplitMix64's finalizer: three shifts and two multiplies, once per kept row.
+fn sample_hash(holder_id: i64, asset_id: i64) -> u64 {
+    let mut x = (holder_id ^ asset_id) as u64;
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
 }
 
 impl Sample {
     pub(crate) fn new() -> Self {
-        Self { rows: Vec::new() }
-    }
-    /// Take the row when `selected` — for populations whose iteration order is
-    /// not stable, where first-N would be irreproducible across runs.
-    pub(crate) fn offer_if(
-        &mut self,
-        selected: bool,
-        make_line: impl FnOnce() -> String,
-        make_key: impl FnOnce() -> Option<String>,
-    ) {
-        if selected && self.rows.len() < SAMPLE_CAP {
-            self.rows.push((make_line(), make_key()));
+        Self {
+            heap: std::collections::BinaryHeap::new(),
         }
     }
 
+    /// Offer one row. Kept if the bucket is not full, or if this key hashes
+    /// below the largest hash currently held — in which case that one goes.
+    ///
+    /// `make_line` / `make_key` stay lazy: they run only for a row that is
+    /// actually taken. A row can still be built and later evicted, but that
+    /// happens on the order of `cap * ln(population)` times — thousands, not
+    /// the tens of millions a non-lazy version would cost.
     pub(crate) fn offer(
         &mut self,
+        holder_id: i64,
+        asset_id: i64,
         make_line: impl FnOnce() -> String,
         make_key: impl FnOnce() -> Option<String>,
     ) {
-        self.offer_if(true, make_line, make_key);
+        let h = sample_hash(holder_id, asset_id);
+        if self.heap.len() < SAMPLE_CAP {
+            self.heap.push((h, make_line(), make_key()));
+        } else if let Some((worst, ..)) = self.heap.peek()
+            && h < *worst
+        {
+            self.heap.pop();
+            self.heap.push((h, make_line(), make_key()));
+        }
     }
+
+    /// The kept rows, ordered by key hash so a dump is byte-identical across
+    /// runs (the heap's own order is an implementation detail).
+    fn sorted(&self) -> Vec<&(u64, String, Option<String>)> {
+        let mut out: Vec<_> = self.heap.iter().collect();
+        out.sort_by_key(|(h, ..)| *h);
+        out
+    }
+
     pub(crate) fn write(&self, dir: &Path, name: &str) -> Result<(), BackfillError> {
         let path = dir.join(name);
         // One file per bucket: real identity first, surrogates after. Rows
@@ -70,8 +124,9 @@ impl Sample {
         // trustline anywhere) are prefixed `unresolved` and counted rather than
         // silently dropped.
         let mut unresolved = 0usize;
-        let mut lines = Vec::with_capacity(self.rows.len());
-        for (line, key) in &self.rows {
+        let kept = self.sorted();
+        let mut lines = Vec::with_capacity(kept.len());
+        for (_, line, key) in kept {
             match key {
                 Some(k) => lines.push(format!("{k}\t{line}")),
                 None => {
@@ -84,11 +139,76 @@ impl Sample {
             .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", path.display())))?;
         println!(
             "    wrote {} rows -> {} ({} unresolved identities)",
-            self.rows.len(),
+            self.heap.len(),
             path.display(),
             unresolved
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::*;
+
+    /// Keys spanning the WHOLE i64 range, offered in ascending order — the
+    /// order our key-slice read actually produces, and the one first-N used to
+    /// bias on.
+    fn key_at(i: u64, n: u64) -> i64 {
+        (i.wrapping_mul(u64::MAX / n.max(1))) as i64
+    }
+
+    fn fill(n: u64) -> Sample {
+        let mut s = Sample::new();
+        for i in 0..n {
+            let holder = key_at(i, n);
+            s.offer(holder, 0, || format!("{holder}"), || None);
+        }
+        s
+    }
+
+    /// A bucket smaller than the cap keeps EVERYTHING. The defect buckets hold
+    /// a handful of rows and those are the rows an operator reaches for first;
+    /// any selection that thins them is worse than useless.
+    #[test]
+    fn a_bucket_below_the_cap_keeps_every_row() {
+        assert_eq!(fill(17).heap.len(), 17);
+    }
+
+    /// A large bucket is capped, and — the point of the whole exercise — the
+    /// kept rows are drawn from the WHOLE key range, not from the front of the
+    /// arrival order. First-N on this input would keep only the lowest keys.
+    #[test]
+    fn a_large_bucket_is_capped_and_spread_over_the_key_range() {
+        let s = fill(100_000);
+        assert_eq!(s.heap.len(), SAMPLE_CAP);
+
+        let kept: Vec<i64> = s
+            .sorted()
+            .iter()
+            .map(|(_, line, _)| line.parse().expect("line is the holder id"))
+            .collect();
+        let below_zero = kept.iter().filter(|h| **h < 0).count();
+        assert!(
+            below_zero > SAMPLE_CAP / 4 && below_zero < SAMPLE_CAP * 3 / 4,
+            "both halves of the key range must be represented, got {below_zero} of {SAMPLE_CAP} below zero"
+        );
+    }
+
+    /// Order-independence is what lets a dump taken before the seed be compared
+    /// with one taken after. The missing-entry buckets are fed from a `HashMap`
+    /// whose iteration order is seeded per process, so this is not academic.
+    #[test]
+    fn the_kept_set_does_not_depend_on_arrival_order() {
+        let forward = fill(5_000);
+        let mut backward = Sample::new();
+        for i in (0..5_000u64).rev() {
+            let holder = key_at(i, 5_000);
+            backward.offer(holder, 0, || format!("{holder}"), || None);
+        }
+        let a: Vec<_> = forward.sorted().iter().map(|(h, ..)| *h).collect();
+        let b: Vec<_> = backward.sorted().iter().map(|(h, ..)| *h).collect();
+        assert_eq!(a, b, "the same population must yield the same sample");
     }
 }
 
@@ -337,13 +457,12 @@ impl Report {
             (V::Agree, false) => Some(&mut s.agree_classic),
             _ => None,
         };
-        // The identity is built ONLY for a row that is actually kept — at most
-        // SAMPLE_CAP per bucket, against tens of millions of rows read. It comes
-        // straight from the snapshot, which is what breaks the circularity the
-        // audit called out: reversing our surrogates through our own tables
-        // meant auditing the tables with themselves.
+        // The identity is built only for a row the bucket actually takes. It
+        // comes straight from the snapshot, which is what breaks the
+        // circularity the audit called out: reversing our surrogates through
+        // our own tables meant auditing the tables with themselves.
         if let Some(bucket) = bucket {
-            bucket.offer(line, || {
+            bucket.offer(row.holder_id, row.asset_id, line, || {
                 key_line(state, row.holder_id, row.asset_id, is_native)
             });
         }
@@ -373,16 +492,13 @@ impl Report {
                 .entry(entry.ledger / 2_000_000 * 2_000_000)
                 .or_default() += 1;
         }
-        // First-N is NOT deterministic here: the caller iterates a HashMap whose
-        // hasher is seeded per process, so the sample differed on every run and
-        // could not be re-verified or compared before/after. Select on a
-        // function of the KEY instead — reproducible, and independent of any
-        // structure in the data.
-        const MISSING_SAMPLE_MODULUS: u64 = 16_384;
-        self.samples.missing_classic.offer_if(
-            (key.holder_id ^ key.asset_id)
-                .unsigned_abs()
-                .is_multiple_of(MISSING_SAMPLE_MODULUS),
+        // This bucket is fed from a `HashMap` whose hasher is seeded per
+        // process, so arrival order differs on every run. `Sample` selects on
+        // the key hash, which is order-independent — the same population always
+        // yields the same dump, and this bucket needs no rule of its own.
+        self.samples.missing_classic.offer(
+            key.holder_id,
+            key.asset_id,
             || {
                 format!(
                     "{}\t{}\t{}\t{}",

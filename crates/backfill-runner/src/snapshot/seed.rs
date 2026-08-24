@@ -387,7 +387,7 @@ pub async fn seed_command(
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
 
-    let (list, mut state) =
+    let (list, mut state, source_report) =
         network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
 
     // One directory per checkpoint, so a run never overwrites the record of an
@@ -486,7 +486,7 @@ pub async fn seed_command(
         .await?;
 
     let summary = format!(
-        "checkpoint {}\n{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
+        "checkpoint {}\n{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
          contract-held classic rows  {:>12}\n    \
          type-3 Soroban rows         {:>12}\n    \
          snapshot pool shares        {:>12}  (our side: lp_positions)\n\
@@ -497,6 +497,7 @@ pub async fn seed_command(
          account stubs         {:>12}\n\
          \n  ghosts.tsv holds every positive-amount row this run zeroes.\n",
         list.checkpoint_ledger,
+        source_report,
         report.classic.render("CLASSIC CREDIT trustlines", false),
         report
             .native
