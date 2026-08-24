@@ -67,8 +67,19 @@ pub enum Verdict {
     DivergentOursNewer,
     /// Both hold it at the SAME ledger and the amounts still differ. One of us
     /// parsed that ledger wrong, and it cannot be us-versus-them freshness —
-    /// so this is a defect signal, not routine drift. Reported apart and never
-    /// auto-healed: guessing a winner would bury the evidence.
+    /// so this is a defect signal, not routine drift. Reported apart and
+    /// QUARANTINED, never auto-healed: guessing a winner would bury the
+    /// evidence.
+    ///
+    /// Characterised 2026-08-24 on the full population (17,798 rows): OUR
+    /// amount is lower than the chain's in every single one, the defect is
+    /// LIVE (ledgers up to the checkpoint itself, ~96 distinct ledgers in the
+    /// newest band alone), and 106 of 107 recent (account, ledger) pairs carry
+    /// a SOROBAN transaction — zero classic. Repairing these belongs to the
+    /// Soroban-writer defect task together with its root cause; a heal here
+    /// was built, dry-run-verified (200/200 healed values equal to chain), and
+    /// REMOVED — correcting the symptom from the seed while the writer keeps
+    /// producing new ties at ~1,900/week would silently decay.
     DivergentSameLedger,
     /// Both hold it with equal amounts, but our ledger is behind the entry's.
     Stale,

@@ -847,6 +847,137 @@ floor.** Every one predates our indexing window, so the gap is coverage, not a
 parser that drops trustlines — the discriminator rule from 0502/0503, returning
 the good answer.
 
+#### The audit's own coverage was uneven — closed 2026-08-24
+
+Asked which populations got the same scrutiny, the honest answer was no. By
+rows written versus chain probes run:
+
+| set               | rows it writes | chain probes, before | after                                      |
+| ----------------- | -------------- | -------------------- | ------------------------------------------ |
+| `missing_classic` | 19.3M          | 2,000                | 2,000                                      |
+| `closure_classic` | **22.2M**      | 200                  | **712** (every resolvable row of the dump) |
+| `entry_states`    | **10.9M**      | **3**                | **5,000**                                  |
+| `ghosts_native`   | 1.04M          | 300                  | 300                                        |
+| `ghosts_classic`  | 1,941          | 0                    | 0 — unreachable, no StrKey exists anywhere |
+
+Signers were the real gap: 10.9M rows written on the strength of three
+samples. Closed by fetching all 5,000 dumped accounts from chain and comparing
+the decoded `AccountEntry` field by field —
+
+**5,000 of 5,000 identical: thresholds, signer set, AND signer order.** No
+account absent, none divergent.
+
+`closure_classic` re-probed at 712 of 712 gone from chain.
+
+#### The same-ledger defect is LIVE, and it is in the Soroban path
+
+The heal decision made the root cause urgent rather than academic, so the
+quarantine bucket was characterised rather than just counted.
+
+**It is not historical.** Ledgers run to 64,106,462 against a checkpoint of
+64,106,495 — the newest possible. By band across the 1,000-row sample: 8 at
+58-59M, 131 at 59-60M, 25, 434, 30, 265, and **107 in the current 64M band**,
+spread over **96 distinct ledgers**, so it is a continuous process and not one
+bad event.
+
+**It is one-directional in the current band too**: 101 of 101 comparable rows
+have OUR value lower, none higher, differences of roughly 0.001-0.007 XLM.
+
+**It localises to Soroban.** For the 107 (account, ledger) pairs in the newest
+band, our `transactions` table holds:
+
+|                                                       |         |
+| ----------------------------------------------------- | ------- |
+| Soroban transactions from that account in that ledger | **106** |
+| classic-only transactions                             | **0**   |
+
+106 of 107 pairs, zero classic. That is a subsystem, not a coincidence.
+
+**One hypothesis raised and REFUTED, recorded so it is not re-tried:** that
+`extract_ledger_entry_changes` misses a fourth meta container carrying the
+unused-resource-fee refund. `TransactionMetaV4` in stellar-xdr 26.0.1 carries
+only `tx_changes_before`, `operations` and `tx_changes_after`, and the parser
+reads all three. The refund does surface as a `TransactionEvent` with
+`stage = AfterAllTxs` (our own `tx_event_stage_real_meta.rs` pins that against
+mainnet), and `AfterAllTxs` appears nowhere in `db-clickhouse/src/persist/` —
+but the balance path never reasons about stages at all, so that is a lead, not
+a cause.
+
+**What this means for the heal**: `--heal-same-ledger` repairs the ~17.7k
+accumulated rows, and the writer keeps producing new ones. It is a correction,
+not a fix, and the run does not close the underlying defect.
+
+#### The third production run FAILED — a load-dependent ceiling, found the hard way
+
+The `--heal-same-ledger` run died at a step the two previous runs had passed:
+
+```
+Code: 159. DB::Exception: Timeout exceeded: elapsed 31857 ms, maximum: 30000 ms
+```
+
+Not a balance slice — it never reached one. The unsliced dimension read,
+`SELECT id FROM accounts GROUP BY id`, has to ship **14.58M ids** (15.82M raw
+rows collapsed), and `max_execution_time` counts the time spent SENDING rows,
+not only aggregating them. The aggregation alone measures **0.4s**; the
+transfer is the whole cost.
+
+That is the worst shape a limit can have: it depends on how busy the server is,
+so it passes until it does not, and it would have passed again on a retry.
+
+Two things went right, and are worth keeping rather than assuming:
+
+- **It failed loudly and early**, before a single row was classified. A cursor
+  error propagates rather than yielding a short set — which matters more here
+  than almost anywhere else in the run, because fewer known ids means more ids
+  judged absent, which means more dimension stubs. A silently truncated id read
+  would have manufactured `assets` rows for assets that already exist: the
+  invented-entity failure, arriving through the back door.
+- The `MIN_ASSET_IDS` / `MIN_ACCOUNT_IDS` floors would have caught a short read
+  too. Two independent guards on the same hazard, and the cheaper one fired.
+
+Fixed by slicing the id read on `id`, exactly as `stream_our_rows` already
+slices the balances read — the tool now has one policy for reading production
+rather than one policy and one exception.
+
+#### `--heal-same-ledger` built and dry-run verified (checkpoint 64,107,135)
+
+The mode ADR 0057 named as the direction if the quarantine proved noisy. It
+adopts the NETWORK's amount at the CHECKPOINT version — not at the tied ledger,
+which would merely add a third candidate at the same RMT version and leave the
+survivor a coin flip. The checkpoint is always strictly above the tie, because a
+post-checkpoint row returns from the guard before ever reaching this verdict.
+
+**17,798 rows healed**, full list with BOTH values in `same_ledger_healed.tsv`.
+
+The one-directional finding now covers the WHOLE population, not a sample:
+
+|                                    | rows       |
+| ---------------------------------- | ---------- |
+| network higher (our value too low) | **17,798** |
+| network lower                      | **0**      |
+| equal                              | **0**      |
+
+And the healed value is the chain's: 200 sampled healed rows fetched from RPC,
+**200 of 200 equal to the network balance** at the recorded ledger, none
+churned, none gone.
+
+Correction totals move as expected — 44,867,274 balance rows against 44,847,266
+without the flag; the ~20k delta is the 17,798 heals plus ordinary churn between
+two checkpoints taken ~11 minutes apart. Unresolved references still 0 and 0.
+
+This is a correction of accumulated state, NOT a fix of the writer. At roughly
+1,900 new divergences a week (extrapolated from the band distribution), the
+benefit decays until the Soroban path is repaired, and the heal has to be
+re-run.
+
+**Decision 2026-08-24 (owner): the flag is REMOVED from the seed.** Healing the
+symptom from the seed while the writer keeps producing new ties couples an
+ongoing repair to a one-off tool. The design and its verification survive in
+task 0514 (the Soroban writer bug), which owns root cause, writer fix, and the
+one-shot heal AFTER the fix — in that order. The full-population measurement
+(17,798 / 0 / 0) and the 200/200 RPC check of healed values are recorded there
+and in the verdict's docs.
+
 #### `--execute` needs an identity this dry-run does not have
 
 Established by reading the server's own settings, never by attempting a write:
@@ -860,6 +991,55 @@ deployment order has an unwritten step between "review summary.txt" and
 "`--execute`": the seed must run under a write-capable identity, which is the
 same class of infrastructure action as the indexer deploy that precedes it.
 Worth settling before the run rather than discovering at the prompt.
+
+### Round of 2026-08-24 evening — owner decisions executed
+
+- **`--heal-same-ledger` removed** (decision above). `verdict::correction` is
+  back to three arguments; the quarantine stands; repair lives in 0514.
+- **Task 0514 filed on develop** (`45ce3f10`): the same-ledger bucket is a live
+  Soroban writer bug — full-population one-directionality, ~1,900 rows/week,
+  106/107 Soroban-only, the refuted fourth-container hypothesis, and the heal
+  design to resurrect after the writer fix.
+- **0503 appended**: the ~576 orphan holders (balances rows whose holder has no
+  `accounts` row) as an enumerable parity defect; the 1,941 unverifiable
+  classic ghosts are that same population.
+- **Timeout fix kept as slicing** (owner decision): raising
+  `max_execution_time` per query is refused under `readonly = 1` (verified by
+  attempting `SETTINGS max_execution_time = 120` — `Code: 164`), so a profile
+  change would be the only alternative, and the slicing works under any
+  profile.
+- **Write path exercised for the first time**: full `--execute` against a
+  LOCAL ClickHouse (docker compose + `db-clickhouse-init` schema), using a
+  scratch build with the three read floors zeroed (empty local tables would
+  trip them by design; the binary is not committed). Results below.
+
+### The write path, exercised end to end (2026-08-24, local ClickHouse)
+
+The one thing no dry-run could test: `--execute` had never run, anywhere. Done
+now against a local ClickHouse (docker compose + `db-clickhouse-init`), with a
+scratch build whose three read floors are zeroed (an empty local DB trips them
+by design — that build is not committed).
+
+An empty "our side" makes the whole network missing, so the test is BIGGER
+than the production run will be, and it exercises the account-stub insert path
+that production (0 stubs) never will:
+
+| table                 | inserted   | counted in CH after | match |
+| --------------------- | ---------- | ------------------- | ----- |
+| `balances`            | 43,307,561 | 43,307,561          | exact |
+| `account_entry_state` | 10,892,282 | 10,892,282          | exact |
+| `assets`              | 394,033    | 394,033             | exact |
+| `accounts`            | 10,892,282 | 10,892,282          | exact |
+
+**~65.5M rows, exit 0, row-exact on all four tables.** 937s total, 3.19 GB
+peak RSS. Unresolved references 0 and 0 even from an empty database. This
+closes the 0310-class risk (client-side insert rejection on struct/schema
+mismatch) for all four row types against the real schema.
+
+Content check, not just counts: the issue #377 fixture account rebuilt from
+NOTHING but the snapshot shows all five holdings (native + AQUA/KALE/SHX/USDC,
+the three zeros at their exact ledgers) and thresholds 1/3/3/3 with 4 signer
+keys — acceptance criterion 1 demonstrated through the write path itself.
 
 ## Acceptance criteria
 
