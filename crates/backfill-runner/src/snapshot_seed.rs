@@ -417,7 +417,7 @@ pub async fn seed_command(
     // rows are left alone, never corrected differently — so the pin is
     // optional here and exists for exact reproduction (the ADR 0056 LP merge
     // re-derives this seed's snapshot from `artifacts/manifest.json`).
-    let snapshot::SnapshotPass { list, mut state } = crate::snapshot::open_snapshot(
+    let (list, mut state) = snapshot::open_snapshot(
         pinned_manifest,
         if execute { " [EXECUTE]" } else { " [dry-run]" },
     )

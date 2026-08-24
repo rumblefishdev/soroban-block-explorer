@@ -307,7 +307,7 @@ where
 pub(crate) async fn stream_bucket_from_url<F>(
     client: &reqwest::Client,
     url: &str,
-    expect_hash: Option<&str>,
+    expect_hash: &str,
     f: F,
 ) -> Result<u64, BackfillError>
 where
@@ -344,29 +344,28 @@ where
     // gunzip then SHA-256 reproduces the file name exactly. Checking it turns
     // "we trust TLS and DNS" into "we checked", which is what lets this source
     // be called verified at all.
-    if let Some(want) = expect_hash {
-        let mut gz = GzDecoder::new(&tmp);
-        let mut digest = Sha256::new();
-        let mut buf = vec![0u8; 1 << 20];
-        loop {
-            let n = gz
-                .read(&mut buf)
-                .map_err(|e| BackfillError::Incomplete(format!("bucket verify read: {e}")))?;
-            if n == 0 {
-                break;
-            }
-            digest.update(&buf[..n]);
+    let mut gz = GzDecoder::new(&tmp);
+    let mut digest = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = gz
+            .read(&mut buf)
+            .map_err(|e| BackfillError::Incomplete(format!("bucket verify read: {e}")))?;
+        if n == 0 {
+            break;
         }
-        let got = hex::encode(digest.finalize());
-        if got != want {
-            return Err(BackfillError::Incomplete(format!(
-                "bucket content hash mismatch: manifest says {want}, decompressed bytes \
-                 hash to {got} — a substituted or truncated bucket, NOT a decode problem"
-            )));
-        }
-        tmp.seek(SeekFrom::Start(0))
-            .map_err(|e| BackfillError::Incomplete(format!("bucket rewind failed: {e}")))?;
+        digest.update(&buf[..n]);
     }
+    let got = hex::encode(digest.finalize());
+    if got != expect_hash {
+        return Err(BackfillError::Incomplete(format!(
+            "bucket content hash mismatch: manifest says {expect_hash}, decompressed bytes \
+             hash to {got} — a substituted or truncated bucket, NOT a decode problem"
+        )));
+    }
+    drop(gz);
+    tmp.seek(SeekFrom::Start(0))
+        .map_err(|e| BackfillError::Incomplete(format!("bucket rewind failed: {e}")))?;
 
     stream_bucket(BufReader::new(&tmp), f)?;
     Ok(bytes)
@@ -844,76 +843,56 @@ pub fn snap_entry_for<'a>(state: &'a mut SnapshotState, row: &OurRow) -> Option<
     }
 }
 
-/// One opened snapshot pass: the bucket list this run decoded and the
-/// deduplicated state folded out of it.
-///
-/// Every consumer needs the same four steps in the same order — build the HTTP
-/// client, resolve the bucket list (pinned or freshest), announce the
-/// checkpoint, stream every bucket into a [`SnapshotState`]. Spelled once here
-/// so two commands cannot drift into decoding the archive differently.
-pub struct SnapshotPass {
-    pub list: BucketList,
-    pub state: SnapshotState,
-}
-
-/// Open a snapshot pass.
+/// Resolve a bucket list and fold every bucket into a deduplicated
+/// [`SnapshotState`]: build the HTTP client, take the pinned or freshest
+/// checkpoint, stream all 21 buckets, print the distinct-entry report.
 ///
 /// `pinned_manifest` decodes a previously recorded bucket list instead of the
 /// freshest checkpoint. Optional by design: the newest checkpoint is complete
 /// by construction (the archive's `.well-known` manifest is stellar-core's
 /// atomic commit point, written LAST), so the pin exists for exact
 /// reproduction of an earlier run, not for safety.
-pub async fn open_snapshot(
+///
+/// Memory is the distinct-entry count, not the record count: ~124M records
+/// collapse onto the accounts + trustlines the network actually holds.
+pub(crate) async fn open_snapshot(
     pinned_manifest: Option<&std::path::Path>,
     label: &str,
-) -> Result<SnapshotPass, BackfillError> {
+) -> Result<(BucketList, SnapshotState), BackfillError> {
     let started = std::time::Instant::now();
     let http = archive_client()?;
     let list = match pinned_manifest {
         Some(path) => bucket_list_from_manifest(path)?,
         None => fetch_bucket_list(&http, PUBNET_ARCHIVE).await?,
     };
+    let take = list.hashes.len();
     println!(
-        "checkpoint ledger {} — {} buckets{label}",
-        list.checkpoint_ledger,
-        list.hashes.len()
+        "checkpoint ledger {} — {take} buckets{label}",
+        list.checkpoint_ledger
     );
 
-    let take = list.hashes.len();
-    let state = build_state(&http, &list, SnapshotState::default(), |i, bytes, secs| {
-        println!("  [{:>2}/{take}] {bytes:>10} B  {secs:>6.1}s", i + 1);
-    })
-    .await?;
+    let mut state = SnapshotState::default();
+    for (i, hash) in list.hashes.iter().enumerate() {
+        let url = BucketList::url(PUBNET_ARCHIVE, hash);
+        let t0 = std::time::Instant::now();
+        let bytes = stream_bucket_from_url(&http, &url, hash, |rec| {
+            state.absorb_record(&rec);
+            Ok(())
+        })
+        .await?;
+        println!(
+            "  [{:>2}/{take}] {bytes:>10} B  {:>6.1}s",
+            i + 1,
+            t0.elapsed().as_secs_f64()
+        );
+    }
     report_state(
         &state,
         list.checkpoint_ledger,
         started.elapsed().as_secs_f64(),
     );
 
-    Ok(SnapshotPass { list, state })
-}
-
-/// Stream every bucket and fold it into a deduplicated [`SnapshotState`].
-///
-/// Memory is the distinct-entry count, not the record count: ~124M records
-/// collapse onto the accounts + trustlines the network actually holds.
-pub async fn build_state(
-    client: &reqwest::Client,
-    list: &BucketList,
-    mut state: SnapshotState,
-    mut on_bucket: impl FnMut(usize, u64, f64),
-) -> Result<SnapshotState, BackfillError> {
-    for (i, hash) in list.hashes.iter().enumerate() {
-        let url = BucketList::url(PUBNET_ARCHIVE, hash);
-        let t0 = std::time::Instant::now();
-        let bytes = stream_bucket_from_url(client, &url, Some(hash), |rec| {
-            state.absorb_record(&rec);
-            Ok(())
-        })
-        .await?;
-        on_bucket(i, bytes, t0.elapsed().as_secs_f64());
-    }
-    Ok(state)
+    Ok((list, state))
 }
 
 /// DISTINCT-entry report after first-wins, printed by the compare pass before
