@@ -87,7 +87,7 @@ const INSERT_CHUNK: usize = 500_000;
 #[derive(Default)]
 struct Corrections {
     balances: Vec<BalanceRow>,
-    signers: Vec<AccountEntryStateRow>,
+    entry_states: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
     n_missing: u64,
@@ -307,7 +307,8 @@ async fn build_corrections(
         });
     }
 
-    // Pass 4: signers — one row per live account, the FULL set, versioned on
+    // Pass 4: entry state — one row per live account (signers, thresholds,
+    // flags), the FULL set, versioned on
     // the entry's own ledger so the (future) live writer wins on any change.
     for (id, e) in &state.accounts {
         if !e.live {
@@ -316,7 +317,7 @@ async fn build_corrections(
         let Some(d) = state.account_details.get(id) else {
             continue;
         };
-        out.signers.push(AccountEntryStateRow {
+        out.entry_states.push(AccountEntryStateRow {
             account_id: *id,
             signer_keys: d.signers.iter().map(|(k, _, _)| k.clone()).collect(),
             signer_weights: d.signers.iter().map(|(_, w, _)| *w).collect(),
@@ -446,7 +447,7 @@ pub async fn seed_command(
         corr.n_closed_but_live,
         corr.n_divergent_same_ledger,
         corr.n_newer_than_checkpoint,
-        corr.signers.len(),
+        corr.entry_states.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
     );
@@ -459,7 +460,7 @@ pub async fn seed_command(
         insert_chunked(sink, "assets", &corr.asset_stubs).await?;
         insert_chunked(sink, "accounts", &corr.account_stubs).await?;
         insert_chunked(sink, "balances", &corr.balances).await?;
-        insert_chunked(sink, "account_entry_state", &corr.signers).await?;
+        insert_chunked(sink, "account_entry_state", &corr.entry_states).await?;
         println!("  inserts done.");
     } else {
         println!("  dry-run: nothing inserted. Re-run with --execute to write.");

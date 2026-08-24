@@ -1799,7 +1799,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // the Horizon alphanum4/12 split into one `classic-credit` key. amount is the
     // same scaled-i128 (decimals=7 at read); accounts resolve via `accounts`.
     let mut balance_dedup: HashMap<(i64, i64), BalanceRow> = HashMap::new();
-    // Signers dedup by account, LAST occurrence wins — the same hazard
+    // Entry-state dedup by account, LAST occurrence wins — the same hazard
     // `build_balance_rows` guards against, for the same reason. States arrive one
     // per TRANSACTION (`process.rs` calls `extract_account_states` per tx and
     // concatenates), and every state in a ledger carries that ledger as its
@@ -1808,7 +1808,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // resolves a tie arbitrarily — a removed signer could survive as the winner,
     // which is exactly what the whole-set-replacement design promises cannot
     // happen. Ledger/tx order puts the final state last, so last-wins is right.
-    let mut signers_dedup: HashMap<i64, AccountEntryStateRow> = HashMap::new();
+    let mut entry_state_dedup: HashMap<i64, AccountEntryStateRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1894,7 +1894,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                         signer_weights.push(weight);
                         signer_types.push(typ.to_string());
                     }
-                    signers_dedup.insert(
+                    entry_state_dedup.insert(
                         account_id_int,
                         AccountEntryStateRow {
                             account_id: account_id_int,
@@ -1939,7 +1939,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     }
     out.unified_balance_rows.extend(balance_dedup.into_values());
     out.account_entry_state_rows
-        .extend(signers_dedup.into_values());
+        .extend(entry_state_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {

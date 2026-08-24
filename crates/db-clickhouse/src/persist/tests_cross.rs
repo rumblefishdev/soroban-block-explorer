@@ -2547,7 +2547,7 @@ fn closed_at_ledger_marks_only_real_closures() {
 /// lore-0463: the signers side row follows full-set-replace semantics and is
 /// emitted ONLY when the AccountEntry itself was observed.
 #[test]
-fn signer_rows_full_set_replace_semantics() {
+fn entry_state_rows_full_set_replace_semantics() {
     let ledger = synthetic_ledger();
 
     // Entry observed, thresholds 01030303 (master 1, low/med/high 3), two
