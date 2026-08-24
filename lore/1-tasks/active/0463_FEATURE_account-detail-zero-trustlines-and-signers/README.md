@@ -1041,6 +1041,31 @@ NOTHING but the snapshot shows all five holdings (native + AQUA/KALE/SHX/USDC,
 the three zeros at their exact ledgers) and thresholds 1/3/3/3 with 4 signer
 keys — acceptance criterion 1 demonstrated through the write path itself.
 
+### Decision — how the master key is rendered (owner, 2026-08-24)
+
+The ledger carries the account's own key as a WEIGHT (`thresholds[0]`), not as
+a list entry; additional signers are the separate list. Our schema stores them
+apart, which is correct, and it is also the shape that misleads: a page
+rendering only `signer_keys` shows the issue #377 fixture as 3-of-4 when the
+chain says 3-of-5.
+
+**Chosen: the master key is rendered as the FIRST ROW of the signers list**,
+carrying `master_weight` and a "master" badge. Five rows for the fixture. This
+matches what other explorers show, so the count does not surprise anyone
+comparing sources, while the badge keeps the row honest about being the
+account's own key rather than an added signer.
+
+Rejected: a separate "master key weight" field beside the list (correct but
+leaves the reader to do the arithmetic that produces the security claim), and
+a computed "3-of-5" header over a 4-row list (the header and the list would
+disagree on screen).
+
+Constraint for the API/DTO work: the total that matters is
+`master_weight + sum(signer_weights)`, and the thresholds are compared against
+THAT. An account with `master_weight = 0` has a disabled master key and must
+NOT render the row as a signer with weight 0 reading as ordinary — 41 of 5,000
+sampled accounts are permanently locked this way.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five
