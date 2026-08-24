@@ -283,7 +283,7 @@ async fn build_corrections(
     }
     for (id, e) in &state.accounts {
         if e.live && !e.matched {
-            report.observe_missing_account();
+            report.observe_missing_account(*id, e, state);
             out.balances.push(BalanceRow {
                 holder_id: *id,
                 asset_id: ids::NATIVE_ASSET_ID,

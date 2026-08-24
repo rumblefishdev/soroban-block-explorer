@@ -222,6 +222,12 @@ pub(crate) struct Samples {
     pub(crate) divergent_native: Sample,
     pub(crate) agree_classic: Sample,
     pub(crate) missing_classic: Sample,
+    /// Native's half of the blind spot. It had neither a dump nor a floor
+    /// split while classic had both, even though a missing ACCOUNT above the
+    /// floor is the stronger defect signal of the two: native is the
+    /// population the RPC bootstrap already seeded, so dormancy explains it
+    /// less well than it explains a dormant trustline.
+    pub(crate) missing_native: Sample,
     pub(crate) closed_but_live: Sample,
     /// The OTHER defect signal. It writes nothing, so this dump is the only
     /// way to look at one — the same reason `divergent_same_ledger` has one.
@@ -230,9 +236,12 @@ pub(crate) struct Samples {
     /// `missing` split by the entry's own last-modified ledger vs our floor.
     pub(crate) missing_below_floor: u64,
     pub(crate) missing_above_floor: u64,
+    pub(crate) missing_native_below_floor: u64,
+    pub(crate) missing_native_above_floor: u64,
     /// Finer histogram of the ABOVE-floor missing — these are the suspicious
     /// ones, and their shape says whether they cluster somewhere.
     pub(crate) missing_above_by_2m: std::collections::BTreeMap<u32, u64>,
+    pub(crate) missing_native_above_by_2m: std::collections::BTreeMap<u32, u64>,
 }
 
 impl Samples {
@@ -245,12 +254,16 @@ impl Samples {
             divergent_native: Sample::new(),
             agree_classic: Sample::new(),
             missing_classic: Sample::new(),
+            missing_native: Sample::new(),
             closed_but_live: Sample::new(),
             closed_but_live_conflict: Sample::new(),
             divergent_same_ledger: Sample::new(),
             missing_below_floor: 0,
             missing_above_floor: 0,
+            missing_native_below_floor: 0,
+            missing_native_above_floor: 0,
             missing_above_by_2m: std::collections::BTreeMap::new(),
+            missing_native_above_by_2m: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -511,23 +524,78 @@ impl Report {
 
     /// One live snapshot ACCOUNT nothing on our side ever touched — native's
     /// half of the blind spot.
-    pub(crate) fn observe_missing_account(&mut self) {
+    pub(crate) fn observe_missing_account(
+        &mut self,
+        holder_id: i64,
+        entry: &network_state::NetHolding,
+        state: &NetworkState,
+    ) {
         self.native.missing += 1;
+        // Same discriminator as the classic side, and the same reason: below
+        // the floor we never saw a change for this account, above it someone
+        // dropped one we did.
+        if entry.ledger < LEDGER_FLOOR {
+            self.samples.missing_native_below_floor += 1;
+        } else {
+            self.samples.missing_native_above_floor += 1;
+            *self
+                .samples
+                .missing_native_above_by_2m
+                .entry(entry.ledger / 2_000_000 * 2_000_000)
+                .or_default() += 1;
+        }
+        self.samples.missing_native.offer(
+            holder_id,
+            db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+            || {
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    holder_id,
+                    db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+                    entry.balance,
+                    entry.ledger
+                )
+            },
+            || {
+                key_line(
+                    state,
+                    holder_id,
+                    db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+                    true,
+                )
+            },
+        );
     }
 
     /// The missing-bucket discriminator, rendered: below our floor is the
     /// expected blind spot, above it is a defect signal to chase.
     pub(crate) fn render_missing_histogram(&self) -> String {
         let s = &self.samples;
-        let mut out = format!(
-            "\n  missing trustlines by the entry's own lastModifiedLedgerSeq:\n    \
-             below our floor {LEDGER_FLOOR}: {}\n    at/above the floor:      {}\n",
-            s.missing_below_floor, s.missing_above_floor
-        );
-        if !s.missing_above_by_2m.is_empty() {
-            out.push_str("    above-floor by 2M-ledger band:\n");
-            for (band, n) in &s.missing_above_by_2m {
-                let _ = writeln!(out, "      {band:>10}+  {n:>10}");
+        let mut out = String::new();
+        for (label, below, above, bands) in [
+            (
+                "missing trustlines",
+                s.missing_below_floor,
+                s.missing_above_floor,
+                &s.missing_above_by_2m,
+            ),
+            (
+                "missing accounts (native)",
+                s.missing_native_below_floor,
+                s.missing_native_above_floor,
+                &s.missing_native_above_by_2m,
+            ),
+        ] {
+            let _ = write!(
+                out,
+                "\n  {label} by the entry's own lastModifiedLedgerSeq:\n    \
+                 below our floor {LEDGER_FLOOR}: {below}\n    at/above the floor:      {above}\n"
+            );
+            if !bands.is_empty() {
+                out.push_str("    above-floor by 2M-ledger band:\n");
+                for (band, n) in bands {
+                    let _ = writeln!(out, "      {band:>10}+  {n:>10}");
+                }
             }
         }
         out
@@ -546,6 +614,7 @@ impl Report {
         s.divergent_native.write(dir, "divergent_native.tsv")?;
         s.agree_classic.write(dir, "agree_classic.tsv")?;
         s.missing_classic.write(dir, "missing_classic.tsv")?;
+        s.missing_native.write(dir, "missing_native.tsv")?;
         s.closed_but_live.write(dir, "closed_but_live.tsv")?;
         s.closed_but_live_conflict
             .write(dir, "closed_but_live_conflict.tsv")?;

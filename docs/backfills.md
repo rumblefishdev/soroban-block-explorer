@@ -398,6 +398,12 @@ correction written against a row already AT that ledger would be a
 same-version ReplacingMergeTree tie, resolved arbitrarily — the exact
 nondeterminism this tool exists to remove.
 
+The `missing` split is reported for BOTH populations — trustlines and native
+accounts — each with its own below/above-floor counts, 2M-ledger bands and
+sample dump. An above-floor missing ACCOUNT is the stronger signal of the two:
+native is the population the RPC bootstrap already seeded, so dormancy
+explains it less well than it explains a dormant trustline.
+
 Both defect signals get their own sample dump (`divergent_same_ledger.tsv`,
 `closed_but_live_conflict.tsv`) — they write nothing, so the dump is the only
 way to look at one.
