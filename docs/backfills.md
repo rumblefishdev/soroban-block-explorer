@@ -371,6 +371,43 @@ carried the same decode and the same verdict behind its own counting shell.)
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
+**The decision table.** Every one of our rows falls into exactly one verdict,
+and the verdict alone decides what (if anything) is written. Read the report's
+buckets against this:
+
+| our row          | network at the checkpoint | relation                  | verdict                       | what is written                                             |
+| ---------------- | ------------------------- | ------------------------- | ----------------------------- | ----------------------------------------------------------- |
+| —                | live                      |                           | `missing`                     | live row @ the entry's own ledger                           |
+| open             | absent                    | ours ≥ checkpoint         | `newer than checkpoint`       | nothing — the snapshot is the stale side                    |
+| open, amount 0   | absent                    | ours < checkpoint         | `closure`                     | amount 0, closed @ checkpoint                               |
+| open, amount > 0 | absent                    | ours < checkpoint         | **`GHOST`**                   | amount 0, closed @ checkpoint, **+ a line in `ghosts.tsv`** |
+| closed           | absent                    |                           | `already closed`              | nothing                                                     |
+| closed           | live                      | network newer             | **`CLOSED BUT LIVE`**         | live row @ the entry's ledger — re-opened                   |
+| closed           | live                      | network not newer         | **`CLOSED vs LIVE conflict`** | nothing — defect signal, see below                          |
+| open             | live                      | amounts equal, ours older | `stale`                       | nothing                                                     |
+| open             | live                      | amounts equal             | `agree`                       | nothing — the positive control                              |
+| open             | live                      | differ, network newer     | `heal`                        | the network's amount @ its ledger                           |
+| open             | live                      | differ, ours newer        | `divergent ours newer`        | nothing — the live parser saw more                          |
+| open             | live                      | differ, SAME ledger       | **`divergent SAME ledger`**   | nothing — defect signal                                     |
+
+**Version discipline:** a live fact versions on the entry's own
+`lastModifiedLedgerSeq`; an absence fact (closure, ghost) on the run's
+checkpoint ledger, meaning "true at or before". Never a synthetic stamp. The
+`≥ checkpoint` guard is deliberate, not an off-by-one: a checkpoint-versioned
+correction written against a row already AT that ledger would be a
+same-version ReplacingMergeTree tie, resolved arbitrarily — the exact
+nondeterminism this tool exists to remove.
+
+**The two defect signals never auto-heal.** `divergent SAME ledger` means one
+of two parsers misread that ledger; `CLOSED vs LIVE conflict` means something
+closed a holding the network still has, at a ledger no honest version can
+supersede. Both are reported and left alone: adopting a side, or inventing a
+version, would bury the only evidence. Expect both at zero on the first run —
+`CLOSED vs LIVE conflict` is structurally unreachable until something has
+stamped a closure, so it is the alarm for the reconciliation runs below, where
+the closures under test are the seed's own previous output or the live
+writer's.
+
 **The seed's ordering contract (do not reorder):**
 
 1. Deploy the lifecycle writer (the indexer that stamps `closed_at_ledger`)
