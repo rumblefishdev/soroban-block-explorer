@@ -64,11 +64,11 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::BackfillError;
-use crate::network_state::{self, NetworkState};
 use crate::sink::Sink;
-use crate::snapshot_archive::PUBNET_ARCHIVE;
-use crate::snapshot_report::Report;
-use crate::snapshot_verdict;
+use crate::snapshot::archive::PUBNET_ARCHIVE;
+use crate::snapshot::network_state::{self, NetworkState};
+use crate::snapshot::report::Report;
+use crate::snapshot::verdict;
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow, BalanceRow};
@@ -124,7 +124,7 @@ pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
 /// gap.
 async fn stream_our_rows(
     sink: &Sink,
-    mut f: impl FnMut(&snapshot_verdict::OurRow),
+    mut f: impl FnMut(&verdict::OurRow),
 ) -> Result<u64, BackfillError> {
     let mut seen = 0u64;
     for (i, (from, to)) in key_slices().enumerate() {
@@ -133,7 +133,7 @@ async fn stream_our_rows(
         let mut cursor = sink
             .client()
             .query(&slice_sql(from, to))
-            .fetch::<snapshot_verdict::OurRow>()?;
+            .fetch::<verdict::OurRow>()?;
         while let Some(row) = cursor.next().await? {
             seen += 1;
             f(&row);
@@ -151,7 +151,7 @@ async fn stream_our_rows(
 }
 
 /// The per-slice read. Its SELECT list IS the field order of
-/// [`snapshot_verdict::OurRow`] — a mismatch would silently misclassify every row
+/// [`verdict::OurRow`] — a mismatch would silently misclassify every row
 /// rather than fail.
 fn slice_sql(from: i128, to: i128) -> String {
     // The aggregates are aliased INSIDE a subquery and renamed outside. Aliasing
@@ -216,20 +216,20 @@ async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillEr
 /// `>= checkpoint` guard, so the drift is only rows newly LEFT ALONE, never a
 /// different correction.)
 fn fold_our_row(
-    row: &snapshot_verdict::OurRow,
-    verdict: snapshot_verdict::Verdict,
+    row: &verdict::OurRow,
+    verdict: verdict::Verdict,
     net: Option<network_state::NetHolding>,
     checkpoint: u32,
     out: &mut Corrections,
 ) {
-    use snapshot_verdict::Verdict as V;
+    use verdict::Verdict as V;
     if verdict == V::Ghost {
         out.ghosts.push(format!(
             "{}\t{}\t{}\t{}",
             row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
         ));
     }
-    let Some(c) = snapshot_verdict::correction(verdict, net.as_ref(), checkpoint) else {
+    let Some(c) = verdict::correction(verdict, net.as_ref(), checkpoint) else {
         return;
     };
     out.balances.push(BalanceRow {

@@ -3,7 +3,7 @@
 //! Everything in this module is about GETTING the bytes and turning them into
 //! [`SnapshotRecord`]s. Nothing here knows what a trustline is, what our
 //! tables look like, or which record wins when a key appears twice; that is
-//! [`crate::network_state`]'s job.
+//! [`crate::snapshot::network_state`]'s job.
 //!
 //! ## Shape of the data
 //!
@@ -291,7 +291,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network_state::NetworkState;
+    use crate::snapshot::network_state::NetworkState;
 
     /// The manifest's `currentLedger` must sit on the checkpoint lattice.
     /// Accepting an off-lattice value would mean decoding a bucket list that

@@ -3,7 +3,7 @@
 //!
 //! One home for the analysis, separate from the command that renders it: the
 //! numbers are computed from the shared
-//! [`snapshot_verdict::verdict`] rule, and any consumer that folds our rows through
+//! [`verdict::verdict`] rule, and any consumer that folds our rows through
 //! that rule can produce the identical report.
 
 use std::path::Path;
@@ -11,8 +11,8 @@ use std::path::Path;
 use std::fmt::Write as _;
 
 use crate::error::BackfillError;
-use crate::network_state::{self, NetworkState};
-use crate::snapshot_verdict;
+use crate::snapshot::network_state::{self, NetworkState};
+use crate::snapshot::verdict;
 
 /// Our indexer's ledger floor. The single most important discriminator for the
 /// `missing` bucket: an entry whose own `lastModifiedLedgerSeq` is below this
@@ -171,8 +171,8 @@ pub(crate) struct Tally {
 impl Tally {
     /// Count one verdict. The seed acts on the same enum, so the report and the
     /// write cannot describe different populations.
-    pub(crate) fn observe(&mut self, v: snapshot_verdict::Verdict, amount: i128) {
-        use snapshot_verdict::Verdict as V;
+    pub(crate) fn observe(&mut self, v: verdict::Verdict, amount: i128) {
+        use verdict::Verdict as V;
         match v {
             V::AlreadyClosed => self.already_closed += 1,
             V::ClosedButLive => self.closed_but_live += 1,
@@ -297,9 +297,9 @@ impl Report {
     /// twice.
     pub(crate) fn observe(
         &mut self,
-        row: &snapshot_verdict::OurRow,
+        row: &verdict::OurRow,
         state: &mut NetworkState,
-    ) -> (snapshot_verdict::Verdict, Option<network_state::NetHolding>) {
+    ) -> (verdict::Verdict, Option<network_state::NetHolding>) {
         let line = || {
             format!(
                 "{}\t{}\t{}\t{}",
@@ -307,8 +307,8 @@ impl Report {
             )
         };
         let is_native = row.asset_id == db_clickhouse::persist::ids::NATIVE_ASSET_ID;
-        let net = snapshot_verdict::claim(state, row);
-        let v = snapshot_verdict::verdict(row, net.as_ref(), self.checkpoint);
+        let net = verdict::claim(state, row);
+        let v = verdict::verdict(row, net.as_ref(), self.checkpoint);
         let out = if is_native {
             &mut self.native
         } else {
@@ -319,7 +319,7 @@ impl Report {
         // it is the positive control — if the surrogate derivation were wrong
         // that bucket would be empty, so a non-empty sample of it is evidence
         // the whole comparison is keyed correctly.
-        use snapshot_verdict::Verdict as V;
+        use verdict::Verdict as V;
         let s = &mut self.samples;
         let bucket = match (v, is_native) {
             (V::Ghost, true) => Some(&mut s.ghost_native),

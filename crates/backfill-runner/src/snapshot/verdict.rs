@@ -7,7 +7,7 @@
 
 use db_clickhouse::persist::ids;
 
-use crate::network_state::{HoldingKey, NetHolding, NetworkState};
+use crate::snapshot::network_state::{HoldingKey, NetHolding, NetworkState};
 
 // ---------------------------------------------------------------------------
 // The verdict — ONE rule, counted by the report and acted on by the seed
@@ -370,7 +370,7 @@ mod tests {
     /// closure. Native and classic take different maps; both must claim.
     #[test]
     fn every_row_claims_its_entry_whatever_the_verdict() {
-        use crate::network_state::HoldingKey;
+        use crate::snapshot::network_state::HoldingKey;
 
         let mut state = NetworkState::default();
         // Two rows that end in OPPOSITE verdicts: a healthy classic trustline

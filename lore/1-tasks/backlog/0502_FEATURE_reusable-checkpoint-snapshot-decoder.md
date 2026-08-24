@@ -79,20 +79,20 @@ load order — never on a window boundary (the task 0492 defect).
 
 ## Built in 0463 already (extract, do not rebuild)
 
-Five modules under `crates/backfill-runner/src/`, split along the seam this
-task needs (2026-08-24):
+One module tree under `crates/backfill-runner/src/snapshot/`, split along the
+seam this task needs (2026-08-24):
 
-| module             | lines | concern                                             |
-| ------------------ | ----- | --------------------------------------------------- |
-| `snapshot_archive` | 393   | manifest, buckets, framed XDR, per-bucket SHA-256   |
-| `snapshot`         | 530   | classify + first-wins dedup into `SnapshotState`    |
-| `snapshot_verdict` | 297   | the ten-way comparison rule against one of our rows |
-| `snapshot_report`  | 432   | counters, samples, `summary.txt`                    |
-| `snapshot_seed`    | 555   | reads our `balances`, builds and writes corrections |
+| module          | lines | concern                                             |
+| --------------- | ----- | --------------------------------------------------- |
+| `archive`       | 415   | manifest, buckets, framed XDR, per-bucket SHA-256   |
+| `network_state` | 553   | classify + first-wins dedup into `NetworkState`     |
+| `verdict`       | 472   | the eleven-way comparison rule, plus what it writes |
+| `report`        | 433   | counters, samples, `summary.txt`                    |
+| `seed`          | 534   | reads our `balances`, builds and writes corrections |
 
-**`snapshot_archive` + `network_state` are what moves to the new crate** — the
-first knows nothing about our tables, the second knows nothing about
-comparison. `snapshot_verdict` / `report` / `seed` stay behind as
+**`archive` + `network_state` are what moves to the new crate** — the first
+knows nothing about our tables, the second knows nothing about comparison.
+`verdict` / `report` / `seed` stay behind as
 backfill-runner consumers. Measured: framed-XDR streaming at 13.5 MB peak on
 4.44 GB, first-wins dedup, four-way compare, seed.
 

@@ -179,9 +179,9 @@ the floor, and an entry that never changed since then has no row here to
 re-parse.
 
 **Clause 4 ("delete it once it has run") applies to the SUBCOMMAND, not to the
-decoder.** `snapshot_archive` (transport, format) and `network_state`
-(classification, first-wins dedup) underneath it are a reusable capability with
-two
+decoder.** `snapshot::archive` (transport, format) and
+`snapshot::network_state` (classification, first-wins dedup) underneath it are
+a reusable capability with two
 filed consumers — task 0499 re-derives this exact snapshot from the seed's
 `manifest.json` for the liquidity-pool merge, and task 0503 re-runs the
 comparison as a recurring correctness monitor. Task 0502 extracts it into its

@@ -11,17 +11,13 @@ mod contract_type_rebuild;
 mod dashboard;
 mod error;
 mod ingest;
-mod network_state;
 mod nft_reclassify;
 mod partition;
 mod repair_tier1;
 mod rpc_snapshot;
 mod run;
 mod sink;
-mod snapshot_archive;
-mod snapshot_report;
-mod snapshot_seed;
-mod snapshot_verdict;
+mod snapshot;
 mod status;
 mod sync;
 mod util;
@@ -361,7 +357,7 @@ async fn main() {
             );
         }
         Command::SnapshotSeed { artifacts, execute } => {
-            snapshot_seed::seed_command(&sink, &artifacts, execute)
+            snapshot::seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");
         }

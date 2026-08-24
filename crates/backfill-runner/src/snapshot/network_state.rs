@@ -1,10 +1,10 @@
 //! The network's state — records from the archive folded into DISTINCT live
 //! entries, keyed the way our own tables key them (task 0463, issue #377).
 //!
-//! [`crate::snapshot_archive`] gets the bytes; this module decides what they
+//! [`crate::snapshot::archive`] gets the bytes; this module decides what they
 //! MEAN — every record becomes a [`NetFact`] keyed the way `balances` keys
 //! it, folded into one [`NetworkState`] of [`NetHolding`]s.
-//! [`crate::snapshot_verdict`] then compares one of our rows against it.
+//! [`crate::snapshot::verdict`] then compares one of our rows against it.
 //!
 //! ## Why this exists
 //!
@@ -62,7 +62,7 @@
 use db_clickhouse::persist::ids;
 
 use crate::error::BackfillError;
-use crate::snapshot_archive::{
+use crate::snapshot::archive::{
     BucketList, PUBNET_ARCHIVE, SnapshotRecord, archive_client, fetch_bucket_list,
     stream_bucket_from_url,
 };
