@@ -629,6 +629,238 @@ reconciliation drops from three snapshot decodes to two.
 - Lore id collisions present ON DEVELOP (pre-existing, not from this branch):
   two `0496_*` tasks, two `0054_*` ADRs.
 
+### Dry-run on production 2026-08-24 — checkpoint 64,106,239, verified against chain
+
+Method, and the two dead ends it ran into, in
+[`notes/V-chain-audit-method.md`](notes/V-chain-audit-method.md).
+
+First full dry-run of `snapshot-seed` against production. 909 s, peak RSS
+4.37 GB, exit 0. Every number below is measured, and every chain check uses an
+INDEPENDENT implementation (SEP-23 StrKey + LedgerKey XDR + AccountEntry /
+TrustLineEntry decoders written from the spec in Python), so a shared
+misreading in our Rust cannot pass it.
+
+| what the seed would write                    | rows                                           |
+| -------------------------------------------- | ---------------------------------------------- |
+| `balances` corrections                       | 44,846,161                                     |
+| `account_entry_state` (signers + thresholds) | 10,891,935                                     |
+| `assets` stubs                               | 97,109                                         |
+| `accounts` stubs                             | **0** — every referenced holder already exists |
+
+**Unresolved references: 0 assets, 0 holders** (464 issuers, cosmetic). A new
+counter, added for this run, turns three silent `continue`s in the stub pass
+into a reported number and makes `--execute` refuse rather than write a balance
+whose JOIN finds nothing.
+
+#### The highest-stakes population is clean
+
+The class that cannot be caught by inspection is an INVENTED entity: a wrong
+amount on a real asset is visible to anyone who looks the asset up, an asset
+that does not exist on chain is not, because nobody knows to look for it.
+
+Structural audit over **every** row of the stub dump (no sampling):
+
+- 97,109 stubs, 97,109 distinct ids, 97,109 distinct identities — a bijection,
+  so no surrogate collision merged two assets into one row.
+- Every asset code is alphanumeric (width histogram peaks at 3-4 and 10-12,
+  the shape real Stellar codes have) or the documented `0x` hex fallback — 3 of
+  97,109 take that path.
+- Every issuer StrKey passes an independently computed CRC16.
+
+Chain audit of the rows the seed INSERTS as new live holdings — 1,000 sampled
+from `missing_classic`:
+
+|                                                |                 |
+| ---------------------------------------------- | --------------- |
+| present on chain                               | **1000 / 1000** |
+| identity echoed back unchanged (code + issuer) | **1000 / 1000** |
+| unchanged since our recorded ledger            | **1000 / 1000** |
+| balance matches to the stroop                  | **1000 / 1000** |
+
+Positive control (`agree_classic`) 200/200 present and frozen; `closure_classic`
+200/200 absent, so flipping the read filter resurrects nothing; native ghosts
+300/300 absent from chain (holder StrKeys resolved through `accounts`).
+
+17.8% of the missing rows carry amount 0 — live zero-balance trustlines, the
+exact class issue #377 reports.
+
+#### Defect found and fixed: the checkpoint guard sat in the wrong branch
+
+`NewerThanCheckpoint` was only reachable when the network held NO entry for the
+key. A row our writer touched after the snapshot was taken, but which the
+snapshot still lists as live, fell through to a comparison that cannot mean
+anything.
+
+Measured consequence: **1000 of 1000 sampled rows in BOTH `divergent
+ours-newer` buckets (11,994 classic + 3,772 native) were simply newer than the
+checkpoint.** The bucket an operator reads as "our parser and the network
+disagree" held no disagreement at all.
+
+The serious half is latent rather than visible: once the lifecycle writer is
+deployed — step 1 of the deployment order, before this seed runs by design — a
+trustline our writer CLOSES between the checkpoint and the run meets a snapshot
+that still calls it live, and is reported as `ClosedButLiveConflict`. That is
+one of the two defect signals, whose whole value is never firing on healthy
+data. It reads 0 today only because the writer is not deployed yet.
+
+Fixed by hoisting the `>= checkpoint` guard above both the closure branch and
+the live-entry match, with a test pinning all six combinations. **No correction
+changes**: every verdict the hoist can absorb was already report-only
+(`ClosedButLive` and `HealFromSnapshot` both require a snapshot ledger above the
+row's, which a post-checkpoint row makes impossible), so the measured correction
+counts stand.
+
+#### The same-ledger quarantine proved noisy — and the direction is one-way
+
+`DivergentSameLedger` (17,840 native) is the bucket held back pending evidence.
+ADR 0057 recorded `--heal-same-ledger` as the agreed direction "if the
+quarantine bucket proves noisy". Measured against chain, 1,000 sampled:
+
+- 997 comparable (3 churned, 0 gone, 0 equal)
+- **997 of 997: our amount is LOWER than the chain's. Zero exceptions.**
+- Differences cluster hard — 9,614 stroops on 415 accounts, 9,624 on 102,
+  77,268 on 73 — across only 249 distinct values.
+
+One-directional plus clustered is systematic, not random corruption: we are
+capturing an earlier point in a ledger the account changed more than once. The
+seed writes nothing for these, so it neither causes nor worsens them, but it
+also does not fix them — they stay wrong after the run.
+
+#### Classic ghosts belong to holders we hold no identity for
+
+Every other verdict bucket resolves 100% of its holders through `accounts`.
+`ghosts_classic` resolves **0 of 440**. Measured on one 1/64 key slice: 9 orphan
+holders in 111,879, so roughly **576 network-wide (0.008%)** — rows in
+`balances` whose holder has no `accounts` row and is not a contract either.
+
+Consequence for this run: the 1,941 classic ghosts cannot be chain-verified by
+us at all, because no source carries their StrKey — not `accounts`, and not the
+snapshot, which holds no `AccountEntry` for them live or dead. Their risk is
+bounded by the same fact: with no StrKey the account page cannot render them
+today, so zeroing changes nothing user-visible. Root cause is a separate
+question, and belongs with the orphan-holder population rather than with the
+seed.
+
+#### The fixture account, end to end
+
+`GDXWIA4V…` — five rows in `balances`, two rendered today:
+
+| asset | ours           | chain   | `lastModifiedLedgerSeq` |
+| ----- | -------------- | ------- | ----------------------- |
+| AQUA  | 0 @ 58,469,457 | PRESENT | 58,469,457              |
+| USDC  | 0 @ 58,469,453 | PRESENT | 58,469,453              |
+| SHX   | 0 @ 59,023,860 | PRESENT | 59,023,860              |
+
+Three live trustlines at zero, agreeing to the ledger.
+
+#### Correction to this task's own description: four signers, not five
+
+The chain's `AccountEntry` for the fixture carries **four** signers at weight 1
+and `masterWeight = 1`, thresholds 3/3/3. Total signing power 5, threshold 3 —
+so "a genuine 3-of-5" is right, but the fifth key is the account's OWN master
+key, which the ledger does not put in the signers list. Horizon synthesises it
+in; that is where "five ed25519 signers" came from.
+
+This is a UI constraint, not a wording nit. `signer_keys` holds four entries and
+`master_weight` is a separate column, which is correct per XDR — but a page that
+renders only the list shows **3-of-4** and reads as a real threshold rather than
+as missing data. `stage.rs` already carries that exact warning for the keyless
+case; the master key is the same failure through a different door.
+
+#### Thresholds above total weight are normal, not corrupt
+
+An audit assertion that every account must be able to sign flagged 50 of 5,000
+sampled states. Three verified against chain, byte-identical to ours
+(`1/1/255/255` with no signers, `0/1/1/1` with no signers, `1/10/10/10` with one
+weight-1 signer). These are the standard idioms for locking an account forever —
+a fixed-supply issuer proving it cannot issue more. The assertion was wrong;
+counted as an observation now.
+
+#### Native supply: resolved against the ledger header, not against a remembered figure
+
+Native `total_supply` moves DOWN by the ghosts' value, 45,345,267.65 XLM, and
+`holder_count` by 1,045,836. This task previously judged that number against a
+recollection ("our total minus the burn account matched the public circulating
+figure exactly"). Measured properly instead, against the value the validators
+sign — `total_coins` in the ledger header, read from RPC `getLedgers`:
+
+```
+total_coins                     105,443,902,087.35 XLM
+  minus the burn account         50,001,786,840.35 XLM   <- the published ~50B supply
+```
+
+The decomposition settles it:
+
+|                                                                                | XLM                |
+| ------------------------------------------------------------------------------ | ------------------ |
+| our native sum, pre-seed                                                       | 105,411,180,657.36 |
+| our native sum, post-seed                                                      | 105,365,835,389.71 |
+| gap to `total_coins`, pre-seed                                                 | 32,721,429.99      |
+| **gap to `total_coins`, post-seed**                                            | **78,066,697.64**  |
+| of which XLM in AMM pools (measured, `liquidity_pool_snapshots`, 52,619 pools) | 22,231,810.44      |
+| remainder — claimable balances + contract-held                                 | 55,834,887.20      |
+
+The gap is REQUIRED, not a defect: XLM sitting in AMM pool reserves and in
+claimable balances belongs to no `AccountEntry`, so the sum of account balances
+must fall below `total_coins` by exactly that much. The pre-seed gap of 32.7M is
+in fact too SMALL — it leaves only 10.5M for every claimable balance and
+contract-held XLM on the network, after 22.2M of AMM reserves are accounted for.
+The post-seed gap leaves 55.8M, which is the plausible figure for a network with
+years of airdrop claimable balances outstanding.
+
+So the seed moves native supply TOWARD the chain, and the earlier "exact match"
+was two errors cancelling: phantom XLM on merged accounts filling in for XLM
+correctly held outside accounts. Acceptance criterion satisfied — direction
+justified, magnitude decomposed, anchor independent.
+
+Left genuinely open: the remainder is inferred, not enumerated. The snapshot
+decoder already reads `ClaimableBalanceEntry` and `LiquidityPoolEntry` and
+discards them (77.9M unmodelled records); tallying the XLM in those two entry
+types would turn 55.8M from a plausible residual into a measured one. That
+belongs with 0503/0504, which own the discarded entry types.
+
+#### Confirming run — checkpoint 64,106,495, with the verdict fix
+
+Re-run four minutes later on a fresh checkpoint. The fix moved exactly what it
+should and nothing else:
+
+| bucket                                           | before    | after              |
+| ------------------------------------------------ | --------- | ------------------ |
+| `divergent ours-newer`, classic                  | 11,994    | **0**              |
+| `divergent ours-newer`, native                   | 3,772     | **0**              |
+| `newer than checkpoint`                          | 324 + 151 | 9,062 + 10,744     |
+| `divergent SAME ledger` (the real defect signal) | 17,840    | 17,739 — untouched |
+
+The bucket an operator reads as disagreement is now empty, because it never held
+disagreement; the genuine signal is unaffected, as it must be — those rows sit
+at a ledger below the checkpoint, where comparison is meaningful.
+
+Reproduced: 0 structural failures, 0 unresolved asset/holder references, 97,109
+asset stubs (identical count — the decode is deterministic), and a SECOND
+independent 1,000-row chain sample of `missing_classic` at 1000/1000 present,
+identity-matched, frozen and amount-exact. 2,000 samples across two runs, no
+defect.
+
+Also worth recording as a clean bill of health for the live writer: **0 of the
+19,278,325 missing trustlines have a `lastModifiedLedgerSeq` at or above our
+floor.** Every one predates our indexing window, so the gap is coverage, not a
+parser that drops trustlines — the discriminator rule from 0502/0503, returning
+the good answer.
+
+#### `--execute` needs an identity this dry-run does not have
+
+Established by reading the server's own settings, never by attempting a write:
+the laptop mTLS cert maps to ClickHouse user **`dev_read`**, whose profile sets
+`readonly = 1` (explicitly changed) and `max_execution_time = 30`. An INSERT is
+refused on the readonly setting before grants are consulted at all, and a
+44.8M-row insert would exceed the execution ceiling regardless.
+
+The dry-run is unaffected — it only reads, in 64 bounded slices. But the
+deployment order has an unwritten step between "review summary.txt" and
+"`--execute`": the seed must run under a write-capable identity, which is the
+same class of infrastructure action as the indexer deploy that precedes it.
+Worth settling before the run rather than discovering at the prompt.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five
