@@ -1,8 +1,8 @@
 //! Reporting and sampling for the snapshot comparison — the counters, the
 //! per-bucket sample dumps and the ledger-floor histogram.
 //!
-//! Split out of `snapshot_compare` so the analysis has one home regardless of
-//! which command renders it: the numbers are computed from the shared
+//! One home for the analysis, separate from the command that renders it: the
+//! numbers are computed from the shared
 //! [`snapshot::verdict`] rule, and any consumer that folds our rows through
 //! that rule can produce the identical report.
 
@@ -234,10 +234,6 @@ impl Tally {
             }
         }
         out
-    }
-
-    pub(crate) fn print(&self, label: &str, native: bool) {
-        print!("{}", self.render(label, native));
     }
 }
 

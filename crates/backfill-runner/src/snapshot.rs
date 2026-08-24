@@ -473,7 +473,7 @@ pub struct AccountDetail {
 /// The deduplicated snapshot, ready to compare against our tables.
 ///
 /// ONE fold of the bucket stream serves both consumers: the comparison
-/// (`snapshot_compare`) and the seed (`snapshot_seed`). They previously kept
+/// (`snapshot_report`) and the write (`snapshot_seed`). They previously kept
 /// separate state types with separate first-wins logic — two chances to
 /// disagree about what the network says. `with_details` is the only difference
 /// between the two passes.
@@ -730,7 +730,7 @@ fn classify(rec: &SnapshotRecord, with_detail: bool) -> Option<SnapItem> {
 pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
 
 /// One of our deduplicated `balances` rows, exactly the SELECT list of
-/// `snapshot_compare::slice_sql`. Shared by the compare and the seed so the
+/// `snapshot_seed::slice_sql`. Shared by the report and the write so the
 /// two consumers cannot drift into different column meanings.
 #[derive(Debug, Clone, Copy, clickhouse::Row, serde::Deserialize)]
 pub struct OurRow {

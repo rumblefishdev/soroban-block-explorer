@@ -575,6 +575,46 @@ that; pinning cargo-lambda itself is the obvious follow-up. The fix belongs on
 develop rather than this feature branch, since it blocks every Rust PR in the
 repo.
 
+### Decision 2026-08-21 — `snapshot-compare` folded into the seed's dry-run
+
+The owner's requirement, clarified: the completeness comparison is wanted
+**on demand only** — automatic runs are of no interest. That removed the one
+argument for a standalone read-only command (a binary with no write path,
+safe to schedule). What remained was the crate's own convention: one command
+with a dry-run, not two commands where one is the other's dry-run.
+
+The merge was gated on losing no analysis. A fresh-eyes agent enumerated
+every output of `compare_command` and traced where each is computed: the
+verdict rule, first-wins dedup and `report_state` already live in
+`snapshot.rs` and the seed already called them; compare-only code was ~340
+lines of counting and sampling around that engine, all computable from data
+the seed's dry-run holds at the same loop position.
+
+**Zero analytic outputs lost. The seed's dry-run GAINED four** it did not
+print before: the `report_state` distinct-entry table, the `agree` /
+`stale` / `already_closed` / `divergent_ours_newer` buckets, the
+classic-vs-native split on every counter, and the excluded-population
+counts. `summary.txt` is now the full report; the sample dumps land in
+`<artifacts>/dumps/`.
+
+Done in four reviewable steps, each compiling and testing on its own so a
+bisect cannot land on a broken commit:
+
+1. `snapshot::open_snapshot` — one opened pass, both consumers.
+2. `snapshot_report.rs` — the analysis gets its own module.
+3. `Report::observe` RETURNS the verdict it counted, so the seed classifies
+   each row exactly once and builds its correction from that same verdict.
+   The report and the write can no longer describe different populations.
+4. `snapshot-compare` retired to `.trash/`; `stream_our_rows` moved to its
+   only remaining consumer.
+
+Cost accepted: the report run is always the heavy one (~4.5 GB RSS, rows
+materialised). A `--report-only` flag was designed and dropped as YAGNI —
+it would save ~2 GB on a box that has it, at the price of a third mode.
+
+Net: 2 snapshot subcommands -> 1, and the mandatory post-re-parse
+reconciliation drops from three snapshot decodes to two.
+
 ### Open follow-ups spawned along the way
 
 - 0502 (reusable snapshot decoder — extract `snapshot.rs` from

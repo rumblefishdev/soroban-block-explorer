@@ -79,7 +79,7 @@ load order — never on a window boundary (the task 0492 defect).
 
 ## Built in 0463 already (extract, do not rebuild)
 
-`crates/backfill-runner/src/snapshot.rs` + `snapshot_compare.rs` +
+`crates/backfill-runner/src/snapshot.rs` + `snapshot_report.rs` +
 `snapshot_seed.rs` are the working implementation this task extracts from:
 framed-XDR streaming (13.5 MB peak on 4.44 GB, measured), first-wins dedup,
 four-way compare, seed. The decoder module moves to its own crate;
@@ -116,7 +116,7 @@ full-population pass, and it passed.
 - ~~Deleting `snapshot-verify`~~ — **DONE 2026-08-21**, ahead of the seed
   rather than after it. The snapshot outranks RPC as a source (content-hash
   verified + enumerable, vs per-key JSON taken on trust), so a permanent RPC
-  comparator earns nothing; `snapshot_compare.rs` lost `verify_command` and
+  comparator earns nothing; the compare module lost `verify_command` and
   `trustline_ledger_key` (186 lines). `rpc_snapshot.rs` STAYS — `bootstrap`
   and `balance-seed` are its real consumers. Standing decoder confidence is
   the ignored network test plus 0503's audit. Note this drops the pre-seed

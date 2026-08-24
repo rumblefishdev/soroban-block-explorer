@@ -18,7 +18,6 @@ mod rpc_snapshot;
 mod run;
 mod sink;
 mod snapshot;
-mod snapshot_compare;
 mod snapshot_report;
 mod snapshot_seed;
 mod status;
@@ -206,21 +205,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Step 3c — four-way comparison of `balances` against the snapshot:
-    /// missing / closure / anomaly / divergent / stale, reported separately for
-    /// classic trustlines and native holdings. Reads our side straight from
-    /// ClickHouse; no manual exports. READ-ONLY — writes nothing.
-    SnapshotCompare {
-        /// Write per-bucket sample TSVs here (closure/ghost/divergent/agree/
-        /// missing), for RPC spot-verification of every verdict.
-        #[arg(long)]
-        dump_dir: Option<PathBuf>,
-        /// Pin the snapshot to a `manifest.json`, so the report describes the
-        /// SAME checkpoint the seed will execute against.
-        #[arg(long)]
-        pinned_manifest: Option<PathBuf>,
-    },
-
     /// Step 3d — THE seed (ADR 0055): build every correction the comparison
     /// proved necessary. Reads our balances and dimension ids straight from
     /// ClickHouse — no manual exports. Default is a DRY-RUN that reads,
@@ -377,18 +361,6 @@ async fn main() {
                 "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
-        }
-        Command::SnapshotCompare {
-            dump_dir,
-            pinned_manifest,
-        } => {
-            snapshot_compare::compare_command(
-                &sink,
-                dump_dir.as_deref(),
-                pinned_manifest.as_deref(),
-            )
-            .await
-            .expect("snapshot compare failed — read-only, safe to re-run");
         }
         Command::SnapshotSeed {
             artifacts,

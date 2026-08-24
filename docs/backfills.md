@@ -358,17 +358,17 @@ hold, while the snapshot answers **"what does the network have that we do
 not?"** — the only question a change-stream can never answer (78.85% of chain
 history predates our ledger floor).
 
-Two subcommands, all read-only except the seed's explicit `--execute`.
+One subcommand, read-only except the seed's explicit `--execute`.
 There are NO manual exports: each command reads our side straight from
 ClickHouse through the same mTLS connection `--execute` inserts through, like
 every other corrective command in this crate. (The research-phase probes
 `snapshot-tally`/`snapshot-dedup`, the `snapshot-export-sql` helper and the
 hand-exported-TSV transport were removed in the 2026-08-20 review;
-`snapshot-compare` prints the distinct-entry report itself.)
+the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
+carried the same decode and the same verdict behind its own counting shell.)
 
 | Subcommand                                                          | What it does                                                                                                                                                                                                                        | Writes                                                                          |
 | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `snapshot-compare [--dump-dir <dir>]`                               | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with sample dumps and a ledger-floor histogram                                                                           | nothing                                                                         |
 | `snapshot-seed --artifacts <dir> [--pinned-manifest …] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; optional `--pinned-manifest` re-decodes a recorded snapshot (exact reproduction, e.g. the ADR 0056 LP merge) | `balances`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The seed's ordering contract (do not reorder):**
@@ -421,7 +421,7 @@ detectable tie. The arbiter is the network:
 
 1. After the re-parse, run the standing tie query (task 0503 carries it per
    table): keys with more than one distinct content at one version.
-2. Run `snapshot-compare` against a fresh checkpoint with a fresh export.
+2. Run `snapshot-seed` (dry-run) against a fresh checkpoint and read its report.
    Between-runs ties surface as `divergent SAME ledger` (live entities) and as
    closure/ghost corrections (dead ones).
 3. Run `snapshot-seed` (dry-run → review → `--execute`): dead-entity ties are

@@ -93,6 +93,93 @@ struct Corrections {
     account_stubs: Vec<AccountRow>,
 }
 
+/// Number of `holder_id` slices. 64 keeps each chunk near the ~760k groups
+/// measured for 1/64 of the key space — two orders under the server's limit.
+const KEY_SLICES: i128 = 64;
+
+/// Stream our deduplicated `balances` in `holder_id` slices, invoking `f` per
+/// row. Like every
+/// other corrective command in this crate, the tool reads its own inputs
+/// through `sink.client()`; there is no manual export step. (A hand-exported
+/// TSV transport existed during the research phase and was removed in the
+/// 2026-08-20 review: the binary holds the same connection for `--execute`
+/// inserts anyway, and a cursor error propagates loudly where the operator
+/// CLI's exit-0-on-server-error trap did not.)
+///
+/// Errors below [`snapshot::MIN_OUR_ROWS`] rows: a short read (wrong database,
+/// dropped slice) would silently report our own holdings as a phantom network
+/// gap.
+async fn stream_our_rows(
+    sink: &Sink,
+    mut f: impl FnMut(&snapshot::OurRow),
+) -> Result<u64, BackfillError> {
+    let mut seen = 0u64;
+    for (i, (from, to)) in key_slices().enumerate() {
+        // `argMax` collapses the ReplacingMergeTree duplicates the way a read
+        // must: prod tables carry unmerged parts, so a plain SELECT double-counts.
+        let mut cursor = sink
+            .client()
+            .query(&slice_sql(from, to))
+            .fetch::<snapshot::OurRow>()?;
+        while let Some(row) = cursor.next().await? {
+            seen += 1;
+            f(&row);
+        }
+        println!("    slice {:>2}/{KEY_SLICES} — {seen} rows so far", i + 1);
+    }
+    if seen < snapshot::MIN_OUR_ROWS {
+        return Err(BackfillError::Incomplete(format!(
+            "our balances read returned {seen} rows, expected at least {} — a short \
+             read reports our own holdings as a phantom network gap (wrong database?)",
+            snapshot::MIN_OUR_ROWS
+        )));
+    }
+    Ok(seen)
+}
+
+/// The per-slice read. Its SELECT list IS the field order of
+/// [`snapshot::OurRow`] — a mismatch would silently misclassify every row
+/// rather than fail.
+fn slice_sql(from: i128, to: i128) -> String {
+    // The aggregates are aliased INSIDE a subquery and renamed outside. Aliasing
+    // `max(last_updated_ledger) AS last_updated_ledger` directly shadows the
+    // column, so the next `argMax(..., last_updated_ledger)` binds the alias and
+    // ClickHouse rejects it: "Aggregate function max(...) is found inside
+    // another aggregate function" (ILLEGAL_AGGREGATION).
+    format!(
+        "SELECT holder_id, asset_id, amt AS amount, led AS last_updated_ledger, \
+                cls AS closed_at_ledger \
+         FROM ( \
+             SELECT holder_id, \
+                    asset_id, \
+                    argMax(amount, last_updated_ledger) AS amt, \
+                    max(last_updated_ledger) AS led, \
+                    argMax(closed_at_ledger, last_updated_ledger) AS cls \
+             FROM balances \
+             WHERE holder_id BETWEEN {from} AND {to} \
+               AND asset_id IN (SELECT id FROM assets WHERE asset_type IN (0, 1)) \
+               AND holder_id NOT IN (SELECT id FROM soroban_contracts) \
+             GROUP BY holder_id, asset_id \
+         )"
+    )
+}
+
+/// The slice boundaries, covering the i64 key space exactly once.
+fn key_slices() -> impl Iterator<Item = (i128, i128)> {
+    let lo = i128::from(i64::MIN);
+    let hi = i128::from(i64::MAX);
+    let step = (hi - lo + 1) / KEY_SLICES;
+    (0..KEY_SLICES).map(move |s| {
+        let from = lo + s * step;
+        let to = if s == KEY_SLICES - 1 {
+            hi
+        } else {
+            lo + (s + 1) * step - 1
+        };
+        (from, to)
+    })
+}
+
 /// Fetch the set of existing dimension ids straight from ClickHouse — the
 /// tool reads its own inputs, like every other corrective command here.
 async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillError> {
@@ -192,7 +279,7 @@ async fn build_corrections(
 
     // Pass 1: our rows → the report classifies, counts and samples; the verdict
     // it hands back drives the correction. One classification, two outputs.
-    let rows_read = crate::snapshot_compare::stream_our_rows(sink, |row| {
+    let rows_read = stream_our_rows(sink, |row| {
         let v = report.observe(row, state);
         fold_our_row(row, v, state, checkpoint, &mut out, ghost_log);
     })
@@ -393,7 +480,7 @@ pub async fn seed_command(
         .map_err(|e| BackfillError::Incomplete(format!("write ghosts: {e}")))?;
 
     // The summary IS the four-way comparison — the same eleven buckets per
-    // population that `snapshot-compare` renders, from the same `Report`, plus
+    // population the report renders, from one `Report`, plus
     // what this run would insert. An operator signs off on one document.
     report.write_dumps(&artifacts.join("dumps"))?;
     let summary = format!(

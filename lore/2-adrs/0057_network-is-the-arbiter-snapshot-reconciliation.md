@@ -57,8 +57,9 @@ Concretely:
    snapshot's checkpoint, meaning "true at or before". Never a window
    boundary, never a synthetic stamp (the task 0492 defect).
 2. **After any historical re-parse** the reconciliation is MANDATORY: the
-   same-version tie query (0503), then `snapshot-compare`, then
-   `snapshot-seed`. Dead-entity divergence is repaired outright at the
+   same-version tie query (0503), then `snapshot-seed` — its dry-run IS the
+   four-way comparison, reviewed before `--execute`. Dead-entity divergence
+   is repaired outright at the
    checkpoint version, which deterministically supersedes both sides of any
    tie. Operational detail lives in `docs/backfills.md`.
 3. **Live-entity same-ledger divergence is quarantined, not auto-healed** —
