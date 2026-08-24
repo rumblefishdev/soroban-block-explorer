@@ -192,6 +192,26 @@ pub struct NetworkState {
     pub superseded: u64,
 }
 
+/// Keep the FIRST value seen for a key; count every later one as superseded.
+///
+/// The three maps have different key types, so this is generic — the same rule
+/// applied identically to accounts, trustlines and pool shares, which is the
+/// point: one place to read, one place to get it wrong.
+fn first_wins<K: std::hash::Hash + Eq>(
+    map: &mut std::collections::HashMap<K, NetHolding>,
+    key: K,
+    value: NetHolding,
+    superseded: &mut u64,
+) {
+    use std::collections::hash_map::Entry;
+    match map.entry(key) {
+        Entry::Vacant(slot) => {
+            slot.insert(value);
+        }
+        Entry::Occupied(_) => *superseded += 1,
+    }
+}
+
 impl NetworkState {
     /// Insert under FIRST-WINS: the bucket list is ordered newest-first, so the
     /// first record seen for a key is the live state and every later one is
@@ -199,17 +219,6 @@ impl NetworkState {
     /// `LiveEntry` further down — that is exactly the resurrection bug this
     /// whole effort is about, in the source format.
     fn absorb(&mut self, item: NetFact) {
-        use std::collections::hash_map::Entry;
-        macro_rules! first_wins {
-            ($map:expr, $k:expr, $v:expr) => {
-                match $map.entry($k) {
-                    Entry::Vacant(slot) => {
-                        slot.insert($v);
-                    }
-                    Entry::Occupied(_) => self.superseded += 1,
-                }
-            };
-        }
         match item {
             NetFact::Account {
                 holder_id,
@@ -224,15 +233,22 @@ impl NetworkState {
                 {
                     self.account_details.insert(holder_id, *d);
                 }
-                first_wins!(self.accounts, holder_id, entry)
+                first_wins(&mut self.accounts, holder_id, entry, &mut self.superseded);
             }
-            NetFact::Trustline { key, entry } => first_wins!(self.trustlines, key, entry),
+            NetFact::Trustline { key, entry } => {
+                first_wins(&mut self.trustlines, key, entry, &mut self.superseded);
+            }
             NetFact::PoolShare {
                 holder_id,
                 pool_id,
                 entry,
             } => {
-                first_wins!(self.pool_shares, (holder_id, pool_id), entry)
+                first_wins(
+                    &mut self.pool_shares,
+                    (holder_id, pool_id),
+                    entry,
+                    &mut self.superseded,
+                );
             }
         }
     }
