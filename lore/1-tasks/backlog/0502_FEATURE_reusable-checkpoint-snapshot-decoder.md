@@ -82,8 +82,8 @@ load order — never on a window boundary (the task 0492 defect).
 `crates/backfill-runner/src/snapshot.rs` + `snapshot_compare.rs` +
 `snapshot_seed.rs` are the working implementation this task extracts from:
 framed-XDR streaming (13.5 MB peak on 4.44 GB, measured), first-wins dedup,
-four-way compare, RPC verifier, seed. The decoder module moves to its own
-crate; compare/seed stay behind as backfill-runner consumers.
+four-way compare, seed. The decoder module moves to its own crate;
+compare/seed stay behind as backfill-runner consumers.
 
 ## The window discriminator — carry it into the tool's contract
 
@@ -113,14 +113,16 @@ full-population pass, and it passed.
   better (complete, verified transport, real-ledger versions, no synthetic
   watermarks). Retire ONLY after the seed verifies on prod, as its own
   change — it is live backfill-flow behaviour, not a spent one-shot.
-- **Deleting `snapshot-verify`** (decided 2026-08-20, over-engineering
-  review): the RPC spot-check is not a check of the network — the snapshot
-  outranks RPC as a source (hash-verified + enumerable vs per-key JSON on
-  trust). It exists as a one-time independent oracle over the snapshot
-  decoder for the 0463 production seed. Once that seed verifies on prod
-  (satisfying 0463's "cross-check RPC regardless of result" AC), the command
-  and its `trustline_ledger_key` helper come out; standing decoder confidence
-  is the ignored network test plus 0503's recurring audit.
+- ~~Deleting `snapshot-verify`~~ — **DONE 2026-08-21**, ahead of the seed
+  rather than after it. The snapshot outranks RPC as a source (content-hash
+  verified + enumerable, vs per-key JSON taken on trust), so a permanent RPC
+  comparator earns nothing; `snapshot_compare.rs` lost `verify_command` and
+  `trustline_ledger_key` (186 lines). `rpc_snapshot.rs` STAYS — `bootstrap`
+  and `balance-seed` are its real consumers. Standing decoder confidence is
+  the ignored network test plus 0503's audit. Note this drops the pre-seed
+  independent oracle: 0463's "cross-check RPC regardless of result" AC is
+  superseded and its post-seed verification now rests on coverage
+  measurement + the 200-account probe.
 
 ## Acceptance criteria
 

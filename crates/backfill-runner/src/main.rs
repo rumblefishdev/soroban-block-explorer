@@ -220,20 +220,6 @@ enum Command {
         pinned_manifest: Option<PathBuf>,
     },
 
-    /// Verify sampled comparison verdicts against Soroban RPC (raw XDR — the
-    /// arbiter). Input: a dump file from `snapshot-compare --dump-dir`, as-is.
-    /// Absence from the response means the entry does not exist. Requires
-    /// `--soroban-rpc-url`. READ-ONLY.
-    SnapshotVerify {
-        #[arg(long)]
-        samples: PathBuf,
-        /// The checkpoint the verdicts were judged at. RPC answers about state
-        /// NOW; without this the check cannot distinguish "already gone at the
-        /// checkpoint" from "closed since", and proves far less than it looks.
-        #[arg(long)]
-        checkpoint: Option<u32>,
-    },
-
     /// Step 3d — THE seed (ADR 0055): build every correction the comparison
     /// proved necessary. Reads our balances and dimension ids straight from
     /// ClickHouse — no manual exports. Default is a DRY-RUN that reads,
@@ -402,18 +388,6 @@ async fn main() {
             )
             .await
             .expect("snapshot compare failed — read-only, safe to re-run");
-        }
-        Command::SnapshotVerify {
-            samples,
-            checkpoint,
-        } => {
-            let rpc = cli
-                .soroban_rpc_url
-                .as_deref()
-                .expect("snapshot-verify requires --soroban-rpc-url");
-            snapshot_compare::verify_command(rpc, &samples, checkpoint)
-                .await
-                .expect("snapshot verify failed — read-only, safe to re-run");
         }
         Command::SnapshotSeed {
             artifacts,

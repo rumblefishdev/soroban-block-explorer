@@ -358,7 +358,7 @@ hold, while the snapshot answers **"what does the network have that we do
 not?"** — the only question a change-stream can never answer (78.85% of chain
 history predates our ledger floor).
 
-Three subcommands, all read-only except the seed's explicit `--execute`.
+Two subcommands, all read-only except the seed's explicit `--execute`.
 There are NO manual exports: each command reads our side straight from
 ClickHouse through the same mTLS connection `--execute` inserts through, like
 every other corrective command in this crate. (The research-phase probes
@@ -366,11 +366,10 @@ every other corrective command in this crate. (The research-phase probes
 hand-exported-TSV transport were removed in the 2026-08-20 review;
 `snapshot-compare` prints the distinct-entry report itself.)
 
-| Subcommand                                                                        | What it does                                                                                                                                                                                                                        | Writes                                                                      |
-| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `snapshot-compare [--dump-dir <dir>]`                                             | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with sample dumps and a ledger-floor histogram                                                                           | nothing                                                                     |
-| `snapshot-verify --samples <dump.tsv> --checkpoint N` (needs `--soroban-rpc-url`) | spot-check a `--dump-dir` file against live chain state via `getLedgerEntries` raw XDR — absence from the response means the entry does not exist                                                                                   | nothing                                                                     |
-| `snapshot-seed --artifacts <dir> [--pinned-manifest …] [--execute]`               | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; optional `--pinned-manifest` re-decodes a recorded snapshot (exact reproduction, e.g. the ADR 0056 LP merge) | `balances`, `account_signers`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                                          | What it does                                                                                                                                                                                                                        | Writes                                                                      |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `snapshot-compare [--dump-dir <dir>]`                               | four-way diff vs `balances`: missing / closure / ghost / divergent / stale, classic and native separately, with sample dumps and a ledger-floor histogram                                                                           | nothing                                                                     |
+| `snapshot-seed --artifacts <dir> [--pinned-manifest …] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; optional `--pinned-manifest` re-decodes a recorded snapshot (exact reproduction, e.g. the ADR 0056 LP merge) | `balances`, `account_signers`, `assets`, `accounts` — only with `--execute` |
 
 **The seed's ordering contract (do not reorder):**
 

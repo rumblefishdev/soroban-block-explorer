@@ -157,7 +157,7 @@ clauses 1–4 first, because the answer is usually `run --reindex` or a live fix
 
 ### Checkpoint-snapshot subcommands (task 0463) — read clause 4 carefully
 
-`snapshot-compare`, `snapshot-verify` and `snapshot-seed` (research probes
+`snapshot-compare` and `snapshot-seed` (research probes
 `snapshot-tally` / `snapshot-dedup`, the `snapshot-export-sql` helper and the
 hand-exported-TSV transport were removed in the 2026-08-20 review — compare
 prints the distinct-entry report itself, and both compare and seed read our

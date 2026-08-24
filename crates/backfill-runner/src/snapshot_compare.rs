@@ -60,11 +60,10 @@ const SAMPLE_CAP: usize = 1_000;
 
 /// First-N sample collector.
 struct Sample {
-    /// (surrogate line, verify-format key). The key is real StrKeys from the
-    /// snapshot itself, so checking a sample never routes through our own
+    /// (surrogate line, real-identity key). The key is StrKeys from the
+    /// snapshot itself, so reading a sample never routes through our own
     /// tables; `None` when detail mode is off or the snapshot carries no
-    /// identity for the key. Both land in ONE dump file per bucket, key first,
-    /// which `snapshot-verify` consumes directly.
+    /// identity for the key. Both land in ONE dump file per bucket, key first.
     rows: Vec<(String, Option<String>)>,
 }
 
@@ -94,8 +93,7 @@ impl Sample {
     }
     fn write(&self, dir: &Path, name: &str) -> Result<(), BackfillError> {
         let path = dir.join(name);
-        // One file per bucket: verify key first (what `snapshot-verify` parses;
-        // it ignores the trailing surrogate columns), surrogates after. Rows
+        // One file per bucket: real identity first, surrogates after. Rows
         // whose identity the snapshot does not carry (an asset with no live
         // trustline anywhere) are prefixed `unresolved` and counted rather than
         // silently dropped.
@@ -123,7 +121,7 @@ impl Sample {
 }
 
 /// Sample collectors for every bucket of the comparison, so each verdict can
-/// be spot-checked against RPC instead of trusted.
+/// be eyeballed against real chain identities instead of trusted.
 struct Samples {
     closure_classic: Sample,
     ghost_classic: Sample,
@@ -409,7 +407,7 @@ fn fold_row(
     }
 }
 
-/// The `snapshot-verify` input line for one row, from snapshot-carried
+/// The real-identity line for one row, from snapshot-carried
 /// identities. `None` when detail mode is off, or when the snapshot holds no
 /// identity for the key (an asset with no live trustline anywhere — those are
 /// counted as unresolved by the dump, never silently dropped).
@@ -618,191 +616,5 @@ pub async fn compare_command(
         "\n  total {:.1}s — nothing was written",
         started.elapsed().as_secs_f64()
     );
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// RPC spot-verification of the comparison's verdicts (task 0463 step 3e-early)
-// ---------------------------------------------------------------------------
-
-/// Build a `LedgerKey::Trustline` for a classic credit asset. The width
-/// (alphanum4 vs 12) is the CODE length's business, exactly as the XDR defines
-/// it — a 5-char code in an alphanum4 key would be a different ledger key and
-/// silently verify the wrong entry.
-fn trustline_ledger_key(holder: &str, code: &str, issuer: &str) -> Option<stellar_xdr::LedgerKey> {
-    use stellar_xdr::{
-        AccountId, AlphaNum4, AlphaNum12, AssetCode4, AssetCode12, LedgerKeyTrustLine, PublicKey,
-        TrustLineAsset, Uint256,
-    };
-    let holder_pk = stellar_strkey::ed25519::PublicKey::from_string(holder).ok()?;
-    let issuer_pk = stellar_strkey::ed25519::PublicKey::from_string(issuer).ok()?;
-    let issuer_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(issuer_pk.0)));
-    let bytes = code.as_bytes();
-    let asset = if bytes.len() <= 4 {
-        let mut c = [0u8; 4];
-        c[..bytes.len()].copy_from_slice(bytes);
-        TrustLineAsset::CreditAlphanum4(AlphaNum4 {
-            asset_code: AssetCode4(c),
-            issuer: issuer_id,
-        })
-    } else if bytes.len() <= 12 {
-        let mut c = [0u8; 12];
-        c[..bytes.len()].copy_from_slice(bytes);
-        TrustLineAsset::CreditAlphanum12(AlphaNum12 {
-            asset_code: AssetCode12(c),
-            issuer: issuer_id,
-        })
-    } else {
-        return None;
-    };
-    Some(stellar_xdr::LedgerKey::Trustline(LedgerKeyTrustLine {
-        account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(holder_pk.0))),
-        asset,
-    }))
-}
-
-/// Verify sampled verdicts against Soroban RPC — an independent ~100-line
-/// oracle over the snapshot decoder, for the one pre-`--execute` check.
-///
-/// Input: the dump files `snapshot-compare --dump-dir` writes, as-is. Each
-/// line starts `account<TAB>G…` or `trustline<TAB>G…<TAB>CODE<TAB>G-issuer`;
-/// trailing surrogate columns are ignored, and `unresolved` lines (identity
-/// not carried by the snapshot) are counted and skipped. Emits one line per
-/// key: `FOUND balance ledger` or `ABSENT`. **Absence from the response means
-/// the entry does not exist** — the deleted-account / removed-trustline test.
-pub async fn verify_command(
-    rpc_url: &str,
-    samples: &Path,
-    checkpoint: Option<u32>,
-) -> Result<(), BackfillError> {
-    use crate::rpc_snapshot::{RpcClient, account_ledger_key};
-
-    let body = std::fs::read_to_string(samples)
-        .map_err(|e| BackfillError::Incomplete(format!("read {}: {e}", samples.display())))?;
-    let mut keys = Vec::new();
-    let mut labels = Vec::new();
-    let mut n_unresolved = 0u64;
-    for (n, line) in body.lines().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let f: Vec<&str> = line.split('\t').collect();
-        let key = match f.as_slice() {
-            ["account", holder, ..] => account_ledger_key(holder),
-            ["trustline", holder, code, issuer, ..] => trustline_ledger_key(holder, code, issuer),
-            ["unresolved", ..] => {
-                n_unresolved += 1;
-                continue;
-            }
-            _ => {
-                return Err(BackfillError::Incomplete(format!(
-                    "line {n}: expected 'account<TAB>G…' or 'trustline<TAB>G…<TAB>CODE<TAB>G…' \
-                     (a snapshot-compare dump file)"
-                )));
-            }
-        };
-        match key {
-            Some(k) => {
-                keys.push(k);
-                labels.push(line.to_string());
-            }
-            None => println!("SKIP\t{line}\t(malformed strkey)"),
-        }
-    }
-    if n_unresolved > 0 {
-        println!("  {n_unresolved} unresolved-identity lines skipped");
-    }
-
-    let client = RpcClient::new(rpc_url)
-        .map_err(|e| BackfillError::Incomplete(format!("rpc client: {e}")))?;
-    let found = client
-        .get_ledger_entries(&keys)
-        .await
-        .map_err(|e| BackfillError::Incomplete(format!("getLedgerEntries: {e}")))?;
-
-    // The RPC answers with the entries that EXIST; absence is the signal.
-    // Match responses back to requests by re-deriving each entry's key.
-    let mut by_key: std::collections::HashMap<Vec<u8>, (i64, u32)> =
-        std::collections::HashMap::new();
-    for rec in &found {
-        use stellar_xdr::{LedgerEntryData as D, Limits, WriteXdr};
-        let (bal, key) = match &rec.data {
-            D::Account(a) => (
-                a.balance,
-                stellar_xdr::LedgerKey::Account(stellar_xdr::LedgerKeyAccount {
-                    account_id: a.account_id.clone(),
-                }),
-            ),
-            D::Trustline(t) => (
-                t.balance,
-                stellar_xdr::LedgerKey::Trustline(stellar_xdr::LedgerKeyTrustLine {
-                    account_id: t.account_id.clone(),
-                    asset: t.asset.clone(),
-                }),
-            ),
-            _ => continue,
-        };
-        if let Ok(bytes) = key.to_xdr(Limits::none()) {
-            by_key.insert(bytes, (bal, rec.last_modified_ledger));
-        }
-    }
-
-    let mut n_found = 0u64;
-    let mut n_absent = 0u64;
-    // The point-in-time argument, which the earlier check discarded even though
-    // the data was already in hand:
-    //
-    //   an entry present NOW whose `lastModifiedLedgerSeq` is <= the checkpoint
-    //   existed CONTINUOUSLY and unchanged over that span — a delete-and-recreate
-    //   would have bumped the ledger.
-    //
-    // So FOUND with `L <= checkpoint` is proof about the checkpoint, not merely
-    // about now. FOUND with `L > checkpoint` proves nothing either way.
-    let mut n_proven = 0u64;
-    let mut n_changed_since = 0u64;
-    for (k, label) in keys.iter().zip(&labels) {
-        use stellar_xdr::{Limits, WriteXdr};
-        let bytes = k
-            .to_xdr(Limits::none())
-            .map_err(|e| BackfillError::Incomplete(format!("key xdr: {e}")))?;
-        match by_key.get(&bytes) {
-            Some((bal, led)) => {
-                n_found += 1;
-                match checkpoint {
-                    Some(cp) if *led <= cp => {
-                        n_proven += 1;
-                        println!(
-                            "FOUND\tPROVEN-AT-CHECKPOINT\t{label}\tbalance={bal}\tledger={led}"
-                        );
-                    }
-                    Some(_) => {
-                        n_changed_since += 1;
-                        println!("FOUND\tCHANGED-SINCE\t{label}\tbalance={bal}\tledger={led}");
-                    }
-                    None => println!("FOUND\t{label}\tbalance={bal}\tledger={led}"),
-                }
-            }
-            None => {
-                n_absent += 1;
-                println!("ABSENT\t{label}");
-            }
-        }
-    }
-    println!(
-        "\nverified {} keys: {n_found} FOUND, {n_absent} ABSENT",
-        keys.len()
-    );
-    if let Some(cp) = checkpoint {
-        println!(
-            "  against checkpoint {cp}: {n_proven} proven unchanged since, \
-             {n_changed_since} changed after it (those prove nothing either way)"
-        );
-    } else {
-        println!(
-            "  NOTE: no --checkpoint given, so every result is about state NOW, not about \
-             the checkpoint the verdicts were judged at. 'ABSENT now' is equally consistent \
-             with a correct verdict and with an entry closed after the checkpoint."
-        );
-    }
     Ok(())
 }

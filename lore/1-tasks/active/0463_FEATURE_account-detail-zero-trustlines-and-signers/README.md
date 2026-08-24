@@ -138,8 +138,10 @@ the ADR.
    carries **`AccountEntry` too**, so signers get their history from the same
    artifact. Version on each entry's own `lastModifiedLedgerSeq`, never on a
    window boundary (task 0492). **Coverage must be measured afterwards and
-   cross-checked against the RPC route regardless of the result** — a standing
-   requirement, not a nicety.
+   cross-checked against an independent source regardless of the result** — a
+   standing requirement, not a nicety. (Originally the RPC route; that
+   comparator was deleted 2026-08-21, so the check is now the 200-account
+   probe against the chain plus the aggregate deltas.)
 4. **Flip the read filter + production verification** — only after the seed
    verifies. This is where **native** becomes visible too (239,087 holders):
    under `closed_at_ledger = 0` it needs no exemption of its own. A standalone
@@ -179,8 +181,6 @@ Everything below is measured on production data and RPC-verified, not estimated.
      missing / closure / ghost (ours >0, network gone) / divergent / stale,
      classic and native separately, with stride samples and a below/above-floor
      histogram of the missing bucket.
-   - `snapshot-verify` — spot-check any sample against Soroban RPC raw XDR
-     (`getLedgerEntries`); absence from the response = entry does not exist.
    - `snapshot-seed` — builds ALL corrections; dry-run writes artifacts only
      (`manifest.json`, `summary.txt`, `ghosts.tsv`), `--execute` inserts.
 
@@ -224,7 +224,7 @@ balances, never trustlines — so native measures complete while classic misses
 3. **`snapshot-seed --execute`** against a checkpoint taken AFTER the deploy.
    Reversed, every removal in the gap outversions its seed closure and
    resurrects the ghost.
-4. Coverage measurement + RPC cross-check (standing requirement), the
+4. Coverage measurement + independent cross-check (standing requirement), the
    200-account probe as a REPEATABLE check.
 5. Only then: flip the read filter, ship signers API/DTO/UI (explicit
    "not indexed" state until then), regenerate API types, update docs.
@@ -471,18 +471,19 @@ and EXECUTED:
 - **`--execute` now HARD-ERRORS without `--pinned-manifest`** (was a
   warning) — closes the audit finding that execute could decode a different
   snapshot than the dry-run reviewed.
-- **RPC verification (`snapshot-verify`) KEPT for exactly one job, then
-  dies**: snapshot outranks RPC as a source (verifiable + enumerable vs
-  per-key JSON on trust), so the command is not a check of the network — it
-  is an independent ~100-line oracle over our ~1,500-line decoder, for the
-  one production seed run the standing AC demands. Its deletion after the
-  seed verifies on prod is RECORDED in 0502 ("Also fold in").
+- **RPC verification (`snapshot-verify`) DELETED 2026-08-21** — recorded in 0502. The snapshot outranks RPC as a source (content-hash verified +
+  enumerable, vs per-key JSON on trust), so a permanent RPC comparator earns
+  nothing. It had done its one job already: 260/260 samples and the 100/100
+  ghost check that flipped ghosts from "report only" to "zero and report".
+  `rpc_snapshot.rs` stays — `bootstrap` and `balance-seed` use it. This
+  supersedes the standing "cross-check RPC regardless of result" AC; post-seed
+  verification now rests on coverage measurement + the 200-account probe.
 - Fold tests for the four sibling state writers STAY in this branch (owner's
   call — they answer the audited hazard even though 0503 is their home).
 - Small trims EXECUTED same day: `Stale` verdict moved to the no-op arm
   (verdict rule guarantees equal amounts, the write-arm equality guard was
   dead), ONE dump file per bucket (verify key first, surrogates after;
-  `snapshot-verify` consumes it as-is and skips `unresolved` lines), one
+  the dump is self-describing), one
   shared `MIN_OUR_ROWS` 40M floor, seed reuses `build_state` instead of its
   own decode loop.
 - **Seed disk cost MEASURED, a non-issue**: `balances` today is 78.2M rows =
@@ -510,7 +511,7 @@ owner's call, explicitly preferring the crate's dry-run-as-sanity-check
 model over frozen-input machinery; the dry-run/execute drift is absorbed by
 the `>= checkpoint` guard (churned rows → NewerThanCheckpoint → left alone),
 so the drift is only rows newly skipped, never a different correction — and
-the post-seed verification (coverage, RPC cross-check, 200-account probe)
+the post-seed verification (coverage, 200-account probe, aggregate deltas)
 measures the OUTCOME against the network anyway, which is the real net.
 
 **Follow-up same day: the `--execute` pin demoted to optional.** The hard
@@ -598,7 +599,9 @@ repo.
 - [ ] An account with no signers row renders an explicit "not indexed", never
       an empty list that reads as "not multisig"
 - [ ] Seed coverage measured for BOTH trustlines and accounts, and
-      cross-checked against the RPC route regardless of the measured result
+      cross-checked against an independent source regardless of the measured
+      result (the 200-account chain probe; the RPC comparator was deleted
+      2026-08-21 — see 0502)
 - [ ] `total_supply` and `holder_count` move **only in the direction the
       network justifies**, spot-verified against RPC for at least one asset.
       (Rewritten 2026-08-18: the original criterion said "unchanged", which a
