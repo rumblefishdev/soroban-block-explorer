@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use std::fmt::Write as _;
+
 use crate::error::BackfillError;
 use crate::snapshot::{self, SnapshotState};
 
@@ -187,54 +189,55 @@ impl Tally {
         }
     }
 
-    pub(crate) fn print(&self, label: &str, native: bool) {
-        println!("\n  {label}");
-        println!(
-            "    missing (network has, we do not)   {:>12}",
-            self.missing
-        );
-        println!(
-            "    closure (we hold 0, network gone)  {:>12}",
-            self.closure
-        );
-        println!("    GHOST   (we hold >0, network gone) {:>12}", self.ghost);
-        println!("    heal    (snapshot newer)           {:>12}", self.heal);
-        println!(
-            "    divergent (ours newer, kept)       {:>12}",
-            self.divergent_ours_newer
-        );
-        println!("    stale   (our ledger behind)        {:>12}", self.stale);
-        println!("    agree                              {:>12}", self.agree);
-        println!(
-            "    already marked closed              {:>12}",
-            self.already_closed
-        );
-        println!(
-            "    CLOSED BUT LIVE (we hide it)       {:>12}",
-            self.closed_but_live
-        );
-        println!(
-            "    divergent SAME ledger (defect?)    {:>12}",
-            self.divergent_same_ledger
-        );
-        println!(
-            "    newer than checkpoint (left alone) {:>12}",
-            self.newer_than_checkpoint
-        );
+    /// The eleven buckets as text. They sum to the rows read — a completeness
+    /// invariant, so a row cannot vanish from the report unnoticed.
+    pub(crate) fn render(&self, label: &str, native: bool) -> String {
+        let mut out = format!("\n  {label}\n");
+        let rows = [
+            ("missing (network has, we do not)  ", self.missing),
+            ("closure (we hold 0, network gone) ", self.closure),
+            ("GHOST   (we hold >0, network gone)", self.ghost),
+            ("heal    (snapshot newer)          ", self.heal),
+            (
+                "divergent (ours newer, kept)      ",
+                self.divergent_ours_newer,
+            ),
+            ("stale   (our ledger behind)       ", self.stale),
+            ("agree                             ", self.agree),
+            ("already marked closed             ", self.already_closed),
+            ("CLOSED BUT LIVE (re-opened)       ", self.closed_but_live),
+            (
+                "divergent SAME ledger (defect?)   ",
+                self.divergent_same_ledger,
+            ),
+            (
+                "newer than checkpoint (left alone)",
+                self.newer_than_checkpoint,
+            ),
+        ];
+        for (label, n) in rows {
+            let _ = writeln!(out, "    {label} {n:>12}");
+        }
         if self.ghost > 0 {
             // Only native sums to a meaningful unit. Summing classic amounts
             // across different assets is a unit-less number — an early run
             // printed 796 billion "XLM" that way.
             if native {
-                println!(
+                let _ = writeln!(
+                    out,
                     "    value behind the ghosts            {:>12} stroops ({:.7} XLM)",
                     self.ghost_stroops,
                     self.ghost_stroops as f64 / 1e7
                 );
             } else {
-                println!("    (classic ghost amounts are per-asset units — see the dump)");
+                out.push_str("    (classic ghost amounts are per-asset units — see ghosts.tsv)\n");
             }
         }
+        out
+    }
+
+    pub(crate) fn print(&self, label: &str, native: bool) {
+        print!("{}", self.render(label, native));
     }
 }
 
@@ -253,5 +256,180 @@ pub(crate) fn key_line(
     } else {
         let (code, issuer) = state.asset_registry.get(&row.asset_id)?;
         Some(format!("trustline\t{holder}\t{code}\t{issuer}"))
+    }
+}
+
+/// The whole analysis of one comparison pass: per-population counters, the
+/// sample dumps and the ledger-floor histogram.
+///
+/// Owned by whoever renders it. [`Report::observe`] RETURNS the verdict it
+/// counted, so a consumer that also acts on the verdict (the seed, building
+/// corrections) computes it exactly once — the report and the write can never
+/// describe different populations.
+pub(crate) struct Report {
+    pub(crate) classic: Tally,
+    pub(crate) native: Tally,
+    samples: Samples,
+    native_asset_id: i64,
+}
+
+impl Report {
+    pub(crate) fn new(checkpoint: u32) -> Self {
+        Self {
+            classic: Tally::default(),
+            native: Tally::default(),
+            samples: Samples::new(checkpoint),
+            native_asset_id: db_clickhouse::persist::ids::NATIVE_ASSET_ID,
+        }
+    }
+
+    /// Classify one of our rows, count it, sample it — and hand the verdict
+    /// back to the caller.
+    pub(crate) fn observe(
+        &mut self,
+        row: &snapshot::OurRow,
+        state: &mut SnapshotState,
+    ) -> snapshot::Verdict {
+        let line = || {
+            format!(
+                "{}\t{}\t{}\t{}",
+                row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
+            )
+        };
+        let is_native = row.asset_id == self.native_asset_id;
+        let v = snapshot::verdict(
+            row,
+            snapshot::snap_entry_for(state, row),
+            self.samples.checkpoint,
+        );
+        let out = if is_native {
+            &mut self.native
+        } else {
+            &mut self.classic
+        };
+        out.observe(v, row.amount);
+        // Real identities for the dump, straight from the snapshot (detail mode
+        // only). This is what breaks the circularity the audit called out:
+        // reversing our surrogates through our own tables meant auditing the
+        // tables with themselves.
+        let key = key_line(state, row, is_native);
+        // Sample the buckets a human has to adjudicate. `Agree` is sampled too:
+        // it is the positive control — if the surrogate derivation were wrong
+        // that bucket would be empty, so a non-empty sample of it is evidence
+        // the whole comparison is keyed correctly.
+        let s = &mut self.samples;
+        match (v, is_native) {
+            (snapshot::Verdict::Ghost, true) => s.ghost_native.offer(line, || key),
+            (snapshot::Verdict::Ghost, false) => s.ghost_classic.offer(line, || key),
+            (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, true) => {
+                s.divergent_native.offer(line, || key)
+            }
+            (
+                snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer,
+                false,
+            ) => s.divergent_classic.offer(line, || key),
+            (snapshot::Verdict::ClosedButLive, _) => s.closed_but_live.offer(line, || key),
+            (snapshot::Verdict::DivergentSameLedger, _) => {
+                s.divergent_same_ledger.offer(line, || key)
+            }
+            (snapshot::Verdict::Closure, false) => s.closure_classic.offer(line, || key),
+            (snapshot::Verdict::Agree, false) => s.agree_classic.offer(line, || key),
+            _ => {}
+        }
+        v
+    }
+
+    /// One live snapshot trustline nothing on our side ever touched — the blind
+    /// spot: an entry we never ingested, invisible to any query over our own
+    /// data. Counted, bucketed by the ledger floor, and sampled.
+    pub(crate) fn observe_missing_trustline(
+        &mut self,
+        key: &snapshot::HoldingKey,
+        entry: &snapshot::SnapEntry,
+        state: &SnapshotState,
+    ) {
+        self.classic.missing += 1;
+        // The discriminator: below the floor we cannot have a row (dormant
+        // since before our history starts — expected). Above it, someone
+        // dropped a change we should have seen — a defect to chase.
+        if entry.ledger < LEDGER_FLOOR {
+            self.samples.missing_below_floor += 1;
+        } else {
+            self.samples.missing_above_floor += 1;
+            *self
+                .samples
+                .missing_above_by_2m
+                .entry(entry.ledger / 2_000_000 * 2_000_000)
+                .or_default() += 1;
+        }
+        // First-N is NOT deterministic here: the caller iterates a HashMap whose
+        // hasher is seeded per process, so the sample differed on every run and
+        // could not be re-verified or compared before/after. Select on a
+        // function of the KEY instead — reproducible, and independent of any
+        // structure in the data.
+        const MISSING_SAMPLE_MODULUS: u64 = 16_384;
+        let row_for_key = snapshot::OurRow {
+            holder_id: key.holder_id,
+            asset_id: key.asset_id,
+            amount: 0,
+            last_updated_ledger: 0,
+            closed_at_ledger: 0,
+        };
+        self.samples.missing_classic.offer_if(
+            (key.holder_id ^ key.asset_id)
+                .unsigned_abs()
+                .is_multiple_of(MISSING_SAMPLE_MODULUS),
+            || {
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    key.holder_id, key.asset_id, entry.amount, entry.ledger
+                )
+            },
+            || key_line(state, &row_for_key, false),
+        );
+    }
+
+    /// One live snapshot ACCOUNT nothing on our side ever touched — native's
+    /// half of the blind spot.
+    pub(crate) fn observe_missing_account(&mut self) {
+        self.native.missing += 1;
+    }
+
+    /// The missing-bucket discriminator, rendered: below our floor is the
+    /// expected blind spot, above it is a defect signal to chase.
+    pub(crate) fn render_missing_histogram(&self) -> String {
+        use std::fmt::Write as _;
+        let s = &self.samples;
+        let mut out = format!(
+            "\n  missing trustlines by the entry's own lastModifiedLedgerSeq:\n    \
+             below our floor {LEDGER_FLOOR}: {}\n    at/above the floor:      {}\n",
+            s.missing_below_floor, s.missing_above_floor
+        );
+        if !s.missing_above_by_2m.is_empty() {
+            out.push_str("    above-floor by 2M-ledger band:\n");
+            for (band, n) in &s.missing_above_by_2m {
+                let _ = writeln!(out, "      {band:>10}+  {n:>10}");
+            }
+        }
+        out
+    }
+
+    /// Write every per-bucket sample dump into `dir`.
+    pub(crate) fn write_dumps(&self, dir: &Path) -> Result<(), BackfillError> {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", dir.display())))?;
+        println!("\n  sample dumps (real identity, then holder_id\tasset_id\tamount\tledger):");
+        let s = &self.samples;
+        s.closure_classic.write(dir, "closure_classic.tsv")?;
+        s.ghost_classic.write(dir, "ghosts_classic.tsv")?;
+        s.ghost_native.write(dir, "ghosts_native.tsv")?;
+        s.divergent_classic.write(dir, "divergent_classic.tsv")?;
+        s.divergent_native.write(dir, "divergent_native.tsv")?;
+        s.agree_classic.write(dir, "agree_classic.tsv")?;
+        s.missing_classic.write(dir, "missing_classic.tsv")?;
+        s.closed_but_live.write(dir, "closed_but_live.tsv")?;
+        s.divergent_same_ledger
+            .write(dir, "divergent_same_ledger.tsv")?;
+        Ok(())
     }
 }

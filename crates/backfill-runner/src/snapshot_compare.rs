@@ -40,8 +40,8 @@ use std::path::Path;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
-use crate::snapshot::{self, SnapshotState};
-use crate::snapshot_report::{LEDGER_FLOOR, Samples, Tally, key_line};
+use crate::snapshot::{self};
+use crate::snapshot_report::Report;
 
 /// Number of `holder_id` slices. 64 keeps each chunk near the ~760k groups
 /// measured for 1/64 of the key space — two orders under the server's limit.
@@ -130,119 +130,6 @@ fn key_slices() -> impl Iterator<Item = (i128, i128)> {
     })
 }
 
-/// Route one row to the right entity and classify it.
-fn fold_row(
-    row: &snapshot::OurRow,
-    state: &mut SnapshotState,
-    native_asset_id: i64,
-    classic: &mut Tally,
-    native: &mut Tally,
-    samples: &mut Samples,
-) {
-    let line = || {
-        format!(
-            "{}\t{}\t{}\t{}",
-            row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
-        )
-    };
-    let is_native = row.asset_id == native_asset_id;
-    let out = if is_native { native } else { classic };
-    let v = snapshot::verdict(
-        row,
-        snapshot::snap_entry_for(state, row),
-        samples.checkpoint,
-    );
-    out.observe(v, row.amount);
-    // Real identities for the verify-format companion file, straight from the
-    // snapshot (populated only in detail mode). This is what breaks the
-    // circularity the audit called out: reversing our surrogates through our
-    // own tables meant auditing the tables with themselves.
-    let key = key_line(state, row, is_native);
-    // Sample the buckets a human has to adjudicate. `Agree` is sampled too: it
-    // is the positive control — if the surrogate derivation were wrong, this
-    // bucket would be empty, so a non-empty sample of it is evidence the whole
-    // comparison is keyed correctly.
-    match (v, is_native) {
-        (snapshot::Verdict::Ghost, true) => samples.ghost_native.offer(line, || key),
-        (snapshot::Verdict::Ghost, false) => samples.ghost_classic.offer(line, || key),
-        (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, true) => {
-            samples.divergent_native.offer(line, || key)
-        }
-        (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, false) => {
-            samples.divergent_classic.offer(line, || key)
-        }
-        (snapshot::Verdict::ClosedButLive, _) => samples.closed_but_live.offer(line, || key),
-        (snapshot::Verdict::DivergentSameLedger, _) => {
-            samples.divergent_same_ledger.offer(line, || key)
-        }
-        (snapshot::Verdict::Closure, false) => samples.closure_classic.offer(line, || key),
-        (snapshot::Verdict::Agree, false) => samples.agree_classic.offer(line, || key),
-        _ => {}
-    }
-}
-
-/// Whatever the snapshot holds LIVE and nothing on our side ever touched is the
-/// blind spot: entries we never ingested, invisible to any query over our own
-/// data.
-fn fill_missing(
-    state: &SnapshotState,
-    classic: &mut Tally,
-    native: &mut Tally,
-    samples: &mut Samples,
-) {
-    native.missing = state
-        .accounts
-        .values()
-        .filter(|e| e.live && !e.matched)
-        .count() as u64;
-    let mut missing = 0u64;
-    for (key, e) in &state.trustlines {
-        if !e.live || e.matched {
-            continue;
-        }
-        missing += 1;
-        // The discriminator: below the floor we cannot have a row (dormant
-        // since before our history starts — expected). Above it, someone
-        // dropped a change we should have seen — a defect to chase.
-        if e.ledger < LEDGER_FLOOR {
-            samples.missing_below_floor += 1;
-        } else {
-            samples.missing_above_floor += 1;
-            *samples
-                .missing_above_by_2m
-                .entry(e.ledger / 2_000_000 * 2_000_000)
-                .or_default() += 1;
-        }
-        // First-N is NOT deterministic here: this iterates a HashMap whose
-        // hasher is seeded per process, so the sample differed on every run and
-        // could not be re-verified or compared before/after. Select on a
-        // function of the KEY instead — reproducible, and independent of any
-        // structure in the data. The modulus is sized so ~19M missing rows
-        // yield on the order of the cap.
-        const MISSING_SAMPLE_MODULUS: u64 = 16_384;
-        let row_for_key = snapshot::OurRow {
-            holder_id: key.holder_id,
-            asset_id: key.asset_id,
-            amount: 0,
-            last_updated_ledger: 0,
-            closed_at_ledger: 0,
-        };
-        samples.missing_classic.offer_if(
-            (key.holder_id ^ key.asset_id)
-                .unsigned_abs()
-                .is_multiple_of(MISSING_SAMPLE_MODULUS),
-            || {
-                format!(
-                    "{}\t{}\t{}\t{}",
-                    key.holder_id, key.asset_id, e.amount, e.ledger
-                )
-            },
-            || key_line(state, &row_for_key, false),
-        );
-    }
-    classic.missing = missing;
-}
-
 /// Read-only four-way comparison. Downloads and decodes the snapshot, streams
 /// our rows, prints the counts. **Writes nothing, anywhere.**
 pub async fn compare_command(
@@ -259,61 +146,32 @@ pub async fn compare_command(
     let snapshot::SnapshotPass { list, mut state } =
         snapshot::open_snapshot(pinned_manifest, dump_dir.is_some(), "").await?;
 
-    let native_id = db_clickhouse::persist::ids::NATIVE_ASSET_ID;
-    let mut samples = Samples::new(list.checkpoint_ledger);
-    let mut classic = Tally::default();
-    let mut native = Tally::default();
+    let mut report = Report::new(list.checkpoint_ledger);
     println!("\n  streaming our balances in {KEY_SLICES} key slices…");
     stream_our_rows(sink, |row| {
-        fold_row(
-            row,
-            &mut state,
-            native_id,
-            &mut classic,
-            &mut native,
-            &mut samples,
-        );
+        report.observe(row, &mut state);
     })
     .await?;
-    fill_missing(&state, &mut classic, &mut native, &mut samples);
-
-    // The missing-bucket discriminator: below our floor is the expected blind
-    // spot; above it is a defect signal that must be chased, not explained.
-    println!(
-        "\n  missing trustlines by the entry's own lastModifiedLedgerSeq:\n    \
-         below our floor {LEDGER_FLOOR}: {}\n    at/above the floor:      {}",
-        samples.missing_below_floor, samples.missing_above_floor
-    );
-    if !samples.missing_above_by_2m.is_empty() {
-        println!("    above-floor by 2M-ledger band:");
-        for (band, n) in &samples.missing_above_by_2m {
-            println!("      {band:>10}+  {n:>10}");
+    for (key, entry) in &state.trustlines {
+        if entry.live && !entry.matched {
+            report.observe_missing_trustline(key, entry, &state);
+        }
+    }
+    for entry in state.accounts.values() {
+        if entry.live && !entry.matched {
+            report.observe_missing_account();
         }
     }
 
+    print!("{}", report.render_missing_histogram());
     if let Some(dir) = dump_dir {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", dir.display())))?;
-        println!("\n  sample dumps (holder_id\tasset_id\tamount\tledger):");
-        samples.closure_classic.write(dir, "closure_classic.tsv")?;
-        samples.ghost_classic.write(dir, "ghosts_classic.tsv")?;
-        samples.ghost_native.write(dir, "ghosts_native.tsv")?;
-        samples
-            .divergent_classic
-            .write(dir, "divergent_classic.tsv")?;
-        samples
-            .divergent_native
-            .write(dir, "divergent_native.tsv")?;
-        samples.agree_classic.write(dir, "agree_classic.tsv")?;
-        samples.missing_classic.write(dir, "missing_classic.tsv")?;
-        samples.closed_but_live.write(dir, "closed_but_live.tsv")?;
-        samples
-            .divergent_same_ledger
-            .write(dir, "divergent_same_ledger.tsv")?;
+        report.write_dumps(dir)?;
     }
 
-    classic.print("CLASSIC CREDIT trustlines", false);
-    native.print("NATIVE XLM holdings (AccountEntry, not a trustline)", true);
+    report.classic.print("CLASSIC CREDIT trustlines", false);
+    report
+        .native
+        .print("NATIVE XLM holdings (AccountEntry, not a trustline)", true);
 
     // Excluded on purpose — printed so the pass never reads as exhaustive when
     // it is not.
