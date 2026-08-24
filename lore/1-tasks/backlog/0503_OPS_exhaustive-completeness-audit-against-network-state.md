@@ -207,6 +207,27 @@ diffed against `lp_positions`. Measured 47% short; recorded in 0499 with the
 ~100-line comparator sketch. It leaves this task's list when the ADR 0056 merge
 folds pool shares into `balances`.
 
+## Orphan holders in `balances` (added 2026-08-24, from 0463)
+
+Found while chain-checking the seed's classic-ghost bucket: rows in `balances`
+whose `holder_id` has NO row in `accounts` and is not a contract either.
+Measured on one 1/64 `holder_id` slice: 9 orphan holders among 111,879, so
+roughly **576 network-wide (0.008%)**.
+
+Two consequences the audit must own:
+
+- **They are unverifiable from any side.** No source carries their StrKey —
+  not `accounts`, and not the checkpoint snapshot, which holds no
+  `AccountEntry` for them live or dead. The 1,941 classic-ghost rows the 0463
+  seed zeroes are exactly this population; the zeroing is safe (with no StrKey
+  the account page cannot render them), but nothing can prove them right or
+  wrong individually.
+- **They are a parity defect in their own right**: some write path emitted a
+  `balances` row without emitting the `accounts` row beside it. The audit
+  should enumerate the full set (the slice query generalises), date them by
+  `last_updated_ledger`, and attribute them to a writer — the same
+  producer-attribution method the tie audit uses.
+
 ## Rules for the audit itself
 
 - **Read-only.** This measures; remediation is a separate task per finding.
