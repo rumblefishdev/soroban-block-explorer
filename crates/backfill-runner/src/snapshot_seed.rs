@@ -279,6 +279,7 @@ async fn build_corrections(
 
     // Pass 1: our rows → the report classifies, counts and samples; the verdict
     // it hands back drives the correction. One classification, two outputs.
+    println!("\n  streaming our balances in {KEY_SLICES} key slices…");
     let rows_read = stream_our_rows(sink, |row| {
         let v = report.observe(row, state);
         fold_our_row(row, v, state, checkpoint, &mut out, ghost_log);
@@ -483,8 +484,36 @@ pub async fn seed_command(
     // population the report renders, from one `Report`, plus
     // what this run would insert. An operator signs off on one document.
     report.write_dumps(&artifacts.join("dumps"))?;
+    // Excluded on purpose — reported so the pass never reads as exhaustive
+    // when it is not. Contract-held classic balances live in the SAC's
+    // `ContractData`, not a trustline, so the snapshot's trustline set would
+    // call every one of them a phantom; type-3 is the same reason, different
+    // entry type; pool shares are the same ledger entry type but live in
+    // `lp_positions` on our side (ADR 0056 merges them).
+    let excluded_contract: u64 = sink
+        .client()
+        .query(
+            "SELECT count() FROM balances \
+             WHERE asset_id IN (SELECT id FROM assets WHERE asset_type IN (0, 1)) \
+               AND holder_id IN (SELECT id FROM soroban_contracts)",
+        )
+        .fetch_one()
+        .await?;
+    let excluded_type3: u64 = sink
+        .client()
+        .query(
+            "SELECT count() FROM balances \
+             WHERE asset_id IN (SELECT id FROM assets WHERE asset_type = 3)",
+        )
+        .fetch_one()
+        .await?;
+
     let summary = format!(
-        "checkpoint {}\n{}{}{}\n  CORRECTIONS{}\n    \
+        "checkpoint {}\n{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
+         contract-held classic rows  {:>12}\n    \
+         type-3 Soroban rows         {:>12}\n    \
+         snapshot pool shares        {:>12}  (our side: lp_positions)\n\
+         \n  CORRECTIONS{}\n    \
          balances rows         {:>12}\n    \
          account_entry_state   {:>12}\n    \
          asset stubs           {:>12}\n    \
@@ -496,6 +525,9 @@ pub async fn seed_command(
             .native
             .render("NATIVE XLM holdings (AccountEntry, not a trustline)", true),
         report.render_missing_histogram(),
+        excluded_contract,
+        excluded_type3,
+        state.live_pool_shares(),
         if execute {
             " — INSERTING"
         } else {
