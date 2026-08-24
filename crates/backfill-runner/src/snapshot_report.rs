@@ -304,33 +304,30 @@ impl Report {
             &mut self.classic
         };
         out.observe(v, row.amount);
-        // Real identities for the dump, straight from the snapshot. This is
-        // what breaks the circularity the audit called out:
-        // reversing our surrogates through our own tables meant auditing the
-        // tables with themselves.
-        let key = key_line(state, row, is_native);
         // Sample the buckets a human has to adjudicate. `Agree` is sampled too:
         // it is the positive control — if the surrogate derivation were wrong
         // that bucket would be empty, so a non-empty sample of it is evidence
         // the whole comparison is keyed correctly.
+        use snapshot::Verdict as V;
         let s = &mut self.samples;
-        match (v, is_native) {
-            (snapshot::Verdict::Ghost, true) => s.ghost_native.offer(line, || key),
-            (snapshot::Verdict::Ghost, false) => s.ghost_classic.offer(line, || key),
-            (snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer, true) => {
-                s.divergent_native.offer(line, || key)
-            }
-            (
-                snapshot::Verdict::HealFromSnapshot | snapshot::Verdict::DivergentOursNewer,
-                false,
-            ) => s.divergent_classic.offer(line, || key),
-            (snapshot::Verdict::ClosedButLive, _) => s.closed_but_live.offer(line, || key),
-            (snapshot::Verdict::DivergentSameLedger, _) => {
-                s.divergent_same_ledger.offer(line, || key)
-            }
-            (snapshot::Verdict::Closure, false) => s.closure_classic.offer(line, || key),
-            (snapshot::Verdict::Agree, false) => s.agree_classic.offer(line, || key),
-            _ => {}
+        let bucket = match (v, is_native) {
+            (V::Ghost, true) => Some(&mut s.ghost_native),
+            (V::Ghost, false) => Some(&mut s.ghost_classic),
+            (V::HealFromSnapshot | V::DivergentOursNewer, true) => Some(&mut s.divergent_native),
+            (V::HealFromSnapshot | V::DivergentOursNewer, false) => Some(&mut s.divergent_classic),
+            (V::ClosedButLive, _) => Some(&mut s.closed_but_live),
+            (V::DivergentSameLedger, _) => Some(&mut s.divergent_same_ledger),
+            (V::Closure, false) => Some(&mut s.closure_classic),
+            (V::Agree, false) => Some(&mut s.agree_classic),
+            _ => None,
+        };
+        // The identity is built ONLY for a row that is actually kept — at most
+        // SAMPLE_CAP per bucket, against tens of millions of rows read. It comes
+        // straight from the snapshot, which is what breaks the circularity the
+        // audit called out: reversing our surrogates through our own tables
+        // meant auditing the tables with themselves.
+        if let Some(bucket) = bucket {
+            bucket.offer(line, || key_line(state, row, is_native));
         }
         v
     }
