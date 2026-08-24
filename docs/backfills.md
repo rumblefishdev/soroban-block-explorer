@@ -418,6 +418,14 @@ stamped a closure, so it is the alarm for the reconciliation runs below, where
 the closures under test are the seed's own previous output or the live
 writer's.
 
+**`--execute` needs a write-capable ClickHouse identity.** The laptop mTLS cert
+maps to user `dev_read`, whose profile sets `readonly = 1` and
+`max_execution_time = 30` — an INSERT is refused on the readonly setting before
+grants are consulted, and the row volume would exceed the execution ceiling
+regardless. The dry-run is unaffected: it only reads, in bounded slices. Confirm
+the identity before the run, not at the prompt (`SELECT currentUser()` and
+`system.settings` answer it read-only; never test a write by writing).
+
 **The seed's ordering contract (do not reorder):**
 
 1. Deploy the lifecycle writer (the indexer that stamps `closed_at_ledger`)
