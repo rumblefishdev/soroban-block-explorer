@@ -66,6 +66,7 @@ use std::path::Path;
 use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::snapshot::{self, PUBNET_ARCHIVE, SnapshotState};
+use crate::snapshot_report::Report;
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow, BalanceRow};
@@ -90,23 +91,6 @@ struct Corrections {
     entry_states: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
-    n_missing: u64,
-    n_closure: u64,
-    /// Native ghosts separately from classic: their stroops sum IS an XLM
-    /// figure, while summing classic amounts across different assets would be
-    /// a unit-less nonsense number (the first dry-run printed 796 billion
-    /// "XLM" that way — memecoin units masquerading as stroops).
-    n_ghost_native: u64,
-    ghost_native_stroops: i128,
-    n_ghost_classic: u64,
-    n_heal: u64,
-    /// We stamped closed, the network says live at a newer ledger — re-opened.
-    n_closed_but_live: u64,
-    /// Same ledger, different amount. Counted and reported, never written.
-    n_divergent_same_ledger: u64,
-    /// Rows the snapshot does not have but WE touched after the checkpoint —
-    /// the snapshot is the stale side, so they are left alone.
-    n_newer_than_checkpoint: u64,
 }
 
 /// Fetch the set of existing dimension ids straight from ClickHouse — the
@@ -124,14 +108,16 @@ async fn fetch_id_set(sink: &Sink, sql: &str) -> Result<HashSet<i64>, BackfillEr
     Ok(out)
 }
 
-/// Fold one of our streamed rows into corrections, acting on the SHARED
-/// verdict the compare pass reports. One rule, two consumers — the report an
-/// operator signs off on predicts what `--execute` writes. (`--execute`
-/// re-reads our rows fresh, like every corrective command here; churn since
-/// the dry-run is absorbed by the `>= checkpoint` guard, so the drift is only
-/// rows newly LEFT ALONE, never a different correction.)
+/// Emit the correction one verdict implies. The verdict comes from the REPORT,
+/// which counted and sampled the same row a moment earlier — so the summary an
+/// operator signs off on and the rows `--execute` writes are derived from one
+/// classification, not two. (`--execute` re-reads our rows fresh, like every
+/// corrective command here; churn since the dry-run is absorbed by the
+/// `>= checkpoint` guard, so the drift is only rows newly LEFT ALONE, never a
+/// different correction.)
 fn fold_our_row(
     row: &snapshot::OurRow,
+    verdict: snapshot::Verdict,
     state: &mut SnapshotState,
     checkpoint: u32,
     out: &mut Corrections,
@@ -145,38 +131,26 @@ fn fold_our_row(
         last_updated_ledger,
         ..
     } = *row;
-    match snapshot::verdict(row, snapshot::snap_entry_for(state, row), checkpoint) {
+    match verdict {
         // Nothing to write: both sides agree (Stale = equal amounts, our ledger
-        // merely older — the verdict rule guarantees the equality), or our side
-        // is the fresher one and the live parser already knows better.
-        V::AlreadyClosed | V::Agree | V::DivergentOursNewer | V::Stale => {}
-        // Same ledger, different amount — one parser is wrong and freshness
-        // cannot arbitrate. Reported, never auto-healed: picking a winner would
-        // bury the only evidence that something mis-parsed.
-        V::DivergentSameLedger => out.n_divergent_same_ledger += 1,
-        // We hid a holding the network says is live at a NEWER ledger. Re-open
-        // it at the entry's own ledger, which outversions our wrong closure.
-        V::ClosedButLive => {
-            let Some(e) = snapshot::snap_entry_for(state, row) else {
-                return;
-            };
-            out.n_closed_but_live += 1;
-            out.balances.push(BalanceRow {
-                holder_id,
-                asset_id,
-                amount: i128::from(e.amount),
-                last_updated_ledger: i64::from(e.ledger),
-                closed_at_ledger: 0,
-            });
-        }
-        V::NewerThanCheckpoint => out.n_newer_than_checkpoint += 1,
-        // The snapshot is strictly newer AND the amounts differ, so adopt its
+        // merely older — the verdict rule guarantees the equality), our side is
+        // the fresher one, or the snapshot is the stale side. Same-ledger
+        // divergence is a defect signal: reported by the tally, never
+        // auto-healed — picking a winner would bury the only evidence.
+        V::AlreadyClosed
+        | V::Agree
+        | V::DivergentOursNewer
+        | V::Stale
+        | V::DivergentSameLedger
+        | V::NewerThanCheckpoint => {}
+        // We hid a holding the network says is live at a NEWER ledger: re-open
+        // at the entry's own ledger, which outversions our wrong closure. Heal:
+        // the snapshot is strictly newer AND the amounts differ, so adopt its
         // amount at ITS ledger.
-        V::HealFromSnapshot => {
+        V::ClosedButLive | V::HealFromSnapshot => {
             let Some(e) = snapshot::snap_entry_for(state, row) else {
                 return;
             };
-            out.n_heal += 1;
             out.balances.push(BalanceRow {
                 holder_id,
                 asset_id,
@@ -185,16 +159,8 @@ fn fold_our_row(
                 closed_at_ledger: 0,
             });
         }
-        v @ (V::Closure | V::Ghost) => {
-            if v == V::Closure {
-                out.n_closure += 1;
-            } else {
-                if asset_id == ids::NATIVE_ASSET_ID {
-                    out.n_ghost_native += 1;
-                    out.ghost_native_stroops += amount;
-                } else {
-                    out.n_ghost_classic += 1;
-                }
+        V::Closure | V::Ghost => {
+            if verdict == V::Ghost {
                 ghost_log.push(format!(
                     "{holder_id}\t{asset_id}\t{amount}\t{last_updated_ledger}"
                 ));
@@ -219,14 +185,16 @@ async fn build_corrections(
     known_assets: &HashSet<i64>,
     known_accounts: &HashSet<i64>,
     checkpoint: u32,
+    report: &mut Report,
     ghost_log: &mut Vec<String>,
 ) -> Result<Corrections, BackfillError> {
     let mut out = Corrections::default();
 
-    // Pass 1: our rows → closures, ghosts, self-heals. The shared streamed
-    // read (with its short-read floor) — the same rows the compare pass sees.
+    // Pass 1: our rows → the report classifies, counts and samples; the verdict
+    // it hands back drives the correction. One classification, two outputs.
     let rows_read = crate::snapshot_compare::stream_our_rows(sink, |row| {
-        fold_our_row(row, state, checkpoint, &mut out, ghost_log);
+        let v = report.observe(row, state);
+        fold_our_row(row, v, state, checkpoint, &mut out, ghost_log);
     })
     .await?;
     println!("  folded {rows_read} of our rows");
@@ -236,7 +204,7 @@ async fn build_corrections(
     let mut referenced_holders: HashSet<i64> = HashSet::new();
     for (key, e) in &state.trustlines {
         if e.live && !e.matched {
-            out.n_missing += 1;
+            report.observe_missing_trustline(key, e, state);
             out.balances.push(BalanceRow {
                 holder_id: key.holder_id,
                 asset_id: key.asset_id,
@@ -250,7 +218,7 @@ async fn build_corrections(
     }
     for (id, e) in &state.accounts {
         if e.live && !e.matched {
-            out.n_missing += 1;
+            report.observe_missing_account();
             out.balances.push(BalanceRow {
                 holder_id: *id,
                 asset_id: ids::NATIVE_ASSET_ID,
@@ -407,12 +375,14 @@ pub async fn seed_command(
     }
 
     let mut ghost_log = Vec::new();
+    let mut report = Report::new(list.checkpoint_ledger);
     let corr = build_corrections(
         sink,
         &mut state,
         &known_assets,
         &known_accounts,
         list.checkpoint_ledger,
+        &mut report,
         &mut ghost_log,
     )
     .await?;
@@ -422,31 +392,29 @@ pub async fn seed_command(
     std::fs::write(artifacts.join("ghosts.tsv"), ghost_log.join("\n") + "\n")
         .map_err(|e| BackfillError::Incomplete(format!("write ghosts: {e}")))?;
 
+    // The summary IS the four-way comparison — the same eleven buckets per
+    // population that `snapshot-compare` renders, from the same `Report`, plus
+    // what this run would insert. An operator signs off on one document.
+    report.write_dumps(&artifacts.join("dumps"))?;
     let summary = format!(
-        "checkpoint {}\n\
-         balances corrections: {} rows\n\
-           missing inserted    {}\n\
-           closures stamped    {}\n\
-           native ghosts zeroed  {}   ({:.7} XLM — full list in ghosts.tsv)\n\
-           classic ghosts zeroed {}   (amounts are per-asset units; see ghosts.tsv)\n\
-           self-heals          {}\n\
-           re-opened (we hid a live holding) {}\n\
-           divergent SAME ledger (defect?)   {}   NOT written — investigate\n\
-           left alone (ours newer than checkpoint) {}\n\
-         account_entry_state rows: {}\n\
-         asset stubs:          {}\n\
-         account stubs:        {}\n",
+        "checkpoint {}\n{}{}{}\n  CORRECTIONS{}\n    \
+         balances rows         {:>12}\n    \
+         account_entry_state   {:>12}\n    \
+         asset stubs           {:>12}\n    \
+         account stubs         {:>12}\n\
+         \n  ghosts.tsv holds every positive-amount row this run zeroes.\n",
         list.checkpoint_ledger,
+        report.classic.render("CLASSIC CREDIT trustlines", false),
+        report
+            .native
+            .render("NATIVE XLM holdings (AccountEntry, not a trustline)", true),
+        report.render_missing_histogram(),
+        if execute {
+            " — INSERTING"
+        } else {
+            " — dry-run, nothing inserted"
+        },
         corr.balances.len(),
-        corr.n_missing,
-        corr.n_closure,
-        corr.n_ghost_native,
-        corr.ghost_native_stroops as f64 / 1e7,
-        corr.n_ghost_classic,
-        corr.n_heal,
-        corr.n_closed_but_live,
-        corr.n_divergent_same_ledger,
-        corr.n_newer_than_checkpoint,
         corr.entry_states.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
