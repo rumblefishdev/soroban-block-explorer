@@ -104,7 +104,7 @@ pub async fn fetch_bucket_list(
     // would be a fiction. Cheap check, load-bearing conclusion.
     if checkpoint_ledger % CHECKPOINT_FREQUENCY != CHECKPOINT_FREQUENCY - 1 {
         return Err(BackfillError::Incomplete(format!(
-            "manifest currentLedger {checkpoint_ledger} is not a checkpoint              (checkpoints are ≡ {} mod {CHECKPOINT_FREQUENCY}) — this is not a              checkpoint bucket list",
+            "manifest currentLedger {checkpoint_ledger} is not a checkpoint (checkpoints are ≡ {} mod {CHECKPOINT_FREQUENCY}) — this is not a checkpoint bucket list",
             CHECKPOINT_FREQUENCY - 1
         )));
     }
@@ -299,9 +299,6 @@ mod tests {
     use super::*;
     use crate::network_state::NetworkState;
 
-    /// The archive's fan-out layout, pinned. A wrong split silently 404s every
-    /// bucket, which reads as "the archive is down" rather than "our URL is
-    /// wrong".
     /// The manifest's `currentLedger` must sit on the checkpoint lattice.
     /// Accepting an off-lattice value would mean decoding a bucket list that
     /// is not a checkpoint's state, and stamping fictional ledger numbers.
@@ -314,6 +311,9 @@ mod tests {
         assert!(!on(0));
     }
 
+    /// The archive's fan-out layout, pinned. A wrong split silently 404s every
+    /// bucket, which reads as "the archive is down" rather than "our URL is
+    /// wrong".
     #[test]
     fn bucket_url_uses_the_three_byte_pair_fanout() {
         let h = "4a478392b7fd16baf9acf1290c687130e4106f961688c2a8f35b898653e51f22";
