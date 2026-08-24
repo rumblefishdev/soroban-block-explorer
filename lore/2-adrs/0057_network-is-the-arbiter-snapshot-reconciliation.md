@@ -52,8 +52,11 @@ row, and the merge keeps the highest version. Three defect classes follow:
 An insert-time tiebreaker ("later run wins") was considered for class 1 and
 set aside: it requires rebuilding every RMT table (the engine's version
 parameter is immutable), and it resolves to _whichever code ran last_ rather
-than to the truth. The intent behind it — a backfill's new data MUST win —
-stands, and is delivered by this ADR's mechanism instead.
+than to the truth. The intent behind it stands, but in a narrower form than
+"a backfill's new data must win": data the NETWORK verifies supersedes an
+equal-version row, and only that. Where the network cannot arbitrate — two
+live-entity readings of the SAME ledger — decision 3 quarantines the pair and
+picks neither side.
 
 ## Decision
 

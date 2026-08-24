@@ -141,6 +141,10 @@ full-population pass, and it passed.
       knowing anything about bucket layout
 - [ ] Memory stays bounded — measured, not assumed, on the full 4.54 GB
 - [ ] The checkpoint ledger and per-entry `lastModifiedLedgerSeq` are exposed
+- [ ] The floor split is exposed BY THE TOOL — histogram and per-bucket counts
+      together — not left for each caller to reinvent
+- [ ] `--at-ledger <n>` decodes the checkpoint asked for, not the newest:
+      verified by decoding a past checkpoint and matching its manifest hashes
 - [ ] Wall-clock and peak memory of a full pass are recorded in the task
 - [ ] The 0463 seed is refactored onto it rather than keeping a second copy
 - [ ] **Docs updated** — `docs/backfills.md` gains the snapshot as a source

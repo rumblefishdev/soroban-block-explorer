@@ -171,18 +171,18 @@ Everything below is measured on production data and RPC-verified, not estimated.
    the amount) when a trustline is removed and when an account is merged, for
    classic, native, Soroban and LP write paths. It also extracts signers +
    thresholds into `account_entry_state`. This is NOT deployed yet.
-2. **Checkpoint-snapshot toolchain** (`backfill-runner` subcommands, all
-   read-only except the seed's explicit `--execute`):
-   - `snapshot-tally` — decode the archive's full-state snapshot, count records
-     (4.44 GB, 21 buckets, ~6 min, 13.5 MB peak RSS after the streaming fix).
-   - `snapshot-dedup` — first-wins per key → DISTINCT entries. The bucket list
-     is newest-first; the first record per key is the live one.
-   - `snapshot-compare` — four-way diff of our `balances` against the network:
-     missing / closure / ghost (ours >0, network gone) / divergent / stale,
-     classic and native separately, with stride samples and a below/above-floor
-     histogram of the missing bucket.
-   - `snapshot-seed` — builds ALL corrections; dry-run writes artifacts only
-     (`manifest.json`, `summary.txt`, `ghosts.tsv`), `--execute` inserts.
+2. **Checkpoint-snapshot toolchain** — ONE `backfill-runner` subcommand,
+   `snapshot-seed`, read-only except its explicit `--execute`. Its dry-run
+   decodes the archive's full-state snapshot (4.44 GB, 21 buckets, ~6 min),
+   folds it first-wins into DISTINCT entries, compares our `balances` against
+   it and writes the artifacts (`manifest.json`, `summary.txt`, `ghosts.tsv`,
+   `dumps/`); `--execute` additionally inserts.
+
+   _Historical:_ this began as four commands. `snapshot-tally` and
+   `snapshot-dedup` were research probes, deleted in the 2026-08-20 review
+   (their numbers are recorded below); `snapshot-compare` was folded into the
+   seed's dry-run on 2026-08-21 — it carried the same decode and the same
+   verdict rule behind its own counting shell.
 
 ### The measured truth (checkpoint 64,010,495; RPC-verified 260/260 sampled)
 

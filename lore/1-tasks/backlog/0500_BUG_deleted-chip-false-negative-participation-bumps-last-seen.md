@@ -74,8 +74,12 @@ sources joined against deduplicated `accounts`:
 | …of which the NEWEST row is a participant skeleton | **16,187**  | 14.4% |
 | (`sequence_number = 0` — not a recreation)         |             |       |
 
-The 16,187 are the false-negative floor for this window: dead accounts the
-chip renders as alive. The remaining ~4,195 bumped rows have a real
+The 16,187 are the CANDIDATE population for this window — rows carrying the
+defect's signature, not accounts individually verified. Only 5 were checked
+against the chain (below); the confirmed count is therefore 5, and 16,187 is
+the bound the signature implies. Verifying all of them means 16,187
+`getLedgerEntries` calls, which is worth doing only if the fix is contested.
+The remaining ~4,195 bumped rows have a real
 `sequence_number` at their newest version — recreation candidates, correctly
 alive. **5 of 5 sampled skeleton-bumped accounts verified ABSENT on chain**
 via `getLedgerEntries` (raw XDR, per the no-Horizon rule), including

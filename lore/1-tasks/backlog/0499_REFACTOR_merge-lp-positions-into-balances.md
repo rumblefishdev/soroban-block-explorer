@@ -68,16 +68,21 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id, pool_id)` —
 
 The 0463 seed decodes pool-share trustlines into `SnapshotState::pool_shares`
 but deliberately does NOT diff them: same ledger entry type, different table on
-our side. Measured against checkpoint 64,010,495:
+our side.
 
-| side                          | count      |
-| ----------------------------- | ---------- |
-| network live pool shares      | **77,048** |
-| our `lp_positions`, positive  | **40,652** |
-| our `lp_positions`, at zero   | 68,079     |
-| our `lp_positions`, all pairs | 108,731    |
+| side                          | count      | measured                                     |
+| ----------------------------- | ---------- | -------------------------------------------- |
+| network live pool shares      | **77,048** | snapshot @ checkpoint 64,010,495, 2026-08-18 |
+| our `lp_positions`, positive  | **40,652** | live table, 2026-08-24                       |
+| our `lp_positions`, at zero   | 68,079     | live table, 2026-08-24                       |
+| our `lp_positions`, all pairs | 108,731    | live table, 2026-08-24                       |
 
-**We are missing ~36,400 live positions — 47%.** The same shape as the 60%
+**The two sides are six days and ~100k ledgers apart** — this task's own
+parent measured export-vs-checkpoint skew as the DOMINANT lever on correction
+volume, so the gap below is an order of magnitude, not a number to seed from.
+Re-measure both sides at one checkpoint before item 5 acts on it.
+
+**We are missing roughly 36,000 live positions — around 47%.** The same shape as the 60%
 classic-trustline gap, and the same live-zero-vs-closed ambiguity sits on the
 68,079 zero rows. Work-list item 5 must therefore fill, not just copy: an
 identity copy of 40,652 rows carries the hole forward.
