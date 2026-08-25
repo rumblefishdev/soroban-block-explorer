@@ -64,6 +64,42 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id, pool_id)` —
 9. Retire `lp_positions` (stop writing, then drop after verification) and
    delete the ~30-line LP persist arm from 0463's writer.
 
+## Measured 2026-08-24 — the gap the merge inherits (deferred from 0463)
+
+The 0463 seed decodes pool-share trustlines into `SnapshotState::pool_shares`
+but deliberately does NOT diff them: same ledger entry type, different table on
+our side.
+
+| side                          | count      | measured                                     |
+| ----------------------------- | ---------- | -------------------------------------------- |
+| network live pool shares      | **77,048** | snapshot @ checkpoint 64,010,495, 2026-08-18 |
+| our `lp_positions`, positive  | **40,652** | live table, 2026-08-24                       |
+| our `lp_positions`, at zero   | 68,079     | live table, 2026-08-24                       |
+| our `lp_positions`, all pairs | 108,731    | live table, 2026-08-24                       |
+
+**The two sides are six days and ~100k ledgers apart** — this task's own
+parent measured export-vs-checkpoint skew as the DOMINANT lever on correction
+volume, so the gap below is an order of magnitude, not a number to seed from.
+Re-measure both sides at one checkpoint before item 5 acts on it.
+
+**We are missing roughly 36,000 live positions — around 47%.** The same shape as the 60%
+classic-trustline gap, and the same live-zero-vs-closed ambiguity sits on the
+68,079 zero rows. Work-list item 5 must therefore fill, not just copy: an
+identity copy of 40,652 rows carries the hole forward.
+
+### The comparator is nearly free — do it as part of item 5
+
+`snapshot.rs` already holds every pool share deduplicated, first-wins, with its
+own `lastModifiedLedgerSeq` and a live flag (`SnapshotState::pool_shares`), and
+`verdict()` is generic over the key. What is missing is only the other side: a
+`stream_our_rows` variant over `lp_positions` and a second `Report`. Estimated
+~100 lines, read-only. Deliberately NOT added to the 0463 branch — that branch
+was being trimmed, and the number above is what carried the value.
+
+Once `balances` owns pool shares (this task), the seed compares them with no
+extra code at all: they stop being a separate table and fall into the existing
+classic path.
+
 ## Acceptance criteria
 
 - [ ] A classic pool position renders on the account page from `balances`
@@ -76,6 +112,8 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id, pool_id)` —
 - [ ] Assets list and search show zero pool rows; `total_supply` /
       `holder_count` unchanged for spot-checked non-pool assets
 - [ ] The 0463 zero-vs-closed probe extended to pool positions returns clean
+- [ ] Pool positions are diffed against the snapshot, not just copied — the
+      measured 47% gap is closed and re-measured, never carried forward
 - [ ] `repair-tier1` no longer touches lp data; `docs/backfills.md` updated
 - [ ] **Docs updated** — schema + read path + frontend contract
 - [ ] **API types regenerated** — yes, DTOs change

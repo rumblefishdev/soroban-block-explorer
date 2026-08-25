@@ -234,12 +234,23 @@
 
 		# Timeouts cover the longest legitimate analytical
 		# query we expect (mirrored from the pilot users.d
-		# /timeouts.xml 7200 s window). Tighter than the
-		# CH-side timeout so Caddy releases the upstream
-		# socket first on stalls.
+		# /timeouts.xml 7200 s window).
+		#
+		# `response_header_timeout` bounds time to FIRST BYTE,
+		# not query duration. CH flushes a streaming SELECT's
+		# headers immediately, but sends nothing until it
+		# finishes for anything that buffers (INSERT … SELECT,
+		# CREATE TABLE AS, a heavy GROUP BY, OPTIMIZE). Held at
+		# 30 s it disconnected exactly those, while CH ran on,
+		# committed the rows and logged QueryFinish — the work
+		# done, the caller told it failed (task 0331 here; 26
+		# days of a dead prices worker next door, task 0513).
+		# It never bounded a runaway either: a runaway streams,
+		# so it always passed. All four values now state the
+		# one window the comment above promises.
 		transport http {
 			dial_timeout 10s
-			response_header_timeout 30s
+			response_header_timeout 7200s
 			read_timeout 7200s
 			write_timeout 7200s
 		}

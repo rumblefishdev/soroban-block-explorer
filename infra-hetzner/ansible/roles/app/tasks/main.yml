@@ -178,12 +178,36 @@
   #   - ansible/*.retry               ansible session retry files
   #   - ansible/.vault_pass*          vault password files
   #   - **/.DS_Store, **/Thumbs.db    OS-metadata cruft
+  #
+  # `--inplace` is load-bearing, not an optimisation. Two files in
+  # this subtree are bind-mounted into a container as SINGLE FILES
+  # (Caddyfile → /etc/caddy/Caddyfile, ca/ca.crt → clients-ca.pem),
+  # and a single-file bind mount pins the INODE, not the path.
+  # rsync's default temp-file + rename hands every sync a NEW inode,
+  # so the container goes on reading the pre-sync file forever. That
+  # is not hypothetical: from the 2026-07-06 deploy until task 0513
+  # found it, app-caddy-1 served a Caddyfile that no longer existed
+  # at that path, and a `caddy reload` would have re-read the same
+  # orphan. Writing in place keeps the inode, so the `Reload caddy`
+  # handler below can actually see what this task wrote. A container
+  # already pinned to an orphan needs one `up -d --force-recreate`
+  # to re-anchor — see infra-hetzner/README.md.
+  #
+  # `delay_updates: false` is required, not stylistic: the module
+  # passes `--delay-updates` by default and rsync refuses the pair
+  # outright ("--inplace cannot be used with --delay-updates"). The
+  # two are opposites — `--delay-updates` stages every file and
+  # renames the batch at the end, which is precisely the rename that
+  # breaks the mount. Losing it costs cross-file atomicity on a
+  # config-only subtree we sync from one operator at a time.
   ansible.posix.synchronize:
     src: '{{ playbook_dir }}/../../infra-hetzner/'
     dest: '{{ app_repo_dest }}/infra-hetzner/'
     delete: true
     recursive: true
+    delay_updates: false
     rsync_opts:
+      - '--inplace'
       - '--chmod=D755,F644'
       - '--exclude=ca/out/'
       - '--exclude=ca/*.key'
@@ -214,12 +238,24 @@
   # Allowlist style — only the three subtrees that compose
   # bind-mounts (config.d/, users.d/, schema/). Rust source,
   # Cargo.toml, tests etc. stay on the operator's laptop.
+  #
+  # `--inplace` for the same reason as the infra-hetzner/ sync above,
+  # and here it has already cost us once: ten of these XML files are
+  # bind-mounted into app-clickhouse-1 INDIVIDUALLY, so each is pinned
+  # to an inode. The 2026-07-06 `prices_writer` grant change synced
+  # cleanly, reported success, and did nothing until the container was
+  # force-recreated (task 0314). Writing in place keeps the inode, so a
+  # restart is enough to pick up an XML edit.
+  # `delay_updates: false` for the same reason as the sync above —
+  # rsync rejects `--inplace` outright while `--delay-updates` is on.
   ansible.posix.synchronize:
     src: '{{ playbook_dir }}/../../crates/db-clickhouse/{{ item }}/'
     dest: '{{ app_repo_dest }}/crates/db-clickhouse/{{ item }}/'
     delete: true
     recursive: true
+    delay_updates: false
     rsync_opts:
+      - '--inplace'
       - '--chmod=D755,F644'
       - '--exclude=*.key'
       - '--exclude=*.pem'

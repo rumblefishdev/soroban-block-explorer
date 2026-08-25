@@ -62,6 +62,25 @@ fn column_order_accounts() {
 }
 
 #[test]
+fn column_order_account_entry_state() {
+    assert_columns::<AccountEntryStateRow>(
+        "account_entry_state",
+        &[
+            "account_id",
+            "signer_keys",
+            "signer_weights",
+            "signer_types",
+            "master_weight",
+            "threshold_low",
+            "threshold_med",
+            "threshold_high",
+            "flags",
+            "last_updated_ledger",
+        ],
+    );
+}
+
+#[test]
 fn column_order_assets() {
     assert_columns::<AssetRow>(
         "assets",
@@ -113,7 +132,13 @@ fn column_order_asset_enrichment() {
 fn column_order_balances() {
     assert_columns::<BalanceRow>(
         "balances",
-        &["holder_id", "asset_id", "amount", "last_updated_ledger"],
+        &[
+            "holder_id",
+            "asset_id",
+            "amount",
+            "last_updated_ledger",
+            "closed_at_ledger",
+        ],
     );
 }
 
@@ -216,6 +241,7 @@ fn column_order_lp_positions() {
             "shares",
             "first_deposit_ledger",
             "last_updated_ledger",
+            "closed_at_ledger",
         ],
     );
 }
@@ -1382,7 +1408,8 @@ fn enum_discriminants_lock_in_with_schema() {
 use domain::NftEventType;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
-    ContractFunction, ExtractedContractInterface, ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
+    ContractFunction, ExtractedContractInterface, ExtractedLiquidityPool, ExtractedLpPosition,
+    ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
 };
 
 fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
@@ -2415,4 +2442,512 @@ fn build_wasm_upgrade_rows_carries_is_sac_from_prior() {
     let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
     assert_eq!(rows.len(), 1);
     assert!(rows[0].is_sac, "is_sac carried forward from the prior row");
+}
+
+/// ADR 0055 — the write path must stamp `closed_at_ledger` on exactly the rows
+/// whose ledger entry disappeared, and on no others. Before this column a
+/// removal was written as `amount = 0`, byte-identical to a live-but-empty
+/// holding, so the read path could only hide both (issue #377).
+#[test]
+fn closed_at_ledger_marks_only_real_closures() {
+    let ledger = synthetic_ledger();
+
+    // One live account: zero XLM (legal — sponsored reserves, CAP-0033), one
+    // live trustline sitting at zero, and one trustline that was REMOVED.
+    let live = ExtractedAccountState {
+        account_id: "GLIVE".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 7,
+        balances: serde_json::json!([
+            {"asset_type": "native", "balance": "0.0000000"},
+            {"asset_type": "credit_alphanum4", "asset_code": "AQUA",
+             "issuer": "GISSUER", "balance": "0.0000000"},
+        ]),
+        removed_trustlines: vec![serde_json::json!({
+            "asset_type": "credit_alphanum4", "asset_code": "SHX", "issuer": "GISSUER",
+        })],
+        account_removed: false,
+        signers: Some(vec![
+            serde_json::json!({"key": "GSIGNER1", "weight": 1, "type": "ed25519"}),
+            serde_json::json!({"key": "TSIGNER2", "weight": 255, "type": "preauth_tx"}),
+        ]),
+        thresholds: Some("01030303".to_string()),
+        flags: Some(0),
+        home_domain: None,
+        created_at: 1_700_000_000,
+    };
+
+    // A merged account: the native 0 is a tombstone, not a balance.
+    let merged = ExtractedAccountState {
+        account_id: "GMERGED".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: -1,
+        balances: serde_json::json!([{"asset_type": "native", "balance": "0.0000000"}]),
+        removed_trustlines: vec![],
+        account_removed: true,
+        signers: None,
+        thresholds: None,
+        flags: None,
+        home_domain: None,
+        created_at: 1_700_000_000,
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[live, merged],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    let live_id = ids::account_id("GLIVE");
+    let merged_id = ids::account_id("GMERGED");
+    let find = |holder: i64, asset: i64| {
+        staged
+            .unified_balance_rows
+            .iter()
+            .find(|r| r.holder_id == holder && r.asset_id == asset)
+            .unwrap_or_else(|| panic!("no balance row for holder {holder} asset {asset}"))
+    };
+
+    // Live account, zero XLM — the row the page must start showing.
+    assert_eq!(find(live_id, ids::NATIVE_ASSET_ID).closed_at_ledger, 0);
+    // Live trustline at zero — same amount as a closure, different meaning.
+    assert_eq!(
+        find(live_id, ids::credit_asset_id("AQUA", "GISSUER")).closed_at_ledger,
+        0
+    );
+    // Removed trustline — stamped with the ledger it disappeared in.
+    assert_eq!(
+        find(live_id, ids::credit_asset_id("SHX", "GISSUER")).closed_at_ledger,
+        100
+    );
+    // Merged account — the native tombstone is a closure, not a zero balance.
+    let tombstone = find(merged_id, ids::NATIVE_ASSET_ID);
+    assert_eq!(tombstone.amount, 0);
+    assert_eq!(
+        tombstone.closed_at_ledger, 100,
+        "an account_merge tombstone must be marked closed, or merged accounts \
+         render as holding 0 XLM once the read filter flips"
+    );
+}
+
+/// lore-0463: the signers side row follows full-set-replace semantics and is
+/// emitted ONLY when the AccountEntry itself was observed.
+#[test]
+fn entry_state_rows_full_set_replace_semantics() {
+    let ledger = synthetic_ledger();
+
+    // Entry observed, thresholds 01030303 (master 1, low/med/high 3), two
+    // signers — the issue #377 fixture shape.
+    let observed = ExtractedAccountState {
+        account_id: "GOBSERVED".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 7,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: Some(vec![
+            serde_json::json!({"key": "GS1", "weight": 1, "type": "ed25519"}),
+            serde_json::json!({"key": "XS2", "weight": 3, "type": "hash_x"}),
+        ]),
+        thresholds: Some("01030303".to_string()),
+        flags: Some(5),
+    };
+    // Entry observed with an EMPTY set — removing the last signer must still
+    // emit a row, or the stale set survives in the RMT forever.
+    let emptied = ExtractedAccountState {
+        account_id: "GEMPTIED".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 9,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: Some(vec![]),
+        thresholds: Some("01000000".to_string()),
+        flags: Some(0),
+    };
+    // Trustline-only accum: NO entry observed — must not touch the set.
+    let trustline_only = ExtractedAccountState {
+        account_id: "GTRUSTONLY".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: -1,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([
+            {"asset_type": "credit_alphanum4", "asset_code": "AQUA",
+             "issuer": "GISSUER", "balance": "1.0000000"},
+        ]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: None,
+        thresholds: None,
+        flags: None,
+    };
+    // Merged account: nothing to emit.
+    let merged = ExtractedAccountState {
+        account_id: "GMERGED2".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: -1,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([{"asset_type": "native", "balance": "0.0000000"}]),
+        removed_trustlines: vec![],
+        account_removed: true,
+        signers: None,
+        thresholds: None,
+        flags: None,
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[observed, emptied, trustline_only, merged],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(
+        staged.account_entry_state_rows.len(),
+        2,
+        "exactly the two entry-observed accounts emit signer rows"
+    );
+    let obs = staged
+        .account_entry_state_rows
+        .iter()
+        .find(|r| r.account_id == ids::account_id("GOBSERVED"))
+        .expect("observed row");
+    assert_eq!(obs.master_weight, 1);
+    assert_eq!(
+        (obs.threshold_low, obs.threshold_med, obs.threshold_high),
+        (3, 3, 3),
+        "thresholds hex must parse as [master, low, med, high] — a byte-order \
+         swap here mislabels every multisig account"
+    );
+    assert_eq!(obs.signer_keys, vec!["GS1", "XS2"]);
+    assert_eq!(obs.signer_weights, vec![1, 3]);
+    assert_eq!(obs.signer_types, vec!["ed25519", "hash_x"]);
+    assert_eq!(obs.flags, 5);
+    assert_eq!(obs.last_updated_ledger, 100);
+
+    let emp = staged
+        .account_entry_state_rows
+        .iter()
+        .find(|r| r.account_id == ids::account_id("GEMPTIED"))
+        .expect("emptied row");
+    assert!(
+        emp.signer_keys.is_empty(),
+        "an emptied set must write an empty row, not skip the write"
+    );
+    assert_eq!(emp.master_weight, 1);
+}
+
+/// The Soroban (type-3) closure stamp. A holder who spent down to zero and a
+/// holder whose `ContractData` entry was REMOVED both carry `balance = 0`, so
+/// `closed` is the only thing separating them — the same ambiguity as a classic
+/// trustline, in a different write path (ADR 0055). In scope for this task and
+/// previously asserted nowhere.
+#[test]
+fn soroban_removal_stamps_closed_at_ledger_but_a_spent_down_holder_does_not() {
+    use xdr_parser::ExtractedSorobanBalance;
+
+    let spent = ExtractedSorobanBalance {
+        contract_id: "CTOKEN".to_string(),
+        holder: "GSPENT".to_string(),
+        balance: 0,
+        ledger: 100,
+        closed: false,
+    };
+    let removed = ExtractedSorobanBalance {
+        holder: "GREMOVED".to_string(),
+        closed: true,
+        ..spent.clone()
+    };
+
+    let rows = stage::build_balance_rows(&[spent, removed], &HashMap::new());
+    let by = |strkey: &str| {
+        rows.iter()
+            .find(|r| r.holder_id == ids::address_id(strkey))
+            .expect("row")
+    };
+
+    assert_eq!(by("GSPENT").amount, 0);
+    assert_eq!(
+        by("GSPENT").closed_at_ledger,
+        0,
+        "a live holder at zero must stay live — this is the whole bug"
+    );
+    assert_eq!(by("GREMOVED").amount, 0);
+    assert_eq!(
+        by("GREMOVED").closed_at_ledger,
+        100,
+        "a removed entry must carry the ledger it disappeared in"
+    );
+}
+
+/// The in-ledger last-wins fold, for the four state writers that lacked a
+/// regression test (full-schema audit, task 0503): two states for one key in
+/// ONE ledger must collapse to a single row carrying the LAST state in
+/// application order. Two rows would tie the RMT version and the merge would
+/// pick arbitrarily — the `balances` defect, in any other table.
+#[test]
+fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
+    let ledger = synthetic_ledger();
+    let seq = i64::from(ledger.sequence);
+
+    // -- accounts: sequence bump then home_domain set, same ledger --
+    let first = ExtractedAccountState {
+        account_id: "GFOLD".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: ledger.sequence,
+        sequence_number: 7,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: None,
+        thresholds: None,
+        flags: None,
+    };
+    let second = ExtractedAccountState {
+        sequence_number: 9,
+        home_domain: Some("example.org".to_string()),
+        ..first.clone()
+    };
+
+    // -- lp_positions: deposit then partial withdraw, same ledger --
+    let pool_hex = "ab".repeat(32);
+    let deposit = ExtractedLpPosition {
+        pool_id: pool_hex.clone(),
+        account_id: "GFOLD".to_string(),
+        shares: "2.0000000".to_string(),
+        first_deposit_ledger: Some(ledger.sequence),
+        last_updated_ledger: ledger.sequence,
+        closed: false,
+    };
+    let withdraw = ExtractedLpPosition {
+        shares: "1.0000000".to_string(),
+        first_deposit_ledger: None,
+        ..deposit.clone()
+    };
+
+    // -- liquidity_pools: created then touched again, same ledger --
+    let pool = ExtractedLiquidityPool {
+        pool_id: pool_hex.clone(),
+        asset_a: serde_json::json!("native"),
+        asset_b: serde_json::json!({"type": "credit_alphanum4", "code": "USDC", "issuer": "GISS"}),
+        fee_bps: 30,
+        reserves: serde_json::json!({}),
+        total_shares: "2.0000000".to_string(),
+        tvl: None,
+        created_at_ledger: Some(ledger.sequence),
+        last_updated_ledger: ledger.sequence,
+        created_at: 1_700_000_000,
+    };
+    let pool_again = ExtractedLiquidityPool {
+        created_at_ledger: None,
+        total_shares: "1.0000000".to_string(),
+        ..pool.clone()
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[first, second],
+        &[pool, pool_again],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[deposit, withdraw],
+    )
+    .expect("prepare");
+
+    let acct = staged
+        .account_rows
+        .iter()
+        .find(|r| r.account_id == "GFOLD")
+        .expect("one account row");
+    assert_eq!(
+        staged
+            .account_rows
+            .iter()
+            .filter(|r| r.account_id == "GFOLD")
+            .count(),
+        1,
+        "two same-ledger states must not emit two rows at one RMT version"
+    );
+    assert_eq!(acct.sequence_number, 9, "last state in tx order wins");
+    assert_eq!(acct.home_domain.as_deref(), Some("example.org"));
+
+    assert_eq!(staged.lp_position_rows.len(), 1);
+    assert_eq!(
+        staged.lp_position_rows[0].shares, 10_000_000,
+        "the withdraw (last in order) is the surviving share count"
+    );
+    assert_eq!(
+        staged.lp_position_rows[0].first_deposit_ledger, seq,
+        "first_deposit survives the overwrite via min-preservation"
+    );
+
+    assert_eq!(
+        staged.pool_rows.len(),
+        1,
+        "one pool row per ledger, not one per touch"
+    );
+}
+
+/// Two ownership events for one NFT in ONE ledger: the later event's owner is
+/// the row that survives — mirrors the `>=` in the hot-bucket fold.
+#[test]
+fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x91);
+    let contract = "C".to_string() + &"B".repeat(55);
+    let wasm_hex = "22".repeat(32);
+    let iface = nft_classified_interface(&wasm_hex);
+    let dep = ExtractedContractDeployment {
+        contract_id: contract.clone(),
+        wasm_hash: Some(wasm_hex.clone()),
+        deployer_account: None,
+        deployed_at_ledger: 10,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        sac_asset: None,
+    };
+    let minted = ExtractedNft {
+        owner_account: Some("GFIRST".to_string()),
+        ..synthetic_nft(&contract, "tk1")
+    };
+    let transferred = ExtractedNft {
+        owner_account: Some("GSECOND".to_string()),
+        ..minted.clone()
+    };
+    let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        std::slice::from_ref(&iface),
+        std::slice::from_ref(&dep),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[minted, transferred],
+        std::slice::from_ref(&ev),
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.nft_rows.len(), 1, "one row per token per ledger");
+    assert_eq!(
+        staged.nft_rows[0].current_owner_id,
+        Some(ids::account_id("GSECOND")),
+        "the LAST transfer in application order owns the token at ledger end"
+    );
+}
+
+/// Two transactions in ONE ledger touching the same account must collapse to a
+/// single `account_entry_state` row carrying the LAST state.
+///
+/// `extract_account_states` runs per transaction and every state in a ledger
+/// carries that ledger as its watermark, so two rows would share the RMT
+/// version — and `ReplacingMergeTree` resolves a tie arbitrarily. The loser
+/// could be the newer one, leaving a REMOVED signer as the surviving row: the
+/// exact ghost the whole-set-replacement design promises is impossible.
+#[test]
+fn two_states_for_one_account_in_one_ledger_collapse_to_the_last() {
+    let ledger = synthetic_ledger();
+    // tx #1 — signer S is present.
+    let added = ExtractedAccountState {
+        account_id: "GTWICE".to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: 100,
+        sequence_number: 7,
+        home_domain: None,
+        created_at: 1_700_000_000,
+        balances: serde_json::json!([]),
+        removed_trustlines: vec![],
+        account_removed: false,
+        signers: Some(vec![serde_json::json!({
+            "key": "GS1", "weight": 1, "type": "ed25519"
+        })]),
+        thresholds: Some("01020202".to_string()),
+        flags: Some(0),
+    };
+    // tx #5, SAME ledger — signer S removed. This is the state that must win.
+    let removed = ExtractedAccountState {
+        signers: Some(vec![]),
+        ..added.clone()
+    };
+
+    let staged = stage::prepare(
+        &ledger,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[added, removed],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(
+        staged.account_entry_state_rows.len(),
+        1,
+        "two same-ledger states must not emit two rows at the same RMT version — \
+         the merge would pick a winner arbitrarily"
+    );
+    assert!(
+        staged.account_entry_state_rows[0].signer_keys.is_empty(),
+        "last state in ledger/tx order wins; a surviving 'GS1' means a removed \
+         signer ghosted"
+    );
 }

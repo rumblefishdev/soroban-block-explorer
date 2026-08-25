@@ -17,6 +17,7 @@ mod repair_tier1;
 mod rpc_snapshot;
 mod run;
 mod sink;
+mod snapshot;
 mod status;
 mod sync;
 mod util;
@@ -29,6 +30,7 @@ use clap::{Parser, Subcommand};
 /// overrides. Single source of truth — `run` and `status` both receive
 /// it via their `execute` args, no duplicated constant.
 const DEFAULT_TEMP_DIR: &str = ".temp/backfill-runner";
+const DEFAULT_ARTIFACTS_DIR: &str = ".artifacts/snapshot-seed";
 
 #[derive(Parser)]
 #[command(name = "backfill-runner", version, about)]
@@ -202,6 +204,25 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Step 3d — THE seed (ADR 0055): build every correction the comparison
+    /// proved necessary. Reads our balances and dimension ids straight from
+    /// ClickHouse — no manual exports. Default is a DRY-RUN that reads,
+    /// decodes, folds and writes artifacts (manifest.json, summary.txt,
+    /// ghosts.tsv) without inserting anything; `--execute` performs the
+    /// inserts. Deployment order is load-bearing: deploy the lifecycle writer
+    /// FIRST, then seed from a checkpoint taken after that deploy (see the
+    /// module docs).
+    SnapshotSeed {
+        /// Parent directory for provenance artifacts. Each run writes into
+        /// `<artifacts>/<checkpoint_ledger>/` (manifest, summary, ghost list,
+        /// dumps), so a run never overwrites the record of an earlier one.
+        #[arg(long, env = "BACKFILL_ARTIFACTS_DIR", default_value = DEFAULT_ARTIFACTS_DIR)]
+        artifacts: PathBuf,
+        /// Actually insert. Without this flag the run is read-only.
+        #[arg(long)]
+        execute: bool,
+    },
+
     /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
     /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
     /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
@@ -334,6 +355,11 @@ async fn main() {
                 "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
+        }
+        Command::SnapshotSeed { artifacts, execute } => {
+            snapshot::seed::seed_command(&sink, &artifacts, execute)
+                .await
+                .expect("snapshot seed failed");
         }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse

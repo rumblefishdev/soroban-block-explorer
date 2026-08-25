@@ -62,6 +62,43 @@ Scale unmeasured; the sampling that found it was not designed to measure it.
 Measure before fixing: dead accounts (type-8 sources, successful, never
 recreated) whose `last_seen_ledger` exceeds their merge ledger.
 
+## Scale MEASURED 2026-08-24 (the pre-fix measurement this task required)
+
+Window 55,000,000–55,200,000 (200k ledgers), successful `account_merge`
+sources joined against deduplicated `accounts`:
+
+| population                                         | count       | share |
+| -------------------------------------------------- | ----------- | ----- |
+| merged sources in window                           | **112,080** |       |
+| `last_seen_ledger` bumped past the merge ledger    | 20,382      | 18.2% |
+| …of which the NEWEST row is a participant skeleton | **16,187**  | 14.4% |
+| (`sequence_number = 0` — not a recreation)         |             |       |
+
+The 16,187 are the CANDIDATE population for this window — rows carrying the
+defect's signature, not accounts individually verified. Only 5 were checked
+against the chain (below); the confirmed count is therefore 5, and 16,187 is
+the bound the signature implies. Verifying all of them means 16,187
+`getLedgerEntries` calls, which is worth doing only if the fix is contested.
+The remaining ~4,195 bumped rows have a real
+`sequence_number` at their newest version — recreation candidates, correctly
+alive. **5 of 5 sampled skeleton-bumped accounts verified ABSENT on chain**
+via `getLedgerEntries` (raw XDR, per the no-Horizon rule), including
+`GA274C3GJHBJIG7BC7SF6F5HFMHIPDEFVAY7IO7ZTTNGXHSQ4653DQ4C` — merged at
+55,126,142, bumped to 60,541,934 (~10 months past its death) and still
+rendering as an ordinary live account.
+
+Extrapolation is not linear across the chain (merge density varies), but at
+~14% of merged sources per window the affected population is in the hundreds
+of thousands. The decided fix (native `closed_at_ledger != 0` after the 0463
+seed) covers every one of these by construction: the seed zeroes the ghost
+and stamps the closure regardless of what later participation did to
+`last_seen_ledger`. Re-measure zero AFTER the seed, per the AC.
+
+Also confirmed while measuring: a NEW-column-on-accounts alternative stays
+rejected — `accounts` takes whole-row skeleton writes (task 0421, 55.6% of
+active rows have `sequence_number = 0`), so a `deleted` column there would be
+clobbered by exactly the participation writes that cause this bug.
+
 ## The fundamental fix is already decided — do not patch the old derivation
 
 ADR 0055 gives `balances` a lifecycle column, and the 0463 writer already
@@ -77,9 +114,12 @@ deleted, not repaired.
 
 ## Acceptance criteria
 
-- [ ] The five sampled accounts render as deleted; Horizon agrees on each
-- [ ] A recycled account (merged, then recreated — ~47 % of one measured
-      window's merge sources) still renders as alive
+- [ ] The five sampled accounts render as deleted; `getLedgerEntries` on the
+      raw XDR agrees on each (NOT Horizon — legacy, and it synthesizes)
+- [ ] A recycled account (merged, then recreated) still renders as alive.
+      Rate depends on the window: 3.7% of merged sources in 55.0M-55.2M
+      (4,195 of 112,080, measured 2026-08-24). An earlier filing cited ~47%
+      from an unnamed window; treat that figure as unverified.
 - [ ] Scale measured and recorded before the fix, re-measured zero after
 - [ ] `fetch_deleted_status`'s old derivation is removed, not left dormant
 - [ ] Sequenced AFTER the 0463 seed has run and verified — the column is only

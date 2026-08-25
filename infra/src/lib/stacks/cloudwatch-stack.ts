@@ -140,6 +140,33 @@ export class CloudWatchStack extends cdk.Stack {
     // service) has produced a week of honestly-attributed data — today the
     // Project tag sees ~9% of this project's real spend.
     // ---------------------
+    // DANGER, read before touching this block. `addToResourcePolicy` on a
+    // Topic synthesises an `AWS::SNS::TopicPolicy`, and that resource
+    // REPLACES the topic's access policy outright — it does not merge with
+    // the default policy SNS creates alongside a new topic. Adding the cost
+    // grant alone therefore revoked the default owner statement that lets
+    // CloudWatch publish, and every operational alarm went mute while still
+    // evaluating and changing state perfectly: measured 2026-08-18 14:52 to
+    // 2026-08-19 09:58, three `Failed to execute action` entries on this
+    // topic while the co-tenant's topic delivered twelve in the same window.
+    // Nothing noticed, because the delivery chain has no witness (ADR 0054,
+    // open decision). So: every principal that must publish here is listed
+    // EXPLICITLY below, and anything added later goes in the same list.
+    // Same-account alarms publish AS THE ACCOUNT, so the owner statement is
+    // the one that matters; a `cloudwatch.amazonaws.com` service-principal
+    // grant is only needed for cross-account topics and was dropped as
+    // redundant here.
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowOwnerAccountPublish',
+        // The default statement SNS would have created, restored by hand:
+        // CloudWatch alarms publish under the topic owner's account, so
+        // without this every alarm action fails.
+        principals: [new iam.AccountPrincipal(cdk.Stack.of(this).account)],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+      })
+    );
     alarmTopic.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCostAnomalyDetectionPublish',
@@ -149,6 +176,14 @@ export class CloudWatchStack extends cdk.Stack {
         principals: [new iam.ServicePrincipal('costalerts.amazonaws.com')],
         actions: ['sns:Publish'],
         resources: [alarmTopic.topicArn],
+        // Confused-deputy guard: a service principal is not an identity, it
+        // is "any caller reaching us through that service". Without this the
+        // grant reads "Cost Anomaly Detection may publish here on behalf of
+        // ANY account" — a stranger could point their monitor at our topic.
+        // Scoping to our own account keeps the grant to our own anomalies.
+        conditions: {
+          StringEquals: { 'AWS:SourceAccount': cdk.Stack.of(this).account },
+        },
       })
     );
     const costAnomalyMonitor = new ce.CfnAnomalyMonitor(

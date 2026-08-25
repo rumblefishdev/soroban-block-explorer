@@ -4,7 +4,7 @@ title: 'RESEARCH: fundamental parser/classifier design — total-function, never
 type: RESEARCH
 status: backlog
 related_adr: []
-related_tasks: ['0308', '0296', '0283']
+related_tasks: ['0512', '0392', '0296', '0283']
 tags:
   [
     parser,
@@ -31,7 +31,7 @@ history:
 How SHOULD our contract/event parser + classifier be designed so it **never silently misses** a
 category (NFT, fungible, …)? Is our current approach (keyword/function-name classifier + fixed
 event-shape allow-list) the right paradigm, or is there a fundamentally better one? This task is the
-strategic counterpart to [0308](../0308_FEATURE_custom-abi-nft-parser-classifier-coverage/README.md)
+strategic counterpart to [0512](../../active/0512_FEATURE_classifier-monitored-unknown-and-launchpad-nft.md)
 (the tactical NFT fix). It exists so the design research is not lost; the refactor itself is
 **deferred** by decision (close NFTs first, rebuild later).
 
@@ -63,7 +63,9 @@ Every contract/event flows down to **exactly one class or a monitored UNKNOWN**:
 
 ## Status / next steps (when picked up)
 
-- Deferred — do not start until the 0308 tactical NFT fix + 0306 ops are done.
+- Deferred — do not start until the 0512 tactical NFT fix + 0306 ops are done.
+  (Was "0308"; that task was abandoned by decision on 2026-06-22, commit `f92ce582`.
+  0512 inherited the tactical scope — see 0392 for the measured case.)
 - Then: decide scope (whole-pipeline vs per-domain rollout), write an ADR for the total-function +
   monitored-UNKNOWN design, and a phased migration plan. The `minted` family (bytes token_id) and
   the heterogeneous custom tail are the concrete stress-tests this design must handle.
@@ -78,5 +80,8 @@ Every contract/event flows down to **exactly one class or a monitored UNKNOWN**:
 ## Notes
 
 - Full research report + citations: `notes/R-classification-design-patterns.md`.
-- The NFT-specific shape catalog (sibling research) lives in 0308's `notes/R-nft-event-shape-catalog.md`.
+- The NFT-specific shape catalog (sibling research) was 0308's
+  `notes/R-nft-event-shape-catalog.md`. 0308 was abandoned (`f92ce582`), but the
+  catalog is intact in git — 110 lines, recoverable with:
+  `git show ec160781:lore/1-tasks/active/0308_FEATURE_custom-abi-nft-parser-classifier-coverage/notes/R-nft-event-shape-catalog.md`
 - Durable summary in auto-memory `reference-soroban-classification-seps`.

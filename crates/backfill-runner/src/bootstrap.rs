@@ -379,6 +379,14 @@ async fn stage_account_snapshots(
                 asset_id: native_asset_id,
                 amount: balance,
                 last_updated_ledger: watermark,
+                // The snapshot only contains accounts the RPC returned, so the
+                // account exists — a zero balance here is a live account
+                // holding no XLM, never a merge tombstone. ADR 0055.
+                //
+                // NOTE: `watermark` is the synthetic window boundary this whole
+                // path is faulted for in task 0492. That defect is untouched
+                // here; it must not be papered over by the lifecycle column.
+                closed_at_ledger: 0,
             })
             .await
             .map_err(BackfillError::Ch)?;

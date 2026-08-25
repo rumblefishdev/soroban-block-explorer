@@ -150,14 +150,42 @@ history:
       matching that glob used to deploy the release set. Docs: deployment.md
       Releases section rewritten, TL;DR and CloudWatch rows note the tag form,
       /release skill steps 2/5/6 updated.
+  - date: 2026-08-19
+    status: active
+    who: karolkow
+    note: >
+      Second slice opened as PR #427 and the post-incident review sweep closed
+      out: 68 findings, every one dispositioned. 17 fixed, 31 already covered
+      by open tasks, 10 rejected once measured, 5 verified healthy, 3 skipped
+      on the operator's call, 2 handed off or refuted. Five tasks spawned
+      (0507-0511), four existing ones extended. Three acceptance criteria
+      updated here: the dashboard/alarm one advanced with the second slice, the
+      latch-proofing one now records that production contradicts it knowingly,
+      and the child-task one names what was spawned.
+  - date: 2026-08-19
+    status: active
+    who: karolkow
+    note: >
+      Acceptance criteria triaged. Two closed: the cost one on the deploy, with
+      the read-only evidence and the unproven last hop both stated; the API
+      types one because a stated N/A is answered, not pending. Of the eight
+      left, four need a production window, one is a measurement now runnable,
+      one is in flight with PR #427, one is an operator decision, and one — no
+      alarm sits latched and mute — is dead as written, because the alarm that
+      breaks it was skipped knowingly. Recorded with the two honest ways out.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
 
 ## Summary
 
-Sixteen open tasks looked like sixteen problems. They are a small number of
-recurring defects, each with several instances:
+Eight open tasks turned out to be instances of a small number of recurring
+defects. (The original framing said sixteen; a triage found eight genuine
+instances, three that form a separate cost cluster, and five that do not
+belong — the inflated headline is corrected here rather than left standing at
+the top while the Notes refute it further down.)
+
+The defects, each with several instances:
 
 1. **Declared vs actual, never compared.** We write down how things should be,
    reality drifts, and nothing continuously checks one against the other.
@@ -343,11 +371,21 @@ be readable.
   SSOT/codegen variant was built, judged overkill at 2 contracts, and
   reverted (return threshold recorded in the guard's commit message)
 
-### 3. The comparator
+### 3. The comparator — the schedule withdrawn, the requirement kept
 
-One scheduled job printing deltas for every row of defect 1, publishing to the
-SNS topic that already reaches the team. Start with the two that already bit us —
-schema and CDK — then alarm filters vs emitted strings, then tests vs CI.
+A single scheduled job printing deltas for every row of defect 1 was the first
+answer, and it is **not being built**. ADR 0054 records why: the infrastructure
+comparison already runs (`make diff-production`); its output was read on
+2026-06-22, measured again on 2026-07-27, and the delta was still pending on
+2026-08-04. The gap was never detection. Putting the same report on a timer
+produces it more often, to the same effect.
+
+What survives is the requirement inside the idea: **a human sees the delta
+without asking for it.** That is now bound to the release instead of to a
+clock — `cdk diff` covers all ten declared stacks on every tag run
+(`infra/scripts/deploy-scope.sh`), so the delta arrives at the moment a change
+ships, which is also the moment someone can act on it. Same principle as
+ADR 0054 rule 5: verify on change, not on a schedule.
 
 ### 4. Cost attribution and cost detection ([[0449]]) — **done 2026-08-10** (detection live after deploy)
 
@@ -434,22 +472,40 @@ month is unanswerable by construction.
 ## Acceptance Criteria
 
 - [x] Read-only AWS principal exists and is usable from the assistant workspace
-- [x] The planned-pause constraint has a stated answer — resolved 2026-08-10
+- [ ] The planned-pause constraint has a stated answer — resolved 2026-08-10
       the opposite way from the first draft: pauses are NOT machine-readable;
       one knowing page per pause is the accepted design (ADR 0054 rule 4).
-      Verified at deploy by pausing and confirming exactly one page
+      **Un-ticked 2026-08-19**: the box was checked against a verification
+      that was never run. Worse, the deploy window it referred to is the one
+      in which no alarm could deliver at all (see the mute incident below),
+      so "exactly one page" was unobservable by construction. Re-ticks after
+      pausing the event-source mapping and counting the pages that arrive
 - [ ] An alarm fires on ingestion stall — in code
       (`production-ingestion-backlog-age`); AC checks off after a simulated
       stall against the deployed alarm
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
-- [x] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
+- [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
       latched and mute (2026-08-11 — DLQs: drain per `docs/runbooks/dlq.md`,
       standing content never accepted; Galexie disk: act-before-ceiling
-      comment; latch-proofing verified at deploy by the drained-DLQ
-      test-message gate)
-- [ ] Comparator runs on a schedule and reports schema + CDK deltas; its output is
-      seen by a human without anyone asking for it
+      comment). **Latch-proofing partially verified 2026-08-19**: purging the
+      ledger DLQ moved its alarm ALARM -> OK after five days latched, which
+      proves the drain half; the other half — that a re-dirtied queue pages
+      again — needs the test-message gate and has not run.
+      **Contradicted in production, knowingly, 2026-08-19**: measured the same
+      day, `production-enrichment-dlq-depth` has been in ALARM without
+      interruption since 2026-07-03 — 47 days — with 6 messages standing and
+      the depth never returning to zero across message expiries. CloudWatch
+      notifies on transition, so that alarm is mute by construction and the
+      topic-policy fix did not revive it. Skipped on the operator's call, so
+      this criterion cannot be ticked as written: the rule says standing
+      content is never accepted, and it is being accepted
+- [ ] The declared-vs-actual delta reaches a human without anyone asking for it.
+      **Re-scoped 2026-08-19** from "a comparator runs on a schedule": the
+      schedule is withdrawn (ADR 0054, and the measured six weeks of a read-but-
+      unacted delta), the requirement is not. The mechanism is the tag run's
+      `cdk diff` over all ten stacks — so this criterion now ticks with the one
+      below, which gates that same run
 - [ ] The CDK half of that comparison exists at release time, not only on a
       schedule: `cdk diff` covers all ten declared stacks on every tag run, and
       a tag can deploy any of them (in code 2026-08-18,
@@ -462,29 +518,181 @@ month is unanswerable by construction.
       the sep1 issuer resolve reads ~24.6k rows/call in `system.query_log`
       (not ~24.9M), and the `dev_read` vs `ingestion_writer` read-count
       discrepancy explained or recorded as still open
-- [ ] Cost allocation tags active; a per-project cost answer takes minutes, and a
+- [x] Cost allocation tags active; a per-project cost answer takes minutes, and a
       step change in spend raises an alert (tags active + backfill, runbook
-      shipped; anomaly detection committed — checks off after deploy)
+      shipped; anomaly detection committed — checks off after deploy).
+      **Ticked 2026-08-19 on the deploy**, and the boundary is stated rather
+      than glossed: read-only checks confirm the monitor exists
+      (`production-cost-anomaly-by-service`, DIMENSIONAL/SERVICE, created
+      2026-08-18) and that an IMMEDIATE subscription routes it to the alarm
+      topic. What is NOT proven is the last hop to the channel — that is true
+      of every alarm here and is what ADR 0054 rule 5 gates from now on
 - [ ] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
       without widgets) — including a stated dashboard answer for the new
       cost-anomaly alert. First slice in PR #422 (two dead widgets removed,
       freshness widget on the alarm's signal, backlog-age widget with
-      threshold line); still open for the second PR: worker-errors +
-      CH-write-failures widgets, the cost graph + stated answer, and the
+      threshold line). **Second slice in PR #427**: worker-errors and
+      CH-write-failures widgets and the cost section are in. Still open: the
+      stated dashboard answer for the cost-anomaly alert, and the
       per-decision leftovers (Galexie disk %, cost reading note, ledger
-      RATE series)
+      RATE series). Deliberately NOT taken: sharing one metric constant
+      between an alarm and its widget (review finding 39) — the arithmetic
+      favoured it and it was skipped anyway, so alarm/widget equality stays
+      an assertion in a comment
 - [ ] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
       0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
       deploy-gated verifications; re-scope of the five non-instances is with
-      the operator)
+      the operator). **2026-08-19**: 0449 moved backlog -> active, because its
+      detection half has been live since the 2026-08-18 release while the file
+      still read "not started". Five further tasks spawned from the review
+      sweep below — 0507 (schema migration ladder), 0508 (crate boundaries),
+      0509 (RPC pools and declared egress), 0510 (auth path missing from the
+      API schema), 0511 (infrastructure configuration is not one thing) — and
+      four existing tasks absorbed findings rather than spawn near-duplicates
+      (0103, 0414, 0418, 0458)
 - [x] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
       naming the signals and where they live (2026-08-11:
       `docs/runbooks/health.md` — the four-sentence convention, the coverage
       matrix with every cell decided, symptom→first-move paths, an escape
       hatch, and the feedback rule; plus `api-5xx.md`, `dlq.md`, `costs.md`
       shipped earlier)
-- [ ] **API types regenerated** — N/A, no API surface change
+- [x] **API types regenerated** — N/A, no API surface change (an N/A with a
+      reason is answered, not pending)
+
+### Where the remaining eight stand (triaged 2026-08-19)
+
+Triaged once so nobody re-derives it. Three shapes: an **operator window**
+(needs a deliberate action in production and cannot be done from a keyboard
+here), a **measurement** (runnable now), or **dead as written**.
+
+| Criterion                                  | Shape               | What unblocks it                                                                                                                             |
+| ------------------------------------------ | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planned pause pages exactly once           | operator window     | pause the event-source mapping, count the pages that arrive                                                                                  |
+| Alarm fires on ingestion stall             | operator window     | simulate a stall against the deployed alarm                                                                                                  |
+| CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                            |
+| 0403's deferred measurement                | measurement         | a deploy has now happened; the `system.query_log` read and the `dev_read` vs `ingestion_writer` discrepancy can be run                       |
+| Dashboard↔alarm coverage                   | in flight           | PR #427 carries the two widgets and the cost section; the stated dashboard answer for the cost alert and three per-decision leftovers remain |
+| Each child task closed or re-scoped        | operator decision   | the re-scope of the five non-instances                                                                                                       |
+| Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                    |
+| No alarm sits latched and mute             | **dead as written** | see below                                                                                                                                    |
+
+**The latched-alarm criterion cannot be ticked, and that is a decision, not a
+backlog item.** `production-enrichment-dlq-depth` has been in ALARM since
+2026-07-03 and was skipped deliberately on 2026-08-19. The rule it states —
+standing content is never accepted — is being knowingly broken. Two honest
+ways out, both the operator's: drain that queue and let the criterion mean what
+it says, or narrow the criterion to exclude it with the reason written down.
+Leaving it open and unexplained is the one option that makes the task lie.
+
+**Four of the remaining seven need a production window, not code.** That is the
+real state of this umbrella: the building is done, the proving is not, and the
+proving is deliberately not something that can be faked from here — which is
+the whole point of a task named "declared vs actual, never compared".
+
+## Review sweep 2026-08-19 — 68 findings, and what survived measuring them
+
+After the mute incident, six review passes were run over the merged first
+slice plus a whole-repo architecture audit, and their output was tracked to a
+disposition each. The register itself is deliberately not in git (it names
+files and shapes for one finding that must not be described in a public repo);
+what belongs here is the outcome and the lesson.
+
+**Where the 68 went**
+
+| Disposition                                    | Count |
+| ---------------------------------------------- | ----- |
+| Fixed                                          | 17    |
+| Already covered by an open task                | 31    |
+| Examined and rejected on measurement           | 10    |
+| Verified healthy, recorded so nobody re-audits | 5     |
+| Skipped on the operator's call                 | 3     |
+| Handed off / refuted outright                  | 2     |
+
+**What shipped from it.** The alarm-mute fix (the only finding that was
+actually breaking production, deployed 2026-08-19 13:59 UTC and verified
+live); ADR 0054 rule 5; the comparator re-scope; threshold sources named; the
+trash policy's worktree hole closed; the task-status correction on 0449;
+ASCII-only synthesized strings; four alarms stripped of a re-derived ADR rule;
+the T4 decision recorded inside the guard.
+
+**The lesson, because it cost most of the session.** Every finding that named
+a file and a line held up. Every _aggregate characterisation_ did not:
+
+- "the alarm blocks are ~600 lines of copy-paste" — all ten together are 226,
+  and roughly 30 are recoverable;
+- "~30 findings on other people's files" — the range carries nine files from
+  other tasks, all of them this operator's;
+- "four near-identical justification essays" — one argument repeated four
+  times, 11 lines net;
+- "a magic count guard instead of an exact filter" — the exact filter is
+  already there, and the count is the guard **on** it;
+- "the Makefile reinvents an approval flag" — the flag guards
+  security-broadening changes, the confirm guards a parked delta, and both are
+  in use.
+
+Ten findings died that way. The pattern is pattern-recognition without
+arithmetic: the direction was right every time, the magnitude was never
+computed. **Verify the summary at least as hard as the finding.** The same
+discipline is why the alarm factory, the error-rate helper and the shared
+metric constants were all rejected or reverted rather than shipped on the
+strength of three reviewers agreeing.
+
+A second, narrower lesson: `npx --prefix <dir> nx …` does not change the
+working directory, so several verification runs this session measured the main
+checkout while the work sat in a worktree. It reported four passing guard
+tests where the worktree has five, and it reported green while a deliberately
+broken emit site sat on disk. Verification commands must be run from the tree
+they claim to verify.
+
+## Incident 2026-08-18 — this task's own deploy muted every alarm for 19 h
+
+The defining event of this task, and it is ours. Recorded here rather than in
+a child task because it invalidates two acceptance criteria and rewrites one
+open decision from optional to blocking.
+
+**What happened.** Adding a cost-anomaly grant to the alarm topic
+synthesised an `AWS::SNS::TopicPolicy`, and that resource REPLACES a topic's
+access policy rather than extending it. The replaced policy was the default
+SNS attaches at topic creation — the statement CloudWatch publishes under.
+From the deploy at 14:52 until 09:58 the next morning, every alarm evaluated
+correctly, changed state correctly, and could not deliver.
+
+**Why nothing caught it.** Three reasons, each worth keeping:
+
+1. The deploy was green. Nothing failed — the resource was created exactly as
+   written. Losing the implied statement is obedient behaviour, not an error.
+2. A refused publish is nobody's alarm. It surfaces only in an alarm's action
+   history, which no one reads unless already suspicious.
+3. The post-deploy verification checked alarm STATES and metric flow, both
+   healthy. It did not check action EXECUTION — and could not, because for
+   26 hours no alarm attempted a delivery. The first attempt was the DLQ
+   returning to OK after a purge, which is how this was found: by accident,
+   during unrelated work.
+
+**Measurement that settled it**: three `Failed to execute action` entries on
+our topic in the window, against twelve `Successfully executed` on the
+co-tenant's topic in the same window — a topic-scoped cause, not a service
+fault.
+
+**What it changes here.**
+
+- The Slack-chain witness stops being an open decision and becomes a
+  precondition. ADR 0054 named this exact failure under Negative consequences
+  and listed two cheap mitigations; the work identified the hole, wrote it
+  down, and walked into it. An ADR that governs alarms but says nothing about
+  the channel they travel is incomplete — the channel needs a rule.
+- Verification gates must run immediately after a deploy, not "later". The
+  drained-DLQ test-message gate existed precisely for this and would have
+  exposed it in a minute; it was deferred and the defect lived 19 hours.
+- Two acceptance criteria were ticked against proofs that never ran, one of
+  them referring to the very window in which no page could arrive. Both are
+  un-ticked above.
+
+**Fix**: `ops/0455_sns-topic-policy-mute-fix` — the policy now lists every
+principal explicitly (owner account, cost anomalies with a source-account
+condition), with a comment recording the replacement semantics so the next
+grant is added to the list rather than on top of it.
 
 ## Carried to the follow-up PR (raised in PR #422 review, decided not to widen)
 

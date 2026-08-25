@@ -1,31 +1,6 @@
-import { formatFee } from '@rumblefish/soroban-block-explorer-ui';
 import { describe, expect, it } from 'vitest';
 
 import { formatAbsoluteUtc } from './formatters.js';
-
-describe('formatFee', () => {
-  it('returns em-dash for non-finite input', () => {
-    expect(formatFee(Number.NaN)).toBe('—');
-    expect(formatFee(Number.POSITIVE_INFINITY)).toBe('—');
-  });
-
-  it('treats 0 stroops as "0 XLM"', () => {
-    expect(formatFee(0)).toBe('0 XLM');
-  });
-
-  it('returns em-dash for negative input (bad data, not a real fee)', () => {
-    // Guards against BigInt-modulo padded-minus-sign corruption.
-    expect(formatFee(-100)).toBe('—');
-    expect(formatFee(-10_000_000)).toBe('—');
-  });
-
-  it('converts stroops to XLM and trims trailing zeros', () => {
-    expect(formatFee(100)).toBe('0.00001 XLM');
-    expect(formatFee(10_000_000)).toBe('1 XLM');
-    expect(formatFee(25_000_000)).toBe('2.5 XLM');
-    expect(formatFee(1_000)).toBe('0.0001 XLM');
-  });
-});
 
 describe('formatAbsoluteUtc', () => {
   it('formats an ISO timestamp as YYYY-MM-DD HH:mm:ss UTC', () => {

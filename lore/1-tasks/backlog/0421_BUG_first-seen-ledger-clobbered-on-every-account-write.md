@@ -286,3 +286,92 @@ from itself. Migration is a new table + `INSERT SELECT` + `EXCHANGE TABLES`.
 - Discovered via a contradiction while measuring something else: 7,875 accounts
   claimed a `first_seen_ledger` inside the last 21 ledgers while the deduped
   account total was growing by only tens per minute.
+
+## Analysis 2026-08-21 — the shape of the fix, and half of it already exists
+
+Re-measured on production while reviewing the 0463 release (fresh numbers,
+same phenomenon this task was opened for):
+
+| population                             | with `sequence_number = 0` |
+| -------------------------------------- | -------------------------- |
+| all accounts (14,577,283)              | 1,390,359 — 9.5 %          |
+| **accounts active recently (451,930)** | **251,186 — 55.6 %**       |
+
+An account that sends a transaction always bumps its sequence on chain, so
+every one of those 251k zeroes is ours. The 61.71 % this task recorded in July
+and the 55.6 % measured now are the same tap, still running.
+
+### Four options weighed
+
+| #     | option                                                                      | keeps coverage                                                                                                 | stops the clobber | cost                                                                                                                       |
+| ----- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| A     | stop writing skeleton rows — only write when an `AccountEntry` was observed | **no** — an account that merely RECEIVED a payment disappears from the list and from search until it transacts | yes               | small                                                                                                                      |
+| B     | write the skeleton with the LOWEST version                                  | yes                                                                                                            | yes               | `last_seen_ledger` is both the RMT version and a meaningful column; it cannot be stamped 0 without lying about "last seen" |
+| **C** | **split the table by write condition**                                      | **yes**                                                                                                        | **yes**           | migration + historical backfill                                                                                            |
+| D     | `AggregatingMergeTree` with per-column `max()` / `argMax()`                 | yes                                                                                                            | yes               | rebuild of the table and every reader; heaviest                                                                            |
+
+**C is the recommended shape**, and 0463 has already built half of it:
+
+- `accounts` — identity plus `first_seen_ledger` / `last_seen_ledger`. Written
+  on every touch. Nothing here can be falsified by a touch.
+- a side table written ONLY when an `AccountEntry` was in the change set —
+  today `account_entry_state` (signers, thresholds, master weight, flags), which
+  would gain `sequence_number` and `home_domain`.
+
+`account_entry_state` already carries the exact write condition this fix needs
+(`ExtractedAccountState.signers.is_some()` — trustline-only appearances never
+touch it) and the exact source (`AccountEntry`). It is not a coincidence: both
+tables exist because a whole-row RMT write cannot carry fields the writer did
+not observe.
+
+D remains worth a look if per-column merge semantics would also retire
+`repair-tier1`'s MIN problem (the 12 Tier-1 columns) in one move — that is the
+one thing C does not solve. Weigh them together, not separately.
+
+**Owner's read (2026-08-21): C is the likely answer.** D solves the same
+problem through a heavier mechanism — a table rebuild plus every reader
+learning aggregate-merge semantics — where C is a write-condition split that
+the codebase already demonstrates working. Treat D as the fallback to reach
+for only if the Tier-1 MIN columns turn out to need it anyway; do not open
+with it.
+
+**The counter-argument C must answer before it is chosen:** under D this side
+table can disappear ENTIRELY — `sequence_number`, `home_domain`, signers and
+flags all fold back into `accounts` with per-column merge semantics, and the
+split stops being necessary. Anything invested in the side table's shape
+(including its name) is therefore provisional until this task picks C or D.
+The rename done in 0463 was priced with that in mind: minutes, on an empty
+table, against a coordinated code-and-data change if deferred past the
+indexer deploy.
+
+### The naming smell, and why it was resolved before this task starts
+
+`account_entry_state` holds `flags`, which describe the account as an ASSET ISSUER
+(`AUTH_REQUIRED` / `AUTH_REVOCABLE` / `AUTH_IMMUTABLE` /
+`AUTH_CLAWBACK_ENABLED`) and have nothing to do with signing. The column is in
+the right place — same source, same write condition, same version — but the
+name undersells the table, and under option C it would be plainly wrong once
+`sequence_number` and `home_domain` move in.
+
+Renaming was FREE at review time (table present on production but EMPTY, zero
+consumers in `crates/api` or `web`, writer not yet deployed: 0 of 76,334,267
+`balances` rows carried a closure), and it stops being free the moment the
+indexer ships. Decision and outcome are recorded in task 0463.
+
+### Other smells found in the same pass (all pre-existing, none blocking 0463)
+
+- **`accounts` has no `flags` column at all** — the parser has always extracted
+  `AccountEntry.flags` (`ledger_entry_changes.rs`, long before 0463) and thrown
+  them away. Whatever this task does with `sequence_number` should decide
+  deliberately whether `flags` belongs to the same row.
+- **The invariant is worth stating in the schema, not just here**: a whole-row
+  write that defaults missing fields is safe only if it also carries the LOWEST
+  version. `soroban_contracts`' stub writer is safe by accident of which column
+  is the version; `accounts` is unsafe by the same accident inverted.
+- **No reverse index on signers** — "which accounts is `G…` a signer of?" is
+  unanswerable today. Not in 0463's scope, worth its own task if the UI wants
+  it.
+- **Version-column audit came back clean**: of 27 ReplacingMergeTree tables, 15
+  carry no version column, and every one of those is either keyed by ledger (a
+  re-parse only ever competes with its own earlier parse) or is a pure function
+  of an immutable input. No table is missing a version where it needs one.

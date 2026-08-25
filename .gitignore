@@ -66,6 +66,7 @@ lore/board.json
 
 
 .temp
+.artifacts
 .trash
 
 # CDK

@@ -2,7 +2,7 @@
 id: '0199'
 title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0027', '0031', '0043', '0053']
 related_tasks: ['0125', '0194', '0195', '0247', '0261', '0266']
 tags:
@@ -483,6 +483,34 @@ history:
       #371 and should not hold it open — it keeps #367 (TVL), which is its
       actual subject. Phase B is struck from this task's scope; nothing else
       changes. The residual UX work on that view is 0490 and 0491.
+  - date: '2026-08-19'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      DONE and archived. Shipped as PR #380 (merged 2026-08-12, 5b77f7e8;
+      +close_usd guard 4ba9424e; develop-merge 2030b7e4), deployed to
+      production and verified live (#367 closed with links; #366 rode the
+      same deploy). Scope as re-cut 2026-08-06: compute-at-read USD
+      (ADR 0053) — TVL on list+detail, 24h volume+fee_revenue on detail,
+      TVL/volume/fees charts; no Lambda 2, no SQS, no snapshot-column
+      writes (original Phase 1/2 ACs superseded). AC validation
+      2026-08-19: gross volume vs Horizon trades on canonical XLM/USDC
+      over closed day 08-18 = EXACT match (526,863.8801956 XLM both
+      sides, 0.0000000 percent vs 1 percent tolerance, 1,209 swap
+      ledgers vs 3,595 trades); live reserves and total_shares also
+      exact to the stroop. Coverage at close (pinned 08-19): 99.1
+      percent priceable-ever, 71.0 percent 90d, ~41 percent 48h overall
+      (69 percent of active pools), ceiling ~96 percent of active pools
+      pending the prices-side pivot step. The month-long prices.*
+      collaboration (freeze pre-roll, USDC base-row structural fix,
+      USDT depeg correction, duplicate-identity mechanism, 0171
+      sentinel) is recorded in
+      notes/R-prices-freeze-incident-and-current-price-usd-v13.md.
+      Deferred, NOT spawned as tasks yet (awaiting explicit go, see
+      Future Work): nullable chart points, detail query
+      parallelisation, honest min_tvl filter, Phase 3 Soroban-DEX TVL
+      (gated on 0331 follow-up), forming-bucket guard revisit when
+      their coverage gate ships.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
@@ -607,33 +635,60 @@ Soroswap, Phoenix, etc. emit `swap` events with explicit per-swap amounts; no Pa
 
 ## Acceptance Criteria
 
+> Re-cut 2026-08-06 (ADR 0053 compute-at-read): Lambda 2 / SQS /
+> snapshot-column writes were removed from the design, so the Phase 1/2
+> criteria below are marked per what actually shipped, with superseded
+> items named as such rather than ticked.
+
 **Phase 1 (Indexer):**
 
-- [ ] PathPayment ops yield `gross_volume_a` extraction during XDR parse (unit + integration tests with mocked claimed_offers).
-- [ ] Insert-hook emits exactly one `LpAnalytics` SQS message per new `liquidity_pool_snapshots` row (test).
-- [ ] `gross_volume_a = None` on no-swap ledgers; deposit/withdraw ops do not contribute to the sum.
+- [x] PathPayment ops yield `gross_volume_a` extraction during XDR parse — shipped earlier on the 0261/0266 shared re-parse; validated 2026-08-19 (exact Horizon match below).
+- [ ] ~~Insert-hook emits one `LpAnalytics` SQS message per snapshot row~~ — SUPERSEDED by ADR 0053: nothing consumes snapshot inserts; USD is computed at read.
+- [x] `gross_volume_a = None` on no-swap ledgers; deposit/withdraw do not contribute (1,218 snapshot rows vs 1,209 swap ledgers on the validation day).
 
-**Phase 2 (Lambda 2):**
+**Phase 2 (compute-at-read, formerly Lambda 2):**
 
-- [ ] `tvl`, `volume`, `fee_revenue` populated by Lambda 2 from `reserves + gross_volume_a + fee_bps + oracle prices`.
-- [ ] Permanent oracle fail → per-column NULL (matrix in Phase 2 §Atomicity) + WARN log carrying pool_id, snapshot_id, per-leg oracle errors; transient → SQS retry.
-- [ ] `liquidity_pools.tvl` (if column exists) is not overwritten by Lambda 2 under any oracle outcome (only by indexer reserves recompute).
-- [ ] Sample query: non-NULL `tvl` and `volume` on production-region pools with valid oracle data.
-- [ ] Sample query: `volume / price_a` agrees with Horizon `/liquidity_pools/{id}/trades` gross volume **within 1% tolerance** on a known mixed-direction pool. The "≈" comparison is intentional — Horizon and the explorer both use per-operation extraction (Horizon parses `claimedOffers[]` the same way), so the only sources of drift are (a) USD price-snapshot timing (Horizon uses asset units, we multiply by `price_a` then divide back), (b) rounding in `NUMERIC(28,7)` arithmetic, (c) Soroban DEX swap events not yet covered in Phase 1 (Phase 3 scope). Drift > 1% on a classic-only pool indicates an extraction bug and blocks the AC.
-- [ ] `GET /liquidity-pools/:id/chart` returns non-null time series (originally 0125 AC).
+- [x] `tvl`, `volume`, `fee_revenue` computed from `reserves + gross_volume_a + fee_bps + prices` — at read (PR #380), never written to snapshots.
+- [x] Permanent price miss → NULL fields (dash in UI); prices errors degrade to NULL with logging, never a 500 — the superseded oracle-fail matrix, same intent, new form.
+- [ ] ~~`liquidity_pools.tvl` not overwritten by Lambda 2~~ — SUPERSEDED: no writer exists at all.
+- [x] Sample query: non-NULL `tvl` and `volume` on production pools — verified live 2026-08-18/19 (list, detail; e.g. XLM/USDC $4.2M).
+- [x] **VALIDATED 2026-08-19, exact match:** gross volume vs Horizon `/liquidity_pools/{id}/trades` on canonical XLM/USDC (`a468d41d…0088`), closed day 2026-08-18 UTC — 526,863.8801956 XLM on BOTH sides (0.0000000% drift vs 1% tolerance; compared in asset-A units, which removes the price-timing drift source). Live reserves + total_shares also exact to the stroop. Original phrasing: The "≈" comparison is intentional — Horizon and the explorer both use per-operation extraction (Horizon parses `claimedOffers[]` the same way), so the only sources of drift are (a) USD price-snapshot timing (Horizon uses asset units, we multiply by `price_a` then divide back), (b) rounding in `NUMERIC(28,7)` arithmetic, (c) Soroban DEX swap events not yet covered in Phase 1 (Phase 3 scope). Drift > 1% on a classic-only pool indicates an extraction bug and blocks the AC.
+- [x] `GET /liquidity-pools/:id/chart` returns non-null time series — verified live (XLM/USDC chart headline $4,166,296; TVL/volume/fees tabs).
 
 **Phase 3:**
 
-- [ ] At least Soroswap adapter scaffolding.
+- [ ] Soroswap adapter scaffolding — DEFERRED out of this task: Soroban-LP reserves are contract-held `Balance(pool)` entries, not indexed; gated on the 0331 SAC ContractData-balance follow-up (see 2026-06-30 history entry).
 
 **Common:**
 
-- [ ] Permanent / transient `EnrichError` mapping documented + unit-tested.
-- [ ] Integration test (mock price API).
-- [ ] CDK DepthAlarm thresholds reviewed.
-- [ ] Docs: ADR 0043 per-kind matrix amendment + schema doc + indexing-pipeline doc + endpoint-queries comments.
-- [ ] API types regenerated if any DTO surfaces these fields.
-- [ ] 0196 backlog updated to capture backfill dedup ownership for the three columns.
+- [ ] ~~Permanent / transient `EnrichError` mapping~~ — SUPERSEDED: no enrichment worker in the shipped design; CH errors degrade to NULL fields.
+- [x] Tests: 232 unit tests green on the merged branch (price-leg mapping, formatters, filters; decode smoke vs CH 26.3) in place of the mock-price-API integration test the Lambda design called for.
+- [ ] ~~CDK DepthAlarm thresholds~~ — SUPERSEDED: no queue exists.
+- [x] Docs: ADR 0053 + endpoint-queries 18/19/21 + database-schema-overview + backend-overview + technical-design updated in the PR (ADR 0032 rule).
+- [x] API types regenerated (CI freshness gate green throughout).
+- [ ] ~~0196 backfill dedup ownership~~ — SUPERSEDED: the three columns are never written, so there is nothing to dedup.
+
+## Future Work
+
+None of these are spawned as tasks yet — surfaced for an explicit decision,
+per the no-auto-task convention:
+
+1. **Nullable chart points** — let the TVL line BREAK over unpriceable
+   stretches instead of connecting across them (deferred review finding).
+2. **Parallelise the two detail queries** (price context + USD analytics
+   run serially; measured cheap, deferred with reason in PR #380 review).
+3. **Honest `filter[min_tvl]`** — needs a materialized per-pool TVL
+   (prices-side identity-keyed series or our own rollup); the API answers
+   400 until then.
+4. **Phase 3: Soroban-DEX TVL** — gated on the 0331 SAC
+   ContractData-balance ingestion follow-up (contract-held reserves).
+5. **Forming-bucket guard revisit** — when the prices-side coverage gate +
+   raw coverage share ship, the unconditional one-bucket cut can become
+   conditional.
+6. **Prices-side watch items** (theirs, tracked in the R-prices note):
+   duplicate-identity fix (5.5% of priced pools tainted), second pivot
+   step (coverage 69→96 percent of active pools), 0171 omit-the-row,
+   stale-but-real close.
 
 ## Notes
 
