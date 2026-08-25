@@ -1066,6 +1066,110 @@ THAT. An account with `master_weight = 0` has a disabled master key and must
 NOT render the row as a signer with weight 0 reading as ordinary — 41 of 5,000
 sampled accounts are permanently locked this way.
 
+### Deployed 2026-08-24 evening — the writer validates against the chain
+
+PR #428 merged to master (`6cd072c5`) and the indexer deployed. Verified by
+reading production, not by assuming:
+
+| check                              | result                                                             |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| lifecycle writer stamping          | `closed_at_ledger` non-zero — first stamp at ledger **64,115,052** |
+| live signer writes                 | `account_entry_state` carrying production rows                     |
+| ingest after the container recycle | our head **equals** the chain head to the ledger                   |
+
+That last row is not a formality: deploy + container recycle is the window
+where the ClickHouse driver rejects inserts client-side on a struct/schema
+mismatch, which stopped ingest for nine minutes in task 0310. It did not
+recur.
+
+**The three earlier dry-runs are void for `--execute`.** Their checkpoints
+(64,106,239 / 64,106,495 / 64,107,135) all sit BELOW the deploy ledger, and the
+ordering contract requires a checkpoint taken after it — otherwise every
+removal in the gap was written by the OLD writer as a plain zero at a ledger
+above the checkpoint, outversioning the seed's closure and resurrecting the
+ghost. A fresh run at checkpoint **64,115,135** replaces them.
+
+#### The defect signals fire for the first time — and read zero
+
+Before the deploy nothing was ever stamped closed, so `AlreadyClosed` and both
+`ClosedButLive*` verdicts were structurally unreachable: they could not have
+caught anything. This run is the first where they could:
+
+```
+already marked closed            182 classic + 37 native
+CLOSED BUT LIVE (re-opened)        0 + 0
+CLOSED vs LIVE conflict (defect?)  0 + 0
+```
+
+219 stamps, none contradicted by the snapshot. That also exercises the
+checkpoint-guard fix in the condition it was written for — post-deploy churn
+meeting a snapshot that predates it.
+
+#### Every stamp the deployed writer made, checked against chain
+
+All 557 distinct keys carrying a stamp (482 trustlines + 75 native), resolved
+to StrKeys and fetched from RPC:
+
+- **554 absent from chain** — correctly closed.
+- **3 apparently present, none a defect.** One (`GCYNGANMUF…`) has a NEWER
+  open row on our side: `closed_at = 0`, 1.5 XLM at ledger 64,115,211, and the
+  chain agrees exactly — same `lastModifiedLedgerSeq`, same balance. It
+  surfaced only because an OLDER row carries a stamp, which is the account
+  being merged and then RE-CREATED at the same address, with both states
+  recorded. The other two were present on the first probe and gone minutes
+  later on the second — the same merge/re-create/merge pattern, caught
+  mid-cycle.
+
+Account re-creation is worth recording as a shape this writer handles: the
+address returns, and the newest row wins on RMT version, so a closure does not
+become permanent.
+
+#### Post-deploy run — what `--execute` would write (checkpoint 64,115,135)
+
+|                        | rows                                            |
+| ---------------------- | ----------------------------------------------- |
+| `balances` corrections | 44,852,492                                      |
+| `account_entry_state`  | 10,894,330                                      |
+| `assets` stubs         | 97,108                                          |
+| `accounts` stubs       | 0                                               |
+| unresolved references  | **0 assets, 0 holders** (464 issuers, cosmetic) |
+
+Structural audit: 0 failures. Missing trustlines at/above our floor: still 0.
+
+#### The deployed writer, checked against an external source
+
+Not "is it running" but "does it write the truth". Both write paths and both
+halves, every check against RPC with the independent decoders:
+
+| what                               | check                                             | result                                                                |
+| ---------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------- |
+| signers written by the LIVE writer | thresholds, signer set AND order vs chain         | **377 / 377 identical** (22 churned after our ledger, 1 merged since) |
+| account-merge closures             | absent from chain                                 | 554 / 557                                                             |
+| account-merge closures             | is there an `account_merge` at OUR stamped ledger | **5 / 5 SUCCESS**                                                     |
+| trustline closures                 | absent from chain                                 | 6 / 6                                                                 |
+| trustline closures                 | is there a `change_trust` at OUR stamped ledger   | **6 / 6**                                                             |
+
+The second and third rows matter more than absence alone: absence proves we
+closed something that is gone, the ledger match proves we closed it _for the
+right reason at the right moment_. Deleted entries leave no trace in
+`getLedgerEntries`, so the timing had to be verified from the ledger's
+transaction set instead.
+
+Two false alarms along the way, both mine, recorded so they are not re-derived:
+
+- Three merge closures looked "still present on chain". One
+  (`GCYNGANMUF…`) has a NEWER open row on our side agreeing with the chain to
+  the balance and ledger — the account was merged and then RE-CREATED at the
+  same address, both states recorded, newest winning on RMT version. The other
+  two were present on one probe and gone minutes later: the same
+  merge/re-create/merge cycle caught mid-way. Account re-creation is a shape
+  this writer handles; a closure does not become permanent.
+- Four trustline closures appeared to have no matching transaction in their
+  ledger. The join that produced them took the CROSS product of five holders
+  and five assets and then zipped ledgers positionally, so the (holder, asset,
+  ledger) triples under test were never real rows. Re-run with the ledger
+  carried through the join: 6 / 6.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five
