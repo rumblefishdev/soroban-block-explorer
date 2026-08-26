@@ -282,8 +282,13 @@ async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, Backfill
 ///   ALONE, never given a different correction.
 /// - The SNAPSHOT side drifts too, and that half the old comment did not
 ///   reason about. Checkpoints publish every 64 ledgers (~5 minutes) while a
-///   full pass takes ~15, so `--execute` ALWAYS decodes a later checkpoint
-///   than the dry-run reviewed — not occasionally. Holdings the network
+///   full pass takes ~5 (measured: 317 s dry-run, 637 s with the inserts;
+///   the archive download dominates and is network-bound, so earlier runs
+///   measured 909 s on the same code). What separates two runs is therefore a
+///   whole pass PLUS the operator reading `summary.txt`, which is why
+///   `--execute` still always decodes a later checkpoint than the dry-run
+///   reviewed — but the margin is one checkpoint interval, not three.
+///   Holdings the network
 ///   created in that window are `missing` in the second run and get INSERTED,
 ///   without having appeared in the summary an operator signed off on.
 ///

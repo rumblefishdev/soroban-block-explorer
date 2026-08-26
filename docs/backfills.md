@@ -446,6 +446,36 @@ regardless. The dry-run is unaffected: it only reads, in bounded slices. Confirm
 the identity before the run, not at the prompt (`SELECT currentUser()` and
 `system.settings` answer it read-only; never test a write by writing).
 
+### Running it — the exact shape
+
+The mTLS bundle is three flags, all-or-nothing; a partial set panics. They can
+also come from `CLICKHOUSE_CERT` / `_KEY` / `_CA`, but a read cert usually
+already occupies those names, so pass the write bundle explicitly — a CLI value
+beats the env var, so nothing has to be unset. `--artifacts` belongs to the
+SUBCOMMAND, after `snapshot-seed`, not before it.
+
+```bash
+backfill-runner \
+  --clickhouse-url https://<ch-host> \
+  --ch-cert <cert.pem> --ch-key <key.pem> --ch-ca infra-hetzner/ca/ca.crt \
+  snapshot-seed --artifacts <dir> [--execute]
+```
+
+**Step 0 — confirm the identity with a READ, never a trial write:**
+
+```sql
+SELECT currentUser(), getSetting('readonly'), getSetting('max_execution_time')
+```
+
+`--execute` now refuses early on a read-only identity rather than discovering it
+at the first INSERT, but running the query yourself still costs 2 seconds and
+tells you which user you are before anything downloads.
+
+Keep a write cert OUT of any directory a read-only helper globs (the `chq`
+wrapper takes the first `*.crt` and the first `*.key` INDEPENDENTLY, so a second
+pair there either silently promotes that helper to admin or pairs mismatched
+halves).
+
 **The seed's ordering contract (do not reorder):**
 
 1. Deploy the lifecycle writer (the indexer that stamps `closed_at_ledger`)
@@ -463,8 +493,12 @@ the identity before the run, not at the prompt (`SELECT currentUser()` and
 
 **`--execute` never decodes the checkpoint the dry-run reviewed — expect that,
 and read `summary.txt` accordingly.** Checkpoints publish every 64 ledgers
-(~5 minutes) and a full pass takes ~15, so the snapshot has always advanced by
-the time the run starts. Two consequences, in opposite directions:
+(~5 minutes) and a full pass takes about as long again — measured 317 s for a
+dry-run and 637 s with the inserts, dominated by the archive download — so what
+separates two runs is a whole pass plus the time an operator spends reading
+`summary.txt`. The snapshot has therefore always advanced by the time the
+second run starts, though by one checkpoint interval rather than several. Two
+consequences, in opposite directions:
 
 - Our own churn is harmless: the `>= checkpoint` guard files it as
   newer-than-checkpoint and leaves it alone.
@@ -486,6 +520,48 @@ live data on the entry's own `lastModifiedLedgerSeq`, closures on the run's
 checkpoint ledger (semantics: "closed at or before"). ReplacingMergeTree keeps
 the higher version, so the live writer's newer rows always win regardless of
 load order.
+
+### Auditing a run that has written — the order that makes it mean something
+
+Do these AFTER `--execute`, and capture the aggregates BEFORE it (they cannot be
+recovered afterwards). Every number here was produced this way on 2026-08-26.
+
+1. **Reproduce the run's own arithmetic.** The verdict buckets must sum to the
+   rows it says it folded, and the writing verdicts must sum to the correction
+   count. If either fails, a row was mis-bucketed and the rest of the audit is
+   meaningless.
+2. **Count the cohorts in ClickHouse.** Rows at `last_updated_ledger =
+<checkpoint>` are the closure/ghost cohort (expect `amount = 0` and
+   `closed_at = checkpoint`); rows below the ledger floor with `closed_at = 0`
+   are the inserted live holdings.
+3. **Sample from the DATABASE, not from the dumps.** The dumps are what the run
+   _intended_; the table is what it _did_. Resolve identities through our own
+   dimension tables and verify against `getLedgerEntries`, gated on
+   `lastModifiedLedgerSeq` — equal licenses an amount claim, above is churn,
+   below is a defect. Spread the sample across ERAS and across both asset-code
+   widths: `AlphaNum4` and `AlphaNum12` are different XDR branches, and a sample
+   of only short codes proves nothing about long ones.
+4. **Check ingest and disk**, because a bulk insert is also the window where the
+   ClickHouse driver can reject the live writer's rows: our head must equal the
+   chain head, and the live writer must still be stamping.
+5. **Compare against an external indexer** — and check what its column MEANS
+   before believing the delta. A count labelled "trustlines" may or may not
+   include contract holders; verify by computing both of ours and seeing which
+   one tracks. Exact equality on one asset is luck, not evidence; agreement
+   within a fraction of a percent across several is.
+6. **Reconcile supply against the ledger header**, not against a remembered
+   figure. `total_coins` and `fee_pool` both live in the signed header
+   (`getLedgers` → `headerXdr`, past the 32-byte history-entry hash). The
+   account sum must fall BELOW `total_coins` by the fee pool plus everything
+   held outside accounts — AMM reserves, claimable balances, contract-held.
+   Two traps, both hit in practice: measure the AMM term in the SAME pass (a
+   two-day-old figure drifted 381k XLM, which was 40% of the residual it fed),
+   and say whether your sum includes contract-held balances — on pubnet that is
+   ~920M XLM, so the two readings of "our native sum" differ enormously.
+7. **Re-run the dry-run.** It writes nothing, costs one pass, and is the only
+   real test of idempotency: `missing` and `closure` should collapse to churn,
+   `already closed` and `agree` should absorb them. A bucket that fails to move
+   locates the defect exactly.
 
 **After the seed (standing requirement, not advice):** measure the coverage
 achieved for trustlines and accounts separately, AND cross-check a sample
