@@ -1963,25 +1963,78 @@ relevant to the B→D sequencing in 0515, not to this task.
   archive download, which is network-bound (254 s of decode here).
 - Unresolved issuer references 0, because there are no stubs at all.
 
+### T13 verified against production data (2026-08-26)
+
+The read filter, the signers path and the presentation were built in a separate
+session; this is the independent check. Every fixture below was chosen BEFORE
+the work, from populations already verified against the chain, and the API's own
+`BALANCES_SQL` was extracted verbatim from the source and run against production
+— so what is checked is the query that ships, not a paraphrase of it.
+
+| gate                              | result                                                                      |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| API tests                         | 258 passed                                                                  |
+| web lint + typecheck + tests      | 296 passed (typecheck against the WORKTREE's libs, not the main checkout's) |
+| API-types freshness (the CI gate) | clean — `git diff --exit-code` on the generated tree                        |
+| `amount != 0` left in live SQL    | none — only in the doc comment and the guard test that forbids it           |
+
+#### The fixtures, through the shipping query
+
+| account                    | expected                            | got                                                                                                            |
+| -------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `GDXWIA4V…` (issue #377)   | five assets, not two                | **5 rows** — native + KALE funded, then SHX / AQUA / USDC at 0 on ledgers 59,023,860 / 58,469,457 / 58,469,453 |
+| `GC45LJ7N…`                | native zero beside a funded classic | **XLM 0 + USDC 1.5**                                                                                           |
+| warehouse, 8,547 stamped   | none of them                        | **0 rows**                                                                                                     |
+| warehouse, 890 stamped     | none of them                        | **1 row** — native 2 XLM, live and funded; 890 stamped, 0 live zeros. Correct, not a leak                      |
+| merged account (ghost set) | nothing at all                      | **0 rows**                                                                                                     |
+
+Ordering is the T5 decision, verified in the output: native first, then funded,
+then amount, then recency. The three zeros come back newest-first.
+
+#### The SAC chip now carries information
+
+It could not fire at all before (it guessed `issuer.startsWith('C')`, and no
+account has a C-prefixed address). Checked that it DISCRIMINATES rather than
+merely rendering: one account's `STEM` returns `sac_deployed = false` while its
+native row returns `true`, so the chip is a signal rather than a constant.
+
+#### A number I challenged and was wrong about
+
+`AccountSigners.tsx` states 703,871 accounts have a disabled master key. Measured
+773,480, and I was ready to file it — but the alternative reading checks out
+exactly: **703,906 have `master_weight = 0` AND other signers**, which is the
+population the comment is about. The remaining 69,576 have no signers either,
+and the UI flags those separately as an account no key can sign for. The comment
+is right; the naive count was mine.
+
+Coverage claim in the DTO also verified: 10,883,461 of 14,596,194 accounts carry
+a signer row, so the documented "25% carry no row" is accurate.
+
+#### What is NOT yet verified
+
+**Production.** Everything above is the shipping query against production DATA
+and the components under test — not the deployed page. The last acceptance
+criterion stays open until the deploy, which is the operator's.
+
 ## Acceptance criteria
 
-- [ ] A live zero-balance trustline appears; the fixture account shows five
+- [x] A live zero-balance trustline appears; the fixture account shows five
       assets, not two
-- [ ] A **closed** trustline still does not appear — verified on an account
+- [x] A **closed** trustline still does not appear — verified on an account
       with a known removal, not only the happy path
-- [ ] The 873-zero-row account shows none of those 873
-- [ ] Native zero balances appear (239,087 holders), watching the two-convention
+- [x] The 873-zero-row account shows none of those 873
+- [x] Native zero balances appear (239,087 holders), watching the two-convention
       trap for native
-- [ ] Signers (key, weight, type) and low/med/high thresholds are shown; the
+- [x] Signers (key, weight, type) and low/med/high thresholds are shown; the
       fixture reads as multisig (verified on chain: thresholds 3/3/3, five
       signers at weight 1 — a genuine 3-of-5)
-- [ ] An account with no signers row renders an explicit "not indexed", never
+- [x] An account with no signers row renders an explicit "not indexed", never
       an empty list that reads as "not multisig"
-- [ ] Seed coverage measured for BOTH trustlines and accounts, and
+- [x] Seed coverage measured for BOTH trustlines and accounts, and
       cross-checked against an independent source regardless of the measured
       result (the 200-account chain probe; the RPC comparator was deleted
       2026-08-21 — see 0502)
-- [ ] `total_supply` and `holder_count` move **only in the direction the
+- [x] `total_supply` and `holder_count` move **only in the direction the
       network justifies**, spot-verified against RPC for at least one asset.
       (Rewritten 2026-08-18: the original criterion said "unchanged", which a
       correct seed cannot satisfy — `balance_aggregates_mv` recomputes
@@ -1989,11 +2042,11 @@ relevant to the B→D sequencing in 0515, not to this task.
       and the seed inserts ~19.3M live holdings carrying real amounts while
       zeroing ~1.04M native ghosts. Capture both aggregates BEFORE the run so
       the delta can be checked rather than discovered.)
-- [ ] The 200-account probe from `notes/R-` returns zero accounts where the
+- [x] The 200-account probe from `notes/R-` returns zero accounts where the
       chain holds more live zero trustlines than we do
 - [ ] **Verified on production**, not at merge — the destination is a shipped,
       checked change
-- [ ] **Docs updated** — `docs/architecture/**` read path and frontend data
+- [x] **Docs updated** — `docs/architecture/**` read path and frontend data
       contract; `docs/backfills.md` gains the seed pass
-- [ ] **API types regenerated** — yes, the account DTO gains fields
+- [x] **API types regenerated** — yes, the account DTO gains fields
       (`npx nx run @rumblefish/api-types:generate`)
