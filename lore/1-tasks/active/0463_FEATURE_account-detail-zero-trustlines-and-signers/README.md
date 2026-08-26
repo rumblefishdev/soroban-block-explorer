@@ -1173,6 +1173,228 @@ Two false alarms along the way, both mine, recorded so they are not re-derived:
   ledger) triples under test were never real rows. Re-run with the ledger
   carried through the join: 6 / 6.
 
+### External review 2026-08-26 — verified independently before acting
+
+An outside review (8 agents, 3 adversarial rounds) produced 32 items over the
+snapshot module. Every claim was re-checked at source before anything was
+changed: each `file:line` opened, each cited commit resolved, library behaviour
+read in the vendored crate source, and production claims measured with `chq`.
+The review is mostly sound — all 8 cited commits exist with the descriptions
+attributed to them — but it carries four errors, one of them in a blocker's
+recommendation.
+
+#### The largest open question is now CLOSED by measurement, not argument
+
+The review's blocker B2 hypothesised `assets` rows whose `id` came from an
+older derivation: unkeyable by the snapshot, so their balances would fall into
+the absence arm and be zeroed and stamped closed, with no floor firing because
+the row count never changes. Only the verdict flips — silent for the
+zero-amount half, which is exactly the class this task exists to fix.
+
+Answered with a throwaway read-only falsifier (not committed; the check cannot
+be SQL, because ClickHouse's `cityHash64()` is a different algorithm from the
+low 64 bits of CityHash128 that `ids::` uses):
+
+| arm of `asset_id()`                 | rows checked | not derivable |
+| ----------------------------------- | ------------ | ------------- |
+| type 1 — `hash64("CODE:issuer_id")` | 343,987      | **0**         |
+| type 3 — `id == contract_id`        | 4,380        | **0**         |
+| type 0 — the `native` constant      | 7            | **0**         |
+
+Plus, in pure SQL over the same table: **0 identities carrying more than one
+`id`, and 0 `id`s carrying more than one identity.** That bijection is the
+corroborating argument — had the formula ever changed, the live writer (which
+uses today's) would have inserted a second row for the same identity under the
+new id. It has not done so once in ~344k assets.
+
+So B2's population is empty and its proposed permanent `--execute` refusal has
+nothing to refuse.
+
+#### Four errors in the review, recorded so they are not re-derived
+
+- **Its recommended fix for B3 cannot work.** `--expect-checkpoint <N>` would
+  have `--execute` refuse unless the freshest checkpoint equals the one the
+  dry-run named. Checkpoints publish every 64 ledgers (~5 min) and a pass takes
+  ~15, so that condition is false by construction on every run. The workable
+  shape is the deleted `--pinned-manifest` (it read the dry-run's own
+  `manifest.json`), not a freshness assertion.
+- **F5's "exists ONLY in a commit message" is false.** The 1000/1000 chain
+  check is at README line 694 and the full 11,994 + 3,772 → 0 transition table
+  at 829-831. Only the dimension-id counts are commit-message-only. F5 also
+  demands chain evidence for a bucket that measures **zero** after the fix;
+  what actually remains is F7 (`NewerThanCheckpoint` is unsampled), which
+  already says it.
+- **`docs/backfills.md:497` does not repeat the tie guarantee.** That phrase
+  occurs exactly once in the repo, in ADR 0057 line 78.
+- The summary `format!` takes **16** positional arguments, not 18. The
+  objection to positional formatting stands; the number did not.
+
+#### One place the review holds itself to two standards
+
+B1 asks for a test proving `key_slices()` covers i64 exactly once. Read
+closely, the coverage is exact for ANY value of `KEY_SLICES`, not just powers
+of two: the final slice ends at `hi` by an explicit arm, and slice `s+1` starts
+one past slice `s`'s end. A test would assert a fact about arithmetic — which
+is precisely why the same review deletes `checkpoint_lattice_accepts_only_63_mod_64`
+under D7. The other two tests B1 asks for (dangling counters,
+`build_corrections`) target real untested logic and stand: `seed.rs` has **0**
+tests against 12 in its siblings, and it is the only module that writes.
+
+#### Measured while verifying — a number the review did not have
+
+`slice_sql` excludes rows whose asset has no `assets` row. Measured on
+production: **1,616 (holder, asset) keys across 159 unknown asset ids.** They
+belong to no exclusion bucket, so `summary.txt` does not sum to the table.
+Harm is low (a re-insert lands on the same key), but the gap should be
+counted rather than invisible.
+
+Also: the unsampled set is wider than F7 states — `AlreadyClosed` and `Stale`
+have no sample arm either. And the review's ground rule about
+`changeable_in_readonly` could not be verified: that column does not exist in
+`system.settings` on CH 26.3.10.60. Its practical conclusion was confirmed
+directly instead — `dev_read`, `readonly = 1`, `max_execution_time = 30`.
+
+### Acted on 2026-08-26 — three decisions, and the corrections they implied
+
+**Snapshot drift: the claim is retracted, the pin is not restored** (B3, owner's
+call). The deleted flag's original job was keeping a frozen manual export
+consistent with the snapshot, and manual exports are gone; an unpinned run
+decodes the FRESHER snapshot, which is a better input. What was wrong was the
+documentation: `fold_our_row` asserted the drift is "only rows newly LEFT
+ALONE, never a different correction", reasoning about our side only. The
+snapshot side moves too, so holdings the network creates between the two
+checkpoints are `missing` in the execute run and get INSERTED without appearing
+in the reviewed summary. Now stated plainly in the code, in `docs/backfills.md`
+and in the three stale README lines (:306, :534, :546). The reviewed document
+BOUNDS a run's counts; it does not enumerate its rows — and the run is verified
+by measuring its outcome against the network, which no frozen input improves.
+
+**`ClosedButLiveConflict` keeps its policy and loses its reason** (F1). The
+comment claimed no honest version could supersede our closure. The file refutes
+that twice: the guard proves every row on that arm sits below the checkpoint,
+and `correction` already stamps closures at the checkpoint, which ADR 0057
+blesses. A presence fact carries the same way — an entry in the checkpoint's
+bucket list IS live at the checkpoint. The real reason is decay coupling: a
+one-off heal against an ongoing writer defect is the same trap that removed the
+same-ledger heal (task 0514), and the bucket's value is reading zero on healthy
+data. Reported still; the reason is now the true one.
+
+**`ClosedButFunded` — built, then REVERTED the same day** (F2). Worth
+recording as a full loop, because the reverting evidence is the useful part.
+
+The finding was real: ADR 0057 decision 2 promises the checkpoint version
+"deterministically supersedes both sides of any tie", and `AlreadyClosed`
+returned no correction, so for one shape it could not deliver that. A twelfth
+verdict was added to repair a row that says CLOSED while still holding a
+positive amount — zeroed at the checkpoint version (strictly above the row's
+own ledger, so it supersedes both tied rows) while KEEPING the closure ledger
+the writer recorded.
+
+It was justified partly on the tie surfacing as a MIX — the funded amount from
+one row married to the closure stamp from another, which three independent
+`argMax` aggregates permit. Measuring that argument is what killed the verdict:
+
+| measurement                                                   | result |
+| ------------------------------------------------------------- | ------ |
+| tie rows carrying a non-zero `closed_at_ledger`               | **0**  |
+| rows in the whole table with `closed_at != 0 AND amount != 0` | **0**  |
+| stamped rows overall (`closed_at != 0`)                       | 54,720 |
+
+The 2×2 has an empty cell, and it is the one this verdict fires on. Nor can a
+writer produce it: the parser sets `closed = change_type == "removed"`, and a
+removed entry carries balance 0.
+
+Decisive, though, is that **the tuple `argMax` and this verdict are two
+treatments of the SAME mechanism.** A mix was the only route to a
+closed-and-funded row, and one `argMax` over a tuple makes a mix structurally
+impossible. After that fix the verdict covers nothing that can occur — so it
+went, and `correction()` went back to three arguments.
+
+What survives instead is honesty about the gap neither closes: a tie whose
+surviving side is the coherent `{amount: 0, closed_at: L}` reads as an ordinary
+closure, writes nothing, and lives on. **ADR 0057 decision 2 was amended** to
+state its real scope — the guarantee holds whenever the surviving side produces
+a correction, which is every tie measured to date — and `docs/backfills.md`
+names the exception so it is not rediscovered as a surprise.
+
+**Four comments that were actively false, corrected:**
+
+- `seed.rs` claimed the SELECT-to-`OurRow` mapping is positional and "would
+  silently misclassify every row rather than fail". Read in the vendored
+  crate: `clickhouse` 0.15 builds a name-to-field mapping per cursor
+  (`RowMetadata::new_for_cursor`, unconditional — there is no `validation`
+  feature) and returns `SchemaMismatch` on a count mismatch or an unknown
+  column. Two review agents built findings on that one sentence.
+- `snapshot.rs` said `archive` + `network_state` "know nothing about our
+  schema". `network_state` calls `ids::` six times to derive OUR surrogate
+  keys. Only `archive` is schema-free; the seam still falls where it did,
+  because `ids` is a pure hash module that travels with it.
+- `archive.rs`'s lattice test defined its own predicate and asserted against
+  it, so deleting the production check left it green. It now calls a real
+  `is_checkpoint`, and gains the case that pins the FREQUENCY (`!is_checkpoint(31)`
+  — every case it had still passes at a frequency of 32). Honest limit: it
+  still would not catch deletion of the call site, which needs a mocked fetch.
+- Stale module names (`snapshot_report`, `snapshot_seed::slice_sql`) left over
+  from the file-tree refactor.
+
+Docs also gained the drift statement, lost Horizon as a validation source
+(legacy — it synthesises fields the ledger lacks), and the two duplicated
+reconciliation steps collapsed into one.
+
+Deferred, not dropped: F3/F4 (identity precheck, moving the two `uniqExact`
+reads above the decode), D1 → F6/F7/F8 (collapse the 11-name triplication,
+then add the missing native twins and sample arms), B1's two real tests,
+F9/F10 (heal dumps, ghost holders resolved from `accounts`), F13-F18 and the
+D-series refactors.
+
+### The two-`argMax` hazard — measured, then closed structurally (2026-08-26)
+
+A follow-up review item: `slice_sql` ran THREE independent aggregates, so on a
+same-version tie `amount` and `closed_at_ledger` could in principle be taken
+from different rows, assembling a row that exists in no part on disk.
+
+Measured over one full key slice before changing anything:
+
+| measurement                                                         | result     |
+| ------------------------------------------------------------------- | ---------- |
+| keys in the slice                                                   | 762,955    |
+| ties `argMax` actually has to resolve (at the winning version)      | **19,142** |
+| rows where the two-aggregate form disagreed with one tuple `argMax` | **0**      |
+| tie rows carrying a non-zero `closed_at_ledger`                     | **0**      |
+
+Two conclusions, and they point in different directions:
+
+- **The hazard is real but currently cannot fire.** Every one of the 1,238,583
+  known ties predates `closed_at_ledger`, so the column is 0 on BOTH sides and
+  no assembly of them can differ from a real row. The last row is the decisive
+  one — a "mix" needs the two sides to disagree in the second column, and none
+  of them do.
+- **The independence never showed itself either.** ClickHouse keeps the
+  first-encountered maximum and both aggregate states walk the same rows in the
+  same order, so they agreed 19,142 times out of 19,142. That is an
+  implementation property, not a documented contract.
+
+Taken: ONE `argMax` over a tuple, unpacked in the existing outer SELECT. Proven
+equivalent on 762,955 keys and verified against production for column names and
+types (`Int64/Int64/Int128/Int64/Int64`, matching `OurRow`). It closes the shape
+a FUTURE tie can take, once the deployed writer's stamps start landing at
+contended versions — not the historical population, which `Closure`/`Ghost`
+already supersede.
+
+**This measurement is also what retired `ClosedButFunded`** (above): that
+verdict existed to catch the mix, and one tuple `argMax` makes a mix
+impossible, so the two were alternative treatments of one mechanism and the
+structural one won.
+
+The residual is written down rather than implied: **a tie whose surviving side
+is the coherent `{amount: 0, closed_at: L}` still escapes.** It
+reads as an ordinary closure, writes nothing, and both tied rows live on for
+the API's own `argMax` to re-flip. Catching that needs the read to carry the
+tie itself — distinct contents at the winning version — which is a second
+aggregation level over ~78M rows. Not built, because the population that could
+produce it does not exist yet: the generating process stopped ~2 months before
+the lifecycle writer did its first stamp.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five
