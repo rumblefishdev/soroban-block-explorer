@@ -570,6 +570,39 @@ where
     Ok(())
 }
 
+/// Refuse `--execute` under a read-only identity, BEFORE the run costs
+/// anything.
+///
+/// The failure it prevents is not subtle, it is just late: the first INSERT is
+/// the last step of the pass, so a wrong certificate spends ~5 minutes and
+/// 4.4 GB of archive download to learn a fact one SELECT already knows. The
+/// operator laptop's cert maps to a `readonly = 1` user, which refuses an
+/// INSERT before grants are consulted at all, so this is the ordinary case and
+/// not an exotic one.
+///
+/// A READ, never a trial write: the decisive test for a write permission must
+/// not itself be a write. `readonly` is the setting that actually gates the
+/// insert — grants are never reached while it is 1 — so it is what gets
+/// checked, rather than the user name, which is only reported to make the
+/// message actionable.
+async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
+    let (user, readonly): (String, u8) = sink
+        .client()
+        .query("SELECT currentUser(), toUInt8(getSetting('readonly'))")
+        .fetch_one()
+        .await?;
+    if readonly != 0 {
+        return Err(BackfillError::Incomplete(format!(
+            "refusing --execute: connected as `{user}` with readonly = {readonly}, which \
+             rejects every INSERT before grants are consulted. Use a write-capable \
+             identity (see the write-identity section of docs/backfills.md); the \
+             dry-run needs no change."
+        )));
+    }
+    println!("  identity: {user} (readonly = 0) — writes permitted");
+    Ok(())
+}
+
 /// The seed. Without `--execute`: reads its inputs from ClickHouse, decodes
 /// the snapshot, folds, writes artifacts, inserts NOTHING. With `--execute`:
 /// additionally inserts the four row sets.
@@ -579,6 +612,12 @@ pub async fn seed_command(
     execute: bool,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
+
+    // Before anything expensive: a write we cannot make is worth knowing in
+    // second 2, not in minute 11.
+    if execute {
+        refuse_if_read_only(sink).await?;
+    }
 
     let (list, mut state, source_report) =
         network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
