@@ -84,12 +84,12 @@ measured against production ClickHouse and cross-checked against mainnet via
 `soroban_events.topics_xdr` / `data_xdr` are decoded scval JSON, so the whole
 protocol is already queryable without touching XDR again:
 
-| Event                                      | Emitter | Shape                                                                                                   | Rows            |
-| ------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------- | --------------- |
-| `add_pool`                                 | router  | topics `[sym, vec<token addresses>]`, data `[pool address, sym pool_type, bytes pool_hash, vec params]` | 410             |
-| `update_reserves`                          | pool    | topics `[sym]`, data `vec<i128>` — one entry per token, **same order as the pool's `get_tokens()`**     | 3 302 989       |
-| `trade`                                    | pool    | topics `[sym, token_in, token_out, caller]`, data `[amount_in, amount_out, fee]`                        | 4 158 845       |
-| `deposit_liquidity` / `withdraw_liquidity` | pool    | topics `[sym, …tokens]`, data `[…amounts, shares]`                                                      | 75 276 / 27 145 |
+| Event                                      | Emitter | Shape                                                                                                                                                                | Rows            |
+| ------------------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `add_pool`                                 | router  | topics `[sym, vec<token addresses>]`, data `[pool address, sym pool_type, bytes pool_hash, vec params]`                                                              | 410             |
+| `update_reserves`                          | pool    | topics `[sym]`, data `vec<i128>` — one entry per token, **same order as the pool's `get_tokens()`**                                                                  | 3 302 989       |
+| `trade`                                    | pool    | topics `[sym, token_in, token_out, caller]`, data `[amount_in, amount_out, fee]`                                                                                     | 4 158 845       |
+| `deposit_liquidity` / `withdraw_liquidity` | pool    | topics `[sym, …tokens]`, data `[shares, …amounts]` _(corrected 2026-08-26 — recorded backwards here originally; shares is element 0, verified on ledger 61 777 648)_ | 75 276 / 27 145 |
 
 Event arity tracks token count: 2-token pools give 3 topics / 3 data, the
 3-token stable pools give 4 / 4. No other variants exist across all history.
@@ -97,6 +97,8 @@ Event arity tracks token count: 2-token pools give 3 topics / 3 data, the
 ### Three findings that change the plan
 
 **1. There are TWO routers, not one — and pools exist outside both.**
+_(Counts corrected 2026-08-26 — there are ten routers and 496 pools; see
+the verification pass at the end of this file.)_
 
 `CBQDHNBF…6QUK` (the address Aquarius documents) holds 304 token sets / **337
 pools**. A second contract, `CA7RQDMM…UOJQ`, reports `contract_name() =
@@ -360,3 +362,97 @@ Consider making plane state the source for reserves on the **live** path too,
 not just history — one source and one decode for all time, instead of two
 stitched at ledger 57 573 730. Events stay the source for volume, where the
 amounts are read rather than inferred.
+
+---
+
+## Verification pass — 2026-08-26
+
+Independent re-measurement of the findings above, prompted by an adversarial
+review that assumed they were wrong. Each figure is a single-pass query over
+`soroban_events` (10.3 G rows) with explicit deduplication. Two of the three
+challenges were refuted by the data; the router counts in the first block do
+need correcting.
+
+### Correction: an earlier join was inflated by unmerged RMT rows
+
+`soroban_contracts` carries duplicate rows — merges are healthy, the parts are
+simply never collapsed to one. An `INNER JOIN` on it multiplies event rows by
+roughly 4. Any count reached through that join is wrong by that factor unless
+taken with `uniqExact` / `DISTINCT`. Everything below is deduplicated.
+
+### Routers: ten, not two — but eight are dead
+
+| Router          | Pools | Types registered               | First ledger | Last ledger |
+| --------------- | ----: | ------------------------------ | -----------: | ----------: |
+| `CBQDHNBF…6QUK` |   339 | constant, stable, concentrated |   52 728 530 |  64 119 240 |
+| `CA7RQDMM…UOJQ` |    73 | constant, stable, concentrated |   52 902 613 |  63 997 027 |
+| `CAZREK5U…IXVE` |    41 | constant, stable               |   52 085 052 |  52 699 385 |
+| `CC2B3GFL…UQF7` |    13 | constant, stable               |   51 288 881 |  51 551 155 |
+| `CANMWW5D…TTOD` |     8 | constant, stable               |   50 667 251 |  50 857 364 |
+| `CCPHUHQY…I7SE` |     7 | constant, **elastic**          |   59 502 171 |  59 651 517 |
+| `CDT6GQYR…57KM` |     6 | constant, stable               |   51 103 194 |  51 204 578 |
+| `CDVTDAUA…T2VI` |     3 | constant                       |   50 667 038 |  50 667 042 |
+| `CBVSLUYH…PWL3` |     3 | constant                       |   50 638 875 |  50 638 879 |
+| `CALJOHJU…KLDN` |     3 | constant                       |   50 772 154 |  50 772 158 |
+
+**496 registered pools, not 410.** The documented router holds **339, not 337**.
+
+Of the 84 pools registered by the eight undocumented routers: 5 ever emitted
+`update_reserves`, newest activity at ledger 60 697 845, **none** active in the
+last million ledgers, 210 reserve events in total. Those eight are historically
+dead, so a two-router scope loses nothing live — and loses those 5 pools and
+210 events from a complete history, which is the standard this project holds
+itself to.
+
+**A fourth pool type exists.** `CCPHUHQY…I7SE` registers `elastic` alongside
+`constant`. The earlier claim that no other variants exist across all history
+is false as written. Any match on pool type must be total; `elastic` must not
+land in a default arm.
+
+### The registry is complete — zero orphans
+
+|                                          |       |
+| ---------------------------------------- | ----: |
+| registered pools, all ten routers        |   496 |
+| pools emitting `update_reserves`         |   373 |
+| **emitting but registered by no router** | **0** |
+| registered but never traded              |   123 |
+
+Registry-driven discovery is sufficient, provided every router is found. The
+shape-driven rule stated earlier is still the right rule — it is what surfaces
+the ten — but the orphan arm (step A3) has no known work to do today. Keep it
+as a monitored path, not as a load-bearing assumption.
+
+Step A5 cannot establish this on its own: it diffs the table against the same
+registries that filled it, so a pool no router registered would be invisible to
+both sides. The zero above comes from the independent shape side
+(`update_reserves` emitters). That is the comparison A5 should make.
+
+### Concentrated pools: an adoption curve, not a sampling artefact
+
+Trades per ~500 k-ledger window, by pool type:
+
+| Window |  Trades | constant | stable | concentrated | % conc. |
+| -----: | ------: | -------: | -----: | -----------: | ------: |
+|    116 | 265 570 |  237 647 | 27 923 |            0 |       0 |
+|    120 | 204 822 |  168 709 | 36 108 |            0 |       0 |
+|    122 | 259 589 |  208 208 | 51 381 |            0 |       0 |
+|    123 | 229 956 |  188 359 | 41 578 |           19 |       0 |
+|    124 | 241 793 |  184 498 | 47 962 |        9 333 |     3.9 |
+|    125 | 436 390 |  268 643 | 32 439 |      135 308 |    31.0 |
+|    126 | 417 163 |  199 210 | 49 645 |      168 308 |    40.3 |
+|    127 | 226 021 |   91 183 | 65 752 |       69 086 |    30.6 |
+|    128 | 181 375 |   89 165 | 21 690 |       70 520 |    38.9 |
+
+Zero to ~39 % in five windows, then a plateau at 30–40 %. `constant` falls in
+absolute terms across the same span (237 k → 89 k), so concentrated is taking
+flow rather than adding it. The "constant-only is not defensible" conclusion
+holds, and if anything understates the case.
+
+### Still unverified — settle before the participants work
+
+Share-token coverage. The participants finding rests on a single pool matching
+`get_total_shares()` exactly. How many constant pools have a share token
+actually present in `assets` was not measured — the hourly read quota ran out.
+Until it is measured, an unresolvable share token must render "not indexed";
+an empty holder list is indistinguishable from a pool that genuinely has none.
