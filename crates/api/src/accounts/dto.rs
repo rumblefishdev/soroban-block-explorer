@@ -106,6 +106,52 @@ pub struct AccountDetailResponse {
     /// and never re-funded (its last lifecycle event is the merge). Derived,
     /// not stored.
     pub deleted: bool,
+    /// Signing configuration, or `null` when we have never observed this
+    /// account's entry state.
+    ///
+    /// **`null` is NOT "no extra signers".** 25% of indexed accounts carry no
+    /// row, so a client that renders `null` as "single signature" is making a
+    /// security claim the data does not support. Render the unknown as
+    /// unknown.
+    pub signing: Option<AccountSigning>,
+}
+
+/// One entry of an account's signer list, exactly as the ledger stores it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSigner {
+    /// The signer's StrKey. `ed25519` signers are `G…`; the hash types carry
+    /// their own prefixes.
+    pub key: String,
+    /// 1–255 for a real signer (`SetOptions` deletes at 0). Stored as the
+    /// chain carried it — an out-of-range value is an anomaly, never clamped.
+    pub weight: u32,
+    /// `ed25519` | `preauth_tx` | `hash_x` (the only three the network has).
+    #[serde(rename = "type")]
+    pub signer_type: String,
+}
+
+/// An account's signing configuration: who may sign, and how much weight each
+/// operation class demands.
+///
+/// **The master key is NOT in `signers`.** The ledger keeps the account's own
+/// key out of that list and expresses its weight as `master_weight`; Horizon
+/// synthesises an extra entry, we do not. A client showing only `signers`
+/// therefore reads 3-of-4 where the chain says 3-of-5 — compose the master key
+/// into the display, do not expect it here.
+///
+/// A `master_weight` of 0 is a permanently DISABLED master key, not a signer
+/// with a low weight. It is a common, deliberate configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSigning {
+    pub signers: Vec<AccountSigner>,
+    /// Weight of the account's own key — compare thresholds against
+    /// `master_weight` PLUS the sum of `signers[].weight`.
+    pub master_weight: u32,
+    pub threshold_low: u32,
+    pub threshold_med: u32,
+    pub threshold_high: u32,
+    /// Ledger at which this configuration was last observed.
+    pub last_updated_ledger: i64,
 }
 
 /// Slim — `inner_tx_hash` lives on `/v1/transactions` only.

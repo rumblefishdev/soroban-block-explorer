@@ -390,6 +390,56 @@ struct AccountBalanceChRow {
     sac_deployed: bool,
 }
 
+/// One account's signing configuration as the ledger states it (task 0463,
+/// ADR 0055). `None` when the account has no `account_entry_state` row.
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+pub struct AccountEntryStateRow {
+    pub signer_keys: Vec<String>,
+    pub signer_weights: Vec<u32>,
+    pub signer_types: Vec<String>,
+    pub master_weight: u8,
+    pub threshold_low: u8,
+    pub threshold_med: u8,
+    pub threshold_high: u8,
+    pub last_updated_ledger: i64,
+}
+
+/// Read the account's signers + thresholds. First read of
+/// `account_entry_state` from the API — the table is written by the indexer
+/// (whole-set replacement per observed `AccountEntry`) and seeded for accounts
+/// that predate our ledger floor.
+///
+/// `FINAL` rather than an explicit `argMax`: the table is a
+/// `ReplacingMergeTree(last_updated_ledger)` whose parts are not merged in
+/// production, so an un-deduplicated read returns several versions of one
+/// account. Both forms measured the same on a single-key seek (7 vs 8 ms,
+/// 17,465 rows, ~5 MiB), and `FINAL` matches the neighbouring reads in this
+/// module. It is also tie-safe here in a way three separate aggregates would
+/// not be: it yields ONE stored row, never a mixture of columns from two rows
+/// written at the same version.
+///
+/// **`Ok(None)` means "we have never observed this account's entry state",
+/// which is NOT "the account has no extra signers".** 3.7M of 14.6M accounts
+/// carry no row (25%), so the two must stay distinguishable all the way to the
+/// page — a missing row rendered as "single signature" would be a security
+/// claim we cannot support.
+pub async fn fetch_entry_state(
+    client: &clickhouse::Client,
+    account_id: i64,
+) -> Result<Option<AccountEntryStateRow>, clickhouse::error::Error> {
+    client
+        .query(
+            "SELECT signer_keys, signer_weights, signer_types, \
+                    master_weight, threshold_low, threshold_med, threshold_high, \
+                    last_updated_ledger \
+             FROM account_entry_state FINAL \
+             WHERE account_id = ?",
+        )
+        .bind(account_id)
+        .fetch_optional::<AccountEntryStateRow>()
+        .await
+}
+
 /// The account-detail balances read, hoisted out of [`fetch_balances`] so the
 /// lifecycle predicate is assertable without a live ClickHouse.
 ///
