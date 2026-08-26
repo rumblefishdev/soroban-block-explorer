@@ -16,6 +16,7 @@ import { useAccountDetail } from '../api/index.js';
 
 import { AccountBalances } from './accounts/AccountBalances.js';
 import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
+import { AccountSigners } from './accounts/AccountSigners.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
 import { AccountTransactions } from './accounts/AccountTransactions.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
@@ -41,6 +42,7 @@ export default function AccountDetailPage() {
 
   let summary: ReactNode = null;
   let balances: ReactNode = null;
+  let signers: ReactNode = null;
   if (account.isError) {
     summary = (
       <DetailErrorState
@@ -53,6 +55,13 @@ export default function AccountDetailPage() {
   } else if (account.data) {
     summary = <AccountSummary account={account.data} />;
     balances = <AccountBalances balances={account.data.balances} />;
+    signers = (
+      <AccountSigners
+        accountId={accountId}
+        signing={account.data.signing}
+        deleted={account.data.deleted}
+      />
+    );
   }
 
   return (
@@ -87,6 +96,11 @@ export default function AccountDetailPage() {
       {balances != null && (
         <SectionErrorBoundary sectionName="account-balances">
           {balances}
+        </SectionErrorBoundary>
+      )}
+      {signers != null && (
+        <SectionErrorBoundary sectionName="account-signers">
+          {signers}
         </SectionErrorBoundary>
       )}
       {/* Gate on resolved parent data (not just `!isError`) so the
