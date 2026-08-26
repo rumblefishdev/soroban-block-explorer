@@ -233,10 +233,18 @@ pub async fn fetch_list(
             // account-detail balances. Resolve native via `assets.asset_type = 0`
             // (the native asset_id is a Rust cityhash, which CH `cityHash64`
             // cannot recompute, so we join rather than hardcode a literal).
+            //
+            // `closed_at_ledger = 0` for the same reason the detail read uses
+            // it (ADR 0055): without it a merged account keeps printing `0 XLM`
+            // here while the detail page — which now hides closed rows — shows
+            // no XLM at all. The two disagreed before task 0463 in the other
+            // direction; the point of the flip is that they agree. A filtered
+            // row leaves `xlm_balance` null, which the table renders as a dash.
             "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
-             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0"
+             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0 \
+               AND b.closed_at_ledger = 0"
         ))
         .fetch_all::<AccountListBalanceRow>()
         .await?
@@ -380,19 +388,20 @@ struct AccountBalanceChRow {
     last_updated_ledger: i64,
 }
 
-/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
-/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
-/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
-/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
-/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
-/// Soroban from on-chain `METADATA`).
-pub async fn fetch_balances(
-    client: &clickhouse::Client,
-    account_id: i64,
-) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
-    let rows = client
-        .query(
-            "SELECT \
+/// The account-detail balances read, hoisted out of [`fetch_balances`] so the
+/// lifecycle predicate is assertable without a live ClickHouse.
+///
+/// **`closed_at_ledger = 0`, never `amount != 0`** (ADR 0055, task 0463). The
+/// old predicate could not tell "holds nothing" from "the trustline is gone":
+/// both are `amount = 0`, so hiding zeros hid every zero-balance trustline the
+/// account really has, and 78.85% of chain history predates our floor so we
+/// cannot recover the difference by re-parsing. The lifecycle column records
+/// the removal itself, which is the only thing that distinguishes them.
+///
+/// Native folds in with no special case: a live account's zero XLM row carries
+/// `closed_at_ledger = 0` and shows; a merged account's native tombstone
+/// carries a non-zero stamp and does not.
+const BALANCES_SQL: &str = "SELECT \
                 a.asset_type                  AS asset_type, \
                 nullIf(a.asset_code, '')      AS asset_code, \
                 a.issuer_id                   AS issuer_id, \
@@ -419,9 +428,21 @@ pub async fn fetch_balances(
                  GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
                  AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
-             WHERE b.holder_id = ? AND b.amount != 0 \
-             ORDER BY a.asset_type, a.asset_code",
-        )
+             WHERE b.holder_id = ? AND b.closed_at_ledger = 0 \
+             ORDER BY a.asset_type, a.asset_code";
+
+/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
+/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
+/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
+/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
+/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
+/// Soroban from on-chain `METADATA`).
+pub async fn fetch_balances(
+    client: &clickhouse::Client,
+    account_id: i64,
+) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
+    let rows = client
+        .query(BALANCES_SQL)
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
         .await?;
@@ -631,6 +652,34 @@ pub async fn fetch_transactions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The account-detail read must select on the LIFECYCLE column, never on
+    /// the amount. `amount != 0` cannot tell "holds nothing" from "the
+    /// trustline is gone" — it was the defect behind issue #377, and it is a
+    /// one-word regression away, so the predicate is pinned here rather than
+    /// left to review. Asserted against the SQL itself, no ClickHouse needed.
+    #[test]
+    fn balances_are_selected_by_lifecycle_not_by_amount() {
+        assert!(
+            BALANCES_SQL.contains("b.closed_at_ledger = 0"),
+            "the balances read must filter on the lifecycle column"
+        );
+        assert!(
+            !BALANCES_SQL.contains("b.amount != 0"),
+            "`amount != 0` hides every zero-balance trustline the account holds"
+        );
+        // A zero-amount row that is still open has to survive the predicate,
+        // which is only true if `amount` is absent from the WHERE clause
+        // entirely — a combined `amount != 0 OR ...` would pass the check above.
+        let where_clause = BALANCES_SQL
+            .split("WHERE")
+            .nth(1)
+            .expect("the read has a WHERE clause");
+        assert!(
+            !where_clause.contains("amount"),
+            "no amount predicate belongs in this WHERE clause: {where_clause}"
+        );
+    }
 
     #[test]
     fn asset_type_name_matches_pg_function() {
