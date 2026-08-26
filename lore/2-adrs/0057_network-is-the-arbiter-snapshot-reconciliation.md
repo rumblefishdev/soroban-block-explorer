@@ -74,9 +74,22 @@ Concretely:
 2. **After any historical re-parse** the reconciliation is MANDATORY: the
    same-version tie query (0503), then `snapshot-seed` — its dry-run IS the
    four-way comparison, reviewed before `--execute`. Dead-entity divergence
-   is repaired outright at the
-   checkpoint version, which deterministically supersedes both sides of any
-   tie. Operational detail lives in `docs/backfills.md`.
+   is repaired outright at the checkpoint version, which deterministically
+   supersedes both sides of the tie — because a correction IS written for
+   that key, whichever side of the tie the read happens to select.
+
+   **Amended 2026-08-26 — the guarantee is not unconditional, and the
+   original wording claimed it was.** It holds whenever the surviving side
+   produces a correction, which covers every tie measured to date (1,238,583
+   keys, all carrying `closed_at_ledger = 0` on both sides — they predate the
+   column, so either side lands in `Closure`/`Ghost`). It does NOT hold when
+   the surviving side is a coherent `{amount: 0, closed_at: L}`: that reads as
+   an ordinary already-closed row, writes nothing, and leaves both tied rows in
+   place. Closing that needs the read to carry the tie itself, which is a
+   second aggregation level over the whole table; deferred while the
+   population is empty, and named in `docs/backfills.md` so it is not
+   rediscovered as a surprise. Operational detail lives there too.
+
 3. **Live-entity same-ledger divergence is quarantined, not auto-healed** —
    it means one of two parser versions misread that ledger, and adopting
    either side silently would bury the evidence. If the bucket proves noisy,

@@ -418,6 +418,24 @@ stamped a closure, so it is the alarm for the reconciliation runs below, where
 the closures under test are the seed's own previous output or the live
 writer's.
 
+**Same-version ties are superseded, with one known exception.** A re-parse can
+write two rows for one key at one ledger; ReplacingMergeTree then resolves them
+arbitrarily and so does the API's own `argMax`. The seed supersedes both sides
+by writing at the checkpoint version, which is strictly higher. That works for
+every tie measured so far (1,238,583 keys, all merged accounts, all carrying
+`closed_at_ledger = 0` on both sides — they predate the column), because such a
+key lands in `closure`/`ghost` whichever side wins.
+
+The exception, written down rather than implied: a tie between
+`{amount: X, closed_at: 0}` and `{amount: 0, closed_at: L}` resolves to one
+real row, and if that row is the second it reads as an ordinary
+`already marked closed`, writes nothing, and the tie survives. Detecting it
+needs the read to carry the tie itself — distinct contents at the winning
+version — which is a second aggregation level over the whole table. Not built:
+no such tie exists yet, because the process that generated the known ones
+stopped ~2 months before the lifecycle writer made its first stamp. Re-run the
+0503 tie query after any re-parse that touches stamped ledgers.
+
 **`--execute` needs a write-capable ClickHouse identity.** The laptop mTLS cert
 maps to user `dev_read`, whose profile sets `readonly = 1` and
 `max_execution_time = 30` — an INSERT is refused on the readonly setting before
