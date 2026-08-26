@@ -28,5 +28,15 @@ export default defineConfig({
     url: 'http://localhost:4280',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    // `src/api/config.ts` THROWS at module load when this is unset, so without
+    // it the app never boots and every assertion fails as "element not found"
+    // — which reads like a broken page rather than a missing variable. The
+    // suite passed locally only because `.env.development.local` supplies one,
+    // and that file is untracked, so CI had none.
+    //
+    // The value is never fetched: every request is intercepted by `page.route`.
+    // It only has to parse as a URL, and pointing it at the test server keeps a
+    // stray un-mocked call local instead of aimed at a real host.
+    env: { VITE_API_BASE_URL: 'http://localhost:4280/api' },
   },
 });
