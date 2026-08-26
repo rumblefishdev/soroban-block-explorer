@@ -9,7 +9,7 @@ import {
   PaginationControls,
   scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { PAGE_SIZE } from '../../api/polling.js';
 
@@ -44,6 +44,25 @@ interface BalanceShape {
    *  em-dash INITIAL — the avatar keeps its honest `?` (finding 11). */
   avatarCode: string | null;
   href: string | undefined;
+}
+
+/**
+ * A row's identity for React, from the asset's own identity rather than its
+ * position. One balance row exists per (holder, asset), and an asset is keyed
+ * on exactly this four-part tuple, so no two rows can collide — including the
+ * two ways a part can be absent (native carries no code or issuer; a classic
+ * asset whose issuer we cannot resolve carries no issuer).
+ *
+ * Position would have worked only per page: with pagination the index restarts
+ * at 0 on every page, so page 2's first row would claim page 1's key.
+ */
+function assetKey(balance: AccountBalance): string {
+  return [
+    balance.type,
+    balance.asset_code ?? '',
+    balance.asset_issuer ?? '',
+    balance.contract_id ?? '',
+  ].join('|');
 }
 
 function shape(balance: AccountBalance): BalanceShape {
@@ -261,11 +280,31 @@ export function AccountBalances({
   // the "Latest results" the cursor sections have to say. Sliced, never
   // re-sorted — the server decided the order (`BALANCES_SQL`) and a page
   // boundary has to fall where it put it.
-  const [page, setPage] = useState(0);
+  //
+  // Position lives in the URL, like every other paginated section here — it
+  // survives a reload and can be sent to someone. `?assets=`, not `?cursor=`,
+  // because the transactions section below owns that one on the same page.
+  // `replace: true` matches `useTableUrlState`: paging is not navigation, and
+  // Back should leave the page, not walk it backwards one slice at a time.
+  const [params, setParams] = useSearchParams();
   const paged = balances.length > PAGE_SIZE;
-  // A different account is a different list; without this, arriving from a
-  // 3,000-row account onto a 5-row one lands on an empty page 40.
-  useEffect(() => setPage(0), [balances]);
+  const lastPage = Math.max(0, Math.ceil(balances.length / PAGE_SIZE) - 1);
+  // Clamped, not trusted: a pasted `?assets=999`, or the param surviving a
+  // move to a smaller account, must show a real page rather than nothing.
+  const asked = Number(params.get('assets') ?? '1');
+  const page = Number.isSafeInteger(asked)
+    ? Math.min(Math.max(asked - 1, 0), lastPage)
+    : 0;
+  const goTo = (next: number) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next <= 0) p.delete('assets');
+        else p.set('assets', String(next + 1));
+        return p;
+      },
+      { replace: true }
+    );
 
   const start = page * PAGE_SIZE;
   const shown = paged ? balances.slice(start, start + PAGE_SIZE) : balances;
@@ -281,10 +320,9 @@ export function AccountBalances({
       ) : (
         shown.map((balance, index) => (
           <BalanceRow
-            key={`${balance.asset_code ?? 'native'}-${
-              balance.asset_issuer ?? start + index
-            }`}
+            key={assetKey(balance)}
             balance={balance}
+            // Alternating row background — every second row.
             alt={index % 2 === 1}
           />
         ))
@@ -296,9 +334,9 @@ export function AccountBalances({
         <PaginationControls
           caption={`${start + 1}–${start + shown.length} of ${balances.length}`}
           canPrev={page > 0}
-          canNext={start + PAGE_SIZE < balances.length}
-          onPrev={() => setPage((p) => Math.max(0, p - 1))}
-          onNext={() => setPage((p) => p + 1)}
+          canNext={page < lastPage}
+          onPrev={() => goTo(page - 1)}
+          onNext={() => goTo(page + 1)}
         />
       )}
     </SectionCard>

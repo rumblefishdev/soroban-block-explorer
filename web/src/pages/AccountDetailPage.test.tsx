@@ -89,6 +89,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** N zero-balance classic assets, codes ascending so order is checkable. */
+function manyZeroAssets(n: number): AccountBalance[] {
+  return Array.from({ length: n }, (_, i) => ({
+    ...USDC_BALANCE,
+    asset_code: `A${String(i).padStart(3, '0')}`,
+    balance: '0',
+  }));
+}
+
 /** The Assets card alone — the transactions section below has its own pager. */
 function assetsCard() {
   const card = screen.getByText('Assets').closest('.MuiCard-root');
@@ -231,13 +240,8 @@ describe('AccountDetailPage', () => {
   it('pages a long list and states the exact position, not "latest results"', async () => {
     // The whole set is on the page, so the caption can count — which is the
     // difference between paginating and silently capping.
-    const many = Array.from({ length: 45 }, (_, i) => ({
-      ...USDC_BALANCE,
-      asset_code: `A${String(i).padStart(3, '0')}`,
-      balance: '0',
-    }));
     mockDetail({
-      data: { ...SAMPLE, balances: many },
+      data: { ...SAMPLE, balances: manyZeroAssets(45) },
       isLoading: false,
       isError: false,
       error: null,
@@ -265,6 +269,46 @@ describe('AccountDetailPage', () => {
     await user.click(assetsCard().getByRole('button', { name: 'Next' }));
     expect(screen.getByText('41–45 of 45')).toBeInTheDocument();
     expect(assetsCard().getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+
+  it('opens on the page the URL names, so a position can be sent to someone', () => {
+    // Every other paginated section here keeps its position in the URL. This
+    // one is an offset rather than a cursor, but the property is the same:
+    // survives a reload, and the link means what it showed.
+    mockDetail({
+      data: { ...SAMPLE, balances: manyZeroAssets(45) },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?assets=3`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('41–45 of 45')).toBeInTheDocument();
+  });
+
+  it('clamps a page number past the end instead of rendering nothing', () => {
+    // A pasted number, or the param surviving a move to a smaller account.
+    // An empty card would read as "this account holds nothing".
+    mockDetail({
+      data: { ...SAMPLE, balances: manyZeroAssets(45) },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?assets=999`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('41–45 of 45')).toBeInTheDocument();
+    expect(screen.getAllByText('A044').length).toBeGreaterThan(0);
   });
 
   it('tags a classic balance whose SAC is deployed, and leaves the type chip alone', () => {
