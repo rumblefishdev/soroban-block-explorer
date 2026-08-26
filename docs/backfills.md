@@ -340,7 +340,9 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 
 1. **`repair-tier1`** — mandatory after parallel or `--reindex` runs (rule 3).
    Stop the indexer first.
-2. **Validate** — coverage gap-scan + a Horizon / stellar.expert sample compare.
+2. **Validate** — coverage gap-scan + a sample compare against raw ledger
+   entries (`getLedgerEntries` XDR) or stellar.expert. NOT Horizon: it is
+   legacy, and it synthesises fields the ledger does not carry.
    Re-run the same slice: the RMT-deduped count must stay identical.
 3. **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md)).
 
@@ -515,12 +517,12 @@ detectable tie. The arbiter is the network:
 
 1. After the re-parse, run the standing tie query (task 0503 carries it per
    table): keys with more than one distinct content at one version.
-2. Run `snapshot-seed` (dry-run) against a fresh checkpoint and read its report.
-   Between-runs ties surface as `divergent SAME ledger` (live entities) and as
-   closure/ghost corrections (dead ones).
-3. Run `snapshot-seed` (dry-run → review → `--execute`): dead-entity ties are
-   repaired outright at the checkpoint version; same-ledger divergences on
-   LIVE entities are reported for a human call — one of two parser versions is
+2. Run `snapshot-seed` against a fresh checkpoint — dry-run, review
+   `summary.txt`, then `--execute`. Between-runs ties surface as
+   `divergent SAME ledger` (live entities) and as closure/ghost corrections
+   (dead ones). Dead-entity ties are repaired outright at the checkpoint
+   version, which supersedes both sides; same-ledger divergences on LIVE
+   entities are reported for a human call — one of two parser versions is
    wrong, and auto-adopting either would bury the evidence.
 
 This is the same tooling as the one-off 0463 seed; the seed is one-off, the
