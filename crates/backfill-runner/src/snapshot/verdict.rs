@@ -14,7 +14,7 @@ use crate::snapshot::network_state::{HoldingKey, NetHolding, NetworkState};
 // ---------------------------------------------------------------------------
 
 /// One of our deduplicated `balances` rows, exactly the SELECT list of
-/// `snapshot_seed::slice_sql`. Shared by the report and the write so the
+/// `seed::slice_sql`. Shared by the report and the write so the
 /// two consumers cannot drift into different column meanings.
 #[derive(Debug, Clone, Copy, clickhouse::Row, serde::Deserialize)]
 pub struct OurRow {

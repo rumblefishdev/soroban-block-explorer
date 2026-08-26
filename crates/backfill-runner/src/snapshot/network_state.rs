@@ -168,7 +168,7 @@ pub struct AccountDetail {
 /// The deduplicated snapshot, ready to compare against our tables.
 ///
 /// ONE fold of the bucket stream serves both consumers: the comparison
-/// (`snapshot_report`) and the write (`snapshot_seed`). They previously kept
+/// ([`super::report`]) and the write ([`super::seed`]). They previously kept
 /// separate state types with separate first-wins logic — two chances to
 /// disagree about what the network says.
 #[derive(Debug, Default)]
