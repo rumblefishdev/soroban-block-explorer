@@ -497,7 +497,8 @@ Expanded behavior:
 Account detail view for a Stellar account.
 
 - Account summary - account ID (full, copyable), sequence number, first seen ledger, last seen ledger
-- Balances - native XLM balance and credit asset balances
+- **Assets** - native XLM plus every trustline, INCLUDING the ones standing at zero
+- **Signers** - the signer set and the three thresholds
 - Recent transactions - paginated table of transactions involving this account
 
 Expanded behavior:
@@ -505,8 +506,45 @@ Expanded behavior:
 - This page should act as the canonical destination for exact account ID lookups from
   global search and linked identifiers.
 - The summary should make account state easy to scan without requiring protocol knowledge.
-- Balances should be visually separated from transaction history.
+- Assets should be visually separated from transaction history.
 - Linked transactions should reuse the same visual conventions as the global transactions page.
+
+**Assets, not "Balances" (issue #377, task 0463).** A trustline standing at zero is a
+real thing the account holds — permission granted to an issuer — and the read path
+selects on `closed_at_ledger = 0`, never on the amount, so those rows are shown. The
+card is therefore named for what it lists, and the meta states two numbers apart:
+`5 assets · 2 with a balance` (the second clause is dropped when every asset is funded,
+where it only restates the first).
+
+Order comes from the API and is NOT re-sorted client-side, because pagination has to cut
+where the server cut: native pinned first, then funded before empty, then size, then
+recency. The middle key is the load-bearing one — recency alone strands a real holding
+under thousands of empty rows.
+
+Paged in the browser rather than by cursor: the whole set arrives with the account, which
+is what lets the caption state an exact position (`1–20 of 1015`) where the cursor
+sections must say "Latest results". Position lives in `?assets=`, distinct from the
+`?cursor=` the transactions section owns on the same page, so Back after opening an asset
+returns to the page you were on. It is clamped, never trusted. The pager appears only
+above one page — 99% of accounts hold 18 assets or fewer and should see no machinery.
+Each row carries the type chip AND, separately, a `SAC` tag when the asset has a deployed
+Stellar Asset Contract — two orthogonal axes, the same pairing `/assets` renders.
+
+**Signers (issue #377, task 0463).** The account's own key is composed in as the FIRST
+row with a badge: the ledger keeps it out of `signers` and expresses its weight as
+`master_weight`, so a page rendering only the list reads 3-of-4 where the chain says
+3-of-5. Horizon synthesises that entry server-side; we assemble it in the view and leave
+the API saying what the chain says. `master_weight = 0` renders as `master key — disabled`
+— a permanently disabled key, not a low-weight signer, and the second most common shape
+on pubnet. An account no key can sign for gets its own marker. The footer states total
+weight beside all three thresholds rather than one "N of M", which would pick one
+threshold and hide two. `preauth_tx` and `hash_x` signers render unlinked; they are not
+accounts.
+
+A missing signing configuration is stated as a fact about the ledger, not as thin
+coverage: after the checkpoint seed every live account has one, and accounts without a
+row probe ABSENT on chain. The warning is reserved for the one shape that would be a real
+gap — live holdings shown with no signing configuration.
 
 ### 6.8 Assets (`/assets`)
 
