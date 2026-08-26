@@ -116,6 +116,52 @@ to whichever task hit them first.
 6. **Never verify our decoder with our decoder.** Chain checks re-implement
    StrKey and the XDR from the spec.
 
+## Sequenced 2026-08-26 (owner): B → D → E
+
+With the seed executed and audited, the question stopped being "does this work"
+and became "what does this capability become". Options were laid out and three
+were taken, in this order. The order is the decision — each one is a
+precondition for the value of the next.
+
+**B — extract the decoder into its own crate ([0502](0502…)).** First, because
+everything else builds in the wrong place until it happens: the decoder and the
+verdict rule currently live in `backfill-runner`, which is a tool for LOADING.
+The seed should be one consumer of the capability, not its owner. Nothing
+blocks this; it is a refactor with an existing plan.
+
+**D — model the five discarded entry types ([0504](0504…), audit in
+[0503](0503…)).** 78.7M records per pass are decoded and thrown away. The
+concrete payoff is not completeness for its own sake: **claimable balances are
+exactly the ~567k XLM residual the supply reconciliation currently INFERS
+rather than measures.** The decoder already reads those records. Doing D before
+any recurring report is deliberate — a periodic report that still infers one
+term would harden an estimate into a fact, which is precisely the mistake
+caught on 2026-08-26 with the fee pool.
+
+**E — settle `audit-harness`.** Discovered while answering this question: that
+crate's README lists `2c — DB vs raw archive XDR re-parse (ground truth)` as a
+FUTURE phase. **The snapshot comparison is that phase, delivered** — and
+delivered better, over the whole population rather than a sample. Meanwhile the
+crate itself is Postgres-era (`sqlx`, `DATABASE_URL=postgres://…`) and cannot
+run against a CH-only stack, and one of its three binaries (`horizon-diff`)
+targets a source this project has ruled out as legacy. Its Phase 1 — pure SQL
+invariants, internal consistency, no network — is genuinely complementary to
+the snapshot (that catches divergence FROM the network; this catches
+self-inconsistency WITHIN our own tables) and is worth porting to ClickHouse.
+Either port it or archive it behind a banner; leaving a dead crate that reads
+as live is the trap.
+
+### Deliberately NOT taken
+
+**A recurring/scheduled reconciliation.** Tempting — the dry-run is already a
+full health report, and a weekly series would turn `divergent SAME ledger` and
+the two defect signals into trends. Rejected for now on the grounds that the
+moment this becomes an automated job is the moment nobody reads its output. It
+stays a pass a human runs deliberately and reads. Revisit after D, when the
+report has no inferred terms left.
+
+**A dashboard, or wiring it into CI.** Same reason, more so.
+
 ## What this EPIC is for next
 
 An audit of the whole capability, planned from one place rather than seven.

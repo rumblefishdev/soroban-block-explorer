@@ -84,6 +84,20 @@ jobs:
       - run: npx nx format:check --all
       - run: npx nx run-many -t lint build typecheck test
 
+      # Browser regression for the account page (issue #377, task 0463). The
+      # three assertions there are the ones jsdom cannot make — real history
+      # for the Back button, real layout for the 1,015-row pager — so the
+      # suite needs a real browser, and the runner image ships none. ~95 MB.
+      #
+      # Not cached: one download per run beats cache-key bookkeeping while
+      # this is a single-browser, three-test suite. Add actions/cache on
+      # ~/.cache/ms-playwright if the suite or the browser list grows.
+      #
+      # The API is intercepted inside the tests (page.route), so this needs no
+      # ClickHouse certificate and no network beyond the browser download.
+      - run: npx playwright install --with-deps chromium
+      - run: npx nx run @rumblefish/soroban-block-explorer-web:e2e
+
       # The release tag → deploy scope mapping. Cheap, and the only guard on
       # the case that matters: a plain `production-*` tag must stay
       # Compute-only, never `--all` (task 0455). Runs here because the

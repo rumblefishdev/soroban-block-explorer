@@ -14,7 +14,7 @@ use crate::snapshot::network_state::{HoldingKey, NetHolding, NetworkState};
 // ---------------------------------------------------------------------------
 
 /// One of our deduplicated `balances` rows, exactly the SELECT list of
-/// `snapshot_seed::slice_sql`. Shared by the report and the write so the
+/// `seed::slice_sql`. Shared by the report and the write so the
 /// two consumers cannot drift into different column meanings.
 #[derive(Debug, Clone, Copy, clickhouse::Row, serde::Deserialize)]
 pub struct OurRow {
@@ -43,10 +43,24 @@ pub enum Verdict {
     /// We stamped it CLOSED, and the network holds it LIVE — but at a ledger
     /// NOT NEWER than our closure. The snapshot still contradicts us: an entry
     /// present in the checkpoint bucket list is live AT the checkpoint whatever
-    /// its own last-modified ledger says. What is missing is a way to fix it
-    /// honestly — re-opening at the entry's own (older-or-equal) ledger cannot
-    /// outversion our closure row, and inventing a newer version would be a
-    /// synthetic stamp, the very defect task 0492 documents.
+    /// its own last-modified ledger says.
+    ///
+    /// It is reported rather than healed for a reason about DECAY, not about
+    /// versioning. An earlier comment here claimed no honest version could
+    /// supersede our closure; that was wrong, and this file refutes it twice —
+    /// the guard below guarantees every row reaching this arm sits BELOW the
+    /// checkpoint, and [`correction`] already stamps `Closure`/`Ghost` at the
+    /// checkpoint, which ADR 0057 blesses for an absence fact. A presence fact
+    /// carries the same way: an entry in the checkpoint's bucket list IS live
+    /// at the checkpoint, so adopting its balance at that version states
+    /// something true, not synthetic.
+    ///
+    /// The real reason is that healing here would repair a symptom while
+    /// whatever produced the wrong closure keeps producing more — the same
+    /// coupling that removed the same-ledger heal (task 0514). A one-off
+    /// correction against an ongoing writer defect decays silently between
+    /// runs, and the bucket's whole value is that it reads zero on healthy
+    /// data. Revisit once a root cause is known and fixed.
     ///
     /// So this is a DEFECT SIGNAL, not a correction: something closed a
     /// holding the network still has. Unreachable on a first seed run (nothing

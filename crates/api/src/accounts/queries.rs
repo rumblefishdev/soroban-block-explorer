@@ -78,6 +78,7 @@ pub struct AccountBalanceRow {
     pub balance: String,
     pub decimals: u32,
     pub last_updated_ledger: i64,
+    pub sac_deployed: bool,
 }
 
 #[derive(Debug)]
@@ -233,10 +234,18 @@ pub async fn fetch_list(
             // account-detail balances. Resolve native via `assets.asset_type = 0`
             // (the native asset_id is a Rust cityhash, which CH `cityHash64`
             // cannot recompute, so we join rather than hardcode a literal).
+            //
+            // `closed_at_ledger = 0` for the same reason the detail read uses
+            // it (ADR 0055): without it a merged account keeps printing `0 XLM`
+            // here while the detail page — which now hides closed rows — shows
+            // no XLM at all. The two disagreed before task 0463 in the other
+            // direction; the point of the flip is that they agree. A filtered
+            // row leaves `xlm_balance` null, which the table renders as a dash.
             "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
-             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0"
+             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0 \
+               AND b.closed_at_ledger = 0"
         ))
         .fetch_all::<AccountListBalanceRow>()
         .await?
@@ -308,59 +317,58 @@ pub async fn fetch_account(
 // Derived `deleted` status (account_merge) — task 0324
 // ---------------------------------------------------------------------------
 
-/// `true` ⟺ the account was the `source` of a **successful** `account_merge`
-/// (`type = 8`) in its last-seen ledger — its ledger entry was merged into
-/// another account and removed. `last_seen_ledger` is the `GREATEST` of every
-/// appearance, so a deleting merge necessarily sits in that ledger and nothing
-/// follows it: a later re-create would push `last_seen_ledger` higher and this
-/// query would find no merge there → `false`. That makes the check a plain
-/// EXISTS — no chronological "last op" ordering needed.
+/// `true` ⟺ the account's ledger entry is GONE — read straight off the
+/// lifecycle column on its native holding (ADR 0055), not re-derived from
+/// operation history.
 ///
-/// Two corrections over the original derivation (both were live bugs):
-/// - **`successful` filter (join `transactions`).** `operations_appearances`
-///   carries failed-tx ops too (no status column of its own); a *failed*
-///   `account_merge` does NOT delete the account. The join restricts to
-///   `t.successful`, which the single-table query could not express.
-/// - **No `argMax` over `transaction_id`.** `transaction_id` is a cityhash
-///   surrogate, NOT chronological, so ordering by it never picked the real last
-///   op (and returned `Nullable(UInt8)`, which mismatched the `u8` decode → the
-///   original 500). EXISTS sidesteps ordering and nullability entirely.
+/// Native XLM lives on the `AccountEntry` itself, so "the account was removed"
+/// and "its native holding was closed" are the same fact recorded once. The
+/// indexer stamps `closed_at_ledger` when it sees the entry removed, and the
+/// checkpoint seed stamped every account that had already gone before our
+/// ledger floor — which is what makes this readable now and was not before.
 ///
-/// The `ledger_sequence = ?` literal on BOTH tables is load-bearing: both are
-/// `PARTITION BY intDiv(ledger_sequence, 500000)` and key on `ledger_sequence`,
-/// so the equality prunes each side to that one ledger (~hundreds of tx rows,
-/// ~1 matching op). Without it the planner scans the 6.2B + 3.6B-row tables and
-/// trips the query memory limit.
+/// **Replaces an `operations_appearances` × `transactions` join on the
+/// last-seen ledger, which under-detected badly: 22 of 60 sampled merged
+/// accounts.** The cause is upstream — a merge operation is not attributed to
+/// the account being merged. `GAEGXYY63CYV34TH6HDVZ3L4WCYX7AUTLNOPFCNBR3RCQIB3MVSKLAWP`
+/// has its Account Merge in its own `last_seen_ledger`, that ledger holds
+/// exactly one type-8 appearance, and none of the 664 appearances there names
+/// the account as source or destination; it reaches its own transaction list
+/// through `transaction_participants` alone. Deriving a fact from a table that
+/// does not carry it cannot be patched into correctness, so this stops trying.
 ///
-/// ponytail: drops the same-ledger merge-then-`create_account` re-create case
-/// (merged out then recreated within the SAME ledger → still live, but EXISTS
-/// reports deleted). Measured zero across 6.2B ops. To close it, anchor on the
-/// real chronological key `(t.application_order, oa.application_order)` via
-/// `argMax` instead of EXISTS.
+/// Chain-verified in both directions via `getLedgerEntries`, 236 accounts, no
+/// exceptions:
+/// - closed native row → **100 / 100 ABSENT** from the ledger;
+/// - open native row → **100 / 100 PRESENT**;
+/// - merged and then re-created → **36 / 36 PRESENT**, open row, correctly NOT
+///   deleted. The old derivation needed `last_seen_ledger` to handle that case;
+///   here it falls out, because a re-create writes a new open row over the
+///   tombstone and `FINAL` keeps one row per key (measured: zero accounts hold
+///   both an open and a closed native row).
+///
+/// No native row at all ⇒ `false`. Such an account is not "deleted" — it is one
+/// we have only ever seen referenced, never funded, and the caller has already
+/// resolved it or returned 404.
 pub async fn fetch_deleted_status(
     client: &clickhouse::Client,
     account_surrogate_id: i64,
-    last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    let deleted = client
+    let closed = client
         .query(
-            "SELECT count() > 0 \
-             FROM operations_appearances oa \
-             INNER JOIN transactions t \
-               ON t.id = oa.transaction_id AND t.ledger_sequence = oa.ledger_sequence \
-             WHERE oa.ledger_sequence = ? \
-               AND t.ledger_sequence = ? \
-               AND oa.type = 8 \
-               AND oa.source_id = ? \
-               AND t.successful",
+            "SELECT closed_at_ledger != 0 \
+             FROM balances FINAL \
+             WHERE holder_id = ? AND asset_id = ?",
         )
-        .bind(last_seen_ledger)
-        .bind(last_seen_ledger)
         .bind(account_surrogate_id)
-        .fetch_one::<u8>()
+        // The native surrogate is a Rust cityhash CH cannot recompute, so it is
+        // BOUND rather than joined for via `assets.asset_type = 0` — same value
+        // the writer keys on, one join fewer than the accounts-list read.
+        .bind(db_clickhouse::persist::ids::NATIVE_ASSET_ID)
+        .fetch_optional::<bool>()
         .await?;
 
-    Ok(deleted != 0)
+    Ok(closed.unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------
@@ -378,21 +386,89 @@ struct AccountBalanceChRow {
     balance: String,
     decimals: u32,
     last_updated_ledger: i64,
+    sac_deployed: bool,
 }
 
-/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
-/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
-/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
-/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
-/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
-/// Soroban from on-chain `METADATA`).
-pub async fn fetch_balances(
+/// One account's signing configuration as the ledger states it (task 0463,
+/// ADR 0055). `None` when the account has no `account_entry_state` row.
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+pub struct AccountEntryStateRow {
+    pub signer_keys: Vec<String>,
+    pub signer_weights: Vec<u32>,
+    pub signer_types: Vec<String>,
+    pub master_weight: u8,
+    pub threshold_low: u8,
+    pub threshold_med: u8,
+    pub threshold_high: u8,
+    pub last_updated_ledger: i64,
+}
+
+/// Read the account's signers + thresholds. First read of
+/// `account_entry_state` from the API — the table is written by the indexer
+/// (whole-set replacement per observed `AccountEntry`) and seeded for accounts
+/// that predate our ledger floor.
+///
+/// `FINAL` rather than an explicit `argMax`: the table is a
+/// `ReplacingMergeTree(last_updated_ledger)` whose parts are not merged in
+/// production, so an un-deduplicated read returns several versions of one
+/// account. Both forms measured the same on a single-key seek (7 vs 8 ms,
+/// 17,465 rows, ~5 MiB), and `FINAL` matches the neighbouring reads in this
+/// module. It is also tie-safe here in a way three separate aggregates would
+/// not be: it yields ONE stored row, never a mixture of columns from two rows
+/// written at the same version.
+///
+/// **`Ok(None)` means "we have never observed this account's entry state",
+/// which is NOT "the account has no extra signers".** 3.7M of 14.6M accounts
+/// carry no row (25%), so the two must stay distinguishable all the way to the
+/// page — a missing row rendered as "single signature" would be a security
+/// claim we cannot support.
+pub async fn fetch_entry_state(
     client: &clickhouse::Client,
     account_id: i64,
-) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
-    let rows = client
+) -> Result<Option<AccountEntryStateRow>, clickhouse::error::Error> {
+    client
         .query(
-            "SELECT \
+            "SELECT signer_keys, signer_weights, signer_types, \
+                    master_weight, threshold_low, threshold_med, threshold_high, \
+                    last_updated_ledger \
+             FROM account_entry_state FINAL \
+             WHERE account_id = ?",
+        )
+        .bind(account_id)
+        .fetch_optional::<AccountEntryStateRow>()
+        .await
+}
+
+/// The account-detail balances read, hoisted out of [`fetch_balances`] so the
+/// lifecycle predicate is assertable without a live ClickHouse.
+///
+/// **`closed_at_ledger = 0`, never `amount != 0`** (ADR 0055, task 0463). The
+/// old predicate could not tell "holds nothing" from "the trustline is gone":
+/// both are `amount = 0`, so hiding zeros hid every zero-balance trustline the
+/// account really has, and 78.85% of chain history predates our floor so we
+/// cannot recover the difference by re-parsing. The lifecycle column records
+/// the removal itself, which is the only thing that distinguishes them.
+///
+/// Native folds in with no special case: a live account's zero XLM row carries
+/// `closed_at_ledger = 0` and shows; a merged account's native tombstone
+/// carries a non-zero stamp and does not.
+///
+/// **Ordering is four keys, and only the first two are load-bearing.** Native
+/// is pinned first — it is not a trustline at all (it lives on the
+/// `AccountEntry`; every other row is permission granted to an issuer), and its
+/// position should never move. Then FUNDED before empty, which is the property
+/// the whole change exists for: with zero-balance trustlines now visible, an
+/// account can carry thousands of empty rows, and recency alone strands a real
+/// holding — measured on a spammed account, a 920bn-unit SGB position at ledger
+/// 51,190,951 sits below 3,274 of its empty rows.
+///
+/// The last two are presentation. `amount DESC` compares RAW amounts across
+/// assets with different `decimals` and no prices, so it cannot mean "worth
+/// more" and is not claimed to; it just keeps the bigger positions together.
+/// Recency then orders the empty rows, where it is the only honest
+/// discriminator we have, and `asset_code` makes the whole thing stable so a
+/// page boundary never shows the same row twice.
+const BALANCES_SQL: &str = "SELECT \
                 a.asset_type                  AS asset_type, \
                 nullIf(a.asset_code, '')      AS asset_code, \
                 a.issuer_id                   AS issuer_id, \
@@ -401,7 +477,8 @@ pub async fn fetch_balances(
                 nullIf(m.symbol, '')          AS symbol, \
                 toString(b.amount)            AS balance, \
                 coalesce(m.decimals, 7)       AS decimals, \
-                b.last_updated_ledger         AS last_updated_ledger \
+                b.last_updated_ledger         AS last_updated_ledger, \
+                sac.deployed                  AS sac_deployed \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
              /* sc FINAL: soroban_contracts is a ReplacingMergeTree with unmerged \
@@ -419,9 +496,59 @@ pub async fn fetch_balances(
                  GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
                  AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
-             WHERE b.holder_id = ? AND b.amount != 0 \
-             ORDER BY a.asset_type, a.asset_code",
-        )
+             /* Deployed-SAC facet, the same join `/assets` uses (ADR 0051): a \
+                SAC is a PROPERTY of a classic/native asset, never its type, and \
+                never a property of the issuer. `asset_sac` is an \
+                AggregatingMergeTree, so the state must be aggregated, and the \
+                alias cannot be `sac_deployed` — that shadows the column and the \
+                HAVING then nests two aggregates (ILLEGAL_AGGREGATION). \
+                `HAVING deployed` keeps the joined side to the ~4.3k identities \
+                that actually have one, out of ~306k; an unmatched row LEFT \
+                JOINs to the column default, which is exactly `false`. \
+                \
+                RESTRICTED to this holder's own assets before aggregating, the \
+                way `/assets` restricts by its page's tuples. Aggregating the \
+                whole table first measured 425 MiB and 219 ms per request \
+                against 81 MiB / 122 ms without the join; restricted it is \
+                86 MiB / 56 ms — the memory, not the latency, is the reason \
+                (`read_only` caps a query at 4 GiB, and this runs per page \
+                view). Same bound value as the outer WHERE. */ \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        toBool(max(sac_deployed)) AS deployed \
+                 FROM asset_sac \
+                 WHERE (asset_type, asset_code, issuer_id, contract_id) IN ( \
+                     SELECT asset_type, asset_code, issuer_id, contract_id \
+                     FROM assets \
+                     WHERE id IN (SELECT asset_id FROM balances WHERE holder_id = ?) \
+                 ) \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 HAVING deployed \
+             ) sac ON sac.asset_type = a.asset_type AND sac.asset_code = a.asset_code \
+                 AND sac.issuer_id = a.issuer_id AND sac.contract_id = a.contract_id \
+             WHERE b.holder_id = ? AND b.closed_at_ledger = 0 \
+             ORDER BY a.asset_type = 0 DESC, \
+                      b.amount > 0 DESC, \
+                      b.amount DESC, \
+                      b.last_updated_ledger DESC, \
+                      a.asset_code";
+
+/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
+/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
+/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
+/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
+/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
+/// Soroban from on-chain `METADATA`).
+pub async fn fetch_balances(
+    client: &clickhouse::Client,
+    account_id: i64,
+) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
+    let rows = client
+        .query(BALANCES_SQL)
+        // Twice: the SAC subquery narrows itself to this holder's assets
+        // before aggregating, and the outer read selects them. Same value,
+        // bound in the order the two `?` appear.
+        .bind(account_id)
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
         .await?;
@@ -445,6 +572,7 @@ pub async fn fetch_balances(
             balance: r.balance,
             decimals: r.decimals,
             last_updated_ledger: r.last_updated_ledger,
+            sac_deployed: r.sac_deployed,
         })
         .collect())
 }
@@ -631,6 +759,34 @@ pub async fn fetch_transactions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The account-detail read must select on the LIFECYCLE column, never on
+    /// the amount. `amount != 0` cannot tell "holds nothing" from "the
+    /// trustline is gone" — it was the defect behind issue #377, and it is a
+    /// one-word regression away, so the predicate is pinned here rather than
+    /// left to review. Asserted against the SQL itself, no ClickHouse needed.
+    #[test]
+    fn balances_are_selected_by_lifecycle_not_by_amount() {
+        assert!(
+            BALANCES_SQL.contains("b.closed_at_ledger = 0"),
+            "the balances read must filter on the lifecycle column"
+        );
+        assert!(
+            !BALANCES_SQL.contains("b.amount != 0"),
+            "`amount != 0` hides every zero-balance trustline the account holds"
+        );
+        // A zero-amount row that is still open has to survive the predicate,
+        // which is only true if `amount` is absent from the WHERE clause
+        // entirely — a combined `amount != 0 OR ...` would pass the check above.
+        let where_clause = BALANCES_SQL
+            .split("WHERE")
+            .nth(1)
+            .expect("the read has a WHERE clause");
+        assert!(
+            !where_clause.contains("amount"),
+            "no amount predicate belongs in this WHERE clause: {where_clause}"
+        );
+    }
 
     #[test]
     fn asset_type_name_matches_pg_function() {

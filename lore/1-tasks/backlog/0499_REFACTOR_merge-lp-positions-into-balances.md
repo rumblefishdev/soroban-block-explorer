@@ -87,6 +87,36 @@ classic-trustline gap, and the same live-zero-vs-closed ambiguity sits on the
 68,079 zero rows. Work-list item 5 must therefore fill, not just copy: an
 identity copy of 40,652 rows carries the hole forward.
 
+### The forward path is already correct — item 5 is history only (2026-08-26)
+
+Re-measured after the 0463 seed executed, and the ambiguity above is bounded in
+time rather than spread across the table.
+
+| check                                                         | result                                        |
+| ------------------------------------------------------------- | --------------------------------------------- |
+| positions touched AFTER the writer deploy (ledger 64,115,052) | **30 / 30 PRESENT on chain**                  |
+| every closure stamp in `lp_positions`                         | 44, all at ledger ≥ 64,115,290                |
+| positions touched since the deploy                            | 340, of which 44 closed (13%)                 |
+| table today                                                   | 108,766 pairs / 40,646 positive / 68,120 zero |
+
+`stage.rs` stamps `closed_at_ledger: if pos.closed { last } else { 0 }` on the
+pool-share arm, and the probe says it is right: no live position reads as
+closed, no closed one reads as live, for anything the writer has seen.
+
+An earlier 40-row probe returning 16 PRESENT / 24 ABSENT looked like a dead
+lifecycle; split by the deploy ledger it is not. Every ABSENT row predates the
+writer, which is exactly the cohort the seed skipped on purpose.
+
+So item 5 does **not** need to repair the writer, and the live-zero-vs-closed
+ambiguity applies only to rows untouched since 64,115,052 — not to the whole
+68,120. Both facts narrow the fill.
+
+Note for the re-measure item 5 already calls for: the 77,048 figure above comes
+from checkpoint **64,010,495** (2026-08-18), while the executed seed pinned
+**64,131,263** — ~120k ledgers apart. That seed is finished and its
+`manifest.json` is final, so the re-measure now has a fixed artifact to align
+both sides on.
+
 ### The comparator is nearly free — do it as part of item 5
 
 `snapshot.rs` already holds every pool share deduplicated, first-wins, with its

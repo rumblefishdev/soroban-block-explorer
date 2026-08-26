@@ -76,6 +76,12 @@ pub fn archive_client() -> Result<reqwest::Client, BackfillError> {
         .map_err(|e| BackfillError::Incomplete(format!("archive client build failed: {e}")))
 }
 
+/// Checkpoints are published every 64 ledgers, at sequences ≡ 63 (mod 64)
+/// (stellar-core `docs/history.md`).
+fn is_checkpoint(ledger: u32) -> bool {
+    ledger % CHECKPOINT_FREQUENCY == CHECKPOINT_FREQUENCY - 1
+}
+
 /// Fetch and parse the archive manifest.
 pub async fn fetch_bucket_list(
     client: &reqwest::Client,
@@ -102,12 +108,11 @@ pub async fn fetch_bucket_list(
         .ok_or_else(|| BackfillError::Incomplete("manifest has no currentLedger".into()))?
         as u32;
 
-    // Checkpoints are published every 64 ledgers, at sequences ≡ 63 (mod 64)
-    // (stellar-core `docs/history.md`). A `currentLedger` off that lattice is
-    // not a checkpoint, so the bucket list beside it is not a checkpoint's
-    // state — and every ledger number this run stamps into `closed_at_ledger`
-    // would be a fiction. Cheap check, load-bearing conclusion.
-    if checkpoint_ledger % CHECKPOINT_FREQUENCY != CHECKPOINT_FREQUENCY - 1 {
+    // A `currentLedger` off the checkpoint lattice is not a checkpoint, so the
+    // bucket list beside it is not a checkpoint's state — and every ledger
+    // number this run stamps into `closed_at_ledger` would be a fiction. Cheap
+    // check, load-bearing conclusion.
+    if !is_checkpoint(checkpoint_ledger) {
         return Err(BackfillError::Incomplete(format!(
             "manifest currentLedger {checkpoint_ledger} is not a checkpoint (checkpoints are ≡ {} mod {CHECKPOINT_FREQUENCY}) — this is not a checkpoint bucket list",
             CHECKPOINT_FREQUENCY - 1
@@ -312,13 +317,23 @@ mod tests {
     /// The manifest's `currentLedger` must sit on the checkpoint lattice.
     /// Accepting an off-lattice value would mean decoding a bucket list that
     /// is not a checkpoint's state, and stamping fictional ledger numbers.
+    ///
+    /// Calls the production predicate, and the cases are chosen to pin the
+    /// FREQUENCY rather than restate modular arithmetic: this test previously
+    /// defined its own `l % CHECKPOINT_FREQUENCY == …` closure and asserted
+    /// against that, so deleting the check in `fetch_bucket_list` left it
+    /// green — and every case it used still passes at a frequency of 32.
+    /// `!is_checkpoint(31)` is the one that fails if the constant moves.
     #[test]
     fn checkpoint_lattice_accepts_only_63_mod_64() {
-        let on = |l: u32| l % CHECKPOINT_FREQUENCY == CHECKPOINT_FREQUENCY - 1;
-        assert!(on(63), "the first checkpoint");
-        assert!(on(64_102_079), "a real manifest value, probed 2026-08-24");
-        assert!(!on(64_102_080));
-        assert!(!on(0));
+        assert!(is_checkpoint(63), "the first checkpoint");
+        assert!(
+            is_checkpoint(64_102_079),
+            "a real manifest value, probed 2026-08-24"
+        );
+        assert!(!is_checkpoint(64_102_080));
+        assert!(!is_checkpoint(0));
+        assert!(!is_checkpoint(31), "63 mod 64, not 31 mod 32");
     }
 
     /// The archive's fan-out layout, pinned. A wrong split silently 404s every
