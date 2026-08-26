@@ -543,8 +543,20 @@ accounts.
 
 A missing signing configuration is stated as a fact about the ledger, not as thin
 coverage: after the checkpoint seed every live account has one, and accounts without a
-row probe ABSENT on chain. The warning is reserved for the one shape that would be a real
-gap — live holdings shown with no signing configuration.
+row probe ABSENT on chain. Which of the three no-configuration states the card shows is
+decided in this order: a **classic** holding with no configuration is the warning (see
+below); otherwise `deleted` says the account was closed; otherwise there is no account at
+this address, and when the page is also showing a Soroban balance the card says why that
+is not a contradiction — a SEP-41 balance lives in the token contract's storage and needs
+no account (1,325 such addresses on pubnet carry sequence number 0).
+
+The warning reads **classic** holdings only, never all of them. A classic trustline cannot
+exist without an `AccountEntry`, so one with no signing configuration means the gap is
+ours; a Soroban balance implies nothing, because it outlives `account_merge` and can
+predate any account. Reading all holdings fired the alarm on 10,713 accounts whose data was
+correct (100% Soroban rows, 350/350 probed ABSENT on chain while 60/60 of their token
+balances probed PRESENT with matching amounts). Restricted to classic it measures zero and
+still cannot miss a live account, since every live account carries a native XLM row.
 
 ### 6.8 Assets (`/assets`)
 

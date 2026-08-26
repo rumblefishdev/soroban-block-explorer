@@ -2028,8 +2028,15 @@ criterion stays open until the deploy, which is the operator's.
 - [x] Signers (key, weight, type) and low/med/high thresholds are shown; the
       fixture reads as multisig (verified on chain: thresholds 3/3/3, five
       signers at weight 1 — a genuine 3-of-5)
-- [x] An account with no signers row renders an explicit "not indexed", never
-      an empty list that reads as "not multisig"
+- [x] An account with no signers row renders an explicit state, never an empty
+      list that reads as "not multisig". **Amended 2026-08-26**: the original
+      wording said "not indexed" for every such account, which was wrong for
+      10,713 of them — a Soroban balance implies no account entry, so the
+      alarm fired on correct data. Now: a CLASSIC holding with no
+      configuration is "Not indexed" (measures 0, still catches a writer
+      regression); `deleted` is "Closed"; otherwise "No account", and when a
+      Soroban balance is on screen the card says why that is not a
+      contradiction
 - [x] Seed coverage measured for BOTH trustlines and accounts, and
       cross-checked against an independent source regardless of the measured
       result (the 200-account chain probe; the RPC comparator was deleted
@@ -2050,3 +2057,245 @@ criterion stays open until the deploy, which is the operator's.
       contract; `docs/backfills.md` gains the seed pass
 - [x] **API types regenerated** — yes, the account DTO gains fields
       (`npx nx run @rumblefish/api-types:generate`)
+
+## The "Not indexed" signer state is wrong — measured 2026-08-26
+
+The warning branch in `AccountSigners` reads: _"This account holds assets, but
+we have no signing configuration for it. That combination should not occur."_
+It occurs **10,713 times**, and the combination is not a contradiction at all —
+it is ordinary Soroban.
+
+### An address can hold tokens without being an account
+
+`account_merge` deletes the `AccountEntry`. It does **not** touch a token
+contract's storage. A SEP-41 balance is a `ContractData` entry owned by the
+TOKEN contract and keyed by address, so it outlives the account, and an address
+that was never funded can hold one from the start.
+
+Both were verified on chain, not reasoned about:
+
+| Probe (`getLedgerEntries`, independent SEP-23 / XDR implementation)         | Result               |
+| --------------------------------------------------------------------------- | -------------------- |
+| `LedgerKey::Account` for gap accounts, three sub-populations, both id signs | **350 / 350 ABSENT** |
+| control — accounts _with_ `account_entry_state`                             | 100 / 100 PRESENT    |
+| `LedgerKey::ContractData` `["Balance", Address]` for their token holdings   | **60 / 60 PRESENT**  |
+| control — same key shape for live accounts                                  | 6 / 6 PRESENT        |
+| **stored amount vs the `i128` decoded from the entry XDR**                  | **60 / 60 EXACT**    |
+
+So the rows are right to the last unit. The account is gone; the token balance
+is not; we hold both facts correctly. Only the page's inference is wrong.
+
+### The population
+
+`chq` against production, `FINAL` throughout, `positiveModulo` for slicing —
+plain `%` on a negative `Int64` returns a negative remainder, so
+`holder_id % 8 = 0..7` silently samples only the positive half of the id space.
+That trap produced one wrong intermediate here before it was caught.
+
+|                                                                 | Count      |
+| --------------------------------------------------------------- | ---------- |
+| Holders with a live `balances` row and no `account_entry_state` | ~74,000    |
+| …of those, in `accounts` (reachable on the account page)        | **10,713** |
+| …`deleted = true` — the account was closed                      | 9,388      |
+| …no native row at all, `sequence_number = 0` — never an account | 1,325      |
+
+**Every live row in that gap is `asset_type = 3`.** Grouped by asset type over
+all eight slices: 1378 / 1370 / 1389 / 1490 / 1426 / 1438 / 1387 / 1438 — one
+line of output per slice, always type 3, never anything else.
+
+Type 3 is **Soroban**, not a pool share (`persist/ids.rs:122` — project enum
+0 native / 1 classic_credit / 2 SAC-retired / 3 soroban). All 4,387 type-3
+rows satisfy `id = contract_id`, which is that enum's defining property. The
+`pool_share` label the API prints for them is **task 0496**, already filed;
+it is what made this population look like liquidity-pool shares at first read.
+
+Classic pool shares are not in `balances` at all — they are in `lp_positions`
+(line 203 above already measures that gap), so `pool_share` had no legitimate
+occurrence to be compared against.
+
+### Why the branch only now misfires
+
+The API used to select balances by `amount != 0`, and 147 of 179 sampled gap
+rows carry `amount = 0`. Moving to the lifecycle predicate made them visible.
+The predicate is correct; the branch that consumes it is not.
+
+End to end on `GB7BJ4PBLFBYBUJGPMEKRHIWPZC6HNEYF2GHE7NEEFGJHLFWRT2VD3RD`
+(`AccountEntry` absent on chain), from the local API against production:
+
+```
+deleted: true, signing: null,
+balances: [ type 3 "Pool Share Token", balance "0", ledger 57054801 ]
+```
+
+`deleted` is already `true` and already correct — but `hasLiveHoldings` is
+tested FIRST, so a closed account is announced as an indexing gap.
+
+### The rule the branch should encode
+
+A **classic trustline** cannot exist without an `AccountEntry`; a **Soroban
+balance** can. So the tripwire belongs on classic holdings only:
+
+1. live holdings of `asset_type` 0 or 1 and no signing → genuine gap, warn
+2. `deleted` → "Closed"
+3. otherwise → no account at this address (it may still hold contract tokens)
+
+Measured today, case 1 is **0** across all eight slices — the tripwire keeps
+its meaning and stops firing on 10,713 accounts where it is simply wrong.
+
+### The 3.7M accounts without entry state are the historical tail, not a gap
+
+`accounts` holds 14,596,522 distinct addresses; `account_entry_state` holds
+10,883,758. The 3.71M difference was worth decomposing rather than asserting.
+
+Sampled at 1/64 (58,042 dead accounts in the slice), scaled ×64:
+
+| bucket                                     | slice  | ×64       | share |
+| ------------------------------------------ | ------ | --------- | ----- |
+| closed account, sequence known             | 46,661 | 2,986,304 | 80.4% |
+| closed account, sequence never captured    | 6,174  | 395,136   | 10.6% |
+| never had a native balance row at all      | 5,207  | 333,248   | 9.0%  |
+| **open native balance and no entry state** | **0**  | **0**     | —     |
+
+The last line is the one that matters: **no account has a live native balance
+without signing state.** That is the shape a coverage gap would take, and it
+is empty — so `deleted` cannot be fooled by a missing entry-state row.
+
+Chain probe of each bucket separately (`LedgerKey::Account`):
+
+| bucket                                | result            |
+| ------------------------------------- | ----------------- |
+| closed, sequence known                | 60 / 60 ABSENT    |
+| closed, sequence never captured       | 60 / 60 ABSENT    |
+| never any native row                  | 60 / 60 ABSENT    |
+| control — accounts _with_ entry state | 100 / 100 PRESENT |
+
+Coverage in the other direction was already proven by the seed itself: at the
+checkpoint, `account_entry_state` equalled the snapshot's live-account count
+**exactly** (10,872,679, line 1414 above). Today's 10,883,758 is that plus
+11,079 accounts created since.
+
+So the 3.71M is what an explorer is supposed to keep — addresses whose accounts
+are gone, and addresses that were referenced but never funded. Sequence number
+0 on a closed account means the account was created and merged before our
+history floor, so no transaction of its own was ever seen; it does not mean the
+account never existed.
+
+Of the never-funded addresses, 7 in 5,208 are asset issuers. Where the rest
+were first seen is **unmeasured** — `transaction_participants` is 10.7B rows and
+the answer changes no decision here.
+
+### Correction: merged accounts keeping their `account_entry_state` row is DESIGN, not defect (2026-08-26)
+
+The earlier framing ("~11,900 stale rows, +7k/day, needs a lifecycle") was
+wrong twice, and the second look reverses the verdict.
+
+**It is the writer's documented intent.** `stage.rs` emits no entry-state row
+on `account_removed` — "the page gates on `deleted`, and a merge cannot change
+signers." So the table's semantics are LAST KNOWN configuration; liveness
+lives in the native balance's lifecycle column, exactly like `accounts` keeps
+merged accounts' history. A merged account showing its final signer set is the
+same feature as a merged account showing its transactions.
+
+**The rate panic was chain churn, not our artifact.** Ground truth from
+`operations_appearances` (`type = 8`) against closure stamps per window:
+
+| window (ledgers)              | merge ops on chain | our closures |
+| ----------------------------- | ------------------ | ------------ |
+| 64,117,440–64,126,079 (12 h)  | 12,322             | 8,670        |
+| 64,126,080–64,131,262 (7.2 h) | 23,690             | 22,062       |
+| 64,131,264–64,134,437 (4.4 h) | 2,264              | 1,054        |
+
+Merge traffic genuinely swings ~5k–80k/day (churn bots); closures track the
+ops in every window (appearances include failed ops, hence ops ≥ closures).
+The single out-of-band spike is the seed's own stamp (3,365,167 rows at
+exactly 64,131,263; no other ledger exceeds 13) — which also answers the
+artefact question: the seed writes exactly one closure value, so every
+non-checkpoint stamp is the live writer's.
+
+**Exact stale-row counts** (dead account AND an entry-state row): 11,587 =
+11,546 writer-stamped + 378 at the checkpoint value (the seed/writer
+same-ledger bucket — owned by the snapshot-review session). Post-checkpoint:
+1,054 of 1,054 merges kept their row — post-seed the ratio is 100% by
+construction, since the seed wrote state for every account alive at checkpoint.
+
+**Growth is trivial**: 10.92M rows, 220 MiB compressed (~21 B/row) — stale
+rows accrue at the merge rate, i.e. single-digit MB/day for the whole table.
+
+**The one real residual**: an aggregate over `account_entry_state` alone
+("how many accounts are multisig?") silently counts dead accounts, and the
+share grows. Resolution decided: state the last-known semantics in
+`database-schema-overview.md` (same doc pass that fixes its "live holdings"
+warning sentence to "classic holdings") — no schema change, no task.
+
+### Second correction, and the writer verified against the chain (2026-08-26, later)
+
+Two of the numbers above were produced WITHOUT RMT dedup (the exact trap
+`project_rmt_unmerged_dedup_on_read` warns about) and are hereby replaced:
+
+- dead accounts with a signers row: **11,639** (was 11,587), of which
+  **11,636** carry a real writer stamp and **3** the checkpoint value.
+- the "378 at the checkpoint stamp" **does not exist** — it was old closure
+  VERSIONS of accounts later recreated; `argMax` collapses them away. No
+  same-ledger mystery bucket on this side; 3 accounts merged in/around the
+  checkpoint ledger itself, consistent with ≤13 merges on any other ledger.
+
+The earlier "ops ≥ closures because appearances include failures" guess was
+also wrong: in the post-checkpoint window only **5 of 2,264** merge ops
+failed. The real explanation, measured: **2,259 successful merges collapse
+onto 1,055 unique accounts** — churn bots merge and re-create the same
+addresses, ~2.1 merges per account in the window. `coalesce(op.source_id,
+tx.source_id)` identifies the merged account (2,175 of 2,259 type-8
+appearances carry NULL `source_id` — task 0516's gap, now quantified);
+against our lifecycle stamps: **1,048+ stamped closed, and every account
+found unstamped probed PRESENT on chain** — recreated and alive, stamp 0
+correct. Verdict: **the live writer misses nothing measurable.**
+
+Decisions taken: D6 = leave the deleted-account Signers card as-is (the
+header's `Deleted` badge is the context; the card is history, like the
+transaction list). D7 = the last-known semantics gets one sentence in
+`database-schema-overview.md`, no schema change, no task. D9 = keep the
+tripwire branch, no monitoring infra.
+
+### B3 resolved: the LP write path works; only the historical pass is missing
+
+`lp_positions` looked lifeless — 108,718 live rows against the network's 77,048
+at checkpoint, and a 40-row chain probe came back 16 PRESENT / 24 ABSENT. That
+reading was incomplete. Split by the writer's deploy ledger (64,115,052):
+
+| cohort                             | result                               |
+| ---------------------------------- | ------------------------------------ |
+| positions touched AFTER the deploy | **30 / 30 PRESENT on chain**         |
+| all closure stamps in the table    | 44, every one at ledger ≥ 64,115,290 |
+| positions touched since deploy     | 340, of which 44 closed (13%)        |
+
+`stage.rs:1101` stamps `closed_at_ledger: if pos.closed { last } else { 0 }` —
+the ADR 0055 write path this task carries, and it is correct. Every ABSENT row
+in the earlier sample predates the deploy, which is exactly the cohort the seed
+skipped on purpose ("Pool-share trustlines — they live in `lp_positions` until
+the ADR 0056 merge lands").
+
+So B3 is not a defect in the writer: it is the **historical backfill for pool
+shares, still outstanding**, the same shape the seed fixed for classic/native.
+Per task 0493's split note the LP write path belongs to 0463; the backfill pass
+re-derives its snapshot from `manifest.json` (the archive is content-addressed),
+which is why that artifact was kept.
+
+### Decisions closed 2026-08-26 (signers card)
+
+| #   | Question                                | Chosen                                      | Reason kept for the next reader                                                                            |
+| --- | --------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| D1  | what the tripwire reads                 | classic holdings only                       | a classic trustline cannot exist without an `AccountEntry`; a Soroban balance can                          |
+| D3  | no-account card wording                 | say why tokens without an account is normal | 1,325 addresses are in that state; the balance is on screen right above                                    |
+| D4  | Soroban holdings on a closed account    | leave them                                  | 60/60 match the chain exactly; TTL/archival is tasks 0435/0436                                             |
+| D6  | closed account WITH a stale signers row | leave the card as-is                        | the header's `Deleted` badge is the context; the card is history, like the transaction list                |
+| D7  | `account_entry_state` liveness          | one sentence in the schema doc              | last-known is the design, not a defect; no schema change, no task                                          |
+| D9  | tripwire vs monitoring                  | keep the branch, no monitoring              | a fixture-driven test cannot see production; the branch is the reader's signal that the list is unreliable |
+
+D2 (where to compute the flag) collapsed into D1 — both flags are one `.some()`
+in the page over data it already holds, so no API change and no regenerated
+types.
+
+**Rejected**: reordering `deleted` ahead of the tripwire. It reads as "fact
+beats inference", but the branch is an ALARM: a closed account with a live
+classic trustline is a real data defect, and putting `deleted` first silences
+the one contradiction the branch can still catch.

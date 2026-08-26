@@ -56,14 +56,44 @@ That removed the only known consumer. This defect is therefore invisible today
 on the account page, which is why it is priority-low: nothing renders wrongly
 because of it.
 
+## Scale — MEASURED 2026-08-26
+
+Over ledgers **64,131,264–64,134,437** (3,174 ledgers, ~4.4 h), successful
+`account_merge` only:
+
+|                                                                       |                                    |
+| --------------------------------------------------------------------- | ---------------------------------- |
+| type-8 appearances                                                    | 2,264 (2,259 successful, 5 failed) |
+| …with `source_id` NULL                                                | **2,175 — 96.3%**                  |
+| distinct non-null `source_id` values                                  | 84                                 |
+| distinct merged accounts after `coalesce(op.source_id, tx.source_id)` | 1,055                              |
+
+So it is not a rare shape: **96% of merge operations name no account at all**,
+and the 4% that do are 84 distinct sources — consistent with the operation
+carrying an explicit `sourceAccount` only when the transaction submitter
+differs from the account being closed.
+
+The merged account is recoverable today by falling back to the TRANSACTION
+source (`coalesce(op.source_id, tx.source_id)`), which is how the measurement
+above identified all 1,055. That fallback is a read-side workaround, not the
+fix: it is wrong for any transaction that merges an account other than its own
+source, and nothing on the read path currently applies it.
+
+Cross-checked while measuring: those 1,055 accounts all carry a lifecycle
+closure stamp on their native holding (the handful that read `closed = 0`
+probed PRESENT on chain — merged then re-created inside the window, so the
+zero is correct). The defect is confined to `operations_appearances`
+attribution; `balances` lifecycle is unaffected.
+
 ## What is NOT known
 
-- **Scale.** One account was inspected in detail. Whether every
-  `account_merge` is unattributed, or only some shape of them, is unmeasured.
-- **Cause.** Whether `source_id` records the TRANSACTION source rather than
-  the operation's explicit `sourceAccount`, whether the merged account should
-  appear as `destination_id`, or whether the row is dropped earlier in the
-  parser — none of this was investigated.
+- **Older windows.** One 4.4-hour window was measured, during heavy churn-bot
+  traffic. Whether the 96% ratio holds across quieter periods is unmeasured.
+- **Cause.** The 96%-NULL / 84-distinct split points at `source_id` carrying
+  ONLY the operation's explicit `sourceAccount` (absent on most merges, since
+  the account usually submits its own closing transaction) rather than falling
+  back to the transaction source. Not confirmed in the parser — read it before
+  acting on this reading.
 - **Blast radius.** Any other read that asks "which account did operation X"
   for an op with an explicit source account would inherit the same gap. Worth
   a grep over the API's operation queries before deciding this is harmless.
@@ -83,7 +113,8 @@ because of it.
 
 ## Acceptance criteria
 
-- [ ] Scale measured and recorded BEFORE any change, over a named window
+- [x] Scale measured and recorded BEFORE any change, over a named window
+      (64,131,264–64,134,437: 2,175 of 2,259 successful merges unattributed)
 - [ ] Root cause identified in the writer, not guessed from the symptom
 - [ ] Fixed, and the same window re-measured to zero
 - [ ] Other operation types with an explicit `sourceAccount` checked for the

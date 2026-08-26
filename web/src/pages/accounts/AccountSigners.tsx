@@ -141,6 +141,7 @@ export function AccountSigners({
   accountId,
   signing,
   hasClassicHoldings,
+  hasContractHoldings,
   deleted,
 }: {
   accountId: string;
@@ -151,6 +152,12 @@ export function AccountSigners({
    * whether an `AccountEntry` exists.
    */
   hasClassicHoldings: boolean;
+  /**
+   * Whether the page is showing a Soroban token balance. Only used to explain
+   * the no-account case: "no account, yet it holds something" is the reading
+   * this section provokes, and it has a plain answer.
+   */
+  hasContractHoldings: boolean;
   /** The account existed and was closed, as opposed to never existing. */
   deleted: boolean;
 }) {
@@ -174,7 +181,16 @@ export function AccountSigners({
       : {
           label: 'No account',
           color: 'neutral' as const,
-          text: 'The ledger holds no account for this address — we know it only because other transactions referenced it.',
+          // Holding tokens without being an account is not a contradiction to
+          // explain away — it is how Soroban works, and the page is already
+          // showing the balance right above this card. 1,325 addresses on
+          // pubnet are in exactly this state: sequence number 0, no
+          // `AccountEntry` on chain, a token balance that matches the chain
+          // exactly. Saying only "no account" left the reader to reconcile the
+          // two facts unaided.
+          text: hasContractHoldings
+            ? 'This address is not a Stellar account — the ledger holds no account entry for it, so it has no signers. It can still hold the contract tokens shown above: those live in the token contract’s own storage and need no account.'
+            : 'The ledger holds no account for this address — we know it only because other transactions referenced it.',
         };
     return (
       <SectionCard

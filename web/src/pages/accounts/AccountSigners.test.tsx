@@ -31,6 +31,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={signing()}
         hasClassicHoldings
+        hasContractHoldings={false}
         deleted={false}
       />
     );
@@ -50,6 +51,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0 })}
         hasClassicHoldings
+        hasContractHoldings={false}
         deleted={false}
       />
     );
@@ -66,6 +68,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0, signers: [] })}
         hasClassicHoldings
+        hasContractHoldings={false}
         deleted={false}
       />
     );
@@ -84,12 +87,32 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={null}
         hasClassicHoldings={false}
+        hasContractHoldings={false}
         deleted
       />
     );
 
     expect(screen.getByText('Closed')).toBeInTheDocument();
     expect(screen.queryByText('No account')).not.toBeInTheDocument();
+  });
+
+  it('tells a token-holding address why it has no account', () => {
+    // 1,325 addresses on pubnet: sequence number 0, no `AccountEntry` on
+    // chain, a Soroban balance that matches the chain exactly. Saying only
+    // "no account" next to a visible balance reads as a contradiction; the
+    // resolution is that a SEP-41 balance needs no account.
+    renderWithProviders(
+      <AccountSigners
+        accountId={ACCOUNT}
+        signing={null}
+        hasClassicHoldings={false}
+        hasContractHoldings
+        deleted={false}
+      />
+    );
+
+    expect(screen.getByText('No account')).toBeInTheDocument();
+    expect(screen.getByText(/need no account/)).toBeInTheDocument();
   });
 
   it('states plainly that a row-less account has no ledger entry', () => {
@@ -103,6 +126,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={null}
         hasClassicHoldings={false}
+        hasContractHoldings={false}
         deleted={false}
       />
     );
@@ -122,6 +146,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={null}
         hasClassicHoldings
+        hasContractHoldings={false}
         deleted={false}
       />
     );
@@ -143,6 +168,7 @@ describe('AccountSigners', () => {
           ],
         })}
         hasClassicHoldings
+        hasContractHoldings={false}
         deleted={false}
       />
     );

@@ -167,7 +167,15 @@ Derived explorer entities:
   entry, we must not. A row-less account does NOT mean thin coverage: the checkpoint seed wrote
   state for every live account, so a missing row means the account has no ledger entry (probed:
   450 of 450 such accounts ABSENT via `getLedgerEntries`). The one shape that WOULD be a gap —
-  live holdings shown with no signing configuration — measures zero and is what the page warns on
+  a live CLASSIC holding shown with no signing configuration — measures zero and is what the
+  page warns on. A Soroban holding is not that shape: it outlives `account_merge`, so it says
+  nothing about whether an account exists.
+  **Semantics: LAST KNOWN configuration, not liveness.** The writer emits nothing on
+  `account_merge` (a merge cannot change signers), and RMT cannot delete, so a merged account
+  keeps its final signer set — deliberately, the same way `accounts` keeps merged accounts.
+  11,639 rows are in that state today and the share grows with pubnet merge churn. Liveness
+  comes from the native holding's `closed_at_ledger` (ADR 0055); an aggregate over this table
+  ALONE ("how many accounts are multisig?") silently counts dead accounts
 - `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum`) /
   `holder_count` (`countIf(amount > 0)`) over `balances`
 - `asset_aggregates` / `soroban_token_supply` — **DROPPED (task 0331)**. Classic supply/holders now

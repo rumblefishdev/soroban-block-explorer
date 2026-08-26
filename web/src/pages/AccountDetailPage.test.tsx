@@ -500,6 +500,8 @@ describe('AccountDetailPage', () => {
 
     expect(screen.getByText('No account')).toBeInTheDocument();
     expect(screen.queryByText('Not indexed')).not.toBeInTheDocument();
+    // …and the page says WHY the two facts on screen are not a contradiction.
+    expect(screen.getByText(/need no account/)).toBeInTheDocument();
   });
 
   it('renders NotFoundState when the detail query 404s', () => {

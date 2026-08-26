@@ -71,6 +71,7 @@ export default function AccountDetailPage() {
         hasClassicHoldings={account.data.balances.some(
           (b) => b.type === 0 || b.type === 1
         )}
+        hasContractHoldings={account.data.balances.some((b) => b.type === 3)}
         deleted={account.data.deleted}
       />
     );
