@@ -340,7 +340,9 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 
 1. **`repair-tier1`** — mandatory after parallel or `--reindex` runs (rule 3).
    Stop the indexer first.
-2. **Validate** — coverage gap-scan + a Horizon / stellar.expert sample compare.
+2. **Validate** — coverage gap-scan + a sample compare against raw ledger
+   entries (`getLedgerEntries` XDR) or stellar.expert. NOT Horizon: it is
+   legacy, and it synthesises fields the ledger does not carry.
    Re-run the same slice: the RMT-deduped count must stay identical.
 3. **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md)).
 
@@ -418,6 +420,24 @@ stamped a closure, so it is the alarm for the reconciliation runs below, where
 the closures under test are the seed's own previous output or the live
 writer's.
 
+**Same-version ties are superseded, with one known exception.** A re-parse can
+write two rows for one key at one ledger; ReplacingMergeTree then resolves them
+arbitrarily and so does the API's own `argMax`. The seed supersedes both sides
+by writing at the checkpoint version, which is strictly higher. That works for
+every tie measured so far (1,238,583 keys, all merged accounts, all carrying
+`closed_at_ledger = 0` on both sides — they predate the column), because such a
+key lands in `closure`/`ghost` whichever side wins.
+
+The exception, written down rather than implied: a tie between
+`{amount: X, closed_at: 0}` and `{amount: 0, closed_at: L}` resolves to one
+real row, and if that row is the second it reads as an ordinary
+`already marked closed`, writes nothing, and the tie survives. Detecting it
+needs the read to carry the tie itself — distinct contents at the winning
+version — which is a second aggregation level over the whole table. Not built:
+no such tie exists yet, because the process that generated the known ones
+stopped ~2 months before the lifecycle writer made its first stamp. Re-run the
+0503 tie query after any re-parse that touches stamped ledgers.
+
 **`--execute` needs a write-capable ClickHouse identity.** The laptop mTLS cert
 maps to user `dev_read`, whose profile sets `readonly = 1` and
 `max_execution_time = 30` — an INSERT is refused on the readonly setting before
@@ -425,6 +445,36 @@ grants are consulted, and the row volume would exceed the execution ceiling
 regardless. The dry-run is unaffected: it only reads, in bounded slices. Confirm
 the identity before the run, not at the prompt (`SELECT currentUser()` and
 `system.settings` answer it read-only; never test a write by writing).
+
+### Running it — the exact shape
+
+The mTLS bundle is three flags, all-or-nothing; a partial set panics. They can
+also come from `CLICKHOUSE_CERT` / `_KEY` / `_CA`, but a read cert usually
+already occupies those names, so pass the write bundle explicitly — a CLI value
+beats the env var, so nothing has to be unset. `--artifacts` belongs to the
+SUBCOMMAND, after `snapshot-seed`, not before it.
+
+```bash
+backfill-runner \
+  --clickhouse-url https://<ch-host> \
+  --ch-cert <cert.pem> --ch-key <key.pem> --ch-ca infra-hetzner/ca/ca.crt \
+  snapshot-seed --artifacts <dir> [--execute]
+```
+
+**Step 0 — confirm the identity with a READ, never a trial write:**
+
+```sql
+SELECT currentUser(), getSetting('readonly'), getSetting('max_execution_time')
+```
+
+`--execute` now refuses early on a read-only identity rather than discovering it
+at the first INSERT, but running the query yourself still costs 2 seconds and
+tells you which user you are before anything downloads.
+
+Keep a write cert OUT of any directory a read-only helper globs (the `chq`
+wrapper takes the first `*.crt` and the first `*.key` INDEPENDENTLY, so a second
+pair there either silently promotes that helper to admin or pairs mismatched
+halves).
 
 **The seed's ordering contract (do not reorder):**
 
@@ -441,11 +491,77 @@ the identity before the run, not at the prompt (`SELECT currentUser()` and
    `summary.txt` is a close estimate of the execute's counts, never a
    contradiction of them.
 
+**`--execute` never decodes the checkpoint the dry-run reviewed — expect that,
+and read `summary.txt` accordingly.** Checkpoints publish every 64 ledgers
+(~5 minutes) and a full pass takes about as long again — measured 317 s for a
+dry-run and 637 s with the inserts, dominated by the archive download — so what
+separates two runs is a whole pass plus the time an operator spends reading
+`summary.txt`. The snapshot has therefore always advanced by the time the
+second run starts, though by one checkpoint interval rather than several. Two
+consequences, in opposite directions:
+
+- Our own churn is harmless: the `>= checkpoint` guard files it as
+  newer-than-checkpoint and leaves it alone.
+- The network's is not purely cosmetic: holdings created between the two
+  checkpoints are `missing` in the execute run and get INSERTED without having
+  been in the reviewed summary. They are real live holdings — a fresher
+  snapshot is a better input, not a riskier one — but the reviewed document
+  bounds the run's counts, it does not enumerate its rows.
+
+A `--pinned-manifest` flag existed for exactly this and was removed (its
+original job was keeping a frozen manual export consistent with the snapshot,
+and manual exports are gone). What replaces it is verification of the OUTCOME
+rather than of the input: the coverage measurement and 200-account probe below
+compare the finished table against the network. `manifest.json` records which
+checkpoint each run actually used.
+
 **No indexer stop is needed.** Every seeded row versions on a real ledger:
 live data on the entry's own `lastModifiedLedgerSeq`, closures on the run's
 checkpoint ledger (semantics: "closed at or before"). ReplacingMergeTree keeps
 the higher version, so the live writer's newer rows always win regardless of
 load order.
+
+### Auditing a run that has written — the order that makes it mean something
+
+Do these AFTER `--execute`, and capture the aggregates BEFORE it (they cannot be
+recovered afterwards). Every number here was produced this way on 2026-08-26.
+
+1. **Reproduce the run's own arithmetic.** The verdict buckets must sum to the
+   rows it says it folded, and the writing verdicts must sum to the correction
+   count. If either fails, a row was mis-bucketed and the rest of the audit is
+   meaningless.
+2. **Count the cohorts in ClickHouse.** Rows at `last_updated_ledger =
+<checkpoint>` are the closure/ghost cohort (expect `amount = 0` and
+   `closed_at = checkpoint`); rows below the ledger floor with `closed_at = 0`
+   are the inserted live holdings.
+3. **Sample from the DATABASE, not from the dumps.** The dumps are what the run
+   _intended_; the table is what it _did_. Resolve identities through our own
+   dimension tables and verify against `getLedgerEntries`, gated on
+   `lastModifiedLedgerSeq` — equal licenses an amount claim, above is churn,
+   below is a defect. Spread the sample across ERAS and across both asset-code
+   widths: `AlphaNum4` and `AlphaNum12` are different XDR branches, and a sample
+   of only short codes proves nothing about long ones.
+4. **Check ingest and disk**, because a bulk insert is also the window where the
+   ClickHouse driver can reject the live writer's rows: our head must equal the
+   chain head, and the live writer must still be stamping.
+5. **Compare against an external indexer** — and check what its column MEANS
+   before believing the delta. A count labelled "trustlines" may or may not
+   include contract holders; verify by computing both of ours and seeing which
+   one tracks. Exact equality on one asset is luck, not evidence; agreement
+   within a fraction of a percent across several is.
+6. **Reconcile supply against the ledger header**, not against a remembered
+   figure. `total_coins` and `fee_pool` both live in the signed header
+   (`getLedgers` → `headerXdr`, past the 32-byte history-entry hash). The
+   account sum must fall BELOW `total_coins` by the fee pool plus everything
+   held outside accounts — AMM reserves, claimable balances, contract-held.
+   Two traps, both hit in practice: measure the AMM term in the SAME pass (a
+   two-day-old figure drifted 381k XLM, which was 40% of the residual it fed),
+   and say whether your sum includes contract-held balances — on pubnet that is
+   ~920M XLM, so the two readings of "our native sum" differ enormously.
+7. **Re-run the dry-run.** It writes nothing, costs one pass, and is the only
+   real test of idempotency: `missing` and `closure` should collapse to churn,
+   `already closed` and `agree` should absorb them. A bucket that fails to move
+   locates the defect exactly.
 
 **After the seed (standing requirement, not advice):** measure the coverage
 achieved for trustlines and accounts separately, AND cross-check a sample
@@ -477,12 +593,12 @@ detectable tie. The arbiter is the network:
 
 1. After the re-parse, run the standing tie query (task 0503 carries it per
    table): keys with more than one distinct content at one version.
-2. Run `snapshot-seed` (dry-run) against a fresh checkpoint and read its report.
-   Between-runs ties surface as `divergent SAME ledger` (live entities) and as
-   closure/ghost corrections (dead ones).
-3. Run `snapshot-seed` (dry-run → review → `--execute`): dead-entity ties are
-   repaired outright at the checkpoint version; same-ledger divergences on
-   LIVE entities are reported for a human call — one of two parser versions is
+2. Run `snapshot-seed` against a fresh checkpoint — dry-run, review
+   `summary.txt`, then `--execute`. Between-runs ties surface as
+   `divergent SAME ledger` (live entities) and as closure/ghost corrections
+   (dead ones). Dead-entity ties are repaired outright at the checkpoint
+   version, which supersedes both sides; same-ledger divergences on LIVE
+   entities are reported for a human call — one of two parser versions is
    wrong, and auto-adopting either would bury the evidence.
 
 This is the same tooling as the one-off 0463 seed; the seed is one-off, the

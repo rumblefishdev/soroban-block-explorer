@@ -171,24 +171,43 @@ async fn stream_our_rows(
     Ok(seen)
 }
 
-/// The per-slice read. Its SELECT list IS the field order of
-/// [`verdict::OurRow`] — a mismatch would silently misclassify every row
-/// rather than fail.
+/// The per-slice read. Its SELECT list is aliased to the FIELD NAMES of
+/// [`verdict::OurRow`], which is what the driver matches on: `clickhouse` 0.15
+/// builds a name-to-field mapping per cursor and returns `SchemaMismatch` on a
+/// count mismatch or an unknown column, so a renamed alias fails the query
+/// rather than shifting a column silently. Decoding is not positional — an
+/// earlier version of this comment said it was, and two reviews built findings
+/// on that sentence.
 fn slice_sql(from: i128, to: i128) -> String {
     // The aggregates are aliased INSIDE a subquery and renamed outside. Aliasing
     // `max(last_updated_ledger) AS last_updated_ledger` directly shadows the
     // column, so the next `argMax(..., last_updated_ledger)` binds the alias and
     // ClickHouse rejects it: "Aggregate function max(...) is found inside
     // another aggregate function" (ILLEGAL_AGGREGATION).
+    //
+    // ONE `argMax` over a TUPLE, not one per column. Two independent `argMax`
+    // aggregates resolve a same-version tie independently, so in principle they
+    // could take `amount` from one row and `closed_at_ledger` from another and
+    // hand back a row that exists in no part on disk. Measured, they do not:
+    // over a full key slice (762,955 keys, 19,142 ties argMax actually has to
+    // resolve) the two forms returned identical results, because ClickHouse
+    // keeps the first-encountered maximum and both states walk the same rows in
+    // the same order. That is an implementation property, not a contract, and
+    // the tuple costs nothing — so the guarantee is structural instead.
+    //
+    // Not a repair of the 1,238,583 known ties: every one of those carries
+    // `closed_at_ledger = 0` on BOTH sides (they predate the column), so no
+    // assembly of them can differ from a real row. This closes the shape a
+    // FUTURE tie could take, once the deployed writer's stamps start appearing
+    // at contended versions.
     format!(
-        "SELECT holder_id, asset_id, amt AS amount, led AS last_updated_ledger, \
-                cls AS closed_at_ledger \
+        "SELECT holder_id, asset_id, tupleElement(best, 1) AS amount, \
+                led AS last_updated_ledger, tupleElement(best, 2) AS closed_at_ledger \
          FROM ( \
              SELECT holder_id, \
                     asset_id, \
-                    argMax(amount, last_updated_ledger) AS amt, \
-                    max(last_updated_ledger) AS led, \
-                    argMax(closed_at_ledger, last_updated_ledger) AS cls \
+                    argMax((amount, closed_at_ledger), last_updated_ledger) AS best, \
+                    max(last_updated_ledger) AS led \
              FROM balances \
              WHERE holder_id BETWEEN {from} AND {to} \
                AND asset_id IN (SELECT id FROM assets WHERE asset_type IN (0, 1)) \
@@ -251,10 +270,35 @@ async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, Backfill
 /// Emit the correction one verdict implies. The verdict comes from the REPORT,
 /// which counted and sampled the same row a moment earlier — so the summary an
 /// operator signs off on and the rows `--execute` writes are derived from one
-/// classification, not two. (`--execute` re-reads our rows fresh, like every
-/// corrective command here; churn since the dry-run is absorbed by the
-/// `>= checkpoint` guard, so the drift is only rows newly LEFT ALONE, never a
-/// different correction.)
+/// classification, not two.
+///
+/// Within ONE run. Across two runs the populations differ, and the honest
+/// statement of how is worth spelling out, because an earlier version of this
+/// comment claimed more than it could:
+///
+/// - OUR side drifts harmlessly. `--execute` re-reads our rows fresh, like
+///   every corrective command here, and anything the live writer touched since
+///   is absorbed by the `>= checkpoint` guard — those rows are newly LEFT
+///   ALONE, never given a different correction.
+/// - The SNAPSHOT side drifts too, and that half the old comment did not
+///   reason about. Checkpoints publish every 64 ledgers (~5 minutes) while a
+///   full pass takes ~5 (measured: 317 s dry-run, 637 s with the inserts;
+///   the archive download dominates and is network-bound, so earlier runs
+///   measured 909 s on the same code). What separates two runs is therefore a
+///   whole pass PLUS the operator reading `summary.txt`, which is why
+///   `--execute` still always decodes a later checkpoint than the dry-run
+///   reviewed — but the margin is one checkpoint interval, not three.
+///   Holdings the network
+///   created in that window are `missing` in the second run and get INSERTED,
+///   without having appeared in the summary an operator signed off on.
+///
+/// That drift is accepted deliberately (2026-08-21, reaffirmed 2026-08-26).
+/// The rows it adds are real live holdings — the fresher snapshot is the
+/// better input, not a riskier one — and the run is verified by measuring its
+/// OUTCOME against the network (coverage, the 200-account chain probe,
+/// aggregate deltas), which a frozen input would not improve. `manifest.json`
+/// records the checkpoint each run actually used, so the population is always
+/// identifiable after the fact.
 fn fold_our_row(
     row: &verdict::OurRow,
     verdict: verdict::Verdict,
@@ -531,6 +575,39 @@ where
     Ok(())
 }
 
+/// Refuse `--execute` under a read-only identity, BEFORE the run costs
+/// anything.
+///
+/// The failure it prevents is not subtle, it is just late: the first INSERT is
+/// the last step of the pass, so a wrong certificate spends ~5 minutes and
+/// 4.4 GB of archive download to learn a fact one SELECT already knows. The
+/// operator laptop's cert maps to a `readonly = 1` user, which refuses an
+/// INSERT before grants are consulted at all, so this is the ordinary case and
+/// not an exotic one.
+///
+/// A READ, never a trial write: the decisive test for a write permission must
+/// not itself be a write. `readonly` is the setting that actually gates the
+/// insert — grants are never reached while it is 1 — so it is what gets
+/// checked, rather than the user name, which is only reported to make the
+/// message actionable.
+async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
+    let (user, readonly): (String, u8) = sink
+        .client()
+        .query("SELECT currentUser(), toUInt8(getSetting('readonly'))")
+        .fetch_one()
+        .await?;
+    if readonly != 0 {
+        return Err(BackfillError::Incomplete(format!(
+            "refusing --execute: connected as `{user}` with readonly = {readonly}, which \
+             rejects every INSERT before grants are consulted. Use a write-capable \
+             identity (see the write-identity section of docs/backfills.md); the \
+             dry-run needs no change."
+        )));
+    }
+    println!("  identity: {user} (readonly = 0) — writes permitted");
+    Ok(())
+}
+
 /// The seed. Without `--execute`: reads its inputs from ClickHouse, decodes
 /// the snapshot, folds, writes artifacts, inserts NOTHING. With `--execute`:
 /// additionally inserts the four row sets.
@@ -540,6 +617,12 @@ pub async fn seed_command(
     execute: bool,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
+
+    // Before anything expensive: a write we cannot make is worth knowing in
+    // second 2, not in minute 11.
+    if execute {
+        refuse_if_read_only(sink).await?;
+    }
 
     let (list, mut state, source_report) =
         network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;

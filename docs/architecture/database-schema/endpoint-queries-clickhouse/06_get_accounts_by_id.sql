@@ -23,10 +23,10 @@
 --               No partition predicate — state tables not partitioned.
 -- Notes:
 --   • Three statements. The API threads `account.id` (Int64) from A into B
---     and C, and `account.last_seen_ledger` into C.
---   • Statement C derives the `deleted` flag (account_merge) — task 0324.
---     CH-only (prod serves accounts from CH); the PG fallback reports
---     `deleted = false`.
+--     and C. C no longer needs `last_seen_ledger`.
+--   • Statement C READS the `deleted` flag off the native holding's lifecycle
+--     column (task 0500) — it no longer derives it from operation history.
+--     CH-only (prod serves accounts from CH).
 --   • CH has no `token_asset_type_name`/`asset_type_name` SQL helper —
 --     project raw SMALLINT (Int16) and decode in the API layer (Rust enum,
 --     same source of truth as PG).
@@ -69,24 +69,38 @@ ORDER BY abc.asset_type, abc.asset_code, iss.account_id;
 -- @@ split @@
 
 -- ============================================================================
--- C. Derived `deleted` flag (account_merge) — task 0324.
---    Inputs: $1 = account.id (Int64, from A); $2 = account.last_seen_ledger.
+-- C. `deleted` flag — READ, not derived (task 0500, ADR 0055).
+--    Inputs: $1 = account.id (Int64, from A); $2 = the native asset surrogate,
+--            BOUND from Rust (a cityhash ClickHouse cannot recompute).
 --
---    `deleted` ⟺ the account's LAST op in its last-seen ledger is an
---    account_merge (type = 8) where it was the `source`. Since last_seen_ledger
---    = GREATEST(all appearances), any deleting merge sits in that ledger;
---    argMax over (transaction_id, application_order) picks the account's
---    chronologically-last op within it, so a same-ledger re-create (merge then
---    create_account at a higher application order) correctly yields `false`.
+--    Native XLM lives on the `AccountEntry`, so "the account was removed" and
+--    "its native holding was closed" are one fact, recorded once in the
+--    lifecycle column. No row at all ⇒ false: an address we have only ever
+--    seen referenced is not "deleted".
 --
---    `ledger_sequence = $2` as a LITERAL is load-bearing: operations_appearances
---    is PARTITION BY intDiv(ledger_sequence, 500000) with no sort key on
---    source_id/type, so anchoring on the (already-known) last_seen_ledger
---    prunes to a single granule (~8K rows). Without it the planner scans the
---    whole ~6.2B-row table and trips the query memory limit — hence a
---    dedicated 3rd query keyed by the literal, never a join on `accounts`.
+--    This REPLACED an operations_appearances × transactions derivation that
+--    asked whether the account sourced a successful account_merge in its
+--    last-seen ledger. It under-detected badly — 22 of 60 sampled merged
+--    accounts — for two independent reasons:
+--      • participation bumps `last_seen_ledger` past the death (task 0500:
+--        16,187 candidates in a single 200k-ledger window), so the anchor
+--        ledger held no merge at all;
+--      • the merge operation is not attributed to the account being merged —
+--        one sampled ledger carried exactly one type-8 appearance and none of
+--        its 664 appearances named the merged account.
+--    A fact cannot be derived correctly from a table that does not carry it.
+--
+--    Chain-verified via getLedgerEntries, 236 accounts, no exceptions: closed
+--    row -> 100/100 ABSENT, open row -> 100/100 PRESENT, merged-then-recreated
+--    -> 36/36 PRESENT and correctly alive. Re-measuring task 0500's window
+--    after the fix: 16,139 of 16,187 now read deleted and the remaining 48
+--    probed PRESENT on chain — the defect population is zero.
+--
+--    The re-create case needs no special handling: a re-create writes a new
+--    open row over the tombstone and FINAL keeps one row per key (measured:
+--    zero accounts hold both an open and a closed native row). That also
+--    retires the same-ledger merge-then-create caveat the old query carried.
 -- ============================================================================
-SELECT argMax(type = 8 AND source_id = $1, (transaction_id, application_order))
-FROM operations_appearances
-WHERE ledger_sequence = $2
-  AND (source_id = $1 OR destination_id = $1);
+SELECT closed_at_ledger != 0
+FROM balances FINAL
+WHERE holder_id = $1 AND asset_id = $2;

@@ -303,8 +303,10 @@ What that decision obliges, in place of the split:
   (`assets` list query filters nothing). That is correct — they are real
   network assets — but it is a visible product change, not a silent one.
 - The seed's own inputs must be trustworthy: buckets are SHA-256 verified
-  against the manifest hashes, the checkpoint is pinnable so `--execute` runs
-  the snapshot the dry-run reviewed, and truncated input files are refused.
+  against the manifest hashes, and short reads are refused by floors on every
+  input. (This bullet also claimed the checkpoint was pinnable so `--execute`
+  ran the snapshot the dry-run reviewed. The pin was removed 2026-08-24 and
+  the claim is withdrawn — see the 2026-08-26 entry.)
 
 ### Audit findings 2026-08-18 — five agents over the full branch diff
 
@@ -531,9 +533,10 @@ manifest is written LAST as an atomic commit point (failed publications are
 discarded, not half-visible); a live probe of a minutes-old manifest found
 all 22 referenced files present; and the runner fails loud regardless (404
 via `error_for_status`, truncation via per-bucket SHA-256) — worst case is a
-failed run, never a half-decoded one. `--pinned-manifest` stays as an
-optional flag with one real consumer: the ADR 0056 LP merge re-derives this
-seed's exact snapshot from `artifacts/manifest.json`.
+failed run, never a half-decoded one. (`--pinned-manifest` was kept as an
+optional flag that day and DELETED outright on 2026-08-24; `manifest.json` is
+still written, so the ADR 0056 LP merge can re-derive this seed's exact
+snapshot from it.)
 
 Executed: `--our-rows`/`--assets-ids`/`--accounts-ids` deleted; seed and
 compare stream the 64-slice `argMax` read through one shared
@@ -543,7 +546,7 @@ its test); the chq exit-0 trap and the one-dropped-slice hole (found by the
 design-study agent: 40M floor passes a 64th-slice loss) are gone — a cursor
 error propagates. Freshness — the measured dominant lever on correction
 volume — moves from runbook discipline into the tool itself. Net −~200
-lines; operator flow: dry-run → read summary → `--execute --pinned-manifest`.
+lines; operator flow: dry-run → read summary → `--execute`.
 
 ### CI red 2026-08-20 — not this branch: Rust 1.98.0 vs zig's linker
 
@@ -1066,25 +1069,979 @@ THAT. An account with `master_weight = 0` has a disabled master key and must
 NOT render the row as a signer with weight 0 reading as ordinary — 41 of 5,000
 sampled accounts are permanently locked this way.
 
+### Deployed 2026-08-24 evening — the writer validates against the chain
+
+PR #428 merged to master (`6cd072c5`) and the indexer deployed. Verified by
+reading production, not by assuming:
+
+| check                              | result                                                             |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| lifecycle writer stamping          | `closed_at_ledger` non-zero — first stamp at ledger **64,115,052** |
+| live signer writes                 | `account_entry_state` carrying production rows                     |
+| ingest after the container recycle | our head **equals** the chain head to the ledger                   |
+
+That last row is not a formality: deploy + container recycle is the window
+where the ClickHouse driver rejects inserts client-side on a struct/schema
+mismatch, which stopped ingest for nine minutes in task 0310. It did not
+recur.
+
+**The three earlier dry-runs are void for `--execute`.** Their checkpoints
+(64,106,239 / 64,106,495 / 64,107,135) all sit BELOW the deploy ledger, and the
+ordering contract requires a checkpoint taken after it — otherwise every
+removal in the gap was written by the OLD writer as a plain zero at a ledger
+above the checkpoint, outversioning the seed's closure and resurrecting the
+ghost. A fresh run at checkpoint **64,115,135** replaces them.
+
+#### The defect signals fire for the first time — and read zero
+
+Before the deploy nothing was ever stamped closed, so `AlreadyClosed` and both
+`ClosedButLive*` verdicts were structurally unreachable: they could not have
+caught anything. This run is the first where they could:
+
+```
+already marked closed            182 classic + 37 native
+CLOSED BUT LIVE (re-opened)        0 + 0
+CLOSED vs LIVE conflict (defect?)  0 + 0
+```
+
+219 stamps, none contradicted by the snapshot. That also exercises the
+checkpoint-guard fix in the condition it was written for — post-deploy churn
+meeting a snapshot that predates it.
+
+#### Every stamp the deployed writer made, checked against chain
+
+All 557 distinct keys carrying a stamp (482 trustlines + 75 native), resolved
+to StrKeys and fetched from RPC:
+
+- **554 absent from chain** — correctly closed.
+- **3 apparently present, none a defect.** One (`GCYNGANMUF…`) has a NEWER
+  open row on our side: `closed_at = 0`, 1.5 XLM at ledger 64,115,211, and the
+  chain agrees exactly — same `lastModifiedLedgerSeq`, same balance. It
+  surfaced only because an OLDER row carries a stamp, which is the account
+  being merged and then RE-CREATED at the same address, with both states
+  recorded. The other two were present on the first probe and gone minutes
+  later on the second — the same merge/re-create/merge pattern, caught
+  mid-cycle.
+
+Account re-creation is worth recording as a shape this writer handles: the
+address returns, and the newest row wins on RMT version, so a closure does not
+become permanent.
+
+#### Post-deploy run — what `--execute` would write (checkpoint 64,115,135)
+
+|                        | rows                                            |
+| ---------------------- | ----------------------------------------------- |
+| `balances` corrections | 44,852,492                                      |
+| `account_entry_state`  | 10,894,330                                      |
+| `assets` stubs         | 97,108                                          |
+| `accounts` stubs       | 0                                               |
+| unresolved references  | **0 assets, 0 holders** (464 issuers, cosmetic) |
+
+Structural audit: 0 failures. Missing trustlines at/above our floor: still 0.
+
+#### The deployed writer, checked against an external source
+
+Not "is it running" but "does it write the truth". Both write paths and both
+halves, every check against RPC with the independent decoders:
+
+| what                               | check                                             | result                                                                |
+| ---------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------- |
+| signers written by the LIVE writer | thresholds, signer set AND order vs chain         | **377 / 377 identical** (22 churned after our ledger, 1 merged since) |
+| account-merge closures             | absent from chain                                 | 554 / 557                                                             |
+| account-merge closures             | is there an `account_merge` at OUR stamped ledger | **5 / 5 SUCCESS**                                                     |
+| trustline closures                 | absent from chain                                 | 6 / 6                                                                 |
+| trustline closures                 | is there a `change_trust` at OUR stamped ledger   | **6 / 6**                                                             |
+
+The second and third rows matter more than absence alone: absence proves we
+closed something that is gone, the ledger match proves we closed it _for the
+right reason at the right moment_. Deleted entries leave no trace in
+`getLedgerEntries`, so the timing had to be verified from the ledger's
+transaction set instead.
+
+Two false alarms along the way, both mine, recorded so they are not re-derived:
+
+- Three merge closures looked "still present on chain". One
+  (`GCYNGANMUF…`) has a NEWER open row on our side agreeing with the chain to
+  the balance and ledger — the account was merged and then RE-CREATED at the
+  same address, both states recorded, newest winning on RMT version. The other
+  two were present on one probe and gone minutes later: the same
+  merge/re-create/merge cycle caught mid-way. Account re-creation is a shape
+  this writer handles; a closure does not become permanent.
+- Four trustline closures appeared to have no matching transaction in their
+  ledger. The join that produced them took the CROSS product of five holders
+  and five assets and then zipped ledgers positionally, so the (holder, asset,
+  ledger) triples under test were never real rows. Re-run with the ledger
+  carried through the join: 6 / 6.
+
+### External review 2026-08-26 — verified independently before acting
+
+An outside review (8 agents, 3 adversarial rounds) produced 32 items over the
+snapshot module. Every claim was re-checked at source before anything was
+changed: each `file:line` opened, each cited commit resolved, library behaviour
+read in the vendored crate source, and production claims measured with `chq`.
+The review is mostly sound — all 8 cited commits exist with the descriptions
+attributed to them — but it carries four errors, one of them in a blocker's
+recommendation.
+
+#### The largest open question is now CLOSED by measurement, not argument
+
+The review's blocker B2 hypothesised `assets` rows whose `id` came from an
+older derivation: unkeyable by the snapshot, so their balances would fall into
+the absence arm and be zeroed and stamped closed, with no floor firing because
+the row count never changes. Only the verdict flips — silent for the
+zero-amount half, which is exactly the class this task exists to fix.
+
+Answered with a throwaway read-only falsifier (not committed; the check cannot
+be SQL, because ClickHouse's `cityHash64()` is a different algorithm from the
+low 64 bits of CityHash128 that `ids::` uses):
+
+| arm of `asset_id()`                 | rows checked | not derivable |
+| ----------------------------------- | ------------ | ------------- |
+| type 1 — `hash64("CODE:issuer_id")` | 343,987      | **0**         |
+| type 3 — `id == contract_id`        | 4,380        | **0**         |
+| type 0 — the `native` constant      | 7            | **0**         |
+
+Plus, in pure SQL over the same table: **0 identities carrying more than one
+`id`, and 0 `id`s carrying more than one identity.** That bijection is the
+corroborating argument — had the formula ever changed, the live writer (which
+uses today's) would have inserted a second row for the same identity under the
+new id. It has not done so once in ~344k assets.
+
+So B2's population is empty and its proposed permanent `--execute` refusal has
+nothing to refuse.
+
+#### Four errors in the review, recorded so they are not re-derived
+
+- **Its recommended fix for B3 cannot work.** `--expect-checkpoint <N>` would
+  have `--execute` refuse unless the freshest checkpoint equals the one the
+  dry-run named. Checkpoints publish every 64 ledgers (~5 min) and a pass takes
+  ~15, so that condition is false by construction on every run. The workable
+  shape is the deleted `--pinned-manifest` (it read the dry-run's own
+  `manifest.json`), not a freshness assertion.
+- **F5's "exists ONLY in a commit message" is false.** The 1000/1000 chain
+  check is at README line 694 and the full 11,994 + 3,772 → 0 transition table
+  at 829-831. Only the dimension-id counts are commit-message-only. F5 also
+  demands chain evidence for a bucket that measures **zero** after the fix;
+  what actually remains is F7 (`NewerThanCheckpoint` is unsampled), which
+  already says it.
+- **`docs/backfills.md:497` does not repeat the tie guarantee.** That phrase
+  occurs exactly once in the repo, in ADR 0057 line 78.
+- The summary `format!` takes **16** positional arguments, not 18. The
+  objection to positional formatting stands; the number did not.
+
+#### One place the review holds itself to two standards
+
+B1 asks for a test proving `key_slices()` covers i64 exactly once. Read
+closely, the coverage is exact for ANY value of `KEY_SLICES`, not just powers
+of two: the final slice ends at `hi` by an explicit arm, and slice `s+1` starts
+one past slice `s`'s end. A test would assert a fact about arithmetic — which
+is precisely why the same review deletes `checkpoint_lattice_accepts_only_63_mod_64`
+under D7. The other two tests B1 asks for (dangling counters,
+`build_corrections`) target real untested logic and stand: `seed.rs` has **0**
+tests against 12 in its siblings, and it is the only module that writes.
+
+#### Measured while verifying — a number the review did not have
+
+`slice_sql` excludes rows whose asset has no `assets` row. Measured on
+production: **1,616 (holder, asset) keys across 159 unknown asset ids.** They
+belong to no exclusion bucket, so `summary.txt` does not sum to the table.
+Harm is low (a re-insert lands on the same key), but the gap should be
+counted rather than invisible.
+
+Also: the unsampled set is wider than F7 states — `AlreadyClosed` and `Stale`
+have no sample arm either. And the review's ground rule about
+`changeable_in_readonly` could not be verified: that column does not exist in
+`system.settings` on CH 26.3.10.60. Its practical conclusion was confirmed
+directly instead — `dev_read`, `readonly = 1`, `max_execution_time = 30`.
+
+### Acted on 2026-08-26 — three decisions, and the corrections they implied
+
+**Snapshot drift: the claim is retracted, the pin is not restored** (B3, owner's
+call). The deleted flag's original job was keeping a frozen manual export
+consistent with the snapshot, and manual exports are gone; an unpinned run
+decodes the FRESHER snapshot, which is a better input. What was wrong was the
+documentation: `fold_our_row` asserted the drift is "only rows newly LEFT
+ALONE, never a different correction", reasoning about our side only. The
+snapshot side moves too, so holdings the network creates between the two
+checkpoints are `missing` in the execute run and get INSERTED without appearing
+in the reviewed summary. Now stated plainly in the code, in `docs/backfills.md`
+and in the three stale README lines (:306, :534, :546). The reviewed document
+BOUNDS a run's counts; it does not enumerate its rows — and the run is verified
+by measuring its outcome against the network, which no frozen input improves.
+
+**`ClosedButLiveConflict` keeps its policy and loses its reason** (F1). The
+comment claimed no honest version could supersede our closure. The file refutes
+that twice: the guard proves every row on that arm sits below the checkpoint,
+and `correction` already stamps closures at the checkpoint, which ADR 0057
+blesses. A presence fact carries the same way — an entry in the checkpoint's
+bucket list IS live at the checkpoint. The real reason is decay coupling: a
+one-off heal against an ongoing writer defect is the same trap that removed the
+same-ledger heal (task 0514), and the bucket's value is reading zero on healthy
+data. Reported still; the reason is now the true one.
+
+**`ClosedButFunded` — built, then REVERTED the same day** (F2). Worth
+recording as a full loop, because the reverting evidence is the useful part.
+
+The finding was real: ADR 0057 decision 2 promises the checkpoint version
+"deterministically supersedes both sides of any tie", and `AlreadyClosed`
+returned no correction, so for one shape it could not deliver that. A twelfth
+verdict was added to repair a row that says CLOSED while still holding a
+positive amount — zeroed at the checkpoint version (strictly above the row's
+own ledger, so it supersedes both tied rows) while KEEPING the closure ledger
+the writer recorded.
+
+It was justified partly on the tie surfacing as a MIX — the funded amount from
+one row married to the closure stamp from another, which three independent
+`argMax` aggregates permit. Measuring that argument is what killed the verdict:
+
+| measurement                                                   | result |
+| ------------------------------------------------------------- | ------ |
+| tie rows carrying a non-zero `closed_at_ledger`               | **0**  |
+| rows in the whole table with `closed_at != 0 AND amount != 0` | **0**  |
+| stamped rows overall (`closed_at != 0`)                       | 54,720 |
+
+The 2×2 has an empty cell, and it is the one this verdict fires on. Nor can a
+writer produce it: the parser sets `closed = change_type == "removed"`, and a
+removed entry carries balance 0.
+
+Decisive, though, is that **the tuple `argMax` and this verdict are two
+treatments of the SAME mechanism.** A mix was the only route to a
+closed-and-funded row, and one `argMax` over a tuple makes a mix structurally
+impossible. After that fix the verdict covers nothing that can occur — so it
+went, and `correction()` went back to three arguments.
+
+What survives instead is honesty about the gap neither closes: a tie whose
+surviving side is the coherent `{amount: 0, closed_at: L}` reads as an ordinary
+closure, writes nothing, and lives on. **ADR 0057 decision 2 was amended** to
+state its real scope — the guarantee holds whenever the surviving side produces
+a correction, which is every tie measured to date — and `docs/backfills.md`
+names the exception so it is not rediscovered as a surprise.
+
+**Four comments that were actively false, corrected:**
+
+- `seed.rs` claimed the SELECT-to-`OurRow` mapping is positional and "would
+  silently misclassify every row rather than fail". Read in the vendored
+  crate: `clickhouse` 0.15 builds a name-to-field mapping per cursor
+  (`RowMetadata::new_for_cursor`, unconditional — there is no `validation`
+  feature) and returns `SchemaMismatch` on a count mismatch or an unknown
+  column. Two review agents built findings on that one sentence.
+- `snapshot.rs` said `archive` + `network_state` "know nothing about our
+  schema". `network_state` calls `ids::` six times to derive OUR surrogate
+  keys. Only `archive` is schema-free; the seam still falls where it did,
+  because `ids` is a pure hash module that travels with it.
+- `archive.rs`'s lattice test defined its own predicate and asserted against
+  it, so deleting the production check left it green. It now calls a real
+  `is_checkpoint`, and gains the case that pins the FREQUENCY (`!is_checkpoint(31)`
+  — every case it had still passes at a frequency of 32). Honest limit: it
+  still would not catch deletion of the call site, which needs a mocked fetch.
+- Stale module names (`snapshot_report`, `snapshot_seed::slice_sql`) left over
+  from the file-tree refactor.
+
+Docs also gained the drift statement, lost Horizon as a validation source
+(legacy — it synthesises fields the ledger lacks), and the two duplicated
+reconciliation steps collapsed into one.
+
+Deferred, not dropped: F3/F4 (identity precheck, moving the two `uniqExact`
+reads above the decode), D1 → F6/F7/F8 (collapse the 11-name triplication,
+then add the missing native twins and sample arms), B1's two real tests,
+F9/F10 (heal dumps, ghost holders resolved from `accounts`), F13-F18 and the
+D-series refactors.
+
+### The two-`argMax` hazard — measured, then closed structurally (2026-08-26)
+
+A follow-up review item: `slice_sql` ran THREE independent aggregates, so on a
+same-version tie `amount` and `closed_at_ledger` could in principle be taken
+from different rows, assembling a row that exists in no part on disk.
+
+Measured over one full key slice before changing anything:
+
+| measurement                                                         | result     |
+| ------------------------------------------------------------------- | ---------- |
+| keys in the slice                                                   | 762,955    |
+| ties `argMax` actually has to resolve (at the winning version)      | **19,142** |
+| rows where the two-aggregate form disagreed with one tuple `argMax` | **0**      |
+| tie rows carrying a non-zero `closed_at_ledger`                     | **0**      |
+
+Two conclusions, and they point in different directions:
+
+- **The hazard is real but currently cannot fire.** Every one of the 1,238,583
+  known ties predates `closed_at_ledger`, so the column is 0 on BOTH sides and
+  no assembly of them can differ from a real row. The last row is the decisive
+  one — a "mix" needs the two sides to disagree in the second column, and none
+  of them do.
+- **The independence never showed itself either.** ClickHouse keeps the
+  first-encountered maximum and both aggregate states walk the same rows in the
+  same order, so they agreed 19,142 times out of 19,142. That is an
+  implementation property, not a documented contract.
+
+Taken: ONE `argMax` over a tuple, unpacked in the existing outer SELECT. Proven
+equivalent on 762,955 keys and verified against production for column names and
+types (`Int64/Int64/Int128/Int64/Int64`, matching `OurRow`). It closes the shape
+a FUTURE tie can take, once the deployed writer's stamps start landing at
+contended versions — not the historical population, which `Closure`/`Ghost`
+already supersede.
+
+**This measurement is also what retired `ClosedButFunded`** (above): that
+verdict existed to catch the mix, and one tuple `argMax` makes a mix
+impossible, so the two were alternative treatments of one mechanism and the
+structural one won.
+
+The residual is written down rather than implied: **a tie whose surviving side
+is the coherent `{amount: 0, closed_at: L}` still escapes.** It
+reads as an ordinary closure, writes nothing, and both tied rows live on for
+the API's own `argMax` to re-flip. Catching that needs the read to carry the
+tie itself — distinct contents at the winning version — which is a second
+aggregation level over ~78M rows. Not built, because the population that could
+produce it does not exist yet: the generating process stopped ~2 months before
+the lifecycle writer did its first stamp.
+
+### Dry-run at checkpoint 64,131,071 (2026-08-26) — audited, and one committed doc contradicted
+
+First run on the post-review code. 317 s, exit 0, checkpoint **above the deploy
+ledger 64,115,052**, so the ordering contract holds.
+
+#### The report's own arithmetic reproduces exactly
+
+Recomputed by hand rather than trusted, because the completeness invariant is
+the only thing standing between a mis-bucketed row and a silent one:
+
+| check                                                  | result                                           |
+| ------------------------------------------------------ | ------------------------------------------------ |
+| eleven verdict buckets, classic + native, summed       | **49,650,721**                                   |
+| rows the run says it folded                            | **49,650,721** — exact                           |
+| writing verdicts (missing + closures + ghosts) summed  | **44,834,825**                                   |
+| `balances` corrections reported                        | **44,834,825** — exact                           |
+| `account_entry_state` rows                             | **10,872,679** = live accounts, exact            |
+| `ghosts.tsv` lines                                     | **1,057,618** = 1,941 + 1,055,677, exact         |
+| asset stubs: rows / distinct ids / distinct identities | **97,108 / 97,108 / 97,108** — still a bijection |
+
+Residual of 46 between native live accounts and our matched rows resolves as
+accounts created between the checkpoint and the read — the only bucket that can
+absorb them is `newer than checkpoint`, and it is 10,038 against 9,992 needed.
+
+#### Chain audit of THIS run, independent implementation
+
+StrKey, `LedgerKey` XDR and `TrustLineEntry` decoding re-implemented from spec
+per `notes/V-`, gated on `lastModifiedLedgerSeq` so churn is never counted as
+disagreement:
+
+| bucket                                         | expectation | result                                                                              |
+| ---------------------------------------------- | ----------- | ----------------------------------------------------------------------------------- |
+| `missing_classic` (the INSERT set)             | present     | **200/200 present, 200/200 identity echoed, 200/200 frozen, 200/200 balance exact** |
+| `agree_classic` (positive control)             | present     | **200/200**, all four the same                                                      |
+| `closure_classic`                              | absent      | **200/200 absent** — the read-filter flip resurrects nothing                        |
+| `ghosts_native` (1.06M rows zeroed, 45.4M XLM) | absent      | **300/300 absent** (holders resolved through our `accounts`)                        |
+
+Zero rows where the chain's ledger sits BELOW ours, which would have been a
+defect rather than churn.
+
+#### The defect signals fire for real this time, and read zero
+
+The previous post-deploy run had 219 lifecycle stamps to test against. This one
+has **56,226** (25,667 classic + 30,559 native), two days of the deployed
+writer:
+
+```
+CLOSED BUT LIVE (re-opened)        0 + 0
+CLOSED vs LIVE conflict (defect?)  0 + 0
+```
+
+Not one of 56,226 closures is contradicted by the network. That is the
+strongest health check the writer has had.
+
+#### Two buckets went to zero, and the reason is the self-read
+
+`heal` and `stale` are now **0 in both populations**, where the module docs
+still advertise "self-heal (snapshot newer) ~25k". Both count rows where the
+snapshot is NEWER than ours — impossible once our side is read live at run
+time, because we are never behind the checkpoint. Anything where we are ahead
+lands in `newer than checkpoint` (12,444 + 10,038). The ~25k figure dates from
+the frozen-TSV era and should be read as history, not as an expectation.
+
+`divergent SAME ledger` is 17,984 native / 0 classic, up from 17,739 — ~245 in
+one day, tracking the ~1,900/week in task 0514, and still one-directional and
+Soroban-localised. Quarantined, writes nothing.
+
+#### A doc committed hours earlier is already contradicted by measurement
+
+`docs/backfills.md` and `seed.rs` state that a full pass "takes ~15" minutes
+against a checkpoint interval of ~5. **Measured: 317 s** — about ONE checkpoint
+interval, not three. The conclusion survives (the manifest is fetched at each
+run's START, so what separates two runs is a whole run plus the operator
+reading `summary.txt`), but the number is wrong and the margin is far thinner
+than written. The 909 s figure it was based on came from a run whose cost was
+dominated by archive download, which is network-bound and varies: 246 s of this
+run's 317 s was still the buckets.
+
+#### Aggregates captured BEFORE the run, per the acceptance criterion
+
+Only useful if taken first, so recorded here rather than discovered afterwards:
+
+| asset         | `total_supply`      | `holder_count` |
+| ------------- | ------------------- | -------------- |
+| native XLM    | 1054107012889362218 | 9,926,579      |
+| USDC (circle) | 3201349384852260    | 631,180        |
+| AQUA          | 854444817802479332  | 61,909         |
+| SHX           | 995998878972179459  | 49,761         |
+
+Expected direction after the seed: native `holder_count` DOWN by ~1.06M (the
+ghosts) and `total_supply` down by ~45.4M XLM; classic supply and holders UP as
+19.26M live trustlines enter.
+
+#### Known gaps this run displays rather than hides
+
+- `ghosts_classic` and `ghosts_native` dump **1000/1000 unresolved identities**
+  — the `key_line` limitation (a dead account carries no snapshot identity).
+  The native half is auditable through our `accounts` table, as above; the 1,941
+  classic ghosts remain unreachable from any source.
+- `closure_classic` resolves 708 of 1,000 (292 unresolved), matching the 288
+  measured on 2026-08-24 — the holder was merged along with the trustline.
+- `closure_native` and `agree_native` still have no dump at all (review F6).
+  The 10.8M-row native `agree` count is itself the positive control for native
+  keying, but there is no sample file to look at.
+- `entry_states.tsv` reports "5001 of 10,872,679": the truncation marker is
+  counted as a row (review F17, cosmetic).
+- The ~1,616 keys whose asset has no `assets` row are still excluded from the
+  comparison and absent from NOT COMPARED, so the block does not sum to the
+  table (review F17).
+
+### EXECUTED on production — checkpoint 64,131,263 (2026-08-26), and the full audit
+
+`--execute` ran under the dedicated write cert (CN → `dev_shared`, verified
+`readonly = 0` by a read BEFORE the run). 636.5 s total, exit 0,
+`inserts done.` Checkpoint sits ABOVE the deploy ledger 64,115,052, so the
+ordering contract held. Everything below is measured AFTER the write, most of
+it against independent sources.
+
+#### What landed, verified in ClickHouse
+
+| table                 | run said   | verified in CH                                                                                                                               |
+| --------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `balances`            | 44,834,785 | checkpoint cohort **25,572,553 − 184 organic = 25,572,368 exact**; missing cohort **19,262,417 exact** (min ledger 287,404, all below floor) |
+| `account_entry_state` | 10,871,929 | 10,882,822 distinct accounts (= seed + live writer)                                                                                          |
+| `assets`              | 97,108     | distinct ids 445,489 = 348,380 + 97,108 **+ 1 organic**                                                                                      |
+| `accounts`            | 0          | unchanged                                                                                                                                    |
+
+Disk: `balances` total is now **1.48 GiB on disk** (119.3M raw rows, 8 active
+parts, single partition); server has 476 GiB free. The whole seed cost well
+under 1 GiB of disk.
+
+Ingest never blinked: our head equalled the chain head (64,131,563 = 64,131,563)
+during and after verification, and the live writer kept stamping
+(`account_entry_state` max version 64,131,437 > checkpoint). The 0310-class
+schema-mismatch window did not recur.
+
+#### Chain audit of the written state — from the DATABASE, not the dumps
+
+Fresh samples drawn from production AFTER the write, resolved through our own
+dimension tables, verified against `getLedgerEntries` with the independent
+spec-implemented decoders:
+
+| population                                                      | result                                                                                                                                                          |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| inserted missing rows, eras 10.1M–50.4M (incl. 30 zero-balance) | **120/120 present, identity echoed, frozen at our ledger, amount exact**                                                                                        |
+| native ghosts (head + middle + tail of ghosts.tsv)              | **300/300 absent from chain**; in CH, 632+300 keys read `amount 0, closed_at 64131263` through `argMax`                                                         |
+| warehouse accounts (8,547 / 890 / 890 stamped rows)             | **0 live zeros remain** on any of them                                                                                                                          |
+| fixture `GDXWIA4V…`                                             | 5 rows: native + KALE positive, AQUA/USDC/SHX **0 at ledgers 58,469,457 / 58,469,453 / 59,023,860**; signers `1 + 4×1`, thresholds 3/3/3                        |
+| entry-state versions (min + median band)                        | **10/10 equal to chain's `lastModifiedLedgerSeq`** — the 56M floor on account versions is a NETWORK fact (a mass rewrite band ~56.01–56.09M), not a seed defect |
+
+#### External indexer cross-check — stellar.expert, funded-trustline counts
+
+Two fully independent pipelines, compared after our aggregate refresh:
+
+| asset | our `holder_count` | stellar.expert `funded` | delta       |
+| ----- | ------------------ | ----------------------- | ----------- |
+| AQUA  | **129,438**        | **129,438**             | **0**       |
+| SHX   | 54,737             | 54,736                  | 1           |
+| USDC  | 682,443            | 681,989                 | 454 (0.07%) |
+
+AQUA — whose holder count our seed DOUBLED (61,909 → 129,438 by waking
+pre-floor dormant lines) — matches to the row. Supplies read lower than
+stellar.expert's issued supply by the value sitting in pools/contracts, which
+is the NOT COMPARED set, as designed.
+
+#### The native supply question — RESOLVED, and it corrects 2026-08-24
+
+> **Read the adversarial pass below before quoting these figures.** Three of
+> them were later tightened: the AMM term was two days stale (drift 381k XLM,
+> 40% of the residual), "our native sum" silently includes 920.8M XLM of
+> contract-held balances, and the stellar.expert agreement is real but not
+> "exact to the row".
+
+The predicted "supply moves down ~45.3M XLM" did NOT happen, and chasing that
+discrepancy produced the session's best result. What actually happened:
+
+- The seed's ghost accounting (45.2M XLM) was per ITS OWN `argMax` read. The
+  aggregate MV reads through `FINAL`, and on the 1.24M same-version ties the
+  two rules flip different coins — the MV had ALREADY been excluding most
+  phantom value before the seed. The seed therefore did not move the sum much;
+  **it made the sum deterministic** (checkpoint rows outversion both tie
+  sides). Verified at population scale: of 210,572 stamped keys in slice 0,
+  exactly **1** still reads funded (an organic same-ledger write).
+- Ground truth after: 16-slice `argMax` sum = **105,410,270,563.77 XLM**,
+  funded 9,925,836 — and `FINAL` now agrees (9,925,837 / within 370k XLM of
+  churn window), which it could not before.
+- Every funded key was verdict-checked against the snapshot at FULL population
+  (`agree` = equal amounts), so phantom value in the native sum is now
+  structurally impossible, not just sampled-away.
+
+Against the validators' own number (header decoded from `getLedgers`,
+byte-offset past the history-entry hash):
+
+```
+total_coins                          105,443,902,087.35
+our native sum (ground truth)        105,410,270,563.77
+gap                                       33,631,523.58
+  fee_pool (header, same decode)         10,451,269.25   <- the term 08-24 MISSED
+  AMM pool reserves (measured 08-24)     22,231,810.44
+  remainder = claimable balances            948,443.89
+```
+
+**The books close to ~0.95M XLM (0.0009%), every term measured but the last.**
+This retro-corrects 2026-08-24: the "pre-seed gap too small → phantom XLM
+present" inference and the "55.8M plausible for claimables" figure were both
+wrong for the same reason — the fee pool was absent from the model. The
+pre-seed gap was already right; the missing 10.45M was burned fees, and
+claimables hold ~0.95M, not ~55M.
+
+#### Aggregates moved only where the network justifies
+
+Captured BEFORE → read AFTER (post-refresh):
+
+| asset  | holders before → after | supply direction                             |
+| ------ | ---------------------- | -------------------------------------------- |
+| native | 9,926,579 → 9,925,837  | ~flat — see above; determinism, not drift    |
+| USDC   | 631,180 → 682,443      | up (+2.31M USDC of dormant lines)            |
+| AQUA   | 61,909 → 129,438       | up — doubled, matches stellar.expert exactly |
+| SHX    | 49,761 → 54,737        | up                                           |
+
+#### Is a future run idempotent? Yes — verified by construction
+
+The question: would the next `snapshot-seed` re-insert what this one wrote,
+including the pre-floor rows? No:
+
+- seeded live rows (below-floor, entry's own version) → next run reads them,
+  network unchanged → `Agree` → writes nothing (the 13.1M `agree` bucket of
+  THIS run already proves the path);
+- seeded closures/ghosts (`closed_at = 64,131,263`) → network absent →
+  `AlreadyClosed` → writes nothing;
+- asset stubs → now in the known-id set → no stubs;
+- churn since → exactly the small corrections a reconciliation SHOULD write.
+
+And if any identical row were ever re-inserted anyway, RMT collapses
+byte-identical duplicates harmlessly.
+
+#### Residue for the record
+
+- `already marked closed` grew 25,667+30,559 → 25,713+31,362 between dry-run
+  and execute — the live writer stamping in the gap, as designed.
+- `divergent SAME ledger` 18,012 — task 0514's live Soroban defect, untouched
+  by design, still one-directional.
+- The fresh dry-run before execute was skipped DELIBERATELY: `--execute`
+  always decodes a newer checkpoint than any dry-run, so a same-day dry-run
+  adds review theatre, not review. The 64,131,071 dry-run (fully audited,
+  0.04% drift) is the reviewed document; delta at execute matched it.
+
+### What the seed achieved, in numbers (2026-08-26)
+
+The index before this work was not merely incomplete — on several questions it
+answered confidently and wrongly. What changed:
+
+| question a visitor could ask               | before                        | after                                             |
+| ------------------------------------------ | ----------------------------- | ------------------------------------------------- |
+| "does this account hold asset X?"          | 60% of live trustlines absent | **+19,262,417** holdings added                    |
+| "is this account multisig?"                | nothing indexed               | **10,871,929** accounts with signers + thresholds |
+| "does this asset exist?"                   | 97,109 real assets unknown    | **+97,108** assets, every one chain-checked       |
+| "is this holding closed or empty?"         | indistinguishable             | **24,514,784** closures stamped explicitly        |
+| "does this merged account still hold XLM?" | 1.04M phantom balances shown  | **1,036,526** zeroed, 300/300 verified gone       |
+| holders of AQUA                            | 61,909                        | **129,438 — equals stellar.expert to the row**    |
+
+**9,478,880 live zero-balance holdings** (8,530,451 classic + 948,429 native)
+now exist as distinguishable facts rather than being dropped by a filter — the
+population issue #377 reports, measured after the write.
+
+Coverage: **0** missing trustlines at or above our ledger floor. Every gap the
+snapshot found predates our indexing window, so the 60% hole was coverage, not
+a parser defect — the discriminator returning the good answer.
+
+Audit totals against the chain, all with independently implemented decoders:
+**200 + 120 + 80 = 400** inserted rows sampled across ledgers **635,690 →
+50.3M** (2016 → 2024, including 52 twelve-char codes and 30 zero-balance
+lines) — present, identity echoed, frozen at our ledger, amount exact to the
+stroop, **400/400**. Plus 300/300 ghosts absent, 200/200 closures absent,
+200/200 positive control present.
+
+#### The capability is now a debugger, not just a loader
+
+The same pass that writes also answers "where are we wrong?", and it did so
+three times in one day on facts nobody had questioned:
+
+- **the fee pool.** Reconciling native supply against the validator-signed
+  header forced the 10.45M XLM fee pool into the model. The 2026-08-24 entry's
+  "phantom XLM" inference and its ~55.8M claimable estimate were both wrong
+  for that one missing term; the books now close to **~0.95M XLM (0.0009%)**.
+- **the same-ledger ties.** The seed's checkpoint-versioned writes made
+  1.24M coin-flip keys deterministic — verified at population scale (of
+  210,572 stamped keys in one slice, exactly 1 still reads funded, and that
+  one is organic).
+- **the live Soroban defect** (18,012 rows, task 0514) surfaced only because
+  the comparison exists at all, and is now tracked run over run.
+
+Two defect signals (`CLOSED BUT LIVE`, `CLOSED vs LIVE conflict`) read **0
+against 57,075 lifecycle stamps** — the strongest health check the writer has
+had, and a monitor that only means something because it can fire.
+
+#### "One organic asset" — identified
+
+The post-run asset count kept drifting up (348,380 → 348,409 in 40 minutes).
+Not seed residue: these are assets created ON CHAIN after the checkpoint and
+written by the LIVE indexer. First one is `SHIPSTOCKS` (issuer
+`GDXLMDAW…GA33`) whose first row sits at ledger **64,131,264 — the ledger
+immediately after the checkpoint 64,131,263**; the issuer is confirmed live on
+chain. Roughly 40 new assets/hour, which is ordinary network activity and the
+reason any "expected total" has to be a rate, never a fixed number.
+
+### Adversarial pass on the day's own conclusions (2026-08-26)
+
+The seed was verified from many angles; the LEAST checked artifacts were the
+conclusions drawn from it hours earlier — one of which overturned a previous
+entry, which is the shape that gets it wrong twice. Attacked deliberately.
+Three hits, all by measurement.
+
+#### 1. The residual was quoted more precisely than its inputs allow
+
+The reconciliation subtracted an AMM figure measured **two days earlier** from
+sums measured today. Re-measured now:
+
+| term                     | 2026-08-24    | today         |
+| ------------------------ | ------------- | ------------- |
+| XLM in AMM pool reserves | 22,231,810.44 | 22,612,827.69 |
+
+**The two-day drift is 381,017 XLM — 40% of the ~948k residual it feeds.** So
+"0.0009%" was false precision. With today's figure the residual is 567,427 XLM
+(0.00054%). The conclusion survives comfortably — the books close either way —
+but the honest statement is "under ~1M XLM, and the AMM term must be measured
+in the same pass", not a six-digit number.
+
+(Caught mid-flight and worth recording: `reserve_a`/`reserve_b` are
+`Decimal(38,7)`, so they already carry the scale. Dividing by 1e7 gives 2.26
+XLM instead of 22.6M — a wrong answer that looks like a plausible small number
+rather than an error.)
+
+#### 2. "Our native sum" includes 920.8M XLM that is not on any account
+
+Measured: **968 contract keys hold 920,803,987.44 XLM** (SAC `ContractData`,
+re-keyed onto native by task 0331). The 16-slice ground-truth sum includes them.
+
+That is arithmetically RIGHT for reconciling against `total_coins`, which also
+counts them — but it was labelled "our native sum" with no qualifier, and the
+2026-08-24 entry it corrects was reasoning about the sum of `AccountEntry`
+balances. Those two quantities differ by 920.8M XLM. Stated both ways now:
+
+```
+total_coins                            105,443,902,087.35
+our native sum, ALL holders            105,410,270,563.77
+  of which contract-held (ContractData)     920,803,987.44
+  accounts-only equivalent            104,489,466,576.33
+gap to total_coins                          33,631,523.58
+  fee_pool                                  10,451,269.25
+  AMM reserves (measured same day)          22,612,827.69
+  residual (claimable balances)                567,426.64
+```
+
+#### 3. The stellar.expert agreement is real — the reason given for it was not
+
+The claim "AQUA matches to the row" was made without ever checking what
+stellar.expert means by `funded`. Ours counts every holder; theirs is labelled
+under `trustlines`, and a contract holding a classic asset has no trustline.
+If the definitions differed, the match was luck. Measured on three assets:
+
+| asset | ours, all holders | ours, trustlines only | stellar.expert `funded` |
+| ----- | ----------------- | --------------------- | ----------------------- |
+| AQUA  | 129,434           | 129,084               | 129,438                 |
+| SHX   | 54,739            | 54,687                | 54,736                  |
+| USDC  | 682,274           | 641,773               | 681,989                 |
+
+The pattern settles it: their number tracks our ALL-HOLDERS count to within
+0.04%, and diverges from trustlines-only by 6.3% on USDC. **They do count SAC
+contract holders**, so the comparison is like-for-like and the agreement
+stands. What does not stand is "exact to the row" as evidence — SHX is ±3 and
+USDC ±285, so AQUA landing exactly is coincidence. The defensible claim is
+"two independent pipelines agree within 0.04% on funded holders".
+
+#### Idempotency is still argued, not measured — and the test is free
+
+The claim that a second run writes nothing was derived from the verdict table,
+never observed. A **dry-run costs 5 minutes, writes nothing, and runs under the
+read-only identity**, so there is no reason to leave it as an argument.
+Falsifiable predictions for the next dry-run at any fresh checkpoint:
+
+| bucket                     | this run   | predicted next |
+| -------------------------- | ---------- | -------------- |
+| `missing` classic          | 19,262,417 | ~0             |
+| `closure` classic          | 22,205,262 | ~0             |
+| `closure` + `ghost` native | 3,365,165  | ~0             |
+| `already marked closed`    | 57,075     | ~25.6M         |
+| `agree` classic            | 13,134,885 | ~32.4M         |
+| asset stubs                | 97,108     | ~0             |
+| `balances` corrections     | 44,834,785 | churn only     |
+
+Any bucket that fails to move locates the defect precisely. The safety
+property worth naming: if the seed closed something wrongly, the next run
+reports it as `CLOSED BUT LIVE` — the seed's own output is audited by the next
+reconciliation, which is why the two defect signals reading 0 matters.
+
+### The seed made "we have not looked" a false statement (2026-08-26)
+
+The signers section shipped with a WARNING chip for accounts carrying no
+`account_entry_state` row, on the reasoning that a missing row is an unknown
+and an unknown must not read as an answer. The owner questioned it — the seed
+had just written entry state for every live account — and the challenge was
+right twice over.
+
+**First correction, mine.** The claim "3,910 accounts exist on chain but have
+no signing state" came from a `LEFT JOIN` whose unmatched rows default
+`closed_at_ledger` to 0, so accounts with NO native row at all were counted as
+live. Re-measured with a semi-join, that population is **0**.
+
+**What the row-less accounts actually are**, per key slice:
+
+| category                              | accounts |
+| ------------------------------------- | -------- |
+| native tombstone — merged             | 41,008   |
+| no native row at all — seq 0 skeleton | 3,910    |
+| **live native row**                   | **0**    |
+
+All 3,910 skeletons carry `sequence_number = 0` and 3,896 have no balance row
+of any kind: addresses we recorded because something referenced them, never
+because we parsed their entry.
+
+**Then the chain settled it.** StrKey, `LedgerKey::Account` and the RPC call
+re-implemented from spec per `notes/V-`, both controls passing (the issue #377
+account PRESENT, a known-merged account ABSENT):
+
+| probed population             | present | absent  |
+| ----------------------------- | ------- | ------- |
+| skeletons, negative key range | 0       | **200** |
+| skeletons, positive key range | 0       | **150** |
+| merged (tombstone)            | 0       | **100** |
+
+**450 of 450 absent, zero exceptions.** So a missing row is not thin coverage —
+it is the chain saying the account has no entry. The warning was wrong in 100%
+of the cases it fired on, and it fired on ~3.7M accounts.
+
+Rewritten: the ordinary case states the fact plainly and neutrally, because
+dressing a known answer as an unknown is its own kind of lie. The WARNING is
+kept for the one shape that WOULD be a real gap — **live holdings shown for an
+account with no signing configuration**, which measures 0 today and is exactly
+what a live-writer regression would look like. Both facts are already on the
+page, so nothing new is fetched to decide it.
+
+Side effect worth having: the section no longer depends on the derived
+`deleted` flag, which measured **22 of 60** on merged accounts — see the
+defect note below.
+
+### `deleted` under-detects merged accounts — not this task's to fix
+
+Measured while choosing the copy above: of 60 accounts with a native tombstone
+and no entry state, only **22** have `deleted = true`. One concrete case,
+`GAEGXYY63CYV34TH6HDVZ3L4WCYX7AUTLNOPFCNBR3RCQIB3MVSKLAWP`: its last operation
+is an Account Merge at ledger 57,037,462, which IS its `last_seen_ledger`, and
+that ledger holds exactly one type-8 appearance — but **none of the 664
+appearances there names this account** as source or destination. The account
+reaches its own transaction list through `transaction_participants` only.
+
+So the merge operation is not attributed to the account being merged.
+
+**Fixed by not deriving it at all (owner's call: fundamentally and simply).**
+Native XLM lives on the `AccountEntry`, so "the account was removed" and "its
+native holding was closed" are one fact, and ADR 0055's lifecycle column
+already records it — the indexer stamps live removals, the checkpoint seed
+stamped everything that had gone before our floor. That column is what makes
+this readable now and was not before the seed ran. A fact cannot be derived
+correctly from a table that does not carry it, so the read stops trying.
+
+Chain-verified in both directions, 236 accounts, no exceptions:
+
+| population                 | present | absent  |
+| -------------------------- | ------- | ------- |
+| closed native row          | 0       | **100** |
+| open native row            | **100** | 0       |
+| merged and then RE-CREATED | **36**  | 0       |
+
+That third row is the case the old derivation needed `last_seen_ledger` for.
+Here it falls out: a re-create writes a new open row over the tombstone, and
+`FINAL` keeps one row per key — measured zero accounts holding both an open and
+a closed native row. The new read is one keyed lookup with the native surrogate
+BOUND from Rust (ClickHouse cannot recompute that cityhash), replacing a join
+across `operations_appearances` × `transactions` on two 6.2B/3.6B-row tables.
+
+Verified live afterwards: all four sampled accounts that previously reported
+`deleted: false` while absent from the chain now report `true`; the issue #377
+account and six live accounts stay `false`; four merged-then-re-created
+accounts stay `false`.
+
+The upstream attribution gap is still real and still unfixed — it just no
+longer has a consumer on this page.
+
+### S1 — idempotency MEASURED, at checkpoint 64,132,415 (2026-08-26)
+
+The claim that a second run writes nothing was argued from the verdict table
+and never observed. Seven falsifiable predictions were written down first; the
+dry-run then ran read-only, 483.4 s, exit 0. **All seven hit**, five of them at
+literally zero rather than "approximately".
+
+| bucket                     | run that wrote | predicted | measured       |
+| -------------------------- | -------------- | --------- | -------------- |
+| `missing` classic          | 19,262,417     | ~0        | **0**          |
+| `closure` classic          | 22,205,262     | ~0        | **0**          |
+| `closure` + `ghost` native | 3,365,165      | ~0        | **0**          |
+| `already marked closed`    | 57,075         | ~25.6M    | **25,630,171** |
+| `agree` classic            | 13,134,885     | ~32.4M    | **32,393,816** |
+| asset stubs                | 97,108         | ~0        | **0**          |
+| `balances` corrections     | 44,834,785     | churn     | **1**          |
+
+#### The strongest correctness result the seed has produced
+
+`already marked closed` is now **25,630,171** — essentially every closure this
+seed wrote — and against a snapshot taken 1,152 ledgers LATER:
+
+```
+CLOSED BUT LIVE (re-opened)        0 + 0
+CLOSED vs LIVE conflict (defect?)  0 + 0
+```
+
+Not one of ~24.5M holdings the seed closed is live on the network. The earlier
+evidence for that population was a 200-row chain sample; this is the **whole
+set, checked against an independently obtained network state**. The safety
+property named when the run was executed — "the seed's own output is audited by
+the next reconciliation" — is no longer a property on paper.
+
+Also at full population: `missing` is 0 in BOTH halves and at both sides of the
+ledger floor, so the 19.3M gap is closed and did not reopen; `agree` classic
+rose from 13.1M to 32.4M, i.e. the inserted rows now compare equal to the
+network rather than being absent from it.
+
+#### One correction written — and it lands in the known-unverifiable set
+
+The single `balances` row is a classic GHOST, and its history is legible:
+
+```
+amount 0            ledger 64,131,263   closed_at 64,131,263   <- the seed's closure
+amount 7,300,000,000 ledger 64,131,706   closed_at 0           <- the LIVE writer, after
+```
+
+The trustline (USDM0, issuer `GDM5QWWX…`) was re-created on chain after the
+seed closed it, our writer recorded that correctly, and by the new checkpoint it
+is gone again. The verdict is right.
+
+Its holder has **0 rows in `accounts` and 0 in `soroban_contracts`** — an
+orphan holder, the ~576-row population task 0503 owns. So the one anomaly in
+49.6M rows lands exactly in the set already documented as unverifiable from any
+source (and unrenderable on the account page, which bounds its harm).
+
+#### A claim of mine that the measurement narrowed
+
+"A future run writes only churn" is true of `balances` (44.8M → 1). It is
+**false of `account_entry_state`**, which emitted **10,872,072 rows again** —
+the full live-account set, every run.
+
+The cause is structural, not a bug: pass 4 iterates every live account and
+emits a row unconditionally, with no comparison against what we already hold.
+The rows are byte-identical at the same version, so ReplacingMergeTree collapses
+them and the data is unaffected — but a recurring reconciliation would rewrite
+10.9M rows per pass for nothing. Worth a version comparison (or an
+`argMax(last_updated_ledger)` read of `account_entry_state`, the way the
+balances side already reads its own inputs) before this becomes routine —
+relevant to the B→D sequencing in 0515, not to this task.
+
+#### Residue
+
+- `divergent SAME ledger` native 17,944, down from 18,012 — accounts that
+  churned past their tie ledger, not a repair. Task 0514 unchanged.
+- Run took 483 s against 317 s for the previous dry-run; the difference is
+  archive download, which is network-bound (254 s of decode here).
+- Unresolved issuer references 0, because there are no stubs at all.
+
+### T13 verified against production data (2026-08-26)
+
+The read filter, the signers path and the presentation were built in a separate
+session; this is the independent check. Every fixture below was chosen BEFORE
+the work, from populations already verified against the chain, and the API's own
+`BALANCES_SQL` was extracted verbatim from the source and run against production
+— so what is checked is the query that ships, not a paraphrase of it.
+
+| gate                              | result                                                                      |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| API tests                         | 258 passed                                                                  |
+| web lint + typecheck + tests      | 296 passed (typecheck against the WORKTREE's libs, not the main checkout's) |
+| API-types freshness (the CI gate) | clean — `git diff --exit-code` on the generated tree                        |
+| `amount != 0` left in live SQL    | none — only in the doc comment and the guard test that forbids it           |
+
+#### The fixtures, through the shipping query
+
+| account                    | expected                            | got                                                                                                            |
+| -------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `GDXWIA4V…` (issue #377)   | five assets, not two                | **5 rows** — native + KALE funded, then SHX / AQUA / USDC at 0 on ledgers 59,023,860 / 58,469,457 / 58,469,453 |
+| `GC45LJ7N…`                | native zero beside a funded classic | **XLM 0 + USDC 1.5**                                                                                           |
+| warehouse, 8,547 stamped   | none of them                        | **0 rows**                                                                                                     |
+| warehouse, 890 stamped     | none of them                        | **1 row** — native 2 XLM, live and funded; 890 stamped, 0 live zeros. Correct, not a leak                      |
+| merged account (ghost set) | nothing at all                      | **0 rows**                                                                                                     |
+
+Ordering is the T5 decision, verified in the output: native first, then funded,
+then amount, then recency. The three zeros come back newest-first.
+
+#### The SAC chip now carries information
+
+It could not fire at all before (it guessed `issuer.startsWith('C')`, and no
+account has a C-prefixed address). Checked that it DISCRIMINATES rather than
+merely rendering: one account's `STEM` returns `sac_deployed = false` while its
+native row returns `true`, so the chip is a signal rather than a constant.
+
+#### A number I challenged and was wrong about
+
+`AccountSigners.tsx` states 703,871 accounts have a disabled master key. Measured
+773,480, and I was ready to file it — but the alternative reading checks out
+exactly: **703,906 have `master_weight = 0` AND other signers**, which is the
+population the comment is about. The remaining 69,576 have no signers either,
+and the UI flags those separately as an account no key can sign for. The comment
+is right; the naive count was mine.
+
+Coverage claim in the DTO also verified: 10,883,461 of 14,596,194 accounts carry
+a signer row, so the documented "25% carry no row" is accurate.
+
+#### What is NOT yet verified
+
+**Production.** Everything above is the shipping query against production DATA
+and the components under test — not the deployed page. The last acceptance
+criterion stays open until the deploy, which is the operator's.
+
 ## Acceptance criteria
 
-- [ ] A live zero-balance trustline appears; the fixture account shows five
+- [x] A live zero-balance trustline appears; the fixture account shows five
       assets, not two
-- [ ] A **closed** trustline still does not appear — verified on an account
+- [x] A **closed** trustline still does not appear — verified on an account
       with a known removal, not only the happy path
-- [ ] The 873-zero-row account shows none of those 873
-- [ ] Native zero balances appear (239,087 holders), watching the two-convention
+- [x] The 873-zero-row account shows none of those 873
+- [x] Native zero balances appear (239,087 holders), watching the two-convention
       trap for native
-- [ ] Signers (key, weight, type) and low/med/high thresholds are shown; the
+- [x] Signers (key, weight, type) and low/med/high thresholds are shown; the
       fixture reads as multisig (verified on chain: thresholds 3/3/3, five
       signers at weight 1 — a genuine 3-of-5)
-- [ ] An account with no signers row renders an explicit "not indexed", never
-      an empty list that reads as "not multisig"
-- [ ] Seed coverage measured for BOTH trustlines and accounts, and
+- [x] An account with no signers row renders an explicit state, never an empty
+      list that reads as "not multisig". **Amended 2026-08-26**: the original
+      wording said "not indexed" for every such account, which was wrong for
+      10,713 of them — a Soroban balance implies no account entry, so the
+      alarm fired on correct data. Now: a CLASSIC holding with no
+      configuration is "Not indexed" (measures 0, still catches a writer
+      regression); `deleted` is "Closed"; otherwise "No account", and when a
+      Soroban balance is on screen the card says why that is not a
+      contradiction
+- [x] Seed coverage measured for BOTH trustlines and accounts, and
       cross-checked against an independent source regardless of the measured
       result (the 200-account chain probe; the RPC comparator was deleted
       2026-08-21 — see 0502)
-- [ ] `total_supply` and `holder_count` move **only in the direction the
+- [x] `total_supply` and `holder_count` move **only in the direction the
       network justifies**, spot-verified against RPC for at least one asset.
       (Rewritten 2026-08-18: the original criterion said "unchanged", which a
       correct seed cannot satisfy — `balance_aggregates_mv` recomputes
@@ -1092,11 +2049,253 @@ sampled accounts are permanently locked this way.
       and the seed inserts ~19.3M live holdings carrying real amounts while
       zeroing ~1.04M native ghosts. Capture both aggregates BEFORE the run so
       the delta can be checked rather than discovered.)
-- [ ] The 200-account probe from `notes/R-` returns zero accounts where the
+- [x] The 200-account probe from `notes/R-` returns zero accounts where the
       chain holds more live zero trustlines than we do
 - [ ] **Verified on production**, not at merge — the destination is a shipped,
       checked change
-- [ ] **Docs updated** — `docs/architecture/**` read path and frontend data
+- [x] **Docs updated** — `docs/architecture/**` read path and frontend data
       contract; `docs/backfills.md` gains the seed pass
-- [ ] **API types regenerated** — yes, the account DTO gains fields
+- [x] **API types regenerated** — yes, the account DTO gains fields
       (`npx nx run @rumblefish/api-types:generate`)
+
+## The "Not indexed" signer state is wrong — measured 2026-08-26
+
+The warning branch in `AccountSigners` reads: _"This account holds assets, but
+we have no signing configuration for it. That combination should not occur."_
+It occurs **10,713 times**, and the combination is not a contradiction at all —
+it is ordinary Soroban.
+
+### An address can hold tokens without being an account
+
+`account_merge` deletes the `AccountEntry`. It does **not** touch a token
+contract's storage. A SEP-41 balance is a `ContractData` entry owned by the
+TOKEN contract and keyed by address, so it outlives the account, and an address
+that was never funded can hold one from the start.
+
+Both were verified on chain, not reasoned about:
+
+| Probe (`getLedgerEntries`, independent SEP-23 / XDR implementation)         | Result               |
+| --------------------------------------------------------------------------- | -------------------- |
+| `LedgerKey::Account` for gap accounts, three sub-populations, both id signs | **350 / 350 ABSENT** |
+| control — accounts _with_ `account_entry_state`                             | 100 / 100 PRESENT    |
+| `LedgerKey::ContractData` `["Balance", Address]` for their token holdings   | **60 / 60 PRESENT**  |
+| control — same key shape for live accounts                                  | 6 / 6 PRESENT        |
+| **stored amount vs the `i128` decoded from the entry XDR**                  | **60 / 60 EXACT**    |
+
+So the rows are right to the last unit. The account is gone; the token balance
+is not; we hold both facts correctly. Only the page's inference is wrong.
+
+### The population
+
+`chq` against production, `FINAL` throughout, `positiveModulo` for slicing —
+plain `%` on a negative `Int64` returns a negative remainder, so
+`holder_id % 8 = 0..7` silently samples only the positive half of the id space.
+That trap produced one wrong intermediate here before it was caught.
+
+|                                                                 | Count      |
+| --------------------------------------------------------------- | ---------- |
+| Holders with a live `balances` row and no `account_entry_state` | ~74,000    |
+| …of those, in `accounts` (reachable on the account page)        | **10,713** |
+| …`deleted = true` — the account was closed                      | 9,388      |
+| …no native row at all, `sequence_number = 0` — never an account | 1,325      |
+
+**Every live row in that gap is `asset_type = 3`.** Grouped by asset type over
+all eight slices: 1378 / 1370 / 1389 / 1490 / 1426 / 1438 / 1387 / 1438 — one
+line of output per slice, always type 3, never anything else.
+
+Type 3 is **Soroban**, not a pool share (`persist/ids.rs:122` — project enum
+0 native / 1 classic_credit / 2 SAC-retired / 3 soroban). All 4,387 type-3
+rows satisfy `id = contract_id`, which is that enum's defining property. The
+`pool_share` label the API prints for them is **task 0496**, already filed;
+it is what made this population look like liquidity-pool shares at first read.
+
+Classic pool shares are not in `balances` at all — they are in `lp_positions`
+(line 203 above already measures that gap), so `pool_share` had no legitimate
+occurrence to be compared against.
+
+### Why the branch only now misfires
+
+The API used to select balances by `amount != 0`, and 147 of 179 sampled gap
+rows carry `amount = 0`. Moving to the lifecycle predicate made them visible.
+The predicate is correct; the branch that consumes it is not.
+
+End to end on `GB7BJ4PBLFBYBUJGPMEKRHIWPZC6HNEYF2GHE7NEEFGJHLFWRT2VD3RD`
+(`AccountEntry` absent on chain), from the local API against production:
+
+```
+deleted: true, signing: null,
+balances: [ type 3 "Pool Share Token", balance "0", ledger 57054801 ]
+```
+
+`deleted` is already `true` and already correct — but `hasLiveHoldings` is
+tested FIRST, so a closed account is announced as an indexing gap.
+
+### The rule the branch should encode
+
+A **classic trustline** cannot exist without an `AccountEntry`; a **Soroban
+balance** can. So the tripwire belongs on classic holdings only:
+
+1. live holdings of `asset_type` 0 or 1 and no signing → genuine gap, warn
+2. `deleted` → "Closed"
+3. otherwise → no account at this address (it may still hold contract tokens)
+
+Measured today, case 1 is **0** across all eight slices — the tripwire keeps
+its meaning and stops firing on 10,713 accounts where it is simply wrong.
+
+### The 3.7M accounts without entry state are the historical tail, not a gap
+
+`accounts` holds 14,596,522 distinct addresses; `account_entry_state` holds
+10,883,758. The 3.71M difference was worth decomposing rather than asserting.
+
+Sampled at 1/64 (58,042 dead accounts in the slice), scaled ×64:
+
+| bucket                                     | slice  | ×64       | share |
+| ------------------------------------------ | ------ | --------- | ----- |
+| closed account, sequence known             | 46,661 | 2,986,304 | 80.4% |
+| closed account, sequence never captured    | 6,174  | 395,136   | 10.6% |
+| never had a native balance row at all      | 5,207  | 333,248   | 9.0%  |
+| **open native balance and no entry state** | **0**  | **0**     | —     |
+
+The last line is the one that matters: **no account has a live native balance
+without signing state.** That is the shape a coverage gap would take, and it
+is empty — so `deleted` cannot be fooled by a missing entry-state row.
+
+Chain probe of each bucket separately (`LedgerKey::Account`):
+
+| bucket                                | result            |
+| ------------------------------------- | ----------------- |
+| closed, sequence known                | 60 / 60 ABSENT    |
+| closed, sequence never captured       | 60 / 60 ABSENT    |
+| never any native row                  | 60 / 60 ABSENT    |
+| control — accounts _with_ entry state | 100 / 100 PRESENT |
+
+Coverage in the other direction was already proven by the seed itself: at the
+checkpoint, `account_entry_state` equalled the snapshot's live-account count
+**exactly** (10,872,679, line 1414 above). Today's 10,883,758 is that plus
+11,079 accounts created since.
+
+So the 3.71M is what an explorer is supposed to keep — addresses whose accounts
+are gone, and addresses that were referenced but never funded. Sequence number
+0 on a closed account means the account was created and merged before our
+history floor, so no transaction of its own was ever seen; it does not mean the
+account never existed.
+
+Of the never-funded addresses, 7 in 5,208 are asset issuers. Where the rest
+were first seen is **unmeasured** — `transaction_participants` is 10.7B rows and
+the answer changes no decision here.
+
+### Correction: merged accounts keeping their `account_entry_state` row is DESIGN, not defect (2026-08-26)
+
+The earlier framing ("~11,900 stale rows, +7k/day, needs a lifecycle") was
+wrong twice, and the second look reverses the verdict.
+
+**It is the writer's documented intent.** `stage.rs` emits no entry-state row
+on `account_removed` — "the page gates on `deleted`, and a merge cannot change
+signers." So the table's semantics are LAST KNOWN configuration; liveness
+lives in the native balance's lifecycle column, exactly like `accounts` keeps
+merged accounts' history. A merged account showing its final signer set is the
+same feature as a merged account showing its transactions.
+
+**The rate panic was chain churn, not our artifact.** Ground truth from
+`operations_appearances` (`type = 8`) against closure stamps per window:
+
+| window (ledgers)              | merge ops on chain | our closures |
+| ----------------------------- | ------------------ | ------------ |
+| 64,117,440–64,126,079 (12 h)  | 12,322             | 8,670        |
+| 64,126,080–64,131,262 (7.2 h) | 23,690             | 22,062       |
+| 64,131,264–64,134,437 (4.4 h) | 2,264              | 1,054        |
+
+Merge traffic genuinely swings ~5k–80k/day (churn bots); closures track the
+ops in every window (appearances include failed ops, hence ops ≥ closures).
+The single out-of-band spike is the seed's own stamp (3,365,167 rows at
+exactly 64,131,263; no other ledger exceeds 13) — which also answers the
+artefact question: the seed writes exactly one closure value, so every
+non-checkpoint stamp is the live writer's.
+
+**Exact stale-row counts** (dead account AND an entry-state row): 11,587 =
+11,546 writer-stamped + 378 at the checkpoint value (the seed/writer
+same-ledger bucket — owned by the snapshot-review session). Post-checkpoint:
+1,054 of 1,054 merges kept their row — post-seed the ratio is 100% by
+construction, since the seed wrote state for every account alive at checkpoint.
+
+**Growth is trivial**: 10.92M rows, 220 MiB compressed (~21 B/row) — stale
+rows accrue at the merge rate, i.e. single-digit MB/day for the whole table.
+
+**The one real residual**: an aggregate over `account_entry_state` alone
+("how many accounts are multisig?") silently counts dead accounts, and the
+share grows. Resolution decided: state the last-known semantics in
+`database-schema-overview.md` (same doc pass that fixes its "live holdings"
+warning sentence to "classic holdings") — no schema change, no task.
+
+### Second correction, and the writer verified against the chain (2026-08-26, later)
+
+Two of the numbers above were produced WITHOUT RMT dedup (the exact trap
+`project_rmt_unmerged_dedup_on_read` warns about) and are hereby replaced:
+
+- dead accounts with a signers row: **11,639** (was 11,587), of which
+  **11,636** carry a real writer stamp and **3** the checkpoint value.
+- the "378 at the checkpoint stamp" **does not exist** — it was old closure
+  VERSIONS of accounts later recreated; `argMax` collapses them away. No
+  same-ledger mystery bucket on this side; 3 accounts merged in/around the
+  checkpoint ledger itself, consistent with ≤13 merges on any other ledger.
+
+The earlier "ops ≥ closures because appearances include failures" guess was
+also wrong: in the post-checkpoint window only **5 of 2,264** merge ops
+failed. The real explanation, measured: **2,259 successful merges collapse
+onto 1,055 unique accounts** — churn bots merge and re-create the same
+addresses, ~2.1 merges per account in the window. `coalesce(op.source_id,
+tx.source_id)` identifies the merged account (2,175 of 2,259 type-8
+appearances carry NULL `source_id` — task 0516's gap, now quantified);
+against our lifecycle stamps: **1,048+ stamped closed, and every account
+found unstamped probed PRESENT on chain** — recreated and alive, stamp 0
+correct. Verdict: **the live writer misses nothing measurable.**
+
+Decisions taken: D6 = leave the deleted-account Signers card as-is (the
+header's `Deleted` badge is the context; the card is history, like the
+transaction list). D7 = the last-known semantics gets one sentence in
+`database-schema-overview.md`, no schema change, no task. D9 = keep the
+tripwire branch, no monitoring infra.
+
+### B3 resolved: the LP write path works; only the historical pass is missing
+
+`lp_positions` looked lifeless — 108,718 live rows against the network's 77,048
+at checkpoint, and a 40-row chain probe came back 16 PRESENT / 24 ABSENT. That
+reading was incomplete. Split by the writer's deploy ledger (64,115,052):
+
+| cohort                             | result                               |
+| ---------------------------------- | ------------------------------------ |
+| positions touched AFTER the deploy | **30 / 30 PRESENT on chain**         |
+| all closure stamps in the table    | 44, every one at ledger ≥ 64,115,290 |
+| positions touched since deploy     | 340, of which 44 closed (13%)        |
+
+`stage.rs:1101` stamps `closed_at_ledger: if pos.closed { last } else { 0 }` —
+the ADR 0055 write path this task carries, and it is correct. Every ABSENT row
+in the earlier sample predates the deploy, which is exactly the cohort the seed
+skipped on purpose ("Pool-share trustlines — they live in `lp_positions` until
+the ADR 0056 merge lands").
+
+So B3 is not a defect in the writer: it is the **historical backfill for pool
+shares, still outstanding**, the same shape the seed fixed for classic/native.
+Per task 0493's split note the LP write path belongs to 0463; the backfill pass
+re-derives its snapshot from `manifest.json` (the archive is content-addressed),
+which is why that artifact was kept.
+
+### Decisions closed 2026-08-26 (signers card)
+
+| #   | Question                                | Chosen                                      | Reason kept for the next reader                                                                            |
+| --- | --------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| D1  | what the tripwire reads                 | classic holdings only                       | a classic trustline cannot exist without an `AccountEntry`; a Soroban balance can                          |
+| D3  | no-account card wording                 | say why tokens without an account is normal | 1,325 addresses are in that state; the balance is on screen right above                                    |
+| D4  | Soroban holdings on a closed account    | leave them                                  | 60/60 match the chain exactly; TTL/archival is tasks 0435/0436                                             |
+| D6  | closed account WITH a stale signers row | leave the card as-is                        | the header's `Deleted` badge is the context; the card is history, like the transaction list                |
+| D7  | `account_entry_state` liveness          | one sentence in the schema doc              | last-known is the design, not a defect; no schema change, no task                                          |
+| D9  | tripwire vs monitoring                  | keep the branch, no monitoring              | a fixture-driven test cannot see production; the branch is the reader's signal that the list is unreliable |
+
+D2 (where to compute the flag) collapsed into D1 — both flags are one `.some()`
+in the page over data it already holds, so no API change and no regenerated
+types.
+
+**Rejected**: reordering `deleted` ahead of the tripwire. It reads as "fact
+beats inference", but the branch is an ALARM: a closed account with a live
+classic trustline is a real data defect, and putting `deleted` first silences
+the one contradiction the branch can still catch.

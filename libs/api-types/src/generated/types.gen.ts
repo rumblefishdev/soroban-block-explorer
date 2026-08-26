@@ -43,6 +43,21 @@ export type AccountBalance = {
    */
   name?: string | null;
   /**
+   * Whether this asset has a Stellar Asset Contract DEPLOYED on-chain
+   * (ADR 0051). A SAC is a PROPERTY of a classic/native asset, orthogonal to
+   * its type — the same axis `/assets` renders as a separate tag beside the
+   * type badge, and the same `asset_sac` join feeds both.
+   *
+   * It is a fact about the ASSET, never about the issuer: the account page
+   * previously inferred it from the issuer address starting with `C`, which
+   * cannot happen (`asset_issuer` resolves out of `accounts`, and no account
+   * has a contract address), so that badge never rendered once.
+   *
+   * `false` also covers a RESERVED-but-undeployed SAC — an address exists,
+   * a contract does not, so nothing links.
+   */
+  sac_deployed: boolean;
+  /**
    * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
    * ticker. `null` for native / classic (they carry `asset_code`).
    */
@@ -66,6 +81,7 @@ export type AccountDetailResponse = {
   home_domain?: string | null;
   last_seen_ledger: number;
   sequence_number: number;
+  signing?: null | AccountSigning;
 };
 
 /**
@@ -85,6 +101,55 @@ export type AccountListItem = {
    * the account-detail balances.
    */
   xlm_balance?: string | null;
+};
+
+/**
+ * One entry of an account's signer list, exactly as the ledger stores it.
+ */
+export type AccountSigner = {
+  /**
+   * The signer's StrKey. `ed25519` signers are `G…`; the hash types carry
+   * their own prefixes.
+   */
+  key: string;
+  /**
+   * `ed25519` | `preauth_tx` | `hash_x` (the only three the network has).
+   */
+  type: string;
+  /**
+   * 1–255 for a real signer (`SetOptions` deletes at 0). Stored as the
+   * chain carried it — an out-of-range value is an anomaly, never clamped.
+   */
+  weight: number;
+};
+
+/**
+ * An account's signing configuration: who may sign, and how much weight each
+ * operation class demands.
+ *
+ * **The master key is NOT in `signers`.** The ledger keeps the account's own
+ * key out of that list and expresses its weight as `master_weight`; Horizon
+ * synthesises an extra entry, we do not. A client showing only `signers`
+ * therefore reads 3-of-4 where the chain says 3-of-5 — compose the master key
+ * into the display, do not expect it here.
+ *
+ * A `master_weight` of 0 is a permanently DISABLED master key, not a signer
+ * with a low weight. It is a common, deliberate configuration.
+ */
+export type AccountSigning = {
+  /**
+   * Ledger at which this configuration was last observed.
+   */
+  last_updated_ledger: number;
+  /**
+   * Weight of the account's own key — compare thresholds against
+   * `master_weight` PLUS the sum of `signers[].weight`.
+   */
+  master_weight: number;
+  signers: Array<AccountSigner>;
+  threshold_high: number;
+  threshold_low: number;
+  threshold_med: number;
 };
 
 /**

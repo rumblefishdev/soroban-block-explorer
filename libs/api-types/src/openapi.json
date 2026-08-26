@@ -2008,7 +2008,13 @@
       "AccountBalance": {
         "type": "object",
         "description": "Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have\nboth; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`\ninstead (the account portfolio includes Soroban balances, task 0331 Option C).",
-        "required": ["type", "balance", "decimals", "last_updated_ledger"],
+        "required": [
+          "type",
+          "balance",
+          "decimals",
+          "last_updated_ledger",
+          "sac_deployed"
+        ],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2041,6 +2047,10 @@
           "name": {
             "type": ["string", "null"],
             "description": "Asset display `name`, from two disjoint sources by asset type: classic /\nnative → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic\nassets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. \"USDC-EURC\nSoroswap LP Token\", 100% coverage). Distinct from the `symbol` ticker.\n`null` when neither source has a name."
+          },
+          "sac_deployed": {
+            "type": "boolean",
+            "description": "Whether this asset has a Stellar Asset Contract DEPLOYED on-chain\n(ADR 0051). A SAC is a PROPERTY of a classic/native asset, orthogonal to\nits type — the same axis `/assets` renders as a separate tag beside the\ntype badge, and the same `asset_sac` join feeds both.\n\nIt is a fact about the ASSET, never about the issuer: the account page\npreviously inferred it from the issuer address starting with `C`, which\ncannot happen (`asset_issuer` resolves out of `accounts`, and no account\nhas a contract address), so that badge never rendered once.\n\n`false` also covers a RESERVED-but-undeployed SAC — an address exists,\na contract does not, so nothing links."
           },
           "symbol": {
             "type": ["string", "null"],
@@ -2091,6 +2101,17 @@
           "sequence_number": {
             "type": "integer",
             "format": "int64"
+          },
+          "signing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccountSigning",
+                "description": "Signing configuration, or `null` when we have never observed this\naccount's entry state.\n\n**`null` is NOT \"no extra signers\".** 25% of indexed accounts carry no\nrow, so a client that renders `null` as \"single signature\" is making a\nsecurity claim the data does not support. Render the unknown as\nunknown."
+              }
+            ]
           }
         }
       },
@@ -2116,6 +2137,73 @@
           "xlm_balance": {
             "type": ["string", "null"],
             "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
+          }
+        }
+      },
+      "AccountSigner": {
+        "type": "object",
+        "description": "One entry of an account's signer list, exactly as the ledger stores it.",
+        "required": ["key", "weight", "type"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The signer's StrKey. `ed25519` signers are `G…`; the hash types carry\ntheir own prefixes."
+          },
+          "type": {
+            "type": "string",
+            "description": "`ed25519` | `preauth_tx` | `hash_x` (the only three the network has)."
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–255 for a real signer (`SetOptions` deletes at 0). Stored as the\nchain carried it — an out-of-range value is an anomaly, never clamped.",
+            "minimum": 0
+          }
+        }
+      },
+      "AccountSigning": {
+        "type": "object",
+        "description": "An account's signing configuration: who may sign, and how much weight each\noperation class demands.\n\n**The master key is NOT in `signers`.** The ledger keeps the account's own\nkey out of that list and expresses its weight as `master_weight`; Horizon\nsynthesises an extra entry, we do not. A client showing only `signers`\ntherefore reads 3-of-4 where the chain says 3-of-5 — compose the master key\ninto the display, do not expect it here.\n\nA `master_weight` of 0 is a permanently DISABLED master key, not a signer\nwith a low weight. It is a common, deliberate configuration.",
+        "required": [
+          "signers",
+          "master_weight",
+          "threshold_low",
+          "threshold_med",
+          "threshold_high",
+          "last_updated_ledger"
+        ],
+        "properties": {
+          "last_updated_ledger": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Ledger at which this configuration was last observed."
+          },
+          "master_weight": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Weight of the account's own key — compare thresholds against\n`master_weight` PLUS the sum of `signers[].weight`.",
+            "minimum": 0
+          },
+          "signers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountSigner"
+            }
+          },
+          "threshold_high": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "threshold_low": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "threshold_med": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },

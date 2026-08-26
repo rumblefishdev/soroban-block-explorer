@@ -17,8 +17,11 @@
 //! |                   | corrections, and — only with `--execute` — inserts.  |
 //!
 //! Everything above [`seed`] is read-only by construction. Task 0502 extracts
-//! [`archive`] + [`network_state`] into their own crate; they are the two that
-//! know nothing about our schema, which is why the seam falls there.
+//! [`archive`] + [`network_state`] into their own crate. Only [`archive`] is
+//! genuinely schema-free: [`network_state`] classifies INTO our key space and
+//! calls `db_clickhouse::persist::ids` to do it. That is a small, pure hash
+//! module which travels with the extraction, so the seam still falls here —
+//! but "knows nothing about our schema" was true of one module, not two.
 
 pub mod archive;
 pub mod network_state;

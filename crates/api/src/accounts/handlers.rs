@@ -16,11 +16,12 @@ use crate::state::AppState;
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
-    AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
-    AccountTxListParams, AccountsListCursor, AccountsListParams,
+    AccountBalance, AccountDetailResponse, AccountListItem, AccountSigner, AccountSigning,
+    AccountTransactionItem, AccountTxListParams, AccountsListCursor, AccountsListParams,
 };
 use super::queries::{
-    self, AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
+    self, AccountBalanceRow, AccountEntryStateRow, AccountHeaderRow, AccountListRow, AccountTxRow,
+    ResolvedListParams,
 };
 
 // ---------------------------------------------------------------------------
@@ -150,9 +151,10 @@ pub async fn get_account(
     // Balances and deleted-status both key off `header.id` alone — neither
     // consumes the other, so they go out together (task 0446). Kept as two
     // `match` arms so each keeps its own error log line.
-    let (balances_res, deleted_res) = tokio::join!(
+    let (balances_res, deleted_res, signing_res) = tokio::join!(
         fetch_account_balances(&state, header.id),
-        fetch_deleted_for_source(&state, header.id, header.last_seen_ledger),
+        fetch_deleted_for_source(&state, header.id),
+        fetch_entry_state_for_source(&state, header.id),
     );
 
     let balances = match balances_res {
@@ -169,6 +171,7 @@ pub async fn get_account(
                 balance: r.balance,
                 decimals: r.decimals,
                 last_updated_ledger: r.last_updated_ledger,
+                sac_deployed: r.sac_deployed,
             })
             .collect(),
         Err(e) => {
@@ -185,6 +188,37 @@ pub async fn get_account(
         }
     };
 
+    let signing = match signing_res {
+        Ok(row) => row.map(|r| AccountSigning {
+            // Zip the three parallel arrays the table stores. They cannot be
+            // ragged — the writer pushes to all three adjacently, after every
+            // `continue` (`stage.rs`), and the whole table measures 0 ragged
+            // rows out of 10.9M — so `zip` truncating to the shortest is a
+            // safe default for a shape that does not occur, not a decision
+            // about one that does.
+            signers: r
+                .signer_keys
+                .into_iter()
+                .zip(r.signer_weights)
+                .zip(r.signer_types)
+                .map(|((key, weight), signer_type)| AccountSigner {
+                    key,
+                    weight,
+                    signer_type,
+                })
+                .collect(),
+            master_weight: u32::from(r.master_weight),
+            threshold_low: u32::from(r.threshold_low),
+            threshold_med: u32::from(r.threshold_med),
+            threshold_high: u32::from(r.threshold_high),
+            last_updated_ledger: r.last_updated_ledger,
+        }),
+        Err(e) => {
+            tracing::error!(account_id = %account_id, error = %e, "DB error fetching account entry state");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
     let body = AccountDetailResponse {
         account_id: header.account_id,
         sequence_number: header.sequence_number,
@@ -193,6 +227,7 @@ pub async fn get_account(
         first_seen_ledger: header.first_seen_ledger,
         last_seen_ledger: header.last_seen_ledger,
         deleted,
+        signing,
     };
 
     let mut resp = Json(body).into_response();
@@ -329,13 +364,22 @@ async fn fetch_account_for_source(
     queries::fetch_account(&state.ch(), account_strkey).await
 }
 
-/// Derived `deleted` status (task 0324). See `queries::fetch_deleted_status`.
+/// `deleted` status off the native holding's lifecycle column (ADR 0055).
+/// See `queries::fetch_deleted_status`.
 async fn fetch_deleted_for_source(
     state: &AppState,
     account_surrogate_id: i64,
-    last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    queries::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
+    queries::fetch_deleted_status(&state.ch(), account_surrogate_id).await
+}
+
+/// See `queries::fetch_entry_state` — `None` means "never observed", not
+/// "no extra signers".
+async fn fetch_entry_state_for_source(
+    state: &AppState,
+    account_id: i64,
+) -> Result<Option<AccountEntryStateRow>, clickhouse::error::Error> {
+    queries::fetch_entry_state(&state.ch(), account_id).await
 }
 
 async fn fetch_account_balances(
