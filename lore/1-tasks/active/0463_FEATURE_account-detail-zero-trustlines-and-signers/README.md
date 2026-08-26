@@ -1562,6 +1562,12 @@ is the NOT COMPARED set, as designed.
 
 #### The native supply question — RESOLVED, and it corrects 2026-08-24
 
+> **Read the adversarial pass below before quoting these figures.** Three of
+> them were later tightened: the AMM term was two days stale (drift 381k XLM,
+> 40% of the residual), "our native sum" silently includes 920.8M XLM of
+> contract-held balances, and the stellar.expert agreement is real but not
+> "exact to the row".
+
 The predicted "supply moves down ~45.3M XLM" did NOT happen, and chasing that
 discrepancy produced the session's best result. What actually happened:
 
@@ -1694,6 +1700,96 @@ written by the LIVE indexer. First one is `SHIPSTOCKS` (issuer
 immediately after the checkpoint 64,131,263**; the issuer is confirmed live on
 chain. Roughly 40 new assets/hour, which is ordinary network activity and the
 reason any "expected total" has to be a rate, never a fixed number.
+
+### Adversarial pass on the day's own conclusions (2026-08-26)
+
+The seed was verified from many angles; the LEAST checked artifacts were the
+conclusions drawn from it hours earlier — one of which overturned a previous
+entry, which is the shape that gets it wrong twice. Attacked deliberately.
+Three hits, all by measurement.
+
+#### 1. The residual was quoted more precisely than its inputs allow
+
+The reconciliation subtracted an AMM figure measured **two days earlier** from
+sums measured today. Re-measured now:
+
+| term                     | 2026-08-24    | today         |
+| ------------------------ | ------------- | ------------- |
+| XLM in AMM pool reserves | 22,231,810.44 | 22,612,827.69 |
+
+**The two-day drift is 381,017 XLM — 40% of the ~948k residual it feeds.** So
+"0.0009%" was false precision. With today's figure the residual is 567,427 XLM
+(0.00054%). The conclusion survives comfortably — the books close either way —
+but the honest statement is "under ~1M XLM, and the AMM term must be measured
+in the same pass", not a six-digit number.
+
+(Caught mid-flight and worth recording: `reserve_a`/`reserve_b` are
+`Decimal(38,7)`, so they already carry the scale. Dividing by 1e7 gives 2.26
+XLM instead of 22.6M — a wrong answer that looks like a plausible small number
+rather than an error.)
+
+#### 2. "Our native sum" includes 920.8M XLM that is not on any account
+
+Measured: **968 contract keys hold 920,803,987.44 XLM** (SAC `ContractData`,
+re-keyed onto native by task 0331). The 16-slice ground-truth sum includes them.
+
+That is arithmetically RIGHT for reconciling against `total_coins`, which also
+counts them — but it was labelled "our native sum" with no qualifier, and the
+2026-08-24 entry it corrects was reasoning about the sum of `AccountEntry`
+balances. Those two quantities differ by 920.8M XLM. Stated both ways now:
+
+```
+total_coins                            105,443,902,087.35
+our native sum, ALL holders            105,410,270,563.77
+  of which contract-held (ContractData)     920,803,987.44
+  accounts-only equivalent            104,489,466,576.33
+gap to total_coins                          33,631,523.58
+  fee_pool                                  10,451,269.25
+  AMM reserves (measured same day)          22,612,827.69
+  residual (claimable balances)                567,426.64
+```
+
+#### 3. The stellar.expert agreement is real — the reason given for it was not
+
+The claim "AQUA matches to the row" was made without ever checking what
+stellar.expert means by `funded`. Ours counts every holder; theirs is labelled
+under `trustlines`, and a contract holding a classic asset has no trustline.
+If the definitions differed, the match was luck. Measured on three assets:
+
+| asset | ours, all holders | ours, trustlines only | stellar.expert `funded` |
+| ----- | ----------------- | --------------------- | ----------------------- |
+| AQUA  | 129,434           | 129,084               | 129,438                 |
+| SHX   | 54,739            | 54,687                | 54,736                  |
+| USDC  | 682,274           | 641,773               | 681,989                 |
+
+The pattern settles it: their number tracks our ALL-HOLDERS count to within
+0.04%, and diverges from trustlines-only by 6.3% on USDC. **They do count SAC
+contract holders**, so the comparison is like-for-like and the agreement
+stands. What does not stand is "exact to the row" as evidence — SHX is ±3 and
+USDC ±285, so AQUA landing exactly is coincidence. The defensible claim is
+"two independent pipelines agree within 0.04% on funded holders".
+
+#### Idempotency is still argued, not measured — and the test is free
+
+The claim that a second run writes nothing was derived from the verdict table,
+never observed. A **dry-run costs 5 minutes, writes nothing, and runs under the
+read-only identity**, so there is no reason to leave it as an argument.
+Falsifiable predictions for the next dry-run at any fresh checkpoint:
+
+| bucket                     | this run   | predicted next |
+| -------------------------- | ---------- | -------------- |
+| `missing` classic          | 19,262,417 | ~0             |
+| `closure` classic          | 22,205,262 | ~0             |
+| `closure` + `ghost` native | 3,365,165  | ~0             |
+| `already marked closed`    | 57,075     | ~25.6M         |
+| `agree` classic            | 13,134,885 | ~32.4M         |
+| asset stubs                | 97,108     | ~0             |
+| `balances` corrections     | 44,834,785 | churn only     |
+
+Any bucket that fails to move locates the defect precisely. The safety
+property worth naming: if the seed closed something wrongly, the next run
+reports it as `CLOSED BUT LIVE` — the seed's own output is audited by the next
+reconciliation, which is why the two defect signals reading 0 matters.
 
 ## Acceptance criteria
 
