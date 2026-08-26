@@ -3,6 +3,7 @@ import type {
   AccountDetailResponse,
 } from '@rumblefish/api-types';
 import { screen, within } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../test-utils.js';
@@ -87,6 +88,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
 });
+
+/** The Assets card alone — the transactions section below has its own pager. */
+function assetsCard() {
+  const card = screen.getByText('Assets').closest('.MuiCard-root');
+  if (!card) throw new Error('Assets card not found');
+  return within(card as HTMLElement);
+}
 
 describe('AccountDetailPage', () => {
   it('renders NotFoundState for a malformed account id (and skips the fetch)', () => {
@@ -197,6 +205,66 @@ describe('AccountDetailPage', () => {
     const text = document.body.textContent ?? '';
     expect(text.indexOf('Stellar Lumens')).toBeLessThan(text.indexOf('ZZZA'));
     expect(text.indexOf('ZZZA')).toBeLessThan(text.indexOf('AAAB'));
+  });
+
+  it('shows no pager at all when everything fits on one page', () => {
+    // 99% of accounts hold 18 assets or fewer. They should see no hint that a
+    // paging mechanism exists.
+    mockDetail({
+      data: SAMPLE,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(
+      assetsCard().queryByRole('button', { name: 'Next' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('pages a long list and states the exact position, not "latest results"', async () => {
+    // The whole set is on the page, so the caption can count — which is the
+    // difference between paginating and silently capping.
+    const many = Array.from({ length: 45 }, (_, i) => ({
+      ...USDC_BALANCE,
+      asset_code: `A${String(i).padStart(3, '0')}`,
+      balance: '0',
+    }));
+    mockDetail({
+      data: { ...SAMPLE, balances: many },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const user = userEvent.setup();
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    // Each code renders twice per row — as the name and as the ticker under
+    // the amount — so presence is counted, not asserted as a single element.
+    expect(screen.getByText('1–20 of 45')).toBeInTheDocument();
+    expect(screen.getAllByText('A000').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('A020')).toHaveLength(0);
+
+    await user.click(assetsCard().getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('21–40 of 45')).toBeInTheDocument();
+    expect(screen.getAllByText('A020').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('A000')).toHaveLength(0);
+
+    // The last page is short, and the caption says so rather than rounding up.
+    await user.click(assetsCard().getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('41–45 of 45')).toBeInTheDocument();
+    expect(assetsCard().getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
   it('tags a classic balance whose SAC is deployed, and leaves the type chip alone', () => {

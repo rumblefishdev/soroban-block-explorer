@@ -6,8 +6,12 @@ import {
   EmptyState,
   formatAmount,
   IdentifierDisplay,
+  PaginationControls,
   scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
+import { useEffect, useState } from 'react';
+
+import { PAGE_SIZE } from '../../api/polling.js';
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
@@ -252,6 +256,20 @@ export function AccountBalances({
       ? `${balances.length} ${noun}`
       : `${balances.length} ${noun} · ${funded} with a balance`;
 
+  // Paginated in the browser, not by cursor: the whole set is already on the
+  // page, which is what lets the caption state an exact position instead of
+  // the "Latest results" the cursor sections have to say. Sliced, never
+  // re-sorted — the server decided the order (`BALANCES_SQL`) and a page
+  // boundary has to fall where it put it.
+  const [page, setPage] = useState(0);
+  const paged = balances.length > PAGE_SIZE;
+  // A different account is a different list; without this, arriving from a
+  // 3,000-row account onto a 5-row one lands on an empty page 40.
+  useEffect(() => setPage(0), [balances]);
+
+  const start = page * PAGE_SIZE;
+  const shown = paged ? balances.slice(start, start + PAGE_SIZE) : balances;
+
   return (
     <SectionCard title="Assets" meta={meta}>
       {balances.length === 0 ? (
@@ -261,15 +279,27 @@ export function AccountBalances({
           description="Assets will appear here once network activity begins"
         />
       ) : (
-        balances.map((balance, index) => (
+        shown.map((balance, index) => (
           <BalanceRow
             key={`${balance.asset_code ?? 'native'}-${
-              balance.asset_issuer ?? index
+              balance.asset_issuer ?? start + index
             }`}
             balance={balance}
             alt={index % 2 === 1}
           />
         ))
+      )}
+      {/* Machinery only when it is earned. At or below one page there is
+          nothing to page through, and a five-asset account should show no
+          hint that a mechanism exists — 99% of accounts hold 18 or fewer. */}
+      {paged && (
+        <PaginationControls
+          caption={`${start + 1}–${start + shown.length} of ${balances.length}`}
+          canPrev={page > 0}
+          canNext={start + PAGE_SIZE < balances.length}
+          onPrev={() => setPage((p) => Math.max(0, p - 1))}
+          onNext={() => setPage((p) => p + 1)}
+        />
       )}
     </SectionCard>
   );
