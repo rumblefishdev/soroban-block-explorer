@@ -1851,10 +1851,38 @@ that ledger holds exactly one type-8 appearance — but **none of the 664
 appearances there names this account** as source or destination. The account
 reaches its own transaction list through `transaction_participants` only.
 
-So the merge operation is not attributed to the account being merged. That is a
-write-path question, not a read-path one; the account page's header chip
-(`deleted`) is wrong for those accounts today. Filed here rather than fixed —
-it belongs with whoever owns the operation-appearance writer.
+So the merge operation is not attributed to the account being merged.
+
+**Fixed by not deriving it at all (owner's call: fundamentally and simply).**
+Native XLM lives on the `AccountEntry`, so "the account was removed" and "its
+native holding was closed" are one fact, and ADR 0055's lifecycle column
+already records it — the indexer stamps live removals, the checkpoint seed
+stamped everything that had gone before our floor. That column is what makes
+this readable now and was not before the seed ran. A fact cannot be derived
+correctly from a table that does not carry it, so the read stops trying.
+
+Chain-verified in both directions, 236 accounts, no exceptions:
+
+| population                 | present | absent  |
+| -------------------------- | ------- | ------- |
+| closed native row          | 0       | **100** |
+| open native row            | **100** | 0       |
+| merged and then RE-CREATED | **36**  | 0       |
+
+That third row is the case the old derivation needed `last_seen_ledger` for.
+Here it falls out: a re-create writes a new open row over the tombstone, and
+`FINAL` keeps one row per key — measured zero accounts holding both an open and
+a closed native row. The new read is one keyed lookup with the native surrogate
+BOUND from Rust (ClickHouse cannot recompute that cityhash), replacing a join
+across `operations_appearances` × `transactions` on two 6.2B/3.6B-row tables.
+
+Verified live afterwards: all four sampled accounts that previously reported
+`deleted: false` while absent from the chain now report `true`; the issue #377
+account and six live accounts stay `false`; four merged-then-re-created
+accounts stay `false`.
+
+The upstream attribution gap is still real and still unfixed — it just no
+longer has a consumer on this page.
 
 ## Acceptance criteria
 

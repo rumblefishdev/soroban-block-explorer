@@ -153,7 +153,7 @@ pub async fn get_account(
     // `match` arms so each keeps its own error log line.
     let (balances_res, deleted_res, signing_res) = tokio::join!(
         fetch_account_balances(&state, header.id),
-        fetch_deleted_for_source(&state, header.id, header.last_seen_ledger),
+        fetch_deleted_for_source(&state, header.id),
         fetch_entry_state_for_source(&state, header.id),
     );
 
@@ -364,13 +364,13 @@ async fn fetch_account_for_source(
     queries::fetch_account(&state.ch(), account_strkey).await
 }
 
-/// Derived `deleted` status (task 0324). See `queries::fetch_deleted_status`.
+/// `deleted` status off the native holding's lifecycle column (ADR 0055).
+/// See `queries::fetch_deleted_status`.
 async fn fetch_deleted_for_source(
     state: &AppState,
     account_surrogate_id: i64,
-    last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    queries::fetch_deleted_status(&state.ch(), account_surrogate_id, last_seen_ledger).await
+    queries::fetch_deleted_status(&state.ch(), account_surrogate_id).await
 }
 
 /// See `queries::fetch_entry_state` — `None` means "never observed", not

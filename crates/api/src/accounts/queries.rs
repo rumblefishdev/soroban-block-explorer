@@ -317,59 +317,58 @@ pub async fn fetch_account(
 // Derived `deleted` status (account_merge) — task 0324
 // ---------------------------------------------------------------------------
 
-/// `true` ⟺ the account was the `source` of a **successful** `account_merge`
-/// (`type = 8`) in its last-seen ledger — its ledger entry was merged into
-/// another account and removed. `last_seen_ledger` is the `GREATEST` of every
-/// appearance, so a deleting merge necessarily sits in that ledger and nothing
-/// follows it: a later re-create would push `last_seen_ledger` higher and this
-/// query would find no merge there → `false`. That makes the check a plain
-/// EXISTS — no chronological "last op" ordering needed.
+/// `true` ⟺ the account's ledger entry is GONE — read straight off the
+/// lifecycle column on its native holding (ADR 0055), not re-derived from
+/// operation history.
 ///
-/// Two corrections over the original derivation (both were live bugs):
-/// - **`successful` filter (join `transactions`).** `operations_appearances`
-///   carries failed-tx ops too (no status column of its own); a *failed*
-///   `account_merge` does NOT delete the account. The join restricts to
-///   `t.successful`, which the single-table query could not express.
-/// - **No `argMax` over `transaction_id`.** `transaction_id` is a cityhash
-///   surrogate, NOT chronological, so ordering by it never picked the real last
-///   op (and returned `Nullable(UInt8)`, which mismatched the `u8` decode → the
-///   original 500). EXISTS sidesteps ordering and nullability entirely.
+/// Native XLM lives on the `AccountEntry` itself, so "the account was removed"
+/// and "its native holding was closed" are the same fact recorded once. The
+/// indexer stamps `closed_at_ledger` when it sees the entry removed, and the
+/// checkpoint seed stamped every account that had already gone before our
+/// ledger floor — which is what makes this readable now and was not before.
 ///
-/// The `ledger_sequence = ?` literal on BOTH tables is load-bearing: both are
-/// `PARTITION BY intDiv(ledger_sequence, 500000)` and key on `ledger_sequence`,
-/// so the equality prunes each side to that one ledger (~hundreds of tx rows,
-/// ~1 matching op). Without it the planner scans the 6.2B + 3.6B-row tables and
-/// trips the query memory limit.
+/// **Replaces an `operations_appearances` × `transactions` join on the
+/// last-seen ledger, which under-detected badly: 22 of 60 sampled merged
+/// accounts.** The cause is upstream — a merge operation is not attributed to
+/// the account being merged. `GAEGXYY63CYV34TH6HDVZ3L4WCYX7AUTLNOPFCNBR3RCQIB3MVSKLAWP`
+/// has its Account Merge in its own `last_seen_ledger`, that ledger holds
+/// exactly one type-8 appearance, and none of the 664 appearances there names
+/// the account as source or destination; it reaches its own transaction list
+/// through `transaction_participants` alone. Deriving a fact from a table that
+/// does not carry it cannot be patched into correctness, so this stops trying.
 ///
-/// ponytail: drops the same-ledger merge-then-`create_account` re-create case
-/// (merged out then recreated within the SAME ledger → still live, but EXISTS
-/// reports deleted). Measured zero across 6.2B ops. To close it, anchor on the
-/// real chronological key `(t.application_order, oa.application_order)` via
-/// `argMax` instead of EXISTS.
+/// Chain-verified in both directions via `getLedgerEntries`, 236 accounts, no
+/// exceptions:
+/// - closed native row → **100 / 100 ABSENT** from the ledger;
+/// - open native row → **100 / 100 PRESENT**;
+/// - merged and then re-created → **36 / 36 PRESENT**, open row, correctly NOT
+///   deleted. The old derivation needed `last_seen_ledger` to handle that case;
+///   here it falls out, because a re-create writes a new open row over the
+///   tombstone and `FINAL` keeps one row per key (measured: zero accounts hold
+///   both an open and a closed native row).
+///
+/// No native row at all ⇒ `false`. Such an account is not "deleted" — it is one
+/// we have only ever seen referenced, never funded, and the caller has already
+/// resolved it or returned 404.
 pub async fn fetch_deleted_status(
     client: &clickhouse::Client,
     account_surrogate_id: i64,
-    last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    let deleted = client
+    let closed = client
         .query(
-            "SELECT count() > 0 \
-             FROM operations_appearances oa \
-             INNER JOIN transactions t \
-               ON t.id = oa.transaction_id AND t.ledger_sequence = oa.ledger_sequence \
-             WHERE oa.ledger_sequence = ? \
-               AND t.ledger_sequence = ? \
-               AND oa.type = 8 \
-               AND oa.source_id = ? \
-               AND t.successful",
+            "SELECT closed_at_ledger != 0 \
+             FROM balances FINAL \
+             WHERE holder_id = ? AND asset_id = ?",
         )
-        .bind(last_seen_ledger)
-        .bind(last_seen_ledger)
         .bind(account_surrogate_id)
-        .fetch_one::<u8>()
+        // The native surrogate is a Rust cityhash CH cannot recompute, so it is
+        // BOUND rather than joined for via `assets.asset_type = 0` — same value
+        // the writer keys on, one join fewer than the accounts-list read.
+        .bind(db_clickhouse::persist::ids::NATIVE_ASSET_ID)
+        .fetch_optional::<bool>()
         .await?;
 
-    Ok(deleted != 0)
+    Ok(closed.unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------
