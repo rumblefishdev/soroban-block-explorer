@@ -1791,6 +1791,71 @@ property worth naming: if the seed closed something wrongly, the next run
 reports it as `CLOSED BUT LIVE` — the seed's own output is audited by the next
 reconciliation, which is why the two defect signals reading 0 matters.
 
+### The seed made "we have not looked" a false statement (2026-08-26)
+
+The signers section shipped with a WARNING chip for accounts carrying no
+`account_entry_state` row, on the reasoning that a missing row is an unknown
+and an unknown must not read as an answer. The owner questioned it — the seed
+had just written entry state for every live account — and the challenge was
+right twice over.
+
+**First correction, mine.** The claim "3,910 accounts exist on chain but have
+no signing state" came from a `LEFT JOIN` whose unmatched rows default
+`closed_at_ledger` to 0, so accounts with NO native row at all were counted as
+live. Re-measured with a semi-join, that population is **0**.
+
+**What the row-less accounts actually are**, per key slice:
+
+| category                              | accounts |
+| ------------------------------------- | -------- |
+| native tombstone — merged             | 41,008   |
+| no native row at all — seq 0 skeleton | 3,910    |
+| **live native row**                   | **0**    |
+
+All 3,910 skeletons carry `sequence_number = 0` and 3,896 have no balance row
+of any kind: addresses we recorded because something referenced them, never
+because we parsed their entry.
+
+**Then the chain settled it.** StrKey, `LedgerKey::Account` and the RPC call
+re-implemented from spec per `notes/V-`, both controls passing (the issue #377
+account PRESENT, a known-merged account ABSENT):
+
+| probed population             | present | absent  |
+| ----------------------------- | ------- | ------- |
+| skeletons, negative key range | 0       | **200** |
+| skeletons, positive key range | 0       | **150** |
+| merged (tombstone)            | 0       | **100** |
+
+**450 of 450 absent, zero exceptions.** So a missing row is not thin coverage —
+it is the chain saying the account has no entry. The warning was wrong in 100%
+of the cases it fired on, and it fired on ~3.7M accounts.
+
+Rewritten: the ordinary case states the fact plainly and neutrally, because
+dressing a known answer as an unknown is its own kind of lie. The WARNING is
+kept for the one shape that WOULD be a real gap — **live holdings shown for an
+account with no signing configuration**, which measures 0 today and is exactly
+what a live-writer regression would look like. Both facts are already on the
+page, so nothing new is fetched to decide it.
+
+Side effect worth having: the section no longer depends on the derived
+`deleted` flag, which measured **22 of 60** on merged accounts — see the
+defect note below.
+
+### `deleted` under-detects merged accounts — not this task's to fix
+
+Measured while choosing the copy above: of 60 accounts with a native tombstone
+and no entry state, only **22** have `deleted = true`. One concrete case,
+`GAEGXYY63CYV34TH6HDVZ3L4WCYX7AUTLNOPFCNBR3RCQIB3MVSKLAWP`: its last operation
+is an Account Merge at ledger 57,037,462, which IS its `last_seen_ledger`, and
+that ledger holds exactly one type-8 appearance — but **none of the 664
+appearances there names this account** as source or destination. The account
+reaches its own transaction list through `transaction_participants` only.
+
+So the merge operation is not attributed to the account being merged. That is a
+write-path question, not a read-path one; the account page's header chip
+(`deleted`) is wrong for those accounts today. Filed here rather than fixed —
+it belongs with whoever owns the operation-appearance writer.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five

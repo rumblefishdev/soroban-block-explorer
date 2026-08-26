@@ -27,7 +27,7 @@ describe('AccountSigners', () => {
     // The chain keeps the master key OUT of the signer list, so a page showing
     // only the list reads 3-of-4 where the chain says 3-of-5.
     renderWithProviders(
-      <AccountSigners accountId={ACCOUNT} signing={signing()} deleted={false} />
+      <AccountSigners accountId={ACCOUNT} signing={signing()} hasLiveHoldings />
     );
 
     expect(screen.getByText('master key')).toBeInTheDocument();
@@ -44,7 +44,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0 })}
-        deleted={false}
+        hasLiveHoldings
       />
     );
 
@@ -59,7 +59,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0, signers: [] })}
-        deleted={false}
+        hasLiveHoldings
       />
     );
 
@@ -67,27 +67,35 @@ describe('AccountSigners', () => {
     expect(screen.queryByText('Single signature')).not.toBeInTheDocument();
   });
 
-  it('calls an unobserved configuration unknown, never "single signature"', () => {
-    // 3.7M of 14.6M accounts carry no row. Rendering that as a known answer
-    // would be a security claim the data does not support.
+  it('states plainly that a row-less account has no ledger entry', () => {
+    // The checkpoint seed wrote entry state for every live account, so a
+    // missing row is a fact about the chain, not a gap in our coverage:
+    // 450 of 450 such accounts probed ABSENT via `getLedgerEntries`, across
+    // two key ranges and both sub-populations. Dressing a known answer as an
+    // unknown is its own kind of lie, so no alarm here.
     renderWithProviders(
-      <AccountSigners accountId={ACCOUNT} signing={null} deleted={false} />
-    );
-
-    expect(screen.getByText('Not indexed')).toBeInTheDocument();
-    expect(screen.queryByText('Single signature')).not.toBeInTheDocument();
-    expect(screen.queryByText('Multisig')).not.toBeInTheDocument();
-  });
-
-  it('gives a merged account the right reason for the same missing data', () => {
-    // A removed account has no ledger entry at all — "not indexed" would blame
-    // our coverage for something the chain settled.
-    renderWithProviders(
-      <AccountSigners accountId={ACCOUNT} signing={null} deleted />
+      <AccountSigners
+        accountId={ACCOUNT}
+        signing={null}
+        hasLiveHoldings={false}
+      />
     );
 
     expect(screen.getByText('No account')).toBeInTheDocument();
     expect(screen.queryByText('Not indexed')).not.toBeInTheDocument();
+    expect(screen.queryByText('Single signature')).not.toBeInTheDocument();
+  });
+
+  it('warns when holdings are shown for an account with no configuration', () => {
+    // The one shape that WOULD be a real gap, and the one a live-writer
+    // regression takes. It measures 0 today; the cost of it appearing
+    // unannounced is a hidden multisig, which is the expensive half of #377.
+    renderWithProviders(
+      <AccountSigners accountId={ACCOUNT} signing={null} hasLiveHoldings />
+    );
+
+    expect(screen.getByText('Not indexed')).toBeInTheDocument();
+    expect(screen.queryByText('No account')).not.toBeInTheDocument();
   });
 
   it('links an ed25519 signer and leaves a pre-auth transaction unlinked', () => {
@@ -102,7 +110,7 @@ describe('AccountSigners', () => {
             { key: PREAUTH, weight: 1, type: 'preauth_tx' },
           ],
         })}
-        deleted={false}
+        hasLiveHoldings
       />
     );
 

@@ -59,7 +59,7 @@ export default function AccountDetailPage() {
       <AccountSigners
         accountId={accountId}
         signing={account.data.signing}
-        deleted={account.data.deleted}
+        hasLiveHoldings={account.data.balances.length > 0}
       />
     );
   }

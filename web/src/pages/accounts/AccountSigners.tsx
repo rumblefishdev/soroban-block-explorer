@@ -103,32 +103,46 @@ function SignerLine({ row, alt }: { row: SignerRow; alt: boolean }) {
 /**
  * Signers and thresholds.
  *
- * `signing == null` is the case this section exists to render HONESTLY: it
- * means the entry state was never observed, not that the account has no extra
- * signers. A quarter of indexed accounts are in that state, so it gets a
- * WARNING chip — deliberately not the neutral one "Single signature" uses,
- * because an unknown must not be mistakable for a known answer.
+ * `signing == null` needed a claim about WHY, and the checkpoint seed settled
+ * it: the seed wrote entry state for every live account, so a missing row now
+ * means the account has no live ledger entry — not that our coverage is thin.
+ * Probed against the chain (`getLedgerEntries`, `LedgerKey::Account`, both
+ * controls passing): 450 of 450 accounts without a row came back ABSENT, over
+ * two disjoint key ranges and both sub-populations (merged, and addresses we
+ * only ever saw referenced). Zero exceptions.
+ *
+ * So the ordinary case states the fact plainly, with no alarm — the answer is
+ * known, and dressing a known answer as an unknown is its own kind of lie.
+ *
+ * The WARNING is kept for the one shape that WOULD be a real gap: no signing
+ * configuration while the page is showing live holdings. That cannot happen
+ * today (it measured 0), but it is exactly what a live-writer regression would
+ * look like, and it is the case where a hidden multisig would matter. The page
+ * already holds both facts, so no extra API call decides it.
  */
 export function AccountSigners({
   accountId,
   signing,
-  deleted,
+  hasLiveHoldings,
 }: {
   accountId: string;
   signing: AccountSigning | null | undefined;
-  deleted: boolean;
+  /** Whether the page is currently showing this account any live holding. */
+  hasLiveHoldings: boolean;
 }) {
   if (signing == null) {
-    // A merged account has no ledger entry at all, so "not indexed" would be
-    // the wrong reason for the same missing data. Say which one it is.
+    // Live holdings with no signing configuration is the contradiction — the
+    // page would be showing assets for an account it claims has no entry.
+    // Measured 0 today; kept because that is the shape a writer regression
+    // takes, and a hidden multisig is the costly half of issue #377.
     return (
       <SectionCard
         title="Signers"
         meta={
-          deleted ? (
-            <Chip size="sm" color="neutral" label="No account" />
-          ) : (
+          hasLiveHoldings ? (
             <Chip size="sm" color="warning" label="Not indexed" />
+          ) : (
+            <Chip size="sm" color="neutral" label="No account" />
           )
         }
       >
@@ -137,9 +151,9 @@ export function AccountSigners({
             variant="bodyRegular"
             sx={(theme) => ({ color: theme.palette.text.secondary })}
           >
-            {deleted
-              ? 'The account was removed from the ledger, so it has no signing configuration.'
-              : 'We have not observed this account’s signing configuration. This is not the same as the account having no additional signers.'}
+            {hasLiveHoldings
+              ? 'This account holds assets, but we have no signing configuration for it. That combination should not occur — treat the signer list as unknown, not as absent.'
+              : 'This account has no entry on the ledger, so it has no signing configuration.'}
           </Typography>
         </Box>
       </SectionCard>
