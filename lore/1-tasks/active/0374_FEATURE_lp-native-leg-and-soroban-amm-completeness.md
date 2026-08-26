@@ -69,3 +69,294 @@ conventions); Soroban AMMs live outside the classic pool table.
 - [ ] Aquarius pools indexed and unioned — K3-5
 - [ ] Classic / Soroban filter on the pool list — K3-5
 - [ ] share_percentage correct (or confirmed already correct) — K4-6
+
+---
+
+## Aquarius first — on-chain research, 2026-08-21
+
+Decision: Aquarius is the first Soroban AMM adapter. Everything below was
+measured against production ClickHouse and cross-checked against mainnet via
+`stellar contract invoke --send=no` (read-only simulation, RPC
+`mainnet.sorobanrpc.com`). Nothing here is inferred from our own code.
+
+### What the store already holds
+
+`soroban_events.topics_xdr` / `data_xdr` are decoded scval JSON, so the whole
+protocol is already queryable without touching XDR again:
+
+| Event                                      | Emitter | Shape                                                                                                   | Rows            |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------- | --------------- |
+| `add_pool`                                 | router  | topics `[sym, vec<token addresses>]`, data `[pool address, sym pool_type, bytes pool_hash, vec params]` | 410             |
+| `update_reserves`                          | pool    | topics `[sym]`, data `vec<i128>` — one entry per token, **same order as the pool's `get_tokens()`**     | 3 302 989       |
+| `trade`                                    | pool    | topics `[sym, token_in, token_out, caller]`, data `[amount_in, amount_out, fee]`                        | 4 158 845       |
+| `deposit_liquidity` / `withdraw_liquidity` | pool    | topics `[sym, …tokens]`, data `[…amounts, shares]`                                                      | 75 276 / 27 145 |
+
+Event arity tracks token count: 2-token pools give 3 topics / 3 data, the
+3-token stable pools give 4 / 4. No other variants exist across all history.
+
+### Three findings that change the plan
+
+**1. There are TWO routers, not one — and pools exist outside both.**
+
+`CBQDHNBF…6QUK` (the address Aquarius documents) holds 304 token sets / **337
+pools**. A second contract, `CA7RQDMM…UOJQ`, reports `contract_name() =
+"AMMRouter"`, `version() = 200` — same as the first — and holds 57 token sets /
+**73 pools**, disjoint from the first. Total **410 registered pools**:
+`constant` 319, `stable` 57, `concentrated` 34.
+
+Each router's `add_pool` events reproduce its live registry **exactly** (337 and
+73, verified by enumerating `get_pools_for_tokens_range` on chain and diffing
+the address sets — zero difference either way). But of the 177 pools active in
+the newest partition, **10 are absent from the first router's registry**; all 10
+sit in the second. Building discovery on one documented router address silently
+drops ~6 % of live pools.
+
+→ Discovery must be shape-driven, not address-driven: any contract emitting
+`add_pool` IS a router; any contract emitting `update_reserves` + `trade` IS a
+pool, registered or not. No hard-coded addresses.
+
+**2. Aquarius DOES have share tokens — participants come free after all.**
+
+An earlier read of this said otherwise; it was wrong, and it was wrong because
+it checked the POOL contract against `assets` instead of the pool's share
+token. `share_id()` on a `constant` pool returns a separate token contract,
+which is already indexed:
+
+- pool `CD3XIX65…UKWL` → share token `CAM3JVJL…3ZYY`
+- our `balances`, deduped by `argMax(amount, last_updated_ledger)`: **5 holders,
+  8 810 229 081 shares**
+- chain `get_total_shares()`: **8 810 229 081** — exact match
+
+The dedup is not optional: the raw `sum(amount)` on the same asset returns
+19 412 769 722 (10 rows for 5 holders) — unmerged RMT duplicates.
+
+`concentrated` pools are the exception: `share_id()` returns the pool itself,
+the pool is not in `assets`, and positions are tick-ranged (`position_update`,
+`pool_state`). Those need their own treatment or an explicit "not indexed".
+
+**3. Concentrated pools are not a rounding error — they are a third of the flow.**
+
+Newest partition, by pool type: `constant` 25 079 trades over 122 pools,
+`concentrated` 21 356 over 21, `stable` 8 010 over 24. The single busiest
+Aquarius pool on the network is concentrated (XLM/AQUA, fee 10, tick spacing
+20). Shipping "constant only" would omit ~39 % of recent trades **and** the top
+pool — that is not a defensible first cut.
+
+### Reserves are exact — verified against chain, three pool types
+
+Latest `update_reserves` from our events vs live `get_reserves()`:
+
+| Pool            | Type         | Ours                                       | Chain     |
+| --------------- | ------------ | ------------------------------------------ | --------- |
+| `CBBMQBNH…BUCV` | concentrated | `40196052765563, 5748484968000`            | identical |
+| `CBMWU357…2LSH` | constant     | `1044176401956, 353830778`                 | identical |
+| `CCYMZTOJ…JX25` | stable       | `1282501540990846914271528, 7176974914804` | identical |
+
+`get_tokens()` order matched the `add_pool` token vector on every pool checked,
+so the reserve vector needs no reordering.
+
+Trade arithmetic reconciles too: between two consecutive snapshots on
+`CBMWU357…2LSH`, `reserve_out` moved by exactly `-amount_out` and `reserve_in`
+by `amount_in - fee` (exact on one sample, 1 unit off on another — rounding, to
+be pinned as a tolerance, not assumed away).
+
+### Traps to design against
+
+- **`trade` topic 4 is the CALLER, not the end user.** On router-mediated swaps
+  it is the router address. Sampled counts (244 654 trades over 30 days through
+  113 distinct addresses) are a symptom of this, not of 113 real traders. Do not
+  render it as "trader".
+- **Reserves are not Decimal128(7).** A stable-pool token carries 18 decimals
+  (`CBZ4DCE7…N2PJ`, `decimals() = 18`, reserve 1.28e24 raw). Store raw `Int128`
+  plus decimals; the classic `liquidity_pool_snapshots` scale would corrupt it.
+  That same token has **no row** in `soroban_contract_metadata`, so decimals
+  cannot always be resolved from our store today.
+- **Leg identity needs two lookups.** `asset_sac` by `sac_contract_id` resolves
+  native and classic-credit legs (verified: XLM SAC → native, `CCW67TSZ…MI75` →
+  USDC); soroban-native legs resolve directly on `assets.contract_id`.
+- **`soroban_contracts.wasm_hash` is stale for upgraded contracts** (task 0320),
+  so it is NOT a usable discovery key — the four pools sampled showed three
+  different hashes.
+- **22 % of trade history predates its pool's reserve stream.** 921 119 of
+  4 158 845 trades, across 79 pools, occur before that pool's first
+  `update_reserves`. Reconstruction backwards from the first known snapshot is
+  arithmetically possible (deltas above) but must be proven per pool, not
+  assumed.
+
+## Atomic steps
+
+Each step is independently landable and carries its own check.
+
+**A. Registry**
+
+1. `CREATE TABLE soroban_pools` — pool contract id, protocol, pool type,
+   registering router id (0 = unregistered), token ids array, fee params,
+   share token id, first-seen ledger, version column. Raw `Int128` policy
+   applies to nothing here; this table is identity only. _(Karol runs the DDL.)_
+2. Parser arm: any `add_pool` event → pool row, router taken from the emitter.
+   No address allowlist.
+3. Parser arm: `update_reserves` / `trade` from a contract with no pool row →
+   write a pool row with `router = 0`, tokens from the trade topics. Orphans are
+   never silently dropped.
+4. Backfill: `INSERT … SELECT` over `soroban_events` for `add_pool`. 410 rows.
+5. **Check:** enumerate every discovered router on chain via
+   `get_pools_for_tokens_range` and diff against the table. Zero pools live but
+   missing. (Script exists in scratch form from this research.)
+
+**B. Reserves**
+
+6. `CREATE TABLE soroban_pool_snapshots` — pool id, ledger, `Array(Int128)`
+   reserves, source event index. _(Karol runs the DDL.)_
+7. Parser arm: `update_reserves` → snapshot row.
+8. Backfill: `INSERT … SELECT`, ~3.3 M rows.
+9. **Check:** for a sample across all three pool types, latest stored reserves
+   equal live `get_reserves()`. Three pools already pass; widen the sample.
+
+**C. Volume**
+
+10. Parser arm: `trade` → per-trade row (pool, ledger, token_in/out ids,
+    amount_in, amount_out, fee).
+11. Backfill, ~4.16 M rows.
+12. **Check:** between consecutive snapshots, `Δreserve_in == amount_in - fee`
+    and `Δreserve_out == -amount_out`, within the documented rounding tolerance.
+
+**D. Identity and units**
+
+13. Leg resolver: contract address → asset identity via `asset_sac`
+    (`sac_contract_id`) with fallback to `assets.contract_id`. Unit tests for
+    native, classic-credit, soroban-native.
+14. Decimals resolver + the missing-metadata case. A leg whose decimals are
+    unknown renders raw with an explicit marker — never a plausible wrong number.
+
+**E. Participants**
+
+15. Derive share token per pool from events: the token contract emitting `mint`
+    in the same transaction as the pool's `deposit_liquidity`.
+    **Check:** matches `share_id()` on a sample.
+16. Participants read = `balances` on that asset, deduped by
+    `argMax(amount, last_updated_ledger)`.
+    **Check:** summed shares equal chain `get_total_shares()` per pool.
+17. Concentrated pools: explicit "not indexed" state, or positions from
+    `position_update` — decide with measurements, do not ship an empty list.
+
+**F. API**
+
+18. `PoolItem.pool_id` widens from the SEP-23 `L…` strkey to also carry a `C…`
+    contract address; add protocol + pool type. **api-types regen.**
+19. Legs become a list, not `asset_a`/`asset_b` — 3-token stable pools exist.
+20. List endpoint unions classic + Aquarius; `filter[protocol]`.
+21. Detail, participants and activity endpoints routed per protocol.
+
+**G. Frontend**
+
+22. Pool route accepts a `C…` id.
+23. Classic / Soroban filter in `PoolsFilterBar`.
+24. `PoolAssetPair` renders N legs; pool-type badge.
+25. Participants empty state per E17.
+
+**H. History gap**
+
+26. Attempt the backwards reconstruction on the 79 gap pools; accept only pools
+    whose walk lands on the first known snapshot exactly. The rest render null
+    reserves before their first snapshot ledger, labelled.
+
+**I. Records**
+
+27. ADR for the two new tables and the shape-driven discovery rule.
+28. `docs/architecture/**` — schema, read path, frontend contract.
+29. `docs/backfills.md` — the three in-DB backfills, flavour A, no re-parse.
+
+---
+
+## Reserves come from ledger state, not from event arithmetic — 2026-08-21
+
+Supersedes the reconstruction approach sketched earlier in this file. The
+earlier design tried to predict how each event moved the reserves. That is now
+unnecessary, and the measurements below are why.
+
+### The finding
+
+A pool's reserves are **stored on ledger**. Decoding the `TransactionMeta` of a
+real swap (`a46f2c7f…4980`, ledger 64 052 779) shows a persistent
+`ContractData` entry owned by `CCABO2IQ…JROY` — the Aquarius "pools plane" —
+keyed `[Symbol("PoolData"), Address(pool)]`:
+
+```
+reserves  -> [1044176401956, 353830778]   identical to the announced values
+pool_type -> "standard"
+init_args -> [10]                          fee, basis points
+```
+
+The plane contract was **deployed at ledger 52 728 369**, before the first
+Aquarius trade (52 728 694) and ~4.85 M ledgers before the first
+`update_reserves` event (57 573 730). Its documented job is to be updated on
+every pool action.
+
+### Why this replaces the reconstruction
+
+| Reconstruct from events                                                | Read the state                        |
+| ---------------------------------------------------------------------- | ------------------------------------- |
+| predict each event's effect on reserves                                | read the reserves                     |
+| fee semantics per pool type **and per contract version**               | none                                  |
+| ±1 per-event error compounding over 921 119 steps                      | independent snapshots                 |
+| partial by nature — pools failing the zero-landing test keep "no data" | every pool, whole history             |
+| indirect proof                                                         | the value the contract itself reports |
+
+It also yields `pool_type` and the fee parameter from the same entry, so pool
+metadata stops depending on event archaeology.
+
+### What the abandoned path had already established
+
+Kept because it is the evidence that the arithmetic route was a dead end, and
+because two of the results stay useful:
+
+- **Trade rule fitted per pool type against 91 181 clean single-event intervals:**
+  constant `Δin = amount_in − fee`; stable `− ceil(fee/2)`; concentrated
+  `− floor(fee/2)`. Out-leg is exactly `−amount_out` in **100 %** of cases,
+  all types. Stable matched 20 688/20 688 exactly; concentrated
+  31 362/31 510; constant only 23 436/38 983 exactly (rest off by 1).
+- **The residual has a name.** Balance derived purely from CAP-67 token
+  transfers minus the announced reserves equalled `get_protocol_fees()` **to
+  the unit** (32 902 811) on the sampled pool. So
+  `reserves = transfer-derived balance − accrued protocol fee`. Retained as a
+  **cross-check**, not as a mechanism.
+- **The oracle test that killed the approach.** Predicting each pool's accrued
+  protocol fee from its whole event history and comparing with on-chain
+  `get_protocol_fees()`: **6 of 49 pool-token cases exact**. Small misses are
+  rounding (3, 11, 136 against balances in the billions); large ones are 12×
+  and 30× and are **not** explained by fee claims — only one of the diverging
+  pools has any `claim_protocol_fee` event at all. Most likely the `fee`
+  field's meaning changed across contract versions, and pools were upgraded
+  many times. A rule per contract version, with no published source, is not a
+  foundation.
+
+### Open question — must be settled by a pilot, not assumed
+
+The pool interface exposes **`backfill_plane_data()`**. That function exists
+for a reason: plane data was probably not populated for every pool from the
+start. So "the plane was deployed early" does **not** prove "the plane carried
+every pool's reserves from the start".
+
+Settle it with a **pilot re-parse of a small slice** inside the gap window
+(~10 k ledgers) and check whether `PoolData` changes appear for pools trading
+in that slice. Cheap, and it decides whether the full re-parse is worth
+running. Do not run the full pass first.
+
+### Revised order
+
+1. Parser extracts the plane's `ContractData` changes from the ledger entry
+   change list — an extension of the existing `ContractData` handling that
+   already reads token balances, not a new mechanism.
+2. Verify on the live path: indexer-captured plane state vs `get_reserves()`
+   on chain. Same comparison that already matched to the unit on three pools
+   across all three pool types.
+3. **Pilot re-parse** of a ~10 k-ledger slice inside the gap window; confirm
+   `PoolData` entries are present there.
+4. Only then the full re-parse of 52 728 369 → 57 573 730 (~4.85 M ledgers).
+   Operator task, not an agent task. `repair-tier1` after any `--reindex` run
+   is mandatory (`docs/backfills.md`), indexer stopped.
+
+Consider making plane state the source for reserves on the **live** path too,
+not just history — one source and one decode for all time, instead of two
+stitched at ledger 57 573 730. Events stay the source for volume, where the
+amounts are read rather than inferred.
