@@ -1884,6 +1884,85 @@ accounts stay `false`.
 The upstream attribution gap is still real and still unfixed — it just no
 longer has a consumer on this page.
 
+### S1 — idempotency MEASURED, at checkpoint 64,132,415 (2026-08-26)
+
+The claim that a second run writes nothing was argued from the verdict table
+and never observed. Seven falsifiable predictions were written down first; the
+dry-run then ran read-only, 483.4 s, exit 0. **All seven hit**, five of them at
+literally zero rather than "approximately".
+
+| bucket                     | run that wrote | predicted | measured       |
+| -------------------------- | -------------- | --------- | -------------- |
+| `missing` classic          | 19,262,417     | ~0        | **0**          |
+| `closure` classic          | 22,205,262     | ~0        | **0**          |
+| `closure` + `ghost` native | 3,365,165      | ~0        | **0**          |
+| `already marked closed`    | 57,075         | ~25.6M    | **25,630,171** |
+| `agree` classic            | 13,134,885     | ~32.4M    | **32,393,816** |
+| asset stubs                | 97,108         | ~0        | **0**          |
+| `balances` corrections     | 44,834,785     | churn     | **1**          |
+
+#### The strongest correctness result the seed has produced
+
+`already marked closed` is now **25,630,171** — essentially every closure this
+seed wrote — and against a snapshot taken 1,152 ledgers LATER:
+
+```
+CLOSED BUT LIVE (re-opened)        0 + 0
+CLOSED vs LIVE conflict (defect?)  0 + 0
+```
+
+Not one of ~24.5M holdings the seed closed is live on the network. The earlier
+evidence for that population was a 200-row chain sample; this is the **whole
+set, checked against an independently obtained network state**. The safety
+property named when the run was executed — "the seed's own output is audited by
+the next reconciliation" — is no longer a property on paper.
+
+Also at full population: `missing` is 0 in BOTH halves and at both sides of the
+ledger floor, so the 19.3M gap is closed and did not reopen; `agree` classic
+rose from 13.1M to 32.4M, i.e. the inserted rows now compare equal to the
+network rather than being absent from it.
+
+#### One correction written — and it lands in the known-unverifiable set
+
+The single `balances` row is a classic GHOST, and its history is legible:
+
+```
+amount 0            ledger 64,131,263   closed_at 64,131,263   <- the seed's closure
+amount 7,300,000,000 ledger 64,131,706   closed_at 0           <- the LIVE writer, after
+```
+
+The trustline (USDM0, issuer `GDM5QWWX…`) was re-created on chain after the
+seed closed it, our writer recorded that correctly, and by the new checkpoint it
+is gone again. The verdict is right.
+
+Its holder has **0 rows in `accounts` and 0 in `soroban_contracts`** — an
+orphan holder, the ~576-row population task 0503 owns. So the one anomaly in
+49.6M rows lands exactly in the set already documented as unverifiable from any
+source (and unrenderable on the account page, which bounds its harm).
+
+#### A claim of mine that the measurement narrowed
+
+"A future run writes only churn" is true of `balances` (44.8M → 1). It is
+**false of `account_entry_state`**, which emitted **10,872,072 rows again** —
+the full live-account set, every run.
+
+The cause is structural, not a bug: pass 4 iterates every live account and
+emits a row unconditionally, with no comparison against what we already hold.
+The rows are byte-identical at the same version, so ReplacingMergeTree collapses
+them and the data is unaffected — but a recurring reconciliation would rewrite
+10.9M rows per pass for nothing. Worth a version comparison (or an
+`argMax(last_updated_ledger)` read of `account_entry_state`, the way the
+balances side already reads its own inputs) before this becomes routine —
+relevant to the B→D sequencing in 0515, not to this task.
+
+#### Residue
+
+- `divergent SAME ledger` native 17,944, down from 18,012 — accounts that
+  churned past their tie ledger, not a repair. Task 0514 unchanged.
+- Run took 483 s against 317 s for the previous dry-run; the difference is
+  archive download, which is network-bound (254 s of decode here).
+- Unresolved issuer references 0, because there are no stubs at all.
+
 ## Acceptance criteria
 
 - [ ] A live zero-balance trustline appears; the fixture account shows five
