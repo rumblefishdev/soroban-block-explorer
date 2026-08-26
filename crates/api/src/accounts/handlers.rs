@@ -169,6 +169,7 @@ pub async fn get_account(
                 balance: r.balance,
                 decimals: r.decimals,
                 last_updated_ledger: r.last_updated_ledger,
+                sac_deployed: r.sac_deployed,
             })
             .collect(),
         Err(e) => {

@@ -78,6 +78,7 @@ pub struct AccountBalanceRow {
     pub balance: String,
     pub decimals: u32,
     pub last_updated_ledger: i64,
+    pub sac_deployed: bool,
 }
 
 #[derive(Debug)]
@@ -386,6 +387,7 @@ struct AccountBalanceChRow {
     balance: String,
     decimals: u32,
     last_updated_ledger: i64,
+    sac_deployed: bool,
 }
 
 /// The account-detail balances read, hoisted out of [`fetch_balances`] so the
@@ -410,7 +412,8 @@ const BALANCES_SQL: &str = "SELECT \
                 nullIf(m.symbol, '')          AS symbol, \
                 toString(b.amount)            AS balance, \
                 coalesce(m.decimals, 7)       AS decimals, \
-                b.last_updated_ledger         AS last_updated_ledger \
+                b.last_updated_ledger         AS last_updated_ledger, \
+                sac.deployed                  AS sac_deployed \
              FROM balances b FINAL \
              INNER JOIN assets a FINAL ON a.id = b.asset_id \
              /* sc FINAL: soroban_contracts is a ReplacingMergeTree with unmerged \
@@ -428,6 +431,36 @@ const BALANCES_SQL: &str = "SELECT \
                  GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
                  AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
+             /* Deployed-SAC facet, the same join `/assets` uses (ADR 0051): a \
+                SAC is a PROPERTY of a classic/native asset, never its type, and \
+                never a property of the issuer. `asset_sac` is an \
+                AggregatingMergeTree, so the state must be aggregated, and the \
+                alias cannot be `sac_deployed` — that shadows the column and the \
+                HAVING then nests two aggregates (ILLEGAL_AGGREGATION). \
+                `HAVING deployed` keeps the joined side to the ~4.3k identities \
+                that actually have one, out of ~306k; an unmatched row LEFT \
+                JOINs to the column default, which is exactly `false`. \
+                \
+                RESTRICTED to this holder's own assets before aggregating, the \
+                way `/assets` restricts by its page's tuples. Aggregating the \
+                whole table first measured 425 MiB and 219 ms per request \
+                against 81 MiB / 122 ms without the join; restricted it is \
+                86 MiB / 56 ms — the memory, not the latency, is the reason \
+                (`read_only` caps a query at 4 GiB, and this runs per page \
+                view). Same bound value as the outer WHERE. */ \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        toBool(max(sac_deployed)) AS deployed \
+                 FROM asset_sac \
+                 WHERE (asset_type, asset_code, issuer_id, contract_id) IN ( \
+                     SELECT asset_type, asset_code, issuer_id, contract_id \
+                     FROM assets \
+                     WHERE id IN (SELECT asset_id FROM balances WHERE holder_id = ?) \
+                 ) \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 HAVING deployed \
+             ) sac ON sac.asset_type = a.asset_type AND sac.asset_code = a.asset_code \
+                 AND sac.issuer_id = a.issuer_id AND sac.contract_id = a.contract_id \
              WHERE b.holder_id = ? AND b.closed_at_ledger = 0 \
              ORDER BY a.asset_type, a.asset_code";
 
@@ -443,6 +476,10 @@ pub async fn fetch_balances(
 ) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
     let rows = client
         .query(BALANCES_SQL)
+        // Twice: the SAC subquery narrows itself to this holder's assets
+        // before aggregating, and the outer read selects them. Same value,
+        // bound in the order the two `?` appear.
+        .bind(account_id)
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
         .await?;
@@ -466,6 +503,7 @@ pub async fn fetch_balances(
             balance: r.balance,
             decimals: r.decimals,
             last_updated_ledger: r.last_updated_ledger,
+            sac_deployed: r.sac_deployed,
         })
         .collect())
 }

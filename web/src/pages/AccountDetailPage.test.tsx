@@ -39,6 +39,7 @@ const NATIVE_BALANCE: AccountBalance = {
   decimals: 7,
   last_updated_ledger: 100,
   type: 0,
+  sac_deployed: false,
 };
 const USDC_BALANCE: AccountBalance = {
   asset_type_name: 'credit_alphanum4',
@@ -49,6 +50,7 @@ const USDC_BALANCE: AccountBalance = {
   decimals: 7,
   last_updated_ledger: 100,
   type: 1,
+  sac_deployed: false,
 };
 
 const SAMPLE: AccountDetailResponse = {
@@ -127,6 +129,74 @@ describe('AccountDetailPage', () => {
     expect(screen.getByText('1,250.50')).toBeInTheDocument();
     // Classic credit balance shows the code as the row name.
     expect(screen.getAllByText('USDC').length).toBeGreaterThan(0);
+  });
+
+  it('tags a classic balance whose SAC is deployed, and leaves the type chip alone', () => {
+    // Two orthogonal axes (ADR 0051): the type chip stays "Classic credit",
+    // the SAC facet is a SECOND tag. Before this field existed the page
+    // inferred the facet from the issuer address starting with `C`, which
+    // `asset_issuer` never is — so the tag could not render even once.
+    mockDetail({
+      data: {
+        ...SAMPLE,
+        balances: [{ ...USDC_BALANCE, sac_deployed: true }],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('SAC')).toBeInTheDocument();
+    expect(screen.getByText('Classic credit')).toBeInTheDocument();
+  });
+
+  it('tags native XLM too, because the assets pages do', () => {
+    // XLM really does have a deployed SAC, and `/assets` (list AND detail)
+    // renders the tag ungated by asset type. The account page must not be the
+    // one view that hides it.
+    mockDetail({
+      data: {
+        ...SAMPLE,
+        balances: [{ ...NATIVE_BALANCE, sac_deployed: true }],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('Stellar Lumens')).toBeInTheDocument();
+    expect(screen.getByText('SAC')).toBeInTheDocument();
+  });
+
+  it('shows no SAC tag for a classic balance without a deployed one', () => {
+    mockDetail({
+      data: { ...SAMPLE, balances: [USDC_BALANCE] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    // A reserved-but-undeployed SAC is an address, not a contract — no tag.
+    expect(screen.queryByText('SAC')).not.toBeInTheDocument();
+    expect(screen.getByText('Classic credit')).toBeInTheDocument();
   });
 
   it('links a classic-credit balance to its /assets/:id detail page', () => {

@@ -2008,7 +2008,13 @@
       "AccountBalance": {
         "type": "object",
         "description": "Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have\nboth; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`\ninstead (the account portfolio includes Soroban balances, task 0331 Option C).",
-        "required": ["type", "balance", "decimals", "last_updated_ledger"],
+        "required": [
+          "type",
+          "balance",
+          "decimals",
+          "last_updated_ledger",
+          "sac_deployed"
+        ],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2041,6 +2047,10 @@
           "name": {
             "type": ["string", "null"],
             "description": "Asset display `name`, from two disjoint sources by asset type: classic /\nnative → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic\nassets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. \"USDC-EURC\nSoroswap LP Token\", 100% coverage). Distinct from the `symbol` ticker.\n`null` when neither source has a name."
+          },
+          "sac_deployed": {
+            "type": "boolean",
+            "description": "Whether this asset has a Stellar Asset Contract DEPLOYED on-chain\n(ADR 0051). A SAC is a PROPERTY of a classic/native asset, orthogonal to\nits type — the same axis `/assets` renders as a separate tag beside the\ntype badge, and the same `asset_sac` join feeds both.\n\nIt is a fact about the ASSET, never about the issuer: the account page\npreviously inferred it from the issuer address starting with `C`, which\ncannot happen (`asset_issuer` resolves out of `accounts`, and no account\nhas a contract address), so that badge never rendered once.\n\n`false` also covers a RESERVED-but-undeployed SAC — an address exists,\na contract does not, so nothing links."
           },
           "symbol": {
             "type": ["string", "null"],

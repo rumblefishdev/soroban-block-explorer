@@ -12,7 +12,7 @@ import {
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
-import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
+import { NATIVE_ASSET_CODE, SAC_TAG } from '../assets/assetType.js';
 
 interface BalanceShape {
   /** Native XLM — its subline is prose ("Native asset"); non-native sublines
@@ -21,7 +21,20 @@ interface BalanceShape {
   name: string;
   code: string;
   subline: string;
-  chipLabel: 'Classic credit' | 'SAC' | 'Soroban' | null;
+  chipLabel: 'Classic credit' | 'Soroban' | null;
+  /** Deployed-SAC facet — a SECOND chip beside the type one, never a
+   *  replacement for it (ADR 0051).
+   *
+   *  Driven by the field alone, ungated by asset type, exactly as
+   *  `AssetsTable` and `AssetDetailPage` drive it. Native XLM does have a
+   *  deployed SAC and is tagged on all three; `asset_sac` holds no type-3
+   *  rows at all, so a Soroban token is structurally false rather than
+   *  special-cased here.
+   *
+   *  This used to be guessed from the issuer address starting with `C` —
+   *  which `asset_issuer` never is, since it resolves out of `accounts` —
+   *  so the badge could not render even once. */
+  isSac: boolean;
   /** What the letter avatar gets. Split from `code` (the ticker under the
    *  amount): a symbol-less token shows an em-dash ticker but must NOT get an
    *  em-dash INITIAL — the avatar keeps its honest `?` (finding 11). */
@@ -38,6 +51,7 @@ function shape(balance: AccountBalance): BalanceShape {
       avatarCode: NATIVE_ASSET_CODE,
       subline: 'Native asset',
       chipLabel: null,
+      isSac: balance.sac_deployed,
       href: routes.asset('native'),
     };
   }
@@ -58,6 +72,7 @@ function shape(balance: AccountBalance): BalanceShape {
       // this said "Token" in neutral, a third name and a third colour for
       // the same thing.
       chipLabel: 'Soroban',
+      isSac: balance.sac_deployed,
       href: balance.contract_id ? routes.asset(balance.contract_id) : undefined,
     };
   }
@@ -65,7 +80,6 @@ function shape(balance: AccountBalance): BalanceShape {
   const code = balance.asset_code ?? '—';
   const issuer = balance.asset_issuer ?? '';
 
-  const isSac = issuer.startsWith('C');
   const href =
     balance.asset_code && balance.asset_issuer
       ? routes.asset(`${balance.asset_code}-${balance.asset_issuer}`)
@@ -76,7 +90,8 @@ function shape(balance: AccountBalance): BalanceShape {
     code,
     avatarCode: balance.asset_code ?? null,
     subline: issuer,
-    chipLabel: isSac ? 'SAC' : 'Classic credit',
+    chipLabel: 'Classic credit',
+    isSac: balance.sac_deployed,
     href,
   };
 }
@@ -178,15 +193,14 @@ function BalanceRow({
           {s.chipLabel && (
             <Chip
               size="sm"
-              color={
-                s.chipLabel === 'SAC'
-                  ? 'brown'
-                  : s.chipLabel === 'Soroban'
-                  ? 'emerald'
-                  : 'neutral'
-              }
+              color={s.chipLabel === 'Soroban' ? 'emerald' : 'neutral'}
               label={s.chipLabel}
             />
+          )}
+          {/* Two orthogonal axes (ADR 0051): the type chip above, and the
+              SAC property tag here — the same pairing `AssetsTable` renders. */}
+          {s.isSac && (
+            <Chip size="sm" color={SAC_TAG.color} label={SAC_TAG.label} />
           )}
         </Box>
       </Stack>

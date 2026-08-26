@@ -79,6 +79,19 @@ pub struct AccountBalance {
     /// Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
     pub decimals: u32,
     pub last_updated_ledger: i64,
+    /// Whether this asset has a Stellar Asset Contract DEPLOYED on-chain
+    /// (ADR 0051). A SAC is a PROPERTY of a classic/native asset, orthogonal to
+    /// its type — the same axis `/assets` renders as a separate tag beside the
+    /// type badge, and the same `asset_sac` join feeds both.
+    ///
+    /// It is a fact about the ASSET, never about the issuer: the account page
+    /// previously inferred it from the issuer address starting with `C`, which
+    /// cannot happen (`asset_issuer` resolves out of `accounts`, and no account
+    /// has a contract address), so that badge never rendered once.
+    ///
+    /// `false` also covers a RESERVED-but-undeployed SAC — an address exists,
+    /// a contract does not, so nothing links.
+    pub sac_deployed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

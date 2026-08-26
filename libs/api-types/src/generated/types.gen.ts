@@ -43,6 +43,21 @@ export type AccountBalance = {
    */
   name?: string | null;
   /**
+   * Whether this asset has a Stellar Asset Contract DEPLOYED on-chain
+   * (ADR 0051). A SAC is a PROPERTY of a classic/native asset, orthogonal to
+   * its type — the same axis `/assets` renders as a separate tag beside the
+   * type badge, and the same `asset_sac` join feeds both.
+   *
+   * It is a fact about the ASSET, never about the issuer: the account page
+   * previously inferred it from the issuer address starting with `C`, which
+   * cannot happen (`asset_issuer` resolves out of `accounts`, and no account
+   * has a contract address), so that badge never rendered once.
+   *
+   * `false` also covers a RESERVED-but-undeployed SAC — an address exists,
+   * a contract does not, so nothing links.
+   */
+  sac_deployed: boolean;
+  /**
    * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
    * ticker. `null` for native / classic (they carry `asset_code`).
    */
