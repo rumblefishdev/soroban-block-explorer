@@ -90,3 +90,7 @@ docker-compose.override.yaml
 # Claude Code local dev-server wiring — machine-specific, pairs with the
 # gitignored web/.env.development.local. Shared .claude/skills/ stays tracked.
 .claude/launch.json
+
+# Playwright browser regression output (web/e2e)
+web/test-results/
+web/playwright-report/
