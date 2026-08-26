@@ -131,6 +131,74 @@ describe('AccountDetailPage', () => {
     expect(screen.getAllByText('USDC').length).toBeGreaterThan(0);
   });
 
+  it('counts the assets and, separately, how many carry value', () => {
+    // A card titled "Balances" listing thousands of zeros argues with its own
+    // contents — the zeros are real holdings (issue #377), so the card is
+    // "Assets" and the two numbers are stated apart.
+    mockDetail({
+      data: {
+        ...SAMPLE,
+        balances: [NATIVE_BALANCE, { ...USDC_BALANCE, balance: '0' }],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('Assets')).toBeInTheDocument();
+    expect(screen.getByText('2 assets · 1 with a balance')).toBeInTheDocument();
+  });
+
+  it('drops the second clause when every asset carries value', () => {
+    // Restating the same number twice reads as bureaucracy, not information.
+    mockDetail({
+      data: SAMPLE,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('2 assets')).toBeInTheDocument();
+  });
+
+  it('renders the assets in the order the API returned them', () => {
+    // The server pins native, then funded before empty, then size, then
+    // recency. Re-sorting here would put a page boundary somewhere other than
+    // where the server put it.
+    const zeroA = { ...USDC_BALANCE, asset_code: 'ZZZA', balance: '0' };
+    const zeroB = { ...USDC_BALANCE, asset_code: 'AAAB', balance: '0' };
+    mockDetail({
+      data: { ...SAMPLE, balances: [NATIVE_BALANCE, zeroA, zeroB] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    // Compared by position in the rendered text: each code also appears as the
+    // ticker under its amount, so counting elements would double them.
+    const text = document.body.textContent ?? '';
+    expect(text.indexOf('Stellar Lumens')).toBeLessThan(text.indexOf('ZZZA'));
+    expect(text.indexOf('ZZZA')).toBeLessThan(text.indexOf('AAAB'));
+  });
+
   it('tags a classic balance whose SAC is deployed, and leaves the type chip alone', () => {
     // Two orthogonal axes (ADR 0051): the type chip stays "Classic credit",
     // the SAC facet is a SECOND tag. Before this field existed the page

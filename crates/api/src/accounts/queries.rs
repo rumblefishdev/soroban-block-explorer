@@ -452,6 +452,22 @@ pub async fn fetch_entry_state(
 /// Native folds in with no special case: a live account's zero XLM row carries
 /// `closed_at_ledger = 0` and shows; a merged account's native tombstone
 /// carries a non-zero stamp and does not.
+///
+/// **Ordering is four keys, and only the first two are load-bearing.** Native
+/// is pinned first — it is not a trustline at all (it lives on the
+/// `AccountEntry`; every other row is permission granted to an issuer), and its
+/// position should never move. Then FUNDED before empty, which is the property
+/// the whole change exists for: with zero-balance trustlines now visible, an
+/// account can carry thousands of empty rows, and recency alone strands a real
+/// holding — measured on a spammed account, a 920bn-unit SGB position at ledger
+/// 51,190,951 sits below 3,274 of its empty rows.
+///
+/// The last two are presentation. `amount DESC` compares RAW amounts across
+/// assets with different `decimals` and no prices, so it cannot mean "worth
+/// more" and is not claimed to; it just keeps the bigger positions together.
+/// Recency then orders the empty rows, where it is the only honest
+/// discriminator we have, and `asset_code` makes the whole thing stable so a
+/// page boundary never shows the same row twice.
 const BALANCES_SQL: &str = "SELECT \
                 a.asset_type                  AS asset_type, \
                 nullIf(a.asset_code, '')      AS asset_code, \
@@ -511,7 +527,11 @@ const BALANCES_SQL: &str = "SELECT \
              ) sac ON sac.asset_type = a.asset_type AND sac.asset_code = a.asset_code \
                  AND sac.issuer_id = a.issuer_id AND sac.contract_id = a.contract_id \
              WHERE b.holder_id = ? AND b.closed_at_ledger = 0 \
-             ORDER BY a.asset_type, a.asset_code";
+             ORDER BY a.asset_type = 0 DESC, \
+                      b.amount > 0 DESC, \
+                      b.amount DESC, \
+                      b.last_updated_ledger DESC, \
+                      a.asset_code";
 
 /// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
 /// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix

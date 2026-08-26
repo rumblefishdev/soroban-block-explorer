@@ -223,25 +223,42 @@ function BalanceRow({
 }
 
 /**
- * Account balances card — the native XLM balance plus every trustline
- * balance. Each non-native code links to its asset detail page.
+ * The account's assets — native XLM plus every trustline it holds, INCLUDING
+ * the ones standing at zero.
+ *
+ * Called "Assets", not "Balances". A trustline at zero is a real thing the
+ * account holds — permission granted to an issuer — and hiding it was issue
+ * #377; but a card titled "Balances" listing 3,477 zeros is a name that
+ * argues with its own contents. The count says how many assets, and the second
+ * clause says how many carry value, so neither number has to be inferred from
+ * the other.
+ *
+ * Ordering is the API's (`BALANCES_SQL`): native pinned, then funded before
+ * empty, then size, then recency. It is not re-sorted here — a page boundary
+ * has to fall in the same place the server put it.
  */
 export function AccountBalances({
   balances,
 }: {
   balances: readonly AccountBalance[];
 }) {
-  const meta = `${balances.length} ${
-    balances.length === 1 ? 'asset' : 'assets'
-  }`;
+  const funded = balances.filter((b) => b.balance !== '0').length;
+  const noun = balances.length === 1 ? 'asset' : 'assets';
+  // The second clause only when it says something new: when every asset is
+  // funded it restates the first number, and on a one-asset account it reads
+  // like bureaucracy.
+  const meta =
+    funded === balances.length
+      ? `${balances.length} ${noun}`
+      : `${balances.length} ${noun} · ${funded} with a balance`;
 
   return (
-    <SectionCard title="Balances" meta={meta}>
+    <SectionCard title="Assets" meta={meta}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
-          title="No balances yet"
-          description="Balances will appear here once network activity begins"
+          title="No assets yet"
+          description="Assets will appear here once network activity begins"
         />
       ) : (
         balances.map((balance, index) => (
