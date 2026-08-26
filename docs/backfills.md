@@ -441,6 +441,26 @@ the identity before the run, not at the prompt (`SELECT currentUser()` and
    `summary.txt` is a close estimate of the execute's counts, never a
    contradiction of them.
 
+**`--execute` never decodes the checkpoint the dry-run reviewed — expect that,
+and read `summary.txt` accordingly.** Checkpoints publish every 64 ledgers
+(~5 minutes) and a full pass takes ~15, so the snapshot has always advanced by
+the time the run starts. Two consequences, in opposite directions:
+
+- Our own churn is harmless: the `>= checkpoint` guard files it as
+  newer-than-checkpoint and leaves it alone.
+- The network's is not purely cosmetic: holdings created between the two
+  checkpoints are `missing` in the execute run and get INSERTED without having
+  been in the reviewed summary. They are real live holdings — a fresher
+  snapshot is a better input, not a riskier one — but the reviewed document
+  bounds the run's counts, it does not enumerate its rows.
+
+A `--pinned-manifest` flag existed for exactly this and was removed (its
+original job was keeping a frozen manual export consistent with the snapshot,
+and manual exports are gone). What replaces it is verification of the OUTCOME
+rather than of the input: the coverage measurement and 200-account probe below
+compare the finished table against the network. `manifest.json` records which
+checkpoint each run actually used.
+
 **No indexer stop is needed.** Every seeded row versions on a real ledger:
 live data on the entry's own `lastModifiedLedgerSeq`, closures on the run's
 checkpoint ledger (semantics: "closed at or before"). ReplacingMergeTree keeps

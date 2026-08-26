@@ -270,10 +270,30 @@ async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, Backfill
 /// Emit the correction one verdict implies. The verdict comes from the REPORT,
 /// which counted and sampled the same row a moment earlier — so the summary an
 /// operator signs off on and the rows `--execute` writes are derived from one
-/// classification, not two. (`--execute` re-reads our rows fresh, like every
-/// corrective command here; churn since the dry-run is absorbed by the
-/// `>= checkpoint` guard, so the drift is only rows newly LEFT ALONE, never a
-/// different correction.)
+/// classification, not two.
+///
+/// Within ONE run. Across two runs the populations differ, and the honest
+/// statement of how is worth spelling out, because an earlier version of this
+/// comment claimed more than it could:
+///
+/// - OUR side drifts harmlessly. `--execute` re-reads our rows fresh, like
+///   every corrective command here, and anything the live writer touched since
+///   is absorbed by the `>= checkpoint` guard — those rows are newly LEFT
+///   ALONE, never given a different correction.
+/// - The SNAPSHOT side drifts too, and that half the old comment did not
+///   reason about. Checkpoints publish every 64 ledgers (~5 minutes) while a
+///   full pass takes ~15, so `--execute` ALWAYS decodes a later checkpoint
+///   than the dry-run reviewed — not occasionally. Holdings the network
+///   created in that window are `missing` in the second run and get INSERTED,
+///   without having appeared in the summary an operator signed off on.
+///
+/// That drift is accepted deliberately (2026-08-21, reaffirmed 2026-08-26).
+/// The rows it adds are real live holdings — the fresher snapshot is the
+/// better input, not a riskier one — and the run is verified by measuring its
+/// OUTCOME against the network (coverage, the 200-account chain probe,
+/// aggregate deltas), which a frozen input would not improve. `manifest.json`
+/// records the checkpoint each run actually used, so the population is always
+/// identifiable after the fact.
 fn fold_our_row(
     row: &verdict::OurRow,
     verdict: verdict::Verdict,

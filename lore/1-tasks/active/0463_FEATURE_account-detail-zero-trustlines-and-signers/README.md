@@ -303,8 +303,10 @@ What that decision obliges, in place of the split:
   (`assets` list query filters nothing). That is correct — they are real
   network assets — but it is a visible product change, not a silent one.
 - The seed's own inputs must be trustworthy: buckets are SHA-256 verified
-  against the manifest hashes, the checkpoint is pinnable so `--execute` runs
-  the snapshot the dry-run reviewed, and truncated input files are refused.
+  against the manifest hashes, and short reads are refused by floors on every
+  input. (This bullet also claimed the checkpoint was pinnable so `--execute`
+  ran the snapshot the dry-run reviewed. The pin was removed 2026-08-24 and
+  the claim is withdrawn — see the 2026-08-26 entry.)
 
 ### Audit findings 2026-08-18 — five agents over the full branch diff
 
@@ -531,9 +533,10 @@ manifest is written LAST as an atomic commit point (failed publications are
 discarded, not half-visible); a live probe of a minutes-old manifest found
 all 22 referenced files present; and the runner fails loud regardless (404
 via `error_for_status`, truncation via per-bucket SHA-256) — worst case is a
-failed run, never a half-decoded one. `--pinned-manifest` stays as an
-optional flag with one real consumer: the ADR 0056 LP merge re-derives this
-seed's exact snapshot from `artifacts/manifest.json`.
+failed run, never a half-decoded one. (`--pinned-manifest` was kept as an
+optional flag that day and DELETED outright on 2026-08-24; `manifest.json` is
+still written, so the ADR 0056 LP merge can re-derive this seed's exact
+snapshot from it.)
 
 Executed: `--our-rows`/`--assets-ids`/`--accounts-ids` deleted; seed and
 compare stream the 64-slice `argMax` read through one shared
@@ -543,7 +546,7 @@ its test); the chq exit-0 trap and the one-dropped-slice hole (found by the
 design-study agent: 40M floor passes a 64th-slice loss) are gone — a cursor
 error propagates. Freshness — the measured dominant lever on correction
 volume — moves from runbook discipline into the tool itself. Net −~200
-lines; operator flow: dry-run → read summary → `--execute --pinned-manifest`.
+lines; operator flow: dry-run → read summary → `--execute`.
 
 ### CI red 2026-08-20 — not this branch: Rust 1.98.0 vs zig's linker
 
