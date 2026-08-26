@@ -68,6 +68,28 @@ const DELETED_SAMPLE: AccountDetailResponse = {
   deleted: true,
 };
 
+/**
+ * A Soroban token balance — the holding that does NOT imply an account.
+ *
+ * A SEP-41 balance is a `ContractData` entry owned by the TOKEN contract and
+ * keyed by address, so `account_merge` never touches it and an address that
+ * was never funded can hold one. Classic payments cannot reach a non-account
+ * at all, which is why the signer tripwire reads classic holdings only.
+ */
+const SOROBAN_BALANCE: AccountBalance = {
+  asset_type_name: 'pool_share', // mislabelled by the API — task 0496
+  asset_code: null,
+  asset_issuer: null,
+  contract_id: 'CDHVVCZ46PXDTGZ6NZJCS4544ZHYIVROAOWEDJNXYXPYA2MPWXQFMTR5',
+  name: 'Pool Share Token',
+  symbol: 'POOL',
+  balance: '120000000',
+  decimals: 7,
+  last_updated_ledger: 100,
+  type: 3,
+  sac_deployed: false,
+};
+
 function mockDetail(value: unknown): void {
   hookMocks.useAccountDetail.mockReturnValue(value);
 }
@@ -435,6 +457,49 @@ describe('AccountDetailPage', () => {
     });
 
     expect(screen.queryByText('Deleted')).not.toBeInTheDocument();
+  });
+
+  it('a closed account holding only a Soroban token reads as Closed', () => {
+    // 9,388 accounts on pubnet. The account is gone (probed ABSENT on chain)
+    // but its token balance is not, and the balance matched the chain exactly
+    // (60/60). Reading ALL holdings made the page announce an indexing gap
+    // about correct data; reading classic holdings lets `deleted` answer.
+    mockDetail({
+      data: { ...DELETED_SAMPLE, balances: [SOROBAN_BALANCE] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.queryByText('Not indexed')).not.toBeInTheDocument();
+  });
+
+  it('an address that was never an account can still hold a Soroban token', () => {
+    // 1,325 addresses: sequence number 0, no `AccountEntry` on chain, a live
+    // token balance anyway. This is the case a mere branch reorder would NOT
+    // have fixed — `deleted` is false, so only the classic-only flag helps.
+    mockDetail({
+      data: { ...SAMPLE, balances: [SOROBAN_BALANCE] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('No account')).toBeInTheDocument();
+    expect(screen.queryByText('Not indexed')).not.toBeInTheDocument();
   });
 
   it('renders NotFoundState when the detail query 404s', () => {

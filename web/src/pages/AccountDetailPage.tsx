@@ -64,7 +64,13 @@ export default function AccountDetailPage() {
       <AccountSigners
         accountId={accountId}
         signing={account.data.signing}
-        hasLiveHoldings={account.data.balances.length > 0}
+        // Classic only (type 0/1). A classic trustline cannot exist without
+        // an AccountEntry; a Soroban token balance can — it lives in the
+        // token contract's own storage, keyed by address, so it survives
+        // account_merge and can even predate any account at all.
+        hasClassicHoldings={account.data.balances.some(
+          (b) => b.type === 0 || b.type === 1
+        )}
         deleted={account.data.deleted}
       />
     );

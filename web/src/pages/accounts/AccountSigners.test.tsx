@@ -30,7 +30,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={signing()}
-        hasLiveHoldings
+        hasClassicHoldings
         deleted={false}
       />
     );
@@ -49,7 +49,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0 })}
-        hasLiveHoldings
+        hasClassicHoldings
         deleted={false}
       />
     );
@@ -65,7 +65,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0, signers: [] })}
-        hasLiveHoldings
+        hasClassicHoldings
         deleted={false}
       />
     );
@@ -83,7 +83,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={null}
-        hasLiveHoldings={false}
+        hasClassicHoldings={false}
         deleted
       />
     );
@@ -102,7 +102,7 @@ describe('AccountSigners', () => {
       <AccountSigners
         accountId={ACCOUNT}
         signing={null}
-        hasLiveHoldings={false}
+        hasClassicHoldings={false}
         deleted={false}
       />
     );
@@ -112,15 +112,16 @@ describe('AccountSigners', () => {
     expect(screen.queryByText('Single signature')).not.toBeInTheDocument();
   });
 
-  it('warns when holdings are shown for an account with no configuration', () => {
+  it('warns when a CLASSIC holding is shown with no configuration', () => {
     // The one shape that WOULD be a real gap, and the one a live-writer
-    // regression takes. It measures 0 today; the cost of it appearing
+    // regression takes: the ledger cannot record a classic trustline without
+    // an account entry. It measures 0 today; the cost of it appearing
     // unannounced is a hidden multisig, which is the expensive half of #377.
     renderWithProviders(
       <AccountSigners
         accountId={ACCOUNT}
         signing={null}
-        hasLiveHoldings
+        hasClassicHoldings
         deleted={false}
       />
     );
@@ -141,7 +142,7 @@ describe('AccountSigners', () => {
             { key: PREAUTH, weight: 1, type: 'preauth_tx' },
           ],
         })}
-        hasLiveHoldings
+        hasClassicHoldings
         deleted={false}
       />
     );

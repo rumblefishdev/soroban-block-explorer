@@ -114,11 +114,21 @@ function SignerLine({ row, alt }: { row: SignerRow; alt: boolean }) {
  * So the ordinary case states the fact plainly, with no alarm — the answer is
  * known, and dressing a known answer as an unknown is its own kind of lie.
  *
- * The WARNING is kept for the one shape that WOULD be a real gap: no signing
- * configuration while the page is showing live holdings. That cannot happen
- * today (it measured 0), but it is exactly what a live-writer regression would
- * look like, and it is the case where a hidden multisig would matter. The page
- * already holds both facts, so no extra API call decides it.
+ * The WARNING is kept for the one shape that WOULD be a real gap, and it reads
+ * CLASSIC holdings only. A classic trustline cannot exist without an
+ * `AccountEntry`, so seeing one with no signing configuration means the gap is
+ * ours. A Soroban token balance proves nothing of the sort: it lives in the
+ * TOKEN contract's storage keyed by address, so it outlives `account_merge` and
+ * an address that was never funded can hold one from the start.
+ *
+ * Measured 2026-08-26: 10,713 accounts reach this branch, and 100% of their
+ * live rows are Soroban (`asset_type = 3`) across all eight id slices — every
+ * one of them probed ABSENT on chain (350/350, control 100/100 PRESENT), while
+ * their token balances probed PRESENT with amounts matching ours exactly
+ * (60/60). Reading all holdings therefore fired the alarm 10,713 times on
+ * correct data. Restricted to classic it measures 0, and it still catches the
+ * regression it exists for — every live account carries a native XLM row
+ * (170,115 of 170,115 in a 1/64 slice), so a live account can never slip past.
  *
  * "No entry on the ledger" covers two different histories, and saying only
  * that made a reader ask which one they were looking at. An account that was
@@ -130,26 +140,30 @@ function SignerLine({ row, alt }: { row: SignerRow; alt: boolean }) {
 export function AccountSigners({
   accountId,
   signing,
-  hasLiveHoldings,
+  hasClassicHoldings,
   deleted,
 }: {
   accountId: string;
   signing: AccountSigning | null | undefined;
-  /** Whether the page is currently showing this account any live holding. */
-  hasLiveHoldings: boolean;
+  /**
+   * Whether the page is showing a live CLASSIC holding (native or credit).
+   * Soroban balances are deliberately excluded — they carry no claim about
+   * whether an `AccountEntry` exists.
+   */
+  hasClassicHoldings: boolean;
   /** The account existed and was closed, as opposed to never existing. */
   deleted: boolean;
 }) {
   if (signing == null) {
     // Three different histories end here, and they are not interchangeable:
-    // an account that holds assets but has no configuration (a contradiction,
-    // measured 0, and what a writer regression looks like); one that was
-    // closed; and an address that was never an account at all.
-    const absent = hasLiveHoldings
+    // an account holding a classic trustline with no configuration (a real
+    // contradiction, measured 0, and what a writer regression looks like); one
+    // that was closed; and an address that was never an account at all.
+    const absent = hasClassicHoldings
       ? {
           label: 'Not indexed',
           color: 'warning' as const,
-          text: 'This account holds assets, but we have no signing configuration for it. That combination should not occur — treat the signer list as unknown, not as absent.',
+          text: 'This account holds a classic trustline, which the ledger cannot record without an account entry — yet we have no signing configuration for it. Treat the signer list as unknown, not as absent.',
         }
       : deleted
       ? {
