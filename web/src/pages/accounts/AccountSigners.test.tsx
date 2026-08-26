@@ -27,7 +27,12 @@ describe('AccountSigners', () => {
     // The chain keeps the master key OUT of the signer list, so a page showing
     // only the list reads 3-of-4 where the chain says 3-of-5.
     renderWithProviders(
-      <AccountSigners accountId={ACCOUNT} signing={signing()} hasLiveHoldings />
+      <AccountSigners
+        accountId={ACCOUNT}
+        signing={signing()}
+        hasLiveHoldings
+        deleted={false}
+      />
     );
 
     expect(screen.getByText('master key')).toBeInTheDocument();
@@ -45,6 +50,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0 })}
         hasLiveHoldings
+        deleted={false}
       />
     );
 
@@ -60,11 +66,30 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={signing({ master_weight: 0, signers: [] })}
         hasLiveHoldings
+        deleted={false}
       />
     );
 
     expect(screen.getByText('No usable key')).toBeInTheDocument();
     expect(screen.queryByText('Single signature')).not.toBeInTheDocument();
+  });
+
+  it('says a closed account was CLOSED, not that it never existed', () => {
+    // Both end with no signing configuration, and a reader looking at an
+    // account page was being told "no account" about the page they were on.
+    // `deleted` is trustworthy now that it is read off the lifecycle column
+    // (task 0500), so the two histories are told apart.
+    renderWithProviders(
+      <AccountSigners
+        accountId={ACCOUNT}
+        signing={null}
+        hasLiveHoldings={false}
+        deleted
+      />
+    );
+
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.queryByText('No account')).not.toBeInTheDocument();
   });
 
   it('states plainly that a row-less account has no ledger entry', () => {
@@ -78,6 +103,7 @@ describe('AccountSigners', () => {
         accountId={ACCOUNT}
         signing={null}
         hasLiveHoldings={false}
+        deleted={false}
       />
     );
 
@@ -91,7 +117,12 @@ describe('AccountSigners', () => {
     // regression takes. It measures 0 today; the cost of it appearing
     // unannounced is a hidden multisig, which is the expensive half of #377.
     renderWithProviders(
-      <AccountSigners accountId={ACCOUNT} signing={null} hasLiveHoldings />
+      <AccountSigners
+        accountId={ACCOUNT}
+        signing={null}
+        hasLiveHoldings
+        deleted={false}
+      />
     );
 
     expect(screen.getByText('Not indexed')).toBeInTheDocument();
@@ -111,6 +142,7 @@ describe('AccountSigners', () => {
           ],
         })}
         hasLiveHoldings
+        deleted={false}
       />
     );
 

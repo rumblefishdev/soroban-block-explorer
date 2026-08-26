@@ -336,10 +336,13 @@ describe('AccountDetailPage', () => {
     expect(screen.getByText('Classic credit')).toBeInTheDocument();
   });
 
-  it('tags native XLM too, because the assets pages do', () => {
-    // XLM really does have a deployed SAC, and `/assets` (list AND detail)
-    // renders the tag ungated by asset type. The account page must not be the
-    // one view that hides it.
+  it('leaves the SAC tag off native XLM, where it would be a constant', () => {
+    // Reversed deliberately. `/assets` tags XLM and that is right there — the
+    // question that page answers is which assets have a SAC. Here the question
+    // is what this account holds, and every account holds XLM, which always
+    // has one: the tag would appear on every account page forever and say
+    // nothing about any of them. It earns its place on a classic row because
+    // only 3,838 of 306,051 asset identities carry a deployed SAC.
     mockDetail({
       data: {
         ...SAMPLE,
@@ -357,7 +360,7 @@ describe('AccountDetailPage', () => {
     });
 
     expect(screen.getByText('Stellar Lumens')).toBeInTheDocument();
-    expect(screen.getByText('SAC')).toBeInTheDocument();
+    expect(screen.queryByText('SAC')).not.toBeInTheDocument();
   });
 
   it('shows no SAC tag for a classic balance without a deployed one', () => {

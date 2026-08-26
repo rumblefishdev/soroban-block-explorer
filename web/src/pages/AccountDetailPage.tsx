@@ -54,12 +54,18 @@ export default function AccountDetailPage() {
     );
   } else if (account.data) {
     summary = <AccountSummary account={account.data} />;
-    balances = <AccountBalances balances={account.data.balances} />;
+    balances = (
+      <AccountBalances
+        balances={account.data.balances}
+        deleted={account.data.deleted}
+      />
+    );
     signers = (
       <AccountSigners
         accountId={accountId}
         signing={account.data.signing}
         hasLiveHoldings={account.data.balances.length > 0}
+        deleted={account.data.deleted}
       />
     );
   }

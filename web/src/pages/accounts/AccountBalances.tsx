@@ -74,7 +74,13 @@ function shape(balance: AccountBalance): BalanceShape {
       avatarCode: NATIVE_ASSET_CODE,
       subline: 'Native asset',
       chipLabel: null,
-      isSac: balance.sac_deployed,
+      // XLM's SAC is real, and `/assets` tags it — but a tag earns its place by
+      // being RARE, and here it never would be. Only 3,838 of 306,051 asset
+      // identities carry a deployed SAC (1.3%), which is what makes the tag
+      // worth reading on a classic row; every account holds XLM and XLM always
+      // has one, so on this row the tag is a constant and says nothing about
+      // the account you are looking at.
+      isSac: false,
       href: routes.asset('native'),
     };
   }
@@ -262,8 +268,11 @@ function BalanceRow({
  */
 export function AccountBalances({
   balances,
+  deleted,
 }: {
   balances: readonly AccountBalance[];
+  /** The account was closed — "yet" would promise something that cannot come. */
+  deleted: boolean;
 }) {
   const funded = balances.filter((b) => b.balance !== '0').length;
   const noun = balances.length === 1 ? 'asset' : 'assets';
@@ -314,8 +323,12 @@ export function AccountBalances({
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
-          title="No assets yet"
-          description="Assets will appear here once network activity begins"
+          title={deleted ? 'No assets' : 'No assets yet'}
+          description={
+            deleted
+              ? 'This account was closed on the ledger.'
+              : 'Assets will appear here once network activity begins'
+          }
         />
       ) : (
         shown.map((balance, index) => (

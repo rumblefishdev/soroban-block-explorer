@@ -119,41 +119,60 @@ function SignerLine({ row, alt }: { row: SignerRow; alt: boolean }) {
  * today (it measured 0), but it is exactly what a live-writer regression would
  * look like, and it is the case where a hidden multisig would matter. The page
  * already holds both facts, so no extra API call decides it.
+ *
+ * "No entry on the ledger" covers two different histories, and saying only
+ * that made a reader ask which one they were looking at. An account that was
+ * CLOSED once existed; an address we only ever saw referenced never did. Both
+ * end with no signing configuration, and the page can tell them apart —
+ * `deleted` is now read off the same lifecycle column (task 0500), so it is
+ * trustworthy in a way it was not when this section first shipped without it.
  */
 export function AccountSigners({
   accountId,
   signing,
   hasLiveHoldings,
+  deleted,
 }: {
   accountId: string;
   signing: AccountSigning | null | undefined;
   /** Whether the page is currently showing this account any live holding. */
   hasLiveHoldings: boolean;
+  /** The account existed and was closed, as opposed to never existing. */
+  deleted: boolean;
 }) {
   if (signing == null) {
-    // Live holdings with no signing configuration is the contradiction — the
-    // page would be showing assets for an account it claims has no entry.
-    // Measured 0 today; kept because that is the shape a writer regression
-    // takes, and a hidden multisig is the costly half of issue #377.
+    // Three different histories end here, and they are not interchangeable:
+    // an account that holds assets but has no configuration (a contradiction,
+    // measured 0, and what a writer regression looks like); one that was
+    // closed; and an address that was never an account at all.
+    const absent = hasLiveHoldings
+      ? {
+          label: 'Not indexed',
+          color: 'warning' as const,
+          text: 'This account holds assets, but we have no signing configuration for it. That combination should not occur — treat the signer list as unknown, not as absent.',
+        }
+      : deleted
+      ? {
+          label: 'Closed',
+          color: 'neutral' as const,
+          text: 'This account was closed on the ledger. A closed account has no signers.',
+        }
+      : {
+          label: 'No account',
+          color: 'neutral' as const,
+          text: 'The ledger holds no account for this address — we know it only because other transactions referenced it.',
+        };
     return (
       <SectionCard
         title="Signers"
-        meta={
-          hasLiveHoldings ? (
-            <Chip size="sm" color="warning" label="Not indexed" />
-          ) : (
-            <Chip size="sm" color="neutral" label="No account" />
-          )
-        }
+        meta={<Chip size="sm" color={absent.color} label={absent.label} />}
       >
         <Box sx={{ px: 2, py: 3 }}>
           <Typography
             variant="bodyRegular"
             sx={(theme) => ({ color: theme.palette.text.secondary })}
           >
-            {hasLiveHoldings
-              ? 'This account holds assets, but we have no signing configuration for it. That combination should not occur — treat the signer list as unknown, not as absent.'
-              : 'This account has no entry on the ledger, so it has no signing configuration.'}
+            {absent.text}
           </Typography>
         </Box>
       </SectionCard>
