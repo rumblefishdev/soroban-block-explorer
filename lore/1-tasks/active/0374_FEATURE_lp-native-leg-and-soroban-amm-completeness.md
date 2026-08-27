@@ -363,10 +363,16 @@ running. Do not run the full pass first.
    Operator task, not an agent task. `repair-tier1` after any `--reindex` run
    is mandatory (`docs/backfills.md`), indexer stopped.
 
-Consider making plane state the source for reserves on the **live** path too,
-not just history — one source and one decode for all time, instead of two
-stitched at ledger 57 573 730. Events stay the source for volume, where the
-amounts are read rather than inferred.
+**Decided 2026-08-27: plane state is the single reserve source for the whole
+timeline** — live and historical, one decode, no stitch at 57 573 730.
+`update_reserves` events become a monitored cross-check (same announced
+values; alarm on divergence; coverage from 57 573 730 onward — before that,
+checkpoint snapshots are the only oracle). Events stay the source for volume,
+where the amounts are read rather than inferred. The pilot behind this: 80/80
+router-A pools had `PoolData` in their first trade ledger in both sampled gap
+slices, and router B's pools sit in a second, deployment-own plane
+(`CDWVENDO…WN5C`, 8/8) — so plane discovery keys on the
+`[Symbol("PoolData"), Address(pool)]` shape, never a hard-coded address.
 
 ---
 
