@@ -2,9 +2,26 @@
 id: '0463'
 title: 'FEATURE: account detail — show zero-balance trustlines + signers/thresholds'
 type: FEATURE
-status: active
-related_adr: []
-related_tasks: ['0464', '0321', '0331', '0295', '0214']
+status: done
+related_adr: ['0055', '0056', '0057']
+related_tasks:
+  [
+    '0464',
+    '0321',
+    '0331',
+    '0295',
+    '0214',
+    '0492',
+    '0493',
+    '0496',
+    '0499',
+    '0501',
+    '0502',
+    '0503',
+    '0504',
+    '0514',
+    '0515',
+  ]
 tags:
   [
     frontend,
@@ -44,6 +61,20 @@ history:
       solution space is being re-planned from scratch before any code, since
       option A was chosen for cost rather than fit and the signers half may
       belong to a different option entirely.
+  - date: '2026-08-26'
+    status: done
+    who: karolkow
+    note: >
+      Shipped and verified on production via tag production-2026.08.26-2.
+      Both halves of issue #377 are live: the read path selects on
+      `closed_at_ledger` instead of `amount != 0`, making 9,478,880 live
+      zero-balance holdings visible, and the account page gained signers +
+      thresholds with the master key composed in. Backed by a one-off
+      checkpoint-snapshot seed that wrote 44,834,785 balance rows,
+      10,871,929 signer rows and 97,108 assets, all chain-audited. 258 API
+      tests, 300 web tests, 3 browser regressions. Three ADRs (0055, 0056,
+      0057) and twelve follow-up tasks spawned; the capability itself is
+      indexed by EPIC 0515.
 ---
 
 # FEATURE: account detail — zero-balance trustlines + signers/thresholds
@@ -2016,6 +2047,73 @@ a signer row, so the documented "25% carry no row" is accurate.
 and the components under test — not the deployed page. The last acceptance
 criterion stays open until the deploy, which is the operator's.
 
+### CLOSED 2026-08-26 — shipped and verified on production
+
+Tag **`production-2026.08.26-2`**, run 33019658856, green.
+
+#### The tag had to be cut twice, and the first one is worth recording
+
+`production-2026.08.26-1` was cut against a LOCAL `master` that was one merge
+behind, so it pointed at the PREVIOUS release commit. The deploy ran and
+**succeeded** — shipping the old code. The failure is invisible from the run:
+green means the tagged commit deployed, not that the tagged commit is the one
+you meant.
+
+Caught by comparing the tag's own CONTENT rather than its name: the new read
+filter appears 6 times in `accounts/queries.rs` on master and 0 times in the
+tagged commit. `production-2026.08.26-2` was cut against `origin/master` and
+carries both. The old tag was left in place — it is the honest record that a
+deploy happened at that commit.
+
+#### What was verified, and how
+
+| claim                        | evidence                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| tag carries the release      | 6 occurrences of the lifecycle filter + signers DTO, read out of the tag itself                                                  |
+| nothing parked outside scope | `cdk diff` — 1 stack with differences (`Compute`, the deployed one), 9 clean                                                     |
+| only the API Lambda changed  | `production-soroban-explorer-api` stamped 22:34:10, inside the run window; indexer and enrichment worker still at 2026-08-25     |
+| the SPA is live and new      | the deployed `AccountDetailPage` chunk fetched from the CDN contains `Signers`, `Not indexed`, `master key`; **zero** `Balances` |
+| the page renders it          | the shipped frontend served against PRODUCTION data through the local API                                                        |
+
+The last row is the one that matters, and it needed a route around the auth
+layer that does not defeat it: Turnstile is correctly armed on production and
+refuses an automated browser, which is exactly its job. Instead the shipped
+`web/src` (verified byte-identical to `origin/master`) was served by Vite with
+the repo's own dev proxy pointed at `api --bin local`, which reads production
+ClickHouse over the same mTLS path the Lambda uses. Real code, real data, no
+challenge bypassed.
+
+Rendered for the issue's own account:
+
+```
+Assets — 5 assets · 2 with a balance
+  Stellar Lumens  Native asset              5.9998533 XLM
+  KALE            Classic credit · SAC      1.101
+  SHX             Classic credit · SAC      0.00
+  AQUA            Classic credit · SAC      0.00
+  USDC            Classic credit · SAC      0.00
+
+Signers — Multisig
+  GDXW…YBEN  master key  [master]  1
+  GACQ…AUET  1   GAWX…BXVQ  1   GCXC…YBEN  1   GDEU…EZWZ  1
+  Total weight 5 · thresholds low 3 · medium 3 · high 3
+```
+
+Five assets where the report saw two; a genuine 3-of-5 where a list without the
+master key would have read 3-of-4. Negative fixtures held: a warehouse account
+with 890 stamped rows renders only its one live funded holding, and a merged
+account renders nothing.
+
+#### Where the rest of the work went
+
+Nothing is left as prose. The capability this task grew is indexed by
+**EPIC 0515**, whose next moves are sequenced B → D → E (extract the decoder
+0502 → model the discarded entry types 0504/0503 → settle `audit-harness`).
+The live Soroban writer defect this work surfaced is **0514**, root cause
+proven, writer fix and heal still open. Presentation and data follow-ups are
+0493 (LP positions on the page), 0496 (Soroban holdings mislabelled), 0501
+(frozen trustlines), 0492 (provenance), 0497, 0499.
+
 ## Acceptance criteria
 
 - [x] A live zero-balance trustline appears; the fixture account shows five
@@ -2051,8 +2149,9 @@ criterion stays open until the deploy, which is the operator's.
       the delta can be checked rather than discovered.)
 - [x] The 200-account probe from `notes/R-` returns zero accounts where the
       chain holds more live zero trustlines than we do
-- [ ] **Verified on production**, not at merge — the destination is a shipped,
-      checked change
+- [x] **Verified on production**, not at merge — the destination is a shipped,
+      checked change (2026-08-26, tag `production-2026.08.26-2`; see the
+      closing section)
 - [x] **Docs updated** — `docs/architecture/**` read path and frontend data
       contract; `docs/backfills.md` gains the seed pass
 - [x] **API types regenerated** — yes, the account DTO gains fields
