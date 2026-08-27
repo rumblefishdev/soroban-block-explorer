@@ -1,5 +1,5 @@
 ---
-id: '0519'
+id: '0520'
 title: 'RESEARCH: one in five NFTs has no metadata, and nothing distinguishes "nothing to fetch" from "fetch is failing"'
 type: RESEARCH
 status: backlog

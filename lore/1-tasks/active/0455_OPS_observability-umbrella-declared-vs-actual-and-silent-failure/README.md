@@ -229,7 +229,7 @@ history:
       All three carried items closed. The reconcile alarm gained a cause field
       rather than a rename; the NFT fetcher took SEP-1's redirect policy rather
       than a second copy of it; NFT metadata coverage was re-measured (20.7%
-      of promoted NFTs carry neither name nor media) and spawned as 0519. The
+      of promoted NFTs carry neither name nor media) and spawned as 0520. The
       measurement changed the shape of that question: the gap is all-or-nothing
       per collection, 51 collections fully missing against 7 partial, so it is
       one cause per collection rather than scattered fetch failures.
@@ -929,6 +929,10 @@ Frequency, sampled across four days of X-Ray fault queries in the window:
 contract. The decompiled tab shipped under task 0465; this is a timeout in
 that route, not an outage.
 
+**Spawned as 0522** (operator's call, over the "known one-off" note this entry
+first proposed). Two separable defects: the timeout, and a bare 500 shown to a
+reader for an expected outcome on an optional view.
+
 **C. 2026-08-27 01:10 UTC, the node fell out of consensus.** `Herder: Lost
 track of consensus`, then `Herder: Ledger took 282.692064376 seconds` against
 a normal ~5 s close. The node entered catchup and six external history
@@ -953,9 +957,18 @@ twice.
 
 `infra/cdk.json` declares `"app": "node dist/bin/production.js"`. The first
 `cdk synth` after editing `cloudwatch-stack.ts` emitted a template WITHOUT the
-change, because it read a `dist/` build produced before the edit — and exited 0. Without `nx run infra:build` first, synth and deploy both describe stale
-code as current. Same shape as the mute itself: a tool reporting health while
-looking at something other than the thing you are asking about.
+change, because it read a `dist/` build produced before the edit — and exited 0.
+
+**Scope corrected before this was acted on.** The first write-up said "synth
+and deploy both describe stale code as current" and proposed adding a build
+guard to the Makefile. `infra/Makefile` already has one: every
+`deploy-production-*` target declares `build` as a prerequisite, which runs
+`nx build`. The documented deploy path was never exposed. What bit here was a
+raw `npx cdk synth` — a shortcut around the Makefile — so the lesson belongs
+to the shortcut, and the guard that was about to be proposed already ships.
+Recorded because the sequence (read the code, infer a defect, propose a fix,
+find the fix already there) recurred through this task's review sweep and is
+worth being able to recognise from the inside.
 
 ### What this changes
 
@@ -998,17 +1011,17 @@ looking at something other than the thing you are asking about.
    this PR stays correct either way: once the policy follows safe redirects, an
    `is_redirect()` error can only mean "refused as unsafe or over budget",
    which is permanent by construction.
-3. **NFT metadata coverage — spawned as [[0519]] 2026-08-27.** Re-measured
+3. **NFT metadata coverage — spawned as [[0520]] 2026-08-27.** Re-measured
    before filing: **13 752 promoted NFTs, 2 849 (20.7%) carry neither a name
    nor a media URL.** The shape is the finding — the gap is all-or-nothing per
    collection: 51 collections are 100% missing (2 716 tokens) and only 7 are
    partial (133 tokens), which points at one cause per collection rather than
    scattered fetch failures. The 7 partial ones are where a real defect would
-   hide. Method note kept in 0519 because it already produced a false 0% once:
+   hide. Method note kept in 0520 because it already produced a false 0% once:
    the `name`/`media_url` columns on `nfts` are vestigial NULL by design, so
    the count must join `nft_enrichment` with `argMax(_, version)`. Note that
    the redirect-policy change landed the same day, so that figure is the
-   pre-change baseline and 0519 re-measures after deploy.
+   pre-change baseline and 0520 re-measures after deploy.
 
 ## Notes
 
