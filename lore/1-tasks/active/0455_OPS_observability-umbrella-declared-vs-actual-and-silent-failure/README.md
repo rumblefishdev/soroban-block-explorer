@@ -213,6 +213,15 @@ history:
       superseded in premise: task 0497 already decided the RMT/MIN compromise
       goes rather than gets per-column mitigations — the two are cross-linked
       and 0232's fate is a close-or-narrow decision recorded there.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      Dashboard/alarm coverage closed. The three C7 leftovers shipped: Galexie
+      disk percentage built from the alarm's own metric objects, a ledger RATE
+      series so a stall reads as a drop rather than a flat line, and a reading
+      note stating why the cost-anomaly alert has no widget by design. Six
+      criteria left, four of them needing a production window.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -584,18 +593,24 @@ month is unanswerable by construction.
       2026-08-18) and that an IMMEDIATE subscription routes it to the alarm
       topic. What is NOT proven is the last hop to the channel — that is true
       of every alarm here and is what ADR 0054 rule 5 gates from now on
-- [ ] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
+- [x] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
       without widgets) — including a stated dashboard answer for the new
       cost-anomaly alert. First slice in PR #422 (two dead widgets removed,
       freshness widget on the alarm's signal, backlog-age widget with
       threshold line). **Second slice in PR #427**: worker-errors and
       CH-write-failures widgets and the cost section are in. Still open: the
       stated dashboard answer for the cost-anomaly alert, and the
-      per-decision leftovers (Galexie disk %, cost reading note, ledger
-      RATE series). Deliberately NOT taken: sharing one metric constant
-      between an alarm and its widget (review finding 39) — the arithmetic
-      favoured it and it was skipped anyway, so alarm/widget equality stays
-      an assertion in a comment
+      per-decision leftovers. **Closed 2026-08-27**: the Galexie disk widget
+      (built from the alarm's OWN metric objects, so that pair's equality is
+      structural rather than asserted), the ledger RATE series beside the
+      sequence counter (a stall reads as a drop to zero instead of a flat
+      line you must notice), and the cost reading note — which states why the
+      anomaly alert deliberately has no widget: it pages per-service on a step
+      change, and a chart of that would be a worse copy of the alert, while
+      the graph beside it exists for the creep no alert can see.
+      Still deliberately NOT taken: sharing metric constants for the other
+      four alarm/widget pairs (review finding 39) — skipped on the operator's
+      call despite favourable arithmetic, so those four stay assertions
 - [ ] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
       0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
@@ -627,16 +642,16 @@ Triaged once so nobody re-derives it. Three shapes: an **operator window**
 (needs a deliberate action in production and cannot be done from a keyboard
 here), a **measurement** (runnable now), or **dead as written**.
 
-| Criterion                                  | Shape               | What unblocks it                                                                                                                             |
-| ------------------------------------------ | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Planned pause pages exactly once           | operator window     | pause the event-source mapping, count the pages that arrive                                                                                  |
-| Alarm fires on ingestion stall             | operator window     | simulate a stall against the deployed alarm                                                                                                  |
-| CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                            |
-| 0403's deferred measurement                | **done 2026-08-27** | 25 057 read_rows/call over 9 370 calls; the two-user gap is granule placement, not permissions                                               |
-| Dashboard↔alarm coverage                   | in flight           | PR #427 carries the two widgets and the cost section; the stated dashboard answer for the cost alert and three per-decision leftovers remain |
-| Each child task closed or re-scoped        | operator decision   | judge 0232, 0250 and 0087 individually — the group re-scope was reversed 2026-08-27                                                          |
-| Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                    |
-| No alarm sits latched and mute             | narrowed 2026-08-27 | the enrichment DLQ alarm is excluded by operator decision; the criterion now covers the rest, and its open half is the re-arm test message   |
+| Criterion                                  | Shape               | What unblocks it                                                                                                                           |
+| ------------------------------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Planned pause pages exactly once           | operator window     | pause the event-source mapping, count the pages that arrive                                                                                |
+| Alarm fires on ingestion stall             | operator window     | simulate a stall against the deployed alarm                                                                                                |
+| CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                          |
+| 0403's deferred measurement                | **done 2026-08-27** | 25 057 read_rows/call over 9 370 calls; the two-user gap is granule placement, not permissions                                             |
+| Dashboard↔alarm coverage                   | **done 2026-08-27** | disk widget, ledger RATE series and the cost reading note landed; the four remaining shared-constant pairs stay skipped by choice          |
+| Each child task closed or re-scoped        | operator decision   | judge 0232, 0250 and 0087 individually — the group re-scope was reversed 2026-08-27                                                        |
+| Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                  |
+| No alarm sits latched and mute             | narrowed 2026-08-27 | the enrichment DLQ alarm is excluded by operator decision; the criterion now covers the rest, and its open half is the re-arm test message |
 
 **The latched-alarm criterion cannot be ticked, and that is a decision, not a
 backlog item.** `production-enrichment-dlq-depth` has been in ALARM since
