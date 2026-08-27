@@ -21,7 +21,7 @@ export interface DeliveryStackProps extends cdk.StackProps {
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
  * - S3 bucket for a second, independently-built SPA served at `/api/*` on
- *   the same distribution (task 0517)
+ *   the same distribution (task 0519)
  * - CloudFront distribution with SPA routing fallback
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
@@ -61,7 +61,7 @@ export class DeliveryStack extends cdk.Stack {
     });
 
     // ---------------------
-    // S3 Bucket (API SPA — task 0517)
+    // S3 Bucket (API SPA — task 0519)
     // ---------------------
     // Separate, independently-built SPA served from `/api/*` on the same
     // distribution. Same shape as `spaBucket` above.
@@ -112,7 +112,7 @@ export class DeliveryStack extends cdk.Stack {
     // gate humans at the Cloudflare edge instead (or land a combined guard
     // function).
     //
-    // The `/api/*` behavior (task 0517) is a separate behavior with its own
+    // The `/api/*` behavior (task 0519) is a separate behavior with its own
     // function slot, so it is gated independently via
     // `config.enableApiSpaBasicAuth` — it reuses the same basic-auth
     // function/KVS construct below when that construct exists, rather than
@@ -304,7 +304,7 @@ export class DeliveryStack extends cdk.Stack {
           ...sharedBehaviorProps,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
-        // Second, independently-built SPA (task 0517) — its own S3 origin,
+        // Second, independently-built SPA (task 0519) — its own S3 origin,
         // gated independently of the main behaviors (see
         // `apiSpaViewerRequestFunction` above). Single short-TTL behavior
         // for now; split out a long-TTL asset sub-path once this SPA's

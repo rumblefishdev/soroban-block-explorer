@@ -1,5 +1,5 @@
 ---
-id: '0517'
+id: '0519'
 title: 'FEATURE: separate /api SPA bucket + CloudFront behavior, basic-auth gated'
 type: FEATURE
 status: active
@@ -25,6 +25,16 @@ history:
       construct, new per-env config flag, single short-TTL behavior for now
       (no split-out long-TTL asset sub-paths until the new SPA's build output
       layout is known).
+  - date: '2026-08-27'
+    status: active
+    who: mkowalski
+    note: >
+      Renumbered 0517 → 0519: this task was numbered off the highest ID
+      visible on a local `master` checkout that had not yet merged develop's
+      `2bcaece1` commit, which had already claimed 0516–0518 (including
+      another, unrelated `0517_FIX_event-name-read-from-wrong-topic`).
+      Renamed the file and updated the frontmatter id to the next free slot
+      in the shared sequence; no content otherwise changed.
 ---
 
 # FEATURE: separate /api SPA bucket + CloudFront behavior, basic-auth gated
