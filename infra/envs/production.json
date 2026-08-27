@@ -38,6 +38,7 @@
   "cloudFrontCertificateArn": "arn:aws:acm:us-east-1:750702271865:certificate/93e279f2-0335-4aa9-b429-ed8a1c4716df",
   "apiCertificateArn": "arn:aws:acm:eu-central-1:750702271865:certificate/1b007d15-773a-4603-8bc6-43cebb4a60c7",
   "enableBasicAuth": false,
+  "enableApiSpaBasicAuth": true,
   "provisionCloudflareBootstrap": true,
   "provisionApiMtlsTruststore": false,
   "enableApiMtls": false,
