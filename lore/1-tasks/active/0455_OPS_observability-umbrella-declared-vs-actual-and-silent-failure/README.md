@@ -564,7 +564,7 @@ month is unanswerable by construction.
       stall against the deployed alarm
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
-- [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
+- [x] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
       latched and mute — **narrowed 2026-08-27, operator decision: the
       enrichment DLQ is excluded from this criterion.**
       `production-enrichment-dlq-depth` has been in ALARM since 2026-07-03
@@ -585,19 +585,39 @@ month is unanswerable by construction.
       2026-08-19 policy repair had not worked, and eighteen alarm actions
       across nine days delivered nowhere. Detection half: PROVEN. Delivery
       half: BLOCKED on the policy fix. Re-running this gate after that deploy
-      is what ticks the box — see "Discovery 2026-08-27"
-- [ ] The declared-vs-actual delta reaches a human without anyone asking for it.
+      is what ticks the box — see "Discovery 2026-08-27".
+      **Ticked 2026-08-27 21:44, on the re-run, with the page in hand.** The
+      fix deployed by `production-2026.08.27-2-CloudWatch`; a second synthetic
+      message crossed the alarm and the action recorded
+      `Successfully executed` — the first since 2026-08-14 03:28. SNS agrees
+      from its own side (1 published, 1 delivered, 0 failed), and the operator
+      confirmed the message in the channel. Deleting the message paged again
+      on the way back: `Successfully executed` at 22:07:34, queue at 0, alarm
+      OK. Both directions of the transition are now proven on the deployed
+      alarm, not inferred from a policy read — which is the distinction that
+      made this criterion worth nine days
+- [x] The declared-vs-actual delta reaches a human without anyone asking for it.
       **Re-scoped 2026-08-19** from "a comparator runs on a schedule": the
       schedule is withdrawn (ADR 0054, and the measured six weeks of a read-but-
       unacted delta), the requirement is not. The mechanism is the tag run's
       `cdk diff` over all ten stacks — so this criterion now ticks with the one
-      below, which gates that same run
-- [ ] The CDK half of that comparison exists at release time, not only on a
+      below, which gates that same run.
+      **Ticked 2026-08-27 with it.** Nobody asked for the Compute drift; it
+      appeared in the deploy log of a release about something else entirely,
+      which is exactly the "without anyone asking" this criterion means
+- [x] The CDK half of that comparison exists at release time, not only on a
       schedule: `cdk diff` covers all ten declared stacks on every tag run, and
       a tag can deploy any of them (in code 2026-08-18,
       `infra/scripts/deploy-scope.sh` + selector grammar; AC checks off when a
       real `-<StackName>` tag has deployed a non-Compute stack and the diff of
-      an undeployed one was read in the job log)
+      an undeployed one was read in the job log).
+      **Ticked 2026-08-27.** `production-2026.08.27-2-CloudWatch` resolved to
+      `stacks=Explorer-production-CloudWatch exclusively=--exclusively
+  web=false`, deployed that stack alone, and the SPA step skipped as
+      declared. The `cdk diff — every stack, deployed or not` step ran before
+      it and showed Compute carrying three undeployed Lambda code changes —
+      an undeployed stack's drift, read in the job log, by the mechanism this
+      criterion asked for, on its first real use
 - [x] Alarm filter strings verified against the strings the code actually emits
       (2026-08-06 — `declared-vs-emitted.spec.ts`, enforced in CI)
 - [x] 0403's deferred measurement executed after the next deploy + a drain:
@@ -1033,6 +1053,36 @@ worth being able to recognise from the inside.
   present, for nine days.
 - No repair of this topic may be called done on inspection again. The gate is
   a delivered page, and nothing weaker.
+
+### Closed 2026-08-27 21:44 — the mute lasted 9 days, 6 h, 52 min
+
+`production-2026.08.27-2-CloudWatch` deployed the third policy statement, and
+the gate was re-run immediately rather than deferred. Both directions of the
+alarm transition delivered:
+
+```
+21:44:34  Successfully executed action    (OK -> ALARM, the synthetic message)
+22:07:34  Successfully executed action    (ALARM -> OK, the message deleted)
+SNS: 1 published, 1 delivered, 0 failed
+```
+
+The operator confirmed the page in the channel. First delivery since
+2026-08-14 03:28.
+
+Three things are worth carrying out of this, because none of them is about
+SNS:
+
+1. **The gate found what inspection could not, twice.** The 2026-08-19 repair
+   was verified by reading the policy and looked correct; it was not. The only
+   step that has ever caught this failure is sending something and watching it
+   arrive.
+2. **Deferring the gate is what cost the nine days.** It existed on 08-19 and
+   was postponed as an operator-window item. The defect it was written to
+   catch was live the whole time it waited.
+3. **A green deploy proved nothing.** Every deploy in the window succeeded,
+   every alarm evaluated correctly, every dashboard was accurate. The system
+   was healthy by every measure it collected about itself, and could not tell
+   anyone anything.
 
 ## Carried to the follow-up PR (raised in PR #422 review, decided not to widen)
 

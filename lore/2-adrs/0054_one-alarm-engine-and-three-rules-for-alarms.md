@@ -198,6 +198,13 @@ rule was first exercised for real. Rule 5 did not prevent the outage; it is
 the reason the outage was found at all, and it is the only step in this ADR
 whose absence has now been measured twice.
 
+**First full pass 2026-08-27 21:44.** The alarm-stack deploy was followed
+immediately by a synthetic message, and the page was seen in the channel:
+`Successfully executed action` in both directions of the transition, SNS
+reporting 1 published / 1 delivered / 0 failed. The rule is cheap — one
+message, three minutes — and it is the only check in this ADR that has ever
+distinguished a working alarm from one that merely looks like one.
+
 Scope is the alarm stack, every time it deploys — including deploys that do
 not appear to touch delivery, because this break was a side effect of an
 unrelated policy statement. What counts as verification is a message that
