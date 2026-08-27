@@ -129,6 +129,21 @@ export interface EnvironmentConfig {
    */
   readonly enableBasicAuth: boolean;
 
+  /**
+   * Enable CloudFront Function basic auth on the `/api/*` behavior only
+   * (task 0517) — the separate API SPA served from its own S3 bucket
+   * (`apiSpaBucket`) on the same distribution. Independent of
+   * `enableBasicAuth`: flipping this on does NOT gate the main site's
+   * behaviors, and flipping `enableBasicAuth` on does NOT gate `/api/*`.
+   *
+   * Shares the same CloudFront Function code and KeyValueStore as
+   * `enableBasicAuth` when both are true (one construct, one set of
+   * credentials) — but the KVS/function are provisioned whenever EITHER
+   * flag is true, since `/api/*` may need the gate while the main site
+   * does not.
+   */
+  readonly enableApiSpaBasicAuth: boolean;
+
   // Cloudflare edge migration (task 0277 / ADR 0048) — origin lockdown.
   // All default false until the Cloudflare zone + certs/secrets exist;
   // enabling them does NOT move DNS, it provisions the AWS-side locks

@@ -20,9 +20,12 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
+ * - S3 bucket for a second, independently-built SPA served at `/api/*` on
+ *   the same distribution (task 0517)
  * - CloudFront distribution with SPA routing fallback
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
+ *   (main behaviors) and `config.enableApiSpaBasicAuth` (`/api/*` only)
  *
  * This distribution has **no AWS WAF and no CDN-level request filtering**, and
  * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
@@ -48,6 +51,22 @@ export class DeliveryStack extends cdk.Stack {
     // ---------------------
     const spaBucket = new s3.Bucket(this, 'SpaBucket', {
       bucketName: `${config.envName}-soroban-explorer-spa`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy:
+        config.envName === 'production'
+          ? cdk.RemovalPolicy.RETAIN
+          : cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: config.envName !== 'production',
+    });
+
+    // ---------------------
+    // S3 Bucket (API SPA — task 0517)
+    // ---------------------
+    // Separate, independently-built SPA served from `/api/*` on the same
+    // distribution. Same shape as `spaBucket` above.
+    const apiSpaBucket = new s3.Bucket(this, 'ApiSpaBucket', {
+      bucketName: `${config.envName}-soroban-explorer-api-spa`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       removalPolicy:
@@ -86,12 +105,20 @@ export class DeliveryStack extends cdk.Stack {
     //
     // CloudFront permits exactly ONE viewer-request function per behavior.
     // The origin-secret lock (Cloudflare cutover, ADR 0048) and basic auth
-    // (pre-launch gate, task 0273) are therefore mutually exclusive —
-    // enforced in `validateConfig`. The origin-secret lock takes the slot
-    // when enabled. If both human-gating AND the Cloudflare lock are needed
-    // simultaneously, gate humans at the Cloudflare edge instead (or land a
-    // combined guard function).
+    // (pre-launch gate, task 0273) are therefore mutually exclusive on the
+    // MAIN behaviors (default, /assets/*, /static/*) — enforced in
+    // `validateConfig`. The origin-secret lock takes the slot when enabled.
+    // If both human-gating AND the Cloudflare lock are needed simultaneously,
+    // gate humans at the Cloudflare edge instead (or land a combined guard
+    // function).
+    //
+    // The `/api/*` behavior (task 0517) is a separate behavior with its own
+    // function slot, so it is gated independently via
+    // `config.enableApiSpaBasicAuth` — it reuses the same basic-auth
+    // function/KVS construct below when that construct exists, rather than
+    // standing up a second, separately-credentialed KVS.
     let viewerRequestFunction: cloudfront.Function | undefined;
+    let basicAuthFunction: cloudfront.Function | undefined;
 
     if (config.enableOriginSecretLock) {
       // Cloudflare origin-secret lock — KVS holds the expected secret,
@@ -121,28 +148,37 @@ export class DeliveryStack extends cdk.Stack {
       new cdk.CfnOutput(this, 'OriginSecretKvsArn', {
         value: originSecretKvs.keyValueStoreArn,
       });
-    } else if (config.enableBasicAuth) {
+    }
+
+    // Provisioned whenever EITHER the main site OR the `/api/*` SPA needs
+    // basic auth — `/api/*` gating must not depend on `enableBasicAuth`
+    // being on for the main site too.
+    if (config.enableBasicAuth || config.enableApiSpaBasicAuth) {
       const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
         keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
       });
 
-      viewerRequestFunction = new cloudfront.Function(
-        this,
-        'BasicAuthFunction',
-        {
-          functionName: `${config.envName}-soroban-explorer-basic-auth`,
-          keyValueStore: basicAuthKvs,
-          runtime: cloudfront.FunctionRuntime.JS_2_0,
-          code: cloudfront.FunctionCode.fromInline(
-            basicAuthFunctionCode(basicAuthKvs.keyValueStoreId)
-          ),
-        }
-      );
+      basicAuthFunction = new cloudfront.Function(this, 'BasicAuthFunction', {
+        functionName: `${config.envName}-soroban-explorer-basic-auth`,
+        keyValueStore: basicAuthKvs,
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        code: cloudfront.FunctionCode.fromInline(
+          basicAuthFunctionCode(basicAuthKvs.keyValueStoreId)
+        ),
+      });
 
       new cdk.CfnOutput(this, 'BasicAuthKvsArn', {
         value: basicAuthKvs.keyValueStoreArn,
       });
+
+      if (config.enableBasicAuth) {
+        viewerRequestFunction = basicAuthFunction;
+      }
     }
+
+    const apiSpaViewerRequestFunction = config.enableApiSpaBasicAuth
+      ? basicAuthFunction
+      : undefined;
 
     // ---------------------
     // Response Headers Policy — security baseline
@@ -268,6 +304,26 @@ export class DeliveryStack extends cdk.Stack {
           ...sharedBehaviorProps,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
+        // Second, independently-built SPA (task 0517) — its own S3 origin,
+        // gated independently of the main behaviors (see
+        // `apiSpaViewerRequestFunction` above). Single short-TTL behavior
+        // for now; split out a long-TTL asset sub-path once this SPA's
+        // build output layout is known.
+        '/api/*': {
+          origin: origins.S3BucketOrigin.withOriginAccessControl(apiSpaBucket),
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          responseHeadersPolicy,
+          cachePolicy: shortTtlCachePolicy,
+          ...(apiSpaViewerRequestFunction && {
+            functionAssociations: [
+              {
+                function: apiSpaViewerRequestFunction,
+                eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+              },
+            ],
+          }),
+        },
       },
       errorResponses: [
         {
@@ -338,6 +394,9 @@ export class DeliveryStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'SpaBucketName', {
       value: spaBucket.bucketName,
+    });
+    new cdk.CfnOutput(this, 'ApiSpaBucketName', {
+      value: apiSpaBucket.bucketName,
     });
     new cdk.CfnOutput(this, 'DistributionId', {
       value: distribution.distributionId,
