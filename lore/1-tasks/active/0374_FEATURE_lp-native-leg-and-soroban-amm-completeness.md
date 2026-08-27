@@ -238,8 +238,13 @@ Each step is independently landable and carries its own check.
 16. Participants read = `balances` on that asset, deduped by
     `argMax(amount, last_updated_ledger)`.
     **Check:** summed shares equal chain `get_total_shares()` per pool.
-17. Concentrated pools: explicit "not indexed" state, or positions from
-    `position_update` — decide with measurements, do not ship an empty list.
+17. Concentrated pools: **decided 2026-08-26 — index the positions.**
+    `position_update` carries holder + tick range + liquidity delta; state is
+    one GROUP BY (712 open positions, 273 holders, 26 pools). List returns
+    positions, header counts holders; constant pools are the degenerate
+    one-position case. Open positions only; raw L + price range (no
+    token-amount conversion until it passes an on-chain check).
+    `ParticipantItem` gains optional range fields; shares become optional.
 
 **F. API**
 
