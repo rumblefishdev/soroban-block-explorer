@@ -176,8 +176,19 @@ pub async fn handler(
             // message freely; rename this field only together with
             // `infra/src/lib/stacks/cloudwatch-stack.ts` (the
             // declared-vs-emitted infra test enforces the pair).
+            // `cause` exists because all three reconcile failure modes emit
+            // this one alarm field, so an S3 outage or a parse bug pages as
+            // "CH write failure" (lore-0455 review). Renaming the deployed
+            // metric was judged not worth losing its history; the cause
+            // field makes the first minute of an incident honest instead.
+            let cause = match &e {
+                HandlerError::S3Download(_) => "s3",
+                HandlerError::Parse(_) => "parse",
+                HandlerError::ClickHouse(_) => "clickhouse",
+            };
             error!(
                 alarm = "ch_write_failure",
+                cause,
                 message_id = %msg.message_id,
                 error = %e,
                 "reconcile failed — will redeliver doorbell"

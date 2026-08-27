@@ -95,6 +95,18 @@ export class ApiGatewayStack extends cdk.Stack {
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,
+        // `metricsEnabled` is deliberately NOT set here, and the reason is
+        // worth keeping so it is not proposed again. It was turned on
+        // 2026-08-27 (lore-0455) to answer "how often does one route fail in
+        // a week", which X-Ray cannot answer because a trace is a sample. It
+        // was reverted the same day, unshipped: this is a `proxy: true` API,
+        // so the whole surface is a single `{proxy+}` resource with an `ANY`
+        // method. Detailed metrics split by RESOURCE and METHOD, so every
+        // endpoint collapses into one series and the result is the
+        // stage-level number with OPTIONS separated out - billed per method,
+        // for a distinction we do not need. A per-route count has to come
+        // from the API Lambda's own structured logs (a metric filter or an
+        // EMF metric keyed on the route), not from the gateway.
         throttlingRateLimit: throttleRate,
         throttlingBurstLimit: throttleBurst,
         cacheClusterEnabled: config.apiGatewayCacheEnabled,

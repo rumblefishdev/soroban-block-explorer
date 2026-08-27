@@ -214,7 +214,7 @@ fn validate_host(host: &str) -> Result<(), Sep1Error> {
 /// a loopback / link-local / RFC 1918 IP literal, or an `http` downgrade, is
 /// never followed. Captures nothing (the PSL lookup and `validate_host` are
 /// free functions), so the closure is `'static` as `Policy::custom` requires.
-fn same_etld1_redirect_policy() -> Policy {
+pub(crate) fn same_etld1_redirect_policy() -> Policy {
     Policy::custom(|attempt| {
         // `previous()` includes the original request URL (index 0), so its len
         // on the Nth redirect is N; `> MAX_REDIRECTS` caps the chain at exactly
@@ -245,6 +245,15 @@ fn same_etld1_redirect_policy() -> Policy {
 /// Suffix List makes `www.circle.com` ≡ `circle.com` while `evil.com` ≢
 /// `circle.com`, and resolves multi-label suffixes (`a.co.uk` ≢ `b.co.uk`)
 /// correctly — a naive suffix strip cannot.
+/// Test-only window onto `redirect_allowed`, so consumers of the shared
+/// policy (the NFT fetcher) can pin the decision table without an HTTP
+/// server — wiremock binds to IP literals, which the policy rejects by
+/// design, so the follow path is untestable end-to-end locally.
+#[cfg(test)]
+pub(crate) fn redirect_decisions_for_test(origin: &str, target: &str) -> bool {
+    redirect_allowed(origin, target)
+}
+
 fn redirect_allowed(origin_host: &str, target_host: &str) -> bool {
     if validate_host(target_host).is_err() {
         return false;

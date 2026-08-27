@@ -17,6 +17,23 @@ import type { Construct } from 'constructs';
 import { originLockCanaryCode } from '../canaries/origin-lock.js';
 import type { EnvironmentConfig } from '../types.js';
 
+/**
+ * ASCII ONLY in anything that reaches the synthesized template - alarm
+ * descriptions, dashboard titles, markdown widgets.
+ *
+ * Not a style preference. `cdk diff` reads the deployed template back through
+ * a path that mangles non-ASCII: byte-checked 2026-08-19, the live alarm
+ * carries `e2 80 94` (an em dash) while the template read returns `3f` (`?`),
+ * so every such string shows as a change that survives being deployed. Nine
+ * alarm descriptions and one dashboard title were producing ten permanent
+ * false entries in the diff - the diff an operator is asked to read before
+ * every production deploy. A gate that always shows noise teaches people to
+ * scroll past it, and that is what happened to the change that muted every
+ * alarm for 19 hours on 2026-08-18.
+ *
+ * Comments are unaffected; they never reach the template. Use `-` for an em
+ * dash and `->` for an arrow.
+ */
 export interface CloudWatchStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
   readonly apiFunction: lambda.IFunction;
@@ -152,10 +169,18 @@ export class CloudWatchStack extends cdk.Stack {
     // Nothing noticed, because the delivery chain has no witness (ADR 0054,
     // open decision). So: every principal that must publish here is listed
     // EXPLICITLY below, and anything added later goes in the same list.
-    // Same-account alarms publish AS THE ACCOUNT, so the owner statement is
-    // the one that matters; a `cloudwatch.amazonaws.com` service-principal
-    // grant is only needed for cross-account topics and was dropped as
-    // redundant here.
+    // The first repair of this block assumed same-account alarms publish AS
+    // THE ACCOUNT, so it restored the owner statement only and dropped the
+    // `cloudwatch.amazonaws.com` grant as cross-account-only. Production
+    // refuted that on 2026-08-27: with the owner statement in place, an alarm
+    // action still returned `CloudWatch Alarms is not authorized to perform:
+    // SNS:Publish`. An account-root principal covers IAM identities in the
+    // account, not the CloudWatch Alarms service, which the default policy
+    // admitted via `"AWS": "*"` + `AWS:SourceOwner` rather than via root. The
+    // owner statement is kept (an operator publishing by hand needs it) and
+    // the service grant is added beside it. Cost: eighteen alarm actions
+    // across five real incidents delivered nowhere over nine days, found only
+    // because a synthetic DLQ message was sent to test the re-arm path.
     alarmTopic.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowOwnerAccountPublish',
@@ -165,6 +190,24 @@ export class CloudWatchStack extends cdk.Stack {
         principals: [new iam.AccountPrincipal(cdk.Stack.of(this).account)],
         actions: ['sns:Publish'],
         resources: [alarmTopic.topicArn],
+      })
+    );
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudWatchAlarmsPublish',
+        // The principal that actually publishes every alarm action. Measured,
+        // not assumed: without this statement CloudWatch reports
+        // `not authorized to perform: SNS:Publish` in the alarm's own action
+        // history while the alarm itself evaluates and transitions normally,
+        // which is why the mute is invisible from the alarm list.
+        principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+        // Same confused-deputy guard as the cost grant below: scope the
+        // service principal to alarms owned by this account.
+        conditions: {
+          StringEquals: { 'AWS:SourceAccount': cdk.Stack.of(this).account },
+        },
       })
     );
     alarmTopic.addToResourcePolicy(
@@ -243,7 +286,7 @@ export class CloudWatchStack extends cdk.Stack {
     // fast: 5 min with zero new objects ≈ 50 missed writes = Galexie stopped.
     // A deliberate indexer pause (concurrency 0) does NOT trip this — doorbells
     // still land in the queue; that is the point of measuring the input, not
-    // the consumer (indexer health is covered by the alarms below).
+    // the consumer.
     //
     // treatMissingData: BREACHING is REQUIRED, not cosmetic. SQS (like Lambda)
     // publishes no datapoint when idle — a true stop makes the metric go
@@ -257,7 +300,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'GalexieLagAlarm', {
         alarmName: `${config.envName}-galexie-ingestion-lag`,
         alarmDescription:
-          'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window — Galexie may have stopped writing.',
+          'No new ledgers landed in S3 (0 doorbells to the ingest queue) for the lag window - Galexie may have stopped writing.',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'NumberOfMessagesSent',
@@ -282,14 +325,9 @@ export class CloudWatchStack extends cdk.Stack {
     // all seven alarms stayed green, and this metric tracked it perfectly
     // (0 → 1421 s) with nothing reading it.
     //
-    // Deliberately a BARE threshold — no pause/failure discrimination. A
-    // planned indexer pause (event-source-mapping disabled) WILL page once
-    // when the backlog crosses the threshold; the operator who just paused it
-    // knows exactly why, and that one knowing page also bounds the
-    // forgot-to-re-enable case, which a discriminator would hide forever. An
-    // `IF(received > 0, age, 0)` discriminator was designed, measured and
-    // withdrawn as overcomplication — see ADR 0054, "Considered and
-    // withdrawn".
+    // Deliberately a BARE threshold: one knowing page per planned pause is
+    // the accepted cost (ADR 0054 rule 4, which also records the measured
+    // `IF(received > 0, age, 0)` discriminator and why it was withdrawn).
     //
     // Threshold and window are measured, not guessed (732 h to 2026-08-04):
     // the hourly max age had median 0 s / p90 1 s, and every hour above 60 s
@@ -307,7 +345,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'IngestBacklogAgeAlarm', {
         alarmName: `${config.envName}-ingestion-backlog-age`,
         alarmDescription:
-          'Queued ledgers are not being consumed — oldest doorbell exceeded the age threshold. Real stall (lore-0454 shape) OR a paused/forgotten event-source mapping; if you just paused the indexer on purpose, this page is expected. Runbook: docs/deployment.md (pause procedure) + docs/runbooks/live-tail-cutover.md.',
+          'Queued ledgers are not being consumed - oldest doorbell exceeded the age threshold. Real stall (lore-0454 shape) OR a paused/forgotten event-source mapping; if you just paused the indexer on purpose, this page is expected. Runbook: docs/deployment.md (pause procedure) + docs/runbooks/live-tail-cutover.md.',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateAgeOfOldestMessage',
@@ -362,7 +400,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'GalexieEphemeralStorageAlarm', {
         alarmName: `${config.envName}-galexie-ephemeral-storage`,
         alarmDescription:
-          'Galexie captive-core ephemeral disk >60% — approaching the deadlock ceiling; plan a disk bump.',
+          'Galexie captive-core ephemeral disk >60% - approaching the deadlock ceiling; plan a disk bump.',
         metric: new cloudwatch.MathExpression({
           expression: '(used / reserved) * 100',
           usingMetrics: { used: ephemeralUsed, reserved: ephemeralReserved },
@@ -399,7 +437,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'ProcessorErrorRateAlarm', {
         alarmName: `${config.envName}-ledger-processor-error-rate`,
         alarmDescription:
-          'Ledger Processor error rate exceeded threshold — ledgers may be failing to index.',
+          'Ledger Processor error rate exceeded threshold - ledgers may be failing to index.',
         metric: new cloudwatch.MathExpression({
           expression: 'errors / invocations',
           usingMetrics: {
@@ -475,7 +513,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'IndexerChWriteFailureAlarm', {
         alarmName: `${config.envName}-indexer-ch-write-failures`,
         alarmDescription:
-          'Indexer Lambda logged a CH write failure (post-retry hard error or mTLS init failure).',
+          'Indexer reconcile hit a terminal failure - the log line carries cause=s3|parse|clickhouse|mtls_init; read it before assuming the database. (Metric name kept for history; every terminal reconcile failure lands here, not only CH writes.)',
         metric: chWriteFailureFilter.metric({
           period: cdk.Duration.minutes(5),
           statistic: cloudwatch.Stats.SUM,
@@ -485,12 +523,10 @@ export class CloudWatchStack extends cdk.Stack {
         // already post-filter — it means a reconcile exhausted the whole
         // in-band retry envelope, not a single flaky request — so it is
         // never routine. An earlier draft used >10 to absorb a planned
-        // Caddy reload (worst case ~6 lines), but that is exactly the
-        // suppression logic this task rejected for pauses and for 5xx:
-        // one knowing page during own maintenance is cheap, and >10
-        // would ALSO hide the slow modes forever — a single poison-pill
-        // ledger (the 0454 shape) emits only 1-2 lines per window and
-        // would never cross 10. Raise the threshold only with a
+        // Caddy reload (worst case ~6 lines); rejected under ADR 0054
+        // rule 4, and it would ALSO hide the slow modes forever — a
+        // single poison-pill ledger (the 0454 shape) emits only 1-2
+        // lines per window and would never cross 10. Raise it only with a
         // measurement: if routine maintenance pages more than about once
         // a month, record the observed line counts and set it just above
         // them.
@@ -528,7 +564,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
         alarmName: `${config.envName}-ledger-processor-dlq-depth`,
         alarmDescription:
-          'Ledger Processor DLQ has messages — reconcile failed repeatedly during an incident. Runbook: docs/runbooks/dlq.md (inspect, fix cause, then purge — doorbells carry no data).',
+          'Ledger Processor DLQ has messages - reconcile failed repeatedly during an incident. Runbook: docs/runbooks/dlq.md (inspect, fix cause, then purge - doorbells carry no data).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -565,7 +601,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'EnrichmentDlqDepthAlarm', {
         alarmName: `${config.envName}-enrichment-dlq-depth`,
         alarmDescription:
-          'Enrichment worker DLQ has messages — a DB incident or a poison-pill message (dead-domain fetches sentinel instead of landing here). Runbook: docs/runbooks/dlq.md (inspect, fix cause, then redrive).',
+          'Enrichment worker DLQ has messages - a DB incident or a poison-pill message (dead-domain fetches sentinel instead of landing here). Runbook: docs/runbooks/dlq.md (inspect, fix cause, then redrive).',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/SQS',
           metricName: 'ApproximateNumberOfMessagesVisible',
@@ -601,7 +637,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'EnrichmentWorkerErrorRateAlarm', {
         alarmName: `${config.envName}-enrichment-worker-error-rate`,
         alarmDescription:
-          'Enrichment worker Lambda error rate exceeded threshold — DB / network / SEP-1 issues.',
+          'Enrichment worker Lambda error rate exceeded threshold - DB / network / SEP-1 issues.',
         metric: new cloudwatch.MathExpression({
           expression: 'errors / invocations',
           usingMetrics: {
@@ -635,13 +671,9 @@ export class CloudWatchStack extends cdk.Stack {
     // alarm is a bare count: no ratio math (percent-of-a-tiny-denominator
     // was the old alarm's noise source — 28 notifications for those 80
     // errors), no threshold knob. If this alarm starts paging regularly,
-    // the fix is to repair the 5xx class it points at — never to widen
-    // this alarm. Investigate with Logs Insights on the API log group:
-    // filter level="ERROR", group by fields.error / fields.message.
-    //
-    // Paging shape: CloudWatch notifies on state transition, so a burst is
-    // one page (ALARM holds while errors continue) and the alarm re-arms
-    // itself after one clean window — rule 2 of ADR 0054.
+    // repair the 5xx class it points at rather than widening the alarm.
+    // Investigate with Logs Insights on the API log group: filter
+    // level="ERROR", group by fields.error / fields.message.
     //
     // Caveat: gateway 5XXError also counts 502/504 the Lambda log never
     // sees (no access logging on the stage — deliberate, add only when a
@@ -658,7 +690,7 @@ export class CloudWatchStack extends cdk.Stack {
         // history restarts, accepted (same call as the DLQ growth renames).
         alarmName: `${config.envName}-api-gateway-5xx`,
         alarmDescription:
-          'An API request returned 5xx — a user saw a server error. Every 5xx is a defect: query the API log group in Logs Insights (filter level="ERROR", group by fields.error) and account for each error; do not tune this alarm.',
+          'An API request returned 5xx - a user saw a server error. Every 5xx is a defect: query the API log group in Logs Insights (filter level="ERROR", group by fields.error) and account for each error; do not tune this alarm.',
         metric: new cloudwatch.Metric({
           namespace: 'AWS/ApiGateway',
           metricName: '5XXError',
@@ -724,7 +756,7 @@ export class CloudWatchStack extends cdk.Stack {
         new cloudwatch.Alarm(this, 'OriginLockCanaryAlarm', {
           alarmName: `${config.envName}-origin-lock-bypass`,
           alarmDescription:
-            'Origin-lockdown canary failed — a direct origin (execute-api / *.cloudfront.net) is answering instead of returning 403. Possible Cloudflare-bypass regression.',
+            'Origin-lockdown canary failed - a direct origin (execute-api / *.cloudfront.net) is answering instead of returning 403. Possible Cloudflare-bypass regression.',
           metric: canary.metricSuccessPercent({
             period: cdk.Duration.minutes(15),
           }),
@@ -784,7 +816,7 @@ export class CloudWatchStack extends cdk.Stack {
         // drain to the DLQ the main queue empties and age reads green.
         [
           new cloudwatch.GraphWidget({
-            title: 'Galexie doorbell rate (ledgers → ingest queue/min)',
+            title: 'Galexie doorbell rate (ledgers -> ingest queue/min)',
             left: [
               new cloudwatch.Metric({
                 namespace: 'AWS/SQS',
@@ -820,6 +852,15 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
           new cloudwatch.GraphWidget({
+            // No RATE companion and no disk-percentage widget beside it, both
+            // tried and reverted 2026-08-27 after measuring. A stalled
+            // consumer already pages through `ingestion-backlog-age` (120 s x
+            // 3 min) and is drawn with its threshold line two widgets left, so
+            // a rate series shows the same stall later and without paging.
+            // Galexie ephemeral disk sat between 26.5% and 30.5% across 57
+            // days and never passed 40%, so a chart of it is a flat line; its
+            // alarm at 60% is the signal, because what it guards is a catchup
+            // spike, not the steady BucketList underneath.
             title: 'Last processed ledger sequence',
             left: [
               new cloudwatch.Metric({
@@ -860,12 +901,27 @@ export class CloudWatchStack extends cdk.Stack {
         // Row 3: Processor errors + DLQ depth
         [
           new cloudwatch.GraphWidget({
-            title: 'Ledger Processor errors',
+            // Two series because the processor fails in two disjoint modes
+            // and each is invisible in the other's metric: a crash raises
+            // Lambda `Errors` but a failed CH write does NOT (the handler
+            // reports batch-item failure so SQS redelivers — Errors stayed 0
+            // through the whole 0454 outage), while `ChWriteFailures` (the
+            // filter-minted metric the zero-tolerance alarm reads) counts
+            // exactly those quiet failures. One glance answers "is the
+            // processor failing" in both modes.
+            title: 'Ledger Processor errors + CH write failures',
             left: [
               processorFunction.metricErrors({
                 period: cdk.Duration.minutes(5),
                 statistic: cloudwatch.Stats.SUM,
-                label: 'Errors',
+                label: 'Lambda errors',
+              }),
+              new cloudwatch.Metric({
+                namespace: 'SorobanBlockExplorer/Indexer',
+                metricName: 'ChWriteFailures',
+                period: cdk.Duration.minutes(5),
+                statistic: cloudwatch.Stats.SUM,
+                label: 'CH write failures',
               }),
             ],
             width: 6,
@@ -901,6 +957,29 @@ export class CloudWatchStack extends cdk.Stack {
             width: 6,
             height: 6,
           }),
+          // The last alarm that had no widget (2026-08-04 survey). Raw error
+          // COUNT, deliberately not the alarm's errors/invocations ratio: the
+          // ratio is unreadable at this worker's traffic (a 1-of-1 window is
+          // 100%), and the count is what an operator compares against the DLQ
+          // depth beside it — errors climbing while the DLQ stays flat means
+          // the retries are absorbing them.
+          new cloudwatch.GraphWidget({
+            title: 'Enrichment worker errors',
+            left: [
+              enrichmentWorkerFunction.metricErrors({
+                period: cdk.Duration.minutes(5),
+                statistic: cloudwatch.Stats.SUM,
+                label: 'Errors',
+              }),
+            ],
+            width: 6,
+            height: 6,
+          }),
+        ],
+        // Row 3b: standing context, deliberately unalarmed (four sentences,
+        // rule 3). Kept off the failure row above so that row reads as
+        // "every one of these has an alarm behind it".
+        [
           new cloudwatch.GraphWidget({
             title: 'Lambda concurrent executions',
             left: [
@@ -923,7 +1002,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'API',
               }),
             ],
-            width: 6,
+            width: 12,
             height: 6,
           }),
         ],
@@ -996,6 +1075,75 @@ export class CloudWatchStack extends cdk.Stack {
         //   are a Logs Insights question (`@initDuration`), not a widget.
         //   Reinstating one means minting the metric from logs first.
         // An empty widget is worse than no widget: it implies coverage.
+        //
+        // Row 7: Cost — the dashboard answer the cost-anomaly alert lacked
+        // (task 0449 acceptance criterion).
+        //
+        // Cost Anomaly Detection publishes NO CloudWatch metric, so nothing
+        // can graph the alert itself; `AWS/Billing EstimatedCharges` is the
+        // only graphable spend signal. Three properties to read it correctly,
+        // all of them AWS behaviour rather than choices made here:
+        //   * it is CUMULATIVE month-to-date, not per-day — the slope is the
+        //     daily burn and the line resets to zero on the 1st;
+        //   * it refreshes every ~6 h, so it is a trend, never a live number;
+        //   * it is published only in us-east-1, hence the explicit region.
+        // Account-wide by design (both projects): that is exactly the scope
+        // the anomaly monitor watches, so alert and graph agree. Per-project
+        // attribution is a Cost Explorer question — docs/runbooks/costs.md.
+        //
+        // What this catches that the anomaly monitor does not: slow creep.
+        // A monitor learns a baseline and fires on step changes; spend that
+        // rises a little every day never looks like a step. Budgets were the
+        // designed answer and were dropped 2026-08-10, so this graph is the
+        // only place a human sees creep at all.
+        [
+          new cloudwatch.TextWidget({
+            markdown: '## Cost',
+            width: 24,
+            height: 1,
+          }),
+        ],
+        [
+          // The stated dashboard answer for the cost-anomaly alert (the last
+          // open C7 cell). Short on purpose: the graph needs three caveats,
+          // not an essay.
+          new cloudwatch.TextWidget({
+            markdown: [
+              '**Whole account, both projects, month-to-date, cumulative.**',
+              'Not a per-project figure - `EstimatedCharges` carries no tag',
+              'dimension (measured), so the split is Cost Explorer with the',
+              '`Project` tag: see `docs/runbooks/costs.md`.',
+              '',
+              'Publishing lags by hours; a flat tail is missing data, not',
+              'stopped spend.',
+              '',
+              '**The anomaly alert has no widget on purpose** - it already',
+              'pages per-service on a step change. This graph is for the',
+              'creep that never looks like a step and so never pages.',
+            ].join('\n'),
+            width: 12,
+            height: 6,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title:
+              'Account charges, month-to-date (USD, cumulative, both projects)',
+            left: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/Billing',
+                metricName: 'EstimatedCharges',
+                dimensionsMap: { Currency: 'USD' },
+                region: 'us-east-1',
+                period: cdk.Duration.hours(6),
+                statistic: cloudwatch.Stats.MAXIMUM,
+                label: 'Month-to-date',
+              }),
+            ],
+            width: 12,
+            height: 6,
+          }),
+        ],
         //
         // Resources widgets (RDS CPU / connections / free storage) removed
         // in task 0239 — the production data plane lives on Hetzner
