@@ -826,14 +826,16 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
           new cloudwatch.GraphWidget({
-            // Two series, one question: is the chain advancing, and how fast.
-            // The raw sequence only ever rises, so a stalled indexer looks
-            // like a flat line you have to notice; RATE makes the stall a
-            // drop to zero, which the eye catches. Left axis is the counter,
-            // right axis is ledgers/min - roughly 10-12 when healthy
-            // (~5-6 s per ledger close). The C7 leftover this closes: the
-            // sequence widget shipped without its rate series (lore-0455).
-            title: 'Last processed ledger sequence + rate',
+            // No RATE companion and no disk-percentage widget beside it, both
+            // tried and reverted 2026-08-27 after measuring. A stalled
+            // consumer already pages through `ingestion-backlog-age` (120 s x
+            // 3 min) and is drawn with its threshold line two widgets left, so
+            // a rate series shows the same stall later and without paging.
+            // Galexie ephemeral disk sat between 26.5% and 30.5% across 57
+            // days and never passed 40%, so a chart of it is a flat line; its
+            // alarm at 60% is the signal, because what it guards is a catchup
+            // spike, not the steady BucketList underneath.
+            title: 'Last processed ledger sequence',
             left: [
               new cloudwatch.Metric({
                 namespace: 'SorobanBlockExplorer/Indexer',
@@ -844,50 +846,6 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'Last indexed ledger',
               }),
             ],
-            right: [
-              new cloudwatch.MathExpression({
-                expression: 'RATE(seq) * 60',
-                usingMetrics: {
-                  seq: new cloudwatch.Metric({
-                    namespace: 'SorobanBlockExplorer/Indexer',
-                    metricName: 'LastProcessedLedgerSequence',
-                    dimensionsMap: { Environment: config.envName },
-                    period: cdk.Duration.minutes(1),
-                    statistic: cloudwatch.Stats.MAXIMUM,
-                  }),
-                },
-                period: cdk.Duration.minutes(1),
-                label: 'Ledgers/min',
-              }),
-            ],
-            width: 6,
-            height: 6,
-          }),
-          new cloudwatch.GraphWidget({
-            // The alarm's OWN metric objects, not a second construction of
-            // the same names - the equality is structural, so a dimension
-            // change cannot leave chart and alarm disagreeing (the shape
-            // review finding 39 asked for; free here because the alarm
-            // already names its parts).
-            title: 'Galexie ephemeral disk used (%)',
-            left: [
-              new cloudwatch.MathExpression({
-                expression: '(used / reserved) * 100',
-                usingMetrics: {
-                  used: ephemeralUsed,
-                  reserved: ephemeralReserved,
-                },
-                period: cdk.Duration.minutes(5),
-                label: 'Ephemeral Used (%)',
-              }),
-            ],
-            leftAnnotations: [
-              {
-                value: config.galexieEphemeralUtilizationThreshold,
-                label: 'pages after 3 consecutive 5-min periods above',
-              },
-            ],
-            leftYAxis: { min: 0, max: 100 },
             width: 6,
             height: 6,
           }),
@@ -1121,29 +1079,21 @@ export class CloudWatchStack extends cdk.Stack {
         ],
         [
           // The stated dashboard answer for the cost-anomaly alert (the last
-          // open C7 cell, lore-0455). The alert has no widget on purpose and
-          // this says why, next to the only graph that could be mistaken for
-          // one - a reader who finds neither would otherwise assume coverage
-          // that is not there.
+          // open C7 cell). Short on purpose: the graph needs three caveats,
+          // not an essay.
           new cloudwatch.TextWidget({
             markdown: [
-              '**How to read the cost graph, and what it cannot tell you.**',
+              '**Whole account, both projects, month-to-date, cumulative.**',
+              'Not a per-project figure - `EstimatedCharges` carries no tag',
+              'dimension (measured), so the split is Cost Explorer with the',
+              '`Project` tag: see `docs/runbooks/costs.md`.',
               '',
-              '- The series is `AWS/Billing EstimatedCharges`: **whole account,',
-              '  both projects, month-to-date, cumulative in USD**. It resets',
-              '  on the 1st and only ever rises within a month. It is not a',
-              '  per-project figure and cannot be made into one here - that is',
-              '  Cost Explorer with the `Project` tag (runbook: costs.md).',
-              '- Publishing is coarse (a few times a day, us-east-1 only), so',
-              '  the newest point can lag by hours. Do not read a flat tail as',
-              '  spend having stopped.',
-              '- **The anomaly alert has no widget, deliberately.** Cost Anomaly',
-              '  Detection learns a per-SERVICE baseline and pages on a step',
-              '  change, naming the service; a chart of the same thing would be',
-              '  a second, worse copy of the alert. This graph exists for the',
-              '  other failure mode: spend that creeps a little every day never',
-              '  looks like a step, so nothing pages and only the shape here',
-              '  shows it.',
+              'Publishing lags by hours; a flat tail is missing data, not',
+              'stopped spend.',
+              '',
+              '**The anomaly alert has no widget on purpose** - it already',
+              'pages per-service on a step change. This graph is for the',
+              'creep that never looks like a step and so never pages.',
             ].join('\n'),
             width: 12,
             height: 6,

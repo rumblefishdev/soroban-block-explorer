@@ -233,6 +233,20 @@ history:
       measurement changed the shape of that question: the gap is all-or-nothing
       per collection, 51 collections fully missing against 7 partial, so it is
       one cause per collection rather than scattered fetch failures.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      Two of the three dashboard cells closed with a measured "no widget"
+      rather than a widget. The Galexie disk chart was reverted after 57 days
+      of history showed 26.5-30.5% and never past 40% - a flat line; the 60%
+      alarm guards a catchup spike, not that baseline. The ledger RATE series
+      was reverted as redundant with ingestion-backlog-age, which catches the
+      same stall sooner and pages. The cost note stays, shortened, and records
+      that EstimatedCharges has no tag dimension so a per-project split cannot
+      exist in CloudWatch. Operator caught both; neither had been measured
+      before being written, which is the exact failure this task keeps finding
+      in other people's work.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -611,14 +625,20 @@ month is unanswerable by construction.
       threshold line). **Second slice in PR #427**: worker-errors and
       CH-write-failures widgets and the cost section are in. Still open: the
       stated dashboard answer for the cost-anomaly alert, and the
-      per-decision leftovers. **Closed 2026-08-27**: the Galexie disk widget
-      (built from the alarm's OWN metric objects, so that pair's equality is
-      structural rather than asserted), the ledger RATE series beside the
-      sequence counter (a stall reads as a drop to zero instead of a flat
-      line you must notice), and the cost reading note — which states why the
-      anomaly alert deliberately has no widget: it pages per-service on a step
-      change, and a chart of that would be a worse copy of the alert, while
-      the graph beside it exists for the creep no alert can see.
+      per-decision leftovers. **2026-08-27: one closed, two answered with a
+      measured "no widget".** The cost reading note landed — it states why the
+      anomaly alert deliberately has no widget (it already pages per-service
+      on a step change; the graph beside it is for the creep that never looks
+      like a step), and records that a per-project split is impossible here:
+      `EstimatedCharges` carries no tag dimension, measured — that split is
+      Cost Explorer's job.
+      The Galexie disk and ledger-rate widgets were **built, measured and
+      reverted the same day**. Disk sat between 26.5% and 30.5% across 57 days
+      and never passed 40%, so the chart was a flat line; its 60% alarm guards
+      a catchup spike, not the steady BucketList underneath. The ledger RATE
+      series duplicated `ingestion-backlog-age`, which catches the same stall
+      sooner, with a threshold line, and pages. Both cells are now "no widget,
+      and here is the measurement", which is what the matrix asks for.
       Still deliberately NOT taken: sharing metric constants for the other
       four alarm/widget pairs (review finding 39) — skipped on the operator's
       call despite favourable arithmetic, so those four stay assertions
@@ -659,7 +679,7 @@ here), a **measurement** (runnable now), or **dead as written**.
 | Alarm fires on ingestion stall             | operator window     | simulate a stall against the deployed alarm                                                                                                |
 | CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                          |
 | 0403's deferred measurement                | **done 2026-08-27** | 25 057 read_rows/call over 9 370 calls; the two-user gap is granule placement, not permissions                                             |
-| Dashboard↔alarm coverage                   | **done 2026-08-27** | disk widget, ledger RATE series and the cost reading note landed; the four remaining shared-constant pairs stay skipped by choice          |
+| Dashboard↔alarm coverage                   | **done 2026-08-27** | cost note landed; disk and ledger-rate widgets measured and rejected, each cell now carries its measurement                                |
 | Each child task closed or re-scoped        | operator decision   | judge 0232, 0250 and 0087 individually — the group re-scope was reversed 2026-08-27                                                        |
 | Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                  |
 | No alarm sits latched and mute             | narrowed 2026-08-27 | the enrichment DLQ alarm is excluded by operator decision; the criterion now covers the rest, and its open half is the re-arm test message |
