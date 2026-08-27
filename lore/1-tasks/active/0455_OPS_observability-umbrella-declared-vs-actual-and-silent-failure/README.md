@@ -964,7 +964,24 @@ self-healed in 45 minutes with zero gaps, and where six third-party archives
 failed at once. Recorded so a recurrence has a starting point instead of a
 fresh instinct.
 
-**Per-method API metrics turned on** (`metricsEnabled: true`,
+**Per-method API metrics turned on, then reverted the same day, unshipped.**
+
+> The change went in on the reasoning below and was pulled after the operator
+> asked what it would actually change. It would not have given a per-route
+> count: this is a `proxy: true` API, and the synthesized template holds a
+> single `{proxy+}` resource with an `ANY` method (plus root and the two
+> OPTIONS preflights). Detailed metrics split by RESOURCE and METHOD, so every
+> endpoint lands in one series — the stage-level number with OPTIONS separated
+> out, billed per method. The defect in the reasoning is the one this whole
+> task is about: `metricsEnabled: false` was read in the code, "no per-route
+> metrics" was inferred, and a fix was written without checking whether the
+> API has routes to split on. Nothing was deployed. A per-route count must
+> come from the API Lambda's own structured logs — a metric filter or an EMF
+> metric keyed on the route — and is not filed as a task, because nobody has
+> yet asked a question that needs it.
+
+The reasoning that led there, kept because the traffic measurement in it is
+still true and still uncomfortable (`metricsEnabled`,
 `api-gateway-stack.ts`). Access logging stays off: its stated trigger — "add
 it only when a silent-504 investigation actually needs it" — did not fire,
 because X-Ray held the answer. But the reason X-Ray held it was never written

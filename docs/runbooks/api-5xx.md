@@ -39,11 +39,13 @@ Gateway `5XXError` also counts 502/504 the Lambda log never sees
 (timeouts, integration failures). If the metric count exceeds what step
 1 found, compare with Lambda `Errors`/`Duration` for the same window.
 
-**Per-method metrics are on** (`metricsEnabled`, 2026-08-27, lore-0455), so
-`5XXError` / `Count` / `Latency` are available per resource and method, not
-only for the stage as a whole. Use them to say which route the errors were on
-and how often it happens — that is the question X-Ray cannot answer, because
-a trace is a sample.
+**There is no per-route error count**, and the gateway cannot give one. This
+is a `proxy: true` API: one `{proxy+}` resource with an `ANY` method, so
+API Gateway's detailed metrics (`metricsEnabled`) would split every endpoint
+into the same series. Turning them on was tried and reverted 2026-08-27
+(lore-0455). A per-route count has to come from the API Lambda's structured
+logs. Until it exists, "how often does this route fail in a week" is answered
+by reading logs, not by a metric.
 
 **X-Ray is on** (`tracingEnabled`) and is the right tool for the opposite
 question — what exactly happened in one request. Filter `fault` over the

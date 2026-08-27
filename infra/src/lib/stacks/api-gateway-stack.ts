@@ -95,20 +95,18 @@ export class ApiGatewayStack extends cdk.Stack {
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,
-        // Per-method CloudWatch metrics. X-Ray answers "what was that one
-        // request"; it cannot answer "how often does this route fail in a
-        // week", because a trace is a sample and the stage-level 5XXError
-        // metric has no route dimension. Turned on 2026-08-27 (lore-0455)
-        // after a single 500 on the decompiled-contract route (lore-0522)
-        // could be identified but not counted.
-        //
-        // It also removes a dependency nobody wrote down. X-Ray samples the
-        // first request per second, then ~5% of the rest. Measured peak
-        // traffic on this stage is 0.8 req/s (2026-08-25/26, ~2k requests a
-        // day), so today essentially every request is traced and "X-Ray
-        // covers it" happens to be true. It stops being true a little above
-        // current traffic, silently. These metrics do not sample.
-        metricsEnabled: true,
+        // `metricsEnabled` is deliberately NOT set here, and the reason is
+        // worth keeping so it is not proposed again. It was turned on
+        // 2026-08-27 (lore-0455) to answer "how often does one route fail in
+        // a week", which X-Ray cannot answer because a trace is a sample. It
+        // was reverted the same day, unshipped: this is a `proxy: true` API,
+        // so the whole surface is a single `{proxy+}` resource with an `ANY`
+        // method. Detailed metrics split by RESOURCE and METHOD, so every
+        // endpoint collapses into one series and the result is the
+        // stage-level number with OPTIONS separated out - billed per method,
+        // for a distinction we do not need. A per-route count has to come
+        // from the API Lambda's own structured logs (a metric filter or an
+        // EMF metric keyed on the route), not from the gateway.
         throttlingRateLimit: throttleRate,
         throttlingBurstLimit: throttleBurst,
         cacheClusterEnabled: config.apiGatewayCacheEnabled,
