@@ -942,6 +942,41 @@ backlog to 294 s, self-recovered by 01:55. The archives are third-party
 infrastructure: not our fault, but our exposure, and worth checking whether
 the node's archive list still carries dead entries.
 
+### Decisions taken on these three, 2026-08-27
+
+**A (ClickHouse connect) — left as a blip, deliberately.** Two failures four
+seconds apart, self-healed, no gap. The host itself is outside monitoring
+(task 0237), which is where a recurrence would be diagnosed, not here.
+
+**B (the 500) — spawned as 0522** rather than filed as a known one-off. The
+timeout and the bare 500 a reader is shown are separable defects, and the
+second does not depend on how rare the first is.
+
+**C (consensus loss, six archives refused) — no configuration change.** The
+first instinct was "review our history-archive list and drop the dead
+entries". There is no such list of ours: `ingestion-stack.ts` sets
+`network = "pubnet"`, a preset, and the archives come from the captive-core
+defaults inside the Galexie image. Overriding them means supplying a full
+`captive_core_toml_path`, which per Galexie's own documentation **completely
+replaces** the defaults — the quorum set included. Taking ownership of the
+quorum set to drop one dead archive is the wrong trade for an event that
+self-healed in 45 minutes with zero gaps, and where six third-party archives
+failed at once. Recorded so a recurrence has a starting point instead of a
+fresh instinct.
+
+**Per-method API metrics turned on** (`metricsEnabled: true`,
+`api-gateway-stack.ts`). Access logging stays off: its stated trigger — "add
+it only when a silent-504 investigation actually needs it" — did not fire,
+because X-Ray held the answer. But the reason X-Ray held it was never written
+down and nothing watches it: X-Ray samples the first request per second and
+~5% of the rest, and measured peak traffic on this stage is **0.8 req/s**
+(~2k requests a day, 2026-08-25/26). At today's volume nearly everything is
+traced, so "X-Ray covers it" is true by accident of traffic. A modest increase
+crosses the reservoir and single errors start disappearing, with no signal
+that the property has lapsed. Per-method metrics do not sample, and they also
+answer the question X-Ray cannot: how often a given route fails over a week.
+This ships in the ApiGateway stack, not CloudWatch — a separate deploy.
+
 ### No data was lost
 
 ```
