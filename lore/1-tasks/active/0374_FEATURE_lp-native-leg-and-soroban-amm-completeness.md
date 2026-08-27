@@ -191,6 +191,11 @@ Each step is independently landable and carries its own check.
 
 **A. Registry**
 
+> Superseded in part by the schema review of 2026-08-27 at the end of this
+> file: four tables, not two; every fact table keys on
+> `(pool_id, ledger_sequence, transaction_id, event_index)`; the registry is an
+> `AggregatingMergeTree`, not a plain RMT.
+
 1. `CREATE TABLE soroban_pools` — pool contract id, protocol, pool type,
    registering router id (0 = unregistered), token ids array, fee params,
    share token id, first-seen ledger, version column. Raw `Int128` policy
@@ -467,3 +472,88 @@ Share-token coverage. The participants finding rests on a single pool matching
 actually present in `assets` was not measured — the hourly read quota ran out.
 Until it is measured, an unresolvable share token must render "not indexed";
 an empty holder list is indistinguishable from a pool that genuinely has none.
+
+---
+
+## Schema + API review — 2026-08-27
+
+An adversarial review of the two proposed table shapes and the API contract,
+run before any DDL was written. Verdict: **ship with changes**. Three findings
+were severe enough to invalidate the atomic steps as written; all were
+re-verified independently before being accepted.
+
+### 1. The proposed sort key would have deleted ~a quarter of every fact table
+
+`ORDER BY (pool_id, ledger_sequence)` on a ReplacingMergeTree collapses rows
+sharing that key, and without a version column the survivor is arbitrary.
+Measured over the newest million ledgers:
+
+| Event             |    Rows | Distinct `(pool, ledger)` |       Lost |
+| ----------------- | ------: | ------------------------: | ---------: |
+| `trade`           | 192 399 |                   146 768 | **23.7 %** |
+| `update_reserves` | 194 230 |                   148 491 | **23.5 %** |
+
+Up to 12 reserve updates land in one ledger for one pool. **Every fact table
+here keys on `(pool_id, ledger_sequence, transaction_id, event_index)`** — the
+shape `soroban_events` already uses. This is the same silent-loss class the
+classic snapshots table has carried unnoticed.
+
+### 2. Four tables, not two
+
+Steps A1 and B6 named DDL for the registry and for reserves. Volume (step C)
+and concentrated positions (step E) had none — they were written as if they
+would insert into tables nobody had defined. Both need DDL in the same
+operator session, with the key from finding 1.
+
+### 3. Widening `pool_id` yields a valid-looking wrong address, not an error
+
+`pool_id_hex_to_strkey` (`crates/api/src/common/strkey.rs:74`) wraps any
+32-byte payload as a `LiquidityPool` strkey. A contract id is also 32 bytes, so
+it passes the length assert and renders a **well-formed `L…` address for a pool
+that does not exist** — no panic, no error. A `pool_kind` discriminator is
+required, and `is_hex_pool_id` / `pool_id_from_text` need the same branch.
+
+### 4. `pool_type` has two vocabularies in our own evidence
+
+The router's `add_pool` says `constant`; the pool-state entry for the same pool
+says `standard`. Since plane state is now the single reserve source (T4), one
+column would collect both spellings. Resolved: a normalised enum plus the raw
+string, with an uncatalogued spelling normalising to `None` and being counted.
+**Implemented** — `domain::PoolType`.
+
+### 5. The orphan arm can clobber a registry row
+
+Under RMT, a stub written by the orphan arm (step A3) at a later ledger wins
+over the real registration. Dormant today (zero orphans measured) but the
+schema must not permit it: use `AggregatingMergeTree` with
+`SimpleAggregateFunction(max/min)` per column — house precedent is `asset_sac`.
+Add `last_activity_ledger` while there: the classic pool list has no usable
+order key precisely because that column is missing.
+
+### 6. The two-leg assumption is wider than the DTO, and `i64` overflows
+
+Beyond `PoolItem`: `PoolEvent::from_signs(i64, i64)` is the whole
+deposit/withdraw/trade classifier and would mislabel an imbalanced three-leg
+deposit as a trade. `PoolActivityItem.amount_a: i64` cannot hold the
+18-decimal leg already on chain (1.28e24 against an `i64::MAX` of 9.22e18).
+Also `reserve_a`/`reserve_b`, the chart TVL formula, `fetch_pool_asset_ids ->
+(i64, i64)`, and five frontend files. Step 21 covers only the DTO and must be
+widened to the classifier and the amount types.
+
+### 7. Empty-string `protocol` is a misleading fallback
+
+Decided in T2 as "assert nothing", but an empty string is indistinguishable
+from a missing filter value and renders as a blank rather than an absence. Use
+`Option<String>` / SQL NULL, which says the same thing without pretending to be
+a value. Same for `shares` becoming optional: `PoolParticipants.tsx:40` calls
+`formatAmount(row.shares)` unconditionally and needs the null branch.
+
+### Also noted
+
+The registry moved from 496 to 497 pools during the review — the same live
+drift that took router A from 339 to 340 earlier. Not a discrepancy; every
+count in this file carries its measurement time.
+
+`clickhouse` 0.15 round-trips `Array(Int128)` correctly, but no such column
+exists in this database yet, so it warrants an integration test rather than an
+assumption.
