@@ -169,10 +169,18 @@ export class CloudWatchStack extends cdk.Stack {
     // Nothing noticed, because the delivery chain has no witness (ADR 0054,
     // open decision). So: every principal that must publish here is listed
     // EXPLICITLY below, and anything added later goes in the same list.
-    // Same-account alarms publish AS THE ACCOUNT, so the owner statement is
-    // the one that matters; a `cloudwatch.amazonaws.com` service-principal
-    // grant is only needed for cross-account topics and was dropped as
-    // redundant here.
+    // The first repair of this block assumed same-account alarms publish AS
+    // THE ACCOUNT, so it restored the owner statement only and dropped the
+    // `cloudwatch.amazonaws.com` grant as cross-account-only. Production
+    // refuted that on 2026-08-27: with the owner statement in place, an alarm
+    // action still returned `CloudWatch Alarms is not authorized to perform:
+    // SNS:Publish`. An account-root principal covers IAM identities in the
+    // account, not the CloudWatch Alarms service, which the default policy
+    // admitted via `"AWS": "*"` + `AWS:SourceOwner` rather than via root. The
+    // owner statement is kept (an operator publishing by hand needs it) and
+    // the service grant is added beside it. Cost: eighteen alarm actions
+    // across five real incidents delivered nowhere over nine days, found only
+    // because a synthetic DLQ message was sent to test the re-arm path.
     alarmTopic.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowOwnerAccountPublish',
@@ -182,6 +190,24 @@ export class CloudWatchStack extends cdk.Stack {
         principals: [new iam.AccountPrincipal(cdk.Stack.of(this).account)],
         actions: ['sns:Publish'],
         resources: [alarmTopic.topicArn],
+      })
+    );
+    alarmTopic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudWatchAlarmsPublish',
+        // The principal that actually publishes every alarm action. Measured,
+        // not assumed: without this statement CloudWatch reports
+        // `not authorized to perform: SNS:Publish` in the alarm's own action
+        // history while the alarm itself evaluates and transitions normally,
+        // which is why the mute is invisible from the alarm list.
+        principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [alarmTopic.topicArn],
+        // Same confused-deputy guard as the cost grant below: scope the
+        // service principal to alarms owned by this account.
+        conditions: {
+          StringEquals: { 'AWS:SourceAccount': cdk.Stack.of(this).account },
+        },
       })
     );
     alarmTopic.addToResourcePolicy(

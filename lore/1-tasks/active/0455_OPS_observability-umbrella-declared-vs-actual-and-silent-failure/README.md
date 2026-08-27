@@ -577,7 +577,15 @@ month is unanswerable by construction.
       What remains to tick for those: the drain half is proven (purging the
       ledger DLQ moved its alarm ALARM -> OK after five days latched,
       2026-08-19); the re-arm half — that a re-dirtied queue pages again —
-      still needs the test-message gate (an operator-window item)
+      still needs the test-message gate (an operator-window item).
+      **Gate run 2026-08-27, and it failed at a stage nobody was testing.**
+      The synthetic message moved the alarm OK -> ALARM in three minutes, so
+      detection re-arms exactly as designed — but the page never left AWS:
+      `CloudWatch Alarms is not authorized to perform: SNS:Publish`. The
+      2026-08-19 policy repair had not worked, and eighteen alarm actions
+      across nine days delivered nowhere. Detection half: PROVEN. Delivery
+      half: BLOCKED on the policy fix. Re-running this gate after that deploy
+      is what ticks the box — see "Discovery 2026-08-27"
 - [ ] The declared-vs-actual delta reaches a human without anyone asking for it.
       **Re-scoped 2026-08-19** from "a comparator runs on a schedule": the
       schedule is withdrawn (ADR 0054, and the measured six weeks of a read-but-
@@ -617,7 +625,13 @@ month is unanswerable by construction.
       (`production-cost-anomaly-by-service`, DIMENSIONAL/SERVICE, created
       2026-08-18) and that an IMMEDIATE subscription routes it to the alarm
       topic. What is NOT proven is the last hop to the channel — that is true
-      of every alarm here and is what ADR 0054 rule 5 gates from now on
+      of every alarm here and is what ADR 0054 rule 5 gates from now on.
+      **2026-08-27: that unproven hop was broken the whole time.** The caveat
+      was written as prudence about a step nobody had checked; it turned out
+      to be an accurate description of a live defect. The box stays ticked for
+      the monitor and the subscription, which do exist and are correct, and
+      the delivery failure is carried by "Discovery 2026-08-27" rather than by
+      re-opening this criterion
 - [x] Dashboard↔alarm coverage reconciled (7 widgets without alarms, 2 alarms
       without widgets) — including a stated dashboard answer for the new
       cost-anomaly alert. First slice in PR #422 (two dead widgets removed,
@@ -752,7 +766,15 @@ tests where the worktree has five, and it reported green while a deliberately
 broken emit site sat on disk. Verification commands must be run from the tree
 they claim to verify.
 
-## Incident 2026-08-18 — this task's own deploy muted every alarm for 19 h
+## Incident 2026-08-18 — this task's own deploy muted every alarm for 9 days
+
+> **Title corrected 2026-08-27.** This section said "19 h" and every sentence
+> below was written in the past tense. Both were wrong: the mute never ended.
+> The 2026-08-19 repair restored a policy that CloudWatch still cannot publish
+> under, and the section's own closing "Fix" line describes that repair as if
+> it had worked. It did not. The measured end of the mute is not yet in the
+> past — see the section that follows. The original text is kept unedited
+> because being able to read a confident, wrong write-up is the point.
 
 The defining event of this task, and it is ours. Recorded here rather than in
 a child task because it invalidates two acceptance criteria and rewrites one
@@ -800,6 +822,128 @@ fault.
 principal explicitly (owner account, cost anomalies with a source-account
 condition), with a comment recording the replacement semantics so the next
 grant is added to the list rather than on top of it.
+
+## Discovery 2026-08-27 — the repair did not repair; 18 actions, 0 delivered
+
+The re-arm gate was finally run: a synthetic message was sent to the ledger
+DLQ to prove a re-dirtied queue pages again. The alarm crossed in three
+minutes. Nothing arrived. The alarm's own action history answers why, in
+CloudWatch's words:
+
+```
+error: "CloudWatch Alarms is not authorized to perform: SNS:Publish
+        on resource:...:production-soroban-explorer-alarms"
+```
+
+**The mute never lifted.** Full action history on the topic, 2026-08-14 to
+2026-08-27:
+
+```
+14.08 03:28  OK    ledger-processor-dlq-depth      <- last delivery, ever
+18.08 14:52  FAIL  api-gateway-5xx                 <- deploy
+18.08 14:52  FAIL  ingestion-backlog-age
+19.08 09:58  FAIL  ledger-processor-dlq-depth
+21.08 16:47  FAIL  indexer-ch-write-failures
+21.08 16:52  FAIL  indexer-ch-write-failures
+21.08 16:52  FAIL  ingestion-backlog-age
+21.08 16:59  FAIL  ingestion-backlog-age
+26.08 09:00  FAIL  api-gateway-5xx
+26.08 09:15  FAIL  api-gateway-5xx
+27.08 02:40  FAIL  galexie-ingestion-lag
+27.08 03:18  FAIL  galexie-ingestion-lag
+27.08 03:22  FAIL  ingestion-backlog-age
+27.08 03:31  FAIL  galexie-ingestion-lag
+27.08 03:37  FAIL  ingestion-backlog-age
+27.08 03:40  FAIL  galexie-ingestion-lag
+27.08 03:49  FAIL  ingestion-backlog-age
+27.08 03:57  FAIL  ingestion-backlog-age
+27.08 12:13  FAIL  ledger-processor-dlq-depth      <- the synthetic test
+```
+
+Eighteen attempts, zero deliveries, nine days. SNS confirms it from the other
+side: `NumberOfMessagesPublished` has exactly one non-zero hour since 13.08,
+and `NumberOfNotificationsFailed` is empty throughout — the publish never
+happened, so there was nothing to fail to deliver.
+
+### Root cause of the failed repair
+
+The repair restored `AllowOwnerAccountPublish` with an account-root principal
+and dropped the `cloudwatch.amazonaws.com` grant as cross-account-only. The
+code comment stated that reasoning as fact:
+
+> "Same-account alarms publish AS THE ACCOUNT, so the owner statement is the
+> one that matters; a `cloudwatch.amazonaws.com` service-principal grant is
+> only needed for cross-account topics and was dropped as redundant here."
+
+It is wrong. An account-root principal admits IAM identities in the account;
+it does not admit the CloudWatch Alarms service. The default policy that the
+first deploy destroyed admitted it via `"AWS": "*"` + `AWS:SourceOwner`, not
+via root — and that distinction is the whole defect. AWS's own setup page
+repeats the same claim the comment made, so consulting it a second time would
+have confirmed the error rather than caught it. The arbiter was the chain.
+
+**Fix**: a third statement, `AllowCloudWatchAlarmsPublish`, service principal
+`cloudwatch.amazonaws.com`, scoped by `AWS:SourceAccount` like the cost grant.
+The owner statement stays (hand-publishing needs it). Verified in the
+synthesized template, not only in source.
+
+### Three real incidents nobody was told about
+
+Not hypothetical exposure — these happened during the mute.
+
+**A. 2026-08-21 14:46 UTC, ClickHouse unreachable.** Two `ch_write_failure`
+lines four seconds apart, `network error: client error (Connect)`. TCP connect
+to the database host failed. Ingestion backlog reached 263 s and drained
+within seven minutes on SQS redelivery.
+
+**B. 2026-08-26 06:55 UTC, a 5xx from the API edge.** The API Lambda logged no
+invocation at all between 06:52:20 and 06:58:38, so the request never reached
+our code — the error was raised by API Gateway itself. **It cannot be
+diagnosed**: the only API-Gateway log group present is `/aws/apigateway/welcome`,
+which suggests access logging is off. Confirming that needs
+`apigatewayv2 get-stages`, which the read-only guard does not allowlist.
+Separately, at 06:58:38 a contract decompilation timed out after 10 229 ms —
+a different minute, same surface, worth its own look.
+
+**C. 2026-08-27 01:10 UTC, the node fell out of consensus.** `Herder: Lost
+track of consensus`, then `Herder: Ledger took 282.692064376 seconds` against
+a normal ~5 s close. The node entered catchup and six external history
+archives refused in sequence — corrupt archive metadata, missing HAS entries,
+failed checkpoint downloads. Two alarm/OK cycles on the Galexie lag alarm,
+backlog to 294 s, self-recovered by 01:55. The archives are third-party
+infrastructure: not our fault, but our exposure, and worth checking whether
+the node's archive list still carries dead entries.
+
+### No data was lost
+
+```
+sequence 64 000 000 -> 64 146 961   have = 146 962   missing = 0
+```
+
+Zero gaps across the whole mute window, including incident A's own minutes.
+All three incidents self-healed. The failure here is purely that the system
+recovered in silence — which is this task's thesis, demonstrated on itself
+twice.
+
+### A second trap found while fixing the first
+
+`infra/cdk.json` declares `"app": "node dist/bin/production.js"`. The first
+`cdk synth` after editing `cloudwatch-stack.ts` emitted a template WITHOUT the
+change, because it read a `dist/` build produced before the edit — and exited 0. Without `nx run infra:build` first, synth and deploy both describe stale
+code as current. Same shape as the mute itself: a tool reporting health while
+looking at something other than the thing you are asking about.
+
+### What this changes
+
+- ADR 0054 rule 5 ("the delivery path is verified on every change to it,
+  before the change is called done") was written from the first incident and
+  caught the second on its first real run. It stays; the evidence for it is
+  now measured rather than argued.
+- The cost-tag criterion's caveat — "what is NOT proven is the last hop to the
+  channel" — was not a theoretical gap. It was the defect, unproven and
+  present, for nine days.
+- No repair of this topic may be called done on inspection again. The gate is
+  a delivered page, and nothing weaker.
 
 ## Carried to the follow-up PR (raised in PR #422 review, decided not to widen)
 

@@ -184,10 +184,19 @@ one message has travelled the whole chain — CloudWatch → SNS → Chatbot →
 Slack — and been seen in the channel.
 
 Why a rule rather than a habit: on 2026-08-18 a topic-policy addition revoked
-CloudWatch's right to publish to the alarm topic, and all nine alarms were
-mute for 19 hours. Nothing paged about the silence; it was found by accident.
-The change that broke it was a deploy, so a check bound to deploys catches
-this class by construction.
+CloudWatch's right to publish to the alarm topic, and every alarm on it went
+mute. Nothing paged about the silence; it was found by accident. The change
+that broke it was a deploy, so a check bound to deploys catches this class by
+construction.
+
+**Updated 2026-08-27.** This paragraph read "mute for 19 hours", because the
+repair deployed on 2026-08-19 was verified by reading the policy rather than
+by sending anything. It was still wrong: the restored statement named an
+account-root principal, which does not admit the CloudWatch Alarms service.
+The mute ran nine days and eighteen alarm actions, and ended only when this
+rule was first exercised for real. Rule 5 did not prevent the outage; it is
+the reason the outage was found at all, and it is the only step in this ADR
+whose absence has now been measured twice.
 
 Scope is the alarm stack, every time it deploys — including deploys that do
 not appear to touch delivery, because this break was a side effect of an
