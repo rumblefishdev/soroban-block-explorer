@@ -148,7 +148,34 @@ Derived explorer entities:
   `account_balances_current`, type-3 from `ContractData Balance(Address)` ledger state.
   `holder_id = cityhash64(holder StrKey)` (G-account or C-contract) in the one surrogate space
   shared with `accounts.id` / `soroban_contracts.id`; resolve back to a StrKey via `accounts` (G) /
-  `soroban_contracts` (C) — there is no dedicated address dimension
+  `soroban_contracts` (C) — there is no dedicated address dimension.
+  **Lifecycle** (ADR 0055 / task 0463): `closed_at_ledger Int64 DEFAULT 0` — `0` while the holding
+  relationship is live, otherwise the ledger the entry disappeared in; rows are never deleted. A
+  live-but-empty holding and a removed one both write `amount = 0`, so the amount alone CANNOT
+  carry liveness — the read path filters `closed_at_ledger = 0`, never `amount != 0` (shipped; a
+  guard test pins the predicate so it cannot regress). The same column answers whether an ACCOUNT
+  still exists: native XLM lives on the `AccountEntry`, so the native row's `closed_at_ledger`
+  is the account's own lifecycle, and `deleted` is read from it rather than derived from
+  operation history (task 0500). The writer
+  stamps closures exactly; rows seeded from the checkpoint snapshot carry the run's checkpoint
+  ledger, meaning "closed at or before"
+- `account_entry_state` — signers + thresholds per account (task 0463, issue #377): one row per
+  account, the FULL signer set as parallel arrays (`signer_keys/weights/types`), plus
+  `master_weight` + `threshold_low/med/high` + account `flags`; RMT(`last_updated_ledger`) keyed on
+  `account_id` — whole-set replacement so removed signers cannot ghost. Raw-XDR truth: the master
+  key is NOT in the signer list (its weight is thresholds byte 0); Horizon synthesizes a master
+  entry, we must not. A row-less account does NOT mean thin coverage: the checkpoint seed wrote
+  state for every live account, so a missing row means the account has no ledger entry (probed:
+  450 of 450 such accounts ABSENT via `getLedgerEntries`). The one shape that WOULD be a gap —
+  a live CLASSIC holding shown with no signing configuration — measures zero and is what the
+  page warns on. A Soroban holding is not that shape: it outlives `account_merge`, so it says
+  nothing about whether an account exists.
+  **Semantics: LAST KNOWN configuration, not liveness.** The writer emits nothing on
+  `account_merge` (a merge cannot change signers), and RMT cannot delete, so a merged account
+  keeps its final signer set — deliberately, the same way `accounts` keeps merged accounts.
+  11,639 rows are in that state today and the share grows with pubnet merge churn. Liveness
+  comes from the native holding's `closed_at_ledger` (ADR 0055); an aggregate over this table
+  ALONE ("how many accounts are multisig?") silently counts dead accounts
 - `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum`) /
   `holder_count` (`countIf(amount > 0)`) over `balances`
 - `asset_aggregates` / `soroban_token_supply` — **DROPPED (task 0331)**. Classic supply/holders now

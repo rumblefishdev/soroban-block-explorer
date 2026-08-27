@@ -25,6 +25,13 @@
             "env": "VITE_TURNSTILE_SITE_KEY"
           }
         ]
+      },
+      "e2e": {
+        "command": "npx playwright test",
+        "options": {
+          "cwd": "web"
+        },
+        "cache": false
       }
     }
   }

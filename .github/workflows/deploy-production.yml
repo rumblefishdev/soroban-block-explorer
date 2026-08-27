@@ -157,7 +157,11 @@ jobs:
       # content-only sync has no use for an 11-minute Lambda build, and the
       # price is only that a `-web` run leaves no drift record — every other
       # tag shape still prints one.
-      - uses: dtolnay/rust-toolchain@stable
+      # PINNED to match ci.yml's `rust-lambda` job — see the long note there.
+      # Rust 1.98.0 emits `--fix-cortex-a53-843419`, which zig's linker rejects,
+      # so a @stable toolchain fails every `cargo lambda build --arm64`. Unpin
+      # both together once cargo-lambda depends on cargo-zigbuild >= 0.23.0.
+      - uses: dtolnay/rust-toolchain@1.97.1
         if: steps.plan.outputs.stacks != ''
       # Same pinned version, same `shared-key` as ci.yml's `rust-lambda` job —
       # that pairing (with the arm runner above) is what makes the tag run

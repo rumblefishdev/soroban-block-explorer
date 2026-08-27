@@ -1,13 +1,66 @@
 ---
 id: '0392'
-title: 'NFT pending: continuous live promote/reconcile (drain gap) + optional write-time tightening'
+title: 'NFT completeness umbrella: no row silently missing (promote gap + parser/classifier gates)'
 type: BUG
 status: active
 related_adr: []
-related_tasks: ['0391', '0283', '0217', '0306', '0296']
+related_tasks: ['0512', '0309', '0391', '0283', '0217', '0306', '0296', '0425']
 tags: [priority-high, effort-medium, layer-indexer, layer-db, nft, clickhouse]
 links: []
 history:
+  - date: 2026-08-21
+    status: active
+    who: karolkow
+    note: >
+      **Restarted as an umbrella; scope decided from the re-measurement.** The
+      task keeps the outcome — no NFT row silently missing — and hands the
+      classifier + parser execution to 0512 (renumbered from 0317, which
+      collided with the archived `0317_BUG_contracts-events-ch-memory-limit`).
+      Three gaps, in dependency order: the parser cannot shape bespoke ABIs
+      (66 contracts / 692 events / zero rows anywhere), the classifier stamps
+      bespoke NFTs `Other` (67 contracts / 278 quarantined rows), and nothing
+      promotes when a verdict resolves (0 rows today — *created* by fixing the
+      second). Gap 3 is this task's own code and is deliberately **gated behind
+      0512**: its acceptance criterion is "observed promoting a real contract",
+      and until 0512 flips verdicts no such contract exists. Building it early
+      ships an untestable mechanism.
+      Two further findings recorded while scoping. `extract_event_signature`
+      (`persist/stage.rs:2137`) only reads a Symbol at topic 0, so
+      namespace-first topics (`["BadgeNFT", sym:"init"]`) and String-typed event
+      names (`["Mint"]`) yield a NULL signature — 470 events across 5 contracts,
+      invisible to any monitoring keyed on event name. And 0309 defers tactical
+      work to `0308`, **which does not exist**; 0512 is the real home, so that
+      dangling link is repointed.
+  - date: 2026-08-21
+    status: active
+    who: karolkow
+    note: >
+      **Re-verified a month on — every checkable claim in this task still holds;
+      only the scale shrank.**
+      Code, on `origin/develop` (`eb7e817c`): the promote half is still absent.
+      `promote_or_count` exists solely inside
+      `crates/backfill-runner/src/nft_reclassify.rs`, and that file is still
+      present — the only drain is still a human. `route_for` is unchanged in
+      behaviour (`persist/stage.rs:1648`; the body cites 1444, the line drifted,
+      the semantics did not): `Token|Fungible -> Drop`, `Nft -> Hot`, everything
+      else -> `Pending`.
+      Prod, measured 2026-08-21 (chain tip 64,054,678): `nfts_pending` holds
+      **278 rows across 67 contracts** (274 / 66 a month ago). A whole month's
+      intake is **+4 rows, +1 contract** — against ~6,575 rows/day before PR #341.
+      The last pending write was ledger 63,836,382, **~12.6 days ago**. Hot `nfts`
+      is at 64,054,630, **48 ledgers off the tip (~4 min)**, holding 13,326 rows
+      over those same 67 contracts. The frozen-surface failure is gone.
+      The decisive split is unchanged from last month: across every row of
+      `soroban_contracts` for those 67 contracts, duplicates included, the only
+      `contract_type` ever stamped is `1` — `groupUniqArray` returns `[1]`.
+      **0 carry a decisive verdict, 0 resolved-but-stranded.** Enum, for the
+      record, since the ordering is not the obvious one:
+      `Token = 0, Other = 1, Nft = 2, Fungible = 3`.
+      So the defect is real and unfixed, but it is now a ~4-rows-a-month leak
+      with an empty resolved queue — a different problem from the one this task
+      was written for. The urgency numbers still quoted in the body (33 days
+      frozen, 6,575 rows/day) remain stale. Restarted from scratch on
+      `fix/0392_nft-pending-drain-gap`.
   - date: 2026-07-21
     status: active
     who: karolkow
@@ -132,130 +185,209 @@ history:
       reconcile remains primary. Steps 1 + 3 remain.
 ---
 
-# NFT pending: continuous live promote/reconcile + write-time tightening
+# NFT completeness: no row silently missing
 
 ## Summary
 
-The `nfts_pending` / `nft_ownership_pending` quarantine (built by **0217**) was
-designed as **defer-then-promote**, but only the _defer_ half runs live — the
-_promote/drop_ half exists exclusively as the one-shot backfill
-`backfill-runner nft-reclassify`. As a result pending grows without bound and
-NFT collection/detail pages lag reality. This task makes **reconcile continuous
-on the live path** — promote/drop each contract's pending rows once its verdict
-resolves — **without** mirroring the backfill's brute `ALTER … DELETE` sweep. A
-write-time routing tightening is a _secondary, measurement-gated_ add-on, not the
-primary fix (see Context — most fungible pending is correct defer, not a leak).
+**Restarted 2026-08-21.** This task was written as "build a continuous
+promote/reconcile for `nfts_pending`". Re-measurement (see _Restart
+measurements_ below) showed that mechanism would move **zero rows today**, while
+a larger defect next door loses data silently. The task is now the umbrella for
+one outcome:
 
-Measured on prod (2026-07-15, see [0391 R §4](../0391_RESEARCH_nft-token-flow-coverage-audit/notes/R-nft-coverage-measured-state.md)):
-hot `nfts` frozen at ledger `62,989,407` (**2026-06-12**, last manual drain) for
-33 days; live writes ~6,575 pending rows/day, **91% Fungible-verdict**; 401/401
-fungible-verdict pending contracts confirmed real fungible assets; 21
-`Nft`-verdict collections / 559 tokens stranded.
+> An NFT row that should exist must exist, and anything we cannot classify must
+> be **visibly** unknown — never silently absent.
 
-## Context
+0392 owns that outcome and the sequencing. It does not hold all the code:
+the classifier and parser work is executed in
+[0512](../../active/0512_FEATURE_classifier-monitored-unknown-and-launchpad-nft.md)
+(renumbered from 0317).
 
-The mechanism has two parts. **Proven (0391 §4a–4e):** the promote/drop half of
-the defer-then-promote design never runs live — only the one-shot backfill does
-it — so pending accretes without bound and NFT pages lag by however long since
-the last manual drain (33 days as of 2026-07-15).
+## The three gaps, in dependency order
 
-**Unresolved (0391 §4f crux test):** a first pass blamed a write-time _fail-open
-leak_ — `route_for` (`stage.rs:1444`) sends `Other|NULL|uncached→Pending`, and
-the 0283 G1/G9 prefetch (`persist.rs:225,394`) is best-effort and falls through
-to Pending on miss. But of the fungible-verdict pending rows with **known**
-WASM-observation timing, the **majority (61%) were correct defer** (WASM observed
-at/after the event → unclassifiable at ingest → _legitimately_ pending), and 72%
-have no recorded upload ledger at all. Write-time fail-open (H1) is therefore a
-minority (~11% overall, ≤39% of timing-known) and **unproven** as the dominant
-cause. Implication: continuous reconcile is the reliable fix; a write-time change
-cannot prevent the H2 defer rows, and would only help H1 — which must be
-justified by measuring the prefetch miss-rate first. Either way, do NOT mirror
-the backfill `ALTER … DELETE` on the live path (treats the symptom, races the
-ingest inserts).
+| #   | Gap                                                                  | Population today                                 | Executed in |
+| --- | -------------------------------------------------------------------- | ------------------------------------------------ | ----------- |
+| 1   | Parser cannot shape bespoke ABIs, and drops without a trace          | 66 contracts, 692 events, **zero rows anywhere** | 0512        |
+| 2   | Classifier stamps bespoke NFTs `Other`                               | 67 contracts, 278 quarantined rows               | 0512        |
+| 3   | Nothing promotes a contract's pending rows when its verdict resolves | **0 today — created by gap 2 being fixed**       | 0392        |
 
-`Fungible`/NFT `transfer` events are byte-identical in shape (`from,to,i128` vs
-`from,to,token_id`) — the parser cannot distinguish them; only WASM
-classification can. So a genuinely-never-seen contract MUST still be able to
-quarantine. This task does not try to make pending zero — it makes pending hold
-_only_ genuinely-unresolved contracts, and reconciles them once resolved.
+Gap 3 is empty _because_ gaps 1 and 2 are open. Fix the classifier and ~66
+contracts flip `Other → Nft`; at that moment 278 rows need promoting and the only
+mechanism is `backfill-runner nft-reclassify`, a human-run subcommand that
+[0425](../../archive/0425_REFACTOR_delete-spent-one-off-backfill-subcommands.md)
+exists to delete. Landing 0512 without 0392 swaps a silent-miss defect for a
+stale-data defect.
 
-## Implementation Plan
+## Sequencing
 
-### Step 1 (PRIMARY): Continuous reconcile — event-driven, per newly-classified contract
+1. **0512 first.** It supplies both the fix and — for the first time — real
+   contracts whose verdict actually flips.
+2. **0392's own code after it.** The promote mechanism is deliberately _not_
+   built ahead of 0512: its acceptance criterion is "observed promoting a real
+   contract", and until 0512 lands there is no such contract to observe. Building
+   it early means shipping an untestable mechanism and calling it done.
+3. **`nft-reclassify` deleted last**, once the replacement has been watched
+   doing its job.
 
-- When a contract's verdict first resolves to `Nft`/`Fungible`/`Token` (i.e. its
-  WASM becomes observed / `contract-type-rebuild`-equivalent runs), promote
-  (`Nft` pending→hot) or drop (`Fungible|Token`) **that one contract's** pending
-  rows.
-- Scope to the contract, not a full-table sweep. This is the live equivalent of
-  the `nft-reclassify` promote/drop, triggered by classification, not by cron.
-- Decide the trigger point: at deploy/upgrade when WASM is classified, vs a
-  lightweight scheduled reconcile keyed on `soroban_contracts` verdict changes
-  since last run.
-- This is the reliable fix: it handles the H2 majority (correct-defer rows that
-  no write-time change can catch) as well as the H1 slice.
+## What is already settled (do not redo)
 
-### Step 2 (SECONDARY, gated): Write-time tightening — gate RESOLVED, fix shipped
+- **Step 2 — done, shipped.** The G9 prefetch was a 100% mechanical no-op
+  (`contract_type` read as bare `i16` against `Nullable(Int16)`, rejected by
+  clickhouse 0.15). One-line `Option<i16>` fix in PR #341. Verdicts resolve at
+  write time now; hot `nfts` tracks the chain tip to within ~4 minutes, and
+  quarantine intake fell from ~6,575 rows/day to ~7 rows/month.
+- **Step 3 — done.** 0306's drain cleared the accumulated backlog.
+- **`route_for` semantics** (`persist/stage.rs:1648`): `Token|Fungible → Drop`,
+  `Nft → Hot`, everything else → `Pending`. Unchanged and correct as far as it
+  goes.
 
-- **Gate resolved by direct measurement (2026-07-15,
-  [R-g9-prefetch-miss-rate-measured](notes/R-g9-prefetch-miss-rate-measured.md)):**
-  the G9 prefetch miss-rate was **100% mechanical** — the fetch itself failed on
-  every row-returning call (`contract_type` read as bare `i16` vs
-  `Nullable(Int16)`, rejected by clickhouse 0.15 RBWNAT validation; 20,494 prod
-  failures/7d, single error string, since indexer resume 2026-06-29). G9 never
-  delivered a verdict; the `ClassificationCache` never held anything.
-- **Fix shipped in PR #341:** `Option<i16>` (one line) — the existing
-  cache-backed prefetch design was already correct and now actually runs, so no
-  new per-event query was added (cost guard satisfied by construction). Same PR
-  unbreaks the 0320 prior-row prefetch (SELECTed the 0304-dropped `name` column
-  → Code 47) and adds a `CLICKHOUSE_URL`-gated e2e asserting Fungible→Drop /
-  Nft→Hot / unknown→Pending + the upgrade-row write (red/green verified).
-- **Consistency with §4f:** no contradiction — with G9 dead, ALL cross-ledger
-  rows fell to Pending regardless of WASM timing. The fix stops only the H1
-  slice (verdict knowable at event time, ≤39% of timing-known + some share of
-  the 72% NULL); the H2 correct-defer majority still quarantines by design and
-  is exactly what Step 1's reconcile drains. Post-deploy, re-run the R §4c
-  split to measure the residual intake.
+## Constraints on any design here
 
-### Step 3: One-shot cleanup of the accumulated backlog
-
-- The ~280k existing fungible false-positives + stranded `Nft` rows still need a
-  single drain to clear the 33-day backlog. That is **0306**'s prod
-  reclassify run — coordinate, don't duplicate. This task ensures the backlog
-  does not re-accumulate after 0306 drains it.
+- **"If a row is in `nfts`, it should be an NFT."** A read-time visibility
+  filter over a polluted table was tried and rejected on review. Membership is
+  decided before the write.
+- **ADR 0046** (`classifier-quarantine-tables-nfts-pending`) is live and
+  **unsuperseded** on develop. It is the standing decision behind the quarantine;
+  honour it or supersede it deliberately.
+- **ADR id 0053 is taken** on develop by `fast-change-offchain-compute-at-read`.
+  Any ADR spawned here needs a free number.
+- Do **not** mirror `nft_reclassify`'s `ALTER … DELETE` on the live path — it
+  treats the symptom and races the ingest inserts.
+- A genuinely-unknown contract must still be able to quarantine. `Fungible` and
+  NFT `transfer` events are byte-identical in shape (`from,to,i128` vs
+  `from,to,token_id`); only WASM classification separates them. The goal is not
+  a zero quarantine, it is a quarantine that holds only the genuinely unresolved
+  — and says so out loud.
 
 ## Acceptance Criteria
 
-- [ ] (Step 1, primary) Newly `Nft`-classified contracts' pending rows promote to
-      hot, and `Fungible|Token` pending rows drop, without a manual
-      `nft-reclassify` run — verified: hot `nfts` max ledger tracks the chain tip
-      instead of freezing (re-run R §4a).
-- [ ] (Step 1) Genuinely-unresolved contracts (WASM never observed) still
-      quarantine correctly — pending is not forced to zero.
-- [ ] **`nft-reclassify` is deleted — either way, but only after the replacement
-      is verified working.** Together with its row in `docs/backfills.md` and its
-      entry in `crates/backfill-runner/README.md`. "Either way" means: whether the
-      replacement is Step 1's continuous reconcile or the cheaper
-      resolved-verdict-stuck-in-pending alert, the subcommand goes once that
-      replacement has been _observed_ doing its job on a real contract — not on the
-      strength of an empty quarantine. Deleting it earlier removes the only working
-      drain; keeping it later re-creates the ownerless mop this task exists to end.
-      Per lore 0425 clause 4.
-- [x] (Step 2 gate) 0283 prefetch miss-rate measured directly — 100% mechanical
-      failure (wire-type bug), fix shipped in PR #341
-      (notes/R-g9-prefetch-miss-rate-measured.md).
-- [ ] (Step 2, shipped) hot-path latency not regressed (no new query added —
-      satisfied by construction); daily fungible-verdict pending intake drop
-      measured post-deploy (re-run the R §4c split).
+- [ ] (gap 3, this task) When a contract's verdict resolves to `Nft`, its pending
+      rows promote to hot without a manual `nft-reclassify` run; `Fungible|Token`
+      rows drop. Scoped to the contract, never a full-table sweep.
+- [ ] (gap 3) **Observed promoting a real contract** — not inferred from an empty
+      quarantine. 0512 supplies the contract.
+- [ ] No contract carrying a decisive `Nft` verdict holds zero rows while emitting
+      NFT events. _(Replaces the old "hot max ledger tracks the tip" check, which
+      PR #341 already satisfies and which never covered the parser gate.)_
+- [ ] Anything the parser or classifier cannot resolve is **counted and visible**,
+      not dropped silently. A NULL `signature` must not be indistinguishable from
+      "no event".
+- [ ] **`nft-reclassify` is deleted** — together with its `docs/backfills.md` row
+      and its `crates/backfill-runner/README.md` entry — _after_ the replacement
+      has been observed working. Per 0425 clause 4.
 - [ ] **Docs updated** — `docs/architecture/**` ingestion-pipeline + XDR-parsing
-      sections describe the routing + reconcile (per ADR 0032). Update in PR.
-- [ ] **API types regenerated** — N/A unless the fix touches `crates/api/**`
-      (routing/ingest is `crates/db-clickhouse` + `crates/indexer`).
+      sections describe the routing and the promote step (ADR 0032).
+- [ ] **API types regenerated** — N/A unless the work touches `crates/api/**`;
+      this is `crates/db-clickhouse` + `crates/xdr-parser` + `crates/indexer`.
+
+### Dropped acceptance criteria
+
+- ~~"Genuinely-unresolved contracts (WASM never observed) still quarantine
+  correctly"~~ — **describes an empty set.** All 67 quarantined contracts have an
+  observed WASM. See F1/F2.
 
 ## Notes
 
-- Depends conceptually on 0283 (verdict prefetch) — this sharpens its fail-open.
-- 0217 (archived) built the quarantine; 0306 is the one-shot prod drain; this
-  task is the _live_ continuous half neither covers.
-- Do NOT implement as a live mirror of `nft_reclassify`'s `ALTER … DELETE` — that
-  treats the symptom and races the ingest inserts.
+- 0217 (archived) built the quarantine; 0306 was the one-shot prod drain.
+- 0512 (was 0317) is the classifier + parser execution task.
+- 0309 is the strategic redesign (total function, monitored UNKNOWN, SEP-46/47/48).
+  It defers tactical work to `0308`, **which does not exist** — that link dangles,
+  and 0512 is the real home.
+- **Reference only, nothing extracted:** branch
+  `fix/0392_nft-pending-live-routing-reconcile` (`c57bd7e8`) and PR #358, closed
+  unmerged 2026-08-21. Its measurements are ours, a month old, and were
+  re-derived from scratch rather than copied.
+
+## Restart measurements — 2026-08-21
+
+Re-derived from scratch against prod ClickHouse and, where it matters, against
+the chain via the official `stellar` CLI 26.0.0. Nothing here is carried over
+from earlier sessions; figures that disagree with the body above supersede it.
+
+### F1 — the quarantine holds nobody this task can drain
+
+Of the 67 contracts in `nfts_pending`, split by when their WASM was uploaded
+relative to their first pending row:
+
+| Bucket                                                      | Contracts | Rows |
+| ----------------------------------------------------------- | --------- | ---- |
+| A — WASM never observed                                     | **0**     | 0    |
+| B — WASM known _before_ the first event                     | **66**    | 274  |
+| C — WASM arrived _after_ the first event (late, strandable) | **1**     | 4    |
+
+Bucket B is the whole quarantine. For those 66 the verdict _was_ available at
+write time — `route_for` asked, and the answer was `Other`. They are not
+deferred-for-timing; they are classifier misses. A reconcile cannot move them:
+their verdict is already computed and it is not decisive.
+
+Bucket C — one contract, 4 rows — is the entire population Step 1 was designed
+for. Even it would not promote, because its verdict is also `Other`.
+
+**So Step 1, implemented exactly as written, would move zero rows today.**
+
+### F2 — an acceptance criterion describes an empty set
+
+The AC _"genuinely-unresolved contracts (WASM never observed) still quarantine
+correctly"_ has no members: bucket A is 0. The stated design intent of the
+quarantine — hold contracts whose WASM has not been seen — is not what the
+quarantine actually contains.
+
+### F3 — the larger defect is next door, and it is silent
+
+Contracts carrying a decisive `Nft` verdict, measured against every NFT table:
+
+|                                       | Contracts | Events  |
+| ------------------------------------- | --------- | ------- |
+| have rows in `nfts` + `nft_ownership` | 67        | 25,110  |
+| **have rows nowhere at all**          | **66**    | **692** |
+
+Those 66 are not quarantined. They are absent — no hot row, no ownership row,
+no pending row. The quarantine sits at the _classifier_ gate only; nothing
+guards the _parser_ gate, so a known-NFT contract whose events the parser cannot
+shape simply produces nothing, with no record that anything was dropped.
+
+### F4 — cause of F3, confirmed on-chain not from our tables
+
+`stellar contract info interface --network mainnet` on two of the 66, reading
+the deployed WASM:
+
+- `CB2SIYGHFGQMKEYQUWCTF3HCWBCPFUSRGVWXOPV3LIJR7K5LRPFXZEYK` —
+  `transfer(env, domain: String, from: Address, to: Address)` and
+  `owner_of(domain: String)`. Token identity is a **String**, and it is the
+  **first** argument. Canonical is `(from, to, token_id)`. The shape cannot
+  match, so every transfer is dropped. This contract emits a perfectly
+  canonical `transfer` event name — name matching alone would not have saved it.
+- `CBT5JMDOUAU3BJF7YZR42LVODLMZSQE4LIJUJNUBKEC2VZOXIF4JFBRU` —
+  `owner_of(token_id: u32)`, `transfer`, `mint_badge`, `total_supply`.
+  Unambiguously an NFT; mints via `mint_badge`, emits `init` / `minted`.
+
+Event signatures across the 66, by volume: `(null)` 470 (5 contracts),
+`minted` 63, `uri_upd` 58, `mint` 46, plus `identity_minted`, `mint_event`,
+`transfer_event`, `set_uri_event`, `approval_for_transfer_event`. The 470
+undecoded signatures are the single largest slice and are not yet explained.
+
+### F5 — current intake
+
+Two contracts wrote pending rows in the last month:
+`CAHDANGTQY4TOXV7LYYXRTFIUKJKJUXWNRUMKRPBJG2QOGSATYTRX6HP` (5 rows, ledgers
+63,636,969–63,836,382) and
+`CBGMSY35IZMHNVBFQQY22PA62VWJVXIKC4TU2CTAKRGIJOACZE4EEIWW` (2 rows). The net
+count moved 274 → 278; the prior 274/66 figure comes from an earlier session and
+was not re-verified, so treat the delta as approximate. What is solid: two
+contracts, single-digit rows, one month.
+
+### F6 — measurement trap for whoever works this next
+
+`soroban_contracts` is RMT and unmerged. `CAHDANG…` carries two disagreeing
+rows — a pre-WASM placeholder (`contract_type` NULL, `wasm_uploaded_at_ledger` 0) and a later stamp (`63,207,509`, `contract_type` 1). Any join to
+`soroban_contracts` without deduping fans out and double-counts; it inflated one
+of my own intermediate counts 5 → 10 before I caught it. Dedup with
+`argMax(contract_type, wasm_uploaded_at_ledger)` grouped by `id`.
+
+### What this implies for the restart
+
+The drain gap is real as a mechanism and unfixed in code, but its addressable
+population is one contract and four rows, none of which would move. The defect
+that is actually costing data is the parser's ABI coverage (F3/F4), which is
+0309 / 0317 territory, not this task's. That is the input to the design
+decision, not the decision itself.

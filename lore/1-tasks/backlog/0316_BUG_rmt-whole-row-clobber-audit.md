@@ -30,6 +30,16 @@ history:
 
 # BUG: RMT whole-row clobber on partial-row insert
 
+> **Related mechanisms, audited elsewhere (2026-08-19):** task
+> [0503](0503_OPS_exhaustive-completeness-audit-against-network-state.md)
+> carries the standing audits for the two SIBLING hazards — same-version
+> content ties (equal RMT versions resolved arbitrarily; measured, only
+> `balances` affected, root-caused in 0463) and in-ledger ordering (every
+> writer fold + fact-table key audited). This task remains the home of the
+> THIRD mechanism only: a higher-version partial row deterministically
+> clobbering good columns. The 0503 measurements feed this task's Phase 0
+> breadth recon.
+
 ## Summary
 
 ClickHouse `ReplacingMergeTree` updates by **replacing the whole row** with the

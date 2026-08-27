@@ -155,6 +155,44 @@ shell wrappers that drove `pool-ids-backfill` (`scripts/0266/`) went with it.
 Recoverable from git history if a comparable pass is ever needed — but read
 clauses 1–4 first, because the answer is usually `run --reindex` or a live fix.
 
+### Checkpoint-snapshot subcommands (task 0463) — read clause 4 carefully
+
+`snapshot-seed` alone — its dry-run IS the four-way comparison. (A separate
+`snapshot-compare` carried the same decode behind its own counting shell and
+was folded into the seed's dry-run; the research probes `snapshot-tally` /
+`snapshot-dedup`, the `snapshot-export-sql` helper and the hand-exported-TSV
+transport went in the 2026-08-20 review. The seed reads our side straight from
+ClickHouse like every other corrective command here.) Read-only except its
+explicit `--execute` (note the inversion of this
+crate's usual `--dry-run` default: writing here is opt-in, so a forgotten
+flag fails safe). The freshest checkpoint is complete by construction — the
+archive's `.well-known` manifest is stellar-core's atomic commit point,
+written last — so every run simply takes it. Artifacts land in
+`<artifacts>/<checkpoint_ledger>/`, one directory per checkpoint, so a run
+never overwrites the record of an earlier one.
+
+**They pass clause 1** — nothing re-implements the ingest path. The source is
+the SDF history archive's checkpoint bucket list, a full STATE snapshot of
+pubnet. Our ingest is a stream of CHANGES since the ledger floor, so a
+`run --reindex` cannot reach what these read: 78.85% of chain history predates
+the floor, and an entry that never changed since then has no row here to
+re-parse.
+
+**Clause 4 ("delete it once it has run") applies to the SUBCOMMAND, not to the
+decoder.** `snapshot::archive` (transport, format) and
+`snapshot::network_state` (classification, first-wins dedup) underneath it are
+a reusable capability with two
+filed consumers — task 0499 re-derives this exact snapshot from the seed's
+`manifest.json` for the liquidity-pool merge, and task 0503 re-runs the
+comparison as a recurring correctness monitor. Task 0502 extracts it into its
+own crate for that reason. Retiring the seed after it runs is correct; taking
+the decoder with it is not.
+
+`snapshot-seed` is the one-off. The comparison is deliberately NOT: post-seed
+it becomes the check that answers "do we still index correctly?", because a
+discrepancy whose entry changed inside our window can no longer be explained by
+coverage.
+
 ## Writes
 
 The runner writes to ClickHouse (ADR 0044); Postgres was retired (task

@@ -84,6 +84,20 @@ jobs:
       - run: npx nx format:check --all
       - run: npx nx run-many -t lint build typecheck test
 
+      # Browser regression for the account page (issue #377, task 0463). The
+      # three assertions there are the ones jsdom cannot make — real history
+      # for the Back button, real layout for the 1,015-row pager — so the
+      # suite needs a real browser, and the runner image ships none. ~95 MB.
+      #
+      # Not cached: one download per run beats cache-key bookkeeping while
+      # this is a single-browser, three-test suite. Add actions/cache on
+      # ~/.cache/ms-playwright if the suite or the browser list grows.
+      #
+      # The API is intercepted inside the tests (page.route), so this needs no
+      # ClickHouse certificate and no network beyond the browser download.
+      - run: npx playwright install --with-deps chromium
+      - run: npx nx run @rumblefish/soroban-block-explorer-web:e2e
+
       # The release tag → deploy scope mapping. Cheap, and the only guard on
       # the case that matters: a plain `production-*` tag must stay
       # Compute-only, never `--all` (task 0455). Runs here because the
@@ -230,7 +244,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # PINNED, and not to be moved to @stable without checking the note below.
+      # Rust 1.98.0 (2026-08-20) started passing `--fix-cortex-a53-843419` to
+      # the linker for aarch64-unknown-linux-gnu. `cargo lambda build --arm64`
+      # links through zig, whose linker rejects that argument:
+      #
+      #   error: unsupported linker arg: --fix-cortex-a53-843419
+      #   error: could not compile `crc-fast` (lib)
+      #
+      # It broke this job mid-day on a DOCS-ONLY commit — the runner upgraded
+      # itself ("stable-aarch64 updated - rustc 1.98.0 (from rustc 1.97.1)"),
+      # so nothing in the repo changed. cargo-zigbuild filters the argument
+      # from 0.23.0 on (PR #452, 2026-06-10), but cargo-lambda 1.9.1 — the
+      # newest release — hard-depends on cargo-zigbuild 0.20.1, so there is no
+      # upgrade path through cargo-lambda today.
+      #
+      # UNPIN when cargo-lambda ships a release depending on cargo-zigbuild
+      # >= 0.23.0. The other Rust jobs stay on @stable: they build natively,
+      # never through zig, and are green on 1.98.0.
+      - uses: dtolnay/rust-toolchain@1.97.1
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:

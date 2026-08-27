@@ -815,6 +815,7 @@ mod tests {
             holder,
             balance,
             ledger: 63_280_279,
+            closed: false,
         };
         let sac_surrogate = ids::contract_id(&token);
 

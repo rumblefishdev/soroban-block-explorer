@@ -2,7 +2,7 @@
 id: '0374'
 title: 'LP completeness: native XLM leg match + Soroban-AMM union + share% recompute'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0359']
 tags: [priority-medium, effort-medium, layer-api, liquidity-pools]
@@ -19,6 +19,13 @@ history:
     note: >
       Linked issue 405 (add Soroban AMM protocols). Rewrote K3-5: the union is
       the last step, not the work — no Soroban pool state is indexed today.
+  - date: '2026-08-21'
+    status: active
+    who: karolkow
+    note: >
+      Activated. First-protocol scope confirmed reachable from data already in
+      `soroban_events`; the backfill is an in-DB INSERT ... SELECT, not an
+      S3 re-parse.
 ---
 
 # LP completeness

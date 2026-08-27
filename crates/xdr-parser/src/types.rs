@@ -355,6 +355,10 @@ pub struct ExtractedSorobanBalance {
     pub balance: i128,
     /// Ledger the balance was observed — the side table's RMT version slot.
     pub ledger: u32,
+    /// `true` when the `ContractData` entry was REMOVED in this change, rather
+    /// than merely spent down to zero. Both emit `balance = 0`, so the flag is
+    /// the only thing separating them — ADR 0055.
+    pub closed: bool,
 }
 
 /// Extracted contract deployment from LedgerEntryChanges.
@@ -402,6 +406,26 @@ pub struct ExtractedAccountState {
     /// Trustlines removed in this change set. Each entry is `{asset_type, asset_code, issuer}`.
     /// Tracked separately from `balances` to avoid marker pollution on INSERT.
     pub removed_trustlines: Vec<serde_json::Value>,
+    /// Full signer set from the observed `AccountEntry`, master EXCLUDED (raw
+    /// XDR truth — master weight is thresholds byte 0; Horizon synthesizes a
+    /// master entry, we do not). `Some(vec)` — entry observed, and the vec IS
+    /// the complete set (may be empty: removing the last signer must emit an
+    /// empty set so the RMT row atomically supersedes the old one). `None` —
+    /// no `AccountEntry` in this change set (trustline-only accum); no signers
+    /// row may be written. lore-0463.
+    pub signers: Option<Vec<serde_json::Value>>,
+    /// 4-byte hex from `AccountEntry.thresholds`: master weight, low, med,
+    /// high. Same Some/None semantics as `signers`.
+    pub thresholds: Option<String>,
+    /// `AccountEntry.flags`. Same Some/None semantics as `signers`.
+    pub flags: Option<u32>,
+    /// `true` when the ACCOUNT ENTRY itself was removed in this change set —
+    /// an `account_merge`, the only way an account is deleted. The native
+    /// balance is emitted as 0 either way, so without this flag the merge
+    /// tombstone is indistinguishable from an account legitimately holding no
+    /// XLM (sponsored reserves make that a live state, CAP-0033). Persist maps
+    /// it to `balances.closed_at_ledger` — ADR 0055.
+    pub account_removed: bool,
     pub home_domain: Option<String>,
     pub created_at: i64,
 }
@@ -528,6 +552,10 @@ pub struct ExtractedLpPosition {
     pub first_deposit_ledger: Option<u32>,
     /// Ledger of the change. Watermark column — older values must not overwrite newer.
     pub last_updated_ledger: u32,
+    /// `true` when the pool-share trustline was REMOVED — the participant left
+    /// the pool. A full withdrawal that keeps the trustline also writes
+    /// `shares = 0`, so the flag is what separates them. ADR 0055.
+    pub closed: bool,
 }
 
 /// Extracted operation data. Feeds the `operations_appearances` indexer path

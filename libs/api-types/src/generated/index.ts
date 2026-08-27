@@ -34,6 +34,8 @@ export type {
   AccountBalance,
   AccountDetailResponse,
   AccountListItem,
+  AccountSigner,
+  AccountSigning,
   AccountTransactionItem,
   AssetDetailResponse,
   AssetItem,

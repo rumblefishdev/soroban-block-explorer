@@ -274,6 +274,36 @@ ansible-playbook ... --tags storagebox
 > docker inspect -f '{{.HostConfig.LogConfig}}' clickhouse   # → max-size:100m max-file:5
 > ```
 
+> **Single-file bind mounts pin the inode — an edit can reach the box and
+> still not reach the process.** Twelve files are mounted into a container
+> individually rather than as a directory: `Caddyfile` and `ca/ca.crt` into
+> `app-caddy-1`, and ten `config.d/*.xml` + `users.d/*.xml` into
+> `app-clickhouse-1`. A single-file bind mount follows the **inode**, not the
+> path, and rsync's default temp-file + rename hands every sync a new one — so
+> the container goes on reading the pre-sync file no matter how correct the
+> deploy looked.
+>
+> Both sync tasks now pass `--inplace`, which writes into the existing file and
+> keeps the inode. This is not theoretical on either side: the 2026-07-06
+> `prices_writer` grant needed a `--force-recreate clickhouse` before the XML
+> took effect, and from that same deploy until task 0513 found it, Caddy served
+> a Caddyfile that no longer existed at that path — where neither the
+> `Reload caddy` handler (a per-service **restart**) nor a manual
+> `caddy reload` would have helped: both re-read the same orphan. Repo green,
+> box green, handler green, nothing changed. The `Restart compose stack`
+> handler's own comment already describes this trap; the Caddyfile checksum
+> task just notifies the other one.
+>
+> A container already pinned to an orphan needs one recreate to re-anchor:
+>
+> ```bash
+> docker compose -f /srv/app/docker-compose.yml \
+>                -f /srv/app/docker-compose.prod.yml up -d --force-recreate caddy
+> # the two must agree afterwards (same check works for clickhouse):
+> stat -c %i /srv/app/infra-hetzner/Caddyfile
+> docker exec app-caddy-1 stat -c %i /etc/caddy/Caddyfile
+> ```
+
 ## Post-deploy verification
 
 After the first deploy and after any potentially disruptive
@@ -288,6 +318,13 @@ docker compose -f /srv/app/docker-compose.yml \
 
 # CH responds intra-host.
 docker exec clickhouse clickhouse-client -q 'SELECT version()'
+
+# Caddy enforces what the Caddyfile says. Read it back from the RUNNING
+# process — the file on disk has already been the wrong answer once (see
+# the inode gotcha above). All four values should read 7200 s except
+# dial_timeout at 10 s.
+docker exec app-caddy-1 wget -qO- http://127.0.0.1:2019/config/ \
+  | tr '{,}' '\n' | grep -i timeout
 
 # CH responds via Caddy with a valid client cert.
 exit
