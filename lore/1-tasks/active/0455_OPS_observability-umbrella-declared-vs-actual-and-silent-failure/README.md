@@ -185,6 +185,15 @@ history:
       is explained rather than left open — probing the same statement across
       five keys as dev_read spans 24 576 to 73 728 read_rows, so granule
       placement sets the cost and the user does not. Seven criteria left.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      Child-task triage reversed. The note had said five tasks should be
+      re-scoped out of this umbrella; nothing acted on it for two weeks and the
+      decision is now the opposite — they stay in related_tasks and are judged
+      one at a time. Two were never live questions: 0403 closed 2026-08-11 and
+      0127 is archived. The real judgement is 0232, 0250 and 0087.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -572,8 +581,10 @@ month is unanswerable by construction.
 - [ ] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
       0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
-      deploy-gated verifications; re-scope of the five non-instances is with
-      the operator). **2026-08-19**: 0449 moved backlog -> active, because its
+      deploy-gated verifications; re-scope of the five non-instances **reversed
+      2026-08-27** — they stay in `related_tasks` and are judged one at a time
+      rather than dropped as a group; 0403 and 0127 are closed anyway, so the
+      live question is 0232, 0250 and 0087). **2026-08-19**: 0449 moved backlog -> active, because its
       detection half has been live since the 2026-08-18 release while the file
       still read "not started". Five further tasks spawned from the review
       sweep below — 0507 (schema migration ladder), 0508 (crate boundaries),
@@ -603,7 +614,7 @@ here), a **measurement** (runnable now), or **dead as written**.
 | CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                            |
 | 0403's deferred measurement                | **done 2026-08-27** | 25 057 read_rows/call over 9 370 calls; the two-user gap is granule placement, not permissions                                               |
 | Dashboard↔alarm coverage                   | in flight           | PR #427 carries the two widgets and the cost section; the stated dashboard answer for the cost alert and three per-decision leftovers remain |
-| Each child task closed or re-scoped        | operator decision   | the re-scope of the five non-instances                                                                                                       |
+| Each child task closed or re-scoped        | operator decision   | judge 0232, 0250 and 0087 individually — the group re-scope was reversed 2026-08-27                                                          |
 | Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                    |
 | No alarm sits latched and mute             | **dead as written** | see below                                                                                                                                    |
 
