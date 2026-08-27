@@ -7,7 +7,7 @@ related_adr: []
 related_tasks: ['0240']
 tags:
   [
-    priority-medium,
+    priority-high,
     effort-small,
     clickhouse,
     security,
@@ -21,6 +21,15 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from [[task-0240]] Phase 4. Verified empirically that CH 26.3.10 does not increment quota counters for requests authenticated via the `X-ClickHouse-User` HTTP header (the path Caddy uses in our proxy-trust model). URL param `?user=` and TCP native auth DO increment. CH refuses to mix the two (`Invalid authentication`), so the obvious "set both" workaround is blocked. Quotas (api_throttle, low_volume, high_write) are effectively no-op for Caddy-proxied traffic. Accepted as a known limitation in 0240; this task scopes the investigation + decision to either fix or accept long-term.'
+  - date: 2026-08-27
+    status: backlog
+    who: karolkow
+    note: >
+      Priority raised on the operator's call during the 0455 child-task
+      review. This is declared-vs-actual in its purest form: quotas.xml
+      declares per-user caps that the production auth path (X-ClickHouse-User
+      header via Caddy) does not enforce at all, so one unbounded query can
+      exhaust the server the API depends on. Kept in the 0455 umbrella.
 ---
 
 # RESEARCH: ClickHouse quota enforcement gap on `X-ClickHouse-User` header auth path

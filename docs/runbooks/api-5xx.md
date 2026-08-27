@@ -38,7 +38,23 @@ ClickHouse error codes worth recognizing on sight:
 Gateway `5XXError` also counts 502/504 the Lambda log never sees
 (timeouts, integration failures). If the metric count exceeds what step
 1 found, compare with Lambda `Errors`/`Duration` for the same window.
-There is no access logging on the stage (deliberate — add it only when
+
+**Per-method metrics are on** (`metricsEnabled`, 2026-08-27, lore-0455), so
+`5XXError` / `Count` / `Latency` are available per resource and method, not
+only for the stage as a whole. Use them to say which route the errors were on
+and how often it happens — that is the question X-Ray cannot answer, because
+a trace is a sample.
+
+**X-Ray is on** (`tracingEnabled`) and is the right tool for the opposite
+question — what exactly happened in one request. Filter `fault` over the
+window; a summary carries the URL, status, duration and trace id, and the
+trace id ties the request to its Lambda log lines. Caveat worth knowing: X-Ray
+samples the first request per second and ~5% of the rest. Peak traffic on this
+stage measured 0.8 req/s in August 2026, so nearly everything is traced today
+— but at higher volume single errors will not be in X-Ray, and the per-method
+metrics are then the only complete count.
+
+There is still no access logging on the stage (deliberate — add it only when
 a silent-504 investigation actually needs it).
 
 ## 3. Account for every error
