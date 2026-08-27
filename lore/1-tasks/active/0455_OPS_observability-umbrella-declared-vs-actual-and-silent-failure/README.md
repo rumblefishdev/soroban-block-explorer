@@ -896,14 +896,38 @@ lines four seconds apart, `network error: client error (Connect)`. TCP connect
 to the database host failed. Ingestion backlog reached 263 s and drained
 within seven minutes on SQS redelivery.
 
-**B. 2026-08-26 06:55 UTC, a 5xx from the API edge.** The API Lambda logged no
-invocation at all between 06:52:20 and 06:58:38, so the request never reached
-our code — the error was raised by API Gateway itself. **It cannot be
-diagnosed**: the only API-Gateway log group present is `/aws/apigateway/welcome`,
-which suggests access logging is off. Confirming that needs
-`apigatewayv2 get-stages`, which the read-only guard does not allowlist.
-Separately, at 06:58:38 a contract decompilation timed out after 10 229 ms —
-a different minute, same surface, worth its own look.
+**B. 2026-08-26 06:58:27 UTC, a 500 from the decompiled-contract route.**
+
+> **Corrected within the day.** This entry first read "06:55 UTC, a 5xx from
+> the API edge... the request never reached our code... it cannot be
+> diagnosed". All three claims were wrong, and they were wrong for one
+> reason: the alarm's datapoint label `06:55:00` was read as the minute the
+> request happened. The alarm's `Period` is 300, so that label is the START
+> of the 06:55-07:00 bucket. Searching the Lambda log around the wrong minute
+> found nothing, and "no invocation" was then promoted to "never reached our
+> code". A CloudWatch datapoint timestamp names a bucket, not an event.
+
+The single fault in the window is one request:
+
+```
+GET /v1/contracts/{contract_id}/decompiled
+HTTP 500, 10.244 s
+```
+
+It carries the same X-Ray trace id as the `decompilation timed out` WARN the
+API logged at 06:58:38, so the warning and the 500 are one request, not two
+neighbouring events. The route computed for ten seconds and then failed.
+
+**It is diagnosable, and was.** The stage has `TracingEnabled: true`, and
+X-Ray held the URL, status, duration and trace id without any extra
+instrumentation. What the stage does NOT have is `accessLogSettings` (null)
+and per-method metrics (`metricsEnabled: false`) — worth having for
+volume-shaped questions, but not the blocker this entry originally claimed.
+
+Frequency, sampled across four days of X-Ray fault queries in the window:
+2026-08-20 none, 08-22 none, 08-24 none, 08-26 one. Rare, and tied to one
+contract. The decompiled tab shipped under task 0465; this is a timeout in
+that route, not an outage.
 
 **C. 2026-08-27 01:10 UTC, the node fell out of consensus.** `Herder: Lost
 track of consensus`, then `Herder: Ledger took 282.692064376 seconds` against
