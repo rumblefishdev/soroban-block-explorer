@@ -33,15 +33,32 @@ All sixteen were still `backlog` at the time of this triage.
 | [[0447]] | MV rewriting its whole target every 2 min. Cause of the volume, not an observability defect |
 | [[0448]] | Research on insert-body compression. Cost/perf research; no observability content           |
 
-## Re-scope out (5) — related in spirit, not instances
+## Kept in scope, judged individually (5) — re-scope reversed 2026-08-27
 
-| Task     | Why it does not fit                                                                                                                                                    |
+| Task     | Why the triage wanted it out — and its state now                                                                                                                       |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [[0232]] | Not a comparison problem. The live writer structurally cannot hold the invariant; the task is choosing a mitigation per column. Detection is an addition, not the task |
 | [[0250]] | Needs a probe that deliberately exceeds a quota, not a comparator. Research/decision task                                                                              |
 | [[0403]] | **Closed 2026-08-11** — validation ran (byte-identical 7/7, E20 green, refresh memory 734-744 MiB/6 GB); the one deploy-dependent measurement moved into 0455's ACs    |
 | [[0087]] | Frontend telemetry. The umbrella's own Notes already exclude it; it should not be in `related_tasks`                                                                   |
 | [[0127]] | A report deliverable, not a defect                                                                                                                                     |
+
+**Reversed on the operator's call, 2026-08-27.** This section originally said
+these five "should be re-scoped out rather than left implying coverage they
+will not get", and nothing acted on it for two weeks. The decision now is the
+opposite: they stay in `related_tasks`, and each is judged on its own when it
+comes up rather than dropped as a group. The reasons below are kept as the
+argument against, not as a verdict.
+
+Two of the five are no longer live questions anyway:
+
+- **0403** closed 2026-08-11; its one deploy-dependent measurement moved into
+  this task's criteria and ran 2026-08-27.
+- **0127** archived as `done`.
+
+So the open judgement is really about three: **0232** (live-mode drift
+mitigation), **0250** (quota enforcement on the header-auth path) and **0087**
+(frontend observability baseline) — all three still `backlog`.
 
 ## What the triage changes
 

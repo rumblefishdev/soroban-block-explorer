@@ -60,6 +60,7 @@ async fn main() -> Result<(), Error> {
             // matching comment in `handler/mod.rs::handler`.
             tracing::error!(
                 alarm = "ch_write_failure",
+                cause = "mtls_init",
                 env_name = %env_name,
                 ch_domain = %ch_domain,
                 mtls_secret_name = %mtls_secret_name,
