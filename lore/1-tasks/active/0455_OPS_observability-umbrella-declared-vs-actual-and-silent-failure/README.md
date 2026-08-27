@@ -20,7 +20,6 @@ related_tasks:
     '0447',
     '0403',
     '0382',
-    '0087',
     '0127',
     '0367',
     '0368',
@@ -203,6 +202,17 @@ history:
       with the reason written into the criterion. It covers every other level
       alarm, and its remaining open half is the re-arm test message. The
       dead-as-written state is resolved.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      The three remaining child-task judgements made individually. 0250 stays
+      and its priority is raised — quotas the config declares are not enforced
+      on the production auth path. 0087 leaves related_tasks; the umbrella's
+      own notes always excluded frontend telemetry. 0232 turned out to be
+      superseded in premise: task 0497 already decided the RMT/MIN compromise
+      goes rather than gets per-column mitigations — the two are cross-linked
+      and 0232's fate is a close-or-narrow decision recorded there.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -592,7 +602,9 @@ month is unanswerable by construction.
       deploy-gated verifications; re-scope of the five non-instances **reversed
       2026-08-27** — they stay in `related_tasks` and are judged one at a time
       rather than dropped as a group; 0403 and 0127 are closed anyway, so the
-      live question is 0232, 0250 and 0087). **2026-08-19**: 0449 moved backlog -> active, because its
+      live question was 0232, 0250 and 0087 — judged 2026-08-27: 0250 stays
+      with raised priority, 0087 is out (dropped from related_tasks), 0232 is
+      superseded in premise by 0497 and cross-linked there). **2026-08-19**: 0449 moved backlog -> active, because its
       detection half has been live since the 2026-08-18 release while the file
       still read "not started". Five further tasks spawned from the review
       sweep below — 0507 (schema migration ladder), 0508 (crate boundaries),

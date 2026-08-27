@@ -4,7 +4,7 @@ title: 'FEATURE: ClickHouse live-mode drift mitigation for all 6 Stage 1 Tier-1 
 type: FEATURE
 status: backlog
 related_adr: ['0044']
-related_tasks: ['0118', '0194', '0228', '0421', '0425']
+related_tasks: ['0118', '0194', '0228', '0421', '0425', '0497']
 blocked_by: []
 tags:
   [
@@ -57,9 +57,30 @@ history:
       `crates/indexer/src/handler/persist/write.rs:115`). This task is
       the single decision point for the live-mode mitigation strategy
       across all 6 columns.
+  - date: 2026-08-27
+    status: backlog
+    who: karolkow
+    note: >
+      Cross-linked with 0497 during the 0455 child-task review: 0497's
+      decision (move MIN copies off RMT, retire repair-tier1) supersedes this
+      task's premise of mitigating drift column by column. Close or narrow
+      when either is picked up; never work both.
 ---
 
 # FEATURE: ClickHouse live-mode drift mitigation for all 6 Stage 1 Tier-1 columns
+
+## Superseded in premise by 0497 (recorded 2026-08-27)
+
+This task chooses a per-column mitigation for live-mode drift — i.e. a way to
+LIVE WITH the RMT/MIN-semantics compromise. Task 0497 (spawned later from the
+LP-holdings map session) decided the opposite: **the compromise goes, not the
+symptom** — every MIN-semantics copy moves off RMT state tables, and each move
+kills its `repair-tier1` entry until the subcommand dies. If 0497 lands, the
+drift this task mitigates stops existing.
+
+Fate to decide when either is picked up: close this task in 0497's favour, or
+narrow it to any column 0497's inventory decides must stay on RMT. Do not work
+both — they are mutually exclusive answers to the same defect.
 
 ## Summary
 
