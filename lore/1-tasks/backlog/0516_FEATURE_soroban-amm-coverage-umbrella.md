@@ -38,10 +38,21 @@ what is shared; each protocol gets its own task for what is not.
 ## Context
 
 `/liquidity-pools` is fed by the classic protocol only. Soroban AMMs are a
-separate world with their own pool contracts, and there are three that matter:
-Aquarius (2 293 670 `swap` events indexed), Soroswap (570 858), Phoenix. That
-list is not our guess — the Soroswap aggregator, whose business is to know
-every Stellar AMM, integrates exactly those three.
+separate world with their own pool contracts, and there are three that matter.
+That list is not our guess — the Soroswap aggregator, whose business is to know
+every Stellar AMM, integrates exactly those three. Measured 2026-08-27:
+
+| Family                                   |                     Contracts |   Swap events |    Share |
+| ---------------------------------------- | ----------------------------: | ------------: | -------: |
+| Router-registry family (Aquarius-shaped) | 371 trading of 497 registered |     4 363 284 |     63 % |
+| **Phoenix**                              |                        **14** | **1 969 860** | **29 %** |
+| Soroswap                                 |      191 trading of 232 pairs |       578 921 |      8 % |
+
+**Phoenix is second, not third** — 3.4x Soroswap's flow across 14 contracts
+rather than 232. An earlier estimate put Soroswap second; it was measured only
+over contracts carrying Soroswap metadata and missed Phoenix entirely, because
+Phoenix's events decode to nothing (see 0517) and so were invisible to a
+signature-based count.
 
 **Read [0008](../archive/0008_RESEARCH_event-interpreter-patterns/README.md)
 before starting.** It already documents Soroswap's and Phoenix's event shapes
@@ -73,6 +84,52 @@ Two rules learned from the Aquarius pass:
 `stellar.expert` is not an oracle here — its pool API returns classic pools
 only. An aggregator's per-pool feed may omit a protocol entirely even while
 reporting it at protocol level; check before relying on it.
+
+## Anchor every decoder in the vendor's own source — and record what you could not reach
+
+Soroban defines no AMM standard, so there is no specification to decode
+against. That makes the vendor's own source the highest authority available,
+and observation the arbiter of last resort. Before writing any decoder:
+
+1. **The vendor's contract source.** Their event-emitting code states the
+   payload exactly. Archive the snippet into the task — repositories go
+   private (Aquarius's did, between one research pass and the next).
+2. **The deployed contract's own spec, pulled from chain.** Live, signed by
+   deployment, and independent of any repository:
+   `stellar contract info interface --id <contract> --rpc-url …`.
+   **It carries function and type definitions but no event definitions**, so
+   it can corroborate types and lookup keys and can never confirm an event's
+   shape. Use it for what it covers, and say so.
+3. **Structural conformance across all history.** Count how many real events
+   match the decoder's checks. Anything short of 100 % is a finding.
+
+**Record which of the three you actually reached.** "Verified against the
+vendor's source" and "verified against a five-month-old capture that the
+vendor has since taken private" are different claims, and the second one is
+what we usually have.
+
+Expect vocabularies to disagree between sources rather than to align. One pool
+type carried three spellings at once: `constant` in the router's event,
+`standard` in pool state, `ConstantProduct` in the contract's own enum — and a
+fourth shape (`elastic`) exists on chain that appears in none of them, because
+it belongs to a different deployment's code.
+
+## Event names collide across protocols — the name is never the identifier
+
+`withdraw_liquidity`, `provide_liquidity` and `swap` are each emitted by more
+than one unrelated protocol. A decoder keyed on an event name will claim
+another protocol's events. Key on the **full shape** — topic types, data types,
+arity — and measure the false-positive rate against all history before
+trusting it.
+
+Three layers keep a decoder honest, and all three are cheap:
+
+1. **Shape, not name.** A specific topic/data layout is a far narrower sieve.
+2. **Behaviour confirms a claim.** A registry entry is a _candidate_; the pool
+   is real once it emits pool activity. Measured on the router family: 23
+   registrations from five dead deployments never emitted anything at all.
+3. **Unknowns are counted, never guessed.** An unrecognised value yields
+   `None` plus the raw string plus a monitored counter.
 
 ## Deployment is the unit, not the brand
 
@@ -129,11 +186,16 @@ Copy into each adapter task:
 
 ## Adapters
 
-| Protocol | Task                                                                         | State                                                  |
-| -------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Aquarius | [0374](../active/0374_FEATURE_lp-native-leg-and-soroban-amm-completeness.md) | active, first adapter                                  |
-| Soroswap | [0518](./0518_FEATURE_soroswap-pool-adapter.md)                              | blocked on 0517                                        |
-| Phoenix  | —                                                                            | spawn when 0518 lands; do not file ahead of a decision |
+| Protocol               | Task                                                                         | State                                      |
+| ---------------------- | ---------------------------------------------------------------------------- | ------------------------------------------ |
+| Router-registry family | [0374](../active/0374_FEATURE_lp-native-leg-and-soroban-amm-completeness.md) | active, first adapter                      |
+| **Phoenix**            | —                                                                            | **next after 0374**; spawn when 0517 lands |
+| Soroswap               | [0518](./0518_FEATURE_soroswap-pool-adapter.md)                              | after Phoenix; blocked on 0517             |
+
+**Order reversed 2026-08-27 on measurement.** Phoenix carries 3.4x the swap
+flow of Soroswap across 14 contracts instead of 232 — more of the market for
+less of the work, and both are unblocked by the same fix (0517). Nothing about
+Soroswap changed; it simply is not second.
 
 ## Acceptance Criteria
 
