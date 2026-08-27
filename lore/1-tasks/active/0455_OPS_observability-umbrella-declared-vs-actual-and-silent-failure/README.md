@@ -194,6 +194,15 @@ history:
       decision is now the opposite — they stay in related_tasks and are judged
       one at a time. Two were never live questions: 0403 closed 2026-08-11 and
       0127 is archived. The real judgement is 0232, 0250 and 0087.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      The latched-alarm criterion narrowed rather than left contradicting
+      production: the enrichment DLQ alarm is excluded by operator decision,
+      with the reason written into the criterion. It covers every other level
+      alarm, and its remaining open half is the re-arm test message. The
+      dead-as-written state is resolved.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -512,20 +521,19 @@ month is unanswerable by construction.
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
 - [ ] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
-      latched and mute (2026-08-11 — DLQs: drain per `docs/runbooks/dlq.md`,
-      standing content never accepted; Galexie disk: act-before-ceiling
-      comment). **Latch-proofing partially verified 2026-08-19**: purging the
-      ledger DLQ moved its alarm ALARM -> OK after five days latched, which
-      proves the drain half; the other half — that a re-dirtied queue pages
-      again — needs the test-message gate and has not run.
-      **Contradicted in production, knowingly, 2026-08-19**: measured the same
-      day, `production-enrichment-dlq-depth` has been in ALARM without
-      interruption since 2026-07-03 — 47 days — with 6 messages standing and
-      the depth never returning to zero across message expiries. CloudWatch
-      notifies on transition, so that alarm is mute by construction and the
-      topic-policy fix did not revive it. Skipped on the operator's call, so
-      this criterion cannot be ticked as written: the rule says standing
-      content is never accepted, and it is being accepted
+      latched and mute — **narrowed 2026-08-27, operator decision: the
+      enrichment DLQ is excluded from this criterion.**
+      `production-enrichment-dlq-depth` has been in ALARM since 2026-07-03
+      with a standing tail of messages, is mute by construction (CloudWatch
+      pages on transition), and the operator chose to accept that rather than
+      drain on a schedule. The exclusion is the honest form: the alarm still
+      exists and still marks the queue as non-empty on the dashboard, but this
+      criterion no longer claims it can page. The rule the ADR states —
+      standing content never accepted — holds for every OTHER level alarm.
+      What remains to tick for those: the drain half is proven (purging the
+      ledger DLQ moved its alarm ALARM -> OK after five days latched,
+      2026-08-19); the re-arm half — that a re-dirtied queue pages again —
+      still needs the test-message gate (an operator-window item)
 - [ ] The declared-vs-actual delta reaches a human without anyone asking for it.
       **Re-scoped 2026-08-19** from "a comparator runs on a schedule": the
       schedule is withdrawn (ADR 0054, and the measured six weeks of a read-but-
@@ -616,7 +624,7 @@ here), a **measurement** (runnable now), or **dead as written**.
 | Dashboard↔alarm coverage                   | in flight           | PR #427 carries the two widgets and the cost section; the stated dashboard answer for the cost alert and three per-decision leftovers remain |
 | Each child task closed or re-scoped        | operator decision   | judge 0232, 0250 and 0087 individually — the group re-scope was reversed 2026-08-27                                                          |
 | Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                    |
-| No alarm sits latched and mute             | **dead as written** | see below                                                                                                                                    |
+| No alarm sits latched and mute             | narrowed 2026-08-27 | the enrichment DLQ alarm is excluded by operator decision; the criterion now covers the rest, and its open half is the re-arm test message   |
 
 **The latched-alarm criterion cannot be ticked, and that is a decision, not a
 backlog item.** `production-enrichment-dlq-depth` has been in ALARM since
