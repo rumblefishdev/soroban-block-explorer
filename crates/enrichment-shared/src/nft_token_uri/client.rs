@@ -13,7 +13,6 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use moka::future::Cache as FutureCache;
-use reqwest::redirect::Policy;
 use serde_json::{Value, json};
 use stellar_xdr::{
     ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Limits, Memo,
@@ -48,8 +47,10 @@ pub(super) const DEFAULT_SOROBAN_RPC_URLS: &[&str] = &[
     "https://stellar.api.onfinality.io/public",
 ];
 /// Default IPFS gateways, tried in order with failover. Both serve path-style
-/// `/ipfs/<CID>` with HTTP 200 (no redirect — required by our
-/// `Policy::limited(0)` SSRF guard) and are reachable from the prod box
+/// `/ipfs/<CID>` with HTTP 200 in one hop (no redirect needed; since
+/// lore-0455 the client follows same-registrable-domain https redirects
+/// with a bounded budget, so a trailing-slash `301` no longer loses
+/// content) and are reachable from the prod box
 /// (task 0311 sieve, 2026-06-22). The prior single default
 /// `cloudflare-ipfs.com` was sunset by Cloudflare → dead.
 pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
@@ -158,8 +159,18 @@ impl NftTokenUriFetcher {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
-            // No redirects: a 30x bypasses `validate_uri`'s host check.
-            .redirect(Policy::limited(0))
+            // Same-registrable-domain redirect policy, shared with SEP-1
+            // (lore-0455; measured 2026-08-18). `Policy::limited(0)` was the
+            // original SSRF guard, but it also refused a directory CID's
+            // harmless `301` to the same host with a trailing slash, losing
+            // the content. This policy follows https-only, same-eTLD+1,
+            // bounded-hop redirects — recovering that case — and still stops
+            // the off-host and per-CID-subdomain shapes the guard exists to
+            // block (PSL-listed gateway domains resolve per-CID subdomains to
+            // different registrable domains). A stopped redirect surfaces as
+            // the 3xx response, which `fetch_one_metadata` already maps to a
+            // failover-worthy `HttpStatus`.
+            .redirect(crate::sep1::same_etld1_redirect_policy())
             .user_agent(USER_AGENT)
             .build()?;
         let cache = FutureCache::builder()
@@ -451,8 +462,9 @@ async fn fetch_one_metadata(
 }
 
 /// Map a non-2xx response to an error WITHOUT panicking on 3xx. `reqwest`'s
-/// `error_for_status()` only errors on 4xx/5xx, so a 3xx (redirect — we run
-/// `Policy::limited(0)`) would make a bare `.expect_err()` panic. 3xx →
+/// `error_for_status()` only errors on 4xx/5xx, so a 3xx (a redirect the
+/// same-eTLD+1 policy refused to follow) would make a bare `.expect_err()`
+/// panic. 3xx →
 /// `HttpStatus` (failover-worthy: the gateway redirects, try the next); 4xx/5xx
 /// → `Http` (preserves the reqwest-error-carrying variant + its transient
 /// classification).
@@ -1428,8 +1440,12 @@ mod tests {
             .respond_with(ResponseTemplate::new(301))
             .mount(&mock)
             .await;
+        // The PRODUCTION policy (same-eTLD+1) must stop this hop: wiremock's
+        // host is an IP literal, which `validate_host` rejects, so the 301 is
+        // returned as a response rather than followed — same observable
+        // behaviour `Policy::limited(0)` had here before lore-0455.
         let client = reqwest::Client::builder()
-            .redirect(Policy::limited(0))
+            .redirect(crate::sep1::same_etld1_redirect_policy())
             .build()
             .unwrap();
         let err = super::fetch_one_metadata(&client, &format!("{}/x", mock.uri()))
@@ -1438,6 +1454,28 @@ mod tests {
         // Reaching here = no panic. The key property: a 3xx gateway is
         // failover-worthy so the pool advances to the next one.
         assert!(super::super::errors::is_endpoint_fault(&err), "got {err:?}");
+    }
+
+    /// The case `Policy::limited(0)` used to lose (lore-0455, measured
+    /// 2026-08-18): a directory CID without a trailing slash answers `301`
+    /// to the SAME host plus `/`. The shared same-eTLD+1 policy must follow
+    /// that hop. Wiremock binds to an IP literal (which the policy rejects
+    /// by design), so this pins the decision function directly on the
+    /// hostname shapes from the measurement.
+    #[test]
+    fn trailing_slash_redirect_is_followed_and_offhost_is_not() {
+        use crate::sep1::redirect_decisions_for_test as allowed;
+        // ipfs.io/ipfs/<dirCID> -> ipfs.io/ipfs/<dirCID>/ : same host, follow.
+        assert!(allowed("ipfs.io", "ipfs.io"));
+        // gateway.pinata.cloud -> www.pinata.cloud : same eTLD+1, follow.
+        assert!(allowed("gateway.pinata.cloud", "www.pinata.cloud"));
+        // dweb.link-style per-CID subdomain hop: PSL-listed gateway domains
+        // resolve to different registrable domains, so it must be stopped.
+        assert!(!allowed("dweb.link", "bafybeigdyrzt.ipfs.dweb.link"));
+        // Plain off-host is stopped.
+        assert!(!allowed("ipfs.io", "evil.example"));
+        // IP-literal target is stopped (SSRF gate).
+        assert!(!allowed("ipfs.io", "169.254.169.254"));
     }
 
     #[test]

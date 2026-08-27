@@ -487,7 +487,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'IndexerChWriteFailureAlarm', {
         alarmName: `${config.envName}-indexer-ch-write-failures`,
         alarmDescription:
-          'Indexer Lambda logged a CH write failure (post-retry hard error or mTLS init failure).',
+          'Indexer reconcile hit a terminal failure - the log line carries cause=s3|parse|clickhouse|mtls_init; read it before assuming the database. (Metric name kept for history; every terminal reconcile failure lands here, not only CH writes.)',
         metric: chWriteFailureFilter.metric({
           period: cdk.Duration.minutes(5),
           statistic: cloudwatch.Stats.SUM,
