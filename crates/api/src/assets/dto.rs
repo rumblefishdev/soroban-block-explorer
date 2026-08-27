@@ -28,7 +28,7 @@ pub struct ListParams {
 }
 
 /// Asset row returned by list and detail. Surfaces both the decoded
-/// `asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`
+/// `asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`
 /// SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetItem {

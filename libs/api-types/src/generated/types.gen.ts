@@ -13,9 +13,11 @@ export type AccountBalance = {
   asset_code?: string | null;
   asset_issuer?: string | null;
   /**
-   * Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`
-   * | `credit_alphanum12` for classic. Soroban (type-3) rows are also returned
-   * — identify them via `contract_id`, not this label.
+   * Label in the `AssetFamily` vocabulary: `native` | `classic_credit` |
+   * `soroban`. (Task 0496: this used to borrow the XDR legend, which calls
+   * 3 `pool_share` — so every Soroban holding read as an LP share. This
+   * field's values come from `assets.asset_type`, whose domain is the
+   * family enum, and the label now follows that domain.)
    */
   asset_type_name?: string | null;
   /**
@@ -283,7 +285,7 @@ export type AssetDetailResponse = {
 
 /**
  * Asset row returned by list and detail. Surfaces both the decoded
- * `asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`
+ * `asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`
  * SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
  */
 export type AssetItem = {
@@ -1958,12 +1960,18 @@ export type PoolActivityItem = {
 export type PoolAssetLeg = {
   asset_code?: string | null;
   /**
-   * Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
+   * Raw SMALLINT, XDR `AssetType`: 0=native, 1=credit_alphanum4,
+   * 2=credit_alphanum12. Not the `assets.asset_type` family domain.
    */
   asset_type: number;
   /**
-   * `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
-   * only on schema drift.
+   * Label in the **XDR `AssetType`** vocabulary — this is a pool LEG, and
+   * leg types come from `liquidity_pools.asset_a_type`/`asset_b_type`,
+   * which store the protocol discriminant: `native` |
+   * `credit_alphanum4` | `credit_alphanum12`. `null` only on schema drift.
+   * (Task 0496 mirror: this doc used to carry the `AssetFamily` legend,
+   * declaring 2 "retired" — while 54 456 production legs carry
+   * 2 = `credit_alphanum12`.)
    */
   asset_type_name?: string | null;
   /**

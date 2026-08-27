@@ -9,25 +9,25 @@
 //!
 //! Readable SQL labels for psql / BI live in the
 //! `20260422000000_enum_label_functions` migration (one IMMUTABLE helper
-//! per enum: `op_type_name`, `asset_type_name`, `token_asset_type_name`,
+//! per enum: `op_type_name`, `asset_type_name`, `asset_family_name`,
 //! `nft_event_type_name`, `contract_type_name`). ADR 0033 removed
 //! `soroban_events.event_type`, so no `event_type_name` helper is defined.
 //! An integration test iterates every variant and asserts that the SQL
 //! helper agrees with `Self::as_str()` so drift surfaces in CI, not prod.
 
+mod asset_family;
 mod asset_type;
 mod contract_event_type;
 mod contract_type;
 mod nft_event_type;
 mod operation_type;
-mod token_asset_type;
 
+pub use asset_family::AssetFamily;
 pub use asset_type::AssetType;
 pub use contract_event_type::ContractEventType;
 pub use contract_type::ContractType;
 pub use nft_event_type::NftEventType;
 pub use operation_type::OperationType;
-pub use token_asset_type::TokenAssetType;
 
 /// Error returned when a SMALLINT value read from the database (or a
 /// string parsed from an API request) does not correspond to any known

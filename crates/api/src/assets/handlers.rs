@@ -3,7 +3,7 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use domain::TokenAssetType;
+use domain::AssetFamily;
 
 use crate::common::cache_control;
 use crate::common::cursor;
@@ -155,7 +155,7 @@ pub async fn list_assets(
     pagination: Pagination<AssetKeyCursor>,
     Query(params): Query<ListParams>,
 ) -> Response {
-    let asset_type: Option<i16> = match filters::parse_enum_opt::<TokenAssetType>(
+    let asset_type: Option<i16> = match filters::parse_enum_opt::<AssetFamily>(
         params.filter_type.as_deref(),
         "type",
         Some("asset type"),
@@ -441,7 +441,7 @@ pub async fn list_asset_transactions(
     // ADR 0051 / task 0339: discriminant 2 (retired `sac`) no longer exists in
     // prod (Phase-2 relabel complete) and is rejected by `try_from` like any
     // other unknown discriminant.
-    if TokenAssetType::try_from(row.asset_type).is_err() {
+    if AssetFamily::try_from(row.asset_type).is_err() {
         tracing::error!(
             asset_type = row.asset_type,
             contract_id = ?row.contract_id,

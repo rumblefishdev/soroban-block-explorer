@@ -174,7 +174,7 @@ fn is_hex_pool_id(s: &str) -> bool {
 
 /// `asset_type` SMALLINT → label, matching the PG `asset_type_name()` SQL
 /// function (migration `20260422000000_enum_label_functions`) — the XDR
-/// `AssetType`, which is what LP legs carry. NOT `token_asset_type_name`
+/// `AssetType`, which is what LP legs carry. NOT `asset_family_name`
 /// (native/classic_credit/sac/soroban); the `PoolAssetLeg` doc-comment quotes
 /// that sibling function and is misleading for pool legs. Box-confirmed: a
 /// 9-char code (`WGUARDIAN`) is `asset_type = 2` = credit_alphanum12, not sac.
