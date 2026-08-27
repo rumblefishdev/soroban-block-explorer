@@ -64,9 +64,10 @@
 //! never emitted a single pool event, so a caller should treat a registration
 //! as a candidate and let activity confirm it.
 //!
-//! Token arity tracks the pool: two-token pools carry two addresses, the
-//! three-token stable pools carry three. **The leg list is a list** — treating
-//! it as a pair is the classic-AMM assumption that does not survive here.
+//! **The leg list is a list.** Measured across all registrations: 488 pools
+//! carry two legs, 7 carry three, and **2 carry four** — all `stable`. Treating
+//! legs as a pair is the classic-AMM assumption that does not survive here, and
+//! an upper bound of three would not survive either. No bound is assumed.
 
 use serde_json::Value;
 
@@ -75,61 +76,115 @@ use serde_json::Value;
 pub struct AddPoolEvent {
     /// Pool contract StrKey (`C…`).
     pub pool: String,
-    /// Pool shape under one spelling, or `None` when the on-chain string is
-    /// one nobody has catalogued. `None` is a signal to count, never a reason
-    /// to drop the registration — the pool is real either way.
-    pub pool_type: Option<&'static str>,
-    /// The spelling exactly as the router wrote it. Kept even when it
-    /// normalises, because two sources disagree on it (`constant` here vs
-    /// `standard` in pool state) and flattening that at write time would hide
-    /// a real divergence.
-    pub pool_type_raw: String,
+    /// Pool shape, exactly as the router wrote it.
+    ///
+    /// Deliberately not normalised here. Three vocabularies for this concept
+    /// are live at once — `constant` in this event, `standard` in pool state,
+    /// `ConstantProduct` in the contract's own enum — and a decoder that
+    /// folded them would be asserting they mean the same thing, which is an
+    /// interpretation, not a decoding. Whoever needs one vocabulary maps it
+    /// where that need lives, and keeps this value to fall back on.
+    pub pool_type: String,
     /// Pool legs, in the order the router registered them. This order is the
     /// one the pool's own `get_tokens()` reports, so reserve vectors line up
     /// with it index-for-index and need no reordering.
     pub tokens: Vec<String>,
-    /// `subpool_salt` — the key by which the router addresses this pool
-    /// within its token set. Confirmed against the deployed contract's own
-    /// spec, pulled from chain: `get_pools(tokens) -> Map<BytesN<32>, Address>`
-    /// and `pool_type(tokens, pool_index: BytesN<32>) -> Symbol` both take
-    /// exactly this value as the lookup key.
+    /// `subpool_salt` — the slot key the router addresses this pool by, within
+    /// one token set: the contract's own spec takes exactly this value as the
+    /// lookup key in `get_pools(tokens) -> Map<BytesN<32>, Address>` and
+    /// `pool_type(tokens, pool_index: BytesN<32>) -> Symbol`.
+    ///
+    /// **It does not identify a pool.** Measured over all 497 registrations:
+    /// only **81 distinct salts**, and 47 `(tokens, salt)` slots were
+    /// registered more than once — one of them seven times, each naming a
+    /// different pool contract. A slot gets re-pointed when a pool is
+    /// redeployed, so the current pool for a slot is the newest registration
+    /// and the older contracts are superseded, not duplicates.
     ///
     /// **Not a WASM hash** — joining it against `soroban_contracts.wasm_hash`
     /// matches nothing, or matches wrongly.
-    /// Decoded to bytes; `None` when absent or not 32 bytes.
+    /// `None` when absent or not 32 bytes.
     pub subpool_salt: Option<[u8; 32]>,
-    /// `init_args` — the arguments the router passed when constructing the
-    /// pool. First element is the fee in basis points for every pool type
-    /// observed so far; `concentrated` pools carry a second value (tick
-    /// spacing). Kept as a list rather than named fields because the arity is
-    /// a property of the pool type, and the vendor's own signature types it as
-    /// an untyped `Vec<Val>`.
-    pub init_args: Vec<i64>,
+    /// `init_args` — the construction arguments, as raw decoded strings in
+    /// emitted order.
+    ///
+    /// Kept as text, unparsed, because the list is **three different
+    /// vocabularies wearing one shape** (measured across all history):
+    ///
+    /// | Pool type | `init_args` | Meaning |
+    /// |---|---|---|
+    /// | `constant`, `elastic` | `[u32]` | fee |
+    /// | `concentrated` | `[u32, i32]` | fee, tick spacing (signed) |
+    /// | `stable` | `[u32, u128]` or `[u32, u128, u32]` | fee, amplification, admin fee |
+    ///
+    /// So position 1 is a tick spacing in one type and an amplification factor
+    /// in another. Parsing to a numeric list here would also invite dropping
+    /// an element that does not fit and **shifting the rest left**, which
+    /// turns a three-argument stable pool into something shaped exactly like a
+    /// two-argument concentrated one. `u128` cannot be assumed to fit `i64`
+    /// either. Whoever needs a number reads it against a known pool type.
+    pub init_args: Vec<String>,
+}
+
+/// Why an event did not yield a registration.
+///
+/// Separated from success so a caller can tell the two apart, because they
+/// mean opposite things. [`NotAddPool`](Self::NotAddPool) is the overwhelming
+/// normal case — every other event on the chain — and counting it is noise.
+/// Every other variant means an event *claimed* to be a registration and could
+/// not be read, so a pool is missing and somebody should be told. Collapsing
+/// both into a bare `None` makes that alarm impossible to write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddPoolReject {
+    /// Not a registration at all. Expected, and not worth counting.
+    NotAddPool,
+    /// Claims to be a registration, but the legs are missing, malformed, or
+    /// empty.
+    BadTokens,
+    /// The data payload is not the expected tuple.
+    BadData,
+    /// The pool address is missing or not an address.
+    BadPoolAddress,
+    /// The pool type is missing or not a symbol.
+    BadPoolType,
 }
 
 /// Decode an `add_pool` event from its topics and data payloads.
 ///
-/// Returns `None` when the event is not a well-formed `add_pool` — a caller
-/// staging events should count those rather than drop them silently, since a
-/// rejected registration is a pool that would otherwise go missing.
-pub fn parse_add_pool(topics: &Value, data: &Value) -> Option<AddPoolEvent> {
-    let topics = topics.as_array()?;
-    if symbol_value(topics.first()?)? != "add_pool" {
-        return None;
+/// Every error other than [`AddPoolReject::NotAddPool`] is a pool that would
+/// otherwise go missing — count those, and alert on them.
+pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddPoolReject> {
+    use AddPoolReject as R;
+
+    let topics = topics.as_array().ok_or(R::NotAddPool)?;
+    if symbol_value(topics.first().ok_or(R::NotAddPool)?) != Some("add_pool") {
+        return Err(R::NotAddPool);
     }
 
-    // Legs ride in topic 1 as a vec of addresses.
-    let tokens: Vec<String> = vec_elements(topics.get(1)?)?
+    // Legs ride in topic 1 as a vec of addresses. From here on the event has
+    // claimed to be a registration, so nothing may fail quietly.
+    let tokens: Vec<String> = topics
+        .get(1)
+        .and_then(vec_elements)
+        .ok_or(R::BadTokens)?
         .iter()
         .map(address_value)
-        .collect::<Option<_>>()?;
+        .collect::<Option<_>>()
+        .ok_or(R::BadTokens)?;
     if tokens.is_empty() {
-        return None;
+        return Err(R::BadTokens);
     }
 
-    let fields = vec_elements(data)?;
-    let pool = address_value(fields.first()?)?;
-    let pool_type_raw = symbol_value(fields.get(1)?)?.to_string();
+    let fields = vec_elements(data).ok_or(R::BadData)?;
+    let pool = fields
+        .first()
+        .and_then(address_value)
+        .ok_or(R::BadPoolAddress)?;
+    let pool_type = fields
+        .get(1)
+        .and_then(symbol_value)
+        .ok_or(R::BadPoolType)?
+        .to_string();
 
     // Remaining fields are positional and have been stable across all history,
     // but a shorter payload is a decodable registration all the same: the pool
@@ -138,43 +193,21 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Option<AddPoolEvent> {
         .get(2)
         .and_then(typed_str("bytes"))
         .and_then(decode_bytes32);
+    // Every element is kept. A `filter_map` here would silently shorten the
+    // list and change what position 1 means.
     let init_args = fields
         .get(3)
         .and_then(vec_elements)
-        .map(|items| items.iter().filter_map(int_value).collect())
+        .map(|items| items.iter().map(raw_scalar).collect())
         .unwrap_or_default();
 
-    Some(AddPoolEvent {
+    Ok(AddPoolEvent {
         pool,
-        pool_type: normalise_pool_type(&pool_type_raw),
-        pool_type_raw,
+        pool_type,
         tokens,
         subpool_salt,
         init_args,
     })
-}
-
-/// Collapse the spellings of a pool shape onto one.
-///
-/// Not a closed domain: these strings are chosen by a third-party contract,
-/// Soroban defines no AMM standard, and a deployment can introduce a shape
-/// without telling anyone. So this is deliberately **not** one of the
-/// `domain::enums` — those pin closed protocol domains to a SMALLINT column,
-/// and pretending this is one would mean editing an enum every time the chain
-/// surprises us.
-///
-/// Two spellings for one shape are already live: the router's `add_pool` says
-/// `constant` while the pool-state entry for the same pool says `standard`.
-/// Total by construction — an unrecognised string yields `None` rather than a
-/// plausible wrong value, and the caller keeps `pool_type_raw` and counts it.
-fn normalise_pool_type(raw: &str) -> Option<&'static str> {
-    match raw {
-        "constant" | "standard" => Some("constant"),
-        "stable" => Some("stable"),
-        "concentrated" => Some("concentrated"),
-        "elastic" => Some("elastic"),
-        _ => None,
-    }
 }
 
 /// Base64 → exactly 32 bytes. A payload of any other length is not the salt
@@ -212,11 +245,15 @@ fn symbol_value(v: &Value) -> Option<&str> {
     typed_str("sym")(v).filter(|s| !s.is_empty())
 }
 
-/// Numeric ScVal JSON carries its value as a string for the wide types and as
-/// a JSON number for the narrow ones; accept both.
-fn int_value(v: &Value) -> Option<i64> {
-    let raw = v.get("value")?;
-    raw.as_i64().or_else(|| raw.as_str()?.parse().ok())
+/// A scalar ScVal's value as text. Numeric ScVal JSON carries wide types as
+/// strings and narrow ones as JSON numbers; both render the same way here, and
+/// anything unexpected renders as its JSON rather than vanishing.
+fn raw_scalar(v: &Value) -> String {
+    match v.get("value") {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
 }
 
 /// Curried string reader for scalar ScVal JSON: `typed_str("address")(v)`
@@ -262,39 +299,73 @@ mod tests {
             ev.pool,
             "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O"
         );
-        assert_eq!(ev.pool_type, Some("constant"));
-        assert_eq!(ev.pool_type_raw, "constant", "raw spelling is preserved");
+        assert_eq!(ev.pool_type, "constant");
         assert_eq!(ev.tokens.len(), 2);
         assert_eq!(
             ev.tokens[0],
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
         );
-        assert_eq!(ev.init_args, vec![10]);
+        assert_eq!(ev.init_args, vec!["10"]);
         assert!(ev.subpool_salt.is_some(), "32-byte subpool salt decodes");
     }
 
-    /// Three-token stable pools exist on mainnet. The leg list must carry all
-    /// three — a pair-shaped decoder would silently lose the third asset.
+    /// Verbatim from mainnet — a `stable` pool, three `init_args`
+    /// (`u32` fee, `u128` amplification, `u32` admin fee). Pinned exactly so a
+    /// change in the widest real argument list fails here.
     #[test]
-    fn keeps_all_three_legs_of_a_stable_pool() {
+    fn decodes_a_mainnet_stable_pool_with_three_init_args() {
         let topics = json!([
             {"type": "sym", "value": "add_pool"},
             {"type": "vec", "value": [
-                {"type": "address", "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
-                {"type": "address", "value": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
-                {"type": "address", "value": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                {"type": "address", "value": "CBZVSNVB55ANF24QVJL2K5QCLOAB6XITGTGXYEAF6NPTXYKEJUYQOHFC"}
             ]}
         ]);
         let data = json!({"type": "vec", "value": [
-            {"type": "address", "value": "CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"},
+            {"type": "address", "value": "CDO2P6WRYF752RA2G23BQFEGKQ4Z4V53O7V43D3KDKNIB3TT24MPU7QI"},
             {"type": "sym", "value": "stable"},
-            {"type": "bytes", "value": "AAAA"},
-            {"type": "vec", "value": [{"type": "u32", "value": 6}]}
+            {"type": "bytes", "value": "1IpnTyaMNDXHXJjpAMaBFGtq1aRpqbXw4/uwrovz85s="},
+            {"type": "vec", "value": [
+                {"type": "u32", "value": 4},
+                {"type": "u128", "value": "85"},
+                {"type": "u32", "value": 0}
+            ]}
         ]});
 
-        let ev = parse_add_pool(&topics, &data).expect("three-token stable pool");
-        assert_eq!(ev.tokens.len(), 3, "third leg must survive decoding");
-        assert_eq!(ev.pool_type, Some("stable"));
+        let ev = parse_add_pool(&topics, &data).expect("real stable pool");
+        assert_eq!(ev.pool_type, "stable");
+        assert_eq!(
+            ev.init_args,
+            vec!["4", "85", "0"],
+            "all three arguments survive, in order and unparsed"
+        );
+        assert!(ev.subpool_salt.is_some(), "32-byte slot key decodes");
+    }
+
+    /// Four-leg pools are real — two of them, both `stable`. A decoder capped
+    /// at three legs would drop them, and an earlier version of this module's
+    /// documentation claimed three was the maximum.
+    #[test]
+    fn keeps_all_four_legs_of_a_stable_pool() {
+        let leg = |c: &str| json!({"type": "address", "value": c});
+        let topics = json!([
+            {"type": "sym", "value": "add_pool"},
+            {"type": "vec", "value": [
+                leg("CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"),
+                leg("CBZVSNVB55ANF24QVJL2K5QCLOAB6XITGTGXYEAF6NPTXYKEJUYQOHFC"),
+                leg("CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"),
+                leg("CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW")
+            ]}
+        ]);
+        let data = json!({"type": "vec", "value": [
+            {"type": "address", "value": "CDO2P6WRYF752RA2G23BQFEGKQ4Z4V53O7V43D3KDKNIB3TT24MPU7QI"},
+            {"type": "sym", "value": "stable"},
+            {"type": "bytes", "value": "1IpnTyaMNDXHXJjpAMaBFGtq1aRpqbXw4/uwrovz85s="},
+            {"type": "vec", "value": [{"type": "u32", "value": 4}]}
+        ]});
+
+        let ev = parse_add_pool(&topics, &data).expect("four-leg stable pool");
+        assert_eq!(ev.tokens.len(), 4, "no arity cap may exist");
     }
 
     /// A pool type nobody has catalogued must arrive as itself. `elastic` is
@@ -307,43 +378,66 @@ mod tests {
 
         let ev = parse_add_pool(&topics, &data).expect("unknown type still decodes");
         assert_eq!(
-            ev.pool_type,
-            Some("elastic"),
-            "no default arm may swallow this"
+            ev.pool_type, "elastic",
+            "a shape only one deployment registers must survive verbatim"
         );
     }
 
-    /// Concentrated pools carry a second parameter beside the fee.
+    /// Verbatim from mainnet — a `concentrated` pool. Its tick spacing is a
+    /// **signed** `i32`, not the `u32` an earlier fixture assumed.
     #[test]
-    fn keeps_every_trailing_parameter() {
-        let (topics, mut data) = constant_pool_event();
-        data["value"][1] = json!({"type": "sym", "value": "concentrated"});
-        data["value"][3] = json!({"type": "vec", "value": [
-            {"type": "u32", "value": 10},
-            {"type": "u32", "value": 20}
+    fn decodes_a_mainnet_concentrated_pool() {
+        let topics = json!([
+            {"type": "sym", "value": "add_pool"},
+            {"type": "vec", "value": [
+                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                {"type": "address", "value": "CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"}
+            ]}
+        ]);
+        let data = json!({"type": "vec", "value": [
+            {"type": "address", "value": "CCKQASCNLYGCUYRKDFYHW5SRVUQNRPRX27YAK62CBNLEVSKIXE3CO4LI"},
+            {"type": "sym", "value": "concentrated"},
+            {"type": "bytes", "value": "7UVCkVX4dkddPHrBjTQnPWONalsvzHNts21xpXiIUsU="},
+            {"type": "vec", "value": [
+                {"type": "u32", "value": 30},
+                {"type": "i32", "value": 60}
+            ]}
         ]});
 
-        let ev = parse_add_pool(&topics, &data).expect("concentrated pool");
-        assert_eq!(
-            ev.init_args,
-            vec![10, 20],
-            "tick spacing must not be dropped"
-        );
+        let ev = parse_add_pool(&topics, &data).expect("real concentrated pool");
+        assert_eq!(ev.pool_type, "concentrated");
+        assert_eq!(ev.init_args, vec!["30", "60"], "tick spacing survives");
     }
 
-    /// A shape nobody has catalogued must still register the pool: `None` is
-    /// a counter to increment, not a reason to lose a real pool.
+    /// A wide `u128` must not be dropped or narrowed. Nothing on chain
+    /// currently exceeds `i64`, but the emitted type permits it, and losing an
+    /// element would shift every later argument into the wrong meaning.
     #[test]
-    fn an_uncatalogued_shape_still_registers_the_pool() {
+    fn keeps_an_argument_too_wide_for_i64() {
+        let (topics, mut data) = constant_pool_event();
+        data["value"][1] = json!({"type": "sym", "value": "stable"});
+        data["value"][3] = json!({"type": "vec", "value": [
+            {"type": "u32", "value": 4},
+            {"type": "u128", "value": "340282366920938463463374607431768211455"},
+            {"type": "u32", "value": 0}
+        ]});
+
+        let ev = parse_add_pool(&topics, &data).expect("stable pool");
+        assert_eq!(ev.init_args.len(), 3, "nothing may be dropped");
+        assert_eq!(ev.init_args[1], "340282366920938463463374607431768211455");
+        assert_eq!(ev.init_args[2], "0", "the admin fee must not shift left");
+    }
+
+    /// A shape nobody has catalogued arrives as itself and still registers the
+    /// pool. The decoder has no catalogue to check against, which is the point:
+    /// nothing here can turn an unknown shape into a known-looking one.
+    #[test]
+    fn an_uncatalogued_shape_arrives_intact() {
         let (topics, mut data) = constant_pool_event();
         data["value"][1] = json!({"type": "sym", "value": "hyperbolic"});
 
         let ev = parse_add_pool(&topics, &data).expect("pool is still real");
-        assert_eq!(ev.pool_type, None, "no plausible wrong variant");
-        assert_eq!(
-            ev.pool_type_raw, "hyperbolic",
-            "raw survives for the counter"
-        );
+        assert_eq!(ev.pool_type, "hyperbolic", "no mapping may rewrite it");
         assert!(!ev.pool.is_empty(), "the pool itself must not be dropped");
     }
 
@@ -358,39 +452,14 @@ mod tests {
         assert_eq!(ev.subpool_salt, None);
     }
 
-    /// The pool-state entry spells `constant` as `standard`; both must land on
-    /// one value or every query needs to know about the disagreement.
-    #[test]
-    fn both_spellings_of_constant_collapse() {
-        assert_eq!(normalise_pool_type("constant"), Some("constant"));
-        assert_eq!(normalise_pool_type("standard"), Some("constant"));
-    }
-
-    #[test]
-    fn every_measured_shape_normalises() {
-        for raw in ["constant", "standard", "stable", "concentrated", "elastic"] {
-            assert!(
-                normalise_pool_type(raw).is_some(),
-                "{raw} is live on mainnet"
-            );
-        }
-    }
-
-    #[test]
-    fn an_unknown_spelling_yields_none() {
-        assert_eq!(normalise_pool_type("hyperbolic"), None);
-        assert_eq!(
-            normalise_pool_type("Constant"),
-            None,
-            "unexpected case is a real signal"
-        );
-    }
-
     #[test]
     fn rejects_other_events() {
         let (_, data) = constant_pool_event();
         let topics = json!([{"type": "sym", "value": "trade"}]);
-        assert_eq!(parse_add_pool(&topics, &data), None);
+        assert_eq!(
+            parse_add_pool(&topics, &data),
+            Err(AddPoolReject::NotAddPool)
+        );
     }
 
     /// Soroswap-shaped events put a protocol label in topic 0 and the name in
@@ -403,9 +472,15 @@ mod tests {
             {"type": "string", "value": "SoroswapPair"},
             {"type": "sym", "value": "add_pool"}
         ]);
-        assert_eq!(parse_add_pool(&topics, &data), None);
+        assert_eq!(
+            parse_add_pool(&topics, &data),
+            Err(AddPoolReject::NotAddPool)
+        );
     }
 
+    /// An empty leg list is a *malformed registration*, not some other event.
+    /// The distinction is the point of the reject enum: this one means a pool
+    /// went missing and should raise an alarm.
     #[test]
     fn rejects_a_registration_with_no_legs() {
         let (_, data) = constant_pool_event();
@@ -413,6 +488,9 @@ mod tests {
             {"type": "sym", "value": "add_pool"},
             {"type": "vec", "value": []}
         ]);
-        assert_eq!(parse_add_pool(&topics, &data), None);
+        assert_eq!(
+            parse_add_pool(&topics, &data),
+            Err(AddPoolReject::BadTokens)
+        );
     }
 }

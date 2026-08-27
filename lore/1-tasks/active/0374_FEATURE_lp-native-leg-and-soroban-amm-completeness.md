@@ -517,9 +517,14 @@ required, and `is_hex_pool_id` / `pool_id_from_text` need the same branch.
 
 The router's `add_pool` says `constant`; the pool-state entry for the same pool
 says `standard`. Since plane state is now the single reserve source (T4), one
-column would collect both spellings. Resolved: a normalised enum plus the raw
-string, with an uncatalogued spelling normalising to `None` and being counted.
-**Implemented** — `domain::PoolType`.
+column would collect both spellings. **Reversed 2026-08-27.** The decoder now
+keeps only the raw spelling and normalises nothing: three vocabularies are live
+at once (`constant` in the event, `standard` in pool state, `ConstantProduct`
+in the contract's own enum), and asserting they mean the same thing is an
+interpretation, not a decoding. It belongs wherever one vocabulary is actually
+needed, not in the path every event crosses. Measured afterwards: `standard`
+appears in **zero** of the 497 `add_pool` payloads, so the folding arm was
+unreachable code justified by a source it could never see.
 
 ### 5. The orphan arm can clobber a registry row
 
