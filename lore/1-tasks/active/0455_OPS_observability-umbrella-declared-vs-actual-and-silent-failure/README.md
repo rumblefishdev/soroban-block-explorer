@@ -222,6 +222,17 @@ history:
       series so a stall reads as a drop rather than a flat line, and a reading
       note stating why the cost-anomaly alert has no widget by design. Six
       criteria left, four of them needing a production window.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      All three carried items closed. The reconcile alarm gained a cause field
+      rather than a rename; the NFT fetcher took SEP-1's redirect policy rather
+      than a second copy of it; NFT metadata coverage was re-measured (20.7%
+      of promoted NFTs carry neither name nor media) and spawned as 0519. The
+      measurement changed the shape of that question: the gap is all-or-nothing
+      per collection, 51 collections fully missing against 7 partial, so it is
+      one cause per collection rather than scattered fetch failures.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -778,11 +789,11 @@ grant is added to the list rather than on top of it.
    "CH write failure". Coverage is total (nothing is missed) and the full error
    Display is in the log line, so it misleads for the first minute rather than
    blinding — but the name is a declared-vs-actual defect of exactly this
-   task's class. Options: (a) one generic `reconcile_failed` contract for every
-   terminal failure — honest, but renames a deployed metric, its filter, the
-   alarm, the guard test and three docs; (b) keep the field, add a `cause`
-   field and fix the alarm description — small diff, alarm name still lies;
-   (c) document and accept. Operator decision pending.
+   task's class. **Resolved 2026-08-27 — option (b).** Every emit site now carries
+   `cause=s3|parse|clickhouse` (`mtls_init` at the cold-start site) and the
+   alarm description tells the reader to check it before assuming the
+   database. Renaming the metric was rejected: it would cost the deployed
+   series its history for a name.
 2. **The NFT fetcher refuses redirects; measured 2026-08-18 whether it should.**
    `Policy::limited(0)` is the SSRF guard, and the gateway pool was chosen in
    0311 precisely because it answers `200` without redirecting. Re-measured:
@@ -791,25 +802,25 @@ grant is added to the list rather than on top of it.
    But a **directory** CID without a trailing slash answers `301` to the same
    host + `/`, and refusing that loses the content; `dweb.link` (not in our
    pool) redirects to a per-CID subdomain, which is the shape the guard exists
-   to stop; `cloudflare-ipfs.com` is dead, confirming the comment. Proposal:
-   mirror the SEP-1 policy — bounded hops, https-only, same registrable domain
-   as the gateway base — which recovers the trailing-slash case and still
-   blocks the subdomain/off-host shapes. Note the classification fix shipped in
+   to stop; `cloudflare-ipfs.com` is dead, confirming the comment. **Resolved 2026-08-27 — implemented, and by sharing rather than
+   copying:** the fetcher now uses SEP-1's own `same_etld1_redirect_policy`,
+   so there is one SSRF redirect policy for every outbound enrichment fetch
+   instead of two that can drift. Recovers the trailing-slash case, still
+   blocks the subdomain and off-host shapes. Note the classification fix shipped in
    this PR stays correct either way: once the policy follows safe redirects, an
    `is_redirect()` error can only mean "refused as unsafe or over budget",
    which is permanent by construction.
-3. **NFT metadata coverage is ~82%, and nothing measures it.** Measured
-   2026-08-18 on production, joining `nfts FINAL` to the deduped
-   `nft_enrichment` side table (`argMax(_, version)`): of 13 294 promoted
-   NFTs, **10 897 carry a name and 10 901 a media URL — about 2 390 have
-   neither**. (Method note for whoever picks this up: the columns on `nfts`
-   itself are vestigial NULL by design — the live indexer rewrites that row on
-   every ownership change — so a count over `nfts.name` reads 0 and means
-   nothing. This note first recorded exactly that false 0%.) The residual may
-   be entirely legitimate (contracts with no `token_uri`), but no signal
-   distinguishes "nothing to fetch" from "fetch is failing", which is defect 2
-   applied to an enrichment family. Wants its own task: first establish the
-   split, then decide whether a coverage signal is worth an alarm.
+3. **NFT metadata coverage — spawned as [[0519]] 2026-08-27.** Re-measured
+   before filing: **13 752 promoted NFTs, 2 849 (20.7%) carry neither a name
+   nor a media URL.** The shape is the finding — the gap is all-or-nothing per
+   collection: 51 collections are 100% missing (2 716 tokens) and only 7 are
+   partial (133 tokens), which points at one cause per collection rather than
+   scattered fetch failures. The 7 partial ones are where a real defect would
+   hide. Method note kept in 0519 because it already produced a false 0% once:
+   the `name`/`media_url` columns on `nfts` are vestigial NULL by design, so
+   the count must join `nft_enrichment` with `argMax(_, version)`. Note that
+   the redirect-policy change landed the same day, so that figure is the
+   pre-change baseline and 0519 re-measures after deploy.
 
 ## Notes
 
