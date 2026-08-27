@@ -173,6 +173,18 @@ history:
       one is in flight with PR #427, one is an operator decision, and one — no
       alarm sits latched and mute — is dead as written, because the alarm that
       breaks it was skipped knowingly. Recorded with the two honest ways out.
+  - date: 2026-08-27
+    status: active
+    who: karolkow
+    note: >
+      Two consistency items closed on the branch. The plan section claimed the
+      DLQ-growth alarm pair was "still pending" eight days after ADR 0054
+      withdrew it; corrected with the reason. 0403's deferred measurement ran:
+      the sep1 issuer resolve averages 25 057 read_rows over 9 370 production
+      calls, the expected order. The dev_read vs ingestion_writer discrepancy
+      is explained rather than left open — probing the same statement across
+      five keys as dev_read spans 24 576 to 73 728 read_rows, so granule
+      placement sets the cost and the user does not. Seven criteria left.
 ---
 
 # Observability umbrella — recurring defects, not isolated bugs
@@ -356,8 +368,13 @@ be readable.
   `ApproximateAgeOfOldestMessage` for the ingest queue (120 s × 3 min, from
   the measured bimodal distribution); the `IF(received > 0, age, 0)`
   discriminator withdrawn per rewritten ADR 0054 rule 4 — one knowing page
-  per planned pause is the accepted cost. DLQ-growth pair still pending
-  (R3)
+  per planned pause is the accepted cost. **The DLQ-growth pair is not
+  pending — it was withdrawn 2026-08-11** (ADR 0054, "Considered and
+  withdrawn"): the DLQ contents were investigated and the latch turned out to
+  be a missing drain procedure, not a wrong alarm shape, so a plain level
+  alarm under rule 2's carve-out is correct and `docs/runbooks/dlq.md` carries
+  the drain. This line said "still pending" for eight days after the ADR
+  killed it
 - **Done 2026-08-06** — every alarm's `treatMissingData` carries a one-line
   justification comment; the write-failure threshold rewritten in doorbell
   units
@@ -514,10 +531,23 @@ month is unanswerable by construction.
       an undeployed one was read in the job log)
 - [x] Alarm filter strings verified against the strings the code actually emits
       (2026-08-06 — `declared-vs-emitted.spec.ts`, enforced in CI)
-- [ ] 0403's deferred measurement executed after the next deploy + a drain:
+- [x] 0403's deferred measurement executed after the next deploy + a drain:
       the sep1 issuer resolve reads ~24.6k rows/call in `system.query_log`
       (not ~24.9M), and the `dev_read` vs `ingestion_writer` read-count
-      discrepancy explained or recorded as still open
+      discrepancy explained or recorded as still open.
+      **Measured 2026-08-27.** Over 14 days the query
+      (`nullIf(account_id, ?) AS issuer_strkey … FROM accounts WHERE id = ?`)
+      ran **9 370 times as `ingestion_writer`, averaging 25 057 read_rows**,
+      max 109 822 — the expected order, three orders of magnitude below the
+      ~24.9M that prompted the check.
+      **The two-user discrepancy is explained, and it is not the user.**
+      Probing the identical statement as `dev_read` across five different keys
+      returned 24 576 / 40 960 / 65 536 / 73 728 / 73 728 read_rows — a 3×
+      spread inside one account, straddling `ingestion_writer`'s average. The
+      cost is set by how many granules the probed key touches, not by who
+      asks; sample one key and any two users look different. So read estimates
+      taken from the readonly account **do** describe production, provided
+      more than one key is sampled — which 0397 did not do
 - [x] Cost allocation tags active; a per-project cost answer takes minutes, and a
       step change in spend raises an alert (tags active + backfill, runbook
       shipped; anomaly detection committed — checks off after deploy).
@@ -571,7 +601,7 @@ here), a **measurement** (runnable now), or **dead as written**.
 | Planned pause pages exactly once           | operator window     | pause the event-source mapping, count the pages that arrive                                                                                  |
 | Alarm fires on ingestion stall             | operator window     | simulate a stall against the deployed alarm                                                                                                  |
 | CDK half of the comparison at release time | operator window     | one real `-<StackName>` tag deploying a non-Compute stack, with the diff of an undeployed one read in the job log                            |
-| 0403's deferred measurement                | measurement         | a deploy has now happened; the `system.query_log` read and the `dev_read` vs `ingestion_writer` discrepancy can be run                       |
+| 0403's deferred measurement                | **done 2026-08-27** | 25 057 read_rows/call over 9 370 calls; the two-user gap is granule placement, not permissions                                               |
 | Dashboard↔alarm coverage                   | in flight           | PR #427 carries the two widgets and the cost section; the stated dashboard answer for the cost alert and three per-decision leftovers remain |
 | Each child task closed or re-scoped        | operator decision   | the re-scope of the five non-instances                                                                                                       |
 | Declared-vs-actual delta reaches a human   | gated               | ticks with the release-time criterion above; not independently actionable                                                                    |
