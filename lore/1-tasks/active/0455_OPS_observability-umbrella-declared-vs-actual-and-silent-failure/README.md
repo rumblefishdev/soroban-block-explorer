@@ -613,7 +613,7 @@ month is unanswerable by construction.
       an undeployed one was read in the job log).
       **Ticked 2026-08-27.** `production-2026.08.27-2-CloudWatch` resolved to
       `stacks=Explorer-production-CloudWatch exclusively=--exclusively
-  web=false`, deployed that stack alone, and the SPA step skipped as
+web=false`, deployed that stack alone, and the SPA step skipped as
       declared. The `cdk diff — every stack, deployed or not` step ran before
       it and showed Compute carrying three undeployed Lambda code changes —
       an undeployed stack's drift, read in the job log, by the mechanism this
