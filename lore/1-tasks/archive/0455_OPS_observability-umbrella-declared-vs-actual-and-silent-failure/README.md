@@ -1,253 +1,281 @@
 ---
+
 id: '0455'
 title: 'OPS: observability umbrella — "declared vs actual, never compared" and "health measured by success"'
 type: OPS
-status: active
+status: completed
 related_adr: ['0054']
 related_tasks:
-  [
-    '0454',
-    '0428',
-    '0400',
-    '0312',
-    '0434',
-    '0232',
-    '0406',
-    '0250',
-    '0237',
-    '0449',
-    '0448',
-    '0447',
-    '0403',
-    '0382',
-    '0127',
-    '0367',
-    '0368',
-  ]
+[
+'0454',
+'0428',
+'0400',
+'0312',
+'0434',
+'0232',
+'0406',
+'0250',
+'0237',
+'0449',
+'0448',
+'0447',
+'0403',
+'0382',
+'0127',
+'0367',
+'0368',
+]
 tags: [priority-high, effort-large, observability, ops, umbrella, cross-project]
 links:
-  - infra/src/lib/stacks/cloudwatch-stack.ts
-  - crates/db-clickhouse/schema/init.sql
-  - crates/indexer/src/handler/mod.rs
-history:
-  - date: 2026-07-29
-    status: backlog
-    who: karolkow
-    note: >
-      Spawned after two investigations in two days, both of which ended in the
-      same place: the data existed, but nothing compared it or alarmed on it, so
-      it took hours of manual queries across six systems to find. Sixteen open
-      tasks turned out to be instances of two recurring defects rather than
-      sixteen separate problems. This task owns the two defects; the children own
-      their instances.
-  - date: 2026-08-04
-    status: active
-    who: karolkow
-    note: >
-      Activated, and grounded against production with a read-only principal —
-      see notes/R-production-evidence-2026-08-04.md. Both defects confirmed from
-      live data; the dead alarm filter is proved by its own metric (~108k events
-      evaluated per day, never a single match). Three findings change the plan: a
-      fourth defect (a latched alarm is a mute alarm — two instances, one running
-      32 days), a hard constraint (three of seven lag events in 30 days were
-      planned pauses, so a naive threshold alarm would page monthly for
-      maintenance), and queue age alone being insufficient because failures
-      draining to the DLQ make it read green. Child triage in
-      notes/S-child-task-triage.md: eight genuine instances, not sixteen.
-  - date: 2026-08-05
-    status: active
-    who: karolkow
-    note: >
-      Surveyed all four surfaces — logs, metrics, dashboard, alarms — and checked
-      each statement against the account; results in
-      notes/R-deep-review-findings-2026-08-04.md. Three earlier statements did
-      not survive measurement and are recorded as refuted, including a proposed
-      enrichment regression: sampling 16 issuer domains directly found no case
-      where metadata is published and the row is blank, so the blank rows track
-      the population rather than the pipeline. The single periodic comparator is
-      set aside — the infrastructure comparison already runs and its output was
-      read twice while the delta stayed open. Widest-effect candidate is an
-      `infra/` test asserting that each filter string and metric namespace
-      appears in `crates/`, which covers the class rather than an instance.
-  - date: 2026-08-10
-    status: active
-    who: karolkow
-    note: >
-      Large execution block landed. Defect-1 instances: 0406 closed (CI
-      provisions ClickHouse and runs the gated e2e suite, sabotage-verified
-      red), 0312 closed (deploy target shows the full diff and asks before
-      --all; parked delta deployed, prod diff clean), 0454's dead filter fixed
-      fundamentally (structured field alarm="ch_write_failure" plus a
-      declared-vs-emitted CI guard over a comment-stripped crates/ corpus; an
-      SSOT/codegen variant was built and reverted as overkill at 2 contracts),
-      0434 exhaustive matches, 0400 reconciled both directions with the
-      consumer-less idx_oaa_transaction_id dropped from prod and init.sql.
-      Defect-2 groundwork: treatMissingData justified on every alarm; stall
-      math IF(received>0, age, 0) measured to separate pause from failure,
-      pending merge. Cost package (0449) executed: Project tag activated from
-      the management account with historical backfill, Galexie task-tag
-      propagation, account-wide Cost Anomaly Detection to the existing SNS
-      topic, costs runbook, leftover staging-Postgres snapshots deleted,
-      hand-provisioned secrets tagged. Remaining: alarm core merge
-      (stall + DLQ-growth + re-arm), MV freshness from data recency, budgets,
-      health runbook, final deploy + verification.
-  - date: 2026-08-18
-    status: active
-    who: karolkow
-    note: >
-      Consolidation stretch (08-11..08-18) closed by PR #422 to develop.
-      Two live incidents validated the thesis in one week: 2026-08-12
-      galexie-lag page = AWS Fargate task replacement (~25 min envelope,
-      recorded as a health.md symptom path), and 2026-08-14 disk pressure
-      on the shared ClickHouse box stopped ingestion ~9.5 h with ONE quiet
-      page (DLQ level, 5 h in) - the backlog-age alarm on this branch
-      would have paged at minute 4. Lessons written into health.md
-      (Code 243 playbook, continuity-query fix, measured 0237 cost).
-      0400 closed and archived (docs half done; drift-gate AC deferred to
-      the comparator AC here). API-gateway stage cache decided NOT
-      ADOPTED after measurement (browser tiers + in-process moka are the
-      live caches, Cloudflare is DYNAMIC; return condition = measured
-      origin pressure, preferred lever a Cloudflare cache rule).
-      Dashboard reconciliation: a whole-batch rewrite was withdrawn by
-      the operator to a stash and REDONE as per-decision atomic changes -
-      the process lesson stands: one decision, one diff, one approval.
-      First slice shipped: two never-populated widgets removed (cache
-      hit/miss - cluster never provisioned; cold starts - InitDuration is
-      not a CloudWatch metric, measured empty), the freshness widget
-      moved onto the alarm's own doorbell signal, the backlog-age widget
-      added with the paging threshold drawn from config, the convention
-      comment states the rule. ch-write-failures threshold cut 10 -> 0
-      (operator decision, the 5xx zero-tolerance rule; >10 would never
-      see a single poison-pill ledger). Two develop merges absorbed
-      (271 + 76 commits; the 0390 tag-driven CI deploy is now armed for
-      Compute+SPA, Ingestion/CloudWatch stay laptop-only). Second slice
-      planned for a follow-up PR from fresh develop: worker-errors and
-      CH-write-failures widgets (with the guard learning
-      MetricFilter-minted names), cost graph, runbook matrix cells,
-      open decisions (Slack-chain witness, X-Ray, canary, retention).
-  - date: 2026-08-18
-    status: active
-    who: stkrolikiewicz
-    note: >
-      Release-scope slice, found while assembling the release note for the
-      next tag: the CDK app declares ten stacks, the tag deployed one, and
-      nothing compared the two - this task's own alarm set was sitting in
-      exactly that gap, invisible because `cdk diff` only ever covered the
-      stack being deployed. Two changes, deliberately separate. (1) The diff
-      is now wider than the deploy - `cdk diff --strict` over ALL stacks on
-      every run, as the release's drift record. (2) The tag carries a
-      selector: `production-<date>-<N>[-SELECTOR]` where empty keeps today's
-      Compute+SPA default, `all` deploys every differing stack, `web` is
-      SPA-only, and anything else is pasted onto `Explorer-production-`
-      verbatim. Mapping in `infra/scripts/deploy-scope.sh` with a
-      `--self-check` wired into the typescript CI job. `--fail` on the diff
-      (auto-deploy whatever differs) was REJECTED: cdk diffs against deployed
-      state, not against the last tag, so it fires on parked deltas and
-      console edits and would ship them unreviewed - the 0312 stowaway, which
-      is why the Makefile grew a typed `yes` the same week. Grammar is now
-      anchored, closing a real hole: the trigger is `production-*`, so any tag
-      matching that glob used to deploy the release set. Docs: deployment.md
-      Releases section rewritten, TL;DR and CloudWatch rows note the tag form,
-      /release skill steps 2/5/6 updated.
-  - date: 2026-08-19
-    status: active
-    who: karolkow
-    note: >
-      Second slice opened as PR #427 and the post-incident review sweep closed
-      out: 68 findings, every one dispositioned. 17 fixed, 31 already covered
-      by open tasks, 10 rejected once measured, 5 verified healthy, 3 skipped
-      on the operator's call, 2 handed off or refuted. Five tasks spawned
-      (0507-0511), four existing ones extended. Three acceptance criteria
-      updated here: the dashboard/alarm one advanced with the second slice, the
-      latch-proofing one now records that production contradicts it knowingly,
-      and the child-task one names what was spawned.
-  - date: 2026-08-19
-    status: active
-    who: karolkow
-    note: >
-      Acceptance criteria triaged. Two closed: the cost one on the deploy, with
-      the read-only evidence and the unproven last hop both stated; the API
-      types one because a stated N/A is answered, not pending. Of the eight
-      left, four need a production window, one is a measurement now runnable,
-      one is in flight with PR #427, one is an operator decision, and one — no
-      alarm sits latched and mute — is dead as written, because the alarm that
-      breaks it was skipped knowingly. Recorded with the two honest ways out.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      Two consistency items closed on the branch. The plan section claimed the
-      DLQ-growth alarm pair was "still pending" eight days after ADR 0054
-      withdrew it; corrected with the reason. 0403's deferred measurement ran:
-      the sep1 issuer resolve averages 25 057 read_rows over 9 370 production
-      calls, the expected order. The dev_read vs ingestion_writer discrepancy
-      is explained rather than left open — probing the same statement across
-      five keys as dev_read spans 24 576 to 73 728 read_rows, so granule
-      placement sets the cost and the user does not. Seven criteria left.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      Child-task triage reversed. The note had said five tasks should be
-      re-scoped out of this umbrella; nothing acted on it for two weeks and the
-      decision is now the opposite — they stay in related_tasks and are judged
-      one at a time. Two were never live questions: 0403 closed 2026-08-11 and
-      0127 is archived. The real judgement is 0232, 0250 and 0087.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      The latched-alarm criterion narrowed rather than left contradicting
-      production: the enrichment DLQ alarm is excluded by operator decision,
-      with the reason written into the criterion. It covers every other level
-      alarm, and its remaining open half is the re-arm test message. The
-      dead-as-written state is resolved.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      The three remaining child-task judgements made individually. 0250 stays
-      and its priority is raised — quotas the config declares are not enforced
-      on the production auth path. 0087 leaves related_tasks; the umbrella's
-      own notes always excluded frontend telemetry. 0232 turned out to be
-      superseded in premise: task 0497 already decided the RMT/MIN compromise
-      goes rather than gets per-column mitigations — the two are cross-linked
-      and 0232's fate is a close-or-narrow decision recorded there.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      Dashboard/alarm coverage closed. The three C7 leftovers shipped: Galexie
-      disk percentage built from the alarm's own metric objects, a ledger RATE
-      series so a stall reads as a drop rather than a flat line, and a reading
-      note stating why the cost-anomaly alert has no widget by design. Six
-      criteria left, four of them needing a production window.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      All three carried items closed. The reconcile alarm gained a cause field
-      rather than a rename; the NFT fetcher took SEP-1's redirect policy rather
-      than a second copy of it; NFT metadata coverage was re-measured (20.7%
-      of promoted NFTs carry neither name nor media) and spawned as 0520. The
-      measurement changed the shape of that question: the gap is all-or-nothing
-      per collection, 51 collections fully missing against 7 partial, so it is
-      one cause per collection rather than scattered fetch failures.
-  - date: 2026-08-27
-    status: active
-    who: karolkow
-    note: >
-      Two of the three dashboard cells closed with a measured "no widget"
-      rather than a widget. The Galexie disk chart was reverted after 57 days
-      of history showed 26.5-30.5% and never past 40% - a flat line; the 60%
-      alarm guards a catchup spike, not that baseline. The ledger RATE series
-      was reverted as redundant with ingestion-backlog-age, which catches the
-      same stall sooner and pages. The cost note stays, shortened, and records
-      that EstimatedCharges has no tag dimension so a per-project split cannot
-      exist in CloudWatch. Operator caught both; neither had been measured
-      before being written, which is the exact failure this task keeps finding
-      in other people's work.
----
+
+- infra/src/lib/stacks/cloudwatch-stack.ts
+- crates/db-clickhouse/schema/init.sql
+- crates/indexer/src/handler/mod.rs
+  history:
+- date: 2026-07-29
+  status: backlog
+  who: karolkow
+  note: >
+  Spawned after two investigations in two days, both of which ended in the
+  same place: the data existed, but nothing compared it or alarmed on it, so
+  it took hours of manual queries across six systems to find. Sixteen open
+  tasks turned out to be instances of two recurring defects rather than
+  sixteen separate problems. This task owns the two defects; the children own
+  their instances.
+- date: 2026-08-04
+  status: active
+  who: karolkow
+  note: >
+  Activated, and grounded against production with a read-only principal —
+  see notes/R-production-evidence-2026-08-04.md. Both defects confirmed from
+  live data; the dead alarm filter is proved by its own metric (~108k events
+  evaluated per day, never a single match). Three findings change the plan: a
+  fourth defect (a latched alarm is a mute alarm — two instances, one running
+  32 days), a hard constraint (three of seven lag events in 30 days were
+  planned pauses, so a naive threshold alarm would page monthly for
+  maintenance), and queue age alone being insufficient because failures
+  draining to the DLQ make it read green. Child triage in
+  notes/S-child-task-triage.md: eight genuine instances, not sixteen.
+- date: 2026-08-05
+  status: active
+  who: karolkow
+  note: >
+  Surveyed all four surfaces — logs, metrics, dashboard, alarms — and checked
+  each statement against the account; results in
+  notes/R-deep-review-findings-2026-08-04.md. Three earlier statements did
+  not survive measurement and are recorded as refuted, including a proposed
+  enrichment regression: sampling 16 issuer domains directly found no case
+  where metadata is published and the row is blank, so the blank rows track
+  the population rather than the pipeline. The single periodic comparator is
+  set aside — the infrastructure comparison already runs and its output was
+  read twice while the delta stayed open. Widest-effect candidate is an
+  `infra/` test asserting that each filter string and metric namespace
+  appears in `crates/`, which covers the class rather than an instance.
+- date: 2026-08-10
+  status: active
+  who: karolkow
+  note: >
+  Large execution block landed. Defect-1 instances: 0406 closed (CI
+  provisions ClickHouse and runs the gated e2e suite, sabotage-verified
+  red), 0312 closed (deploy target shows the full diff and asks before
+  --all; parked delta deployed, prod diff clean), 0454's dead filter fixed
+  fundamentally (structured field alarm="ch_write_failure" plus a
+  declared-vs-emitted CI guard over a comment-stripped crates/ corpus; an
+  SSOT/codegen variant was built and reverted as overkill at 2 contracts),
+  0434 exhaustive matches, 0400 reconciled both directions with the
+  consumer-less idx_oaa_transaction_id dropped from prod and init.sql.
+  Defect-2 groundwork: treatMissingData justified on every alarm; stall
+  math IF(received>0, age, 0) measured to separate pause from failure,
+  pending merge. Cost package (0449) executed: Project tag activated from
+  the management account with historical backfill, Galexie task-tag
+  propagation, account-wide Cost Anomaly Detection to the existing SNS
+  topic, costs runbook, leftover staging-Postgres snapshots deleted,
+  hand-provisioned secrets tagged. Remaining: alarm core merge
+  (stall + DLQ-growth + re-arm), MV freshness from data recency, budgets,
+  health runbook, final deploy + verification.
+- date: 2026-08-18
+  status: active
+  who: karolkow
+  note: >
+  Consolidation stretch (08-11..08-18) closed by PR #422 to develop.
+  Two live incidents validated the thesis in one week: 2026-08-12
+  galexie-lag page = AWS Fargate task replacement (~25 min envelope,
+  recorded as a health.md symptom path), and 2026-08-14 disk pressure
+  on the shared ClickHouse box stopped ingestion ~9.5 h with ONE quiet
+  page (DLQ level, 5 h in) - the backlog-age alarm on this branch
+  would have paged at minute 4. Lessons written into health.md
+  (Code 243 playbook, continuity-query fix, measured 0237 cost).
+  0400 closed and archived (docs half done; drift-gate AC deferred to
+  the comparator AC here). API-gateway stage cache decided NOT
+  ADOPTED after measurement (browser tiers + in-process moka are the
+  live caches, Cloudflare is DYNAMIC; return condition = measured
+  origin pressure, preferred lever a Cloudflare cache rule).
+  Dashboard reconciliation: a whole-batch rewrite was withdrawn by
+  the operator to a stash and REDONE as per-decision atomic changes -
+  the process lesson stands: one decision, one diff, one approval.
+  First slice shipped: two never-populated widgets removed (cache
+  hit/miss - cluster never provisioned; cold starts - InitDuration is
+  not a CloudWatch metric, measured empty), the freshness widget
+  moved onto the alarm's own doorbell signal, the backlog-age widget
+  added with the paging threshold drawn from config, the convention
+  comment states the rule. ch-write-failures threshold cut 10 -> 0
+  (operator decision, the 5xx zero-tolerance rule; >10 would never
+  see a single poison-pill ledger). Two develop merges absorbed
+  (271 + 76 commits; the 0390 tag-driven CI deploy is now armed for
+  Compute+SPA, Ingestion/CloudWatch stay laptop-only). Second slice
+  planned for a follow-up PR from fresh develop: worker-errors and
+  CH-write-failures widgets (with the guard learning
+  MetricFilter-minted names), cost graph, runbook matrix cells,
+  open decisions (Slack-chain witness, X-Ray, canary, retention).
+- date: 2026-08-18
+  status: active
+  who: stkrolikiewicz
+  note: >
+  Release-scope slice, found while assembling the release note for the
+  next tag: the CDK app declares ten stacks, the tag deployed one, and
+  nothing compared the two - this task's own alarm set was sitting in
+  exactly that gap, invisible because `cdk diff` only ever covered the
+  stack being deployed. Two changes, deliberately separate. (1) The diff
+  is now wider than the deploy - `cdk diff --strict` over ALL stacks on
+  every run, as the release's drift record. (2) The tag carries a
+  selector: `production-<date>-<N>[-SELECTOR]` where empty keeps today's
+  Compute+SPA default, `all` deploys every differing stack, `web` is
+  SPA-only, and anything else is pasted onto `Explorer-production-`
+  verbatim. Mapping in `infra/scripts/deploy-scope.sh` with a
+  `--self-check` wired into the typescript CI job. `--fail` on the diff
+  (auto-deploy whatever differs) was REJECTED: cdk diffs against deployed
+  state, not against the last tag, so it fires on parked deltas and
+  console edits and would ship them unreviewed - the 0312 stowaway, which
+  is why the Makefile grew a typed `yes` the same week. Grammar is now
+  anchored, closing a real hole: the trigger is `production-*`, so any tag
+  matching that glob used to deploy the release set. Docs: deployment.md
+  Releases section rewritten, TL;DR and CloudWatch rows note the tag form,
+  /release skill steps 2/5/6 updated.
+- date: 2026-08-19
+  status: active
+  who: karolkow
+  note: >
+  Second slice opened as PR #427 and the post-incident review sweep closed
+  out: 68 findings, every one dispositioned. 17 fixed, 31 already covered
+  by open tasks, 10 rejected once measured, 5 verified healthy, 3 skipped
+  on the operator's call, 2 handed off or refuted. Five tasks spawned
+  (0507-0511), four existing ones extended. Three acceptance criteria
+  updated here: the dashboard/alarm one advanced with the second slice, the
+  latch-proofing one now records that production contradicts it knowingly,
+  and the child-task one names what was spawned.
+- date: 2026-08-19
+  status: active
+  who: karolkow
+  note: >
+  Acceptance criteria triaged. Two closed: the cost one on the deploy, with
+  the read-only evidence and the unproven last hop both stated; the API
+  types one because a stated N/A is answered, not pending. Of the eight
+  left, four need a production window, one is a measurement now runnable,
+  one is in flight with PR #427, one is an operator decision, and one — no
+  alarm sits latched and mute — is dead as written, because the alarm that
+  breaks it was skipped knowingly. Recorded with the two honest ways out.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  Two consistency items closed on the branch. The plan section claimed the
+  DLQ-growth alarm pair was "still pending" eight days after ADR 0054
+  withdrew it; corrected with the reason. 0403's deferred measurement ran:
+  the sep1 issuer resolve averages 25 057 read_rows over 9 370 production
+  calls, the expected order. The dev_read vs ingestion_writer discrepancy
+  is explained rather than left open — probing the same statement across
+  five keys as dev_read spans 24 576 to 73 728 read_rows, so granule
+  placement sets the cost and the user does not. Seven criteria left.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  Child-task triage reversed. The note had said five tasks should be
+  re-scoped out of this umbrella; nothing acted on it for two weeks and the
+  decision is now the opposite — they stay in related_tasks and are judged
+  one at a time. Two were never live questions: 0403 closed 2026-08-11 and
+  0127 is archived. The real judgement is 0232, 0250 and 0087.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  The latched-alarm criterion narrowed rather than left contradicting
+  production: the enrichment DLQ alarm is excluded by operator decision,
+  with the reason written into the criterion. It covers every other level
+  alarm, and its remaining open half is the re-arm test message. The
+  dead-as-written state is resolved.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  The three remaining child-task judgements made individually. 0250 stays
+  and its priority is raised — quotas the config declares are not enforced
+  on the production auth path. 0087 leaves related_tasks; the umbrella's
+  own notes always excluded frontend telemetry. 0232 turned out to be
+  superseded in premise: task 0497 already decided the RMT/MIN compromise
+  goes rather than gets per-column mitigations — the two are cross-linked
+  and 0232's fate is a close-or-narrow decision recorded there.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  Dashboard/alarm coverage closed. The three C7 leftovers shipped: Galexie
+  disk percentage built from the alarm's own metric objects, a ledger RATE
+  series so a stall reads as a drop rather than a flat line, and a reading
+  note stating why the cost-anomaly alert has no widget by design. Six
+  criteria left, four of them needing a production window.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  All three carried items closed. The reconcile alarm gained a cause field
+  rather than a rename; the NFT fetcher took SEP-1's redirect policy rather
+  than a second copy of it; NFT metadata coverage was re-measured (20.7%
+  of promoted NFTs carry neither name nor media) and spawned as 0520. The
+  measurement changed the shape of that question: the gap is all-or-nothing
+  per collection, 51 collections fully missing against 7 partial, so it is
+  one cause per collection rather than scattered fetch failures.
+- date: 2026-08-27
+  status: active
+  who: karolkow
+  note: >
+  Two of the three dashboard cells closed with a measured "no widget"
+  rather than a widget. The Galexie disk chart was reverted after 57 days
+  of history showed 26.5-30.5% and never past 40% - a flat line; the 60%
+  alarm guards a catchup spike, not that baseline. The ledger RATE series
+  was reverted as redundant with ingestion-backlog-age, which catches the
+  same stall sooner and pages. The cost note stays, shortened, and records
+  that EstimatedCharges has no tag dimension so a per-project split cannot
+  exist in CloudWatch. Operator caught both; neither had been measured
+  before being written, which is the exact failure this task keeps finding
+  in other people's work.
+- date: 2026-08-28
+  status: completed
+  who: karolkow
+  note: >
+  Closed on 14 of 14 acceptance criteria, the last four in two days and
+  all four by sending something rather than reading something. The
+  re-arm gate found that the 2026-08-19 policy repair had never worked:
+  18 alarm actions across 9 days delivered nowhere, three real incidents
+  passed unheard (ClickHouse unreachable, a 500 on the decompiled route,
+  a consensus loss with six external archives refusing), and no data was
+  lost in any of them. Fixed by granting the CloudWatch service principal
+  publish on the alarm topic, deployed by a -CloudWatch tag, and proven
+  by a page in the channel. The tag deploy closed two more criteria on
+  its own: it deployed a non-Compute stack and printed Compute's
+  undeployed drift in the same job log, which is the declared-vs-actual
+  delta reaching a human without anyone asking. The stall criterion
+  closed on three genuine stalls rather than a rehearsal. The planned
+  pause was declined on measurement, then reversed by the operator and
+  run: exactly one page from exactly the predicted alarm, eight others
+  silent, 261 sequences with zero missing. ADR 0054 accepted - all four
+  gates closed, rules 2, 3 and 4 each demonstrated by production
+  behaviour. Children handled: 0454 re-scoped (its detection half ships
+  and is proven, the halt remains), 0449 reconciled from 0/7 to 4 met
+  with one criterion restated because Tax can never carry a tag. Five
+  review tasks spawned (0507-0511) with an agreed order, plus 0520 and 0522. Two findings recorded without tasks: Enabled is declared on
+  neither event-source mapping, and X-Ray's completeness here depends on
+  traffic staying under 1 req/s.
 
 # Observability umbrella — recurring defects, not isolated bugs
 
@@ -551,7 +579,7 @@ month is unanswerable by construction.
 ## Acceptance Criteria
 
 - [x] Read-only AWS principal exists and is usable from the assistant workspace
-- [ ] The planned-pause constraint has a stated answer — resolved 2026-08-10
+- [x] The planned-pause constraint has a stated answer — resolved 2026-08-10
       the opposite way from the first draft: pauses are NOT machine-readable;
       one knowing page per pause is the accepted design (ADR 0054 rule 4).
       **Un-ticked 2026-08-19**: the box was checked against a verification
@@ -565,7 +593,40 @@ month is unanswerable by construction.
       system does not perform planned pauses (measured: 0 of 72 hours with
       zero consumption on `production-ledger-ingest`, 2026-08-18/21), so the
       criterion describes a scenario that does not currently arise. It earns
-      its own scheduled act if that changes
+      its own scheduled act if that changes.
+
+      **Reversed and run 2026-08-28, on the operator's call, and it earned the
+      reversal.** The experiment was executed exactly as written up, with the
+      prediction recorded before the pause rather than after it:
+
+      ```
+      12:28:45  event-source mapping disabled
+      12:35:54  ALARM  Successfully executed   <- one page, the predicted alarm
+      12:37:06  mapping re-enabled
+      12:51:54  OK     Successfully executed   <- the recovery page
+      ```
+
+      **Exactly two alarm actions, both from `ingestion-backlog-age`, both
+      delivered. The other eight alarms produced no action at all** — including
+      `galexie-ingestion-lag`, predicted silent because Galexie keeps writing
+      to S3 whether or not the indexer reads, and `indexer-ch-write-failures`,
+      predicted silent because an uninvoked function cannot fail. So the
+      constraint's answer is not merely stated, it is measured: **one knowing
+      page per pause, and one on the way back.**
+
+      Message age climbed 0 -> 72 -> 133 -> 262 -> 313 s before the alarm, and
+      the queue drained on resume at 99 invocations in the first minute. No
+      data was lost: 261 sequences from 64163359 to 64163619, **zero missing**,
+      and zero across a wider control window.
+
+      One thing worth keeping, because it nearly produced a false alarm of my
+      own: `ApproximateAgeOfOldestMessage` kept reporting 900-1000 s for
+      several minutes AFTER the queue was already empty. The queue itself read
+      0 visible, ledgers were advancing, and invocations were running at
+      ~10/min — the metric was simply behind. A stale metric read as a stuck
+      system for about four minutes. Check the queue and the data before
+      believing a graph about them
+
 - [x] An alarm fires on ingestion stall — in code
       (`production-ingestion-backlog-age`); AC checks off after a simulated
       stall against the deployed alarm.
@@ -710,7 +771,7 @@ web=false`, deployed that stack alone, and the SPA step skipped as
       Still deliberately NOT taken: sharing metric constants for the other
       four alarm/widget pairs (review finding 39) — skipped on the operator's
       call despite favourable arithmetic, so those four stay assertions
-- [ ] Each child task either closed by this work or explicitly re-scoped —
+- [x] Each child task either closed by this work or explicitly re-scoped —
       triage in [S — child triage](notes/S-child-task-triage.md) (0406, 0312,
       0428, 0403, 0400 closed and archived; 0454 and 0449 wait on the
       deploy-gated verifications; re-scope of the five non-instances **reversed
@@ -725,7 +786,58 @@ web=false`, deployed that stack alone, and the SPA step skipped as
       0509 (RPC pools and declared egress), 0510 (auth path missing from the
       API schema), 0511 (infrastructure configuration is not one thing) — and
       four existing tasks absorbed findings rather than spawn near-duplicates
-      (0103, 0414, 0418, 0458)
+      (0103, 0414, 0418, 0458).
+
+      **Ticked 2026-08-27 — the last two children handled, both by measuring
+      rather than waiting.**
+
+      **0454** was re-scoped, not closed. Its own implementation item 3 asked
+      for an alarm on `ApproximateAgeOfOldestMessage`; that alarm is in
+      production and fired on three genuine stalls during the mute window. The
+      title's claim "and no alarm can detect it" no longer holds, and the item
+      is marked done in that file. What remains there is the halt itself — a
+      ledger that can never be persisted still blocks the cursor, and an alarm
+      reports that rather than resolving it. Detection was the cheaper half and
+      it is finished.
+
+      **0449** was reconciled against production, because its record and this
+      one contradicted each other: every box in 0449 was unticked while this
+      task recorded the tag work as shipped. Measured, four of seven are met —
+      all eleven stacks emit the tag; the tag is activated (proven indirectly,
+      since `ce list-cost-allocation-tags` is refused to a member account and
+      belongs to the payer); the values are the shared convention; the anomaly
+      monitor exists and routes here. Three remain open, and one of those was
+      **unachievable as written**: "no material spend in the untagged bucket"
+      cannot be satisfied while Tax is 22.5% of that bucket and can never carry
+      a tag. It is restated as *no material **taggable** spend untagged*, with
+      the untaggable lines named. The attribution gap is one property — ECS is
+      62.4% of the untagged bucket and needs `propagateTags` on the Galexie
+      service, which this task's own cost note already predicted.
+
+      Neither child was "waiting on a deploy-gated verification" in the end.
+      Both were waiting on somebody measuring them.
+
+      **Order agreed for the five spawned tasks, 2026-08-27** (operator's
+      call, cheapest-first over risk-first):
+
+      ```
+      0510  auth path absent from the API schema
+      0508  crate boundaries do not hold
+      0511  infrastructure configuration is not one thing
+      0509  two RPC pools, two env contracts, third-party endpoints in code
+      0507  schema migration ladder
+      ```
+
+      The trade was stated before it was taken: 0507 is the only one of the
+      five that has already caused an outage (0310, ingestion down nine
+      minutes when a Rust struct and its table disagreed), and 0509 is the
+      only one that fails open — an unconfigured deployment reaches
+      third-party endpoints instead of refusing to start. Both sit late in
+      this order deliberately, in exchange for two quick closures at the
+      front. Recorded here rather than as a frontmatter field, because the
+      task schema has no priority key and inventing one for five tasks is
+      worse than a line in the place they were spawned.
+
 - [x] **Docs updated** — `docs/runbooks/**` gains "how do I tell if it is broken",
       naming the signals and where they live (2026-08-11:
       `docs/runbooks/health.md` — the four-sentence convention, the coverage
