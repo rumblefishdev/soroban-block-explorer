@@ -3096,3 +3096,63 @@ fn prepare_ignores_non_registrations_and_labelled_topics() {
         "no soroban registry row may come from a non-registration"
     );
 }
+
+#[test]
+fn prepare_refuses_a_registration_with_an_unparseable_fee() {
+    // A shape where init_args[0] is not a number is a vocabulary nobody has
+    // seen (497/497 mainnet registrations carry a u32 there). It must be
+    // refused loudly, never recorded as a plausible fee of 0.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x63);
+    let router = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+
+    let ev = ExtractedEvent {
+        transaction_hash: tx.hash.clone(),
+        event_type: ContractEventType::Contract,
+        source: EventSource::TxLevel,
+        contract_id: Some(router.to_string()),
+        topics: serde_json::json!([
+            {"type": "sym", "value": "add_pool"},
+            {"type": "vec", "value": [
+                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
+            ]}
+        ]),
+        data: serde_json::json!({"type": "vec", "value": [
+            {"type": "address", "value": "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O"},
+            {"type": "sym", "value": "constant"},
+            {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
+            {"type": "vec", "value": [{"type": "sym", "value": "not_a_fee"}]}
+        ]}),
+        event_index: 0,
+        op_index: None,
+        stage: None,
+        ledger_sequence: 10,
+        created_at: 1_700_000_000,
+    };
+    let events = vec![(tx.hash.clone(), vec![ev])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &events,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare itself succeeds — one refused registration must not fail the ledger");
+
+    assert!(
+        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "no registry row may carry a fabricated fee"
+    );
+    assert_eq!(staged.event_rows.len(), 1, "the raw event still lands");
+}

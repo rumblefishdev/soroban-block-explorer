@@ -1046,11 +1046,12 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // RMT key (pool_id, version last_updated_ledger).
     for reg in xdr_parser::pool_router::detect_pool_registrations(events) {
         match pool_registry_row(&reg.event, &reg.router, ledger_sequence_i64) {
-            Some(row) => out.pool_rows.push(row),
-            None => tracing::warn!(
+            Ok(row) => out.pool_rows.push(row),
+            Err(reason) => tracing::error!(
                 ledger_sequence = ledger.sequence,
                 pool = %reg.event.pool,
-                "add_pool dropped: pool address is not a valid C… strkey"
+                reason,
+                "add_pool registration refused — a pool is missing from the registry"
             ),
         }
     }
@@ -2157,9 +2158,10 @@ fn is_diagnostic(src: EventSource) -> bool {
 
 /// Registry row for one decoded `add_pool` registration.
 ///
-/// `None` only when the pool address does not decode as a C… strkey — the
-/// structural checks in `parse_add_pool` make that near-impossible, but a
-/// 32-byte `pool_id` must never be fabricated from a bad address.
+/// `Err` names what was wrong. A bad pool address must never fabricate a
+/// 32-byte `pool_id`, and an unparseable fee must never become a plausible
+/// zero (Karol, 2026-08-28: error, not warn-and-default) — either way the
+/// registration is refused loudly and lands in the missing-pool alarm.
 ///
 /// `share_token_id` is 0 here — it derives from deposit transactions (T6,
 /// step 16), not from the registration. No venue label is stored anywhere:
@@ -2170,16 +2172,18 @@ fn pool_registry_row(
     reg: &xdr_parser::pool_router::AddPoolEvent,
     router_strkey: &str,
     ledger_sequence: i64,
-) -> Option<LiquidityPoolRow> {
-    let pool_id = contract_payload(&reg.pool)?;
-    // Position 0 is a u32 fee in every shape measured on mainnet; anything
-    // unparseable stays visible in init_args rather than becoming a wrong fee.
+) -> Result<LiquidityPoolRow, &'static str> {
+    let pool_id = contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
+    // Position 0 is a u32 fee in EVERY shape measured on mainnet (497/497,
+    // pinned by the corpus test). A shape where it is missing or unparseable
+    // is a new vocabulary nobody has seen — refuse it loudly rather than
+    // record a plausible fee of 0.
     let fee_bps = reg
         .init_args
         .first()
         .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(0);
-    Some(LiquidityPoolRow {
+        .ok_or("init_args[0] is not a parseable fee")?;
+    Ok(LiquidityPoolRow {
         pool_id,
         asset_a_type: 0,
         asset_a_code: String::new(),

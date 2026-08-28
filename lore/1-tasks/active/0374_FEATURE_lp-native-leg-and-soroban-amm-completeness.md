@@ -562,3 +562,293 @@ count in this file carries its measurement time.
 `clickhouse` 0.15 round-trips `Array(Int128)` correctly, but no such column
 exists in this database yet, so it warrants an integration test rather than an
 assumption.
+
+---
+
+## Step 1b — what a slot is, and why the registry keys on the pool
+
+Settled 2026-08-27 by measurement, because the DDL depends on it.
+
+A registration carries a `subpool_salt`: the key the router addresses a pool by
+within one token set. It is tempting to treat `(tokens, salt)` as the pool's
+identity. **It is not.**
+
+|                                                             |        |
+| ----------------------------------------------------------- | -----: |
+| registrations                                               |    497 |
+| distinct pool addresses                                     |    497 |
+| distinct salts                                              | **81** |
+| slots (`tokens` + `salt`) registered more than once         |     18 |
+| pools living in those slots                                 |     65 |
+| of those, never active                                      |     29 |
+| **slots with two pools active in the last million ledgers** |  **3** |
+
+A slot gets re-pointed when a pool is redeployed, and one slot was re-pointed
+seven times. The obvious simplification — "the current pool for a slot is its
+newest registration" — is **false**: three slots have two pools trading at
+once. So the salt is a plain attribute. **The pool contract address is the
+identity**, and there it is clean: 497 registrations, 497 distinct addresses,
+no pool registered twice.
+
+## Step 1 — the DDL, and the two decisions inside it
+
+### Three tables, not four
+
+Concentrated positions get **no table**. They are 13 801 `position_update`
+events across 26 pools, and the contract-id filter is a sort-key prefix, so a
+live aggregation is cheap on both the detail page and the list. Recorded as a
+decision rather than left as a gap.
+
+### Why `AggregatingMergeTree` and not the usual `ReplacingMergeTree`
+
+The registry has two writers with different authority: `add_pool` writes a full
+row, and the orphan arm writes a stub for a contract that trades without a
+registration. Under RMT versioned on a ledger the **stub wins**, because it is
+written later by construction — and a fully-populated pool silently degrades to
+no router, no type, no legs, with the good row deleted on merge. Dormant today
+(zero orphans measured) which is the dangerous kind: it fires during a backfill
+months from now.
+
+With `SimpleAggregateFunction(max, …)` an empty value loses unconditionally, so
+a stub can only ever _add_ information. House precedent is `asset_sac`.
+
+This also settles the empty-vs-null argument for `protocol`. T2 chose an empty
+string to assert nothing about an unidentified deployment; the schema review
+argued for NULL as the less misleading value. The engine decides it: `max` over
+`Nullable` does not give the "empty always loses" property, and an empty string
+does. **Empty string, for a mechanical reason rather than a stylistic one.**
+
+### The DDL — operator runs these
+
+```sql
+-- Registry. One row per pool contract; the salt is an attribute, not a key.
+CREATE TABLE soroban_pools
+(
+    pool_id              Int64,
+    pool_address         SimpleAggregateFunction(max, String),
+    protocol             SimpleAggregateFunction(max, LowCardinality(String)),
+    deployment_id        SimpleAggregateFunction(max, Int64),
+    pool_type_raw        SimpleAggregateFunction(max, LowCardinality(String)),
+    token_ids            SimpleAggregateFunction(max, Array(Int64)),
+    subpool_salt         SimpleAggregateFunction(max, String),
+    init_args            SimpleAggregateFunction(max, Array(String)),
+    fee_bps              SimpleAggregateFunction(max, Int32),
+    share_token_id       SimpleAggregateFunction(max, Int64),
+    plane_id             SimpleAggregateFunction(max, Int64),
+    first_seen_ledger    SimpleAggregateFunction(min, Int64),
+    last_activity_ledger SimpleAggregateFunction(max, Int64)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY pool_id;
+
+-- Reserves, read from pool-plane state. The key carries the transaction and
+-- the intra-transaction index: (pool, ledger) alone collapses 23.5% of rows.
+CREATE TABLE soroban_pool_snapshots
+(
+    pool_id          Int64,
+    ledger_sequence  Int64,
+    transaction_id   Int64,
+    event_index      Int16,
+    reserves         Array(Int128),
+    plane_id         Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 5000000)
+ORDER BY (pool_id, ledger_sequence, transaction_id, event_index);
+
+-- Volume. Same key discipline: (pool, ledger) alone collapses 23.7%.
+CREATE TABLE soroban_pool_trades
+(
+    pool_id          Int64,
+    ledger_sequence  Int64,
+    transaction_id   Int64,
+    event_index      Int16,
+    token_in_id      Int64,
+    token_out_id     Int64,
+    amount_in        Int128,
+    amount_out       Int128,
+    fee              Int128,
+    caller_id        Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 5000000)
+ORDER BY (pool_id, ledger_sequence, transaction_id, event_index);
+```
+
+### Column notes worth keeping
+
+- **`init_args Array(String)`** — raw and unparsed, because the list is three
+  vocabularies wearing one shape (`[u32]`, `[u32, i32]`, `[u32, u128]`,
+  `[u32, u128, u32]`). Position 1 is a tick spacing in one pool type and an
+  amplification factor in another, and `u128` does not fit `i64`.
+- **`fee_bps`** is the one safe extraction: position 0 is a `u32` fee in all
+  eight measured shapes.
+- **`pool_type_raw`** only. No normalised twin: three spellings exist across
+  three sources, and deciding they mean the same thing is an interpretation
+  that belongs where one vocabulary is actually needed.
+- **`caller_id`, not `trader_id`** — topic 4 of `trade` is the caller, which on
+  router-mediated swaps is the router.
+- **`plane_id`** on both tables — planes are per deployment, so the pool's
+  reserve source is not a constant.
+- **`last_activity_ledger`** — the classic list has no usable order key
+  precisely because this column is missing there; deriving it later would mean
+  a full snapshot `GROUP BY`.
+
+## Committed follow-through — the pair columns die (decided 2026-08-28)
+
+Not deferred-as-in-maybe: the end state is **`legs` as the only leg source in
+both worlds**, and the six pair-shaped columns
+(`asset_a_type/code/issuer_id`, `asset_b_*`) **dropped**. Sequence, each step
+with its own verifier:
+
+1. resolve whether our `hash64` surrogate == ClickHouse `cityHash64`
+   (one sample comparison decides SQL-mutation vs Rust job),
+2. backfill `legs` for the 52,620 classic rows,
+3. migrate the ~612 pair-shaped call sites (API queries, classifier,
+   frontend) to `legs` — the largest piece, behind a read-time coalesce
+   bridge so it can land incrementally,
+4. `ALTER TABLE liquidity_pools DROP COLUMN asset_a_type, …` (operator) +
+   drop from `init.sql`, the row struct, and the column-order guard together
+   — the guard test (`column_order_liquidity_pools`) enforces that these
+   three can only move in lockstep.
+
+`init.sql` cannot lose the columns earlier: the driver validates inserts
+against the live table (0310), so the struct must keep the fields until the
+prod columns are dropped, and the guard pins struct ↔ init.sql.
+
+## Step 18 amended — positions are materialized, not query-time (2026-08-28)
+
+Prior-art sweep (wayfinder `answers/R-position-model-prior-art.md`): the
+one-Position-entity-with-nullable-ticks API shape is exactly Messari's
+standardized DEX-AMM schema, so it stays. But NO online-serving system folds
+positions from raw events at query time — everything materializes. At 13 801
+events the fold is cheap today; the design still diverges from every system
+that serves this. Amended: a rebuildable projection, fed by a materialized
+view over the events already ingested — no new ingest code.
+
+Operator DDL (runs together with the still-pending registry ALTER):
+
+```sql
+CREATE TABLE soroban_pool_positions
+(
+    pool_id   Int64,
+    holder_id Int64,
+    tick_lo   Int32,
+    tick_hi   Int32,
+    liquidity SimpleAggregateFunction(sum, Int128),
+    last_updated_ledger SimpleAggregateFunction(max, Int64)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY (pool_id, holder_id, tick_lo, tick_hi);
+```
+
+(The MV definition over `soroban_events` follows with the step-18
+implementation; the table is rebuildable from the events at any time, so a
+wrong projection is a re-fill, never a re-parse.)
+
+The participants DTO gains an explicit position-kind discriminator rather
+than inferring fungible-vs-ranged from null ticks (research amendment 2).
+
+---
+
+## DEPTH-FIRST — the governing principle from here on (Karol, 2026-08-28)
+
+One protocol at a time, one deployment at a time, built end-to-end. Analysis
+may look wide; **building may not**. Nothing lands "because the next protocol
+will need it" — the next protocol updates the model when its turn comes, and
+the diff then shows exactly what differed. 0516 remains analysis and ground
+rules only, never a shared build.
+
+This reversed a same-day drift. The registry had grown to nine columns, a
+deployments dimension and a positions projection — cut back to what the first
+protocol needs:
+
+**The one DDL that exists now** (replaces every earlier DDL block in this
+file; none of the earlier ones ever reached production):
+
+```sql
+ALTER TABLE liquidity_pools
+    ADD COLUMN pool_kind      UInt8                  DEFAULT 0,
+    ADD COLUMN legs           Array(Int64)           DEFAULT [],
+    ADD COLUMN deployment_id  Int64                  DEFAULT 0,
+    ADD COLUMN pool_type_raw  LowCardinality(String) DEFAULT '',
+    ADD COLUMN share_token_id Int64                  DEFAULT 0;
+```
+
+Why each of the five is needed by Aquarius alone: `pool_kind` renders the id
+honestly (a contract payload otherwise renders as a valid-looking wrong L…
+strkey); `legs` because Aquarius stable pools carry 3 and 4 legs today;
+`deployment_id` because two live routers share Aquarius's code and only one
+is Aquarius (T1) — and with the venue label resolved from this id at read
+time (a reviewed constant in the API, not a stored string), a new pool is
+labelled the moment it registers, which kills both the editorial-UPDATE drift
+and the label column; `pool_type_raw` gates the participants path (fungible
+vs concentrated) and the meaning of the tick parameter; `share_token_id`
+feeds the fungible participants read (T6).
+
+**Cut, with the reason recorded:**
+
+- `subpool_salt`, `init_args` — registration provenance; the `add_pool` event
+  sits complete and forever in `soroban_events`. Extract on demand, never
+  copy. (`fee_bps` is the one operational value, already extracted.)
+- `protocol` column — replaced by read-time resolution from `deployment_id`;
+  a stored label needs a re-run editorial UPDATE for every new pool and
+  drifts in between.
+- a `soroban_pool_registry` subtype side table (moving
+  `deployment_id`/`pool_type_raw`/`share_token_id` out of the wide row) —
+  textbook-cleaner, but it pays a JOIN on the hottest path (the union list
+  with type/deployment filters), ClickHouse's own guidance is to denormalise,
+  and the table already carries classic-only columns the same way (`assets`
+  does too: `contract_id`=0 on classic rows, empty code/issuer on soroban —
+  the discriminator says which columns apply). **Revisit at the legs
+  migration**, when the six classic-only columns drop and the JOIN cost can
+  be measured on the real list.
+- `amm_deployments` table — a good idea _when a second protocol arrives_;
+  today it would hold two rows serving one JOIN. Revisit at the Phoenix
+  adapter, not before.
+- `soroban_pool_positions` + its MV — concentrated participants are LAST in
+  Aquarius scope (Karol). The prior-art verdict (materialize, explicit
+  position-kind discriminator) is recorded in T5 and stands for whenever
+  that work starts; nothing is built until then.
+
+## Step-4 ordering rule (Karol caught this, 2026-08-28)
+
+**The backfill runs ONLY after the step-3 writer is live on production, and
+the corpus is re-harvested at that moment.** Order: deploy writer → harvest
+`add_pool` corpus (now covering everything up to the writer's start) →
+generate → insert. A pool registering between an early insert and the deploy
+would be silently missing; the reverse overlap is harmless because the RMT
+key (`pool_id`, version `last_updated_ledger`) makes the insert idempotent.
+The generated file is disposable — one `chq` + one `cargo run` recreates it
+in seconds, so nothing is "saved" by inserting early.
+
+## Step-15 design constraint — filling `share_token_id` must not clobber (Karol caught this, 2026-08-28)
+
+The registry is RMT: merges keep whole rows, so a later partial row wins whole.
+A deposit-path writer that knows ONLY the share token cannot write a registry
+row — it would replace legs/type/deployment with defaults. The three honest
+options, in house terms:
+
+1. **Side table, the `asset_sac` pattern** (different writer, different
+   rhythm → side table with column-merge semantics): a tiny
+   `pool_share_tokens (pool_id, share_token_id, derived_at_ledger)` RMT keyed
+   on `pool_id`, written by the deposit path which has both values in hand;
+   reads join ~500 rows. The `share_token_id` column added by the ALTER then
+   stays unwritten and is dropped at the legs migration. **Recommended.**
+2. In-DB periodic backfill that reconstructs FULL rows
+   (`INSERT … SELECT` joining the current row + the derivation) — no clobber,
+   but the token appears with batch delay and the job is a new moving part.
+3. Read-modify-write in the deposit path — racy against concurrent
+   registration updates and already rejected as a pattern in this project.
+
+Decide at step 15; nothing writes the column until then, so today it is
+harmless either way.
+
+## `fee_bps` silent-zero (Karol, 2026-08-28)
+
+`init_args[0].parse().unwrap_or(0)` turns an unparseable fee into a plausible
+0 — the misleading-fallback class. Bounded today: the corpus test pins all
+eight mainnet shapes (u32 at position 0 in every one), so a silent zero can
+only come from a FUTURE shape. Amendment for step 15's commit train: warn in
+`pool_registry_row` when position 0 is absent or unparseable, so the zero is
+always accompanied by an alarm-visible log line.
