@@ -152,6 +152,21 @@ export class CicdStack extends cdk.Stack {
         })
       );
 
+      // S3 sync for the second, independently-built SPA served at `/api`
+      // (task 0519) — same bucket-level/object-level split as above.
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:ListBucket'],
+          resources: [`arn:aws:s3:::${envName}-soroban-explorer-api-spa`],
+        })
+      );
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:PutObject', 's3:DeleteObject'],
+          resources: [`arn:aws:s3:::${envName}-soroban-explorer-api-spa/*`],
+        })
+      );
+
       // CloudFront cache invalidation after SPA deploy.
       // Scoped to distributions tagged with this environment. If tagging
       // is not yet applied, this uses a wildcard — tighten when the

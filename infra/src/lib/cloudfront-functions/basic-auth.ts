@@ -12,13 +12,15 @@
  * has not been populated yet, e.g. immediately after first deploy), the
  * function returns 503 rather than allowing requests through.
  */
-export function basicAuthFunctionCode(kvsId: string): string {
+/**
+ * The KVS-lookup-and-compare check itself, factored out so other CloudFront
+ * Function sources (e.g. `api-spa-routing.ts`, task 0519's follow-up) can
+ * embed the same auth check without duplicating the KVS error handling.
+ * Assumes the enclosing function already has `const kvs = cf.kvs(...)` in
+ * scope and is `async`. Returns a statement block, not a full function body.
+ */
+export function basicAuthCheckSnippet(realm: string): string {
   return `
-import cf from 'cloudfront';
-const kvs = cf.kvs('${kvsId}');
-
-async function handler(event) {
-  var request = event.request;
   var headers = request.headers;
   var expected;
   try {
@@ -36,9 +38,20 @@ async function handler(event) {
     return {
       statusCode: 401,
       statusDescription: 'Unauthorized',
-      headers: { 'www-authenticate': { value: 'Basic realm="Staging"' } }
+      headers: { 'www-authenticate': { value: 'Basic realm="${realm}"' } }
     };
   }
+`;
+}
+
+export function basicAuthFunctionCode(kvsId: string): string {
+  return `
+import cf from 'cloudfront';
+const kvs = cf.kvs('${kvsId}');
+
+async function handler(event) {
+  var request = event.request;
+${basicAuthCheckSnippet('Staging')}
   return request;
 }
 `.trim();
