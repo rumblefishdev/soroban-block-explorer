@@ -417,7 +417,7 @@ fn column_order_liquidity_pool_snapshots() {
 // Staging smoke
 // ---------------------------------------------------------------------------
 
-use domain::{ContractEventType, ContractType, OperationType, TokenAssetType};
+use domain::{AssetFamily, ContractEventType, ContractType, OperationType};
 use xdr_parser::types::{
     EventSource, ExtractedContractDeployment, ExtractedEvent, ExtractedLedger, ExtractedOperation,
     ExtractedTransaction,
@@ -485,7 +485,7 @@ fn prepare_empty_inputs_yields_ledger_and_native_asset() {
     // Native XLM singleton — schema-level concern, writer stages it.
     assert_eq!(staged.asset_rows.len(), 1);
     let native = &staged.asset_rows[0];
-    assert_eq!(native.asset_type, TokenAssetType::Native as i16);
+    assert_eq!(native.asset_type, AssetFamily::Native as i16);
     assert_eq!(native.asset_code, "");
     assert_eq!(native.issuer_id, 0);
     assert_eq!(native.contract_id, 0);
@@ -1394,8 +1394,8 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
 
 #[test]
 fn enum_discriminants_lock_in_with_schema() {
-    assert_eq!(TokenAssetType::Native as i16, 0);
-    assert_eq!(TokenAssetType::ClassicCredit as i16, 1);
+    assert_eq!(AssetFamily::Native as i16, 0);
+    assert_eq!(AssetFamily::ClassicCredit as i16, 1);
     assert_eq!(ContractType::Token as i16, 0);
     assert_eq!(ContractType::Other as i16, 1);
     assert_eq!(ContractType::Nft as i16, 2);
@@ -1660,9 +1660,7 @@ fn prepare_emits_soroban_asset_row_for_fungible_contract() {
     let asset = staged
         .asset_rows
         .iter()
-        .find(|a| {
-            a.contract_id == crow.id && a.asset_type == domain::TokenAssetType::Soroban as i16
-        })
+        .find(|a| a.contract_id == crow.id && a.asset_type == domain::AssetFamily::Soroban as i16)
         .expect("fungible contract gets a Soroban (type-3) asset row");
     assert_eq!(asset.asset_code, "");
     assert_eq!(asset.issuer_id, 0);
@@ -1707,9 +1705,10 @@ fn prepare_no_soroban_asset_row_for_nft_contract() {
 
     let crow = &staged.contract_rows[0];
     assert_eq!(crow.contract_type, Some(ContractType::Nft as i16));
-    let has_soroban = staged.asset_rows.iter().any(|a| {
-        a.contract_id == crow.id && a.asset_type == domain::TokenAssetType::Soroban as i16
-    });
+    let has_soroban = staged
+        .asset_rows
+        .iter()
+        .any(|a| a.contract_id == crow.id && a.asset_type == domain::AssetFamily::Soroban as i16);
     assert!(
         !has_soroban,
         "Nft contract must NOT produce a Soroban asset row"
@@ -2119,7 +2118,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
     let native_rows: Vec<&_> = staged
         .asset_rows
         .iter()
-        .filter(|a| a.asset_type == domain::TokenAssetType::Native as i16)
+        .filter(|a| a.asset_type == domain::AssetFamily::Native as i16)
         .collect();
     assert_eq!(
         native_rows.len(),
@@ -2132,7 +2131,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
     let sac_rows: Vec<&_> = staged
         .asset_sac_rows
         .iter()
-        .filter(|s| s.asset_type == domain::TokenAssetType::Native as i16)
+        .filter(|s| s.asset_type == domain::AssetFamily::Native as i16)
         .collect();
     assert_eq!(
         sac_rows.len(),
@@ -2228,7 +2227,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
     let facet: Vec<&_> = staged
         .asset_sac_rows
         .iter()
-        .filter(|s| s.asset_type == domain::TokenAssetType::Native as i16)
+        .filter(|s| s.asset_type == domain::AssetFamily::Native as i16)
         .collect();
     assert_eq!(facet.len(), 1, "one native asset_sac facet row");
     assert_eq!(
@@ -2252,7 +2251,7 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0xA2);
     let usdc = ExtractedAsset {
-        asset_type: domain::TokenAssetType::ClassicCredit,
+        asset_type: domain::AssetFamily::ClassicCredit,
         asset_code: Some("USDC".to_string()),
         issuer_address: Some(
             "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),

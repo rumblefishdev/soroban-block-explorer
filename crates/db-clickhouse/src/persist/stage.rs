@@ -1518,9 +1518,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             continue;
         };
         let (asset_type, asset_code, issuer_id) = match sac {
-            SacAssetIdentity::Native => (domain::TokenAssetType::Native, String::new(), 0),
+            SacAssetIdentity::Native => (domain::AssetFamily::Native, String::new(), 0),
             SacAssetIdentity::Credit { code, issuer } => (
-                domain::TokenAssetType::ClassicCredit,
+                domain::AssetFamily::ClassicCredit,
                 code.clone(),
                 ids::account_id(issuer),
             ),
@@ -1554,9 +1554,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // from the real deploy row (OR-merge never downgrades it).
     for ov in sac_overrides {
         let (asset_type, asset_code, issuer_id) = match &ov.identity {
-            SacAssetIdentity::Native => (domain::TokenAssetType::Native, String::new(), 0),
+            SacAssetIdentity::Native => (domain::AssetFamily::Native, String::new(), 0),
             SacAssetIdentity::Credit { code, issuer } => (
-                domain::TokenAssetType::ClassicCredit,
+                domain::AssetFamily::ClassicCredit,
                 code.clone(),
                 ids::account_id(issuer),
             ),
@@ -1584,7 +1584,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     push_asset(
         &mut out,
         &mut asset_seen,
-        AssetRow::staged(domain::TokenAssetType::Native as i16, String::new(), 0, 0),
+        AssetRow::staged(domain::AssetFamily::Native as i16, String::new(), 0, 0),
     );
 
     // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
@@ -1610,7 +1610,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             &mut out,
             &mut asset_seen,
             AssetRow::staged(
-                domain::TokenAssetType::Soroban as i16,
+                domain::AssetFamily::Soroban as i16,
                 String::new(),
                 0,
                 contract_id,

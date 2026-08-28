@@ -38,8 +38,11 @@ the gates.
 
 ## Work list
 
-1. `TokenAssetType::PoolShare = 4`; wire label decided with 0496
-   (Horizon's word is `liquidity_pool_shares`).
+1. `AssetFamily::PoolShare = 4` (the enum was renamed from `TokenAssetType`
+   by 0496, which also fixed both public legends). **Wire label DECIDED
+   2026-08-27, with 0496's own research: `liquidity_pool_shares`** — the
+   ecosystem word, verified against the Go SDK; not `pool_share`, which no
+   consumer emits. Do not reopen.
 2. `ALTER TABLE assets ADD COLUMN pool_id FixedString(32) DEFAULT '' , MODIFY
 ORDER BY (asset_type, asset_code, issuer_id, contract_id, pool_id)` —
    one statement, metadata-only; mirror in `init.sql`. Karol runs it.

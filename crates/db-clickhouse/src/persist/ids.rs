@@ -131,7 +131,7 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
 /// contract-held balances are re-keyed onto the WRAPPED classic/native id in
 /// [`crate::persist::stage::build_balance_rows`], so NO type-2 `asset_id` is ever
 /// persisted. `_ => contract_id` is kept only so the fn stays total on an
-/// unexpected legacy type-2 input; `TokenAssetType::TryFrom` already rejects 2.
+/// unexpected legacy type-2 input; `AssetFamily::TryFrom` already rejects 2.
 ///
 /// The native XLM asset surrogate — `asset_id(0, "", 0, 0)` = `hash64("native")`,
 /// a stable FIRST-CLASS key (task 0359 / ADR 0051), never the empty-string

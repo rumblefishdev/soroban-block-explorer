@@ -20,6 +20,6 @@ pub mod transaction;
 
 pub use classification_cache::ClassificationCache;
 pub use enums::{
-    AssetType, ContractEventType, ContractType, EnumDecodeError, NftEventType, OperationType,
-    TokenAssetType,
+    AssetFamily, AssetType, ContractEventType, ContractType, EnumDecodeError, NftEventType,
+    OperationType,
 };

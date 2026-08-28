@@ -51,9 +51,11 @@ pub struct AccountListItem {
 /// instead (the account portfolio includes Soroban balances, task 0331 Option C).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccountBalance {
-    /// Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`
-    /// | `credit_alphanum12` for classic. Soroban (type-3) rows are also returned
-    /// — identify them via `contract_id`, not this label.
+    /// Label in the `AssetFamily` vocabulary: `native` | `classic_credit` |
+    /// `soroban`. (Task 0496: this used to borrow the XDR legend, which calls
+    /// 3 `pool_share` — so every Soroban holding read as an LP share. This
+    /// field's values come from `assets.asset_type`, whose domain is the
+    /// family enum, and the label now follows that domain.)
     pub asset_type_name: Option<String>,
     /// Raw SMALLINT — stable across label renames.
     #[serde(rename = "type")]
