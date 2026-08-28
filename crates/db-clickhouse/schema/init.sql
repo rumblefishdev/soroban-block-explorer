@@ -588,16 +588,37 @@ ORDER BY (contract_id, token_id);
 -- liquidity_pools (task 0208 Path 2 folded inline): RMT(last_updated_ledger),
 -- `created_at_ledger` dropped (derive read-time from
 -- `MIN(ledger_sequence) FROM liquidity_pool_snapshots GROUP BY pool_id`).
+-- One registry for EVERY pool (task 0374, decided 2026-08-27): classic rows
+-- keep pool_kind=0 and their soroban columns at defaults; Soroban AMM pools
+-- are rows with pool_kind=1. One user-facing concept, one table — the same
+-- reasoning ADR 0056 applies to positions. Engine stays RMT: whole-row
+-- replace is safe because each row has exactly ONE writer (the classic arm
+-- never touches a contract pool_id and vice versa; orphan sightings go to a
+-- monitored counter, never into rows).
+--
+-- The pair-shaped asset_a_*/asset_b_* columns are LEGACY once `legs` is
+-- backfilled for classic rows: 3- and 4-leg stable pools exist on mainnet and
+-- do not fit a pair. They stay until the ~612 pair-shaped call sites migrate
+-- to `legs` (tracked in 0374; do not add new readers).
 CREATE TABLE IF NOT EXISTS liquidity_pools (
-    pool_id              FixedString(32),
-    asset_a_type         Int16,
-    asset_a_code         LowCardinality(String),
-    asset_a_issuer_id    Int64,        -- 0 for native
-    asset_b_type         Int16,
-    asset_b_code         LowCardinality(String),
-    asset_b_issuer_id    Int64,
-    fee_bps              Int32,
-    last_updated_ledger  Int64
+    pool_id              FixedString(32),        -- classic: SHA-256 of the asset pair (CAP-38); soroban: 32-byte payload of the C... contract address. pool_kind says which — without it a contract id renders as a well-formed WRONG L... strkey
+    asset_a_type         Int16,                  -- LEGACY pair shape; XDR AssetType domain (NOT assets.asset_type's AssetFamily domain — task 0496)
+    asset_a_code         LowCardinality(String), -- LEGACY pair shape
+    asset_a_issuer_id    Int64,                  -- 0 for native; LEGACY pair shape
+    asset_b_type         Int16,                  -- LEGACY pair shape
+    asset_b_code         LowCardinality(String), -- LEGACY pair shape
+    asset_b_issuer_id    Int64,                  -- LEGACY pair shape
+    fee_bps              Int32,                  -- both worlds; soroban: init_args[0] (u32 fee, the one arg every measured shape shares)
+    last_updated_ledger  Int64,
+    pool_kind            UInt8                  DEFAULT 0,  -- 0=classic, 1=soroban contract
+    legs                 Array(Int64)           DEFAULT [], -- assets.id per leg, in emission order (= the pool's own get_tokens() order, so reserve vectors align index-for-index). Target single source for legs in BOTH worlds; classic backfill pending
+    protocol             LowCardinality(String) DEFAULT '', -- venue label (T2): 'aquarius' for the vendor-documented deployment; EMPTY for a deployment we assert nothing about (router B). Empty, not NULL, by decision
+    deployment_id        Int64                  DEFAULT 0,  -- soroban_contracts.id surrogate of the registering router; 0 = classic
+    pool_type_raw        LowCardinality(String) DEFAULT '', -- verbatim sym from add_pool (constant|stable|concentrated|elastic|future). Deliberately un-normalised: three vocabularies exist for one shape (event 'constant', pool state 'standard', contract enum 'ConstantProduct'); folding them is an interpretation and belongs at read time
+    subpool_salt         String                 DEFAULT '', -- the router's slot key (BytesN<32>). NOT a pool identity: 81 distinct salts across 497 registrations, slots get re-pointed on redeploy (one slot 7x)
+    init_args            Array(String)          DEFAULT [], -- raw constructor args in emitted order; three vocabularies wearing one shape ([u32] / [u32,i32] / [u32,u128(,u32)]) and u128 does not fit Int64 — parse only against a known pool_type
+    plane_id             Int64                  DEFAULT 0,  -- pools-plane contract of THIS deployment: the single reserve source (T4). Planes are per-deployment — router B writes to its own — so this is a column, not a constant
+    share_token_id       Int64                  DEFAULT 0   -- share token per the T6 rule (SEP-41 mint in the deposit tx, topic[1]==pool, amount==shares). 0 = none: concentrated pools mint nothing, ever (measured over all 84,624 deposit txs). A Soroban token IS an LP share exactly when it appears here — a relation, never an assets column (task 0496)
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
