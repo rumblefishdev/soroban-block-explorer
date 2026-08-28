@@ -596,6 +596,11 @@ ORDER BY (contract_id, token_id);
 -- never touches a contract pool_id and vice versa; orphan sightings go to a
 -- monitored counter, never into rows).
 --
+-- Registration provenance (the router's subpool salt, raw init_args beyond
+-- the fee) is NOT materialised: the add_pool event itself sits complete and
+-- forever in soroban_events — extract on demand, never copy (depth-first,
+-- 2026-08-28).
+--
 -- The pair-shaped asset_a_*/asset_b_* columns are LEGACY once `legs` is
 -- backfilled for classic rows: 3- and 4-leg stable pools exist on mainnet and
 -- do not fit a pair. They stay until the ~612 pair-shaped call sites migrate
@@ -611,14 +616,10 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
     fee_bps              Int32,                  -- both worlds; soroban: init_args[0] (u32 fee, the one arg every measured shape shares)
     last_updated_ledger  Int64,
     pool_kind            UInt8                  DEFAULT 0,  -- 0=classic, 1=soroban contract
-    legs                 Array(Int64)           DEFAULT [], -- assets.id per leg, in emission order (= the pool's own get_tokens() order, so reserve vectors align index-for-index). Target single source for legs in BOTH worlds; classic backfill pending
-    protocol             LowCardinality(String) DEFAULT '', -- venue label (T2): 'aquarius' for the vendor-documented deployment; EMPTY for a deployment we assert nothing about (router B). Empty, not NULL, by decision
-    deployment_id        Int64                  DEFAULT 0,  -- soroban_contracts.id surrogate of the registering router; 0 = classic
-    pool_type_raw        LowCardinality(String) DEFAULT '', -- verbatim sym from add_pool (constant|stable|concentrated|elastic|future). Deliberately un-normalised: three vocabularies exist for one shape (event 'constant', pool state 'standard', contract enum 'ConstantProduct'); folding them is an interpretation and belongs at read time
-    subpool_salt         String                 DEFAULT '', -- the router's slot key (BytesN<32>). NOT a pool identity: 81 distinct salts across 497 registrations, slots get re-pointed on redeploy (one slot 7x)
-    init_args            Array(String)          DEFAULT [], -- raw constructor args in emitted order; three vocabularies wearing one shape ([u32] / [u32,i32] / [u32,u128(,u32)]) and u128 does not fit Int64 — parse only against a known pool_type
-    plane_id             Int64                  DEFAULT 0,  -- pools-plane contract of THIS deployment: the single reserve source (T4). Planes are per-deployment — router B writes to its own — so this is a column, not a constant
-    share_token_id       Int64                  DEFAULT 0   -- share token per the T6 rule (SEP-41 mint in the deposit tx, topic[1]==pool, amount==shares). 0 = none: concentrated pools mint nothing, ever (measured over all 84,624 deposit txs). A Soroban token IS an LP share exactly when it appears here — a relation, never an assets column (task 0496)
+    legs                 Array(Int64)           DEFAULT [], -- assets.id per leg, in emission order (= the pool's own get_tokens() order). Aquarius stable pools carry 3 and 4 legs, so this cannot be a pair
+    deployment_id        Int64                  DEFAULT 0,  -- soroban_contracts.id surrogate of the registering router; 0 = classic. Two live router deployments share Aquarius's code and only one is Aquarius (task 0374 T1) — labels resolve from this id at read time, so a new pool is labelled the moment it registers, with no editorial UPDATE to re-run
+    pool_type_raw        LowCardinality(String) DEFAULT '', -- verbatim sym from add_pool (constant|stable|concentrated|...); un-normalised on purpose: three vocabularies exist for one shape and folding them is read-time interpretation
+    share_token_id       Int64                  DEFAULT 0   -- share token per the T6 rule; 0 = none-yet or none-ever (concentrated pools mint nothing) — pool_type_raw disambiguates. A Soroban token IS an LP share exactly when it appears here (relation, never an assets column — task 0496)
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
