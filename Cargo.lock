@@ -1428,6 +1428,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "stellar-strkey 0.0.16",
  "stellar-xdr 27.0.0",
  "thiserror 2.0.18",
  "tokio",

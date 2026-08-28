@@ -71,6 +71,47 @@
 
 use serde_json::Value;
 
+use crate::types::ExtractedEvent;
+
+/// One pool registration, tied to the router that emitted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolRegistration {
+    /// Emitting router contract StrKey (`C…`).
+    pub router: String,
+    pub event: AddPoolEvent,
+}
+
+/// Scan a ledger's events for `add_pool` registrations — the router-registry
+/// discovery detector, shaped like [`crate::detect_nft_events`]: semantic
+/// decoding lives here, staging only maps the result to rows.
+///
+/// An event that CLAIMS to be a registration and cannot be read is a pool
+/// going missing: it is warned about here (with the reject reason) and
+/// dropped from the result — never silently.
+pub fn detect_pool_registrations(
+    events: &[(String, Vec<ExtractedEvent>)],
+) -> Vec<PoolRegistration> {
+    let mut out = Vec::new();
+    for (_tx, evs) in events {
+        for ev in evs {
+            let Some(router) = ev.contract_id.clone() else {
+                continue;
+            };
+            match parse_add_pool(&ev.topics, &ev.data) {
+                Ok(event) => out.push(PoolRegistration { router, event }),
+                Err(AddPoolReject::NotAddPool) => {}
+                Err(reason) => tracing::warn!(
+                    ledger_sequence = ev.ledger_sequence,
+                    router = %router,
+                    ?reason,
+                    "add_pool claimed to be a registration and could not be read — a pool is missing"
+                ),
+            }
+        }
+    }
+    out
+}
+
 /// One decoded `add_pool` event: a pool joining a router's registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddPoolEvent {

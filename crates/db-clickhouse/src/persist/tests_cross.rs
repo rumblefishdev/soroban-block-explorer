@@ -227,6 +227,11 @@ fn column_order_liquidity_pools() {
             "asset_b_issuer_id",
             "fee_bps",
             "last_updated_ledger",
+            "pool_kind",
+            "legs",
+            "deployment_id",
+            "pool_type_raw",
+            "share_token_id",
         ],
     );
 }
@@ -2949,5 +2954,145 @@ fn two_states_for_one_account_in_one_ledger_collapse_to_the_last() {
         staged.account_entry_state_rows[0].signer_keys.is_empty(),
         "last state in ledger/tx order wins; a surviving 'GS1' means a removed \
          signer ghosted"
+    );
+}
+
+#[test]
+fn prepare_registers_a_pool_from_a_real_add_pool_event() {
+    // Verbatim mainnet payload (router CBQDHNBF…6QUK) — the same fixture the
+    // pool_router corpus test pins, so decoder and staging cannot drift apart.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x61);
+    let router = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+    let pool = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
+
+    let ev = ExtractedEvent {
+        transaction_hash: tx.hash.clone(),
+        event_type: ContractEventType::Contract,
+        source: EventSource::TxLevel,
+        contract_id: Some(router.to_string()),
+        topics: serde_json::json!([
+            {"type": "sym", "value": "add_pool"},
+            {"type": "vec", "value": [
+                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
+            ]}
+        ]),
+        data: serde_json::json!({"type": "vec", "value": [
+            {"type": "address", "value": pool},
+            {"type": "sym", "value": "constant"},
+            {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
+            {"type": "vec", "value": [{"type": "u32", "value": 10}]}
+        ]}),
+        event_index: 0,
+        op_index: None,
+        stage: None,
+        ledger_sequence: 10,
+        created_at: 1_700_000_000,
+    };
+    let events = vec![(tx.hash.clone(), vec![ev])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &events,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    // The event row itself still lands — registration is IN ADDITION, never
+    // instead of the raw event.
+    assert_eq!(staged.event_rows.len(), 1);
+
+    let rows: Vec<_> = staged
+        .pool_rows
+        .iter()
+        .filter(|r| r.pool_kind == 1)
+        .collect();
+    assert_eq!(rows.len(), 1, "one registration, one registry row");
+    let row = rows[0];
+    assert_eq!(row.pool_type_raw, "constant");
+    assert_eq!(row.fee_bps, 10, "fee comes from init_args[0]");
+    assert_eq!(row.legs.len(), 2, "legs are asset surrogates, in order");
+    assert_eq!(row.deployment_id, ids::contract_id(router));
+    assert_eq!(
+        row.share_token_id, 0,
+        "T6 derivation happens later, not here"
+    );
+    // pool_id is the raw C-address payload, not a hash of anything.
+    assert_eq!(
+        stellar_strkey::Contract(row.pool_id)
+            .to_string()
+            .to_string(),
+        pool
+    );
+    // Classic columns stay at their defaults on a soroban row.
+    assert_eq!(row.asset_a_type, 0);
+    assert!(row.asset_a_code.is_empty());
+}
+
+#[test]
+fn prepare_ignores_non_registrations_and_labelled_topics() {
+    // `trade` (another protocol's collision-prone name) and the Soroswap
+    // labelled shape must produce NO registry rows.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x62);
+    let contract = "C".to_string() + &"F".repeat(55);
+
+    let make = |topics: serde_json::Value| ExtractedEvent {
+        transaction_hash: tx.hash.clone(),
+        event_type: ContractEventType::Contract,
+        source: EventSource::TxLevel,
+        contract_id: Some(contract.clone()),
+        topics,
+        data: serde_json::json!({"type": "vec", "value": []}),
+        event_index: 0,
+        op_index: None,
+        stage: None,
+        ledger_sequence: 10,
+        created_at: 1_700_000_000,
+    };
+    let events = vec![(
+        tx.hash.clone(),
+        vec![
+            make(serde_json::json!([{"type": "sym", "value": "trade"}])),
+            make(serde_json::json!([
+                {"type": "string", "value": "SoroswapPair"},
+                {"type": "sym", "value": "add_pool"}
+            ])),
+        ],
+    )];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &events,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "no soroban registry row may come from a non-registration"
     );
 }

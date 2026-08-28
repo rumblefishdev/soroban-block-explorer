@@ -1020,6 +1020,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             asset_b_issuer_id: b_issuer.as_deref().map(ids::account_id).unwrap_or(0),
             fee_bps: pool.fee_bps,
             last_updated_ledger,
+            pool_kind: 0,
+            legs: Vec::new(),
+            deployment_id: 0,
+            pool_type_raw: String::new(),
+            share_token_id: 0,
         };
         match pool_indices.get(&pool_id).copied() {
             Some(idx) => {
@@ -1032,6 +1037,21 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 pool_indices.insert(pool_id, out.pool_rows.len());
                 out.pool_rows.push(new_row);
             }
+        }
+    }
+
+    // Soroban pool registrations (task 0374): the semantic decode lives in
+    // `xdr_parser::pool_router` (same idiom as `detect_nft_events`); this
+    // section only maps registrations to registry rows. Idempotent under the
+    // RMT key (pool_id, version last_updated_ledger).
+    for reg in xdr_parser::pool_router::detect_pool_registrations(events) {
+        match pool_registry_row(&reg.event, &reg.router, ledger_sequence_i64) {
+            Some(row) => out.pool_rows.push(row),
+            None => tracing::warn!(
+                ledger_sequence = ledger.sequence,
+                pool = %reg.event.pool,
+                "add_pool dropped: pool address is not a valid C… strkey"
+            ),
         }
     }
 
@@ -2133,6 +2153,56 @@ fn is_strkey_account(s: &str) -> bool {
 
 fn is_diagnostic(src: EventSource) -> bool {
     matches!(src, EventSource::Diagnostic)
+}
+
+/// Registry row for one decoded `add_pool` registration.
+///
+/// `None` only when the pool address does not decode as a C… strkey — the
+/// structural checks in `parse_add_pool` make that near-impossible, but a
+/// 32-byte `pool_id` must never be fabricated from a bad address.
+///
+/// `share_token_id` is 0 here — it derives from deposit transactions (T6,
+/// step 16), not from the registration. No venue label is stored anywhere:
+/// labels resolve from `deployment_id` at read time. The salt and raw
+/// init_args are NOT materialised — the add_pool event itself sits complete
+/// in soroban_events; extract on demand, never copy.
+fn pool_registry_row(
+    reg: &xdr_parser::pool_router::AddPoolEvent,
+    router_strkey: &str,
+    ledger_sequence: i64,
+) -> Option<LiquidityPoolRow> {
+    let pool_id = contract_payload(&reg.pool)?;
+    // Position 0 is a u32 fee in every shape measured on mainnet; anything
+    // unparseable stays visible in init_args rather than becoming a wrong fee.
+    let fee_bps = reg
+        .init_args
+        .first()
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(0);
+    Some(LiquidityPoolRow {
+        pool_id,
+        asset_a_type: 0,
+        asset_a_code: String::new(),
+        asset_a_issuer_id: 0,
+        asset_b_type: 0,
+        asset_b_code: String::new(),
+        asset_b_issuer_id: 0,
+        fee_bps,
+        last_updated_ledger: ledger_sequence,
+        pool_kind: 1,
+        legs: reg.tokens.iter().map(|t| ids::contract_id(t)).collect(),
+        deployment_id: ids::contract_id(router_strkey),
+        pool_type_raw: reg.pool_type.clone(),
+        share_token_id: 0,
+    })
+}
+
+/// 32-byte payload of a C… contract strkey, or `None` when it is not one.
+fn contract_payload(strkey: &str) -> Option<[u8; 32]> {
+    match stellar_strkey::Strkey::from_string(strkey) {
+        Ok(stellar_strkey::Strkey::Contract(c)) => Some(c.0),
+        _ => None,
+    }
 }
 
 fn extract_event_signature(topics: &Value) -> Option<String> {

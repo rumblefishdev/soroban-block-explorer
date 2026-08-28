@@ -283,6 +283,21 @@ pub struct LiquidityPoolRow {
     pub asset_b_issuer_id: i64,
     pub fee_bps: i32,
     pub last_updated_ledger: i64,
+    /// 0 = classic (pool_id: CAP-38 hash), 1 = soroban contract (pool_id:
+    /// the 32-byte payload of the C… address). Registry columns below are
+    /// meaningful only for kind 1; classic writers set the defaults.
+    pub pool_kind: u8,
+    /// `assets.id` per leg, in emission order (matches the pool's own
+    /// `get_tokens()`, so reserve vectors align index-for-index).
+    pub legs: Vec<i64>,
+    /// Surrogate of the registering router contract. Venue labels resolve
+    /// from this id at read time — no label is stored on the pool.
+    pub deployment_id: i64,
+    /// Verbatim `pool_type` sym from `add_pool`; deliberately un-normalised.
+    pub pool_type_raw: String,
+    /// Share token per the T6 rule. 0 = none yet, or none ever (concentrated
+    /// pools mint nothing); `pool_type_raw` disambiguates.
+    pub share_token_id: i64,
 }
 
 /// `lp_positions` — state, RMT(last_updated_ledger).
