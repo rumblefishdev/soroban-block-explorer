@@ -287,8 +287,14 @@ pub struct LiquidityPoolRow {
     /// the 32-byte payload of the C… address). Registry columns below are
     /// meaningful only for kind 1; classic writers set the defaults.
     pub pool_kind: u8,
-    /// `assets.id` per leg, in emission order (matches the pool's own
-    /// `get_tokens()`, so reserve vectors align index-for-index).
+    /// Token-CONTRACT surrogate per leg (`ids::contract_id` of the token's
+    /// C… address), in emission order — matching the pool's own
+    /// `get_tokens()`, so reserve vectors align index-for-index.
+    ///
+    /// NOT `assets.id` in general (an earlier comment claimed that): the two
+    /// coincide only for bespoke type-3 tokens. 96% of legs are SACs, whose
+    /// classic asset has a DIFFERENT id — a leg resolves to its display
+    /// identity via `asset_sac` (`resolve_leg_assets`, task 0374 step 13).
     pub legs: Vec<i64>,
     /// Surrogate of the registering router contract. Venue labels resolve
     /// from this id at read time — no label is stored on the pool.

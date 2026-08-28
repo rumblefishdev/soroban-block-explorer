@@ -616,7 +616,7 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
     fee_bps              Int32,                  -- both worlds; soroban: init_args[0] (u32 fee, the one arg every measured shape shares)
     last_updated_ledger  Int64,
     pool_kind            UInt8                  DEFAULT 0,  -- 0=classic, 1=soroban contract
-    legs                 Array(Int64)           DEFAULT [], -- assets.id per leg, in emission order (= the pool's own get_tokens() order). Aquarius stable pools carry 3 and 4 legs, so this cannot be a pair
+    legs                 Array(Int64)           DEFAULT [], -- token-contract surrogates per leg, in emission order (= get_tokens() order); == assets.id ONLY for bespoke type-3 tokens — SAC legs resolve via asset_sac. 3- and 4-leg stable pools exist, so this cannot be a pair
     deployment_id        Int64                  DEFAULT 0,  -- soroban_contracts.id surrogate of the registering router; 0 = classic. Two live router deployments share Aquarius's code and only one is Aquarius (task 0374 T1) — labels resolve from this id at read time, so a new pool is labelled the moment it registers, with no editorial UPDATE to re-run
     pool_type_raw        LowCardinality(String) DEFAULT '', -- verbatim sym from add_pool (constant|stable|concentrated|...); un-normalised on purpose: three vocabularies exist for one shape and folding them is read-time interpretation
     share_token_id       Int64                  DEFAULT 0   -- share token per the T6 rule; 0 = none-yet or none-ever (concentrated pools mint nothing) — pool_type_raw disambiguates. A Soroban token IS an LP share exactly when it appears here (relation, never an assets column — task 0496)

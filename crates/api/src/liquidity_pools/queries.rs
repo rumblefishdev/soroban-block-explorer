@@ -916,6 +916,155 @@ struct PoolLegsChRow {
 /// Via [`ids::pool_leg_asset_id`], NOT `ids::asset_id` — `liquidity_pools`
 /// stores the XDR asset type, where `2` is `credit_alphanum12`, while
 /// `asset_id` reads `2` as the retired SAC facet and returns `0` for it.
+/// One resolved Soroban pool leg (task 0374, step 13).
+///
+/// `legs` on a `pool_kind = 1` row stores contract SURROGATES in emission
+/// order. A surrogate resolves along exactly one of two paths, measured on
+/// the full registry at 1005/1005 leg occurrences:
+///
+/// * **SAC hop** (962) — the leg is a Stellar Asset Contract; per ADR 0051 a
+///   SAC has NO `assets` row of its own, so identity comes from the
+///   `asset_sac` facet: `sac_contract_id → (asset_type, code, issuer)`.
+///   Covers native too (XLM's SAC maps to `(0, '', 0)`).
+/// * **Direct token** (43) — a bespoke Soroban token; its `assets` row is
+///   keyed by the same surrogate (`asset_type = 3`).
+///
+/// There is no third case BY CONSTRUCTION: `add_pool` registers a vector of
+/// token CONTRACT addresses, so a classic asset can only ever appear as a leg
+/// through its deployed SAC — "classic without a SAC" is not representable as
+/// a Soroban pool leg, and native is just the SAC case with identity
+/// `(0, '', 0)`.
+///
+/// A surrogate resolving through NEITHER path is representable (`None` in the
+/// map) and must render as an explicit unresolved marker — never as a
+/// plausible empty code (house rule: no misleading fallbacks).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedLeg {
+    /// `AssetFamily` discriminant of the resolved asset row: 0 native,
+    /// 1 classic credit, 3 soroban. NOT the XDR `AssetType` (task 0496).
+    pub family: i16,
+    /// Classic asset code; empty for native and for soroban tokens.
+    pub asset_code: String,
+    /// `accounts.id` surrogate of the classic issuer; 0 for native/soroban.
+    pub issuer_id: i64,
+    /// The contract surrogate the leg came in as (SAC or token).
+    pub contract_id: i64,
+    /// Display scale (task 0374, step 14). `Some(7)` for every classic-family
+    /// leg — the protocol fixes classic amounts at 7 decimal places, so no
+    /// lookup is involved. For a soroban token it comes from on-chain
+    /// `soroban_contract_metadata`; `None` means the token never published
+    /// metadata — an 18-decimal token with NO metadata row exists on mainnet
+    /// in a live stable pool, so this case is real, and it must render as an
+    /// explicit "unresolved" marker, never as a plausible default scale
+    /// (amounts shown 10^11 off look like data, not like a bug).
+    pub decimals: Option<u32>,
+    /// On-chain SEP-41 symbol — the display handle for a bespoke token,
+    /// exactly as the assets page resolves it (metadata, task 0297/0304).
+    /// `None` for classic legs (their handle is `asset_code`) and for tokens
+    /// that never published metadata.
+    pub symbol: Option<String>,
+    /// On-chain SEP-41 name; same sourcing and caveats as `symbol`.
+    pub name: Option<String>,
+}
+
+/// Both arms GROUP BY their key: `asset_sac` is an AggregatingMergeTree read
+/// through `max()` per house idiom, and `assets` is an unmerged RMT whose
+/// duplicates would otherwise fan the map out. No `FINAL` anywhere (0356).
+///
+/// Ids are FORMATTED into the `{ids}` placeholder, not bound — the house
+/// idiom for id-IN resolvers (0344/0345): they are `i64`s, injection-free by
+/// type, and the driver does not bind sequences into `IN`. Every subquery on
+/// a dimension is bounded by the same list — an unbounded
+/// `SELECT DISTINCT … FROM soroban_contracts` would scan the whole contracts
+/// dimension per request.
+const RESOLVE_LEGS_SQL_TEMPLATE: &str = "\
+    SELECT sac_contract_id AS leg, \
+           max(asset_type)  AS family, \
+           max(asset_code)  AS asset_code, \
+           max(issuer_id)   AS issuer_id, \
+           toNullable(toUInt32(7)) AS decimals, \
+           CAST(NULL, 'Nullable(String)') AS symbol, \
+           CAST(NULL, 'Nullable(String)') AS name \
+    FROM asset_sac \
+    WHERE sac_contract_id IN ({ids}) \
+    GROUP BY sac_contract_id \
+    UNION ALL \
+    SELECT a.contract_id AS leg, \
+           3             AS family, \
+           ''            AS asset_code, \
+           0             AS issuer_id, \
+           m.decimals    AS decimals, \
+           nullIf(m.symbol, '') AS symbol, \
+           nullIf(m.name, '')   AS name \
+    FROM (SELECT contract_id FROM assets \
+          WHERE asset_type = 3 AND contract_id IN ({ids}) \
+          GROUP BY contract_id) a \
+    LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
+               WHERE id IN ({ids}) LIMIT 1 BY id) sc \
+           ON sc.id = a.contract_id \
+    LEFT JOIN (SELECT contract_id, \
+                      argMax(decimals, version) AS decimals, \
+                      argMax(symbol, version)   AS symbol, \
+                      argMax(name, version)     AS name \
+               FROM soroban_contract_metadata GROUP BY contract_id) m \
+           ON m.contract_id = sc.contract_id";
+
+#[derive(Debug, Row, Deserialize)]
+struct ResolvedLegChRow {
+    leg: i64,
+    family: i16,
+    asset_code: String,
+    issuer_id: i64,
+    decimals: Option<u32>,
+    symbol: Option<String>,
+    name: Option<String>,
+}
+
+/// Resolve pool-leg surrogates to asset identities, keyed by the surrogate.
+///
+/// Wired into the pool DTOs at step 17; until then the sole caller is the
+/// test suite.
+#[allow(dead_code)]
+pub(crate) async fn resolve_leg_assets(
+    client: &clickhouse::Client,
+    leg_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, ResolvedLeg>, clickhouse::error::Error> {
+    // Canon shape from `common/ch.rs` (0344/0345): sort + dedup before
+    // formatting — one union list's XLM leg repeats across nearly every pool.
+    let mut leg_ids = leg_ids.to_vec();
+    leg_ids.sort_unstable();
+    leg_ids.dedup();
+    if leg_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let ids = leg_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let rows = client
+        .query(&RESOLVE_LEGS_SQL_TEMPLATE.replace("{ids}", &ids))
+        .fetch_all::<ResolvedLegChRow>()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.leg,
+                ResolvedLeg {
+                    family: r.family,
+                    asset_code: r.asset_code,
+                    issuer_id: r.issuer_id,
+                    contract_id: r.leg,
+                    decimals: r.decimals,
+                    symbol: r.symbol,
+                    name: r.name,
+                },
+            )
+        })
+        .collect())
+}
+
 pub async fn fetch_pool_asset_ids(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -2032,6 +2181,55 @@ pub async fn fetch_pool_list(
 
 #[cfg(test)]
 mod tests {
+    // ---- resolve_leg_assets (task 0374, step 13) ----
+
+    /// The SQL must keep both resolution arms and their dedup discipline.
+    /// 96% of legs resolve ONLY through the asset_sac arm (a SAC has no
+    /// assets row — ADR 0051), so losing that arm silently unresolves nearly
+    /// every pool; losing a GROUP BY fans the map out on RMT duplicates.
+    #[test]
+    fn resolve_legs_sql_keeps_both_arms_and_dedup() {
+        let sql = super::RESOLVE_LEGS_SQL_TEMPLATE;
+        assert!(sql.contains("FROM asset_sac"), "SAC arm is 96% of legs");
+        assert!(
+            sql.contains("GROUP BY sac_contract_id"),
+            "asset_sac is an AMT — reads aggregate"
+        );
+        assert!(
+            sql.contains("asset_type = 3") && sql.contains("FROM assets"),
+            "direct-token arm"
+        );
+        assert!(
+            sql.contains("GROUP BY contract_id"),
+            "assets is an unmerged RMT — dedup or fan out"
+        );
+        assert!(!sql.contains("FINAL"), "no FINAL on the read path (0356)");
+        assert!(
+            sql.contains("toNullable(toUInt32(7))"),
+            "classic decimals are a protocol constant, not a lookup"
+        );
+        assert!(
+            sql.contains("argMax(decimals, version)"),
+            "metadata reads pick the newest version, RMT-safely"
+        );
+        assert!(
+            sql.contains("FROM soroban_contracts") && sql.contains("LIMIT 1 BY id"),
+            "the surrogate→strkey hop uses the canon RMT pick (LIMIT 1 BY id, \
+             0344: the strkey is immutable across versions) — never a bare \
+             join that the 4x duplicates would fan out"
+        );
+        assert_eq!(
+            sql.matches("IN ({ids})").count(),
+            3,
+            "every dimension subquery is bounded by the id list — including \
+             the soroban_contracts hop, which would otherwise full-scan"
+        );
+        assert!(
+            sql.contains("argMax(symbol, version)") && sql.contains("argMax(name, version)"),
+            "bespoke legs carry their on-chain display handle, like the assets page"
+        );
+    }
+
     use super::*;
 
     #[test]
