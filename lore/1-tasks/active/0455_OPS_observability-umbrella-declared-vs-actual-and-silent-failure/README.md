@@ -558,10 +558,44 @@ month is unanswerable by construction.
       that was never run. Worse, the deploy window it referred to is the one
       in which no alarm could deliver at all (see the mute incident below),
       so "exactly one page" was unobservable by construction. Re-ticks after
-      pausing the event-source mapping and counting the pages that arrive
-- [ ] An alarm fires on ingestion stall — in code
+      pausing the event-source mapping and counting the pages that arrive.
+      **2026-08-27: the experiment was prepared and declined, deliberately —
+      see "The pause experiment, considered and declined".** It stays open
+      because it is genuinely unanswered, not because it is queued: this
+      system does not perform planned pauses (measured: 0 of 72 hours with
+      zero consumption on `production-ledger-ingest`, 2026-08-18/21), so the
+      criterion describes a scenario that does not currently arise. It earns
+      its own scheduled act if that changes
+- [x] An alarm fires on ingestion stall — in code
       (`production-ingestion-backlog-age`); AC checks off after a simulated
-      stall against the deployed alarm
+      stall against the deployed alarm.
+      **Ticked 2026-08-27 on three real stalls instead, which is the stronger
+      evidence.** A simulation is a proxy for a stall; the stall itself
+      happened three times against the deployed alarm during the mute window,
+      each with the full datapoint trail recorded:
+
+      ```
+      21.08 16:52   140 -> 200 -> 263 s   3/3 over 120 s -> ALARM
+      27.08 03:22   168 -> 199 -> 288 s   3/3 over 120 s -> ALARM
+      27.08 03:49   175 -> 237 -> 294 s   3/3 over 120 s -> ALARM
+      ```
+
+      Each needed three consecutive minutes over threshold, so none could be a
+      single spike, and each recovered on 1/3 under threshold exactly as
+      configured. Two have an established cause (ClickHouse unreachable
+      21.08; consensus loss and six refused history archives 27.08). What the
+      real events could not show was delivery, because the topic was muted —
+      and that half is now proven separately on the SAME topic
+      (`production-ingestion-backlog-age` and
+      `production-ledger-processor-dlq-depth` both publish to
+      `production-soroban-explorer-alarms`, and the failure was topic-scoped,
+      not alarm-scoped). Detection: three real events. Delivery: 2026-08-27
+      21:44. A simulation now would add a fourth, weaker case.
+
+      **The pause experiment that would also have closed this was considered
+      and declined** — see the note below; it is not deferred work, it is work
+      whose value was measured and found low.
+
 - [x] Every alarm's `treatMissingData` reviewed and justified in a comment
       (2026-08-06)
 - [x] Every level-triggered alarm has a stated re-arm answer; no alarm can sit
@@ -613,7 +647,7 @@ month is unanswerable by construction.
       an undeployed one was read in the job log).
       **Ticked 2026-08-27.** `production-2026.08.27-2-CloudWatch` resolved to
       `stacks=Explorer-production-CloudWatch exclusively=--exclusively
-  web=false`, deployed that stack alone, and the SPA step skipped as
+web=false`, deployed that stack alone, and the SPA step skipped as
       declared. The `cdk diff — every stack, deployed or not` step ran before
       it and showed Compute carrying three undeployed Lambda code changes —
       an undeployed stack's drift, read in the job log, by the mechanism this
@@ -1083,6 +1117,49 @@ SNS:
    every alarm evaluated correctly, every dashboard was accurate. The system
    was healthy by every measure it collected about itself, and could not tell
    anyone anything.
+
+### The pause experiment, considered and declined 2026-08-27
+
+Pausing the indexer's event-source mapping would have closed the planned-pause
+criterion and the stall criterion in one act — they describe the same
+experiment from two sides. It was prepared, with a written prediction
+(exactly one alarm: `ingestion-backlog-age`; explicitly NOT galexie-lag, which
+keeps writing to S3, NOT ch-write-failures, which needs an invocation to
+fail), and then declined on three measurements:
+
+- **The stall question was already answered** three times on real events,
+  better than a simulation would answer it.
+- **Planned pauses are not something this system does.** Measured: 0 of 72
+  hours with zero consumption on `production-ledger-ingest` across
+  2026-08-18/21. Running a production experiment to validate behaviour during
+  an event that does not occur is poor value.
+- **The safety net assumed for it does not exist** — see the finding below.
+
+Not deferred. If planned pauses become real operational practice, the
+experiment earns its own scheduled act rather than riding on the end of an
+unrelated evening.
+
+### Finding — `Enabled` on the event-source mappings is declared nowhere
+
+Found while preparing the pause. The synthesized Compute template carries no
+`Enabled` property on either `AWS::Lambda::EventSourceMapping`:
+
+```
+ProcessorFunctionSqsEventSource...          Enabled: NOT DECLARED
+EnrichmentWorkerFunctionSqsEventSource...   Enabled: NOT DECLARED
+```
+
+CloudFormation creates them with the API default and never manages the field
+afterwards. So a mapping disabled by hand stays disabled: no deploy restores
+it, and `cdk diff` cannot show it, because a diff compares declared
+properties and this one is not declared. Ingestion's on/off switch is real,
+load-bearing, and outside the comparison this whole task exists to build.
+
+This is the task's own defect class — declared vs actual, never compared —
+found in the act of planning a test that assumed the opposite. Recorded as a
+measurement, not filed as a task: nothing is currently disabled, and the
+remedy (declare `enabled: true` explicitly) is one line whose right moment is
+the next time that stack is edited for another reason.
 
 ## Carried to the follow-up PR (raised in PR #422 review, decided not to widen)
 
