@@ -852,3 +852,25 @@ eight mainnet shapes (u32 at position 0 in every one), so a silent zero can
 only come from a FUTURE shape. Amendment for step 15's commit train: warn in
 `pool_registry_row` when position 0 is absent or unparseable, so the zero is
 always accompanied by an alarm-visible log line.
+
+## Final-phase step: prove the deploy window is closed (Karol, 2026-08-28)
+
+After the writer deploys and the catch-up backfill re-runs, one read-only
+check proves no registration slipped between the working backfill and the
+writer's start — the gap the batched-deploy plan makes possible:
+
+```sql
+SELECT
+  (SELECT uniqExact(JSONExtractString(data_xdr,'value',1,'value'))
+     FROM soroban_events WHERE signature = 'add_pool')      AS zdarzen,
+  (SELECT uniqExact(pool_id) FROM liquidity_pools
+     WHERE pool_kind = 1)                                   AS w_rejestrze,
+  zdarzen - w_rejestrze                                     AS brakuje  -- MUSI byc 0
+```
+
+Non-zero `brakuje` = re-run the generator + insert (idempotent) and re-check.
+The generator itself is deliberately NOT in the tree (a one-off is not a
+maintained surface — Karol, 2026-08-28); resurrect it verbatim for the final
+phase with:
+`git show 082ee364:crates/db-clickhouse/src/bin/gen_pool_registry_backfill.rs`
+This lands in the T7 production checklist, not only here.
