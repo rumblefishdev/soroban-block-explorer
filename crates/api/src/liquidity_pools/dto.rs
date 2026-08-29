@@ -30,20 +30,31 @@ pub struct SharesCursor {
 /// `docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ParticipantItem {
-    /// Participant account StrKey (G...).
+    /// Participant StrKey. Classic pools: always an account (`G...`).
+    /// Soroban pools: a share-token holder — an account (`G...`) OR a
+    /// contract (`C...`); Aquarius LPs routinely stake their LP tokens, so a
+    /// staking/locker contract holding most of the supply is normal, not a
+    /// data error.
     pub account: String,
     /// Pool-share balance carried as a decimal string preserving the
-    /// underlying `NUMERIC(28,7)` precision (no f64 round-trip).
-    pub shares: String,
+    /// underlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban
+    /// pools: the share-token balance scaled by the token's on-chain
+    /// metadata decimals; `null` when the token never published decimals —
+    /// an unknown scale surfaces as absent (`share_percentage`, which is
+    /// scale-free, still reports).
+    pub shares: Option<String>,
     /// Share of the pool, expressed as a decimal-string percentage
     /// (`100 * shares / total_pool_shares`). `None` when the pool has no
     /// snapshot in the freshness window (stale pool); the frontend renders
     /// it as "—" in that case (matches the list-endpoint stale-pool
-    /// convention from `18_get_liquidity_pools_list.sql`).
+    /// convention from `18_get_liquidity_pools_list.sql`). Soroban pools:
+    /// `100 * balance / sum(all positive balances)` of the share token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
-    /// Ledger of the first deposit by this account into this pool.
-    pub first_deposit_ledger: i64,
+    /// Ledger of the first deposit by this account into this pool. `null`
+    /// for soroban pools — `balances` records current state, not the first
+    /// sighting, and inventing one would be a misleading fallback.
+    pub first_deposit_ledger: Option<i64>,
     /// Ledger of the most recent change to this position.
     pub last_updated_ledger: i64,
 }
@@ -166,20 +177,96 @@ pub struct PoolAssetLeg {
     pub icon_url: Option<String>,
 }
 
+/// One leg of a SOROBAN pool (task 0374). Pools registered by AMM routers
+/// carry 2–4 token-contract legs in emission order (`get_tokens()` order) —
+/// a pair cannot represent them, so soroban pools publish `legs[]` instead
+/// of `asset_a`/`asset_b`.
+///
+/// `family == "unresolved"` is a real state, not an error: a leg surrogate
+/// that resolves through neither the SAC facet nor a bespoke-token `assets`
+/// row must surface explicitly rather than as a plausible empty asset
+/// (house rule: no misleading fallbacks).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PoolLegItem {
+    /// `native` | `classic_credit` | `soroban` | `unresolved` — the
+    /// `AssetFamily` of the resolved asset (task 0496), NOT the XDR
+    /// `AssetType` vocabulary the classic pair legs use.
+    pub family: String,
+    /// Classic asset code; `null` for native, soroban and unresolved legs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_code: Option<String>,
+    /// Classic issuer StrKey (`G...`); `null` outside `classic_credit`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    /// C-strkey of the leg's token CONTRACT — the address `add_pool`
+    /// registered. For a classic-family leg this is the deployed SAC; for a
+    /// soroban leg the token itself. `null` only when unresolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_id: Option<String>,
+    /// On-chain SEP-41 symbol (soroban tokens; from contract metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// On-chain SEP-41 name; same sourcing as `symbol`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Display scale for `reserve`. `7` for every classic-family leg
+    /// (protocol-fixed); a soroban token's from its on-chain metadata.
+    /// `null` = token never published metadata — render amounts as
+    /// unresolved, never with a guessed scale (an 18-decimal token shown at
+    /// a default 7 is 10^11 off and looks like data, not like a bug).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u32>,
+    /// Latest reserve of this leg in RAW token units, as a decimal string
+    /// (scale by `decimals` to render). From the pool's latest ledger-state
+    /// write (`pool_state_changes`); `null` until state is indexed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reserve: Option<String>,
+}
+
 /// One pool row returned by the list endpoint. Shape pinned to canonical
 /// SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
 /// in the freshness window come back with `null` for every dynamic field
 /// (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
 /// `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+///
+/// Since task 0374 the list is a UNION of both pool worlds, discriminated
+/// by `pool_kind`:
+/// - `"classic"` — CAP-38 pools: `asset_a`/`asset_b` populated, `legs` null.
+/// - `"soroban"` — AMM-contract pools: `legs[]` populated (2–4 entries),
+///   `asset_a`/`asset_b` null, `protocol`/`pool_type` describe the AMM.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolItem {
-    /// SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-    /// 0024; the handler encodes to strkey at the response boundary so
-    /// the wire shape matches the Stellar ecosystem canonical form
-    /// (CAP-38 / SEP-23).
+    /// SEP-23 strkey (`L...`, 56 chars) for classic pools; the pool
+    /// CONTRACT's `C...` strkey for soroban pools (its id bytes are a
+    /// contract address payload, and rendering them as `L...` would produce
+    /// a well-formed WRONG key). DB stores 32 bytes per ADR 0024.
     pub pool_id: String,
-    pub asset_a: PoolAssetLeg,
-    pub asset_b: PoolAssetLeg,
+    /// `classic` | `soroban` — which world this row comes from and which
+    /// leg representation it carries. See struct doc.
+    pub pool_kind: String,
+    /// Protocol label of the registering router, resolved at read time from
+    /// the deployment (task 0374 T1): `aquarius` for the vendor-documented
+    /// router. `null` for classic pools AND for router deployments whose
+    /// operator is unverified — an unlabelled live router shares Aquarius's
+    /// code with fully disjoint admin roles, and labelling it "aquarius"
+    /// would be attribution we cannot back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Verbatim pool-type symbol from the registration event
+    /// (`constant` | `stable` | `concentrated` | ...). Un-normalised on
+    /// purpose — three vendor vocabularies exist for one shape; folding
+    /// them is read-time interpretation. `null` for classic pools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_type: Option<String>,
+    /// Soroban pools only: the token legs in emission order. `null` for
+    /// classic pools (use `asset_a`/`asset_b`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legs: Option<Vec<PoolLegItem>>,
+    /// Classic pools only; `null` for soroban pools (use `legs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_a: Option<PoolAssetLeg>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_b: Option<PoolAssetLeg>,
     pub fee_bps: i32,
     /// `fee_bps / 100` as decimal string. Conversion done server-side so
     /// the frontend can render directly (frontend §6.13/§6.14).
@@ -188,8 +275,11 @@ pub struct PoolItem {
     /// Count of active liquidity providers (`lp_positions WHERE shares > 0`).
     /// Computed from the live table — not dependent on the snapshot
     /// freshness window, so it is populated even on stale pools (where
-    /// `tvl`/`volume`/`fee_revenue` are NULL).
-    pub participant_count: i64,
+    /// `tvl`/`volume`/`fee_revenue` are NULL). `null` for soroban pools:
+    /// their participants are share-token holders, and counting them per
+    /// list row is a full `balances` scan per pool — the participants
+    /// endpoint answers it per pool instead. `null` ≠ 0.
+    pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,

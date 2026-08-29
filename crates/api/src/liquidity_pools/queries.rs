@@ -69,8 +69,23 @@ pub struct PoolRow {
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
     /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
-    /// Task 0246 — see DTO doc for surfacing rules.
-    pub participant_count: i64,
+    /// Task 0246 — see DTO doc for surfacing rules. `None` for soroban pools
+    /// (their participants live in `balances` by share token, not
+    /// `lp_positions` — see the DTO doc; `None` ≠ 0).
+    pub participant_count: Option<i64>,
+    /// `liquidity_pools.pool_kind`: 0 = classic (CAP-38), 1 = soroban AMM
+    /// contract (task 0374). Decides which leg representation the handler
+    /// builds — the pair columns on a soroban row are storage defaults, not
+    /// legs, and must not be surfaced.
+    pub pool_kind: u8,
+    /// `soroban_contracts.id` surrogate of the registering router; 0 on
+    /// classic rows. Protocol labels resolve from it at read time.
+    pub deployment_id: i64,
+    /// Verbatim `pool_type` sym from `add_pool`; empty on classic rows.
+    pub pool_type_raw: String,
+    /// Token-contract surrogates per leg in emission order; empty on
+    /// classic rows.
+    pub legs: Vec<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
@@ -85,17 +100,29 @@ pub struct PoolRow {
 /// surrogate before building the API response.
 #[derive(Debug)]
 pub struct ParticipantRow {
-    /// G-StrKey resolved via JOIN on `accounts`.
+    /// StrKey resolved by surrogate: `G...` via `accounts`; for a soroban
+    /// pool's share-token holder possibly `C...` via `soroban_contracts`.
     pub account: String,
-    /// `accounts.id` BIGINT — used only to encode the next cursor; not
-    /// exposed in the response DTO.
+    /// `accounts.id` / holder surrogate BIGINT — used only to encode the
+    /// next cursor; not exposed in the response DTO.
     pub account_id_surrogate: i64,
-    /// Numeric carried as text to preserve `NUMERIC(28,7)` precision.
-    pub shares: String,
+    /// DISPLAY value. Classic: decimal text preserving `NUMERIC(28,7)`
+    /// (pre-scaled DB-side). Soroban: the share-token balance scaled by the
+    /// token's on-chain metadata decimals; `None` when the token never
+    /// published decimals — an unknown scale must surface as absent, never
+    /// as a raw integer masquerading as a scaled amount.
+    pub shares: Option<String>,
+    /// Keyset value the next cursor carries — ALWAYS the database-side form
+    /// (classic decimal text / soroban raw integer), independent of how
+    /// `shares` displays. The cursor must round-trip into the SQL keyset,
+    /// which compares against the stored column, not the display scale.
+    pub cursor_shares: String,
     /// `100 * shares / total_pool_shares`, NULL when the pool has no snapshot
     /// in the 7-day freshness window. Already a decimal string.
     pub share_percentage: Option<String>,
-    pub first_deposit_ledger: i64,
+    /// `None` on the soroban path (`balances` records state, not first
+    /// sighting).
+    pub first_deposit_ledger: Option<i64>,
     pub last_updated_ledger: i64,
 }
 
@@ -322,6 +349,12 @@ pub struct PoolPriceContext {
     pub leg_a: PriceLeg,
     pub leg_b: PriceLeg,
     pub fee_bps: i32,
+    /// 0 = classic, 1 = soroban. The chart handler rejects soroban pools
+    /// explicitly — their history lives in `pool_state_changes`, not
+    /// `liquidity_pool_snapshots`, and their legs are unpriceable through
+    /// the classic `(code, issuer)` prices identity, so running the classic
+    /// chart SQL would return a confidently empty series.
+    pub pool_kind: u8,
 }
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -334,6 +367,7 @@ struct PriceContextChRow {
     asset_b_code: String,
     asset_b_issuer: String,
     fee_bps: i32,
+    pool_kind: u8,
 }
 
 /// Resolve the pool's leg identities + `fee_bps`. `None` = pool unknown
@@ -351,7 +385,7 @@ pub async fn fetch_pool_price_context(
         .query(
             "WITH legs AS ( \
                  SELECT asset_a_type, asset_a_code, asset_a_issuer_id, \
-                        asset_b_type, asset_b_code, asset_b_issuer_id, fee_bps \
+                        asset_b_type, asset_b_code, asset_b_issuer_id, fee_bps, pool_kind \
                  FROM liquidity_pools FINAL WHERE pool_id = unhex(?) \
              ), \
              iss AS ( \
@@ -367,7 +401,8 @@ pub async fn fetch_pool_price_context(
                 legs.asset_b_type            AS asset_b_type, \
                 legs.asset_b_code            AS asset_b_code, \
                 iss_b.account_id             AS asset_b_issuer, \
-                legs.fee_bps                 AS fee_bps \
+                legs.fee_bps                 AS fee_bps, \
+                legs.pool_kind               AS pool_kind \
              FROM legs \
              LEFT JOIN iss iss_a ON iss_a.id = legs.asset_a_issuer_id \
              LEFT JOIN iss iss_b ON iss_b.id = legs.asset_b_issuer_id \
@@ -389,6 +424,7 @@ pub async fn fetch_pool_price_context(
             Some(&r.asset_b_issuer),
         ),
         fee_bps: r.fee_bps,
+        pool_kind: r.pool_kind,
     }))
 }
 
@@ -670,6 +706,10 @@ struct PoolDetailChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
+    pool_kind: u8,
+    deployment_id: i64,
+    pool_type_raw: String,
+    legs: Vec<i64>,
 }
 
 /// `GET /v1/liquidity-pools/:id` — single-pool detail. Mirrors the PG
@@ -802,7 +842,11 @@ pub async fn fetch_pool_by_id(
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
                 toString(s.total_shares)             AS total_shares, \
-                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms \
+                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms, \
+                lp.pool_kind                         AS pool_kind, \
+                lp.deployment_id                     AS deployment_id, \
+                lp.pool_type_raw                     AS pool_type_raw, \
+                lp.legs                              AS legs \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN iss iss_a ON iss_a.id = lp.asset_a_issuer_id \
              LEFT JOIN iss iss_b ON iss_b.id = lp.asset_b_issuer_id \
@@ -857,7 +901,13 @@ pub async fn fetch_pool_by_id(
         created_at_ledger: r.created_at_ledger,
         // Detail does not paginate; the field is set for struct completeness.
         cursor_ledger: r.created_at_ledger,
-        participant_count: r.participant_count,
+        // Soroban pools: lp_positions holds nothing for them, so the SQL's
+        // count is a true 0 of the WRONG population — mask to None (≠ 0).
+        participant_count: (r.pool_kind == 0).then_some(r.participant_count),
+        pool_kind: r.pool_kind,
+        deployment_id: r.deployment_id,
+        pool_type_raw: r.pool_type_raw,
+        legs: r.legs,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
         reserve_a: r.reserve_a,
         reserve_b: r.reserve_b,
@@ -871,27 +921,9 @@ pub async fn fetch_pool_by_id(
     }))
 }
 
-#[derive(Debug, Row, Deserialize)]
-struct CountRow {
-    n: u64,
-}
-
-/// `true` if a real (non-sentinel) pool with this id exists. Gates 404 vs
-/// 200-empty on participants/transactions/chart. CH `liquidity_pools` has no
-/// `created_at_ledger` sentinel column (dropped); a row's presence is the
-/// existence signal. No FINAL needed — existence is unaffected by un-merged
-/// duplicate versions.
-pub async fn pool_exists(
-    client: &clickhouse::Client,
-    pool_id_hex: &str,
-) -> Result<bool, clickhouse::error::Error> {
-    let row = client
-        .query("SELECT count() AS n FROM liquidity_pools WHERE pool_id = unhex(?)")
-        .bind(pool_id_hex)
-        .fetch_one::<CountRow>()
-        .await?;
-    Ok(row.n > 0)
-}
+// `pool_exists` retired with task 0374: every gate that used it now needs
+// the pool's KIND too, so existence rides `fetch_pool_kind_share` /
+// `fetch_pool_asset_ids` / `fetch_pool_price_context` instead.
 
 #[derive(Debug, Row, Deserialize)]
 struct PoolLegsChRow {
@@ -901,6 +933,7 @@ struct PoolLegsChRow {
     asset_b_type: i16,
     asset_b_code: String,
     asset_b_issuer_id: i64,
+    pool_kind: u8,
 }
 
 /// The pool's two legs as `ids::asset_id` surrogates — the key
@@ -965,6 +998,10 @@ pub(crate) struct ResolvedLeg {
     pub symbol: Option<String>,
     /// On-chain SEP-41 name; same sourcing and caveats as `symbol`.
     pub name: Option<String>,
+    /// C-strkey of the leg's token contract (`soroban_contracts` hop) — the
+    /// address `add_pool` registered, for linking. `None` when the contract
+    /// dimension has no row for the surrogate.
+    pub contract_strkey: Option<String>,
 }
 
 /// Both arms GROUP BY their key: `asset_sac` is an AggregatingMergeTree read
@@ -978,16 +1015,20 @@ pub(crate) struct ResolvedLeg {
 /// `SELECT DISTINCT … FROM soroban_contracts` would scan the whole contracts
 /// dimension per request.
 const RESOLVE_LEGS_SQL_TEMPLATE: &str = "\
-    SELECT sac_contract_id AS leg, \
-           max(asset_type)  AS family, \
-           max(asset_code)  AS asset_code, \
-           max(issuer_id)   AS issuer_id, \
+    SELECT s.sac_contract_id AS leg, \
+           max(s.asset_type)  AS family, \
+           max(s.asset_code)  AS asset_code, \
+           max(s.issuer_id)   AS issuer_id, \
            toNullable(toUInt32(7)) AS decimals, \
            CAST(NULL, 'Nullable(String)') AS symbol, \
-           CAST(NULL, 'Nullable(String)') AS name \
-    FROM asset_sac \
-    WHERE sac_contract_id IN ({ids}) \
-    GROUP BY sac_contract_id \
+           CAST(NULL, 'Nullable(String)') AS name, \
+           nullIf(max(sc.contract_id), '') AS contract_strkey \
+    FROM asset_sac s \
+    LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
+               WHERE id IN ({ids}) LIMIT 1 BY id) sc \
+           ON sc.id = s.sac_contract_id \
+    WHERE s.sac_contract_id IN ({ids}) \
+    GROUP BY s.sac_contract_id \
     UNION ALL \
     SELECT a.contract_id AS leg, \
            3             AS family, \
@@ -995,7 +1036,8 @@ const RESOLVE_LEGS_SQL_TEMPLATE: &str = "\
            0             AS issuer_id, \
            m.decimals    AS decimals, \
            nullIf(m.symbol, '') AS symbol, \
-           nullIf(m.name, '')   AS name \
+           nullIf(m.name, '')   AS name, \
+           nullIf(sc.contract_id, '') AS contract_strkey \
     FROM (SELECT contract_id FROM assets \
           WHERE asset_type = 3 AND contract_id IN ({ids}) \
           GROUP BY contract_id) a \
@@ -1018,13 +1060,10 @@ struct ResolvedLegChRow {
     decimals: Option<u32>,
     symbol: Option<String>,
     name: Option<String>,
+    contract_strkey: Option<String>,
 }
 
 /// Resolve pool-leg surrogates to asset identities, keyed by the surrogate.
-///
-/// Wired into the pool DTOs at step 17; until then the sole caller is the
-/// test suite.
-#[allow(dead_code)]
 pub(crate) async fn resolve_leg_assets(
     client: &clickhouse::Client,
     leg_ids: &[i64],
@@ -1059,20 +1098,26 @@ pub(crate) async fn resolve_leg_assets(
                     decimals: r.decimals,
                     symbol: r.symbol,
                     name: r.name,
+                    contract_strkey: r.contract_strkey,
                 },
             )
         })
         .collect())
 }
 
+/// Returns `(asset_a_id, asset_b_id, pool_kind)`. The surrogates are only
+/// meaningful for `pool_kind = 0` — a soroban row's pair columns are storage
+/// defaults, and hashing them would yield the NATIVE asset id, silently
+/// answering with XLM traffic that has nothing to do with the pool. The
+/// activity handler must gate on the kind before using the ids.
 pub async fn fetch_pool_asset_ids(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-) -> Result<Option<(i64, i64)>, clickhouse::error::Error> {
+) -> Result<Option<(i64, i64, u8)>, clickhouse::error::Error> {
     let rows = client
         .query(
             "SELECT asset_a_type, asset_a_code, asset_a_issuer_id, \
-                    asset_b_type, asset_b_code, asset_b_issuer_id \
+                    asset_b_type, asset_b_code, asset_b_issuer_id, pool_kind \
              FROM liquidity_pools WHERE pool_id = unhex(?) \
              ORDER BY last_updated_ledger DESC LIMIT 1",
         )
@@ -1083,8 +1128,310 @@ pub async fn fetch_pool_asset_ids(
         (
             ids::pool_leg_asset_id(r.asset_a_type, &r.asset_a_code, r.asset_a_issuer_id),
             ids::pool_leg_asset_id(r.asset_b_type, &r.asset_b_code, r.asset_b_issuer_id),
+            r.pool_kind,
         )
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Soroban-pool reads (task 0374, steps 16-17).
+// ---------------------------------------------------------------------------
+
+/// Router deployments whose OPERATOR identity is verified against vendor
+/// documentation (task 0374 T1). Resolved at read time from
+/// `liquidity_pools.deployment_id` → `soroban_contracts.contract_id` → this
+/// list, so a new pool is labelled the moment it registers and a label fix
+/// is a code change, not an UPDATE.
+///
+/// Deliberately NOT "every deployment of Aquarius's WASM": a second live
+/// router shares the code byte-for-byte with all seven admin roles disjoint
+/// (measured), so code identity does not establish operator identity. Its
+/// pools stay indexed and unlabelled.
+const ROUTER_PROTOCOL_LABELS: &[(&str, &str)] = &[(
+    "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK",
+    "aquarius",
+)];
+
+/// `deployment_id` surrogates → protocol labels, via the contract dimension.
+/// Ids absent from [`ROUTER_PROTOCOL_LABELS`] simply don't appear in the map
+/// (unlabelled ≠ error).
+pub(crate) async fn resolve_protocol_labels(
+    client: &clickhouse::Client,
+    deployment_ids: Vec<i64>,
+) -> Result<HashMap<i64, &'static str>, clickhouse::error::Error> {
+    let ids: Vec<i64> = deployment_ids.into_iter().filter(|&id| id != 0).collect();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let strkeys = crate::common::ch::resolve_contracts(client, ids).await?;
+    Ok(strkeys
+        .into_iter()
+        .filter_map(|(id, strkey)| {
+            ROUTER_PROTOCOL_LABELS
+                .iter()
+                .find(|(router, _)| *router == strkey)
+                .map(|(_, label)| (id, *label))
+        })
+        .collect())
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct PoolReservesChRow {
+    pool_id_hex: String,
+    reserves: Vec<i128>,
+}
+
+/// Latest per-pool reserves from `pool_state_changes`, keyed by pool hex.
+///
+/// `argMax` by the FULL key tail `(ledger, tx, change)` — last write wins,
+/// including intra-ledger ordering (up to 12 writes/ledger measured). A
+/// single-column argMax cannot tear. The vector is VERBATIM plane/instance
+/// state: a concentrated pool's per-tick tail may follow the leg reserves,
+/// so callers slice by the pool's leg count, never by vector length.
+///
+/// Values return as decimal strings — an i128 reserve exceeds JSON number
+/// precision, same rule as every amount on this API.
+pub(crate) async fn fetch_latest_soroban_reserves(
+    client: &clickhouse::Client,
+    pool_ids_hex: &[&str],
+) -> Result<HashMap<String, Vec<String>>, clickhouse::error::Error> {
+    let mut hexes: Vec<&str> = pool_ids_hex
+        .iter()
+        .copied()
+        .filter(|h| is_hex_pool_id(h))
+        .collect();
+    hexes.sort_unstable();
+    hexes.dedup();
+    if hexes.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Validated-hex ids formatted into the IN list (the driver does not bind
+    // sequences) — same inlining discipline as the list keyset.
+    let in_list = hexes
+        .iter()
+        .map(|h| format!("unhex('{h}')"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let rows = client
+        .query(&format!(
+            "SELECT lower(hex(pool_id)) AS pool_id_hex, \
+                    argMax(reserves, (ledger_sequence, transaction_id, change_index)) AS reserves \
+             FROM pool_state_changes \
+             WHERE pool_id IN ({in_list}) \
+             GROUP BY pool_id"
+        ))
+        .fetch_all::<PoolReservesChRow>()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.pool_id_hex,
+                r.reserves.iter().map(i128::to_string).collect(),
+            )
+        })
+        .collect())
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct PoolKindShareChRow {
+    pool_kind: u8,
+    share_token_id: i64,
+}
+
+/// Existence + kind + share-token gate for the participants endpoint:
+/// `None` = pool unknown (404). `share_token_id = 0` = no share token known
+/// (relation not yet derived, or a concentrated pool that never mints one).
+///
+/// The relation lives in the `pool_share_tokens` SIDE table (asset_sac
+/// pattern — a partial row in the RMT registry would clobber the full
+/// registration); versioned by sighting ledger so a share-token migration
+/// converges on the newest, matching on-chain `share_id()`.
+pub async fn fetch_pool_kind_share(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+) -> Result<Option<(u8, i64)>, clickhouse::error::Error> {
+    let row = client
+        .query(
+            "SELECT lp.pool_kind AS pool_kind, \
+                    toInt64(ifNull(st.tok, 0)) AS share_token_id \
+             FROM liquidity_pools lp FINAL \
+             LEFT JOIN ( \
+                 SELECT pool_id, toNullable(argMax(share_token_id, derived_at_ledger)) AS tok \
+                 FROM pool_share_tokens WHERE pool_id = unhex(?) GROUP BY pool_id \
+             ) st ON st.pool_id = lp.pool_id \
+             WHERE lp.pool_id = unhex(?) LIMIT 1",
+        )
+        .bind(pool_id_hex)
+        .bind(pool_id_hex)
+        .fetch_optional::<PoolKindShareChRow>()
+        .await?;
+    Ok(row.map(|r| (r.pool_kind, r.share_token_id)))
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct SorobanParticipantChRow {
+    holder_id: i64,
+    shares: String,
+    share_percentage: Option<String>,
+    last_updated_ledger: i64,
+}
+
+/// Insert the decimal point into a raw non-negative integer amount string.
+/// Exact string surgery — no float, no i128 parse (the value already IS the
+/// canonical decimal digits). Trailing fractional zeros are trimmed, matching
+/// how CH renders Decimal columns via `toString`.
+fn scale_raw_amount(raw: &str, decimals: u32) -> String {
+    if decimals == 0 {
+        return raw.to_string();
+    }
+    let d = decimals as usize;
+    let padded = if raw.len() <= d {
+        format!("{raw:0>width$}", width = d + 1)
+    } else {
+        raw.to_string()
+    };
+    let (int_part, frac_part) = padded.split_at(padded.len() - d);
+    let frac_part = frac_part.trim_end_matches('0');
+    if frac_part.is_empty() {
+        int_part.to_string()
+    } else {
+        format!("{int_part}.{frac_part}")
+    }
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct DecimalsChRow {
+    decimals: Option<u32>,
+}
+
+/// The share token's on-chain metadata `decimals` (newest version), through
+/// the surrogate→strkey hop. `None` = token never published metadata — the
+/// caller must then surface amounts as UNSCALED-therefore-absent, never
+/// guess a scale.
+async fn fetch_token_decimals(
+    client: &clickhouse::Client,
+    token_id: i64,
+) -> Result<Option<u32>, clickhouse::error::Error> {
+    let row = client
+        .query(
+            "SELECT argMax(decimals, version) AS decimals \
+             FROM soroban_contract_metadata \
+             WHERE contract_id = ( \
+                 SELECT contract_id FROM soroban_contracts WHERE id = ? LIMIT 1 BY id \
+             )",
+        )
+        .bind(token_id)
+        .fetch_optional::<DecimalsChRow>()
+        .await?;
+    Ok(row.and_then(|r| r.decimals))
+}
+
+/// Participants of a SOROBAN pool = current holders of its share token,
+/// from `balances` (task 0374 step 16). Ordered `(amount DESC, holder DESC)`
+/// to mirror the classic participants sort.
+///
+/// `balances` is keyed `(holder_id, asset_id)`, so the asset-direction read
+/// is a full scan — measured 121.5M rows / 974 MB / 71 ms, acceptable behind
+/// the endpoint's short cache.
+// ponytail: full-scan by asset_id; hand ClickHouse a skip index
+// (`ALTER TABLE balances ADD INDEX ... asset_id TYPE bloom_filter`) in the
+// deploy window if this endpoint gets hot.
+///
+/// `argMax(amount, last_updated_ledger)` dedups the unmerged RMT (house
+/// rule: every read dedups). Percentage = share of the sum of POSITIVE
+/// balances — the live circulating supply; total-supply state is not
+/// separately indexed and burnt/zeroed rows must not dilute it.
+pub async fn fetch_soroban_participants(
+    client: &clickhouse::Client,
+    share_token_id: i64,
+    cursor: Option<&SharesCursor>,
+    limit: i64,
+    direction: Direction,
+) -> Result<Vec<ParticipantRow>, clickhouse::error::Error> {
+    let (op, order) = keyset_sql_desc(direction);
+    // Same inline-not-bind discipline as the classic keyset (clickhouse-rs
+    // None-into-tuple defect); a non-numeric cursor degrades to page one.
+    // Share-token balances are integers — reject a fractional cursor value.
+    let keyset = match cursor {
+        Some(c) if is_decimal_str(&c.shares) && !c.shares.contains('.') => format!(
+            "AND ((amt {op} toInt128('{s}')) \
+                  OR (amt = toInt128('{s}') AND holder_id {op} {a}))",
+            op = op,
+            s = c.shares,
+            a = c.account_id,
+        ),
+        _ => String::new(),
+    };
+    let sql = format!(
+        "WITH pos AS ( \
+             SELECT holder_id, argMax(amount, last_updated_ledger) AS amt, \
+                    max(last_updated_ledger) AS lul \
+             FROM balances WHERE asset_id = ? \
+             GROUP BY holder_id HAVING amt > 0 \
+         ), \
+         total AS (SELECT sum(amt) AS t FROM pos) \
+         SELECT holder_id, \
+                toString(amt) AS shares, \
+                toNullable(toString(round(toFloat64(amt) * 100 / (SELECT toFloat64(t) FROM total), 4))) \
+                    AS share_percentage, \
+                lul AS last_updated_ledger \
+         FROM pos \
+         WHERE 1 = 1 {keyset} \
+         ORDER BY amt {order}, holder_id {order} \
+         LIMIT ?",
+        keyset = keyset,
+        order = order,
+    );
+    let rows = client
+        .query(&sql)
+        .bind(share_token_id)
+        .bind(limit)
+        .fetch_all::<SorobanParticipantChRow>()
+        .await?;
+
+    // A holder is an account (G...) or a contract (C...) — Aquarius LPs
+    // routinely stake into a locker contract, so contract holders are the
+    // NORMAL case, not an edge. Resolve through both dimensions; a surrogate
+    // resolving through neither is dropped with the same error contract as
+    // the classic path (pagination may terminate early — operator signal).
+    let ids: Vec<i64> = rows.iter().map(|r| r.holder_id).collect();
+    let (accounts, contracts, decimals) = tokio::join!(
+        crate::common::ch::resolve_accounts(client, ids.clone()),
+        crate::common::ch::resolve_contracts(client, ids),
+        fetch_token_decimals(client, share_token_id),
+    );
+    let (accounts, contracts, decimals) = (accounts?, contracts?, decimals?);
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let Some(strkey) = accounts
+                .get(&r.holder_id)
+                .or_else(|| contracts.get(&r.holder_id))
+                .cloned()
+            else {
+                tracing::error!(
+                    holder_id = r.holder_id,
+                    share_token_id,
+                    "share-token balance resolves to no account/contract row: \
+                     participant dropped, pagination may terminate early"
+                );
+                return None;
+            };
+            Some(ParticipantRow {
+                account: strkey,
+                account_id_surrogate: r.holder_id,
+                // Display scaled by the share token's metadata decimals;
+                // decimals unknown → absent, never a raw integer posing as
+                // a scaled amount. The percentage is scale-free and stays.
+                shares: decimals.map(|d| scale_raw_amount(&r.shares, d)),
+                cursor_shares: r.shares,
+                share_percentage: r.share_percentage,
+                first_deposit_ledger: None,
+                last_updated_ledger: r.last_updated_ledger,
+            })
+        })
+        .collect())
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -1208,9 +1555,10 @@ pub async fn fetch_participants(
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,
-                shares: r.shares,
+                shares: Some(r.shares.clone()),
+                cursor_shares: r.shares,
                 share_percentage: r.share_percentage,
-                first_deposit_ledger: r.first_deposit_ledger,
+                first_deposit_ledger: Some(r.first_deposit_ledger),
                 last_updated_ledger: r.last_updated_ledger,
             })
         })
@@ -1799,6 +2147,10 @@ struct PoolListChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
+    pool_kind: u8,
+    deployment_id: i64,
+    pool_type_raw: String,
+    legs: Vec<i64>,
 }
 
 /// `GET /v1/liquidity-pools` — paginated pool list. Mirrors the PG
@@ -1961,7 +2313,9 @@ pub async fn fetch_pool_list(
                     lp.asset_a_code AS asset_a_code, lp.asset_a_issuer_id AS asset_a_issuer_id, \
                     lp.asset_b_type AS asset_b_type, lp.asset_b_code AS asset_b_code, \
                     lp.asset_b_issuer_id AS asset_b_issuer_id, lp.fee_bps AS fee_bps, \
-                    lp.last_updated_ledger AS last_updated_ledger \
+                    lp.last_updated_ledger AS last_updated_ledger, \
+                    lp.pool_kind AS pool_kind, lp.deployment_id AS deployment_id, \
+                    lp.pool_type_raw AS pool_type_raw, lp.legs AS legs \
              FROM liquidity_pools lp FINAL \
              WHERE 1 = 1{filters} {keyset} \
              ORDER BY last_updated_ledger {order}, pool_id {order} \
@@ -2023,7 +2377,11 @@ pub async fn fetch_pool_list(
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
              toString(s.total_shares)                        AS total_shares, \
-             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms \
+             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms, \
+             lp.pool_kind                                    AS pool_kind, \
+             lp.deployment_id                                AS deployment_id, \
+             lp.pool_type_raw                                AS pool_type_raw, \
+             lp.legs                                         AS legs \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
@@ -2165,7 +2523,9 @@ pub async fn fetch_pool_list(
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,
                 cursor_ledger: r.cursor_ledger,
-                participant_count: r.participant_count,
+                // Soroban rows: lp_positions' 0 is the wrong population's
+                // truth — mask to None (≠ 0), same as detail.
+                participant_count: (r.pool_kind == 0).then_some(r.participant_count),
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
                 reserve_a: r.reserve_a,
                 reserve_b: r.reserve_b,
@@ -2174,6 +2534,10 @@ pub async fn fetch_pool_list(
                 volume: None,
                 fee_revenue: None,
                 latest_snapshot_at: r.latest_snapshot_at_ms.map(millis_to_utc),
+                pool_kind: r.pool_kind,
+                deployment_id: r.deployment_id,
+                pool_type_raw: r.pool_type_raw,
+                legs: r.legs,
             }
         })
         .collect())
@@ -2181,6 +2545,28 @@ pub async fn fetch_pool_list(
 
 #[cfg(test)]
 mod tests {
+    // ---- scale_raw_amount (task 0374, step 16) ----
+
+    /// Exact string surgery, no float: the 18-decimal case is precisely the
+    /// one a f64 path would corrupt, and the sub-unit case is where naive
+    /// slicing without padding panics.
+    #[test]
+    fn scale_raw_amount_places_the_point_exactly() {
+        use super::scale_raw_amount;
+        let cases = [
+            ("250000000000", 7, "25000"),
+            ("4112908590", 7, "411.290859"),
+            ("42", 7, "0.0000042"),
+            ("1", 18, "0.000000000000000001"),
+            ("1000000000000000000", 18, "1"),
+            ("0", 7, "0"),
+            ("123", 0, "123"),
+        ];
+        for (raw, dec, want) in cases {
+            assert_eq!(scale_raw_amount(raw, dec), want, "({raw}, {dec})");
+        }
+    }
+
     // ---- resolve_leg_assets (task 0374, step 13) ----
 
     /// The SQL must keep both resolution arms and their dedup discipline.
@@ -2192,7 +2578,7 @@ mod tests {
         let sql = super::RESOLVE_LEGS_SQL_TEMPLATE;
         assert!(sql.contains("FROM asset_sac"), "SAC arm is 96% of legs");
         assert!(
-            sql.contains("GROUP BY sac_contract_id"),
+            sql.contains("GROUP BY s.sac_contract_id"),
             "asset_sac is an AMT — reads aggregate"
         );
         assert!(
@@ -2220,9 +2606,10 @@ mod tests {
         );
         assert_eq!(
             sql.matches("IN ({ids})").count(),
-            3,
+            4,
             "every dimension subquery is bounded by the id list — including \
-             the soroban_contracts hop, which would otherwise full-scan"
+             BOTH soroban_contracts hops (one per arm, for the leg's C-strkey), \
+             which would otherwise full-scan"
         );
         assert!(
             sql.contains("argMax(symbol, version)") && sql.contains("argMax(name, version)"),

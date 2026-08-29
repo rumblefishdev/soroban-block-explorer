@@ -1616,13 +1616,19 @@ export type PaginatedNftTransferItem = {
 export type PaginatedParticipantItem = {
   data: Array<{
     /**
-     * Participant account StrKey (G...).
+     * Participant StrKey. Classic pools: always an account (`G...`).
+     * Soroban pools: a share-token holder — an account (`G...`) OR a
+     * contract (`C...`); Aquarius LPs routinely stake their LP tokens, so a
+     * staking/locker contract holding most of the supply is normal, not a
+     * data error.
      */
     account: string;
     /**
-     * Ledger of the first deposit by this account into this pool.
+     * Ledger of the first deposit by this account into this pool. `null`
+     * for soroban pools — `balances` records current state, not the first
+     * sighting, and inventing one would be a misleading fallback.
      */
-    first_deposit_ledger: number;
+    first_deposit_ledger?: number | null;
     /**
      * Ledger of the most recent change to this position.
      */
@@ -1632,14 +1638,19 @@ export type PaginatedParticipantItem = {
      * (`100 * shares / total_pool_shares`). `None` when the pool has no
      * snapshot in the freshness window (stale pool); the frontend renders
      * it as "—" in that case (matches the list-endpoint stale-pool
-     * convention from `18_get_liquidity_pools_list.sql`).
+     * convention from `18_get_liquidity_pools_list.sql`). Soroban pools:
+     * `100 * balance / sum(all positive balances)` of the share token.
      */
     share_percentage?: string | null;
     /**
      * Pool-share balance carried as a decimal string preserving the
-     * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+     * underlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban
+     * pools: the share-token balance scaled by the token's on-chain
+     * metadata decimals; `null` when the token never published decimals —
+     * an unknown scale surfaces as absent (`share_percentage`, which is
+     * scale-free, still reports).
      */
-    shares: string;
+    shares?: string | null;
   }>;
   page: PageInfo;
 };
@@ -1717,8 +1728,8 @@ export type PaginatedPoolActivityItem = {
  */
 export type PaginatedPoolItem = {
   data: Array<{
-    asset_a: PoolAssetLeg;
-    asset_b: PoolAssetLeg;
+    asset_a?: null | PoolAssetLeg;
+    asset_b?: null | PoolAssetLeg;
     created_at_ledger: number;
     fee_bps: number;
     /**
@@ -1734,19 +1745,48 @@ export type PaginatedPoolItem = {
     latest_snapshot_at?: string | null;
     latest_snapshot_ledger?: number | null;
     /**
+     * Soroban pools only: the token legs in emission order. `null` for
+     * classic pools (use `asset_a`/`asset_b`).
+     */
+    legs?: Array<PoolLegItem> | null;
+    /**
      * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
      * Computed from the live table — not dependent on the snapshot
      * freshness window, so it is populated even on stale pools (where
-     * `tvl`/`volume`/`fee_revenue` are NULL).
+     * `tvl`/`volume`/`fee_revenue` are NULL). `null` for soroban pools:
+     * their participants are share-token holders, and counting them per
+     * list row is a full `balances` scan per pool — the participants
+     * endpoint answers it per pool instead. `null` ≠ 0.
      */
-    participant_count: number;
+    participant_count?: number | null;
     /**
-     * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-     * 0024; the handler encodes to strkey at the response boundary so
-     * the wire shape matches the Stellar ecosystem canonical form
-     * (CAP-38 / SEP-23).
+     * SEP-23 strkey (`L...`, 56 chars) for classic pools; the pool
+     * CONTRACT's `C...` strkey for soroban pools (its id bytes are a
+     * contract address payload, and rendering them as `L...` would produce
+     * a well-formed WRONG key). DB stores 32 bytes per ADR 0024.
      */
     pool_id: string;
+    /**
+     * `classic` | `soroban` — which world this row comes from and which
+     * leg representation it carries. See struct doc.
+     */
+    pool_kind: string;
+    /**
+     * Verbatim pool-type symbol from the registration event
+     * (`constant` | `stable` | `concentrated` | ...). Un-normalised on
+     * purpose — three vendor vocabularies exist for one shape; folding
+     * them is read-time interpretation. `null` for classic pools.
+     */
+    pool_type?: string | null;
+    /**
+     * Protocol label of the registering router, resolved at read time from
+     * the deployment (task 0374 T1): `aquarius` for the vendor-documented
+     * router. `null` for classic pools AND for router deployments whose
+     * operator is unverified — an unlabelled live router shares Aquarius's
+     * code with fully disjoint admin roles, and labelling it "aquarius"
+     * would be attribution we cannot back.
+     */
+    protocol?: string | null;
     reserve_a?: string | null;
     reserve_b?: string | null;
     total_shares?: string | null;
@@ -1836,13 +1876,19 @@ export type PaginatedTransactionListItem = {
  */
 export type ParticipantItem = {
   /**
-   * Participant account StrKey (G...).
+   * Participant StrKey. Classic pools: always an account (`G...`).
+   * Soroban pools: a share-token holder — an account (`G...`) OR a
+   * contract (`C...`); Aquarius LPs routinely stake their LP tokens, so a
+   * staking/locker contract holding most of the supply is normal, not a
+   * data error.
    */
   account: string;
   /**
-   * Ledger of the first deposit by this account into this pool.
+   * Ledger of the first deposit by this account into this pool. `null`
+   * for soroban pools — `balances` records current state, not the first
+   * sighting, and inventing one would be a misleading fallback.
    */
-  first_deposit_ledger: number;
+  first_deposit_ledger?: number | null;
   /**
    * Ledger of the most recent change to this position.
    */
@@ -1852,14 +1898,19 @@ export type ParticipantItem = {
    * (`100 * shares / total_pool_shares`). `None` when the pool has no
    * snapshot in the freshness window (stale pool); the frontend renders
    * it as "—" in that case (matches the list-endpoint stale-pool
-   * convention from `18_get_liquidity_pools_list.sql`).
+   * convention from `18_get_liquidity_pools_list.sql`). Soroban pools:
+   * `100 * balance / sum(all positive balances)` of the share token.
    */
   share_percentage?: string | null;
   /**
    * Pool-share balance carried as a decimal string preserving the
-   * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+   * underlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban
+   * pools: the share-token balance scaled by the token's on-chain
+   * metadata decimals; `null` when the token never published decimals —
+   * an unknown scale surfaces as absent (`share_percentage`, which is
+   * scale-free, still reports).
    */
-  shares: string;
+  shares?: string | null;
 };
 
 /**
@@ -2012,10 +2063,16 @@ export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
  * in the freshness window come back with `null` for every dynamic field
  * (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
  * `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+ *
+ * Since task 0374 the list is a UNION of both pool worlds, discriminated
+ * by `pool_kind`:
+ * - `"classic"` — CAP-38 pools: `asset_a`/`asset_b` populated, `legs` null.
+ * - `"soroban"` — AMM-contract pools: `legs[]` populated (2–4 entries),
+ * `asset_a`/`asset_b` null, `protocol`/`pool_type` describe the AMM.
  */
 export type PoolItem = {
-  asset_a: PoolAssetLeg;
-  asset_b: PoolAssetLeg;
+  asset_a?: null | PoolAssetLeg;
+  asset_b?: null | PoolAssetLeg;
   created_at_ledger: number;
   fee_bps: number;
   /**
@@ -2031,19 +2088,48 @@ export type PoolItem = {
   latest_snapshot_at?: string | null;
   latest_snapshot_ledger?: number | null;
   /**
+   * Soroban pools only: the token legs in emission order. `null` for
+   * classic pools (use `asset_a`/`asset_b`).
+   */
+  legs?: Array<PoolLegItem> | null;
+  /**
    * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
    * Computed from the live table — not dependent on the snapshot
    * freshness window, so it is populated even on stale pools (where
-   * `tvl`/`volume`/`fee_revenue` are NULL).
+   * `tvl`/`volume`/`fee_revenue` are NULL). `null` for soroban pools:
+   * their participants are share-token holders, and counting them per
+   * list row is a full `balances` scan per pool — the participants
+   * endpoint answers it per pool instead. `null` ≠ 0.
    */
-  participant_count: number;
+  participant_count?: number | null;
   /**
-   * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-   * 0024; the handler encodes to strkey at the response boundary so
-   * the wire shape matches the Stellar ecosystem canonical form
-   * (CAP-38 / SEP-23).
+   * SEP-23 strkey (`L...`, 56 chars) for classic pools; the pool
+   * CONTRACT's `C...` strkey for soroban pools (its id bytes are a
+   * contract address payload, and rendering them as `L...` would produce
+   * a well-formed WRONG key). DB stores 32 bytes per ADR 0024.
    */
   pool_id: string;
+  /**
+   * `classic` | `soroban` — which world this row comes from and which
+   * leg representation it carries. See struct doc.
+   */
+  pool_kind: string;
+  /**
+   * Verbatim pool-type symbol from the registration event
+   * (`constant` | `stable` | `concentrated` | ...). Un-normalised on
+   * purpose — three vendor vocabularies exist for one shape; folding
+   * them is read-time interpretation. `null` for classic pools.
+   */
+  pool_type?: string | null;
+  /**
+   * Protocol label of the registering router, resolved at read time from
+   * the deployment (task 0374 T1): `aquarius` for the vendor-documented
+   * router. `null` for classic pools AND for router deployments whose
+   * operator is unverified — an unlabelled live router shares Aquarius's
+   * code with fully disjoint admin roles, and labelling it "aquarius"
+   * would be attribution we cannot back.
+   */
+  protocol?: string | null;
   reserve_a?: string | null;
   reserve_b?: string | null;
   total_shares?: string | null;
@@ -2062,6 +2148,62 @@ export type PoolItem = {
    * at the leg-A last hourly close; `null` when the pool is unpriceable.
    */
   volume?: string | null;
+};
+
+/**
+ * One leg of a SOROBAN pool (task 0374). Pools registered by AMM routers
+ * carry 2–4 token-contract legs in emission order (`get_tokens()` order) —
+ * a pair cannot represent them, so soroban pools publish `legs[]` instead
+ * of `asset_a`/`asset_b`.
+ *
+ * `family == "unresolved"` is a real state, not an error: a leg surrogate
+ * that resolves through neither the SAC facet nor a bespoke-token `assets`
+ * row must surface explicitly rather than as a plausible empty asset
+ * (house rule: no misleading fallbacks).
+ */
+export type PoolLegItem = {
+  /**
+   * Classic asset code; `null` for native, soroban and unresolved legs.
+   */
+  asset_code?: string | null;
+  /**
+   * C-strkey of the leg's token CONTRACT — the address `add_pool`
+   * registered. For a classic-family leg this is the deployed SAC; for a
+   * soroban leg the token itself. `null` only when unresolved.
+   */
+  contract_id?: string | null;
+  /**
+   * Display scale for `reserve`. `7` for every classic-family leg
+   * (protocol-fixed); a soroban token's from its on-chain metadata.
+   * `null` = token never published metadata — render amounts as
+   * unresolved, never with a guessed scale (an 18-decimal token shown at
+   * a default 7 is 10^11 off and looks like data, not like a bug).
+   */
+  decimals?: number | null;
+  /**
+   * `native` | `classic_credit` | `soroban` | `unresolved` — the
+   * `AssetFamily` of the resolved asset (task 0496), NOT the XDR
+   * `AssetType` vocabulary the classic pair legs use.
+   */
+  family: string;
+  /**
+   * Classic issuer StrKey (`G...`); `null` outside `classic_credit`.
+   */
+  issuer?: string | null;
+  /**
+   * On-chain SEP-41 name; same sourcing as `symbol`.
+   */
+  name?: string | null;
+  /**
+   * Latest reserve of this leg in RAW token units, as a decimal string
+   * (scale by `decimals` to render). From the pool's latest ledger-state
+   * write (`pool_state_changes`); `null` until state is indexed.
+   */
+  reserve?: string | null;
+  /**
+   * On-chain SEP-41 symbol (soroban tokens; from contract metadata).
+   */
+  symbol?: string | null;
 };
 
 /**

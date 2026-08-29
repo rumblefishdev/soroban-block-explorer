@@ -221,6 +221,7 @@ export type {
   PoolAssetLeg,
   PoolEvent,
   PoolItem,
+  PoolLegItem,
   SacAsset,
   SearchGroups,
   SearchHit,

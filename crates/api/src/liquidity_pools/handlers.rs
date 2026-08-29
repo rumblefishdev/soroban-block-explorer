@@ -21,10 +21,11 @@ use crate::state::AppState;
 
 use super::dto::{
     ChartParams, ChartResponse, ParticipantItem, PoolActivityCursor, PoolActivityItem,
-    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolListCursor, PoolListParams,
-    SharesCursor,
+    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolLegItem, PoolListCursor,
+    PoolListParams, SharesCursor,
 };
 use super::queries::{self, PoolRow, ResolvedPoolListParams};
+use crate::common::strkey::contract_hex_to_strkey;
 
 #[utoipa::path(
     get,
@@ -63,34 +64,56 @@ pub async fn list_participants(
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
 
-    // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
-    // frontend can route to a "pool not found" page. An existing pool
-    // with no current participants returns 200 with `data: []`.
-    //
-    // Both reads derive everything from the path — the page never consumes the
-    // existence answer — so they go out together (task 0446). `exists` is still
-    // what decides the 404 and is still checked first, so responses are
-    // unchanged; the cost is one wasted page read when the pool is missing.
+    // Kind gate first (task 0374): the pool's kind decides WHICH population
+    // its participants are — `lp_positions` rows for classic, share-token
+    // holders in `balances` for soroban — so the existence check and the
+    // page read can no longer overlap (the 0446 pairing applied to the
+    // classic-only world; the gate is a cheap point read).
     let ch = state.ch();
-    let (exists, fetched) = tokio::join!(
-        queries::pool_exists(&ch, &pool_id_hex),
+    let (pool_kind, share_token_id) = match queries::fetch_pool_kind_share(&ch, &pool_id_hex).await
+    {
+        Ok(Some(ks)) => ks,
+        Ok(None) => return errors::not_found("liquidity pool not found"),
+        Err(e) => {
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_kind_share");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    // Soroban pool with no share-token relation: the relation is either not
+    // yet derived (indexing lag) or structurally absent (a concentrated pool
+    // mints no share token — its positions are NFTs, not yet indexed). An
+    // empty 200 would read as "no participants" about a pool that HAS them,
+    // so this refuses explicitly instead (same shape as the min_tvl refusal).
+    if pool_kind == 1 && share_token_id == 0 {
+        return errors::bad_request_with_details(
+            errors::INVALID_FILTER,
+            "participants are not available for this pool: no share token is \
+             known (either not yet derived, or a concentrated pool whose \
+             positions are not share-token balances)",
+            serde_json::json!({ "pool_id": pool_id, "pool_kind": "soroban" }),
+        );
+    }
+
+    let fetched = if pool_kind == 1 {
+        queries::fetch_soroban_participants(
+            &ch,
+            share_token_id,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        )
+        .await
+    } else {
         queries::fetch_participants(
             &ch,
             &pool_id_hex,
             pagination.cursor.as_ref(),
             fetch_limit,
             direction,
-        ),
-    );
-    match exists.map_err(|e| e.to_string()) {
-        Ok(true) => {}
-        Ok(false) => return errors::not_found("liquidity pool not found"),
-        Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in pool_exists");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    }
-
+        )
+        .await
+    };
     let mut rows = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
         Err(e) => {
@@ -111,7 +134,10 @@ pub async fn list_participants(
         |dir, last| {
             cursor::encode(
                 &SharesCursor {
-                    shares: last.shares.clone(),
+                    // ALWAYS the database-side form (`cursor_shares`), never
+                    // the display value — the keyset compares against the
+                    // stored column, and the soroban display is re-scaled.
+                    shares: last.cursor_shares.clone(),
                     account_id: last.account_id_surrogate,
                 },
                 dir,
@@ -145,25 +171,52 @@ pub async fn list_participants(
 // so they now sit in one module together. The `splitn(2)` bound, the
 // empty-needle drop and the pair semantics are documented there.
 
-fn map_pool_item(row: PoolRow) -> PoolItem {
+/// The soroban half of a pool row, assembled by [`soroban_views`] and NOT
+/// derivable from the row alone (legs, reserves and the protocol label all
+/// resolve through other tables).
+struct SorobanView {
+    legs: Vec<PoolLegItem>,
+    protocol: Option<String>,
+}
+
+fn map_pool_item(row: PoolRow, soroban: Option<SorobanView>) -> PoolItem {
+    // A soroban pool's id bytes are a CONTRACT address payload — rendering
+    // them as `L...` would produce a well-formed WRONG key, so each kind
+    // encodes its own strkey flavour.
+    let is_soroban = row.pool_kind == 1;
+    let pool_id = if is_soroban {
+        contract_hex_to_strkey(&row.pool_id_hex)
+    } else {
+        pool_id_hex_to_strkey(&row.pool_id_hex)
+    };
+    let (legs, protocol) = match soroban {
+        Some(v) => (Some(v.legs), v.protocol),
+        None => (None, None),
+    };
     PoolItem {
-        pool_id: pool_id_hex_to_strkey(&row.pool_id_hex),
-        asset_a: PoolAssetLeg {
+        pool_id,
+        pool_kind: if is_soroban { "soroban" } else { "classic" }.to_string(),
+        protocol,
+        pool_type: (!row.pool_type_raw.is_empty()).then(|| row.pool_type_raw.clone()),
+        legs,
+        // The pair columns on a soroban row are storage defaults, not legs —
+        // surfacing them would render every soroban pool as native/native.
+        asset_a: (!is_soroban).then_some(PoolAssetLeg {
             asset_type_name: row.asset_a_type_name,
             asset_type: row.asset_a_type,
             asset_code: row.asset_a_code,
             issuer: row.asset_a_issuer,
             contract_id: row.asset_a_contract_id,
             icon_url: row.asset_a_icon_url,
-        },
-        asset_b: PoolAssetLeg {
+        }),
+        asset_b: (!is_soroban).then_some(PoolAssetLeg {
             asset_type_name: row.asset_b_type_name,
             asset_type: row.asset_b_type,
             asset_code: row.asset_b_code,
             issuer: row.asset_b_issuer,
             contract_id: row.asset_b_contract_id,
             icon_url: row.asset_b_icon_url,
-        },
+        }),
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
@@ -177,6 +230,115 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_revenue: row.fee_revenue,
         latest_snapshot_at: row.latest_snapshot_at,
     }
+}
+
+/// `AssetFamily` discriminant → wire label for a soroban-pool leg.
+fn family_label(family: i16) -> &'static str {
+    match family {
+        0 => "native",
+        1 => "classic_credit",
+        3 => "soroban",
+        _ => "unresolved",
+    }
+}
+
+/// Assemble the soroban halves for the soroban rows of a page, keyed by
+/// `pool_id_hex`. One batched round per concern (legs, issuers, reserves,
+/// protocol labels) — never per row. Classic rows get no entry.
+///
+/// Resolution misses DEGRADE, they never fail the page: an unresolvable leg
+/// renders as `family: "unresolved"` (house rule — explicit, not a plausible
+/// empty asset), and a reserves/protocol lookup error only loses that
+/// enrichment.
+async fn soroban_views(
+    client: &clickhouse::Client,
+    rows: &[PoolRow],
+) -> Result<std::collections::HashMap<String, SorobanView>, clickhouse::error::Error> {
+    let soroban_rows: Vec<&PoolRow> = rows.iter().filter(|r| r.pool_kind == 1).collect();
+    if soroban_rows.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let leg_ids: Vec<i64> = soroban_rows.iter().flat_map(|r| r.legs.clone()).collect();
+    let pool_hexes: Vec<&str> = soroban_rows
+        .iter()
+        .map(|r| r.pool_id_hex.as_str())
+        .collect();
+    let deployment_ids: Vec<i64> = soroban_rows.iter().map(|r| r.deployment_id).collect();
+
+    let (resolved, reserves, protocols) = tokio::join!(
+        queries::resolve_leg_assets(client, &leg_ids),
+        queries::fetch_latest_soroban_reserves(client, &pool_hexes),
+        queries::resolve_protocol_labels(client, deployment_ids),
+    );
+    let resolved = resolved?;
+    // Reserves and protocol labels are enrichment: log-and-degrade so a
+    // side-table hiccup does not blank the whole pool list.
+    let reserves = reserves.unwrap_or_else(|e| {
+        tracing::error!("DB error in fetch_latest_soroban_reserves (degraded to null): {e}");
+        std::collections::HashMap::new()
+    });
+    let protocols = protocols.unwrap_or_else(|e| {
+        tracing::error!("DB error in resolve_protocol_labels (degraded to null): {e}");
+        std::collections::HashMap::new()
+    });
+
+    // Classic-credit legs carry an issuer surrogate that must render as a
+    // G-strkey; one batched accounts seek for the whole page.
+    let issuer_ids: Vec<i64> = resolved
+        .values()
+        .filter(|l| l.issuer_id != 0)
+        .map(|l| l.issuer_id)
+        .collect();
+    let issuers = crate::common::ch::resolve_accounts(client, issuer_ids).await?;
+
+    Ok(soroban_rows
+        .into_iter()
+        .map(|row| {
+            let pool_reserves = reserves.get(&row.pool_id_hex);
+            let legs = row
+                .legs
+                .iter()
+                .enumerate()
+                .map(|(i, leg_id)| {
+                    // Reserves ride the same emission order as the legs; the
+                    // vector may carry a per-tick tail past the leg count
+                    // (concentrated pools), which this slice-by-index
+                    // deliberately never reads.
+                    let reserve = pool_reserves.and_then(|r| r.get(i).cloned());
+                    match resolved.get(leg_id) {
+                        Some(l) => PoolLegItem {
+                            family: family_label(l.family).to_string(),
+                            asset_code: (!l.asset_code.is_empty()).then(|| l.asset_code.clone()),
+                            issuer: issuers.get(&l.issuer_id).cloned(),
+                            contract_id: l.contract_strkey.clone(),
+                            symbol: l.symbol.clone(),
+                            name: l.name.clone(),
+                            decimals: l.decimals,
+                            reserve,
+                        },
+                        None => PoolLegItem {
+                            family: "unresolved".to_string(),
+                            asset_code: None,
+                            issuer: None,
+                            contract_id: None,
+                            symbol: None,
+                            name: None,
+                            decimals: None,
+                            reserve,
+                        },
+                    }
+                })
+                .collect();
+            (
+                row.pool_id_hex.clone(),
+                SorobanView {
+                    legs,
+                    protocol: protocols.get(&row.deployment_id).map(|s| s.to_string()),
+                },
+            )
+        })
+        .collect())
 }
 
 #[utoipa::path(
@@ -329,7 +491,22 @@ pub async fn list_pools(
             )
         },
     );
-    let data: Vec<PoolItem> = rows.into_iter().map(map_pool_item).collect();
+    // Soroban rows need their legs/reserves/protocol resolved (task 0374);
+    // classic rows pass through untouched.
+    let mut views = match soroban_views(&state.ch(), &rows).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "DB error in soroban_views (list)");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+    let data: Vec<PoolItem> = rows
+        .into_iter()
+        .map(|r| {
+            let view = views.remove(&r.pool_id_hex);
+            map_pool_item(r, view)
+        })
+        .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -369,6 +546,24 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         }
     };
 
+    // Soroban pool: resolve legs/reserves/protocol instead of the classic
+    // USD analytics — its legs have no classic prices identity, so
+    // tvl/volume stay NULL by the existing "unpriceable" convention.
+    if row.pool_kind == 1 {
+        let rows = std::slice::from_ref(&row);
+        let mut views = match soroban_views(&state.ch(), rows).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(pool_id = %pool_id, error = %e, "DB error in soroban_views (detail)");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
+        let view = views.remove(&row.pool_id_hex);
+        let mut resp = Json(map_pool_item(row, view)).into_response();
+        cache_control::attach(&mut resp, cache_control::SHORT);
+        return resp;
+    }
+
     // USD analytics (0199 compute-at-read): spot TVL + 24h volume/fee from
     // the in-cluster `prices.*` views. Deliberately DEGRADES to NULL fields
     // on error instead of failing the whole detail — the pool's on-chain
@@ -387,6 +582,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
             row.asset_b_issuer.as_deref(),
         ),
         fee_bps: row.fee_bps,
+        pool_kind: row.pool_kind,
     };
     match queries::fetch_pool_usd_analytics(
         &state.ch(),
@@ -407,7 +603,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         }
     }
 
-    let mut resp = Json(map_pool_item(row)).into_response();
+    let mut resp = Json(map_pool_item(row, None)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
@@ -473,7 +669,20 @@ pub async fn list_pool_activity(
         .await
         .map_err(|e| e.to_string());
     let asset_ids = match legs {
-        Ok(Some(ids)) => ids,
+        // Soroban pools are refused EXPLICITLY: `lp_operation_amounts` only
+        // records classic LP operations, and the pair-derived surrogates on a
+        // soroban row hash to the NATIVE asset — running the read would
+        // answer with XLM traffic that has nothing to do with this pool.
+        Ok(Some((_, _, 1))) => {
+            return errors::bad_request_with_details(
+                errors::INVALID_FILTER,
+                "activity is not available for soroban pools yet: this feed \
+                 reads classic LP operations; soroban pool activity lives in \
+                 the pool's contract events",
+                serde_json::json!({ "pool_id": pool_id, "pool_kind": "soroban" }),
+            );
+        }
+        Ok(Some((a, b, _))) => (a, b),
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
             tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
@@ -707,6 +916,19 @@ pub async fn get_pool_chart(
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
+    // Soroban pools are refused EXPLICITLY rather than charted empty: their
+    // history lives in `pool_state_changes` (not the classic snapshots this
+    // SQL reads) and their legs have no classic prices identity — the
+    // classic chart would return a confidently empty series, which is worse
+    // than an honest refusal.
+    if ctx.pool_kind == 1 {
+        return errors::bad_request_with_details(
+            errors::INVALID_FILTER,
+            "chart is not available for soroban pools yet: USD series require \
+             prices for the pool's token legs, which are not yet tracked",
+            serde_json::json!({ "pool_id": pool_id, "pool_kind": "soroban" }),
+        );
+    }
 
     let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
         .await
@@ -829,7 +1051,7 @@ mod map_pool_item_tests {
             fee_percent: "0.30".into(),
             created_at_ledger: 100,
             cursor_ledger: 100,
-            participant_count: 0,
+            participant_count: Some(0),
             latest_snapshot_ledger: None,
             reserve_a: None,
             reserve_b: None,
@@ -838,15 +1060,20 @@ mod map_pool_item_tests {
             volume: None,
             fee_revenue: None,
             latest_snapshot_at: None,
+            pool_kind: 0,
+            deployment_id: 0,
+            pool_type_raw: String::new(),
+            legs: Vec::new(),
         }
     }
 
     #[test]
     fn native_leg_has_no_contract_id() {
-        let item = map_pool_item(base_row());
-        assert_eq!(item.asset_a.asset_type, 0, "asset_a is native");
-        assert_eq!(item.asset_a.contract_id, None);
-        assert_eq!(item.asset_b.asset_type, 1, "asset_b is classic credit");
+        let item = map_pool_item(base_row(), None);
+        let (a, b) = (item.asset_a.unwrap(), item.asset_b.unwrap());
+        assert_eq!(a.asset_type, 0, "asset_a is native");
+        assert_eq!(a.contract_id, None);
+        assert_eq!(b.asset_type, 1, "asset_b is classic credit");
     }
 
     #[test]
@@ -855,21 +1082,26 @@ mod map_pool_item_tests {
         // independently. Native leg (no icon) stays None.
         let mut row = base_row();
         row.asset_b_icon_url = Some("https://cdn.example.test/icons/usdc.svg".into());
-        let item = map_pool_item(row);
-        assert_eq!(item.asset_a.icon_url, None, "native leg has no icon");
+        let item = map_pool_item(row, None);
         assert_eq!(
-            item.asset_b.icon_url.as_deref(),
+            item.asset_a.unwrap().icon_url,
+            None,
+            "native leg has no icon"
+        );
+        assert_eq!(
+            item.asset_b.unwrap().icon_url.as_deref(),
             Some("https://cdn.example.test/icons/usdc.svg")
         );
     }
 
     #[test]
     fn classic_credit_leg_surfaces_issuer_and_no_sac_mirror() {
-        let item = map_pool_item(base_row());
-        assert_eq!(item.asset_b.asset_code.as_deref(), Some("USDC"));
-        assert!(item.asset_b.issuer.is_some());
+        let item = map_pool_item(base_row(), None);
+        let b = item.asset_b.unwrap();
+        assert_eq!(b.asset_code.as_deref(), Some("USDC"));
+        assert!(b.issuer.is_some());
         assert_eq!(
-            item.asset_b.contract_id, None,
+            b.contract_id, None,
             "no SAC mirror in `assets` → contract_id stays None"
         );
     }
@@ -879,10 +1111,92 @@ mod map_pool_item_tests {
         let mut row = base_row();
         row.asset_b_contract_id =
             Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB".into());
-        let item = map_pool_item(row);
+        let item = map_pool_item(row, None);
         assert_eq!(
-            item.asset_b.contract_id.as_deref(),
+            item.asset_b.unwrap().contract_id.as_deref(),
             Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB")
         );
+    }
+
+    // ---- soroban rows (task 0374, step 17) ----
+
+    fn soroban_row() -> PoolRow {
+        let mut row = base_row();
+        // Contract-address payload bytes; renders as `C...`, never `L...`.
+        row.pool_id_hex = "1d3ab48b3b210df1a67f22809e7d84a533b93a583c76f728eec4bd6d68e33338".into();
+        row.pool_kind = 1;
+        row.deployment_id = 42;
+        row.pool_type_raw = "constant".into();
+        row.legs = vec![111, 222];
+        row.participant_count = None;
+        row
+    }
+
+    #[test]
+    fn soroban_row_publishes_legs_and_hides_the_pair() {
+        let view = SorobanView {
+            legs: vec![
+                PoolLegItem {
+                    family: "native".into(),
+                    asset_code: None,
+                    issuer: None,
+                    contract_id: Some(
+                        "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".into(),
+                    ),
+                    symbol: None,
+                    name: None,
+                    decimals: Some(7),
+                    reserve: Some("4112908590".into()),
+                },
+                PoolLegItem {
+                    family: "soroban".into(),
+                    asset_code: None,
+                    issuer: None,
+                    contract_id: Some(
+                        "CC5PU23MKXHUFJKGG5FAUG7MFZX2KMWXPNZP26DDYW76VCB26UWMPEI6".into(),
+                    ),
+                    symbol: Some("AQUA".into()),
+                    name: Some("Aquarius".into()),
+                    decimals: Some(7),
+                    reserve: Some("250000000000".into()),
+                },
+            ],
+            protocol: Some("aquarius".into()),
+        };
+        let item = map_pool_item(soroban_row(), Some(view));
+        assert!(item.pool_id.starts_with('C'), "soroban id is a C-strkey");
+        assert_eq!(item.pool_kind, "soroban");
+        assert_eq!(item.protocol.as_deref(), Some("aquarius"));
+        assert_eq!(item.pool_type.as_deref(), Some("constant"));
+        assert!(item.asset_a.is_none(), "pair columns must not surface");
+        assert!(item.asset_b.is_none());
+        assert_eq!(item.participant_count, None, "None ≠ 0 for soroban");
+        let legs = item.legs.expect("legs published");
+        assert_eq!(legs.len(), 2);
+        assert_eq!(legs[1].reserve.as_deref(), Some("250000000000"));
+    }
+
+    #[test]
+    fn classic_row_has_no_soroban_fields() {
+        let item = map_pool_item(base_row(), None);
+        assert!(item.pool_id.starts_with('L'), "classic id is an L-strkey");
+        assert_eq!(item.pool_kind, "classic");
+        assert_eq!(item.protocol, None);
+        assert_eq!(item.pool_type, None, "empty pool_type_raw → absent field");
+        assert!(item.legs.is_none());
+    }
+
+    /// An unverified-router pool (deployment shares Aquarius's code, admin
+    /// roles disjoint) must stay UNLABELLED — the view carries no protocol
+    /// and the item must not invent one.
+    #[test]
+    fn unlabelled_router_pool_has_null_protocol() {
+        let view = SorobanView {
+            legs: Vec::new(),
+            protocol: None,
+        };
+        let item = map_pool_item(soroban_row(), Some(view));
+        assert_eq!(item.protocol, None);
+        assert_eq!(item.pool_kind, "soroban");
     }
 }
