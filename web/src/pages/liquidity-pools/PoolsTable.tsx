@@ -1,5 +1,5 @@
-import { Box, Stack, Typography } from '@mui/material';
-import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import { Box, Chip, Stack, Typography } from '@mui/material';
+import type { PoolItem } from '@rumblefish/api-types';
 import {
   Dash,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
@@ -13,33 +13,30 @@ import {
 import type { ReactNode } from 'react';
 
 import { routes } from '../../router/routes.js';
-// `assetLegLabel` + `legHref` live in the detail-page helpers but the
-// labelling + linking rules apply equally to the list — reuse the
-// shared helpers rather than duplicating, to keep native-asset / SAC
-// mirror / classic-credit precedence in one place.
+// Every leg renders through the shared `poolLegViews` model (task 0374):
+// classic pools expand their `asset_a`/`asset_b` pair, soroban pools their
+// 2–4 `legs[]`, so labelling / linking / scaling rules live in ONE place.
 import {
-  assetLegLabel,
-  legHref,
-  reserveDotColor,
+  isSorobanPool,
+  poolLegViews,
+  poolPairLabel,
+  type PoolLegView,
 } from '../pool-shared/helpers.js';
 
 import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 
 export const POOL_COLUMN_COUNT = 6;
 
-/** Render leg code text — wrapped in RouterLink when legHref resolves
- *  (native, classic credit, contract-id fallback); plain text otherwise (schema
- *  drift). Matches the precedence used by PoolSummary + PoolKpiStrip. */
-function assetCodeNode(leg: PoolAssetLeg): ReactNode {
-  const code = assetLegLabel(leg);
-  const href = legHref(leg);
-  if (!href) return code;
+/** Render leg label text — wrapped in RouterLink when the view resolves a
+ *  target; plain text otherwise (unresolved leg / schema drift). */
+function legLabelNode(leg: PoolLegView): ReactNode {
+  if (!leg.href) return leg.label;
   return (
     <IdentifierDisplay
-      value={code}
+      value={leg.label}
       type="asset"
       truncate={false}
-      href={href}
+      href={leg.href}
       fontSize="inherit"
     />
   );
@@ -69,9 +66,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Pool',
     width: 260,
     cell: (row) => {
-      const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
-        row.asset_b
-      )}`;
+      const legs = poolLegViews(row);
       return (
         <Stack
           direction="row"
@@ -79,17 +74,30 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <PoolAssetPair a={row.asset_a} b={row.asset_b} />
+          <PoolAssetPair legs={legs} />
           <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-            <Typography
-              variant="bodySmMedium"
-              sx={(theme) => ({ color: theme.palette.text.primary })}
-            >
-              {pair}
-            </Typography>
+            <Stack direction="row" spacing={0.75} alignItems="center">
+              <Typography
+                variant="bodySmMedium"
+                sx={(theme) => ({ color: theme.palette.text.primary })}
+              >
+                {poolPairLabel(row)}
+              </Typography>
+              {/* Protocol chip only when the operator is VERIFIED (task
+                  0374 T1) — an unlabelled soroban pool stays unlabelled
+                  rather than guessing from shared WASM. */}
+              {row.protocol != null && (
+                <Chip
+                  label={row.protocol}
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: 11, textTransform: 'capitalize' }}
+                />
+              )}
+            </Stack>
             <IdentifierDisplay
               value={row.pool_id}
-              type="pool"
+              type={isSorobanPool(row) ? 'contract' : 'pool'}
               href={routes.pool(row.pool_id)}
             />
           </Stack>
@@ -102,25 +110,26 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Reserves',
     width: 150,
     cell: (row) => {
-      // Stale pools (no fresh snapshot) come back with null reserves —
-      // render an em-dash rather than "0".
-      if (row.reserve_a == null && row.reserve_b == null) return <Dash />;
+      const legs = poolLegViews(row);
+      // No reserve on any leg (stale classic pool, or soroban state not
+      // yet indexed) — render an em-dash rather than "0".
+      if (legs.every((l) => l.reserve == null)) return <Dash />;
       return (
         <Stack spacing={0.5}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <AssetDot color={reserveDotColor(row.asset_a)} />
-            <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_a != null ? formatCompactAmount(row.reserve_a) : '—'}{' '}
-              {assetCodeNode(row.asset_a)}
-            </Typography>
-          </Stack>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <AssetDot color={reserveDotColor(row.asset_b)} />
-            <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_b != null ? formatCompactAmount(row.reserve_b) : '—'}{' '}
-              {assetCodeNode(row.asset_b)}
-            </Typography>
-          </Stack>
+          {legs.map((leg, i) => (
+            <Stack
+              key={`${leg.label}-${i}`}
+              direction="row"
+              spacing={1}
+              alignItems="center"
+            >
+              <AssetDot color={leg.dotColor} />
+              <Typography variant="bodyXsMedium" component="span">
+                {leg.reserve != null ? formatCompactAmount(leg.reserve) : '—'}{' '}
+                {legLabelNode(leg)}
+              </Typography>
+            </Stack>
+          ))}
         </Stack>
       );
     },
@@ -131,8 +140,9 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     align: 'right',
     width: 120,
     cell: (row) => {
-      // Unpriceable pools (an untracked leg, or no fresh snapshot) come
-      // back with null TVL — em-dash, consistent with the reserves column.
+      // Unpriceable pools (an untracked leg, no fresh snapshot, or a
+      // soroban pool whose tokens have no USD series yet) come back with
+      // null TVL — em-dash, consistent with the reserves column.
       if (row.tvl == null) return <Dash />;
       return (
         <Typography
@@ -179,14 +189,19 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Participants',
     align: 'right',
     width: 110,
-    cell: (row) => (
-      <Typography
-        variant="bodySmMedium"
-        sx={(theme) => ({ color: theme.palette.text.primary })}
-      >
-        {formatAmount(row.participant_count)}
-      </Typography>
-    ),
+    cell: (row) =>
+      // null (soroban list rows — counted per pool on the detail page, not
+      // per list row) is NOT zero: em-dash.
+      row.participant_count == null ? (
+        <Dash />
+      ) : (
+        <Typography
+          variant="bodySmMedium"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
+          {formatAmount(row.participant_count)}
+        </Typography>
+      ),
   },
 ];
 
@@ -204,7 +219,9 @@ interface PoolsTableProps {
  * (right-aligned, unit label) / Participants. Fee column dropped (task
  * 0348 F9): every classic pool is protocol-fixed at 0.30%
  * (`LIQUIDITY_POOL_FEE_V18`), so a per-row Fee column carried no
- * comparative signal.
+ * comparative signal. Since task 0374 the list is a UNION: soroban AMM
+ * rows render their 2–4 `legs[]` plus a protocol chip through the same
+ * columns.
  */
 export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (

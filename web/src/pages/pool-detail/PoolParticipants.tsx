@@ -37,7 +37,9 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
         variant="bodySmMedium"
         sx={(theme) => ({ color: theme.palette.text.primary })}
       >
-        {formatAmount(row.shares)}
+        {/* null = unknown scale (a soroban share token that never published
+            decimals) — em-dash; Share % is scale-free and still reports. */}
+        {row.shares != null ? formatAmount(row.shares) : '—'}
       </Typography>
     ),
   },
@@ -63,12 +65,17 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Since ledger',
     align: 'right',
     width: 120,
-    cell: (row) => (
-      <IdentifierDisplay
-        value={String(row.first_deposit_ledger)}
-        type="ledger"
-      />
-    ),
+    cell: (row) =>
+      // null for soroban share-token holders — `balances` records current
+      // state, not the first sighting.
+      row.first_deposit_ledger != null ? (
+        <IdentifierDisplay
+          value={String(row.first_deposit_ledger)}
+          type="ledger"
+        />
+      ) : (
+        '—'
+      ),
   },
 ];
 

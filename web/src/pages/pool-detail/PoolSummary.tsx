@@ -10,35 +10,27 @@ import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 
 import {
-  assetLegLabel,
-  legHref,
-  reserveDotColor,
+  isSorobanPool,
+  poolLegViews,
+  type PoolLegView,
 } from '../pool-shared/helpers.js';
 
 interface AssetReserveCellProps {
-  amount: string | null | undefined;
-  code: string;
-  dotColor: string;
-  href?: string;
+  leg: PoolLegView;
 }
 
-function AssetReserveCell({
-  amount,
-  code,
-  dotColor,
-  href,
-}: AssetReserveCellProps) {
-  const codeNode = href ? (
+function AssetReserveCell({ leg }: AssetReserveCellProps) {
+  const codeNode = leg.href ? (
     <IdentifierDisplay
-      value={code}
+      value={leg.label}
       type="asset"
       truncate={false}
-      href={href}
+      href={leg.href}
       fontSize={12}
     />
   ) : (
     <Typography component="span" variant="bodyXsMedium">
-      {code}
+      {leg.label}
     </Typography>
   );
 
@@ -51,21 +43,30 @@ function AssetReserveCell({
           width: 8,
           height: 8,
           borderRadius: '50%',
-          bgcolor: dotColor,
+          bgcolor: leg.dotColor,
           flexShrink: 0,
         }}
       />
       <Typography component="span" variant="bodyXsMedium">
-        {/* LP amounts (reserves, shares) arrive pre-scaled: CH stores them as
-            Decimal128(7) so `toString` already renders "750.699916", not a raw
-            integer. Do NOT wrap in scaleByDecimals — unlike account balances /
-            asset supply (raw Int128 + `decimals`, scaled on the FE), LP assets
-            are always classic 7dp and scaled DB-side. */}
-        {amount != null ? formatAmount(amount) : '—'}
+        {/* `leg.reserve` is display-ready in BOTH worlds: classic amounts
+            arrive pre-scaled (Decimal128(7) → string), soroban raw units are
+            scaled by the leg's on-chain decimals inside `poolLegViews` —
+            and an unknown scale is null, never a raw integer. */}
+        {leg.reserve != null ? formatAmount(leg.reserve) : '—'}
       </Typography>
-      {amount != null ? codeNode : null}
+      {leg.reserve != null ? codeNode : null}
     </Stack>
   );
+}
+
+/** Chunk leg reserve cells into two-per-row `SummaryRow`s — pairs for
+ *  classic, up to two rows for a 3/4-leg soroban stable pool. */
+function reserveRows(legs: PoolLegView[]) {
+  const rows = [];
+  for (let i = 0; i < legs.length; i += 2) {
+    rows.push(legs.slice(i, i + 2));
+  }
+  return rows;
 }
 
 interface PoolSummaryProps {
@@ -76,13 +77,14 @@ interface PoolSummaryProps {
  * "Summary" key-value card on the LP detail page (Figma node `325:7192`).
  * Row layout:
  *
- *   • Pool ID — full CAP-38 `L...` strkey, copyable, full-width row
+ *   • Pool ID — full strkey (`L...` classic / `C...` soroban), copyable
  *   • Fee % (left) │ Total shares (right)
- *   • Asset A reserve (dot, left) │ Asset B reserve (dot, right)
+ *   • [soroban] Protocol (left) │ Pool type (right)
+ *   • Leg reserves (dot), two per row — 1 row for pairs, 2 for 3/4 legs
  */
 export function PoolSummary({ pool }: PoolSummaryProps) {
-  const codeA = assetLegLabel(pool.asset_a);
-  const codeB = assetLegLabel(pool.asset_b);
+  const legs = poolLegViews(pool);
+  const soroban = isSorobanPool(pool);
 
   return (
     <SectionCard title="Summary">
@@ -93,7 +95,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
             value: (
               <IdentifierWithCopy
                 value={pool.pool_id}
-                type="pool"
+                type={soroban ? 'contract' : 'pool'}
                 linked={false}
                 truncate={false}
               />
@@ -106,36 +108,36 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
           { label: 'Fee', value: `${formatAmount(pool.fee_percent, 2)}%` },
           {
             label: 'Total shares',
-            value: formatAmount(pool.total_shares),
+            value:
+              pool.total_shares != null ? formatAmount(pool.total_shares) : '—',
           },
         ]}
       />
-      <SummaryRow
-        cells={[
-          {
-            label: `${codeA} reserve`,
-            value: (
-              <AssetReserveCell
-                amount={pool.reserve_a}
-                code={codeA}
-                dotColor={reserveDotColor(pool.asset_a)}
-                href={legHref(pool.asset_a)}
-              />
-            ),
-          },
-          {
-            label: `${codeB} reserve`,
-            value: (
-              <AssetReserveCell
-                amount={pool.reserve_b}
-                code={codeB}
-                dotColor={reserveDotColor(pool.asset_b)}
-                href={legHref(pool.asset_b)}
-              />
-            ),
-          },
-        ]}
-      />
+      {soroban && (
+        <SummaryRow
+          cells={[
+            {
+              // Verified-operator label only (task 0374 T1); an unlabelled
+              // router renders an explicit em-dash, never a guess.
+              label: 'Protocol',
+              value: pool.protocol ?? '—',
+            },
+            {
+              label: 'Pool type',
+              value: pool.pool_type ?? '—',
+            },
+          ]}
+        />
+      )}
+      {reserveRows(legs).map((row, i) => (
+        <SummaryRow
+          key={i}
+          cells={row.map((leg) => ({
+            label: `${leg.label} reserve`,
+            value: <AssetReserveCell leg={leg} />,
+          }))}
+        />
+      ))}
     </SectionCard>
   );
 }

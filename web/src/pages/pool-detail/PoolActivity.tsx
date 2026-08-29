@@ -117,6 +117,10 @@ export function poolAmountLegs(
       [op.amount_b, pool.asset_b],
     ] as const
   ).flatMap(([amount, leg]) => {
+    // Activity is a CLASSIC-only feed (the API refuses soroban pools), so
+    // the pair legs are always present here — the guard only narrows the
+    // now-nullable wire type.
+    if (leg == null) return [];
     if (amount == null || amount === '') return [];
     const raw = amount.replace(/^-/, '');
     // The sign is carried by the ordering and the separator, not the digits.
