@@ -1,4 +1,8 @@
-import type { PoolAssetLeg } from '@rumblefish/api-types';
+import type {
+  PoolAssetLeg,
+  PoolItem,
+  PoolLegItem,
+} from '@rumblefish/api-types';
 
 import { assetColor } from '../assets/assetColor.js';
 import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
@@ -67,6 +71,125 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
 export function reserveDotColor(leg: PoolAssetLeg): string {
   return assetColor(assetLegLabel(leg)).dot;
 }
+// ---------------------------------------------------------------------------
+// Unified leg views (task 0374): classic pools carry an `asset_a`/`asset_b`
+// PAIR, soroban pools carry 2–4 `legs[]`. Every pool surface renders through
+// this one view so the two shapes cannot drift apart per component.
+// ---------------------------------------------------------------------------
+
+export interface PoolLegView {
+  /** Display label — code / symbol / truncated contract / explicit `?`. */
+  label: string;
+  /** Asset-detail link, when the leg resolves to a linkable identity. */
+  href?: string;
+  /** Reserve-dot / KPI colour, keyed by label like the avatars. */
+  dotColor: string;
+  /** Leg avatar icon (classic legs only — soroban tokens have none yet). */
+  iconUrl?: string | null;
+  /**
+   * Display-ready decimal reserve. Classic: pre-scaled DB-side
+   * (Decimal128(7) → string). Soroban: raw units scaled here by the leg's
+   * on-chain `decimals`; `null` when the reserve OR the scale is unknown —
+   * an unknown scale must never render a raw integer as if it were scaled.
+   */
+  reserve: string | null;
+}
+
+export function isSorobanPool(pool: Pick<PoolItem, 'pool_kind'>): boolean {
+  return pool.pool_kind === 'soroban';
+}
+
+/** Insert the decimal point into a raw integer amount string — exact string
+ *  surgery, mirroring the API's `scale_raw_amount` (no float: an 18-decimal
+ *  token is exactly the case a double would corrupt). */
+function scaleRawAmount(raw: string, decimals: number): string {
+  if (decimals === 0) return raw;
+  const padded = raw.padStart(decimals + 1, '0');
+  const intPart = padded.slice(0, padded.length - decimals);
+  const fracPart = padded.slice(padded.length - decimals).replace(/0+$/, '');
+  return fracPart === '' ? intPart : `${intPart}.${fracPart}`;
+}
+
+/**
+ * Display label for a SOROBAN pool leg. Precedence: native → XLM; classic
+ * credit → its code; soroban token → on-chain symbol, else truncated
+ * contract; unresolved → literal `?` — kept EXPLICIT on purpose (house
+ * rule: no plausible-looking fallback for a leg we failed to resolve).
+ */
+export function legItemLabel(leg: PoolLegItem): string {
+  if (leg.family === 'native') return NATIVE_ASSET_CODE;
+  // Classic identity outranks a metadata symbol: a classic-credit leg's
+  // code IS its name everywhere else in the app; symbols only name
+  // bespoke soroban tokens (their code is empty).
+  if (leg.asset_code) return leg.asset_code;
+  if (leg.symbol) return leg.symbol;
+  if (leg.contract_id) {
+    return `${leg.contract_id.slice(0, 4)}…${leg.contract_id.slice(-4)}`;
+  }
+  return '?';
+}
+
+/** Asset-detail link for a soroban pool leg — same precedence family as
+ *  [`legHref`]: native token page / classic composite / token contract. */
+export function legItemHref(leg: PoolLegItem): string | undefined {
+  if (leg.family === 'native') return routes.asset('native');
+  if (leg.asset_code && leg.issuer) {
+    return routes.asset(`${leg.asset_code}-${leg.issuer}`);
+  }
+  if (leg.family === 'soroban' && leg.contract_id) {
+    return routes.asset(leg.contract_id);
+  }
+  return undefined;
+}
+
+/**
+ * The pool's legs as uniform views, either world.
+ *
+ * Classic rows without their pair legs are a broken backend contract —
+ * throw into the section boundary rather than render a half-pool.
+ */
+export function poolLegViews(pool: PoolItem): PoolLegView[] {
+  if (isSorobanPool(pool)) {
+    return (pool.legs ?? []).map((leg) => {
+      const label = legItemLabel(leg);
+      return {
+        label,
+        href: legItemHref(leg),
+        dotColor: assetColor(label).dot,
+        reserve:
+          leg.reserve != null && leg.decimals != null
+            ? scaleRawAmount(leg.reserve, leg.decimals)
+            : null,
+      };
+    });
+  }
+  if (pool.asset_a == null || pool.asset_b == null) {
+    throw new Error('poolLegViews: classic pool without its asset pair');
+  }
+  return (
+    [
+      [pool.asset_a, pool.reserve_a],
+      [pool.asset_b, pool.reserve_b],
+    ] as const
+  ).map(([leg, reserve]) => {
+    const label = assetLegLabel(leg);
+    return {
+      label,
+      href: legHref(leg),
+      dotColor: assetColor(label).dot,
+      iconUrl: leg.icon_url,
+      reserve: reserve ?? null,
+    };
+  });
+}
+
+/** `XLM / USDC` — the pool's display name, either world. */
+export function poolPairLabel(pool: PoolItem): string {
+  return poolLegViews(pool)
+    .map((l) => l.label)
+    .join(' / ');
+}
+
 /**
  * A pool is "stale" when its newest snapshot is older than 7 days (matches
  * the freshness window enforced by `18_get_liquidity_pools_list.sql` and
