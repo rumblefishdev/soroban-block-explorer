@@ -1147,6 +1147,15 @@
             "schema": {
               "type": ["string", "null"]
             }
+          },
+          {
+            "name": "filter[pool_kind]",
+            "in": "query",
+            "description": "`classic` | `soroban` — restrict the union list to one pool world\n(task 0374). Omitted = both. Validated in the handler so a bad value\ngets this API's error envelope with the allowed list.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
           }
         ],
         "responses": {

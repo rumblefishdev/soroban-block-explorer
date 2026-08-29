@@ -3223,6 +3223,12 @@ export type ListPoolsData = {
      * `NUMERIC(28,7)` column without an f64 round-trip).
      */
     'filter[min_tvl]'?: string | null;
+    /**
+     * `classic` | `soroban` — restrict the union list to one pool world
+     * (task 0374). Omitted = both. Validated in the handler so a bad value
+     * gets this API's error envelope with the allowed list.
+     */
+    'filter[pool_kind]'?: string | null;
   };
   url: '/v1/liquidity-pools';
 };

@@ -114,6 +114,11 @@ pub struct PoolListParams {
     /// `NUMERIC(28,7)` column without an f64 round-trip).
     #[serde(rename = "filter[min_tvl]")]
     pub filter_min_tvl: Option<String>,
+    /// `classic` | `soroban` — restrict the union list to one pool world
+    /// (task 0374). Omitted = both. Validated in the handler so a bad value
+    /// gets this API's error envelope with the allowed list.
+    #[serde(rename = "filter[pool_kind]")]
+    pub filter_pool_kind: Option<String>,
 }
 
 /// One leg of an LP's asset pair. Surfaces both the decoded

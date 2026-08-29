@@ -436,6 +436,26 @@ pub async fn list_pools(
         );
     }
 
+    // `filter[pool_kind]` → stored discriminant (task 0374). Validated here
+    // so a bad value gets this API's envelope with the allowed list — same
+    // shape as `filter[event]` / chart `interval`.
+    let pool_kind = match params.filter_pool_kind.as_deref() {
+        None => None,
+        Some("classic") => Some(0u8),
+        Some("soroban") => Some(1u8),
+        Some(other) => {
+            return errors::bad_request_with_details(
+                errors::INVALID_FILTER,
+                "filter[pool_kind] must be one of: classic, soroban",
+                serde_json::json!({
+                    "param": "filter[pool_kind]",
+                    "received": other,
+                    "allowed": ["classic", "soroban"],
+                }),
+            );
+        }
+    };
+
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
     // One free-text box, two things a reader can paste into it: an asset code
@@ -460,6 +480,7 @@ pub async fn list_pools(
         asset_b_issuer: params.filter_asset_b_issuer,
         asset_codes,
         pool_id_hex,
+        pool_kind,
     };
 
     // The CH list keys on `last_updated_ledger` (see

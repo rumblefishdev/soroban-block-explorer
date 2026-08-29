@@ -146,6 +146,9 @@ pub struct ResolvedPoolListParams {
     /// Mutually exclusive with `asset_codes`: an identifier names exactly one
     /// pool, so there is nothing left for a code match to narrow.
     pub pool_id_hex: Option<String>,
+    /// `filter[pool_kind]` resolved to the stored discriminant: 0 classic,
+    /// 1 soroban. Handler-validated; `None` = both worlds (task 0374).
+    pub pool_kind: Option<u8>,
 }
 
 /// One activity row after enrichment — the handler maps this straight into
@@ -2237,6 +2240,12 @@ pub async fn fetch_pool_list(
         );
         binds.push(iss.clone());
     }
+    // Pool-world filter (task 0374). Inlined, not bound: the value is a
+    // handler-validated 0/1 discriminant, injection-free by type, and the
+    // bind vector here is string-typed.
+    if let Some(kind) = params.pool_kind {
+        filters.push_str(&format!(" AND lp.pool_kind = {kind}"));
+    }
     // Asset-code needles (0440 / issue #366).
     //
     // Substring, not equality: `USD` has to match the `USDC` pools the user can
@@ -2951,6 +2960,7 @@ mod decode_smoke {
             asset_b_code: None,
             asset_b_issuer: None,
             pool_id_hex: None,
+            pool_kind: None,
             asset_codes: Vec::new(),
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -3039,6 +3049,7 @@ mod decode_smoke {
             // Deliberately a proper prefix of a real code: an exact-match
             // predicate returns zero rows here, a substring one does not.
             pool_id_hex: None,
+            pool_kind: None,
             asset_codes: vec!["USD".to_string()],
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -3079,6 +3090,7 @@ mod decode_smoke {
             asset_b_code: None,
             asset_b_issuer: None,
             pool_id_hex: None,
+            pool_kind: None,
             asset_codes: vec!["XLM".to_string()],
         };
         let pools = fetch_pool_list(&ch, &params, Direction::Next)
@@ -3115,6 +3127,7 @@ mod decode_smoke {
             asset_b_code: None,
             asset_b_issuer: None,
             pool_id_hex: None,
+            pool_kind: None,
             asset_codes: vec![a.to_string(), b.to_string()],
         };
 
