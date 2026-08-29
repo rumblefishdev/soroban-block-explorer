@@ -174,10 +174,11 @@ mod tests {
         // (issue #377); side table, not columns on `accounts`, because that
         // table takes whole-row writes from more than one path. 33 → 34:
         // pool_share_tokens (task 0374 step 15, the asset_sac-pattern side
-        // table for the pool→share-token relation).
+        // table) and pool_state_changes (step 7, plane-state reserves).
+        // 34 → 35.
         assert_eq!(
             stmts.len(),
-            34,
+            35,
             "expected 31 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );

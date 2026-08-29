@@ -93,6 +93,7 @@ struct TableInserts {
     lp_amounts: Option<Insert<LpOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_share_tokens: Option<Insert<PoolShareTokenRow>>,
+    pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
     operations: Option<Insert<OperationAppearanceRow>>,
@@ -265,6 +266,13 @@ impl PartitionWriter {
             &mut self.inserts.pool_share_tokens,
             "pool_share_tokens",
             &staged.pool_share_token_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.pool_state_changes,
+            "pool_state_changes",
+            &staged.pool_state_change_rows,
         )
         .await?;
         write_rows(

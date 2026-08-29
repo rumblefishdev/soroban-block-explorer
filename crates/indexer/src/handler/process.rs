@@ -50,6 +50,8 @@ pub struct ParseOutput {
     /// ledger entries, persisted into the unified `balances` table (task 0331; the
     /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
     pub soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance>,
+    pub plane_pool_data: Vec<xdr_parser::pool_state::ExtractedPlanePoolData>,
+    pub pool_instances: Vec<xdr_parser::pool_state::ExtractedPoolInstance>,
     /// Per-transaction operation tree JSON, collected by `extract_invocations`.
     /// Neither write path reads it today (CH writer skips it, PG flow
     /// took it as `_operation_trees`). Kept on `ParseOutput` so the
@@ -281,6 +283,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
     let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
     let mut all_soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance> = Vec::new();
+    let mut all_plane_pool_data: Vec<xdr_parser::pool_state::ExtractedPlanePoolData> = Vec::new();
+    let mut all_pool_instances: Vec<xdr_parser::pool_state::ExtractedPoolInstance> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
         let deployments = xdr_parser::extract_contract_deployments(
             changes,
@@ -295,6 +299,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         // them.
         let assets = xdr_parser::detect_assets(&deployments, &all_contract_interfaces);
         all_assets.extend(assets);
+        all_plane_pool_data.extend(xdr_parser::pool_state::extract_plane_pool_data(changes));
+        all_pool_instances.extend(xdr_parser::pool_state::extract_pool_instances(changes));
         let classic_credits = xdr_parser::detect_classic_credit_assets(changes);
         all_assets.extend(classic_credits);
         all_contract_deployments.extend(deployments);
@@ -353,6 +359,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         lp_positions: all_lp_positions,
         contract_metadata_writes: all_contract_metadata_writes,
         soroban_token_balances: all_soroban_token_balances,
+        plane_pool_data: all_plane_pool_data,
+        pool_instances: all_pool_instances,
         operation_trees: all_operation_trees,
         parse_ms,
         tx_parse_errors,

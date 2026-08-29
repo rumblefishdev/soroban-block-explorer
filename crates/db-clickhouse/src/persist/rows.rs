@@ -306,6 +306,28 @@ pub struct LiquidityPoolRow {
     pub share_token_id: i64,
 }
 
+/// `pool_state_changes` — pool reserve state at the chain's grain (task
+/// 0374, step 7; the single reserve source, T4). The key carries the
+/// transaction and the intra-tx change index: `(pool, ledger)` alone
+/// collapses 23.5% of rows (up to 12 updates per ledger measured).
+///
+/// Two on-chain layouts feed it. Fungible pools: the plane's `PoolData`
+/// vector VERBATIM — possibly reserves as a PREFIX plus per-tick tail
+/// (measured against `update_reserves`: the first N legs agree exactly), so
+/// reads slice by the pool's leg count and nothing may treat vector length
+/// as leg count. Concentrated pools: `Reserve0`/`Reserve1` from the pool's
+/// own instance — the plane holds their `PoolData` only at registration
+/// (anti-test discovery, 2026-08-29).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct PoolStateChangeRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+    pub change_index: i16,
+    pub reserves: Vec<i128>,
+    pub plane_id: i64,
+}
+
 /// `pool_share_tokens` — the pool→share-token relation, derived per the T6
 /// rule from deposit transactions (task 0374, step 15).
 ///

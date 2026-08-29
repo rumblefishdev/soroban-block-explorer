@@ -224,6 +224,7 @@ pub struct StagedLedger {
     pub participant_rows: Vec<TransactionParticipantRow>,
     pub pool_rows: Vec<LiquidityPoolRow>,
     pub pool_share_token_rows: Vec<PoolShareTokenRow>,
+    pub pool_state_change_rows: Vec<PoolStateChangeRow>,
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
     pub op_rows: Vec<OperationAppearanceRow>,
@@ -293,6 +294,12 @@ pub struct StageInputs<'a> {
     /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
     /// legacy callers.
     pub soroban_token_balances: &'a [ExtractedSorobanBalance],
+    /// Plane `PoolData` writes (task 0374 step 7) — the reserve source.
+    pub plane_pool_data: &'a [xdr_parser::pool_state::ExtractedPlanePoolData],
+    /// Pool-instance writes — the STATE source for share tokens and planes;
+    /// supersedes the deposit⇄mint detector as primary (it stays a
+    /// cross-check).
+    pub pool_instances: &'a [xdr_parser::pool_state::ExtractedPoolInstance],
     /// Task 0331 + ADR 0051 — SAC contract surrogate → wrapped classic/native
     /// `asset_id` (from `asset_sac`, via [`crate::persist::fetch_sac_classic_map`]).
     /// [`build_balance_rows`] keys a contract-held SAC balance onto the classic
@@ -351,6 +358,8 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_metadata_writes: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         soroban_token_balances: &[],
         sac_classic: &HashMap::new(),
         sac_overrides: &[],
@@ -540,6 +549,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         lp_positions,
         contract_metadata_writes,
         soroban_token_balances,
+        plane_pool_data,
+        pool_instances,
         sac_classic,
         sac_overrides,
         prior_wasm_verdicts,
@@ -1057,21 +1068,101 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // Share-token sightings (task 0374, step 15) — the T6 detector lives in
-    // xdr_parser; this section only maps sightings to side-table rows. The
-    // pool payload decode can only fail on a malformed emitter address, which
-    // the event pipeline has already validated — count loudly if it ever does.
-    for sighting in xdr_parser::pool_router::detect_share_tokens(events) {
-        match contract_payload(&sighting.pool) {
+    // Pool state from ledger entries (task 0374, step 7): plane writes are
+    // THE reserve source; instance writes are the STATE source for share
+    // tokens (the deposit⇄mint detector remains only as a cross-check, per
+    // the same reasoning that demoted update_reserves in T4). Unparseable
+    // coordinates are refused loudly — a silent skip is a pool going dark.
+    for pw in plane_pool_data {
+        let (Some(pool_id), Some(&tx_id)) = (
+            contract_payload(&pw.data.pool),
+            tx_id_by_hash.get(pw.transaction_hash.as_str()),
+        ) else {
+            tracing::error!(
+                ledger_sequence = pw.ledger_sequence,
+                pool = %pw.data.pool,
+                "plane write refused: unresolvable pool address or transaction"
+            );
+            continue;
+        };
+        let mut reserves = Vec::with_capacity(pw.data.reserves.len());
+        let mut bad = false;
+        for r in &pw.data.reserves {
+            match r.parse::<i128>() {
+                Ok(v) => reserves.push(v),
+                Err(_) => {
+                    bad = true;
+                    break;
+                }
+            }
+        }
+        if bad {
+            tracing::error!(
+                ledger_sequence = pw.ledger_sequence,
+                pool = %pw.data.pool,
+                "plane write refused: non-numeric reserve — a snapshot is missing"
+            );
+            continue;
+        }
+        out.pool_state_change_rows.push(PoolStateChangeRow {
+            pool_id,
+            ledger_sequence: i64::from(pw.ledger_sequence),
+            transaction_id: tx_id,
+            change_index: i16::try_from(pw.change_index).unwrap_or(i16::MAX),
+            reserves,
+            plane_id: ids::contract_id(&pw.data.plane),
+        });
+    }
+    for inst in pool_instances {
+        // A concentrated pool's per-operation reserves live in its INSTANCE
+        // (Reserve0/Reserve1) — the plane is not updated per op for them
+        // (measured; T4 refined). Fungible instances carry no `reserves`
+        // here by construction, so no double-write against the plane rows.
+        if !inst.state.reserves.is_empty() {
+            match (
+                contract_payload(&inst.state.pool),
+                tx_id_by_hash.get(inst.transaction_hash.as_str()),
+                inst.state
+                    .reserves
+                    .iter()
+                    .map(|r| r.parse::<i128>())
+                    .collect::<Result<Vec<_>, _>>(),
+            ) {
+                (Some(pool_id), Some(&tx_id), Ok(reserves)) => {
+                    out.pool_state_change_rows.push(PoolStateChangeRow {
+                        pool_id,
+                        ledger_sequence: i64::from(inst.ledger_sequence),
+                        transaction_id: tx_id,
+                        change_index: i16::try_from(inst.change_index).unwrap_or(i16::MAX),
+                        reserves,
+                        plane_id: inst
+                            .state
+                            .plane
+                            .as_deref()
+                            .map(ids::contract_id)
+                            .unwrap_or(0),
+                    });
+                }
+                _ => tracing::error!(
+                    ledger_sequence = inst.ledger_sequence,
+                    pool = %inst.state.pool,
+                    "instance reserve write refused — a concentrated snapshot is missing"
+                ),
+            }
+        }
+        let Some(token) = inst.state.token_share.as_deref() else {
+            continue; // structural for concentrated pools
+        };
+        match contract_payload(&inst.state.pool) {
             Some(pool_id) => out.pool_share_token_rows.push(PoolShareTokenRow {
                 pool_id,
-                share_token_id: ids::contract_id(&sighting.token),
-                derived_at_ledger: ledger_sequence_i64,
+                share_token_id: ids::contract_id(token),
+                derived_at_ledger: i64::from(inst.ledger_sequence),
             }),
             None => tracing::error!(
-                ledger_sequence = ledger.sequence,
-                pool = %sighting.pool,
-                "share-token sighting dropped: pool address is not a valid C… strkey"
+                ledger_sequence = inst.ledger_sequence,
+                pool = %inst.state.pool,
+                "instance write refused: pool address is not a valid C… strkey"
             ),
         }
     }

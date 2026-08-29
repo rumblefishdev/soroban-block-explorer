@@ -237,6 +237,21 @@ fn column_order_liquidity_pools() {
 }
 
 #[test]
+fn column_order_pool_state_changes() {
+    assert_columns::<PoolStateChangeRow>(
+        "pool_state_changes",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "transaction_id",
+            "change_index",
+            "reserves",
+            "plane_id",
+        ],
+    );
+}
+
+#[test]
 fn column_order_pool_share_tokens() {
     assert_columns::<PoolShareTokenRow>(
         "pool_share_tokens",
@@ -1600,6 +1615,8 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
@@ -1759,6 +1776,8 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1800,6 +1819,8 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1843,6 +1864,8 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1898,6 +1921,8 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
@@ -1951,6 +1976,8 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2103,6 +2130,8 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2209,6 +2238,8 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2286,6 +2317,8 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3162,4 +3195,116 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         "no registry row may carry a fabricated fee"
     );
     assert_eq!(staged.event_rows.len(), 1, "the raw event still lands");
+}
+
+#[test]
+fn prepare_stages_plane_writes_and_instance_share_tokens() {
+    // Real values end to end: the plane write and instance from registration
+    // ledger 63,893,403 (the raw-ledger test's ground truth), through the
+    // full staging pass.
+    use xdr_parser::pool_state::{
+        ExtractedPlanePoolData, ExtractedPoolInstance, PlanePoolData, PoolInstanceState,
+    };
+    const POOL: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const PLANE: &str = "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY";
+    const SHARE: &str = "CC5PU23MKXHUFJKGG5FAUG7MFZX2KMWXPNZP26DDYW76VCB26UWMPEI6";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x64);
+    let plane_write = ExtractedPlanePoolData {
+        data: PlanePoolData {
+            plane: PLANE.into(),
+            pool: POOL.into(),
+            reserves: vec!["100000000000".into(), "30617317".into()],
+            pool_type_raw: "standard".into(),
+            init_args: vec!["10".into()],
+        },
+        transaction_hash: tx.hash.clone(),
+        change_index: 3,
+        ledger_sequence: 10,
+    };
+    let instance = ExtractedPoolInstance {
+        state: PoolInstanceState {
+            pool: POOL.into(),
+            token_share: Some(SHARE.into()),
+            plane: Some(PLANE.into()),
+            router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
+            reserves: Vec::new(),
+        },
+        transaction_hash: tx.hash.clone(),
+        change_index: 1,
+        ledger_sequence: 10,
+    };
+    // A concentrated-style instance (no share token) must stage NOTHING.
+    let conc = ExtractedPoolInstance {
+        state: PoolInstanceState {
+            pool: "CC642QYWXXR2HUZDNJ6KYN5LV5JFPFPT4Q6YNKLZLYEFWZZZ5SJYLA5G".into(),
+            token_share: None,
+            plane: Some(PLANE.into()),
+            router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
+            // Real values from the hot-ledger probe: concentrated reserves
+            // ride the INSTANCE, and must stage a snapshot row.
+            reserves: vec!["4112908590".into(), "250000000000".into()],
+        },
+        transaction_hash: tx.hash.clone(),
+        change_index: 7,
+        ledger_sequence: 10,
+    };
+
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        plane_pool_data: std::slice::from_ref(&plane_write),
+        pool_instances: &[instance, conc],
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
+    .expect("prepare");
+
+    assert_eq!(
+        staged.pool_state_change_rows.len(),
+        2,
+        "one plane-sourced (fungible) + one instance-sourced (concentrated)"
+    );
+    let conc_snap = staged
+        .pool_state_change_rows
+        .iter()
+        .find(|r| r.change_index == 7)
+        .expect("concentrated snapshot from the instance");
+    assert_eq!(conc_snap.reserves, vec![4112908590i128, 250000000000i128]);
+    let snap = staged
+        .pool_state_change_rows
+        .iter()
+        .find(|r| r.change_index == 3)
+        .expect("fungible snapshot from the plane");
+    assert_eq!(snap.reserves, vec![100000000000i128, 30617317i128]);
+    assert_eq!(snap.change_index, 3, "intra-tx tiebreaker survives");
+    assert_eq!(snap.plane_id, ids::contract_id(PLANE));
+
+    assert_eq!(
+        staged.pool_share_token_rows.len(),
+        1,
+        "one fungible instance = one relation row; the concentrated one stages nothing"
+    );
+    assert_eq!(
+        staged.pool_share_token_rows[0].share_token_id,
+        ids::contract_id(SHARE)
+    );
 }
