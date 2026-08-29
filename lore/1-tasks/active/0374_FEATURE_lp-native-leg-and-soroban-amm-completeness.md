@@ -212,7 +212,7 @@ Each step is independently landable and carries its own check.
 
 **B. Reserves**
 
-6. `CREATE TABLE soroban_pool_snapshots` — pool id, ledger, `Array(Int128)`
+6. `CREATE TABLE pool_state_changes` — pool id, ledger, `Array(Int128)`
    reserves, source event index. _(Karol runs the DDL.)_
 7. Parser arm: `update_reserves` → snapshot row.
 8. Backfill: `INSERT … SELECT`, ~3.3 M rows.
@@ -643,7 +643,7 @@ ORDER BY pool_id;
 
 -- Reserves, read from pool-plane state. The key carries the transaction and
 -- the intra-transaction index: (pool, ledger) alone collapses 23.5% of rows.
-CREATE TABLE soroban_pool_snapshots
+CREATE TABLE pool_state_changes
 (
     pool_id          Int64,
     ledger_sequence  Int64,
@@ -917,3 +917,166 @@ The 0008 capture of `liquidity_pool_events` carries the impl comment for
 `deposit_liquidity`: body `[stake_amount, amountA, amountB, amountC]` —
 shares FIRST, in the vendor's own source. The claim previously stood on
 measurement alone (75 200/75 200); it now stands on source + measurement.
+
+## Step-7 deep verification (2026-08-29) — and one layout discovery
+
+79 raw mainnet ledgers through the compiled pipeline (`pool_state_real_corpus`):
+both T3 pilot slices plus 11 registration ledgers picked across every era and
+type. Results:
+
+- **267 plane writes, 269 pool instances, zero PoolData-shaped entries the
+  parser refused** — the silent-loss invariant held everywhere.
+- **The recorded early-era probe PASSES**: dead-deployment registrations
+  (50.6M) and the first Aquarius pools (52.7M) parse with the same storage
+  keys as today's. No layout drift across contract versions.
+- **TokenShare presence matches pool type 269/269**: fungible (constant 220,
+  stable 44, elastic 1) → present; concentrated (4) → absent. Elastic carries
+  a share token — consistent with its deposits minting.
+- **Dual-source oracle** (plane state vs `update_reserves` events, the
+  event-era overlap): every comparable row agrees on the reserve values.
+
+**Discovery: a concentrated pool's plane `reserves` vector is reserves AS A
+PREFIX plus per-tick state in the tail** (measured: `[r0, r1, 0…]` and
+`[r0, r1, tick liquidity…]` vs the event's exact `[r0, r1]`). The snapshot
+writer stores the vector RAW (state verbatim); reads slice by the pool's leg
+count. Nothing may treat vector length as leg count.
+
+## T4 refined by the anti-test (2026-08-29): concentrated reserves ride the INSTANCE
+
+The bidirectional set-equality anti-test (extracted state vs `update_reserves`
+events, per ledger, both directions) caught a real architecture gap: **a
+concentrated pool does NOT update the plane per operation.** Probed raw on a
+hot ledger: 8 instance rewrites (`Reserve0`/`Reserve1`, `TickChunk`s), zero
+plane writes for the busiest concentrated pool. The plane gets their
+`PoolData` at registration only. T3's 80/80 pilot could not see this — the
+first concentrated pool registered AFTER the gap era the pilot sampled; the
+one-source claim was a generalization beyond its sample.
+
+Refinement (implemented): reserves source is per pool layout —
+**fungible → plane `PoolData`; concentrated → instance `Reserve0/Reserve1`**
+(same extraction family, same snapshot table, `plane_id` still carried). The
+fungible instance's `ReserveA/B` mirror is deliberately NOT staged (the plane
+is their source; staging both would duplicate rows) — it remains a
+corroborator.
+
+Final verification state for step 7:
+
+- 90 raw ledgers through the compiled pipeline; zero shaped-but-unparseable;
+- raw registration ledger → full STAGING → exact rows (values, change_index,
+  plane_id, share relation);
+- anti-test: **zero foreign contracts captured** (instances outside the
+  registry: 0; the only set-differences are registrations, where the plane is
+  created before any event exists);
+- **zero pools missed** after the refinement;
+- last-write-per-ledger reserves equal the last `update_reserves` event
+  **17/17** in the event-era overlap;
+- TokenShare-vs-type: 285/285 instances consistent (fungible → present,
+  concentrated → absent).
+
+## Why snapshots stay TWO tables while pools became one (Karol challenged, 2026-08-29)
+
+Dimensional rule: unify by entity when the GRAIN matches; separate facts when
+it differs. The pool dimension shared its grain (one row = one pool). The
+snapshot facts do not: classic = one deterministic row per (pool, ledger)
+(the 0356 LIMIT-1/no-FINAL invariant depends on it); soroban = one row per
+state write, up to 12/ledger (collapsing loses 23.5%). Value models are
+disjoint too (Decimal(38,7) + write-time analytics vs verbatim Array(Int128)).
+Unifying would need a sort-key change = a 322M-row rebuild, and — the
+clincher — **no cross-kind snapshot read exists**: charts and cross-checks
+are per pool, and the pool's kind is known from the registry first. The
+union cost that justified one dimension table does not exist for these facts.
+Considered and rejected: write-side collapse to classic grain (loses real
+intermediate states; adds a kind-conditional invariant to a versionless RMT).
+Revisit trigger: a query that genuinely needs a cross-kind snapshot union.
+
+### Reframed after the greenfield pass (2026-08-29): target + parallel legacy model
+
+Corrected after a devil's-advocate pass (senior-principal framing) — the
+first draft of this section had three real errors:
+
+**Greenfield is TWO fact tables, not one.** A pure state table cannot
+reconstruct volume: a reserve delta does not distinguish a trade from a
+deposit/withdrawal — only the indexer, seeing the operation, can attribute
+it. That is exactly what `gross_volume_a` encodes today (read-time tvl /
+volume / fee_revenue in `queries.rs` are all derived from indexer-written
+inputs). So `gross_volume_a` is a FACT living in the wrong table, not an
+accretion. From scratch:
+
+- `pool_state_changes(pool_id, ledger, tx, change_index, reserves Array(Int128), total_shares)`
+  — verbatim chain state at chain grain, both families. `total_shares`
+  BELONGS here for classic: it is a field of the same `LiquidityPoolEntry`
+  (same source, same write, same grain); for Soroban the column is absent /
+  from its own source. The first draft wrongly exiled it.
+- `pool_trades(pool_id, ledger, tx, …, gross_amounts)` — trade attribution
+  fact (Soroban already has this via events; classic's lives fused into the
+  snapshot row as `gross_volume_a`).
+
+Real accretions remain: write-time Decimal(38,7) scaling and the collapsed
+per-ledger grain (an 0356 write-side choice, not chain shape).
+
+**`pool_state_changes` matches the target state-fact shape**, so the two
+current tables are the target model + a PARALLEL legacy-shaped model — not
+peers-forever. Deliberately NOT labelled "legacy to migrate" and no
+migration task filed (no-speculative-backlog rule): unification is
+trigger-gated. Triggers: first consumer needing one cross-family history
+read; or repair-tier1 cost outweighing a rebuild (its 12 MIN-semantics
+columns are mostly the fused accretions and would retire). Until then every
+pool-history endpoint carries a per-kind branch — a real, named, ongoing
+cost, accepted.
+
+**No in-band sentinels on import.** If classic history ever imports at
+ledger grain, it must carry an explicit source discriminator (nullable
+tx/change or a `source` column), never `tx=0/change=0` — magic zeros are the
+same bug class as the native empty-string convention that hid 21.7% of
+pools.
+
+Step 7 code is unaffected by all of the above.
+
+**Rename (2026-08-29, pre-DDL so free):** `soroban_pool_snapshots` →
+`pool_state_changes` (struct `PoolStateChangeRow`). The only decision from the
+greenfield pass that would have forced later churn was the NAME — after a
+unification the family prefix lies. Everything else (classic migration,
+`pool_trades` split, `total_shares`/`source` columns) is additive later, so
+deferred. Historical mentions above read as the new name.
+
+## Steps 8/9 — formally closed by the deep-testing record (2026-08-29)
+
+The step-7 verification above IS the reserve verification: 90-ledger raw
+corpus through the compiled pipeline (0 shaped-unparseable), raw-ledger →
+staged-rows e2e with exact values, and the bidirectional anti-test against
+`update_reserves` (missing 0, foreign 0, TokenShare-vs-type 285/285,
+last-write-per-ledger values 17/17). The standing cross-check monitor query
+(extraction vs events per ledger) lives in that section; run it after any
+parser change touching pool state.
+
+## Steps 16-20 — read path, frontend, docs (2026-08-29, one session)
+
+- **API** (steps 16-17-19): list + detail publish `pool_kind` / `protocol`
+  (verified-operator label, read-time resolve from `deployment_id`) /
+  `pool_type` / `legs[]` (resolver live-verified on prod: both arms, 8/8
+  legs incl. an 18-decimals bespoke token); pair fields null on soroban
+  rows; `participant_count` null (≠ 0) where the population is wrong.
+  Participants endpoint branches: soroban = share-token holders from
+  `balances` (asset-direction full scan measured 121.5M rows / 71 ms; skip
+  index on `asset_id` is the [K] upgrade if hot), shares scaled by metadata
+  decimals or null, percentage scale-free, cursor rides the raw value.
+  Chart + activity REFUSE soroban pools explicitly (400 with reason) —
+  never a confidently-empty series. Pool routes accept `L...` AND `C...`
+  (a soroban pool's id bytes are a contract payload; an `L...` render would
+  be well-formed and WRONG). `pool_exists` retired — every gate needs the
+  kind now. OpenAPI + `@rumblefish/api-types` regenerated.
+- **Frontend** (step 18): one `poolLegViews` model renders both worlds
+  (classic pair expands, soroban `legs[]` scale raw reserves by on-chain
+  decimals — unknown scale renders as absent, never raw). List + detail
+  render 2-4 legs, protocol chip (verified only), classic-only sections
+  (chart/activity) not mounted for soroban. web tests 305/305, typecheck
+  and lint clean (3 pre-existing warnings elsewhere).
+- **Docs** (step 20): ADR 0058 (discovery shape-first + label-as-attribution;
+  one dimension two id worlds; state facts at chain grain; share relation as
+  side table; explicit refusals) + database-schema / indexing-pipeline /
+  xdr-parsing overviews updated per ADR 0032.
+
+Deferred within scope, still ahead: [K] DDLs, deploy, backfills, gap
+re-parse, deploy-window closure check, registry post-backfill audit (old
+step 6), concentrated positions (step 23, LAST). Local full-stack visual
+verification of the FE against prod CH belongs to the final phase.
