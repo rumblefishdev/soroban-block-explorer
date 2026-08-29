@@ -81,7 +81,24 @@ pub fn scval_to_typed_json(v: &ScVal) -> Value {
                     json!({ "type": "stellar_asset" })
                 }
             };
-            ("contract_instance", json!({ "executable": executable }))
+            // `storage` used to be DROPPED here, which made every fact a
+            // contract keeps about itself (share tokens, planes, the METADATA
+            // struct) invisible downstream — task 0374 step 7 needs it, and
+            // the on-ledger token-metadata gap traced to the same omission.
+            let storage = inst.storage.as_ref().map(|m| {
+                m.iter()
+                    .map(|e| {
+                        json!({
+                            "key": scval_to_typed_json(&e.key),
+                            "value": scval_to_typed_json(&e.val),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            });
+            (
+                "contract_instance",
+                json!({ "executable": executable, "storage": storage }),
+            )
         }
         ScVal::LedgerKeyContractInstance => ("ledger_key_contract_instance", json!(null)),
         ScVal::LedgerKeyNonce(k) => ("ledger_key_nonce", json!(k.nonce)),
