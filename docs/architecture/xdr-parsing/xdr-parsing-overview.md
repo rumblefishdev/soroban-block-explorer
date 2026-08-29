@@ -635,6 +635,36 @@ register their account operands as participants but are excluded from the fungib
 asset index — that identity is ambiguous and tracked separately by the NFT path
 above.
 
+### 5.7 AMM Pool Registrations and State (`pool_router` / `pool_state`)
+
+Router-family AMM pools (Aquarius's shape; ADR 0058, lore task 0374) are
+decoded by two sibling modules:
+
+- **`pool_router.rs`** — `parse_add_pool` decodes a registration event
+  (pool, verbatim `pool_type` sym, 2–4 token legs, `subpool_salt`, raw
+  `init_args` — three arg vocabularies exist and are stored verbatim);
+  `detect_pool_registrations` sweeps a ledger's events SHAPE-first, from any
+  deployment (an address list loses ~6% of live pools, measured).
+  `detect_share_tokens` derives the pool → share-token relation from the
+  SEP-41 mint in deposit transactions (cross-check; the primary source is
+  instance state below). Verified against the full mainnet population:
+  497/497 registrations decode, 0 false positives on a 307-event
+  all-signatures negative corpus.
+- **`pool_state.rs`** — reserves from ledger-entry changes, two layouts:
+  `parse_plane_pool_data` reads the deployment's shared plane contract's
+  `PoolData[pool]` entries (fungible pools; reserves vector VERBATIM);
+  `parse_pool_instance` reads a pool instance's `TokenShare` / `Plane` /
+  `Router` keys plus `Reserve0`/`Reserve1` (concentrated pools keep reserves
+  on their own instance — the plane holds their `PoolData` only at
+  registration). Extraction mirrors the token-balance extractors: state
+  images from created/updated/restored changes only. Verified by a
+  bidirectional anti-test against the routers' own `update_reserves` events
+  (0 missing, 0 foreign captures, last-write-per-ledger values 17/17).
+
+Both feed `persist::stage`, which writes the `liquidity_pools` registry rows
+(`pool_kind = 1`), `pool_state_changes` and `pool_share_tokens` (see the
+database-schema overview and ADR 0058).
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR

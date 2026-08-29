@@ -270,6 +270,18 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    `balance_aggregates_mv`, and the dead `assets.holder_count` /
    `assets.total_supply` columns were dropped in task 0310.
 
+**Soroban AMM pools** (ADR 0058, task 0374) ride the same pass with no extra
+step: `parse_ledger()`'s event sweep detects router `add_pool` registrations
+(`detect_pool_registrations`) and its ledger-entry-change walk extracts pool
+state (`extract_plane_pool_data` for fungible pools' plane `PoolData`,
+`extract_pool_instances` for pool instances — concentrated reserves +
+`TokenShare`). Staging turns these into `liquidity_pools` rows
+(`pool_kind = 1`, whole-row registration — never partially updated on the
+RMT), `pool_state_changes` rows (reserves at chain grain) and
+`pool_share_tokens` rows (side table, `asset_sac` pattern). An unparseable
+fee or reserve REFUSES the row with `tracing::error!` rather than writing a
+plausible default.
+
 The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) was removed with
 Postgres (task 0244); its ordering rationale is preserved in
 [ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md).

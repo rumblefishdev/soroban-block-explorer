@@ -186,6 +186,20 @@ Derived explorer entities:
 - `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history
 - `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions` — classic LP state +
   time-series snapshots + per-account share positions
+- `liquidity_pools` is also the dimension for **Soroban AMM pools** (ADR 0058,
+  task 0374): `pool_kind = 1` rows discovered from router `add_pool` events,
+  carrying `legs Array(Int64)` (token-contract surrogates, 2–4 legs),
+  `deployment_id` (registering router), `pool_type_raw`, `subpool_salt`,
+  `init_args`. Their id bytes are a CONTRACT address payload (`C...` on the
+  wire, never `L...`)
+- `pool_state_changes` — Soroban pool reserves at the chain's grain
+  `(pool, ledger, tx, change_index)`, `reserves Array(Int128)` verbatim.
+  Fungible pools write plane `PoolData`; concentrated pools write
+  `Reserve0/1` on their own instance. The target state-fact shape — classic
+  snapshot history joins INTO it if the snapshot models unify (ADR 0058 §3)
+- `pool_share_tokens` — pool → share-token relation (side table, `asset_sac`
+  pattern; ADR 0058 §4). A Soroban token IS an LP share exactly when it
+  appears here
 
 High-level relationship sketch:
 
@@ -207,9 +221,11 @@ soroban_contracts
   ├─ assets
   └─ nfts ─ nft_ownership (partitioned)
 
-liquidity_pools
-  ├─ liquidity_pool_snapshots (partitioned)
-  └─ lp_positions
+liquidity_pools                       # classic (pool_kind=0) + soroban AMM (pool_kind=1)
+  ├─ liquidity_pool_snapshots (partitioned)   # classic only
+  ├─ lp_positions                             # classic only
+  ├─ pool_state_changes (partitioned)         # soroban reserves, chain grain
+  └─ pool_share_tokens                        # soroban pool → share token
 
 accounts
   ├─ account_balances_current
