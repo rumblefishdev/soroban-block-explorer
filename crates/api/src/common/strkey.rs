@@ -65,8 +65,18 @@ pub(crate) fn is_strkey_shape(value: &str, prefix: char) -> bool {
 ///
 /// Returns the lowercase hex the `pool_id` column stores.
 pub(crate) fn pool_id_from_text(raw: &str) -> Option<String> {
-    match stellar_strkey::LiquidityPool::from_string(raw.trim()) {
-        Ok(stellar_strkey::LiquidityPool(bytes)) => Some(hex::encode(bytes)),
+    // `C...` accepted since task 0374: soroban pools are addressed by their
+    // contract strkey, and pasting one into the same box must find the pool.
+    // A contract strkey that is NOT a pool simply selects nothing — same as
+    // an unknown `L...`.
+    let raw = raw.trim();
+    if let Ok(stellar_strkey::LiquidityPool(bytes)) =
+        stellar_strkey::LiquidityPool::from_string(raw)
+    {
+        return Some(hex::encode(bytes));
+    }
+    match stellar_strkey::Contract::from_string(raw) {
+        Ok(stellar_strkey::Contract(bytes)) => Some(hex::encode(bytes)),
         Err(_) => None,
     }
 }
@@ -89,6 +99,25 @@ pub(crate) fn pool_id_hex_to_strkey(hex_str: &str) -> String {
     stellar_strkey::LiquidityPool(payload)
         .to_string()
         .to_string()
+}
+
+/// 64-char hex → `C...` contract strkey. The id form for SOROBAN pools
+/// (task 0374): their 32 stored bytes are a contract-address payload, and
+/// an `L...` render of the same bytes would be a well-formed WRONG key.
+pub(crate) fn contract_hex_to_strkey(hex_str: &str) -> String {
+    assert_eq!(
+        hex_str.len(),
+        64,
+        "contract id hex must be exactly 64 chars (got {})",
+        hex_str.len()
+    );
+    let bytes = hex::decode(hex_str)
+        .unwrap_or_else(|_| panic!("contract id hex contains non-hex chars: {hex_str}"));
+    let payload: [u8; 32] = bytes
+        .try_into()
+        .expect("32 bytes — guaranteed by 64-char length assert above");
+    // Same heapless→std double `.to_string()` bridge as above.
+    stellar_strkey::Contract(payload).to_string().to_string()
 }
 
 #[cfg(test)]
