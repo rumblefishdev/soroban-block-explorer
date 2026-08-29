@@ -306,6 +306,23 @@ pub struct LiquidityPoolRow {
     pub share_token_id: i64,
 }
 
+/// `pool_share_tokens` — the pool→share-token relation, derived per the T6
+/// rule from deposit transactions (task 0374, step 15).
+///
+/// A SIDE table, deliberately (the `asset_sac` pattern): the deposit path
+/// knows only `(pool, token)`, and a partial row written into the RMT
+/// registry would replace the full registration on merge — legs, type and
+/// deployment gone to defaults (Karol caught this, 2026-08-28). Keyed on
+/// `pool_id` with the sighting ledger as version, so a share-token migration
+/// (13 pools re-pointed their token; measured) converges on the newest —
+/// exactly what `share_id()` returns on chain.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct PoolShareTokenRow {
+    pub pool_id: [u8; 32],
+    pub share_token_id: i64,
+    pub derived_at_ledger: i64,
+}
+
 /// `lp_positions` — state, RMT(last_updated_ledger).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct LpPositionRow {

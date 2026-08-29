@@ -237,6 +237,14 @@ fn column_order_liquidity_pools() {
 }
 
 #[test]
+fn column_order_pool_share_tokens() {
+    assert_columns::<PoolShareTokenRow>(
+        "pool_share_tokens",
+        &["pool_id", "share_token_id", "derived_at_ledger"],
+    );
+}
+
+#[test]
 fn column_order_lp_positions() {
     assert_columns::<LpPositionRow>(
         "lp_positions",

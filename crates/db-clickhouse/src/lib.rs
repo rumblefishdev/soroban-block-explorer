@@ -172,11 +172,13 @@ mod tests {
         // behind the pool page's "Amount" column (issue #371). 31 → 32.
         // task 0463: added `account_entry_state` — signers + thresholds side table
         // (issue #377); side table, not columns on `accounts`, because that
-        // table takes whole-row writes from more than one path. 32 → 33.
+        // table takes whole-row writes from more than one path. 33 → 34:
+        // pool_share_tokens (task 0374 step 15, the asset_sac-pattern side
+        // table for the pool→share-token relation).
         assert_eq!(
             stmts.len(),
-            33,
-            "expected 30 tables + 2 materialized views + 1 dictionary, got {}",
+            34,
+            "expected 31 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

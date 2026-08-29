@@ -223,6 +223,7 @@ pub struct StagedLedger {
     pub hash_index_rows: Vec<TransactionHashIndexRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
     pub pool_rows: Vec<LiquidityPoolRow>,
+    pub pool_share_token_rows: Vec<PoolShareTokenRow>,
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
     pub op_rows: Vec<OperationAppearanceRow>,
@@ -1052,6 +1053,25 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 pool = %reg.event.pool,
                 reason,
                 "add_pool registration refused — a pool is missing from the registry"
+            ),
+        }
+    }
+
+    // Share-token sightings (task 0374, step 15) — the T6 detector lives in
+    // xdr_parser; this section only maps sightings to side-table rows. The
+    // pool payload decode can only fail on a malformed emitter address, which
+    // the event pipeline has already validated — count loudly if it ever does.
+    for sighting in xdr_parser::pool_router::detect_share_tokens(events) {
+        match contract_payload(&sighting.pool) {
+            Some(pool_id) => out.pool_share_token_rows.push(PoolShareTokenRow {
+                pool_id,
+                share_token_id: ids::contract_id(&sighting.token),
+                derived_at_ledger: ledger_sequence_i64,
+            }),
+            None => tracing::error!(
+                ledger_sequence = ledger.sequence,
+                pool = %sighting.pool,
+                "share-token sighting dropped: pool address is not a valid C… strkey"
             ),
         }
     }

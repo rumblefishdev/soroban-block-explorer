@@ -874,3 +874,46 @@ maintained surface — Karol, 2026-08-28); resurrect it verbatim for the final
 phase with:
 `git show 082ee364:crates/db-clickhouse/src/bin/gen_pool_registry_backfill.rs`
 This lands in the T7 production checklist, not only here.
+
+## Step-15 fundamental correction — the chain stores the relation as STATE (2026-08-28)
+
+Karol pushed past "which table" to "where does the truth live". Probed on raw
+ledger meta (registration ledger 63 893 403, pool `CBMWU357…`):
+
+**The pool's own instance storage, written IN THE SAME TRANSACTION as
+`add_pool`, carries the whole registration as state:**
+
+```
+TokenShare  = CC5PU23M…   ← the share token, at birth
+Plane       = CCABO2IQ…      TokenA/TokenB, FeeFraction,
+Router      = CBQDHNBF…      ReserveA/ReserveB, TotalShares, …
+```
+
+And a concentrated pool's instance (probed at 64 134 576) has **no
+`TokenShare` key at all** — instead `Slot0`, `TickSpacing`, `Liquidity`,
+`FeeGrowthGlobal…`. The absence is structural, matching `share_id()`
+returning the pool itself.
+
+### Revised design — T4's rule applied to its own conclusion
+
+- **Source: instance-storage `TokenShare`** (state), not the deposit⇄mint
+  correlation. Available at the creation ledger and, for the 13 measured
+  migrations, as later instance-update entries. "State over inference" — the
+  same reasoning that decided reserves.
+- **Store: the `pool_share_tokens` side table stands** — the relation is
+  mutable and the registry is whole-row RMT, so the structural argument is
+  untouched; only the WRITER changes.
+- **The T6 deposit-mint detector is demoted to a monitored cross-check** —
+  exactly `update_reserves`' fate in T4. Its 16/16 on-chain verification is
+  what makes it a trustworthy alarm.
+- **Implementation folds into step 7**: the instance-entry arm is the same
+  ContractData extraction family as the plane read, so share tokens, plane_id
+  and reserve corroboration ride one pathway. Before implementing, probe one
+  EARLY-era pool (52.7M) for storage-layout drift across contract versions.
+
+### Anchor upgrade (2026-08-28): shares-first is the vendor's own word
+
+The 0008 capture of `liquidity_pool_events` carries the impl comment for
+`deposit_liquidity`: body `[stake_amount, amountA, amountB, amountC]` —
+shares FIRST, in the vendor's own source. The claim previously stood on
+measurement alone (75 200/75 200); it now stands on source + measurement.

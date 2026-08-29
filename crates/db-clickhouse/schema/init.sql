@@ -624,6 +624,20 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
 
+-- Pool → share token, derived per the T6 rule (task 0374 step 15). A SIDE
+-- table (the asset_sac pattern): the deposit path knows only (pool, token),
+-- and a partial row in the RMT registry would clobber the full registration
+-- on merge. Versioned by sighting ledger so a share-token migration (13
+-- pools re-pointed theirs; measured) converges on the newest — matching
+-- share_id() on chain. Concentrated pools never mint, so they never appear.
+CREATE TABLE IF NOT EXISTS pool_share_tokens (
+    pool_id            FixedString(32),
+    share_token_id     Int64,
+    derived_at_ledger  Int64
+)
+ENGINE = ReplacingMergeTree(derived_at_ledger)
+ORDER BY (pool_id);
+
 -- `closed_at_ledger`: same lifecycle semantics as `balances` (ADR 0055) — a
 -- withdrawn position was written as `shares = 0`, indistinguishable from a
 -- position that still exists at zero.
