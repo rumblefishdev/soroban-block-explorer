@@ -19,13 +19,28 @@ export const TVL_PRESETS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '1000000', label: 'Min $1,000,000' },
 ];
 
+/** Pool-world presets (task 0374): the list is a union of classic CAP-38
+ *  pools and soroban AMM pools, discriminated server-side by
+ *  `filter[pool_kind]`. Empty = both. */
+export const POOL_KIND_PRESETS: ReadonlyArray<{
+  value: string;
+  label: string;
+}> = [
+  { value: '', label: 'All pools' },
+  { value: 'classic', label: 'Classic' },
+  { value: 'soroban', label: 'Soroban' },
+];
+
 interface PoolsFilterBarProps {
   /** Asset-code search value (URL key `asset`, API `filter[asset_code]`). */
   asset: string;
   /** Active TVL preset (URL key `min_tvl`, API `filter[min_tvl]`). */
   minTvl: string;
+  /** Pool-world filter (URL key `kind`, API `filter[pool_kind]`). */
+  poolKind: string;
   onAssetChange: (value: string) => void;
   onMinTvlChange: (value: string) => void;
+  onPoolKindChange: (value: string) => void;
 }
 
 /**
@@ -37,11 +52,16 @@ interface PoolsFilterBarProps {
 export function PoolsFilterBar({
   asset,
   minTvl,
+  poolKind,
   onAssetChange,
   onMinTvlChange,
+  onPoolKindChange,
 }: PoolsFilterBarProps) {
   const handleTvlChange = (event: SelectChangeEvent<string>) => {
     onMinTvlChange(event.target.value);
+  };
+  const handleKindChange = (event: SelectChangeEvent<string>) => {
+    onPoolKindChange(event.target.value);
   };
 
   return (
@@ -63,6 +83,24 @@ export function PoolsFilterBar({
         width={400}
         onCommit={onAssetChange}
       />
+      <Select
+        value={poolKind}
+        onChange={handleKindChange}
+        aria-label="Pool kind"
+        size="small"
+        displayEmpty
+        renderValue={(value) =>
+          POOL_KIND_PRESETS.find((opt) => opt.value === value)?.label ??
+          'All pools'
+        }
+        sx={{ width: 160, maxWidth: '100%' }}
+      >
+        {POOL_KIND_PRESETS.map((option) => (
+          <MenuItem key={option.value || 'all'} value={option.value}>
+            {option.label}
+          </MenuItem>
+        ))}
+      </Select>
       {TVL_FILTER_ENABLED && (
         <Select
           value={minTvl}
