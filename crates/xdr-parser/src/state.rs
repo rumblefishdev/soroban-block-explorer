@@ -769,7 +769,6 @@ pub fn extract_liquidity_pools(
             fee_bps,
             reserves: reserves.clone(),
             total_shares: total_shares.clone(),
-            tvl: None,
             created_at_ledger: if is_creation {
                 Some(change.ledger_sequence)
             } else {
@@ -798,9 +797,6 @@ pub fn extract_liquidity_pools(
             created_at: change.created_at,
             reserves,
             total_shares,
-            tvl: None,
-            volume: None,
-            fee_revenue: None,
         });
     }
 

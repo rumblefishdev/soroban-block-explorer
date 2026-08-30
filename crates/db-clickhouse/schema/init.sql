@@ -1044,13 +1044,18 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     reserve_a       Decimal128(7),
     reserve_b       Decimal128(7),
     total_shares    Decimal128(7),
-    tvl             Nullable(Decimal128(7)),
-    volume          Nullable(Decimal128(7)),
-    fee_revenue     Nullable(Decimal128(7)),
+    -- tvl/volume/fee_revenue columns were removed from the write path (0374
+    -- distillation): written as NULL since 0199 (USD is computed at read,
+    -- ADR 0053) and read by nothing. DEPLOY ORDER IS LOAD-BEARING: the
+    -- clickhouse-rs 0.15 client REFUSES an insert when the table still has a
+    -- no-DEFAULT column the struct dropped (proven in the 0374 local e2e;
+    -- the 0310 lesson), so prod must run
+    --   ALTER TABLE liquidity_pool_snapshots DROP COLUMN tvl, DROP COLUMN volume, DROP COLUMN fee_revenue
+    -- BEFORE the writer with this struct starts. (share_token_id had
+    -- DEFAULT 0, so its drop has no such ordering constraint.)
     -- Gross trade volume in asset-A units per (pool, ledger), computed from
     -- path-payment claim atoms (task 0261 extractor; written by the 0266
-    -- backfill / 0247 wiring). USD volume/fee stay NULL until the Prices
-    -- API lands (ADR 0053 read-time join).
+    -- backfill / 0247 wiring) — READ by the chart + 24h volume (kept).
     gross_volume_a  Nullable(Decimal128(7))
 )
 ENGINE = ReplacingMergeTree

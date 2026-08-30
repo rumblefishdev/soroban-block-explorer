@@ -428,9 +428,6 @@ fn column_order_liquidity_pool_snapshots() {
             "reserve_a",
             "reserve_b",
             "total_shares",
-            "tvl",
-            "volume",
-            "fee_revenue",
             "gross_volume_a",
         ],
     );
@@ -1086,9 +1083,6 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
         created_at: 0,
         reserves: serde_json::json!({ "a": 1_000i64, "b": 2_000i64 }),
         total_shares: "0".to_string(),
-        tvl: None,
-        volume: None,
-        fee_revenue: None,
     };
     let snaps = vec![snap(&traded), snap(&quiet)];
 
@@ -2815,7 +2809,6 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
         fee_bps: 30,
         reserves: serde_json::json!({}),
         total_shares: "2.0000000".to_string(),
-        tvl: None,
         created_at_ledger: Some(ledger.sequence),
         last_updated_ledger: ledger.sequence,
         created_at: 1_700_000_000,

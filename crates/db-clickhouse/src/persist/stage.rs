@@ -1212,24 +1212,12 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             reserve_a,
             reserve_b,
             total_shares: decimal7_string_to_i128(&snap.total_shares)?,
-            tvl: snap
-                .tvl
-                .as_deref()
-                .map(decimal7_string_to_i128)
-                .transpose()?,
-            volume: snap
-                .volume
-                .as_deref()
-                .map(decimal7_string_to_i128)
-                .transpose()?,
-            fee_revenue: snap
-                .fee_revenue
-                .as_deref()
-                .map(decimal7_string_to_i128)
-                .transpose()?,
-            // Asset-A-side trade volume for this (pool, ledger) from claim atoms
-            // (0261). `None` when the pool had no trade this ledger. USD volume/
-            // fee_revenue remain read-time (ADR 0053); those columns stay NULL.
+            // Asset-A-side trade volume for this (pool, ledger) from claim
+            // atoms (0261). `None` when the pool had no trade this ledger.
+            // USD tvl/volume/fee_revenue have NO columns here any more: they
+            // were written as NULL since 0199 (compute-at-read, ADR 0053) and
+            // read by nothing — dropped from the write path in 0374's
+            // distillation; prod drops them with ALTER … DROP COLUMN.
             gross_volume_a: gross_volume_by_pool.get(&pool_id).copied(),
         });
     }
