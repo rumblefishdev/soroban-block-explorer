@@ -2,12 +2,22 @@
 id: '0361'
 title: 'Port audit-harness to ClickHouse (data-correctness safety net)'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0244', '0175']
 tags: ['clickhouse', 'audit', 'data-correctness', 'tooling']
 links: []
 history:
+  - date: '2026-08-30'
+    status: superseded
+    who: karolkow
+    by: ['0524']
+    note: >
+      Superseded by the 0524 verification-harness umbrella (one-flow
+      decision): porting the sqlx SQL is a rewrite anyway, and a second
+      tool beside snapshot-seed is exactly what the consolidation forbids.
+      The crate's invariant catalog is transcribed into 0524; the crate
+      itself is deleted from the tree.
   - date: 2026-07-06
     status: backlog
     who: karolkow
