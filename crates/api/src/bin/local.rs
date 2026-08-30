@@ -26,6 +26,11 @@
 //! and deliberately untracked — nothing to commit to run this.
 //!
 //! Env (all optional):
+//! - `LOCAL_CH_URL` — plain (non-mTLS) ClickHouse HTTP endpoint, e.g. the
+//!   docker-compose CH at `http://localhost:8125`. When set, the mTLS vars
+//!   below are ignored and credentials come from the standard
+//!   `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` —
+//!   the e2e-testing path (task 0374): real API over a locally ingested CH.
 //! - `LOCAL_MTLS_DIR` — dir with `<user>.crt`, `<user>.key`, `ca.crt`
 //!   (default `infra-hetzner/ca/out/$USER`)
 //! - `LOCAL_CH_DOMAIN` — Caddy mTLS host (default `ch.sorobanscan.rumblefish.dev`)
@@ -54,17 +59,29 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(9100);
 
-    let read = |name: String| {
-        std::fs::read_to_string(&name)
-            .unwrap_or_else(|e| panic!("failed to read mTLS PEM {name}: {e}"))
+    // Plain-CH branch first (task 0374 e2e): a locally ingested docker CH
+    // needs no certs, and reaching for the mTLS bundle there fails on
+    // missing PEMs before the URL is even considered.
+    let ch = if let Ok(url) = std::env::var("LOCAL_CH_URL") {
+        let cfg = db_clickhouse::Config {
+            url,
+            ..db_clickhouse::Config::from_env()
+        };
+        tracing::info!("plain ClickHouse client → {}", cfg.url);
+        db_clickhouse::client(&cfg)
+    } else {
+        let read = |name: String| {
+            std::fs::read_to_string(&name)
+                .unwrap_or_else(|e| panic!("failed to read mTLS PEM {name}: {e}"))
+        };
+        let bundle = db_clickhouse::mtls::MtlsBundle {
+            cert_pem: read(format!("{mtls_dir}/{user}.crt")),
+            key_pem: read(format!("{mtls_dir}/{user}.key")),
+            ca_pem: read(format!("{mtls_dir}/ca.crt")),
+        };
+        db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
+            .expect("failed to build mTLS ClickHouse client")
     };
-    let bundle = db_clickhouse::mtls::MtlsBundle {
-        cert_pem: read(format!("{mtls_dir}/{user}.crt")),
-        key_pem: read(format!("{mtls_dir}/{user}.key")),
-        ca_pem: read(format!("{mtls_dir}/ca.crt")),
-    };
-    let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
-        .expect("failed to build mTLS ClickHouse client");
 
     let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
