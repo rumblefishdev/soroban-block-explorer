@@ -274,6 +274,56 @@ fn raw_u128_vec(v: &Value) -> Option<Vec<String>> {
         .collect()
 }
 
+/// Collapse plane writes to ONE per (pool, ledger): the LAST image in ledger
+/// apply order — the pool-state twin of `dedup_final_pool_snapshots`
+/// (decision karolkow 2026-08-30: same grain as classic; intra-ledger
+/// history stays reconstructible from `soroban_events` forever, so storing
+/// intermediates duplicated what events already carry).
+///
+/// Input order IS apply order: `process.rs` extends the vector while walking
+/// transactions in their ledger positions, and `extract_plane_pool_data`
+/// preserves change order within a transaction.
+pub fn dedup_final_plane_writes(
+    writes: Vec<ExtractedPlanePoolData>,
+) -> Vec<ExtractedPlanePoolData> {
+    use std::collections::HashMap;
+    let mut position: HashMap<(String, u32), usize> = HashMap::new();
+    let mut deduped: Vec<ExtractedPlanePoolData> = Vec::with_capacity(writes.len());
+    for w in writes {
+        let key = (w.data.pool.clone(), w.ledger_sequence);
+        match position.get(&key) {
+            Some(&idx) => deduped[idx] = w, // keep the last (final) image
+            None => {
+                position.insert(key, deduped.len());
+                deduped.push(w);
+            }
+        }
+    }
+    deduped
+}
+
+/// Same collapse for pool-instance images. Every image carries the FULL
+/// instance storage (TokenShare included), so keeping only the last one
+/// loses neither the share-token relation nor the concentrated reserves.
+pub fn dedup_final_pool_instances(
+    instances: Vec<ExtractedPoolInstance>,
+) -> Vec<ExtractedPoolInstance> {
+    use std::collections::HashMap;
+    let mut position: HashMap<(String, u32), usize> = HashMap::new();
+    let mut deduped: Vec<ExtractedPoolInstance> = Vec::with_capacity(instances.len());
+    for i in instances {
+        let key = (i.state.pool.clone(), i.ledger_sequence);
+        match position.get(&key) {
+            Some(&idx) => deduped[idx] = i,
+            None => {
+                position.insert(key, deduped.len());
+                deduped.push(i);
+            }
+        }
+    }
+    deduped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,54 +448,4 @@ mod tests {
         ]);
         assert_eq!(parse_pool_instance("CFOREIGN", &storage), None);
     }
-}
-
-/// Collapse plane writes to ONE per (pool, ledger): the LAST image in ledger
-/// apply order — the pool-state twin of `dedup_final_pool_snapshots`
-/// (decision karolkow 2026-08-30: same grain as classic; intra-ledger
-/// history stays reconstructible from `soroban_events` forever, so storing
-/// intermediates duplicated what events already carry).
-///
-/// Input order IS apply order: `process.rs` extends the vector while walking
-/// transactions in their ledger positions, and `extract_plane_pool_data`
-/// preserves change order within a transaction.
-pub fn dedup_final_plane_writes(
-    writes: Vec<ExtractedPlanePoolData>,
-) -> Vec<ExtractedPlanePoolData> {
-    use std::collections::HashMap;
-    let mut position: HashMap<(String, u32), usize> = HashMap::new();
-    let mut deduped: Vec<ExtractedPlanePoolData> = Vec::with_capacity(writes.len());
-    for w in writes {
-        let key = (w.data.pool.clone(), w.ledger_sequence);
-        match position.get(&key) {
-            Some(&idx) => deduped[idx] = w, // keep the last (final) image
-            None => {
-                position.insert(key, deduped.len());
-                deduped.push(w);
-            }
-        }
-    }
-    deduped
-}
-
-/// Same collapse for pool-instance images. Every image carries the FULL
-/// instance storage (TokenShare included), so keeping only the last one
-/// loses neither the share-token relation nor the concentrated reserves.
-pub fn dedup_final_pool_instances(
-    instances: Vec<ExtractedPoolInstance>,
-) -> Vec<ExtractedPoolInstance> {
-    use std::collections::HashMap;
-    let mut position: HashMap<(String, u32), usize> = HashMap::new();
-    let mut deduped: Vec<ExtractedPoolInstance> = Vec::with_capacity(instances.len());
-    for i in instances {
-        let key = (i.state.pool.clone(), i.ledger_sequence);
-        match position.get(&key) {
-            Some(&idx) => deduped[idx] = i,
-            None => {
-                position.insert(key, deduped.len());
-                deduped.push(i);
-            }
-        }
-    }
-    deduped
 }
