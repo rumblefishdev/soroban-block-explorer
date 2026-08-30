@@ -37,7 +37,7 @@ dry-run already IS a reconciliation harness — with two more passes under
 the same command, one decode, one summary.txt an operator signs:
 
 1. **Invariant pass** (ancestor: the audit-harness crate, catalog below) —
-   CH-native rewrites,每 read RMT-deduped (the 0423 seeded-duplicates
+   CH-native rewrites, every read RMT-deduped (the 0423 seeded-duplicates
    regression rides here as its test bed).
 2. **Network reconciliation** (ancestors: 0463 seed, 0503) — the existing
    verdict machinery over the 0502 decoder; 0503 = this system on a cron.
