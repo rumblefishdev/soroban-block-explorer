@@ -64,34 +64,44 @@ renders them as `C...` and accepts both `L...` and `C...` on pool routes; an
 `L...` render of contract bytes would be a well-formed WRONG key, so it is
 never minted.
 
-### 3. Reserves are ledger STATE at the chain's grain — `pool_state_changes`
+### 3. Reserves are ledger STATE, one row per (pool, ledger) — `pool_state_changes`
 
 Event arithmetic failed its oracle on 6/49 pools (measured), so reserves come
 from ledger-entry changes, written to `pool_state_changes
-(pool_id, ledger_sequence, application_order, transaction_id, change_index,
-reserves Array(Int128), plane_id)` — sort key
-`(pool, ledger, application_order, change_index)`. Two on-chain layouts feed one table:
+(pool_id, ledger_sequence, reserves Array(Int128), plane_id)` — sort key
+`(pool, ledger)`, ONE deterministic row per pair, collapsed at parse time in
+ledger apply order. Two on-chain layouts feed one table:
 
 - **fungible** pools (constant/stable) write `PoolData[pool]` on the
   deployment's shared _plane_ contract — the vector is stored VERBATIM
-  (concentrated-era tails exist; readers slice by leg count, never by vector
+  (per-tick tails exist; readers slice by leg count, never by vector
   length);
 - **concentrated** pools write `Reserve0`/`Reserve1` on their own instance —
   the plane holds their `PoolData` only at registration (discovered by a
-  bidirectional anti-test against `update_reserves` events; the T3 pilot
-  predated the first concentrated pool).
+  bidirectional anti-test against `update_reserves` events).
 
-The full key matters: `(pool, ledger)` alone collapses 23.5% of rows (up to
-12 writes/ledger measured) — and the intra-ledger component must be
-`application_order` (the transaction's position in its ledger), never the
-`transaction_id` surrogate: a hash sorts randomly, and "latest reserves"
-picked by it returned an intermediate write on 127 of 1,410 real pairs
-(caught by the full-pipeline e2e before the production DDL existed). This table is deliberately named WITHOUT a family
-prefix: it is the target state-fact shape (chain grain, verbatim integers,
-single concern), and classic snapshot history would join INTO it if the two
+**The grain decision was REVERSED once, deliberately (2026-08-30), before
+any production DDL existed.** The first design kept every intra-ledger write
+(up to 12/ledger measured) and therefore needed an `application_order` key
+component — a hash-surrogate order had returned an intermediate write as
+"latest" on 127 of 1,410 real pairs. The full-pipeline e2e then showed the
+per-write grain had NO consumer: the anti-tests compare at ledger grain, the
+API shows only the latest state, and intra-ledger history is permanently
+reconstructible from `soroban_events` (`update_reserves` per action) — so
+storing intermediates duplicated the events. Collapsing to the classic
+mechanism (last image in apply order, the `dedup_final_pool_snapshots`
+twins) removes the ordering-column class of bugs, restores the 0356
+LIMIT-1/no-FINAL invariant here too, and makes the future snapshot
+unification a plain union of IDENTICAL grains. Re-verified after the
+collapse on real windows: rows == pairs 1,415/1,415, values vs events
+1,414/1,414, live-chain spot checks exact. Resurrect the per-write design
+only for a consumer that needs intra-ledger STATE without event replay.
+
+This table is deliberately named WITHOUT a family prefix: it is the target
+state-fact shape, and classic snapshot history would join INTO it if the two
 snapshot models ever unify — never the reverse. The classic
-`liquidity_pool_snapshots` stays as-is until a consumer needs one
-cross-family history read (trigger recorded in task 0374).
+`liquidity_pool_snapshots` stays as-is until that unification (trigger
+recorded in task 0374).
 
 ### 4. The share-token relation is a SIDE table — `pool_share_tokens`
 

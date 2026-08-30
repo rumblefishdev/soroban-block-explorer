@@ -1215,3 +1215,22 @@ DIFFERENT algorithm (ids.rs header), so SQL cannot compute it. The backfill
 is a small one-shot Rust pass (read the pair columns, emit rows with legs
 filled — versioned on each row's own last_updated_ledger), [K] in the
 deploy window alongside the other catch-ups.
+
+## Grain reversal (2026-08-30, decision karolkow): one row per (pool, ledger)
+
+Karol challenged the per-write grain ("czy nie da się jak w klasyce?") and
+the re-audit agreed: every consumer that mattered (anti-tests, API latest,
+charts) works at ledger grain, and intra-ledger history is permanently
+reconstructible from `soroban_events` — the stored intermediates duplicated
+it. Collapsed at parse time in apply order (`dedup_final_plane_writes` /
+`_pool_instances`, twins of the classic dedup); schema simplified to
+`(pool_id, ledger_sequence, reserves, plane_id)`, `application_order` and
+the tx columns gone from the table (the ordering-bug class dies with them);
+API argMax by ledger alone. Free change — production DDL still did not
+exist. Bonus: both worlds now share grain AND mechanism, so the distillation
+unification becomes a plain union.
+
+Re-verified end-to-end on the real windows after the collapse: rows==pairs
+1,415/1,415 (structural one-per-pair), anti-test values 1,414/1,414,
+missing 0, live-chain spot checks 10/10 (the rest moved past the windows),
+Playwright 3/3. ADR 0058 §3 rewritten to record the reversal.
