@@ -227,6 +227,12 @@ impl PartitionWriterHandle {
                     // entries never re-emitted in-window stay absent — the
                     // open caveat.)
                     soroban_token_balances: &parsed.soroban_token_balances,
+                    // Task 0374 step 7 — pool state rides the shared
+                    // `process.rs` extraction exactly like token balances
+                    // above, so the historical re-parse emits
+                    // `pool_state_changes` / `pool_share_tokens` for free.
+                    plane_pool_data: &parsed.plane_pool_data,
+                    pool_instances: &parsed.pool_instances,
                     sac_classic: &sac_classic,
                     sac_overrides: &parsed.sac_overrides,
                     // Task 0283 live G1/G9 are for the live indexer path only.
