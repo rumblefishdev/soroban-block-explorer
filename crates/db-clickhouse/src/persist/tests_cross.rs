@@ -3213,8 +3213,6 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             pool_type_raw: "standard".into(),
             init_args: vec!["10".into()],
         },
-        transaction_hash: tx.hash.clone(),
-        change_index: 3,
         ledger_sequence: 10,
     };
     let instance = ExtractedPoolInstance {
@@ -3225,8 +3223,6 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
             reserves: Vec::new(),
         },
-        transaction_hash: tx.hash.clone(),
-        change_index: 1,
         ledger_sequence: 10,
     };
     // A concentrated-style instance (no share token) must stage NOTHING.
@@ -3240,8 +3236,6 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             // ride the INSTANCE, and must stage a snapshot row.
             reserves: vec!["4112908590".into(), "250000000000".into()],
         },
-        transaction_hash: tx.hash.clone(),
-        change_index: 7,
         ledger_sequence: 10,
     };
 
