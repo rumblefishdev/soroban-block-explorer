@@ -1117,44 +1117,18 @@ the missing `lp_positions` rows from a current checkpoint (the 0457
 snapshot toolchain) closes the gap completely, with `first_deposit_ledger`
 explicitly unknown for seeded rows (never a fabricated value).
 
-## K4-6 fix built (2026-08-29): `snapshot-seed-lp` — option A
+## K4-6 fix MOVED OFF THIS BRANCH (decision karolkow 2026-08-29)
 
-New backfill-runner subcommand (`snapshot/seed_lp.rs`), the LP pass the 0463
-balances seed explicitly deferred. Decoder extended with the classic
-`LiquidityPoolEntry` (`NetPool`, first-wins like every key; unit-tested on a
-constructed XDR entry). What it does:
-
-- seeds missing `lp_positions` pairs from the checkpoint's pool-share
-  trustlines — versioned on each entry's OWN `lastModifiedLedgerSeq` (0492
-  rule), `first_deposit_ledger = 0` = the documented "predates our history"
-  sentinel; the participants read now maps 0 → null (`nullIf`), so it can
-  never render as "ledger 0";
-- self-heals pairs where the snapshot is newer and differs — restating the
-  pair's REAL first_deposit_ledger (whole-row RMT, a correction must not
-  erase it);
-- stubs `liquidity_pools` + one snapshot row for live pre-floor pools with
-  no row at all (pair vocabulary from the entry's own params) — pools the
-  explorer currently cannot show AT ALL;
-- ghosts (ours positive, chain has no pair) are REPORTED to `ghosts.tsv`,
-  never corrected — the 0463 seed earned zeroing rights via a 100/100 RPC
-  probe; this pass has no such evidence yet;
-- built-in decode invariant in the summary:
-  `sum(pool_shares_trust_line_count over live pools) == decoded live
-pool-share count` — a protocol identity; mismatch = decoder dropped
-  records, do not `--execute`.
-
-Also fixed in passing: `backfill-runner/sink.rs` and the `pilot_lp_amounts`
-example missed the step-7 `StageInputs` fields (the crate was outside the
-commit-4 test sweep) — wired to `parsed.plane_pool_data`/`pool_instances`,
-so the historical re-parse emits pool state for free.
-
-[K] to run (dry-run reviews summary first, then execute with the write
-identity — see docs/backfills.md):
-
-```
-cargo run -p backfill-runner --release -- snapshot-seed-lp
-cargo run -p backfill-runner --release -- snapshot-seed-lp --execute
-```
+The seed was built here first (commits `a3bc8e63` + `cee04d5a`, reverted in
+place — resurrect from those SHAs), then pulled out: it touches ONLY the
+CLASSIC world (`LiquidityPoolEntry` + pool-share trustlines are classic
+entry types; the soroban-AMM era starts AFTER the ingest floor — first
+`add_pool` at L50,638,875 vs floor 50,457,424 — so soroban pools need a
+re-parse, never a checkpoint), and this branch ships Aquarius. The work —
+folded into the ONE `snapshot-seed` flow, not a side subcommand (same
+decision) — now lives in task 0523 (re-scoped), together with the 0468
+"Since ledger 0" display bug it half-fixes (94.8% of positions already
+carry the 0 sentinel in prod). The K4-6 MEASUREMENT above stands.
 
 ## F-B / K2-2 closed by verification (2026-08-29)
 
