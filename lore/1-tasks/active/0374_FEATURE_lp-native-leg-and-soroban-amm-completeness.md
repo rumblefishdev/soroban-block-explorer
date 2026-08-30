@@ -64,11 +64,11 @@ conventions); Soroban AMMs live outside the classic pool table.
 
 ## Acceptance Criteria
 
-- [ ] native XLM leg matches → pools visible — F-B / K2-2
-- [ ] Soroswap pools indexed (reserves + volume) and unioned — K3-5
-- [ ] Aquarius pools indexed and unioned — K3-5
-- [ ] Classic / Soroban filter on the pool list — K3-5
-- [ ] share_percentage correct (or confirmed already correct) — K4-6
+- [x] native XLM leg matches → pools visible — F-B / K2-2 (fixed by 0440/0470 along the way; verified on prod 2026-08-29, see below)
+- [ ] Soroswap pools indexed (reserves + volume) and unioned — K3-5 (next protocol, after the Aquarius deploy)
+- [x] Aquarius pools indexed and unioned — K3-5 (code complete + verified; ships with the final-phase deploy/backfills)
+- [x] Classic / Soroban filter on the pool list — K3-5 (filter[pool_kind] + FE dropdown)
+- [x] share_percentage correct (or confirmed already correct) — K4-6 (confirmed correct; the real gap was holder coverage — snapshot-seed-lp built, [K] run pending)
 
 ---
 
@@ -1155,3 +1155,20 @@ identity — see docs/backfills.md):
 cargo run -p backfill-runner --release -- snapshot-seed-lp
 cargo run -p backfill-runner --release -- snapshot-seed-lp --execute
 ```
+
+## F-B / K2-2 closed by verification (2026-08-29)
+
+The native-leg filter defect was FIXED ALONG THE WAY by tasks 0440/0470:
+`asset_codes_predicate` matches native legs by `if(asset_*_type = 0, 'XLM',
+asset_*_code)` (one shared definition for the pools list and global search,
+unit-tested as load-bearing). Verified on prod, deduped: 11,734 classic
+pools carry a native leg (22.3% of 52,663) and EVERY one matches the `XLM`
+filter — the formerly invisible set in full. The filter also substring-hits
+3,270 pools whose credit code merely contains "XLM" (`yXLM`, `XLMFISH`, …)
+— the documented substring semantics every code shares (`USD` matches USDC),
+called out on the DTO. Deliberately NOT built: an exact-native-only hatch
+(the 0359 "surrogate or type=native" suggestion) — no requester since, and
+the per-leg exact mode plus the L/C-id point-select cover the precise cases.
+The scope line "in LP snapshots" in this task's summary was loose wording:
+the defect lived in the list/search FILTER, and snapshots join by pool_id,
+never by leg code.
