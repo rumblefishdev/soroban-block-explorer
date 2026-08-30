@@ -248,7 +248,7 @@ fn key_slices() -> impl Iterator<Item = (i128, i128)> {
 /// almost anywhere else in the run, because fewer known ids means more ids
 /// judged absent, which means more dimension stubs — a truncated read would
 /// manufacture rows for entities that already exist.
-async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, BackfillError> {
+pub(crate) async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, BackfillError> {
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct IdRow {
         id: i64,
@@ -565,7 +565,11 @@ fn write_correction_dumps(
     )
 }
 
-async fn insert_chunked<T>(sink: &Sink, table: &str, rows: &[T]) -> Result<(), BackfillError>
+pub(crate) async fn insert_chunked<T>(
+    sink: &Sink,
+    table: &str,
+    rows: &[T],
+) -> Result<(), BackfillError>
 where
     T: clickhouse::Row + clickhouse::RowOwned + serde::Serialize,
 {
@@ -590,7 +594,7 @@ where
 /// insert — grants are never reached while it is 1 — so it is what gets
 /// checked, rather than the user name, which is only reported to make the
 /// message actionable.
-async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
+pub(crate) async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
     let (user, readonly): (String, u8) = sink
         .client()
         .query("SELECT currentUser(), toUInt8(getSetting('readonly'))")

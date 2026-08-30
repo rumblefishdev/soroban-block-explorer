@@ -27,4 +27,5 @@ pub mod archive;
 pub mod network_state;
 pub mod report;
 pub mod seed;
+pub mod seed_lp;
 pub mod verdict;
