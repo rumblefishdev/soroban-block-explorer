@@ -1035,7 +1035,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let asset_b_issuer_id = b_issuer.as_deref().map(ids::account_id).unwrap_or(0);
         let new_row = LiquidityPoolRow {
             pool_id,
-            legs: Vec::new(),
+            // Legs migration step 2 (task 0374 committed follow-through):
+            // classic rows fill `legs` too, so the pair columns can retire.
+            // Classic legs are ASSET surrogates (`pool_leg_asset_id` — the
+            // same key `lp_operation_amounts` joins on), NOT contract
+            // surrogates like a soroban row's; `pool_kind` says which space.
+            legs: vec![
+                ids::pool_leg_asset_id(a_type as i16, &asset_a_code, asset_a_issuer_id),
+                ids::pool_leg_asset_id(b_type as i16, &asset_b_code, asset_b_issuer_id),
+            ],
             asset_a_type: a_type as i16,
             asset_a_code,
             asset_a_issuer_id,

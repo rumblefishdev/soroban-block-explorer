@@ -2876,6 +2876,19 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
         1,
         "one pool row per ledger, not one per touch"
     );
+    // Legs-migration step 2: a CLASSIC row fills `legs` too — ASSET
+    // surrogates (the lp_operation_amounts join key), derived from the same
+    // pair the legacy columns carry, so the pair can eventually retire.
+    let pr = &staged.pool_rows[0];
+    assert_eq!(pr.pool_kind, 0);
+    assert_eq!(
+        pr.legs,
+        vec![
+            ids::pool_leg_asset_id(pr.asset_a_type, &pr.asset_a_code, pr.asset_a_issuer_id),
+            ids::pool_leg_asset_id(pr.asset_b_type, &pr.asset_b_code, pr.asset_b_issuer_id),
+        ],
+        "classic legs are the pair's asset surrogates, in order"
+    );
 }
 
 /// Two ownership events for one NFT in ONE ledger: the later event's owner is
