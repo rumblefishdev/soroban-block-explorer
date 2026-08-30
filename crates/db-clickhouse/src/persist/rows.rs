@@ -287,9 +287,12 @@ pub struct LiquidityPoolRow {
     /// the 32-byte payload of the C… address). Registry columns below are
     /// meaningful only for kind 1; classic writers set the defaults.
     pub pool_kind: u8,
-    /// Token-CONTRACT surrogate per leg (`ids::contract_id` of the token's
-    /// C… address), in emission order — matching the pool's own
-    /// `get_tokens()`, so reserve vectors align index-for-index.
+    /// One surrogate per leg, in a PER-KIND id space (`pool_kind` says
+    /// which): kind 1 = token-CONTRACT surrogates (`ids::contract_id`) in
+    /// emission order, matching the pool's own `get_tokens()` so reserve
+    /// vectors align index-for-index; kind 0 = ASSET surrogates
+    /// (`ids::pool_leg_asset_id` — the `lp_operation_amounts` join key),
+    /// legs-migration step 2 towards retiring the pair columns.
     ///
     /// NOT `assets.id` in general (an earlier comment claimed that): the two
     /// coincide only for bespoke type-3 tokens. 96% of legs are SACs, whose
@@ -301,9 +304,6 @@ pub struct LiquidityPoolRow {
     pub deployment_id: i64,
     /// Verbatim `pool_type` sym from `add_pool`; deliberately un-normalised.
     pub pool_type_raw: String,
-    /// Share token per the T6 rule. 0 = none yet, or none ever (concentrated
-    /// pools mint nothing); `pool_type_raw` disambiguates.
-    pub share_token_id: i64,
 }
 
 /// `pool_state_changes` — pool reserve state at the chain's grain (task

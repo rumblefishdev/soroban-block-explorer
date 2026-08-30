@@ -231,7 +231,6 @@ fn column_order_liquidity_pools() {
             "legs",
             "deployment_id",
             "pool_type_raw",
-            "share_token_id",
         ],
     );
 }
@@ -3066,10 +3065,6 @@ fn prepare_registers_a_pool_from_a_real_add_pool_event() {
     assert_eq!(row.fee_bps, 10, "fee comes from init_args[0]");
     assert_eq!(row.legs.len(), 2, "legs are asset surrogates, in order");
     assert_eq!(row.deployment_id, ids::contract_id(router));
-    assert_eq!(
-        row.share_token_id, 0,
-        "T6 derivation happens later, not here"
-    );
     // pool_id is the raw C-address payload, not a hash of anything.
     assert_eq!(
         stellar_strkey::Contract(row.pool_id)

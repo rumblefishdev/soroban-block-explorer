@@ -1029,21 +1029,24 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             continue;
         };
         let last_updated_ledger = i64::from(pool.last_updated_ledger);
+        let asset_a_code = a_code.unwrap_or_default();
+        let asset_a_issuer_id = a_issuer.as_deref().map(ids::account_id).unwrap_or(0);
+        let asset_b_code = b_code.unwrap_or_default();
+        let asset_b_issuer_id = b_issuer.as_deref().map(ids::account_id).unwrap_or(0);
         let new_row = LiquidityPoolRow {
             pool_id,
+            legs: Vec::new(),
             asset_a_type: a_type as i16,
-            asset_a_code: a_code.unwrap_or_default(),
-            asset_a_issuer_id: a_issuer.as_deref().map(ids::account_id).unwrap_or(0),
+            asset_a_code,
+            asset_a_issuer_id,
             asset_b_type: b_type as i16,
-            asset_b_code: b_code.unwrap_or_default(),
-            asset_b_issuer_id: b_issuer.as_deref().map(ids::account_id).unwrap_or(0),
+            asset_b_code,
+            asset_b_issuer_id,
             fee_bps: pool.fee_bps,
             last_updated_ledger,
             pool_kind: 0,
-            legs: Vec::new(),
             deployment_id: 0,
             pool_type_raw: String::new(),
-            share_token_id: 0,
         };
         match pool_indices.get(&pool_id).copied() {
             Some(idx) => {
@@ -2283,9 +2286,9 @@ fn is_diagnostic(src: EventSource) -> bool {
 /// zero (Karol, 2026-08-28: error, not warn-and-default) — either way the
 /// registration is refused loudly and lands in the missing-pool alarm.
 ///
-/// `share_token_id` is 0 here — it derives from deposit transactions (T6,
-/// step 16), not from the registration. No venue label is stored anywhere:
-/// labels resolve from `deployment_id` at read time. The salt and raw
+/// The share-token relation lives ONLY in `pool_share_tokens` (side table;
+/// a registry column for it was dead-on-arrival and removed). No venue label
+/// is stored anywhere: labels resolve from `deployment_id` at read time. The salt and raw
 /// init_args are NOT materialised — the add_pool event itself sits complete
 /// in soroban_events; extract on demand, never copy.
 fn pool_registry_row(
@@ -2317,7 +2320,6 @@ fn pool_registry_row(
         legs: reg.tokens.iter().map(|t| ids::contract_id(t)).collect(),
         deployment_id: ids::contract_id(router_strkey),
         pool_type_raw: reg.pool_type.clone(),
-        share_token_id: 0,
     })
 }
 
