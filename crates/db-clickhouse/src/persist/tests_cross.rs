@@ -3290,6 +3290,10 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         .find(|r| r.reserves == vec![100000000000i128, 30617317i128])
         .expect("fungible snapshot from the plane");
     assert_eq!(snap.plane_id, ids::contract_id(PLANE));
+    assert_ne!(
+        conc_snap.pool_id, snap.pool_id,
+        "the two rows belong to two different pools"
+    );
 
     assert_eq!(
         staged.pool_share_token_rows.len(),
