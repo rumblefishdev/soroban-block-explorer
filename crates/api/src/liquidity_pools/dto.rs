@@ -52,10 +52,8 @@ pub struct ParticipantItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
     /// Ledger of the first deposit by this account into this pool. `null`
-    /// for soroban pools (`balances` records current state, not the first
-    /// sighting) AND for classic positions seeded from a checkpoint snapshot,
-    /// whose true first deposit predates our ingest floor — inventing a
-    /// ledger in either case would be a misleading fallback.
+    /// for soroban pools — `balances` records current state, not the first
+    /// sighting, and inventing one would be a misleading fallback.
     pub first_deposit_ledger: Option<i64>,
     /// Ledger of the most recent change to this position.
     pub last_updated_ledger: i64,

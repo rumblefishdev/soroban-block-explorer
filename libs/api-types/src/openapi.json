@@ -4164,7 +4164,7 @@
                 "first_deposit_ledger": {
                   "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool. `null`\nfor soroban pools (`balances` records current state, not the first\nsighting) AND for classic positions seeded from a checkpoint snapshot,\nwhose true first deposit predates our ingest floor — inventing a\nledger in either case would be a misleading fallback."
+                  "description": "Ledger of the first deposit by this account into this pool. `null`\nfor soroban pools — `balances` records current state, not the first\nsighting, and inventing one would be a misleading fallback."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4471,7 +4471,7 @@
           "first_deposit_ledger": {
             "type": ["integer", "null"],
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool. `null`\nfor soroban pools (`balances` records current state, not the first\nsighting) AND for classic positions seeded from a checkpoint snapshot,\nwhose true first deposit predates our ingest floor — inventing a\nledger in either case would be a misleading fallback."
+            "description": "Ledger of the first deposit by this account into this pool. `null`\nfor soroban pools — `balances` records current state, not the first\nsighting, and inventing one would be a misleading fallback."
           },
           "last_updated_ledger": {
             "type": "integer",

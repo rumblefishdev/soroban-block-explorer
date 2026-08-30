@@ -1442,10 +1442,7 @@ struct ParticipantChRow {
     account_id_surrogate: i64,
     shares: String,
     share_percentage: Option<String>,
-    /// `NULL` when the stored value is the `0` sentinel — a position seeded
-    /// from a checkpoint snapshot, whose true first deposit predates our
-    /// ingest floor (task 0374 K4-6). Never rendered as "ledger 0".
-    first_deposit_ledger: Option<i64>,
+    first_deposit_ledger: i64,
     last_updated_ledger: i64,
 }
 
@@ -1489,7 +1486,7 @@ pub async fn fetch_participants(
             toString(lpp.shares)                 AS shares, \
             if(snap.ts IS NULL OR snap.ts = toDecimal128(0, 7), NULL, \
                toString(lpp.shares * 100 / snap.ts)) AS share_percentage, \
-            toNullable(nullIf(lpp.first_deposit_ledger, 0)) AS first_deposit_ledger, \
+            lpp.first_deposit_ledger             AS first_deposit_ledger, \
             lpp.last_updated_ledger              AS last_updated_ledger \
          FROM lp_positions lpp FINAL \
          CROSS JOIN ( \
@@ -1564,7 +1561,7 @@ pub async fn fetch_participants(
                 shares: Some(r.shares.clone()),
                 cursor_shares: r.shares,
                 share_percentage: r.share_percentage,
-                first_deposit_ledger: r.first_deposit_ledger,
+                first_deposit_ledger: Some(r.first_deposit_ledger),
                 last_updated_ledger: r.last_updated_ledger,
             })
         })

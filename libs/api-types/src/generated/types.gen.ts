@@ -1625,10 +1625,8 @@ export type PaginatedParticipantItem = {
     account: string;
     /**
      * Ledger of the first deposit by this account into this pool. `null`
-     * for soroban pools (`balances` records current state, not the first
-     * sighting) AND for classic positions seeded from a checkpoint snapshot,
-     * whose true first deposit predates our ingest floor — inventing a
-     * ledger in either case would be a misleading fallback.
+     * for soroban pools — `balances` records current state, not the first
+     * sighting, and inventing one would be a misleading fallback.
      */
     first_deposit_ledger?: number | null;
     /**
@@ -1887,10 +1885,8 @@ export type ParticipantItem = {
   account: string;
   /**
    * Ledger of the first deposit by this account into this pool. `null`
-   * for soroban pools (`balances` records current state, not the first
-   * sighting) AND for classic positions seeded from a checkpoint snapshot,
-   * whose true first deposit predates our ingest floor — inventing a
-   * ledger in either case would be a misleading fallback.
+   * for soroban pools — `balances` records current state, not the first
+   * sighting, and inventing one would be a misleading fallback.
    */
   first_deposit_ledger?: number | null;
   /**
