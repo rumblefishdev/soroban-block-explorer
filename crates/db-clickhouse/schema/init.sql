@@ -667,7 +667,7 @@ CREATE TABLE IF NOT EXISTS lp_positions (
     pool_id              FixedString(32),
     account_id           Int64,
     shares               Decimal128(7),
-    first_deposit_ledger Int64,
+    first_deposit_ledger Int64,                  -- 0 = SENTINEL "predates our history": positions seeded from a checkpoint snapshot (snapshot-seed-lp, task 0374 K4-6) — the true first deposit is pre-floor and unknowable; the API reads this back as NULL (nullIf), never as ledger 0
     last_updated_ledger  Int64,
     closed_at_ledger     Int64 DEFAULT 0
 )
