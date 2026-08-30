@@ -68,8 +68,9 @@ never minted.
 
 Event arithmetic failed its oracle on 6/49 pools (measured), so reserves come
 from ledger-entry changes, written to `pool_state_changes
-(pool_id, ledger_sequence, transaction_id, change_index, reserves
-Array(Int128), plane_id)`. Two on-chain layouts feed one table:
+(pool_id, ledger_sequence, application_order, transaction_id, change_index,
+reserves Array(Int128), plane_id)` — sort key
+`(pool, ledger, application_order, change_index)`. Two on-chain layouts feed one table:
 
 - **fungible** pools (constant/stable) write `PoolData[pool]` on the
   deployment's shared _plane_ contract — the vector is stored VERBATIM
@@ -81,7 +82,11 @@ Array(Int128), plane_id)`. Two on-chain layouts feed one table:
   predated the first concentrated pool).
 
 The full key matters: `(pool, ledger)` alone collapses 23.5% of rows (up to
-12 writes/ledger measured). This table is deliberately named WITHOUT a family
+12 writes/ledger measured) — and the intra-ledger component must be
+`application_order` (the transaction's position in its ledger), never the
+`transaction_id` surrogate: a hash sorts randomly, and "latest reserves"
+picked by it returned an intermediate write on 127 of 1,410 real pairs
+(caught by the full-pipeline e2e before the production DDL existed). This table is deliberately named WITHOUT a family
 prefix: it is the target state-fact shape (chain grain, verbatim integers,
 single concern), and classic snapshot history would join INTO it if the two
 snapshot models ever unify — never the reverse. The classic
