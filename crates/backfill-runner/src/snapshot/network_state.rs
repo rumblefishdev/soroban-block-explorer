@@ -147,29 +147,6 @@ enum NetFact {
         pool_id: [u8; 32],
         entry: NetHolding,
     },
-    /// A classic `LiquidityPoolEntry` (constant product is the only body the
-    /// protocol defines).
-    Pool { pool_id: [u8; 32], pool: NetPool },
-}
-
-/// First-wins state of one classic `LiquidityPoolEntry` — everything the LP
-/// seed (task 0374 K4-6 follow-up) needs to stub a missing `liquidity_pools`
-/// dimension row and its snapshot: a pre-floor pool untouched since the
-/// ingest floor has NO row on our side at all, exactly like its holders.
-#[derive(Debug, Clone)]
-pub struct NetPool {
-    pub live: bool,
-    /// The entry's OWN `lastModifiedLedgerSeq`; 0 for a dead key.
-    pub ledger: u32,
-    /// `(asset_type, code, issuer strkey)` per leg, in the XDR vocabulary
-    /// the classic pool columns store: 0 native, 1 alphanum4, 2 alphanum12.
-    pub asset_a: (i16, String, String),
-    pub asset_b: (i16, String, String),
-    pub fee_bps: i32,
-    pub reserve_a: i64,
-    pub reserve_b: i64,
-    pub total_shares: i64,
-    pub trustline_count: i64,
 }
 
 /// Everything an `AccountEntry` carries beyond its native balance: identity for
@@ -202,9 +179,6 @@ pub struct NetworkState {
     pub trustlines: std::collections::HashMap<HoldingKey, NetHolding>,
     /// Pool shares, kept separate — see [`NetFact::PoolShare`].
     pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), NetHolding>,
-    /// Classic `LiquidityPoolEntry` records — the pool-side truth the LP seed
-    /// stubs missing `liquidity_pools` rows from. Same first-wins rule.
-    pub pools: std::collections::HashMap<[u8; 32], NetPool>,
     /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
@@ -282,17 +256,6 @@ impl NetworkState {
                     &mut self.superseded,
                 );
             }
-            NetFact::Pool { pool_id, pool } => {
-                // Same first-wins rule, spelled inline — `first_wins` is
-                // typed over `NetHolding` and a `NetPool` carries more.
-                use std::collections::hash_map::Entry;
-                match self.pools.entry(pool_id) {
-                    Entry::Vacant(slot) => {
-                        slot.insert(pool);
-                    }
-                    Entry::Occupied(_) => self.superseded += 1,
-                }
-            }
         }
     }
 
@@ -324,9 +287,6 @@ impl NetworkState {
     }
     pub fn live_pool_shares(&self) -> usize {
         self.pool_shares.values().filter(|e| e.live).count()
-    }
-    pub fn live_pools(&self) -> usize {
-        self.pools.values().filter(|p| p.live).count()
     }
 }
 
@@ -427,53 +387,12 @@ fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
     }
 }
 
-/// `(asset_type, code, issuer strkey)` in the classic pool-column vocabulary
-/// — the XDR `AssetType` discriminants the `liquidity_pools` pair columns
-/// store (0 native / 1 alphanum4 / 2 alphanum12).
-fn pool_leg(asset: &stellar_xdr::Asset) -> (i16, String, String) {
-    use stellar_xdr::Asset as A;
-    match asset {
-        A::Native => (0, String::new(), String::new()),
-        A::CreditAlphanum4(a) => (
-            1,
-            xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
-            a.issuer.to_string(),
-        ),
-        A::CreditAlphanum12(a) => (
-            2,
-            xdr_parser::asset_code::asset_code_str(a.asset_code.as_slice()),
-            a.issuer.to_string(),
-        ),
-    }
-}
-
 /// Classify one decoded record into our key space, or `None` for an entry type
 /// this comparison does not model.
 fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
     use stellar_xdr::{LedgerEntryData as D, LedgerKey as K, TrustLineAsset as A};
     match rec {
         SnapshotRecord::Live(e) => match &e.data {
-            D::LiquidityPool(p) => {
-                // Constant product is the only body the protocol defines; a
-                // future variant would fail this let and fall to unmodelled
-                // rather than decode wrong.
-                let stellar_xdr::LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &p.body;
-                let params = &cp.params;
-                Some(NetFact::Pool {
-                    pool_id: p.liquidity_pool_id.0.0,
-                    pool: NetPool {
-                        live: true,
-                        ledger: e.last_modified_ledger_seq,
-                        asset_a: pool_leg(&params.asset_a),
-                        asset_b: pool_leg(&params.asset_b),
-                        fee_bps: params.fee,
-                        reserve_a: cp.reserve_a,
-                        reserve_b: cp.reserve_b,
-                        total_shares: cp.total_pool_shares,
-                        trustline_count: cp.pool_shares_trust_line_count,
-                    },
-                })
-            }
             D::Account(a) => Some(NetFact::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
                 entry: NetHolding::live(e.last_modified_ledger_seq, a.balance),
@@ -501,20 +420,6 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
             _ => None,
         },
         SnapshotRecord::Dead(k) => match k.as_ref() {
-            K::LiquidityPool(p) => Some(NetFact::Pool {
-                pool_id: p.liquidity_pool_id.0.0,
-                pool: NetPool {
-                    live: false,
-                    ledger: 0,
-                    asset_a: (0, String::new(), String::new()),
-                    asset_b: (0, String::new(), String::new()),
-                    fee_bps: 0,
-                    reserve_a: 0,
-                    reserve_b: 0,
-                    total_shares: 0,
-                    trustline_count: 0,
-                },
-            }),
             K::Account(a) => Some(NetFact::Account {
                 holder_id: ids::address_id(&a.account_id.to_string()),
                 entry: NetHolding::dead(),
@@ -729,57 +634,5 @@ mod tests {
             "both older records are superseded history"
         );
         assert_eq!(st.live_trustlines(), 0);
-    }
-
-    /// A real `LiquidityPoolEntry` decodes into the classic pair vocabulary
-    /// the `liquidity_pools` columns store, and first-wins applies to pools
-    /// exactly like every other key (task 0374 K4-6 seed).
-    #[test]
-    fn a_liquidity_pool_entry_classifies_into_the_pair_vocabulary() {
-        use stellar_xdr::{
-            AlphaNum4, Asset, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt,
-            LiquidityPoolConstantProductParameters, LiquidityPoolEntry, LiquidityPoolEntryBody,
-            LiquidityPoolEntryConstantProduct, PoolId,
-        };
-        let issuer: stellar_xdr::AccountId =
-            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-                .parse()
-                .expect("issuer strkey");
-        let entry = LedgerEntry {
-            last_modified_ledger_seq: 50_000_000,
-            data: LedgerEntryData::LiquidityPool(LiquidityPoolEntry {
-                liquidity_pool_id: PoolId(stellar_xdr::Hash([7u8; 32])),
-                body: LiquidityPoolEntryBody::LiquidityPoolConstantProduct(
-                    LiquidityPoolEntryConstantProduct {
-                        params: LiquidityPoolConstantProductParameters {
-                            asset_a: Asset::Native,
-                            asset_b: Asset::CreditAlphanum4(AlphaNum4 {
-                                asset_code: AssetCode4(*b"USDC"),
-                                issuer: issuer.clone(),
-                            }),
-                            fee: 30,
-                        },
-                        reserve_a: 1_000,
-                        reserve_b: 2_000,
-                        total_pool_shares: 1_414,
-                        pool_shares_trust_line_count: 3,
-                    },
-                ),
-            }),
-            ext: LedgerEntryExt::V0,
-        };
-        let mut st = NetworkState::default();
-        st.absorb_record(&SnapshotRecord::Live(Box::new(entry)));
-
-        let p = &st.pools[&[7u8; 32]];
-        assert!(p.live);
-        assert_eq!(p.ledger, 50_000_000);
-        assert_eq!(p.asset_a, (0, String::new(), String::new()), "native leg");
-        assert_eq!(p.asset_b.0, 1, "alphanum4 → XDR type 1");
-        assert_eq!(p.asset_b.1, "USDC");
-        assert_eq!(p.asset_b.2, issuer.to_string());
-        assert_eq!((p.fee_bps, p.reserve_a, p.reserve_b), (30, 1_000, 2_000));
-        assert_eq!((p.total_shares, p.trustline_count), (1_414, 3));
-        assert_eq!(st.live_pools(), 1);
     }
 }

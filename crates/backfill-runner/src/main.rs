@@ -223,22 +223,6 @@ enum Command {
         execute: bool,
     },
 
-    /// Task 0374 (K4-6 follow-up) — checkpoint-snapshot seed of the classic LP
-    /// world the ingest floor hides: pool-share trustlines whose holders
-    /// predate the floor (missing `lp_positions` rows — 2,681 pools know <50%
-    /// of their shares' owners, chain-validated), plus `liquidity_pools` +
-    /// snapshot stubs for pre-floor pools with no row at all. Versions on each
-    /// entry's own ledger; ghosts are reported, never corrected. Without
-    /// `--execute` the run is read-only (artifacts + summary).
-    SnapshotSeedLp {
-        /// Artifacts directory (summary.txt, ghosts.tsv, manifest.json).
-        #[arg(long, env = "BACKFILL_ARTIFACTS_DIR", default_value = DEFAULT_ARTIFACTS_DIR)]
-        artifacts: PathBuf,
-        /// Actually insert. Without this flag the run is read-only.
-        #[arg(long)]
-        execute: bool,
-    },
-
     /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
     /// the unified `balances` table: bespoke type-3 Soroban tokens AND contract-held
     /// classic/native (types 0/1, held via each asset's SAC — re-keyed onto the
@@ -376,11 +360,6 @@ async fn main() {
             snapshot::seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");
-        }
-        Command::SnapshotSeedLp { artifacts, execute } => {
-            snapshot::seed_lp::seed_lp_command(&sink, &artifacts, execute)
-                .await
-                .expect("snapshot LP seed failed");
         }
         Command::BalanceSeed { dry_run } => {
             // CH-only: `execute` hard-fails (`Incomplete`) on a non-ClickHouse
