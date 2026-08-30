@@ -53,11 +53,14 @@ UNLABELLED. A label fix is a code change, never an UPDATE.
 Soroban pools are rows in the same `liquidity_pools` table
 (`pool_kind = 1`), because the list endpoint must union both worlds and a
 dimension shares its grain (one row = one pool). New columns: `pool_kind`,
-`legs Array(Int64)` (token-CONTRACT surrogates in emission order — 3- and
+`legs Array(Int64)` (surrogates per leg in a PER-KIND id space — 3- and
 4-leg stable pools exist, a pair cannot hold them), `deployment_id`,
 `pool_type_raw` (verbatim event sym — three vendor vocabularies exist for one
-shape; folding them is read-time interpretation), `share_token_id`,
-`subpool_salt`, `init_args` (raw — three arg vocabularies measured).
+shape; folding them is read-time interpretation). Deliberately NOT columns:
+`subpool_salt` and `init_args` (beyond the fee) are never materialised — the
+`add_pool` event sits complete and forever in `soroban_events`, extract on
+demand; and the share-token relation lives ONLY in `pool_share_tokens` (a
+registry column was dead-on-arrival and removed in the distillation pass).
 
 The 32 id bytes of a soroban pool are a CONTRACT address payload. The API
 renders them as `C...` and accepts both `L...` and `C...` on pool routes; an

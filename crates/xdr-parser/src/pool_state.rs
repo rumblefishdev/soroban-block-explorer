@@ -139,14 +139,12 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
     })
 }
 
-/// One plane `PoolData` write, with the coordinates the snapshot key needs.
+/// One plane `PoolData` write. Per-write coordinates (tx hash, change
+/// index) were dropped with the grain collapse: rows are one-per-(pool,
+/// ledger) and the last-in-apply-order pick needs only the vector order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedPlanePoolData {
     pub data: PlanePoolData,
-    pub transaction_hash: String,
-    /// Zero-based change index within the transaction — the intra-tx
-    /// tiebreaker of the snapshot key (a pool updates up to 12x per ledger).
-    pub change_index: u32,
     pub ledger_sequence: u32,
 }
 
@@ -182,8 +180,6 @@ pub fn extract_plane_pool_data(
         if let Some(data) = parse_plane_pool_data(owner, key, val) {
             out.push(ExtractedPlanePoolData {
                 data,
-                transaction_hash: change.transaction_hash.clone(),
-                change_index: change.change_index,
                 ledger_sequence: change.ledger_sequence,
             });
         }
@@ -192,14 +188,11 @@ pub fn extract_plane_pool_data(
 }
 
 /// One pool-instance write (creation or config change) carrying the
-/// state-sourced relations: share token, plane, router.
+/// state-sourced relations: share token, plane, router. Per-write
+/// coordinates dropped with the grain collapse (see the plane twin above).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedPoolInstance {
     pub state: PoolInstanceState,
-    pub transaction_hash: String,
-    /// Intra-tx tiebreaker for instance-sourced snapshot rows (a concentrated
-    /// pool's instance is rewritten per operation — 8x in one hot ledger).
-    pub change_index: u32,
     pub ledger_sequence: u32,
 }
 
@@ -250,8 +243,6 @@ pub fn extract_pool_instances(
         if let Some(state) = parse_pool_instance(pool, storage) {
             out.push(ExtractedPoolInstance {
                 state,
-                transaction_hash: change.transaction_hash.clone(),
-                change_index: change.change_index,
                 ledger_sequence: change.ledger_sequence,
             });
         }
