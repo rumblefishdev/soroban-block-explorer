@@ -1080,3 +1080,78 @@ Deferred within scope, still ahead: [K] DDLs, deploy, backfills, gap
 re-parse, deploy-window closure check, registry post-backfill audit (old
 step 6), concentrated positions (step 23, LAST). Local full-stack visual
 verification of the FE against prod CH belongs to the final phase.
+
+## K4-6 measured (2026-08-29): share_percentage is NOT stale — lp_positions coverage is the real gap
+
+Method: per pool, sum of deduped positive `lp_positions` shares vs the
+latest snapshot `total_shares` (323.7M rows read, 0.7 s), buckets on the
+mismatches, then RAW-XDR chain validation via `getLedgerEntries` (the
+arbiter — Horizon untouched).
+
+Findings:
+
+1. **The percentage's denominator is chain-exact.** Two live sampled pools:
+   snapshot `total_shares` == the on-chain `LiquidityPoolEntry` value to the
+   stroop. Listed holders' percentages are CORRECT. K4-6's "stale
+   share_percentage" is refuted as stated.
+2. **Zero overcounts.** No pool has positions summing above the chain total
+   — no stale-high rows anywhere.
+3. **The real defect: missing holders.** 24,920/26,271 pools agree exactly;
+   the rest under-sum. 2,681 pools know <50% of the shares' owners (1,164 of
+   them LIVE — fresh snapshots), 597 miss 1-50%, 141 drift <1%.
+   Chain-validated: pool `0d8a4b61…` has 2 trustlines on chain, we know 0;
+   `8e08ca7a…` has 3, we know 2.
+4. **Root cause: the ingest floor.** The worst pools' first snapshot is
+   exactly L50,458,12x (the frozen backfill floor); a holder whose pool-share
+   trustline predates the floor and was never touched since has no
+   `lp_positions` row. Same class as every other pre-floor state gap.
+   `pos_newer = 0` everywhere — recency is not a factor.
+
+User-visible harm: participants lists are incomplete and
+`participant_count` undercounts (2 shown where the chain says 3);
+percentages shown are right but do not sum to 100 on affected pools.
+
+Fix direction (not yet decided): pool-share trustlines are ordinary ledger
+entries, so a checkpoint snapshot carries ALL of them — a one-shot seed of
+the missing `lp_positions` rows from a current checkpoint (the 0457
+snapshot toolchain) closes the gap completely, with `first_deposit_ledger`
+explicitly unknown for seeded rows (never a fabricated value).
+
+## K4-6 fix built (2026-08-29): `snapshot-seed-lp` — option A
+
+New backfill-runner subcommand (`snapshot/seed_lp.rs`), the LP pass the 0463
+balances seed explicitly deferred. Decoder extended with the classic
+`LiquidityPoolEntry` (`NetPool`, first-wins like every key; unit-tested on a
+constructed XDR entry). What it does:
+
+- seeds missing `lp_positions` pairs from the checkpoint's pool-share
+  trustlines — versioned on each entry's OWN `lastModifiedLedgerSeq` (0492
+  rule), `first_deposit_ledger = 0` = the documented "predates our history"
+  sentinel; the participants read now maps 0 → null (`nullIf`), so it can
+  never render as "ledger 0";
+- self-heals pairs where the snapshot is newer and differs — restating the
+  pair's REAL first_deposit_ledger (whole-row RMT, a correction must not
+  erase it);
+- stubs `liquidity_pools` + one snapshot row for live pre-floor pools with
+  no row at all (pair vocabulary from the entry's own params) — pools the
+  explorer currently cannot show AT ALL;
+- ghosts (ours positive, chain has no pair) are REPORTED to `ghosts.tsv`,
+  never corrected — the 0463 seed earned zeroing rights via a 100/100 RPC
+  probe; this pass has no such evidence yet;
+- built-in decode invariant in the summary:
+  `sum(pool_shares_trust_line_count over live pools) == decoded live
+pool-share count` — a protocol identity; mismatch = decoder dropped
+  records, do not `--execute`.
+
+Also fixed in passing: `backfill-runner/sink.rs` and the `pilot_lp_amounts`
+example missed the step-7 `StageInputs` fields (the crate was outside the
+commit-4 test sweep) — wired to `parsed.plane_pool_data`/`pool_instances`,
+so the historical re-parse emits pool state for free.
+
+[K] to run (dry-run reviews summary first, then execute with the write
+identity — see docs/backfills.md):
+
+```
+cargo run -p backfill-runner --release -- snapshot-seed-lp
+cargo run -p backfill-runner --release -- snapshot-seed-lp --execute
+```
