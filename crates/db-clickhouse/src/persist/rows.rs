@@ -306,29 +306,25 @@ pub struct LiquidityPoolRow {
     pub pool_type_raw: String,
 }
 
-/// `pool_state_changes` — pool reserve state at the chain's grain (task
-/// 0374, step 7; the single reserve source, T4). The key carries the
-/// transaction and the intra-tx change index: `(pool, ledger)` alone
-/// collapses 23.5% of rows (up to 12 updates per ledger measured).
+/// `pool_state_changes` — pool reserve state, ONE deterministic row per
+/// `(pool, ledger)` (task 0374; grain aligned with the classic snapshots by
+/// decision karolkow 2026-08-30). The collapse happens at parse time in
+/// ledger apply order (`dedup_final_plane_writes` / `_pool_instances` — the
+/// twins of `dedup_final_pool_snapshots`), so no intra-ledger ordering
+/// column is needed and the 0356 LIMIT-1/no-FINAL invariant holds here too.
+/// Intra-ledger history stays reconstructible from `soroban_events`
+/// (`update_reserves` per action, permanent) — storing intermediates
+/// duplicated it; an earlier per-write design needed an `application_order`
+/// key component and was collapsed away before any production DDL existed.
 ///
-/// Two on-chain layouts feed it. Fungible pools: the plane's `PoolData`
-/// vector VERBATIM — possibly reserves as a PREFIX plus per-tick tail
-/// (measured against `update_reserves`: the first N legs agree exactly), so
-/// reads slice by the pool's leg count and nothing may treat vector length
-/// as leg count. Concentrated pools: `Reserve0`/`Reserve1` from the pool's
-/// own instance — the plane holds their `PoolData` only at registration
-/// (anti-test discovery, 2026-08-29).
+/// Two on-chain layouts feed it: fungible pools' plane `PoolData` vector
+/// VERBATIM (possibly a per-tick tail — readers slice by the pool's leg
+/// count, never vector length) and concentrated pools' own-instance
+/// `Reserve0`/`Reserve1`.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct PoolStateChangeRow {
     pub pool_id: [u8; 32],
     pub ledger_sequence: i64,
-    /// The transaction's position in its ledger — the ONLY valid intra-ledger
-    /// order. In the sort key INSTEAD of `transaction_id`: the surrogate is a
-    /// hash and sorts randomly, and "latest reserves" picked by it returned an
-    /// intermediate write on 127 of 1,410 real pairs (task 0374 e2e).
-    pub application_order: i16,
-    pub transaction_id: i64,
-    pub change_index: i16,
     pub reserves: Vec<i128>,
     pub plane_id: i64,
 }

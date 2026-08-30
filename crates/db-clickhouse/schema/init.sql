@@ -624,28 +624,26 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
 
--- Pool reserve state at the chain's grain (task 0374 step 7) — THE reserve
--- source (T4: event arithmetic failed its oracle 6/49). Two on-chain layouts
--- feed it: fungible pools write plane `PoolData` (vector VERBATIM —
--- per-tick tail possible; reads slice by leg count, never vector length);
--- concentrated pools write `Reserve0/Reserve1` on their own instance
--- (plane only at registration — anti-test discovery, 2026-08-29).
--- Key carries transaction + intra-tx change index: (pool, ledger) alone
--- collapses 23.5% of rows. Named without a family prefix on purpose: this
--- is the target state-fact shape; classic history joins HERE if the
--- snapshot models ever unify (greenfield note in 0374) — never the reverse.
+-- Pool reserve state (task 0374 step 7) — THE reserve source (T4: event
+-- arithmetic failed its oracle 6/49). ONE deterministic row per
+-- (pool, ledger), collapsed at parse time in ledger apply order — the same
+-- grain and mechanism as the classic snapshots (decision 2026-08-30), so
+-- the 0356 LIMIT-1/no-FINAL invariant holds and the future unification is
+-- a plain union. Intra-ledger history lives in soroban_events forever.
+-- Two on-chain layouts feed it: fungible pools write plane PoolData
+-- (vector VERBATIM — per-tick tail possible; reads slice by leg count),
+-- concentrated pools write Reserve0/1 on their own instance. Named without
+-- a family prefix on purpose: classic history joins HERE if the snapshot
+-- models unify — never the reverse (ADR 0058).
 CREATE TABLE IF NOT EXISTS pool_state_changes (
-    pool_id           FixedString(32),
-    ledger_sequence   Int64,
-    application_order Int16,                    -- tx position in its ledger: the ONLY valid intra-ledger order (a hash surrogate sorts randomly — "latest" via tx_id picked an intermediate write on 127/1,410 real pairs, task 0374 e2e)
-    transaction_id    Int64,                    -- surrogate for joins; NOT in the key
-    change_index      Int16,
-    reserves          Array(Int128),
-    plane_id          Int64
+    pool_id          FixedString(32),
+    ledger_sequence  Int64,
+    reserves         Array(Int128),
+    plane_id         Int64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 5000000)
-ORDER BY (pool_id, ledger_sequence, application_order, change_index);
+ORDER BY (pool_id, ledger_sequence);
 
 -- Pool → share token, derived per the T6 rule (task 0374 step 15). A SIDE
 -- table (the asset_sac pattern): the deposit path knows only (pool, token),

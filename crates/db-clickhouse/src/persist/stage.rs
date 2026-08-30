@@ -951,13 +951,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // valid intra-ledger ordering (a hash surrogate sorts randomly; the task
     // 0374 e2e caught pool state picking an intermediate write as "last" on
     // 127 of 1,410 real pairs when ordered by tx_id).
-    let mut tx_id_by_hash: HashMap<String, (i64, i16)> = HashMap::with_capacity(transactions.len());
+    let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
         let tx_id = ids::transaction_id(&hash);
-        let tx_app_order =
-            i16::try_from(idx + 1).map_err(|_| staging_err("application_order overflow (>i16)"))?;
-        tx_id_by_hash.insert(tx.hash.clone(), (tx_id, tx_app_order));
+        tx_id_by_hash.insert(tx.hash.clone(), tx_id);
 
         let inner_tx_hash = match tx.inner_tx_hash.as_deref() {
             Some(h) => Some(decode_hash(h, "inner_tx_hash")?),
@@ -1003,7 +1001,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let Some(set) = participants_per_tx.get(&tx.hash) else {
             continue;
         };
-        let Some(&(tx_id, _)) = tx_id_by_hash.get(&tx.hash) else {
+        let Some(&tx_id) = tx_id_by_hash.get(&tx.hash) else {
             continue;
         };
         for key in set {
@@ -1092,14 +1090,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // the same reasoning that demoted update_reserves in T4). Unparseable
     // coordinates are refused loudly — a silent skip is a pool going dark.
     for pw in plane_pool_data {
-        let (Some(pool_id), Some(&(tx_id, tx_app_order))) = (
-            contract_payload(&pw.data.pool),
-            tx_id_by_hash.get(pw.transaction_hash.as_str()),
-        ) else {
+        let Some(pool_id) = contract_payload(&pw.data.pool) else {
             tracing::error!(
                 ledger_sequence = pw.ledger_sequence,
                 pool = %pw.data.pool,
-                "plane write refused: unresolvable pool address or transaction"
+                "plane write refused: pool address is not a valid C… strkey"
             );
             continue;
         };
@@ -1125,9 +1120,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         out.pool_state_change_rows.push(PoolStateChangeRow {
             pool_id,
             ledger_sequence: i64::from(pw.ledger_sequence),
-            application_order: tx_app_order,
-            transaction_id: tx_id,
-            change_index: i16::try_from(pw.change_index).unwrap_or(i16::MAX),
             reserves,
             plane_id: ids::contract_id(&pw.data.plane),
         });
@@ -1140,20 +1132,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         if !inst.state.reserves.is_empty() {
             match (
                 contract_payload(&inst.state.pool),
-                tx_id_by_hash.get(inst.transaction_hash.as_str()),
                 inst.state
                     .reserves
                     .iter()
                     .map(|r| r.parse::<i128>())
                     .collect::<Result<Vec<_>, _>>(),
             ) {
-                (Some(pool_id), Some(&(tx_id, tx_app_order)), Ok(reserves)) => {
+                (Some(pool_id), Ok(reserves)) => {
                     out.pool_state_change_rows.push(PoolStateChangeRow {
                         pool_id,
                         ledger_sequence: i64::from(inst.ledger_sequence),
-                        application_order: tx_app_order,
-                        transaction_id: tx_id,
-                        change_index: i16::try_from(inst.change_index).unwrap_or(i16::MAX),
                         reserves,
                         plane_id: inst
                             .state
@@ -1300,7 +1288,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // the empty-string sentinel); classic credit hashes
             // code:issuer_surrogate — both via `ids::asset_id`.
             if !op.asset_appearances.is_empty() {
-                let (tx_id, _) = tx_id_by_hash[tx_hash];
+                let tx_id = tx_id_by_hash[tx_hash];
                 for asset in &op.asset_appearances {
                     let asset_id = match asset {
                         AssetRef::Native => ids::NATIVE_ASSET_ID,
@@ -1344,7 +1332,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // from `oa.pool_ids` — no XDR-only data, so a plain CH re-key can
             // backfill it (task 0365 Path B).
             if !pool_ids.is_empty() {
-                let (tx_id, _) = tx_id_by_hash[tx_hash];
+                let tx_id = tx_id_by_hash[tx_hash];
                 for pool_id in &pool_ids {
                     if seen_tx_pool_ids.insert(*pool_id) {
                         out.op_pool_rows.push(OperationPoolRow {
@@ -1363,7 +1351,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // discarded, and deposits/withdrawals — which have no atoms — come
             // from the op's own reserve delta.
             {
-                let (tx_id, _) = tx_id_by_hash[tx_hash];
+                let tx_id = tx_id_by_hash[tx_hash];
                 // Fail the ledger rather than clamp, matching the
                 // `transactions.application_order` conversion above: this
                 // column is part of the ORDER BY, so two operations squeezed
@@ -1407,7 +1395,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
     for (k, agg) in op_agg {
-        let Some(&(tx_id, _)) = tx_id_by_hash.get(&k.tx_hash_hex) else {
+        let Some(&tx_id) = tx_id_by_hash.get(&k.tx_hash_hex) else {
             continue;
         };
         let app_order = i16::try_from(agg.min_apply_order)
@@ -1432,7 +1420,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // moved asset appear in the tx. Same (asset, tx) grain as the op-derived
     // rows above; the RMT collapses any overlap. Presence only (model A).
     for (tx_hash, asset_ids) in &event_assets_per_tx {
-        let Some(&(tx_id, _)) = tx_id_by_hash.get(tx_hash) else {
+        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
             continue;
         };
         for &asset_id in asset_ids {
@@ -1458,7 +1446,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
     for (tx_hash, evs) in events {
-        let Some(&(tx_id, _)) = tx_id_by_hash.get(tx_hash) else {
+        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
             continue;
         };
         for ev in evs {
@@ -1545,7 +1533,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
     for (k, agg) in inv_agg {
-        let Some(&(tx_id, _)) = tx_id_by_hash.get(&k.tx_hash_hex) else {
+        let Some(&tx_id) = tx_id_by_hash.get(&k.tx_hash_hex) else {
             continue;
         };
         out.invocation_rows.push(SorobanInvocationAppearanceRow {
@@ -1899,7 +1887,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         if matches!(route, NftRoute::Drop) {
             continue;
         }
-        let Some(&(tx_id, _)) = tx_id_by_hash.get(&ev.transaction_hash) else {
+        let Some(&tx_id) = tx_id_by_hash.get(&ev.transaction_hash) else {
             continue;
         };
         let event_order =
