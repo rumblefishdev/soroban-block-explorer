@@ -1186,8 +1186,10 @@ struct PoolReservesChRow {
 
 /// Latest per-pool reserves from `pool_state_changes`, keyed by pool hex.
 ///
-/// `argMax` by the FULL key tail `(ledger, tx, change)` — last write wins,
-/// including intra-ledger ordering (up to 12 writes/ledger measured). A
+/// `argMax` by the FULL key tail `(ledger, application_order, change)` —
+/// last write wins in the LEDGER'S OWN order. Never the transaction
+/// surrogate: it is a hash and sorts randomly, and picking by it returned an
+/// intermediate write as "latest" on 127 of 1,410 real pairs (0374 e2e). A
 /// single-column argMax cannot tear. The vector is VERBATIM plane/instance
 /// state: a concentrated pool's per-tick tail may follow the leg reserves,
 /// so callers slice by the pool's leg count, never by vector length.
@@ -1218,7 +1220,7 @@ pub(crate) async fn fetch_latest_soroban_reserves(
     let rows = client
         .query(&format!(
             "SELECT lower(hex(pool_id)) AS pool_id_hex, \
-                    argMax(reserves, (ledger_sequence, transaction_id, change_index)) AS reserves \
+                    argMax(reserves, (ledger_sequence, application_order, change_index)) AS reserves \
              FROM pool_state_changes \
              WHERE pool_id IN ({in_list}) \
              GROUP BY pool_id"

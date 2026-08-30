@@ -322,6 +322,11 @@ pub struct LiquidityPoolRow {
 pub struct PoolStateChangeRow {
     pub pool_id: [u8; 32],
     pub ledger_sequence: i64,
+    /// The transaction's position in its ledger — the ONLY valid intra-ledger
+    /// order. In the sort key INSTEAD of `transaction_id`: the surrogate is a
+    /// hash and sorts randomly, and "latest reserves" picked by it returned an
+    /// intermediate write on 127 of 1,410 real pairs (task 0374 e2e).
+    pub application_order: i16,
     pub transaction_id: i64,
     pub change_index: i16,
     pub reserves: Vec<i128>,

@@ -243,6 +243,7 @@ fn column_order_pool_state_changes() {
         &[
             "pool_id",
             "ledger_sequence",
+            "application_order",
             "transaction_id",
             "change_index",
             "reserves",
@@ -3297,6 +3298,11 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
     assert_eq!(snap.reserves, vec![100000000000i128, 30617317i128]);
     assert_eq!(snap.change_index, 3, "intra-tx tiebreaker survives");
     assert_eq!(snap.plane_id, ids::contract_id(PLANE));
+    // The ledger's own temporal position — the sort key's intra-ledger order
+    // (a tx-hash surrogate sorts randomly; 0374 e2e). Both fixtures ride the
+    // single synthetic transaction, so both must say position 1.
+    assert_eq!(snap.application_order, 1);
+    assert_eq!(conc_snap.application_order, 1);
 
     assert_eq!(
         staged.pool_share_token_rows.len(),

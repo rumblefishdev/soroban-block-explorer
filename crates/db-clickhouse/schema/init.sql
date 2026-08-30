@@ -635,16 +635,17 @@ ORDER BY (pool_id);
 -- is the target state-fact shape; classic history joins HERE if the
 -- snapshot models ever unify (greenfield note in 0374) — never the reverse.
 CREATE TABLE IF NOT EXISTS pool_state_changes (
-    pool_id          FixedString(32),
-    ledger_sequence  Int64,
-    transaction_id   Int64,
-    change_index     Int16,
-    reserves         Array(Int128),
-    plane_id         Int64
+    pool_id           FixedString(32),
+    ledger_sequence   Int64,
+    application_order Int16,                    -- tx position in its ledger: the ONLY valid intra-ledger order (a hash surrogate sorts randomly — "latest" via tx_id picked an intermediate write on 127/1,410 real pairs, task 0374 e2e)
+    transaction_id    Int64,                    -- surrogate for joins; NOT in the key
+    change_index      Int16,
+    reserves          Array(Int128),
+    plane_id          Int64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 5000000)
-ORDER BY (pool_id, ledger_sequence, transaction_id, change_index);
+ORDER BY (pool_id, ledger_sequence, application_order, change_index);
 
 -- Pool → share token, derived per the T6 rule (task 0374 step 15). A SIDE
 -- table (the asset_sac pattern): the deposit path knows only (pool, token),
