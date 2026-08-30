@@ -1204,3 +1204,14 @@ Not covered locally (honest gaps): fungible-pool participants through the
 API (no fungible pool REGISTERS inside the windows, so no registry row to
 gate on — the SQL path is measured on prod and unit-covered); prices/TVL
 (null by design in the local stack).
+
+## Correction (2026-08-30): the classic-legs backfill is a RUST pass, not SQL
+
+The legs-step-2 commit message promised "a cheap in-DB INSERT-SELECT" for
+the 52,620 existing classic rows. Wrong — and the legs plan's own step 1
+already asked the deciding question: the leg surrogate is our
+`cityhash_102_128` low half, and ClickHouse's builtin `cityHash64` is a
+DIFFERENT algorithm (ids.rs header), so SQL cannot compute it. The backfill
+is a small one-shot Rust pass (read the pair columns, emit rows with legs
+filled — versioned on each row's own last_updated_ledger), [K] in the
+deploy window alongside the other catch-ups.
