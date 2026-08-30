@@ -1146,3 +1146,61 @@ the per-leg exact mode plus the L/C-id point-select cover the precise cases.
 The scope line "in LP snapshots" in this task's summary was loose wording:
 the defect lived in the list/search FILTER, and snapshots join by pool_id,
 never by leg code.
+
+## Full-stack e2e on real data (2026-08-30) — two shipping-blockers caught, then everything exact
+
+Environment: raw mainnet ledgers (public bucket) → the REAL backfill-runner
+binary → local dockerised ClickHouse (full init.sql) → the real API binary
+(`bin/local`, new plain-CH branch) → the real SPA in a real browser.
+Windows: hot era 64,132,000-200, concentrated-registration era
+64,134,500-699, near-tip 64,190,000-64,191,999 (2,401 ledgers, 174k events).
+
+### Bugs the pipeline caught (both invisible to every unit test)
+
+1. **Writer dropped BOTH new tables' rows silently.**
+   `PartitionWriter::commit()` hand-lists the inserts to `end()` —
+   `pool_share_tokens` and `pool_state_changes` were streamed by
+   `write_ledger` but never ended, so their buffered rows vanished on drop
+   while the `ledgers` marker still landed. Live indexer shares the path: a
+   deploy would have shipped two silently empty tables. Fix: exhaustive
+   destructure of `TableInserts` in `commit()` — a future field refuses to
+   compile until someone decides where it drains.
+2. **The sort key had no intra-ledger order.** `transaction_id` is a hash
+   surrogate and sorts randomly; "latest reserves" picked an INTERMEDIATE
+   write on 127 of 1,410 real (pool, ledger) pairs (192 pairs carry >1 row).
+   Fix (free — prod DDL not yet run): new column `application_order` (tx
+   position in its ledger), key becomes
+   `(pool, ledger, application_order, change_index)`; `transaction_id`
+   stays as a join attribute. API `argMax` follows. Corollary found during
+   verification: `soroban_events.event_index` is per-TRANSACTION, so any
+   "last event in ledger" comparison must order by
+   `(tx application_order, event_index)` — the earlier 17/17 prod check
+   passed only because its pairs were single-tx.
+
+### Results after the fixes
+
+- Registry vs vendor API: 248/248 catalogued pools present, pool_type 0
+  mismatches under the vocab map, fee 0/248; our 92 extra = dead pools
+  (91/92 event-silent since L63M) — full history vs their live subset.
+- Full-pipeline bidirectional anti-test vs `update_reserves`:
+  **missing 0, values 1,414/1,414 exact** (extras: 1 non-trade write).
+- Reserves vs LIVE chain (`getLedgerEntries` at each entry's own
+  lastModified): **26/26 exact** (88 pools moved past the windows —
+  untestable by construction).
+- Share tokens vs live chain `TokenShare`: **92/92** surrogate-exact.
+- Live-chain architecture confirmation: concentrated instances carry
+  `Reserve0/1` and no `TokenShare`; fungible the reverse, reserves in plane
+  `PoolData` (`pool_type: "standard"` — third vocabulary observed live).
+- API battery on real data: union list + legs + protocol label + verbatim
+  pool_type; explicit 400s (participants-concentrated, chart, activity, bad
+  filter value, each with reasons); C-id and L-id routing; absent-valid ids
+  404; malformed 400; cursor walk 3 pages no dups and back-page equality;
+  XLM filter behaves per F-B.
+- Playwright (real data, no mocks; `POOLS_REAL`-gated spec):
+  **3/3** — union list row with legs+chip, soroban detail with per-leg
+  reserves and classic-only sections unmounted, classic detail intact.
+
+Not covered locally (honest gaps): fungible-pool participants through the
+API (no fungible pool REGISTERS inside the windows, so no registry row to
+gate on — the SQL path is measured on prod and unit-covered); prices/TVL
+(null by design in the local stack).
