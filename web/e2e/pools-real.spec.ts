@@ -20,7 +20,7 @@ test('soroban pool renders on the union list with legs and protocol', async ({
   await expect(row.getByText(/^CC64/)).toBeVisible();
 });
 
-test('soroban detail shows legs and hides the classic-only sections', async ({
+test('soroban detail shows legs, chart, and its own activity feed', async ({
   page,
 }) => {
   await page.goto(`/liquidity-pools/${SOROBAN_POOL}`);
@@ -29,11 +29,18 @@ test('soroban detail shows legs and hides the classic-only sections', async ({
   await expect(page.getByText('XLM reserve').first()).toBeVisible();
   await expect(page.getByText('SHX reserve').first()).toBeVisible();
   await expect(page.getByText('concentrated')).toBeVisible();
-  // Classic-only feeds are NOT mounted (the API refuses them explicitly).
-  await expect(page.getByText('Recent activity')).toHaveCount(0);
+  // Chart section, fed from pool_state_changes + trade events + prices.
+  await expect(page.getByRole('tab', { name: 'TVL' })).toBeVisible();
+  // Activity fed from the pool's own soroban events: rows carry an event
+  // chip and per-leg amounts labelled through the unified leg views.
+  await expect(page.getByText('Recent activity')).toBeVisible();
+  const tradeChip = page.getByText('Trade', { exact: true }).first();
+  await expect(tradeChip).toBeVisible();
+  // The full swap phrase lives on the amount stack's aria-label (the visual
+  // text interleaves linked asset codes).
   await expect(
-    page.locator('.MuiCard-root').filter({ hasText: /^Activity/ })
-  ).toHaveCount(0);
+    page.getByLabel(/XLM → [\d,.]+ SHX|SHX → [\d,.]+ XLM/).first()
+  ).toBeVisible();
 });
 
 test('classic pool detail keeps its classic sections', async ({ page }) => {
