@@ -208,7 +208,7 @@ the quantity as well as the amount.
       — **met, but not verifiable the way this criterion assumed.**
       `ce list-cost-allocation-tags` is refused from here:
       `AccessDeniedException — Linked account doesn't have access to cost
-    allocation tags`. This is a member account; that call belongs to the
+allocation tags`. This is a member account; that call belongs to the
       payer. The activation is proven indirectly and conclusively instead:
       `get-cost-and-usage --group-by TAG,Project` returns real per-project
       groups, which an unactivated tag cannot do
