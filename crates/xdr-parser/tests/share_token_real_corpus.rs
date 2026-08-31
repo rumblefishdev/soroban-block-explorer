@@ -20,7 +20,6 @@
 use std::collections::BTreeMap;
 
 use domain::ContractEventType;
-use xdr_parser::pool_router::detect_share_tokens;
 use xdr_parser::types::{EventSource, ExtractedEvent};
 
 #[derive(serde::Deserialize)]
@@ -182,4 +181,300 @@ fn every_mainnet_deposit_resolves_like_share_id() {
         final_token.len()
     );
     assert!(txs > 80_000, "corpus looks truncated: {txs} txs");
+}
+
+// ---------------------------------------------------------------------------
+// The detector under test. Moved OUT of `pool_router.rs` (task 0374): the
+// deposit⇄mint rule is a verification oracle, not the live share-token
+// source (`TokenShare` instance storage is — see `pool_state`), so it lives
+// with its corpus instead of shipping in the production crate. The four
+// typed-JSON accessors are test-local copies of `pool_router`'s private
+// helpers.
+// ---------------------------------------------------------------------------
+
+use serde_json::Value;
+
+/// One share-token sighting: a pool's deposit minting its share token in the
+/// same transaction (task 0374, step 15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareTokenSighting {
+    /// Pool contract StrKey (the `deposit_liquidity` emitter).
+    pub pool: String,
+    /// Share-token contract StrKey (the SEP-41 `mint` emitter).
+    pub token: String,
+}
+
+/// Detect share tokens by the T6 rule, verified 16/16 against `share_id()`
+/// on chain and holding for 75 200 of 75 200 share mints across all history:
+///
+/// in ONE transaction, a pool emits `deposit_liquidity` whose data vector
+/// starts with `shares`, and its share token emits a SEP-41-shaped `mint`
+/// (topics `[sym "mint", address admin, address to]` — topic 2 an ADDRESS;
+/// the classic-SAC shape carries a `string` there and is excluded) whose
+/// admin (topic 1) IS the pool and whose amount equals `shares`. When two
+/// candidates survive — measured exactly once in all history, a share-token
+/// migration dual-writing at ledger 53 552 533 — the highest `event_index`
+/// wins, which is what `share_id()` returns.
+///
+/// Concentrated pools mint nothing, ever (measured over all 84 624 deposit
+/// transactions), so they simply never produce a sighting — the safe
+/// failure, by construction.
+pub fn detect_share_tokens(events: &[(String, Vec<ExtractedEvent>)]) -> Vec<ShareTokenSighting> {
+    let mut out = Vec::new();
+    for (_tx, evs) in events {
+        // (pool, shares) pairs announced by deposits in this tx.
+        let deposits: Vec<(&str, String)> = evs
+            .iter()
+            .filter_map(|ev| {
+                let pool = ev.contract_id.as_deref()?;
+                let topics = ev.topics.as_array()?;
+                if symbol_value(topics.first()?)? != "deposit_liquidity" {
+                    return None;
+                }
+                let shares = vec_elements(&ev.data)?
+                    .first()
+                    .and_then(|v| v.get("value"))
+                    .and_then(Value::as_str)?
+                    .to_string();
+                Some((pool, shares))
+            })
+            .collect();
+        if deposits.is_empty() {
+            continue;
+        }
+        for (pool, shares) in deposits {
+            // Highest event_index wins the (single-occurrence) migration tie.
+            let winner = evs
+                .iter()
+                .filter(|ev| sep41_mint_matches(ev, pool, &shares))
+                .max_by_key(|ev| ev.event_index)
+                .and_then(|ev| ev.contract_id.clone());
+            if let Some(token) = winner {
+                out.push(ShareTokenSighting {
+                    pool: pool.to_string(),
+                    token,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// SEP-41 `mint` with `admin == pool` and `amount == shares`.
+fn sep41_mint_matches(ev: &ExtractedEvent, pool: &str, shares: &str) -> bool {
+    let Some(topics) = ev.topics.as_array() else {
+        return false;
+    };
+    if topics.first().and_then(symbol_value) != Some("mint") {
+        return false;
+    }
+    // topic 2 must be an ADDRESS — the classic-SAC mint carries a string
+    // ("CODE:ISSUER") there, and a SAC wrapping a deposited token in the same
+    // tx is real (4 pools) and must not be mistaken for the share token.
+    if !topics.get(2).is_some_and(|t| has_type(t, "address")) {
+        return false;
+    }
+    if topics.get(1).and_then(address_value).as_deref() != Some(pool) {
+        return false;
+    }
+    ev.data.get("value").and_then(Value::as_str) == Some(shares)
+}
+
+fn vec_elements(v: &Value) -> Option<&[Value]> {
+    (v.get("type")?.as_str()? == "vec")
+        .then(|| v.get("value")?.as_array().map(Vec::as_slice))
+        .flatten()
+}
+
+fn has_type(v: &Value, tag: &str) -> bool {
+    v.get("type").and_then(Value::as_str) == Some(tag)
+}
+
+fn address_value(v: &Value) -> Option<String> {
+    (v.get("type")?.as_str()? == "address")
+        .then(|| v.get("value")?.as_str().map(str::to_string))
+        .flatten()
+}
+
+fn symbol_value(v: &Value) -> Option<&str> {
+    (v.get("type")?.as_str()? == "sym")
+        .then(|| v.get("value")?.as_str())
+        .flatten()
+}
+
+mod shape_tests {
+    use super::*;
+    use serde_json::json;
+    use xdr_parser::types::EventSource;
+
+    fn ev(
+        contract: &str,
+        topics: serde_json::Value,
+        data: serde_json::Value,
+        idx: u32,
+    ) -> ExtractedEvent {
+        ExtractedEvent {
+            transaction_hash: "tx".into(),
+            event_type: ContractEventType::Contract,
+            source: EventSource::TxLevel,
+            contract_id: Some(contract.into()),
+            topics,
+            data,
+            event_index: idx,
+            op_index: None,
+            stage: None,
+            ledger_sequence: 61_777_648,
+            created_at: 0,
+        }
+    }
+
+    /// Verbatim from mainnet — ledger 61 777 648, the transaction the T6
+    /// research decoded by hand: the pool deposits `[shares, a, b]`, a classic
+    /// SAC mints one of the deposited tokens (amount == a token amount), and
+    /// the SEP-41 share token mints exactly `shares`. The SAC must lose on
+    /// SHAPE (string topic 2), not luck.
+    #[test]
+    fn picks_the_share_token_and_excludes_the_sac_wrap() {
+        const POOL: &str = "CAMXZXXBD7DFBLYLHUW24U4MY37X7SU5XXT5ZVVUBXRXWLAIM7INI7G2";
+        const SAC: &str = "CBMFDIRY5OKI4JJURXC4SMEQPWB4UUADIADJK4NA6CYBNOYK4W4TMLLF";
+        const SHARE: &str = "CDMRHKJCYYHZTRQVR7NY43PR7ISMRBYC2O57IMVAQ7B7P2I2XGIZLI5E";
+        let events = vec![(
+            "tx".to_string(),
+            vec![
+                ev(
+                    SAC,
+                    json!([
+                        {"type":"sym","value":"mint"},
+                        {"type":"address","value":"GDO24KCXPB2CKZTG3TXUQISUCOGURIPKRHEXYRJUQEFQTLFVLSA6XP7W"},
+                        {"type":"string","value":"USDX:GDGQDVO6XPFSY4NMX75A7AOVYCF5FBTSXUFWNMURKM5PX7VDVYX4FXNW"}
+                    ]),
+                    json!({"type":"i128","value":"797243789"}),
+                    2,
+                ),
+                ev(
+                    SHARE,
+                    json!([
+                        {"type":"sym","value":"mint"},
+                        {"type":"address","value":POOL},
+                        {"type":"address","value":"GDO24KCXPB2CKZTG3TXUQISUCOGURIPKRHEXYRJUQEFQTLFVLSA6XP7W"}
+                    ]),
+                    json!({"type":"i128","value":"1632259506"}),
+                    6,
+                ),
+                ev(
+                    POOL,
+                    json!([
+                        {"type":"sym","value":"deposit_liquidity"},
+                        {"type":"vec","value":[]}
+                    ]),
+                    json!({"type":"vec","value":[
+                        {"type":"i128","value":"1632259506"},
+                        {"type":"i128","value":"827371042"},
+                        {"type":"i128","value":"797243789"}
+                    ]}),
+                    7,
+                ),
+            ],
+        )];
+
+        let got = detect_share_tokens(&events);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].pool, POOL);
+        assert_eq!(got[0].token, SHARE, "the SAC wrap must lose on shape");
+    }
+
+    /// The one migration transaction in all history (ledger 53 552 533):
+    /// old and new share token both mint `shares` with the pool as admin.
+    /// The higher event_index wins — that is what `share_id()` returns.
+    #[test]
+    fn migration_dual_write_resolves_to_the_higher_index() {
+        const POOL: &str = "CDE57N6XTUPBKYYDGQMXX7E7SLNOLFY3JEQB4MULSMR2AKTSAENGX2HC";
+        const OLD: &str = "CA4J7OKJRXHAAZGVT5QO7DRPYKE5X24PWA77JPNBZWNBWIL4FLZDYMS4";
+        const NEW: &str = "CBWYOO6AFZ6RNOBDVDB4BMPJDUTN3L45SEKMMDOFNY4PWJNMELYJRUMC";
+        let admin_mint = |token: &str, idx: u32| {
+            ev(
+                token,
+                json!([
+                    {"type":"sym","value":"mint"},
+                    {"type":"address","value":POOL},
+                    {"type":"address","value":"GABC"}
+                ]),
+                json!({"type":"i128","value":"614232397"}),
+                idx,
+            )
+        };
+        let events = vec![(
+            "tx".to_string(),
+            vec![
+                admin_mint(OLD, 4),
+                admin_mint(NEW, 5),
+                ev(
+                    POOL,
+                    json!([
+                        {"type":"sym","value":"deposit_liquidity"},
+                        {"type":"vec","value":[]}
+                    ]),
+                    json!({"type":"vec","value":[{"type":"i128","value":"614232397"}]}),
+                    6,
+                ),
+            ],
+        )];
+
+        let got = detect_share_tokens(&events);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].token, NEW, "share_id() returns the later token");
+    }
+
+    /// A mint whose admin is the pool but whose amount is a TOKEN amount
+    /// (not shares) must not match — the amount test is what makes the rule
+    /// deterministic (75 200/75 200 measured).
+    #[test]
+    fn amount_mismatch_is_no_sighting() {
+        const POOL: &str = "CAMXZXXBD7DFBLYLHUW24U4MY37X7SU5XXT5ZVVUBXRXWLAIM7INI7G2";
+        let events = vec![(
+            "tx".to_string(),
+            vec![
+                ev(
+                    "CDMRHKJCYYHZTRQVR7NY43PR7ISMRBYC2O57IMVAQ7B7P2I2XGIZLI5E",
+                    json!([
+                        {"type":"sym","value":"mint"},
+                        {"type":"address","value":POOL},
+                        {"type":"address","value":"GABC"}
+                    ]),
+                    json!({"type":"i128","value":"999"}),
+                    1,
+                ),
+                ev(
+                    POOL,
+                    json!([
+                        {"type":"sym","value":"deposit_liquidity"},
+                        {"type":"vec","value":[]}
+                    ]),
+                    json!({"type":"vec","value":[{"type":"i128","value":"1000"}]}),
+                    2,
+                ),
+            ],
+        )];
+        assert!(detect_share_tokens(&events).is_empty());
+    }
+
+    /// Concentrated pools deposit but never mint — no sighting, by
+    /// construction, not by special-casing.
+    #[test]
+    fn a_mintless_deposit_yields_nothing() {
+        const POOL: &str = "CBBMQBNHB2FYVZYV7VNHOJHUMTFJLR4PUMRVQYNW6RHIKZO2NQMIBUCV";
+        let events = vec![(
+            "tx".to_string(),
+            vec![ev(
+                POOL,
+                json!([
+                    {"type":"sym","value":"deposit_liquidity"},
+                    {"type":"vec","value":[]}
+                ]),
+                json!({"type":"vec","value":[{"type":"i128","value":"5"}]}),
+                1,
+            )],
+        )];
+        assert!(detect_share_tokens(&events).is_empty());
+    }
 }
