@@ -12,7 +12,7 @@
 //! is still produced for in-memory classification (diagnostic filtering +
 //! read-time tagging).
 
-use domain::{ContractEventType, ContractType, NftEventType, OperationType, TokenAssetType};
+use domain::{AssetFamily, ContractEventType, ContractType, NftEventType, OperationType};
 use stellar_xdr::TransactionEventStage;
 
 /// Underlying classic asset identity carried by a SAC deployment.
@@ -470,7 +470,7 @@ pub struct ExtractedLiquidityPoolSnapshot {
 #[derive(Debug, Clone)]
 pub struct ExtractedAsset {
     /// Asset classification (ADR 0031). Maps to `assets.asset_type SMALLINT`.
-    pub asset_type: TokenAssetType,
+    pub asset_type: AssetFamily,
     pub asset_code: Option<String>,
     pub issuer_address: Option<String>,
     /// Soroban contract identity (`C…` StrKey) — set ONLY for `soroban`

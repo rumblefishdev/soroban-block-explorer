@@ -139,10 +139,16 @@ pub struct PoolListParams {
 ///     accepted by `parse_asset_id`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
-    /// `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
-    /// only on schema drift.
+    /// Label in the **XDR `AssetType`** vocabulary — this is a pool LEG, and
+    /// leg types come from `liquidity_pools.asset_a_type`/`asset_b_type`,
+    /// which store the protocol discriminant: `native` |
+    /// `credit_alphanum4` | `credit_alphanum12`. `null` only on schema drift.
+    /// (Task 0496 mirror: this doc used to carry the `AssetFamily` legend,
+    /// declaring 2 "retired" — while 54 456 production legs carry
+    /// 2 = `credit_alphanum12`.)
     pub asset_type_name: Option<String>,
-    /// Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
+    /// Raw SMALLINT, XDR `AssetType`: 0=native, 1=credit_alphanum4,
+    /// 2=credit_alphanum12. Not the `assets.asset_type` family domain.
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,

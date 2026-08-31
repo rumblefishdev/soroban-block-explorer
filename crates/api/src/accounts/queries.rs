@@ -97,17 +97,19 @@ pub struct AccountTxRow {
     pub created_at: DateTime<Utc>,
 }
 
-/// `asset_type` SMALLINT → canonical label, matching the PG `asset_type_name`
-/// function (`domain::AssetType`, 4 XDR variants). `None` for an out-of-range
-/// code (the PG `CASE` returns NULL with no `ELSE`).
+/// `assets.asset_type` SMALLINT → its own domain's label (task 0496).
+///
+/// The value here comes from the `assets` table, whose domain is
+/// [`domain::AssetFamily`] — NOT the XDR `AssetType` this function used to
+/// copy its legend from. The two disagree on 3: XDR says `pool_share`, the
+/// family says `soroban` — so every Soroban holding (42 975 rows across
+/// 38 324 holders, measured on production) rendered as a liquidity-pool
+/// share. A renderer may only use the vocabulary of the enum its value came
+/// from. `None` for an out-of-range code, unchanged.
 fn asset_type_name(asset_type: i16) -> Option<String> {
-    match asset_type {
-        0 => Some("native".to_string()),
-        1 => Some("credit_alphanum4".to_string()),
-        2 => Some("credit_alphanum12".to_string()),
-        3 => Some("pool_share".to_string()),
-        _ => None,
-    }
+    domain::AssetFamily::try_from(asset_type)
+        .ok()
+        .map(|f| f.as_str().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -788,12 +790,20 @@ mod tests {
         );
     }
 
+    /// The old version of this test pinned the XDR legend onto family values
+    /// and thereby froze bug 0496 in place: it asserted 3 = `pool_share`, so
+    /// every Soroban holding rendered as a liquidity-pool share and the test
+    /// was green. A parity test is only as good as the enum it picks.
     #[test]
-    fn asset_type_name_matches_pg_function() {
+    fn asset_type_name_speaks_the_family_vocabulary() {
         assert_eq!(asset_type_name(0).as_deref(), Some("native"));
-        assert_eq!(asset_type_name(1).as_deref(), Some("credit_alphanum4"));
-        assert_eq!(asset_type_name(2).as_deref(), Some("credit_alphanum12"));
-        assert_eq!(asset_type_name(3).as_deref(), Some("pool_share"));
+        assert_eq!(asset_type_name(1).as_deref(), Some("classic_credit"));
+        assert_eq!(
+            asset_type_name(3).as_deref(),
+            Some("soroban"),
+            "3 is AssetFamily::Soroban here, never the XDR pool_share"
+        );
+        assert_eq!(asset_type_name(2), None, "2 (sac) is retired — ADR 0051");
         assert_eq!(asset_type_name(99), None);
     }
 }

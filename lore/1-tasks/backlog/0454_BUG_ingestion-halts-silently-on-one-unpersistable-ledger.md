@@ -139,6 +139,24 @@ event and must not look healthy.
 
 ### 2. No alarm can detect a total stall
 
+> **Superseded 2026-08-27 — the detection half of this task is shipped and
+> proven.** Implementation item 3 below (an alarm on
+> `ApproximateAgeOfOldestMessage` for `production-ledger-ingest`) exists in
+> production as `production-ingestion-backlog-age`, threshold 120 s, 3 of 3
+> datapoints at a 60 s period. It fired on three genuine stalls during
+> lore-0455's mute window — 21.08 (140 -> 200 -> 263 s), 27.08 (168 -> 199 ->
+> 288 s), 27.08 (175 -> 237 -> 294 s) — each on three consecutive minutes over
+> threshold, each recovering on 1 of 3 under it. Delivery to the channel is
+> proven on the same SNS topic as of 2026-08-27 21:44.
+>
+> The title's "and no alarm can detect it" no longer holds. What remains in
+> this task is the halt itself: a ledger that can never be persisted still
+> blocks the cursor indefinitely, and the alarm reports that fact rather than
+> resolving it. Detection was always the cheaper half.
+
+The paragraph below is the original analysis, kept because it is what
+identified the signal that now runs.
+
 Every production alarm relevant to this path was verified against the incident:
 
 | Alarm                         | Why it could not fire                                                                                                                                   |
@@ -203,9 +221,11 @@ The signal that did track the outage perfectly was
    reproduce" with the evidence.
 2. **Log the error kind**, not the payload — the `clickhouse::error::Error` variant
    name is safe to emit; keep the value redaction as-is.
-3. **Alarm on `ApproximateAgeOfOldestMessage`** for `production-ledger-ingest`
+3. ~~**Alarm on `ApproximateAgeOfOldestMessage`** for `production-ledger-ingest`
    (threshold well under the current 1421 s peak — a few minutes). This is the one
-   change that would have caught this incident.
+   change that would have caught this incident.~~
+   **DONE** — shipped as `production-ingestion-backlog-age` at 120 s, and
+   confirmed firing on three real stalls (see the note in section 2).
 4. **Make the failure visible in the error metric** — either fail the invocation
    when the reconcile itself failed (batchSize is 1, so nothing else is lost), or
    emit an explicit failure metric alongside the batch-item response.

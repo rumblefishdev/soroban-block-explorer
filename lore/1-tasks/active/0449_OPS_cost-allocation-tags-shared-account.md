@@ -192,17 +192,80 @@ the quantity as well as the amount.
 
 ## Acceptance Criteria
 
-- [ ] Tag key and values agreed with the other project's owners
-- [ ] All CDK stacks in this repo emit the tag
-- [ ] Tag activated for cost allocation in Billing
-- [ ] `ce get-cost-and-usage --group-by TAG` returns a per-project split with no
-      material spend in the untagged bucket
+> **Reconciled against production 2026-08-27.** Every box below was unticked
+> while lore-0455 recorded the tag work as shipped. Both records could not be
+> right. Each criterion was measured rather than reasoned about; three are
+> met, one is met by a route the criterion did not anticipate, two are open,
+> and one is **unachievable as written** and is restated below.
+
+- [x] Tag key and values agreed with the other project's owners
+      — both values appear in billing data (`Project$soroban-block-explorer`
+      and `Project$stellar-prices-api`), which is the shared convention in use
+- [x] All CDK stacks in this repo emit the tag
+      — measured 2026-08-27: all ten stacks the app declares, plus the CI/CD
+      stack, carry `cdk.Tags.of(this).add('Project', ...)`. No exceptions
+- [x] Tag activated for cost allocation in Billing
+      — **met, but not verifiable the way this criterion assumed.**
+      `ce list-cost-allocation-tags` is refused from here:
+      `AccessDeniedException — Linked account doesn't have access to cost
+allocation tags`. This is a member account; that call belongs to the
+      payer. The activation is proven indirectly and conclusively instead:
+      `get-cost-and-usage --group-by TAG,Project` returns real per-project
+      groups, which an unactivated tag cannot do
+- [ ] ~~`ce get-cost-and-usage --group-by TAG` returns a per-project split with
+      no material spend in the untagged bucket~~
+      **RESTATED — the original is unachievable, and the measurement says why.**
+      The split works and takes seconds. Its answer, 2026-08-01/27, is that
+      **86.5% of spend carries no tag**, against 6.9% for this project and 6.6%
+      for the co-tenant. Composition of the untagged bucket:
+
+      ```
+      Elastic Container Service   62.4%   fixable
+      Tax                         22.5%   NEVER taggable
+      CloudWatch                   6.5%   partly account-level
+      Lambda                       3.4%
+      X-Ray                        1.9%
+      VPC                          1.7%
+      Secrets Manager / RDS / R53  <1% each
+      ```
+
+      **ECS is the whole story and the fix is known**: Galexie runs as a
+      Fargate service, and task-level tags need `propagateTags` on the
+      service — already named in lore-0455's cost note as the prerequisite for
+      honest attribution. Sixty-two percent of the untagged bucket moves on
+      one property.
+
+      **Tax never will.** A tax line cannot carry a resource tag, so a
+      material untagged bucket is guaranteed by construction and the original
+      wording could never have been satisfied. The criterion is therefore:
+
+      **no material *taggable* spend sits untagged** — with Tax, and any other
+      account-level line that cannot carry a tag, named as excluded rather
+      than quietly tolerated
+
 - [ ] `docs/deployment.md` states the requirement for new stacks
-- [ ] An anomaly monitor exists and routes to the Slack topic (per-tag
+      — measured 2026-08-27: it does not. The file discusses release tags at
+      length and says nothing about cost-allocation tags on a new stack
+- [x] An anomaly monitor exists and routes to the Slack topic (per-tag
       Budgets dropped 2026-08-10 — see history; anomaly detection committed,
       checks off after deploy)
       already used by the production alarms
+      — verified 2026-08-27: `production-cost-anomaly-by-service` exists
+      (DIMENSIONAL/SERVICE) with an IMMEDIATE subscription to
+      `production-soroban-explorer-alarms`
 - [ ] The alert is verified by a deliberate test, not assumed to work
+      — still open, and 2026-08-27 showed why the wording matters. That topic
+      could not deliver anything at all between 2026-08-18 and 2026-08-27
+      (lore-0455): every alarm action on it was refused. An "assumed to work"
+      verdict on this alert during that window would have been wrong for nine
+      days. The topic is now proven to deliver; this alert's own path is not
+
+### Incidental, so nobody hunts it twice
+
+The untagged bucket contains a small RDS line. There is no RDS instance,
+cluster or snapshot in either region, and the charge runs 2026-08-01 to 08-09
+and then stops — a tail from a resource already deleted, consistent with the
+Postgres retirement. Nothing to act on.
 
 ## Not in scope
 

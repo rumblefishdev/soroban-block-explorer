@@ -292,10 +292,10 @@ pub(crate) async fn publish_sep1_assets_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::TokenAssetType;
+    use domain::AssetFamily;
 
     fn asset(
-        at: TokenAssetType,
+        at: AssetFamily,
         code: Option<&str>,
         issuer: Option<&str>,
         contract: Option<&str>,
@@ -316,19 +316,19 @@ mod tests {
         // SAC case IS a classic_credit — one candidate key covers it.
         let extracted = vec![
             asset(
-                TokenAssetType::ClassicCredit,
+                AssetFamily::ClassicCredit,
                 Some("USDC"),
                 Some("GISSUER1"),
                 None,
             ),
             asset(
-                TokenAssetType::ClassicCredit,
+                AssetFamily::ClassicCredit,
                 Some("SAC"),
                 Some("GISSUER2"),
                 None,
             ),
-            asset(TokenAssetType::Native, None, None, None), // skipped (0)
-            asset(TokenAssetType::Soroban, None, None, Some("CSOROBAN")), // skipped (3)
+            asset(AssetFamily::Native, None, None, None), // skipped (0)
+            asset(AssetFamily::Soroban, None, None, Some("CSOROBAN")), // skipped (3)
         ];
 
         let keys = sep1_candidate_keys(&extracted);
@@ -352,8 +352,8 @@ mod tests {
     #[test]
     fn candidate_keys_empty_when_no_classic() {
         let extracted = vec![
-            asset(TokenAssetType::Native, None, None, None),
-            asset(TokenAssetType::Soroban, None, None, Some("C")),
+            asset(AssetFamily::Native, None, None, None),
+            asset(AssetFamily::Soroban, None, None, Some("C")),
         ];
         assert!(sep1_candidate_keys(&extracted).is_empty());
     }
