@@ -1234,3 +1234,96 @@ Re-verified end-to-end on the real windows after the collapse: rows==pairs
 1,415/1,415 (structural one-per-pair), anti-test values 1,414/1,414,
 missing 0, live-chain spot checks 10/10 (the rest moved past the windows),
 Playwright 3/3. ADR 0058 §3 rewritten to record the reversal.
+
+## Chart + activity for soroban pools (2026-08-30, decision karolkow: "sprawdź lepiej" → build)
+
+The §5 refusals for the chart and activity feeds did not survive a re-audit:
+both are buildable from data already indexed, no new tables.
+
+- **Activity**: the pool's own `trade` / `deposit_liquidity` /
+  `withdraw_liquidity` events in `soroban_events` — the table is keyed
+  `(contract_id, ledger, transaction_id, event_index)`, so the per-pool page
+  is a leading-PK seek. New `leg_amounts[]` on the wire (per-leg signed RAW
+  units + `leg_index`; FE scales by each leg's on-chain decimals through the
+  unified leg views). Every read `LIMIT 1 BY` (RMT dedup). The actor is the
+  TRANSACTION source, never the event's trader topic — measured: routed
+  trades put the ROUTER contract there. Cursor gains `event_index`
+  (`#[serde(default)]` keeps old classic cursors valid).
+- **Chart**: reserves from `pool_state_changes` + the pool's own trade
+  events + the SAME prices series the classic chart joins (SAC legs price
+  via their classic identities; bespoke tokens under `asset_kind =
+'contract'`). Folded in Rust: reserve carry unbounded, price carry ≤ 48 h,
+  a bucket with an unpriceable trade reports null volume (house rule — no
+  partial sums). Leg ↔ token matching is BY SURROGATE against the registry's
+  `legs`, never via the contracts dimension (may lack rows locally).
+- Hand-verified exact on the local real-data stack with a stubbed prices DB:
+  bucket 08:00 tvl 87,711.33 / volume 204.59 / fee 0.61 (fee_bps = 30) —
+  each recomputed by hand from raw reserves × stub closes. Playwright 3/3
+  (list, soroban detail with chart tab + Trade rows + linked leg labels,
+  classic regression).
+- FE: `AmountLegPart` refactored to label/href parts (classic arm keeps
+  `assetLegLabel`/`legHref`; soroban arm reads `leg_amounts` through
+  `poolLegViews`); the detail-page unmount gates for charts + activity are
+  gone. ADR 0058 §5 rewritten (one refusal remains: participants on a pool
+  with no known share token).
+
+Finding, out of scope here: for that remaining participants 400 the FE
+renders the GENERIC "Something went wrong" retry state — misleading for a
+deliberate refusal; it should surface the explanatory message.
+
+## Simplify pass on the soroban feeds (2026-08-31, /simplify — 4 review agents)
+
+Karol challenged the volume of new API code; the four-angle review agreed
+and one reuse miss was PROD-BREAKING: the soroban close-series read named
+`prices.price_usd_series_1d`, a view that exists only in the local stub —
+prod's daily view is `prices.price_usd_series` (verified via chq). The 1d/1w
+chart would have 500'd in production. Fixed by extracting the classic
+chart's interval→view mapping into `chart_price_series()` shared by both.
+
+Applied (all verified value-identical on the local stack after the rewrite —
+bucket 08:00 still tvl 87,711.33 / volume 204.59 / fee 0.61 exact):
+
+- Chart inputs pre-aggregated in CH: reserves argMax per bucket + one seed
+  row (pre-window history never crosses the wire), trades summed per
+  (bucket, token) with a `bad` parse-failure count so the null-poison rule
+  survives aggregation. The Rust fold now only prices and carries — the
+  O(buckets × trades) rescan, the per-call linear close scans, and the
+  dense-null bucket grid are gone. Output is SPARSE calendar buckets via
+  the classic `toStartOfHour/Day/toMonday` grain (the epoch-aligned weeks
+  landed on Thursdays; both arms of the endpoint now share density,
+  alignment, and the in-progress-price-bucket guard).
+- Three chart inputs fetched with `futures::try_join!` (were sequential).
+- Chart handler: `PoolPriceContext` now carries `legs`, dropping the second
+  `liquidity_pools` seek; both arms fall through one response tail.
+- Activity: 3-way OR keyset → house tuple comparison; tx enrichment
+  extracted to `fetch_activity_txs()` shared with the classic feed (whose
+  copy had also lost the BTreeSet dedup); dead always-`None` `actor` slot
+  removed; deposit arm's mut-flag loop → zip + `collect::<Option<_>>`.
+- `fetch_pool_asset_ids` → `fetch_pool_feed` returning
+  `enum PoolFeed { Classic, Soroban }` — the `unreachable!` in the handler
+  and the garbage-surrogates-on-soroban footgun are unrepresentable now.
+- `SorobanChartLeg` reuses `PriceLeg` via `enum ChartPriceId`; interval
+  tables deduped.
+- Wire: `application_order` is now NULLABLE on activity items — the `0`
+  sentinel built dangling `#op-0` links and collided FE row keys when one
+  tx emitted several events. Soroban rows link plain `/transactions/<hash>`.
+- FE: `poolAmountLegs` collapsed to ONE arm for both worlds — rows
+  normalize to `(leg index, signed raw amount)` and `PoolLegView` (now
+  carrying `decimals`; classic = 7) supplies label/href/scale uniformly.
+  `tradeRate` divides SCALED values (raw units of different-decimals legs
+  were not comparable). Local `scaleRawAmount` deleted for the lib's
+  validated `scaleByDecimals`. Pinned formatPoolAmount strings unchanged.
+- queries.rs tests extracted to `queries_tests.rs` +
+  `queries_decode_smoke.rs` (file 3,804 → 3,140 lines; per-file test
+  extraction limited to PR-touched god files, per Karol).
+
+Cross-validation (scratch harness, zero shared code with the API): activity
+20/20 rows field-identical to an independent Python decode of raw
+`soroban_events` (leg mapping confirmed against PROD `asset_sac` — the SHX
+SAC has no local contracts row, which is exactly why the API matches legs
+by surrogate); chart 1h recomputed from raw tables matches every point to
+the cent; 1w bucket lands on Monday; three 400-anti-tests pass; Playwright
+3/3. Rig note: Playwright needs vite started with
+`VITE_API_BASE_URL=http://localhost:4280` (the `.env.development.local`
+default of 4200 silently starves the app) and the stub prices DB needs
+`prices.price_usd_series` (prod's daily name), not `_1d`.

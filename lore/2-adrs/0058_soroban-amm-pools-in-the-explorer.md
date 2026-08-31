@@ -132,9 +132,21 @@ bespoke-token `assets` row; an unresolvable leg surfaces as
 fields. Values with the wrong population's truth go ABSENT, not zero:
 `participant_count` is null on soroban list rows (their participants are
 share-token holders in `balances`, answered per pool by the participants
-endpoint); classic-only feeds (USD chart, `lp_operation_amounts` activity)
-REFUSE soroban pools with an explanatory 400 instead of returning confidently
-empty series. Soroban participant `shares` display scaled by the share
+endpoint). The chart and activity feeds serve BOTH kinds behind one URL,
+branched per kind inside the handler: the classic arm keeps its snapshot /
+`lp_operation_amounts` sources, the soroban arm reads the pool's own
+`trade` / `deposit_liquidity` / `withdraw_liquidity` events out of
+`soroban_events` (activity: per-leg signed raw amounts in `leg_amounts`,
+scaled client-side by each leg's on-chain decimals; the actor is the
+transaction's source, never the event's trader topic — for routed trades
+that names the router contract) and folds reserves from
+`pool_state_changes` with the same prices series the classic chart joins
+(bespoke tokens price under `asset_kind = 'contract'`; a bucket holding an
+unpriceable trade reports null volume, never a partial sum). The one
+refusal left is participants on a pool with no known share token (e.g. a
+concentrated pool whose positions are not share-token balances) — an
+explanatory 400 instead of a confidently empty list. Soroban participant
+`shares` display scaled by the share
 token's on-chain decimals, or null when the token never published them — an
 unknown scale must not render raw units as if scaled.
 
@@ -147,6 +159,10 @@ unknown scale must not render raw units as if scaled.
 - The union list is served by one query; per-kind branching exists only in
   enrichment and the per-pool feeds. Every pool-history endpoint carries a
   per-kind branch until the snapshot models unify — a named, accepted cost.
+- The soroban chart folds buckets in Rust (bounded per-pool row counts)
+  rather than in generated SQL — the N-leg × bucket carry logic stays unit-
+  testable; the price-carry ceiling (48 h) and the reserve carry are the
+  same rules the classic chart applies.
 - `balances` is read asset-first by the soroban participants endpoint (full
   scan, measured 121.5M rows / 71 ms); a skip index on `asset_id` is the
   upgrade path if it gets hot.
