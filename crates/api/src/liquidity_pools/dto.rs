@@ -370,48 +370,6 @@ impl PoolEvent {
     }
 }
 
-#[cfg(test)]
-mod pool_event_tests {
-    use super::PoolEvent;
-
-    /// The classifier itself. It used to live in SQL as a `multiIf` and could
-    /// only be checked against a live ClickHouse; in Rust it is the one thing
-    /// this endpoint gets wrong most visibly, so it gets the table.
-    #[test]
-    fn sign_pair_names_the_event() {
-        let cases = [
-            (120, 3, PoolEvent::Deposit),
-            (-4, -9, PoolEvent::Withdrawal),
-            (120, -4, PoolEvent::Trade),
-            (-4, 120, PoolEvent::Trade),
-        ];
-        for (a, b, want) in cases {
-            assert_eq!(PoolEvent::from_signs(a, b), want, "({a}, {b})");
-        }
-    }
-
-    /// A zero leg is not a deposit and not a withdrawal, so it falls to trade
-    /// rather than to whichever branch happens to be first.
-    #[test]
-    fn zero_leg_is_not_a_deposit() {
-        assert_eq!(PoolEvent::from_signs(0, 5), PoolEvent::Trade);
-        assert_eq!(PoolEvent::from_signs(0, -5), PoolEvent::Trade);
-        assert_eq!(PoolEvent::from_signs(0, 0), PoolEvent::Trade);
-    }
-
-    /// `as_param` feeds the `allowed` list a rejection returns and
-    /// `from_param` reads the caller's value back, so drift between them would
-    /// advertise a value the endpoint then refuses.
-    #[test]
-    fn filter_value_round_trips() {
-        for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
-            assert_eq!(PoolEvent::from_param(e.as_param()), Some(e), "{e:?}");
-        }
-        assert_eq!(PoolEvent::from_param("swap"), None);
-        assert_eq!(PoolEvent::from_param(""), None);
-    }
-}
-
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools/{id}/activity`.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct PoolActivityParams {
@@ -447,6 +405,12 @@ pub struct PoolActivityCursor {
     pub ledger_sequence: i64,
     pub transaction_id: i64,
     pub application_order: i16,
+    /// Soroban feed only: the event's index within its transaction — the
+    /// keyset's last component there (a soroban pool can emit several flow
+    /// events in one tx). `0` on classic cursors via the serde default, so
+    /// pre-existing opaque cursors keep decoding.
+    #[serde(default)]
+    pub event_index: i64,
 }
 
 /// One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
@@ -467,8 +431,11 @@ pub struct PoolActivityItem {
     pub ledger_sequence: i64,
     /// The operation's 1-based position in its transaction (Horizon's
     /// `application_order`), and the `#op-N` anchor on the transaction detail
-    /// page this row links to (task 0482).
-    pub application_order: i16,
+    /// page this row links to (task 0482). `null` on the soroban feed —
+    /// contract events have no per-op anchor, and a `0` sentinel would both
+    /// build a dangling `#op-0` link and collide row keys when one
+    /// transaction emits several flow events.
+    pub application_order: Option<i16>,
     /// `null` only for the malformed case where the pool's two legs did not
     /// both land in `lp_operation_amounts`. Unreachable by construction — an
     /// op that touches a pool moves both legs — but the read stays total
@@ -499,8 +466,28 @@ pub struct PoolActivityItem {
     /// a single-hop trade; `> 1` marks this row as one hop of a longer path
     /// payment, whose full route lives on the op's detail page. `null` only
     /// when the appearance row is missing — unknown, never guessed to `1`.
+    /// Always `null` on the soroban feed (its rows are single-pool contract
+    /// events by construction).
     pub pools_crossed: Option<i64>,
+    /// SOROBAN pools only: per-leg movements, `leg_index` into the pool's
+    /// `legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool
+    /// can have 3–4 legs, and a trade touches exactly two of them by token
+    /// address). Amounts are RAW token units as signed decimal strings from
+    /// the POOL's perspective (positive entered the pool) — scale by the
+    /// matching leg's `decimals` at render. `null` on classic rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leg_amounts: Option<Vec<PoolLegAmount>>,
     pub created_at: DateTime<Utc>,
+}
+
+/// One leg's movement inside a soroban pool event (see
+/// [`PoolActivityItem::leg_amounts`]).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PoolLegAmount {
+    /// Index into the pool's `legs[]` (emission order).
+    pub leg_index: u32,
+    /// Signed raw units from the pool's perspective, as a decimal string.
+    pub amount: String,
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools` paginated by
@@ -572,3 +559,7 @@ pub struct ChartResponse {
     pub to: DateTime<Utc>,
     pub data_points: Vec<ChartDataPoint>,
 }
+
+#[cfg(test)]
+#[path = "dto_tests.rs"]
+mod tests;

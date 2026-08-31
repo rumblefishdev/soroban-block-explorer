@@ -1681,12 +1681,24 @@ export type PaginatedPoolActivityItem = {
     /**
      * The operation's 1-based position in its transaction (Horizon's
      * `application_order`), and the `#op-N` anchor on the transaction detail
-     * page this row links to (task 0482).
+     * page this row links to (task 0482). `null` on the soroban feed —
+     * contract events have no per-op anchor, and a `0` sentinel would both
+     * build a dangling `#op-0` link and collide row keys when one
+     * transaction emits several flow events.
      */
-    application_order: number;
+    application_order?: number | null;
     created_at: string;
     event?: null | PoolEvent;
     ledger_sequence: number;
+    /**
+     * SOROBAN pools only: per-leg movements, `leg_index` into the pool's
+     * `legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool
+     * can have 3–4 legs, and a trade touches exactly two of them by token
+     * address). Amounts are RAW token units as signed decimal strings from
+     * the POOL's perspective (positive entered the pool) — scale by the
+     * matching leg's `decimals` at render. `null` on classic rows.
+     */
+    leg_amounts?: Array<PoolLegAmount> | null;
     /**
      * How many pools the WHOLE operation crossed — `length(pool_ids)` from
      * the same appearance seek that resolves the source account. `1` for
@@ -1694,6 +1706,8 @@ export type PaginatedPoolActivityItem = {
      * a single-hop trade; `> 1` marks this row as one hop of a longer path
      * payment, whose full route lives on the op's detail page. `null` only
      * when the appearance row is missing — unknown, never guessed to `1`.
+     * Always `null` on the soroban feed (its rows are single-pool contract
+     * events by construction).
      */
     pools_crossed?: number | null;
     /**
@@ -1940,12 +1954,24 @@ export type PoolActivityItem = {
   /**
    * The operation's 1-based position in its transaction (Horizon's
    * `application_order`), and the `#op-N` anchor on the transaction detail
-   * page this row links to (task 0482).
+   * page this row links to (task 0482). `null` on the soroban feed —
+   * contract events have no per-op anchor, and a `0` sentinel would both
+   * build a dangling `#op-0` link and collide row keys when one
+   * transaction emits several flow events.
    */
-  application_order: number;
+  application_order?: number | null;
   created_at: string;
   event?: null | PoolEvent;
   ledger_sequence: number;
+  /**
+   * SOROBAN pools only: per-leg movements, `leg_index` into the pool's
+   * `legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool
+   * can have 3–4 legs, and a trade touches exactly two of them by token
+   * address). Amounts are RAW token units as signed decimal strings from
+   * the POOL's perspective (positive entered the pool) — scale by the
+   * matching leg's `decimals` at render. `null` on classic rows.
+   */
+  leg_amounts?: Array<PoolLegAmount> | null;
   /**
    * How many pools the WHOLE operation crossed — `length(pool_ids)` from
    * the same appearance seek that resolves the source account. `1` for
@@ -1953,6 +1979,8 @@ export type PoolActivityItem = {
    * a single-hop trade; `> 1` marks this row as one hop of a longer path
    * payment, whose full route lives on the op's detail page. `null` only
    * when the appearance row is missing — unknown, never guessed to `1`.
+   * Always `null` on the soroban feed (its rows are single-pool contract
+   * events by construction).
    */
   pools_crossed?: number | null;
   /**
@@ -2148,6 +2176,21 @@ export type PoolItem = {
    * at the leg-A last hourly close; `null` when the pool is unpriceable.
    */
   volume?: string | null;
+};
+
+/**
+ * One leg's movement inside a soroban pool event (see
+ * [`PoolActivityItem::leg_amounts`]).
+ */
+export type PoolLegAmount = {
+  /**
+   * Signed raw units from the pool's perspective, as a decimal string.
+   */
+  amount: string;
+  /**
+   * Index into the pool's `legs[]` (emission order).
+   */
+  leg_index: number;
 };
 
 /**

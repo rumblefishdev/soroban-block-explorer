@@ -4200,7 +4200,6 @@
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
-                "application_order",
                 "source_account",
                 "created_at"
               ],
@@ -4213,9 +4212,9 @@
                   "type": ["string", "null"]
                 },
                 "application_order": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
+                  "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482). `null` on the soroban feed —\ncontract events have no per-op anchor, and a `0` sentinel would both\nbuild a dangling `#op-0` link and collide row keys when one\ntransaction emits several flow events."
                 },
                 "created_at": {
                   "type": "string",
@@ -4236,10 +4235,17 @@
                   "type": "integer",
                   "format": "int64"
                 },
+                "leg_amounts": {
+                  "type": ["array", "null"],
+                  "items": {
+                    "$ref": "#/components/schemas/PoolLegAmount"
+                  },
+                  "description": "SOROBAN pools only: per-leg movements, `leg_index` into the pool's\n`legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool\ncan have 3–4 legs, and a trade touches exactly two of them by token\naddress). Amounts are RAW token units as signed decimal strings from\nthe POOL's perspective (positive entered the pool) — scale by the\nmatching leg's `decimals` at render. `null` on classic rows."
+                },
                 "pools_crossed": {
                   "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`."
+                  "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`.\nAlways `null` on the soroban feed (its rows are single-pool contract\nevents by construction)."
                 },
                 "source_account": {
                   "type": "string",
@@ -4494,7 +4500,6 @@
         "required": [
           "transaction_hash",
           "ledger_sequence",
-          "application_order",
           "source_account",
           "created_at"
         ],
@@ -4507,9 +4512,9 @@
             "type": ["string", "null"]
           },
           "application_order": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
+            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482). `null` on the soroban feed —\ncontract events have no per-op anchor, and a `0` sentinel would both\nbuild a dangling `#op-0` link and collide row keys when one\ntransaction emits several flow events."
           },
           "created_at": {
             "type": "string",
@@ -4530,10 +4535,17 @@
             "type": "integer",
             "format": "int64"
           },
+          "leg_amounts": {
+            "type": ["array", "null"],
+            "items": {
+              "$ref": "#/components/schemas/PoolLegAmount"
+            },
+            "description": "SOROBAN pools only: per-leg movements, `leg_index` into the pool's\n`legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool\ncan have 3–4 legs, and a trade touches exactly two of them by token\naddress). Amounts are RAW token units as signed decimal strings from\nthe POOL's perspective (positive entered the pool) — scale by the\nmatching leg's `decimals` at render. `null` on classic rows."
+          },
           "pools_crossed": {
             "type": ["integer", "null"],
             "format": "int64",
-            "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`."
+            "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`.\nAlways `null` on the soroban feed (its rows are single-pool contract\nevents by construction)."
           },
           "source_account": {
             "type": "string",
@@ -4680,6 +4692,23 @@
           "volume": {
             "type": ["string", "null"],
             "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+          }
+        }
+      },
+      "PoolLegAmount": {
+        "type": "object",
+        "description": "One leg's movement inside a soroban pool event (see\n[`PoolActivityItem::leg_amounts`]).",
+        "required": ["leg_index", "amount"],
+        "properties": {
+          "amount": {
+            "type": "string",
+            "description": "Signed raw units from the pool's perspective, as a decimal string."
+          },
+          "leg_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index into the pool's `legs[]` (emission order).",
+            "minimum": 0
           }
         }
       },

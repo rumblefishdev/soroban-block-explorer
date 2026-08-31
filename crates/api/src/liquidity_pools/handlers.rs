@@ -21,8 +21,8 @@ use crate::state::AppState;
 
 use super::dto::{
     ChartParams, ChartResponse, ParticipantItem, PoolActivityCursor, PoolActivityItem,
-    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolLegItem, PoolListCursor,
-    PoolListParams, SharesCursor,
+    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolLegAmount, PoolLegItem,
+    PoolListCursor, PoolListParams, SharesCursor,
 };
 use super::queries::{self, PoolRow, ResolvedPoolListParams};
 use crate::common::strkey::contract_hex_to_strkey;
@@ -604,6 +604,8 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         ),
         fee_bps: row.fee_bps,
         pool_kind: row.pool_kind,
+        // The detail analytics never read legs — only the chart branch does.
+        legs: Vec::new(),
     };
     match queries::fetch_pool_usd_analytics(
         &state.ch(),
@@ -682,31 +684,15 @@ pub async fn list_pool_activity(
         Err(resp) => return resp,
     };
 
-    // The pool's two leg surrogates, which double as this path's existence
-    // check: the driver pivots `lp_operation_amounts.asset_id` onto them, so
-    // the read cannot run without them and a missing pool is one seek away
-    // (task 0279's pairing, kept).
-    let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    let asset_ids = match legs {
-        // Soroban pools are refused EXPLICITLY: `lp_operation_amounts` only
-        // records classic LP operations, and the pair-derived surrogates on a
-        // soroban row hash to the NATIVE asset — running the read would
-        // answer with XLM traffic that has nothing to do with this pool.
-        Ok(Some((_, _, 1))) => {
-            return errors::bad_request_with_details(
-                errors::INVALID_FILTER,
-                "activity is not available for soroban pools yet: this feed \
-                 reads classic LP operations; soroban pool activity lives in \
-                 the pool's contract events",
-                serde_json::json!({ "pool_id": pool_id, "pool_kind": "soroban" }),
-            );
-        }
-        Ok(Some((a, b, _))) => (a, b),
+    // The pool's feed source, which doubles as this path's existence check:
+    // classic reads lp_operation_amounts by the pair surrogates; soroban
+    // reads the pool's own flow events (task 0374 — the data was always in
+    // soroban_events).
+    let feed = match queries::fetch_pool_feed(&state.ch(), &pool_id_hex).await {
+        Ok(Some(f)) => f,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_feed");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -732,16 +718,35 @@ pub async fn list_pool_activity(
         None => None,
     };
 
-    let fetched = queries::fetch_pool_activity(
-        &state.ch(),
-        &pool_id_hex,
-        asset_ids,
-        pagination.fetch_limit(),
-        pagination.cursor.as_ref(),
-        pagination.direction,
-        event,
-    )
-    .await
+    let fetched = match feed {
+        queries::PoolFeed::Classic {
+            asset_a_id,
+            asset_b_id,
+        } => {
+            queries::fetch_pool_activity(
+                &state.ch(),
+                &pool_id_hex,
+                (asset_a_id, asset_b_id),
+                pagination.fetch_limit(),
+                pagination.cursor.as_ref(),
+                pagination.direction,
+                event,
+            )
+            .await
+        }
+        queries::PoolFeed::Soroban { legs } => {
+            queries::fetch_soroban_pool_activity(
+                &state.ch(),
+                &pool_id,
+                &legs,
+                pagination.fetch_limit(),
+                pagination.cursor.as_ref(),
+                pagination.direction,
+                event,
+            )
+            .await
+        }
+    }
     .map_err(|e| e.to_string());
     let mut rows = match fetched {
         Ok(r) => r,
@@ -761,7 +766,8 @@ pub async fn list_pool_activity(
                 &PoolActivityCursor {
                     ledger_sequence: r.ledger_sequence,
                     transaction_id: r.transaction_id,
-                    application_order: r.application_order,
+                    application_order: r.application_order.unwrap_or(0),
+                    event_index: r.event_index,
                 },
                 dir,
             )
@@ -778,6 +784,11 @@ pub async fn list_pool_activity(
             amount_b: r.amount_b,
             source_account: r.source_account,
             pools_crossed: r.pools_crossed,
+            leg_amounts: r.leg_amounts.map(|la| {
+                la.into_iter()
+                    .map(|(leg_index, amount)| PoolLegAmount { leg_index, amount })
+                    .collect()
+            }),
             created_at: r.created_at,
         })
         .collect();
@@ -937,23 +948,33 @@ pub async fn get_pool_chart(
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
-    // Soroban pools are refused EXPLICITLY rather than charted empty: their
-    // history lives in `pool_state_changes` (not the classic snapshots this
-    // SQL reads) and their legs have no classic prices identity — the
-    // classic chart would return a confidently empty series, which is worse
-    // than an honest refusal.
-    if ctx.pool_kind == 1 {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            "chart is not available for soroban pools yet: USD series require \
-             prices for the pool's token legs, which are not yet tracked",
-            serde_json::json!({ "pool_id": pool_id, "pool_kind": "soroban" }),
-        );
+    // Soroban branch (task 0374): history from `pool_state_changes`, volume
+    // from the pool's own trade events, prices via the SAME series — SAC
+    // legs by their classic identity, bespoke tokens under
+    // `asset_kind = 'contract'`. An unresolvable/unscaled leg makes the
+    // affected values null, never partial. Both arms fall through to the
+    // one response tail below.
+    let fetched = if ctx.pool_kind == 1 {
+        match queries::soroban_chart_legs(&state.ch(), &ctx.legs).await {
+            Ok(chart_legs) => {
+                queries::fetch_soroban_pool_chart(
+                    &state.ch(),
+                    &pool_id_hex,
+                    &pool_id,
+                    &chart_legs,
+                    ctx.fee_bps,
+                    &interval,
+                    from,
+                    to,
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to).await
     }
-
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
-        .await
-        .map_err(|e| e.to_string());
+    .map_err(|e| e.to_string());
     let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {
@@ -975,249 +996,5 @@ pub async fn get_pool_chart(
 }
 
 #[cfg(test)]
-mod normalize_asset_code_tests {
-    use super::normalize_asset_codes;
-
-    #[test]
-    fn none_passes_through() {
-        assert!(normalize_asset_codes(None).is_empty());
-    }
-
-    #[test]
-    fn empty_string_becomes_none() {
-        assert!(normalize_asset_codes(Some(String::new())).is_empty());
-        assert!(normalize_asset_codes(Some("   ".into())).is_empty());
-    }
-
-    #[test]
-    fn lowercase_is_uppercased() {
-        assert_eq!(normalize_asset_codes(Some("usdc".into())), ["USDC"]);
-    }
-
-    #[test]
-    fn mixed_case_is_uppercased() {
-        assert_eq!(normalize_asset_codes(Some("UsDc".into())), ["USDC"]);
-    }
-
-    #[test]
-    fn surrounding_whitespace_is_trimmed() {
-        assert_eq!(normalize_asset_codes(Some("  xlm  ".into())), ["XLM"]);
-    }
-
-    #[test]
-    fn pair_splits_into_two_needles() {
-        assert_eq!(
-            normalize_asset_codes(Some("usdc/xlm".into())),
-            ["USDC", "XLM"]
-        );
-    }
-
-    #[test]
-    fn pair_tolerates_spaces_around_the_slash() {
-        assert_eq!(
-            normalize_asset_codes(Some(" usdc / xlm ".into())),
-            ["USDC", "XLM"]
-        );
-    }
-
-    #[test]
-    fn half_written_pair_keeps_the_written_half() {
-        // Mid-typing state: the field debounces and fires on `USDC/`.
-        assert_eq!(normalize_asset_codes(Some("USDC/".into())), ["USDC"]);
-        assert_eq!(normalize_asset_codes(Some("/XLM".into())), ["XLM"]);
-        assert!(normalize_asset_codes(Some("/".into())).is_empty());
-    }
-
-    #[test]
-    fn third_code_stays_inside_the_second_needle() {
-        // `splitn(2)` bounds the needle count. The remainder is not discarded —
-        // it becomes a needle no asset code can contain, so the query returns
-        // nothing rather than silently answering a narrower question.
-        assert_eq!(
-            normalize_asset_codes(Some("USDC/XLM/BTC".into())),
-            ["USDC", "XLM/BTC"]
-        );
-        assert!(normalize_asset_codes(Some("/".repeat(5_000))).len() <= 2);
-    }
-
-    #[test]
-    fn unicode_lower_uppercases_too() {
-        // Stellar codes are ASCII-only in practice, but the normalizer
-        // should not panic on UTF-8 — `String::to_uppercase` handles it.
-        assert_eq!(normalize_asset_codes(Some("usdc🪙".into())), ["USDC🪙"]);
-    }
-}
-
-#[cfg(test)]
-mod map_pool_item_tests {
-    use super::*;
-    use crate::liquidity_pools::queries::PoolRow;
-
-    fn base_row() -> PoolRow {
-        PoolRow {
-            pool_id_hex: "0".repeat(64),
-            asset_a_type: 0,
-            asset_a_type_name: Some("native".into()),
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_a_contract_id: None,
-            asset_a_icon_url: None,
-            asset_b_type: 1,
-            asset_b_type_name: Some("credit_alphanum4".into()),
-            asset_b_code: Some("USDC".into()),
-            asset_b_issuer: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
-            asset_b_contract_id: None,
-            asset_b_icon_url: None,
-            fee_bps: 30,
-            fee_percent: "0.30".into(),
-            created_at_ledger: 100,
-            cursor_ledger: 100,
-            participant_count: Some(0),
-            latest_snapshot_ledger: None,
-            reserve_a: None,
-            reserve_b: None,
-            total_shares: None,
-            tvl: None,
-            volume: None,
-            fee_revenue: None,
-            latest_snapshot_at: None,
-            pool_kind: 0,
-            deployment_id: 0,
-            pool_type_raw: String::new(),
-            legs: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn native_leg_has_no_contract_id() {
-        let item = map_pool_item(base_row(), None);
-        let (a, b) = (item.asset_a.unwrap(), item.asset_b.unwrap());
-        assert_eq!(a.asset_type, 0, "asset_a is native");
-        assert_eq!(a.contract_id, None);
-        assert_eq!(b.asset_type, 1, "asset_b is classic credit");
-    }
-
-    #[test]
-    fn icon_url_propagates_per_leg() {
-        // gap #5: each leg's icon_url threads from the row to the DTO leg,
-        // independently. Native leg (no icon) stays None.
-        let mut row = base_row();
-        row.asset_b_icon_url = Some("https://cdn.example.test/icons/usdc.svg".into());
-        let item = map_pool_item(row, None);
-        assert_eq!(
-            item.asset_a.unwrap().icon_url,
-            None,
-            "native leg has no icon"
-        );
-        assert_eq!(
-            item.asset_b.unwrap().icon_url.as_deref(),
-            Some("https://cdn.example.test/icons/usdc.svg")
-        );
-    }
-
-    #[test]
-    fn classic_credit_leg_surfaces_issuer_and_no_sac_mirror() {
-        let item = map_pool_item(base_row(), None);
-        let b = item.asset_b.unwrap();
-        assert_eq!(b.asset_code.as_deref(), Some("USDC"));
-        assert!(b.issuer.is_some());
-        assert_eq!(
-            b.contract_id, None,
-            "no SAC mirror in `assets` → contract_id stays None"
-        );
-    }
-
-    #[test]
-    fn sac_mirror_contract_id_propagates_to_response() {
-        let mut row = base_row();
-        row.asset_b_contract_id =
-            Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB".into());
-        let item = map_pool_item(row, None);
-        assert_eq!(
-            item.asset_b.unwrap().contract_id.as_deref(),
-            Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB")
-        );
-    }
-
-    // ---- soroban rows (task 0374, step 17) ----
-
-    fn soroban_row() -> PoolRow {
-        let mut row = base_row();
-        // Contract-address payload bytes; renders as `C...`, never `L...`.
-        row.pool_id_hex = "1d3ab48b3b210df1a67f22809e7d84a533b93a583c76f728eec4bd6d68e33338".into();
-        row.pool_kind = 1;
-        row.deployment_id = 42;
-        row.pool_type_raw = "constant".into();
-        row.legs = vec![111, 222];
-        row.participant_count = None;
-        row
-    }
-
-    #[test]
-    fn soroban_row_publishes_legs_and_hides_the_pair() {
-        let view = SorobanView {
-            legs: vec![
-                PoolLegItem {
-                    family: "native".into(),
-                    asset_code: None,
-                    issuer: None,
-                    contract_id: Some(
-                        "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA".into(),
-                    ),
-                    symbol: None,
-                    name: None,
-                    decimals: Some(7),
-                    reserve: Some("4112908590".into()),
-                },
-                PoolLegItem {
-                    family: "soroban".into(),
-                    asset_code: None,
-                    issuer: None,
-                    contract_id: Some(
-                        "CC5PU23MKXHUFJKGG5FAUG7MFZX2KMWXPNZP26DDYW76VCB26UWMPEI6".into(),
-                    ),
-                    symbol: Some("AQUA".into()),
-                    name: Some("Aquarius".into()),
-                    decimals: Some(7),
-                    reserve: Some("250000000000".into()),
-                },
-            ],
-            protocol: Some("aquarius".into()),
-        };
-        let item = map_pool_item(soroban_row(), Some(view));
-        assert!(item.pool_id.starts_with('C'), "soroban id is a C-strkey");
-        assert_eq!(item.pool_kind, "soroban");
-        assert_eq!(item.protocol.as_deref(), Some("aquarius"));
-        assert_eq!(item.pool_type.as_deref(), Some("constant"));
-        assert!(item.asset_a.is_none(), "pair columns must not surface");
-        assert!(item.asset_b.is_none());
-        assert_eq!(item.participant_count, None, "None ≠ 0 for soroban");
-        let legs = item.legs.expect("legs published");
-        assert_eq!(legs.len(), 2);
-        assert_eq!(legs[1].reserve.as_deref(), Some("250000000000"));
-    }
-
-    #[test]
-    fn classic_row_has_no_soroban_fields() {
-        let item = map_pool_item(base_row(), None);
-        assert!(item.pool_id.starts_with('L'), "classic id is an L-strkey");
-        assert_eq!(item.pool_kind, "classic");
-        assert_eq!(item.protocol, None);
-        assert_eq!(item.pool_type, None, "empty pool_type_raw → absent field");
-        assert!(item.legs.is_none());
-    }
-
-    /// An unverified-router pool (deployment shares Aquarius's code, admin
-    /// roles disjoint) must stay UNLABELLED — the view carries no protocol
-    /// and the item must not invent one.
-    #[test]
-    fn unlabelled_router_pool_has_null_protocol() {
-        let view = SorobanView {
-            legs: Vec::new(),
-            protocol: None,
-        };
-        let item = map_pool_item(soroban_row(), Some(view));
-        assert_eq!(item.protocol, None);
-        assert_eq!(item.pool_kind, "soroban");
-    }
-}
+#[path = "handlers_tests.rs"]
+mod tests;
