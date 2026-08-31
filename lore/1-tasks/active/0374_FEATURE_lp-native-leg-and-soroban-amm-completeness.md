@@ -1327,3 +1327,22 @@ the cent; 1w bucket lands on Monday; three 400-anti-tests pass; Playwright
 `VITE_API_BASE_URL=http://localhost:4280` (the `.env.development.local`
 default of 4200 silently starves the app) and the stub prices DB needs
 `prices.price_usd_series` (prod's daily name), not `_1d`.
+
+## Decisions 2026-08-31 (owner) — plane_id stays, chunking into the row contract, duplicate codes stay
+
+- **27A: `plane_id` STAYS on `pool_state_changes`** — cheap provenance
+  insurance: the plane contract's identity is stored nowhere else, and
+  recovering "which deployment's scoreboard wrote this state" after the
+  fact would take a full-history re-parse. 8 bytes/row buys that never
+  being necessary. (A full removal was built and reverted the same day on
+  the owner's correction — recorded so the exercise isn't repeated: the
+  fields are write-only today, and the removal is mechanical if ever
+  re-decided.)
+- **29: `reserveRows` chunking deleted** — a new `SummaryRows` sibling in
+  `SummaryRow.tsx` lays a flat cell list out two-per-row, so the pairing
+  lives beside the 2-cell row contract that causes it and any future
+  variable-cell caller reuses it. Rendering identical (verified on the
+  3-leg demo pool: 2+1 rows).
+- **32C: duplicate leg codes stay as-is** (EURC × two issuers renders two
+  `EURC` labels; the asset link disambiguates). Options A (collision-only
+  issuer suffix) and B (issuer domain) recorded here if it ever bites.
