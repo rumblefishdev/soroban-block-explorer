@@ -7,7 +7,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../detail/SectionCard.js';
-import { SummaryRow } from '../detail/SummaryRow.js';
+import { SummaryRow, SummaryRows } from '../detail/SummaryRow.js';
 
 import {
   isSorobanPool,
@@ -57,16 +57,6 @@ function AssetReserveCell({ leg }: AssetReserveCellProps) {
       {leg.reserve != null ? codeNode : null}
     </Stack>
   );
-}
-
-/** Chunk leg reserve cells into two-per-row `SummaryRow`s — pairs for
- *  classic, up to two rows for a 3/4-leg soroban stable pool. */
-function reserveRows(legs: PoolLegView[]) {
-  const rows = [];
-  for (let i = 0; i < legs.length; i += 2) {
-    rows.push(legs.slice(i, i + 2));
-  }
-  return rows;
 }
 
 interface PoolSummaryProps {
@@ -129,15 +119,12 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
           ]}
         />
       )}
-      {reserveRows(legs).map((row, i) => (
-        <SummaryRow
-          key={i}
-          cells={row.map((leg) => ({
-            label: `${leg.label} reserve`,
-            value: <AssetReserveCell leg={leg} />,
-          }))}
-        />
-      ))}
+      <SummaryRows
+        cells={legs.map((leg) => ({
+          label: `${leg.label} reserve`,
+          value: <AssetReserveCell leg={leg} />,
+        }))}
+      />
     </SectionCard>
   );
 }
