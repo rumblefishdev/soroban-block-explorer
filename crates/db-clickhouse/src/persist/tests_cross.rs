@@ -3210,8 +3210,6 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             plane: PLANE.into(),
             pool: POOL.into(),
             reserves: vec!["100000000000".into(), "30617317".into()],
-            pool_type_raw: "standard".into(),
-            init_args: vec!["10".into()],
         },
         ledger_sequence: 10,
     };

@@ -83,10 +83,6 @@ fn the_registration_ledger_yields_state_for_the_new_pool() {
         .expect("the registered pool has a PoolData write in its own ledger");
     assert_eq!(plane_entry.data.plane, PLANE);
     assert_eq!(plane_entry.data.reserves, vec!["100000000000", "30617317"]);
-    assert_eq!(
-        plane_entry.data.pool_type_raw, "standard",
-        "the plane's vocabulary, verbatim — the event says `constant`"
-    );
 
     // The instance carries the share token as STATE, at birth — the
     // fundamental source that needs no deposit.

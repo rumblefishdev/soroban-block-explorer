@@ -35,10 +35,6 @@ pub struct PlanePoolData {
     pub pool: String,
     /// Raw u128 reserve amounts, in leg order.
     pub reserves: Vec<String>,
-    /// The plane's own spelling of the pool type (`standard`, `stable`, …).
-    pub pool_type_raw: String,
-    /// Raw constructor args as the plane mirrors them.
-    pub init_args: Vec<String>,
 }
 
 /// Decode a plane `PoolData` entry from a `ContractData` change: `owner` is
@@ -67,10 +63,6 @@ pub fn parse_plane_pool_data(owner: &str, key: &Value, val: &Value) -> Option<Pl
         plane: owner.to_string(),
         pool,
         reserves: raw_u128_vec(field("reserves")?)?,
-        pool_type_raw: typed(field("pool_type")?, "sym")?.as_str()?.to_string(),
-        init_args: field("init_args")
-            .and_then(raw_u128_vec)
-            .unwrap_or_default(),
     })
 }
 
@@ -345,14 +337,11 @@ mod tests {
             "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH"
         );
         assert_eq!(got.reserves, vec!["100000000000", "30617317"]);
-        assert_eq!(
-            got.pool_type_raw, "standard",
-            "the plane's OWN vocabulary survives verbatim"
-        );
-        assert_eq!(got.init_args, vec!["10"]);
     }
 
-    /// Verbatim from the same ledger — a 5-argument stable pool entry.
+    /// Verbatim from the same ledger — a 5-init-arg stable pool entry still
+    /// decodes (the extractor consumes only `reserves`; the other map keys
+    /// must not confuse it).
     #[test]
     fn keeps_every_stable_init_arg() {
         let key = json!({"type": "vec", "value": [
@@ -373,11 +362,7 @@ mod tests {
             &val,
         )
         .unwrap();
-        assert_eq!(
-            got.init_args.len(),
-            5,
-            "no argument may be dropped or shifted"
-        );
+        assert_eq!(got.reserves, vec!["7419859054", "9364494398"]);
     }
 
     #[test]

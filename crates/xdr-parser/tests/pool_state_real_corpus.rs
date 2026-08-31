@@ -109,11 +109,6 @@ fn every_corpus_ledger_extracts_cleanly() {
                     "ledger {seq}: plane entry with no reserves for {}",
                     p.data.pool
                 );
-                assert!(
-                    !p.data.pool_type_raw.is_empty(),
-                    "ledger {seq}: plane entry with no type for {}",
-                    p.data.pool
-                );
                 if let Some(f) = emit_file.as_mut() {
                     writeln!(
                         f,
@@ -121,7 +116,6 @@ fn every_corpus_ledger_extracts_cleanly() {
                         serde_json::json!({
                             "ledger": seq, "pool": p.data.pool,
                             "reserves": p.data.reserves,
-                            "pool_type": p.data.pool_type_raw,
                         })
                     )
                     .expect("emit write");
