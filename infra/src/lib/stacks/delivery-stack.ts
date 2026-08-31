@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
+import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
 import { originSecretFunctionCode } from '../cloudfront-functions/origin-secret.js';
 import { relativeRecordName, type EnvironmentConfig } from '../types.js';
@@ -20,8 +21,12 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
- * - S3 bucket for a second, independently-built SPA served at `/api/*` on
- *   the same distribution (task 0519)
+ * - S3 bucket for a second, independently-built SPA served at `/api`+`/api/*`
+ *   on the same distribution (task 0519), with its own CloudFront Function
+ *   handling SPA routing fallback (bare `/api` redirect, extensionless
+ *   paths rewritten to `/api/index.html`) — the main behaviors' `errorResponses`
+ *   below can't do this for `/api/*` since custom error pages are resolved
+ *   through the _default_ behavior's origin, not the originating one
  * - CloudFront distribution with SPA routing fallback
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
@@ -112,13 +117,12 @@ export class DeliveryStack extends cdk.Stack {
     // gate humans at the Cloudflare edge instead (or land a combined guard
     // function).
     //
-    // The `/api/*` behavior (task 0519) is a separate behavior with its own
-    // function slot, so it is gated independently via
-    // `config.enableApiSpaBasicAuth` — it reuses the same basic-auth
-    // function/KVS construct below when that construct exists, rather than
-    // standing up a second, separately-credentialed KVS.
+    // The `/api` + `/api/*` behaviors (task 0519) are separate behaviors
+    // with their own function slot. They always get `apiSpaFunction` below
+    // for SPA routing (independent of auth), and it also does the basic-auth
+    // check — reusing this same KVS, not a second, separately-credentialed
+    // one — when `config.enableApiSpaBasicAuth` is on.
     let viewerRequestFunction: cloudfront.Function | undefined;
-    let basicAuthFunction: cloudfront.Function | undefined;
 
     if (config.enableOriginSecretLock) {
       // Cloudflare origin-secret lock — KVS holds the expected secret,
@@ -153,18 +157,10 @@ export class DeliveryStack extends cdk.Stack {
     // Provisioned whenever EITHER the main site OR the `/api/*` SPA needs
     // basic auth — `/api/*` gating must not depend on `enableBasicAuth`
     // being on for the main site too.
+    let basicAuthKvs: cloudfront.KeyValueStore | undefined;
     if (config.enableBasicAuth || config.enableApiSpaBasicAuth) {
-      const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
+      basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
         keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
-      });
-
-      basicAuthFunction = new cloudfront.Function(this, 'BasicAuthFunction', {
-        functionName: `${config.envName}-soroban-explorer-basic-auth`,
-        keyValueStore: basicAuthKvs,
-        runtime: cloudfront.FunctionRuntime.JS_2_0,
-        code: cloudfront.FunctionCode.fromInline(
-          basicAuthFunctionCode(basicAuthKvs.keyValueStoreId)
-        ),
       });
 
       new cdk.CfnOutput(this, 'BasicAuthKvsArn', {
@@ -172,13 +168,39 @@ export class DeliveryStack extends cdk.Stack {
       });
 
       if (config.enableBasicAuth) {
-        viewerRequestFunction = basicAuthFunction;
+        viewerRequestFunction = new cloudfront.Function(
+          this,
+          'BasicAuthFunction',
+          {
+            functionName: `${config.envName}-soroban-explorer-basic-auth`,
+            keyValueStore: basicAuthKvs,
+            runtime: cloudfront.FunctionRuntime.JS_2_0,
+            code: cloudfront.FunctionCode.fromInline(
+              basicAuthFunctionCode(basicAuthKvs.keyValueStoreId)
+            ),
+          }
+        );
       }
     }
 
-    const apiSpaViewerRequestFunction = config.enableApiSpaBasicAuth
-      ? basicAuthFunction
-      : undefined;
+    // `/api` + `/api/*` routing function — always created. SPA routing
+    // (bare-`/api` redirect, extensionless-path fallback to
+    // `/api/index.html`) must work whether or not auth is on; the auth
+    // check is folded in only when `enableApiSpaBasicAuth` is set, since
+    // CloudFront allows only one viewer-request function per behavior.
+    const apiSpaKvs = config.enableApiSpaBasicAuth ? basicAuthKvs : undefined;
+    const apiSpaFunction = new cloudfront.Function(
+      this,
+      'ApiSpaRoutingFunction',
+      {
+        functionName: `${config.envName}-soroban-explorer-api-spa-routing`,
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        ...(apiSpaKvs && { keyValueStore: apiSpaKvs }),
+        code: cloudfront.FunctionCode.fromInline(
+          apiSpaRoutingFunctionCode(apiSpaKvs?.keyValueStoreId)
+        ),
+      }
+    );
 
     // ---------------------
     // Response Headers Policy — security baseline
@@ -305,24 +327,39 @@ export class DeliveryStack extends cdk.Stack {
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
         // Second, independently-built SPA (task 0519) — its own S3 origin,
-        // gated independently of the main behaviors (see
-        // `apiSpaViewerRequestFunction` above). Single short-TTL behavior
+        // gated independently of the main behaviors via `apiSpaFunction`
+        // above, which also handles SPA routing. Single short-TTL behavior
         // for now; split out a long-TTL asset sub-path once this SPA's
         // build output layout is known.
+        //
+        // `/api/*` requires the literal trailing slash, so it does NOT
+        // match bare `/api` — that needs its own exact-match behavior
+        // below, redirected to `/api/` by the same function.
+        '/api': {
+          origin: origins.S3BucketOrigin.withOriginAccessControl(apiSpaBucket),
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          responseHeadersPolicy,
+          cachePolicy: shortTtlCachePolicy,
+          functionAssociations: [
+            {
+              function: apiSpaFunction,
+              eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
+        },
         '/api/*': {
           origin: origins.S3BucketOrigin.withOriginAccessControl(apiSpaBucket),
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           responseHeadersPolicy,
           cachePolicy: shortTtlCachePolicy,
-          ...(apiSpaViewerRequestFunction && {
-            functionAssociations: [
-              {
-                function: apiSpaViewerRequestFunction,
-                eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
-              },
-            ],
-          }),
+          functionAssociations: [
+            {
+              function: apiSpaFunction,
+              eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
         },
       },
       errorResponses: [

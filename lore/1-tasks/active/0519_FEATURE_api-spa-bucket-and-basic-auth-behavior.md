@@ -35,6 +35,44 @@ history:
       another, unrelated `0517_FIX_event-name-read-from-wrong-topic`).
       Renamed the file and updated the frontmatter id to the next free slot
       in the shared sequence; no content otherwise changed.
+  - date: '2026-08-28'
+    status: active
+    who: mkowalski
+    note: >
+      Revisited the deep-link gap flagged in this task's own Notes ("Fine as
+      long as the /api SPA doesn't need deep-link support; revisit if it
+      does") after live testing showed `/api/` didn't resolve. Since
+      CloudFront's distribution-level `errorResponses` always resolves
+      through the _default_ behavior's origin regardless of which behavior
+      originated the request, it can't be scoped to `/api/*` — the fix has
+      to happen at the edge before the origin request. Added a new
+      `apiSpaRoutingFunctionCode` CloudFront Function
+      (`cloudfront-functions/api-spa-routing.ts`), attached to `/api/*` and
+      to a new exact-match `/api` behavior (CloudFront's `/api/*` pattern
+      requires the literal trailing slash, so bare `/api` never matched it).
+      The function always rewrites any extensionless path to
+      `/api/index.html` (covers both the bucket root and deep-linked
+      client-side routes) and 301-redirects bare `/api` to `/api/`; it also
+      folds in the existing basic-auth check (factored out of
+      `basic-auth.ts` as `basicAuthCheckSnippet` to avoid duplicating the
+      KVS-lookup logic) when `enableApiSpaBasicAuth` is on — CloudFront
+      allows only one viewer-request function per behavior, so routing and
+      auth can't be separate functions on the same behavior. The main-site
+      `BasicAuthFunction` is now only constructed when `enableBasicAuth`
+      itself is on (previously it was also the vehicle for `/api/*`'s
+      auth); both functions share the same `BasicAuthKvs` KeyValueStore, so
+      there's still only one credential to manage. Also added the matching
+      `s3:ListBucket`/`PutObject`/`DeleteObject` permissions for
+      `${envName}-soroban-explorer-api-spa` to the CI/CD deploy role in
+      `cicd-stack.ts`, mirroring the main SPA bucket's grant (this bucket
+      had none before). Design questions resolved in chat: full deep-link
+      fallback (not just the bare `/api/` root), CloudFront Function
+      mechanism (not S3 website hosting, which would require dropping
+      OAC), and 301-redirect (not silent rewrite) for the no-trailing-slash
+      case. `cdk synth`/`typecheck`/`lint` all pass for the production
+      config; synthesized template inspected directly to confirm the
+      function code, KVS association, and both `/api`/`/api/*` behaviors
+      are wired as intended.
 ---
 
 # FEATURE: separate /api SPA bucket + CloudFront behavior, basic-auth gated
@@ -115,6 +153,15 @@ section per ADR 0032.
       CloudFront section updated to mention the second SPA bucket/behavior.
 - [x] **API types regenerated** — N/A, no `crates/api`/`Cargo.*`/`libs/api-types`
       changes.
+- [x] `/api/` (bucket root) and deep-linked `/api/*` client-side routes
+      resolve to `/api/index.html` via a dedicated CloudFront Function,
+      rather than 403/404ing from S3
+- [x] Bare `/api` (no trailing slash) redirects to `/api/` — needs its own
+      exact-match behavior since `/api/*` requires the literal slash
+- [x] CI/CD deploy role granted S3 permissions on the new bucket
+      (`cicd-stack.ts`)
+- [ ] Deployed to production and verified live (redirect + deep-link
+      fallback + auth still enforced)
 
 ## Notes
 
@@ -122,8 +169,8 @@ Deliberately out of scope for this task (raised and deferred in chat):
 
 - No long-TTL sub-behaviors for `/api/assets/*`-style hashed paths yet — add
   once the new SPA's build tool/base-path convention is known.
-- No change to the global `errorResponses` (403/404 → `/index.html`) —
-  those still resolve through the _default_ behavior's origin (the main SPA
-  bucket), so a client-side-routed deep link under `/api/*` would currently
-  get the wrong SPA's `index.html` on a hard refresh. Fine as long as the
-  `/api` SPA doesn't need deep-link support; revisit if it does.
+
+Previously deferred, now resolved (2026-08-28, see history): the
+`errorResponses`/deep-link gap. `/api/*` routing now has its own CloudFront
+Function rather than relying on the distribution-level `errorResponses`,
+which can't be scoped per-behavior.

@@ -371,12 +371,19 @@ redeploying `ApiGateway` as soon as the run ends.
 - caches static assets and documentation assets; API responses are not assumed to traverse
   CloudFront in the initial topology
 - since task 0519, also serves a second, independently-built SPA from its
-  own S3 bucket (`${envName}-soroban-explorer-api-spa`) under the `/api/*`
-  path on the same distribution. Gated by its own CloudFront Function
-  basic-auth flag (`enableApiSpaBasicAuth`), independent of the main site's
-  `enableBasicAuth`/`enableOriginSecretLock` — the two share the same
-  `basicAuthFunctionCode`/KeyValueStore construct when both are enabled,
-  but each behavior's gate can be toggled without affecting the other.
+  own S3 bucket (`${envName}-soroban-explorer-api-spa`) under `/api` +
+  `/api/*` on the same distribution (two behaviors: `/api/*` requires the
+  literal trailing slash and doesn't match bare `/api`, so that gets its
+  own exact-match behavior). Both point at one CloudFront Function
+  (`api-spa-routing.ts`) that always rewrites extensionless paths to
+  `/api/index.html` (SPA routing fallback, including the bucket root) and
+  redirects bare `/api` to `/api/` — the main behaviors' `errorResponses`
+  can't cover this because custom error pages resolve through the
+  _default_ behavior's origin, not the originating one. The same function
+  also does the basic-auth check when `enableApiSpaBasicAuth` is on,
+  independent of the main site's `enableBasicAuth`/`enableOriginSecretLock`
+  — sharing the KeyValueStore (not the Function itself) so there's one
+  credential to manage, not two.
 
 **Swagger UI**
 
