@@ -1167,43 +1167,7 @@ pub async fn fetch_pool_feed(
 // Soroban-pool reads (task 0374, steps 16-17).
 // ---------------------------------------------------------------------------
 
-/// Router deployments whose OPERATOR identity is verified against vendor
-/// documentation (task 0374 T1). Resolved at read time from
-/// `liquidity_pools.deployment_id` → `soroban_contracts.contract_id` → this
-/// list, so a new pool is labelled the moment it registers and a label fix
-/// is a code change, not an UPDATE.
-///
-/// Deliberately NOT "every deployment of Aquarius's WASM": a second live
-/// router shares the code byte-for-byte with all seven admin roles disjoint
-/// (measured), so code identity does not establish operator identity. Its
-/// pools stay indexed and unlabelled.
-const ROUTER_PROTOCOL_LABELS: &[(&str, &str)] = &[(
-    "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK",
-    "aquarius",
-)];
-
-/// `deployment_id` surrogates → protocol labels, via the contract dimension.
-/// Ids absent from [`ROUTER_PROTOCOL_LABELS`] simply don't appear in the map
-/// (unlabelled ≠ error).
-pub(crate) async fn resolve_protocol_labels(
-    client: &clickhouse::Client,
-    deployment_ids: Vec<i64>,
-) -> Result<HashMap<i64, &'static str>, clickhouse::error::Error> {
-    let ids: Vec<i64> = deployment_ids.into_iter().filter(|&id| id != 0).collect();
-    if ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let strkeys = crate::common::ch::resolve_contracts(client, ids).await?;
-    Ok(strkeys
-        .into_iter()
-        .filter_map(|(id, strkey)| {
-            ROUTER_PROTOCOL_LABELS
-                .iter()
-                .find(|(router, _)| *router == strkey)
-                .map(|(_, label)| (id, *label))
-        })
-        .collect())
-}
+pub(crate) use super::protocol_labels::resolve_protocol_labels;
 
 #[derive(Debug, Row, Deserialize)]
 struct PoolReservesChRow {

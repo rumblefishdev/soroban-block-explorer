@@ -12,6 +12,7 @@
 
 pub mod dto;
 mod handlers;
+mod protocol_labels;
 mod queries;
 
 use utoipa_axum::router::OpenApiRouter;
