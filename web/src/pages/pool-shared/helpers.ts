@@ -4,6 +4,8 @@ import type {
   PoolLegItem,
 } from '@rumblefish/api-types';
 
+import { scaleByDecimals } from '@rumblefish/soroban-block-explorer-ui';
+
 import { assetColor } from '../assets/assetColor.js';
 import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
 import { routes } from '../../router/routes.js';
@@ -93,21 +95,16 @@ export interface PoolLegView {
    * an unknown scale must never render a raw integer as if it were scaled.
    */
   reserve: string | null;
+  /**
+   * Scale for RAW amounts of this leg (activity feed): the on-chain token
+   * `decimals` for a soroban leg, `7` for every classic leg (stroops).
+   * `null` when unknown — callers must skip, never show raw units.
+   */
+  decimals: number | null;
 }
 
 export function isSorobanPool(pool: Pick<PoolItem, 'pool_kind'>): boolean {
   return pool.pool_kind === 'soroban';
-}
-
-/** Insert the decimal point into a raw integer amount string — exact string
- *  surgery, mirroring the API's `scale_raw_amount` (no float: an 18-decimal
- *  token is exactly the case a double would corrupt). */
-function scaleRawAmount(raw: string, decimals: number): string {
-  if (decimals === 0) return raw;
-  const padded = raw.padStart(decimals + 1, '0');
-  const intPart = padded.slice(0, padded.length - decimals);
-  const fracPart = padded.slice(padded.length - decimals).replace(/0+$/, '');
-  return fracPart === '' ? intPart : `${intPart}.${fracPart}`;
 }
 
 /**
@@ -158,8 +155,9 @@ export function poolLegViews(pool: PoolItem): PoolLegView[] {
         dotColor: assetColor(label).dot,
         reserve:
           leg.reserve != null && leg.decimals != null
-            ? scaleRawAmount(leg.reserve, leg.decimals)
+            ? scaleByDecimals(leg.reserve, leg.decimals)
             : null,
+        decimals: leg.decimals ?? null,
       };
     });
   }
@@ -179,6 +177,7 @@ export function poolLegViews(pool: PoolItem): PoolLegView[] {
       dotColor: assetColor(label).dot,
       iconUrl: leg.icon_url,
       reserve: reserve ?? null,
+      decimals: 7,
     };
   });
 }

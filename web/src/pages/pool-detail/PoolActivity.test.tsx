@@ -61,6 +61,59 @@ describe('formatPoolAmount', () => {
   });
 });
 
+describe('formatPoolAmount (soroban leg_amounts)', () => {
+  /** An XLM / AQUA soroban pool: leg 0 native (7 dp), leg 1 an 18-decimal
+   *  bespoke token — exactly the scale a float would corrupt. */
+  const sorobanPool = {
+    pool_kind: 'soroban',
+    legs: [
+      { family: 'native', decimals: 7 },
+      {
+        family: 'soroban',
+        symbol: 'AQUA',
+        decimals: 18,
+        contract_id: 'CAUIKL3IYGMERDRUN6YSCLWVAKIFG5Q4YJHUKM4S4NJZQIA3BAS6OJPK',
+      },
+    ],
+  } as unknown as Parameters<typeof formatPoolAmount>[1];
+
+  it('reads a trade from per-leg movements, scaled by each leg decimals', () => {
+    expect(
+      formatPoolAmount(
+        {
+          amount_a: null,
+          amount_b: null,
+          leg_amounts: [
+            { leg_index: 0, amount: '1200000000' },
+            { leg_index: 1, amount: '-2500000000000000000' },
+          ],
+        },
+        sorobanPool
+      )
+    ).toBe('120 XLM → 2.5 AQUA');
+  });
+
+  it('skips a leg whose scale is unknown rather than showing raw units', () => {
+    const threeLegPool = {
+      pool_kind: 'soroban',
+      legs: [{ family: 'native', decimals: 7 }, { family: 'soroban' }],
+    } as unknown as Parameters<typeof formatPoolAmount>[1];
+    expect(
+      formatPoolAmount(
+        {
+          amount_a: null,
+          amount_b: null,
+          leg_amounts: [
+            { leg_index: 0, amount: '1200000000' },
+            { leg_index: 1, amount: '-999' },
+          ],
+        },
+        threeLegPool
+      )
+    ).toBe('120 XLM');
+  });
+});
+
 describe('tradeRate', () => {
   /** Quoted as out-per-in, the way stellar.expert does — the real fbdfc7ec
    *  trade reads `at 3,063 KALE/XLM` there and must read the same here. */
@@ -99,8 +152,18 @@ describe('activityRowKey', () => {
     const hash = 'a'.repeat(64);
     const first = { transaction_hash: hash, application_order: 1 };
     const second = { transaction_hash: hash, application_order: 2 };
-    expect(activityRowKey(first as PoolActivityItem)).not.toBe(
-      activityRowKey(second as PoolActivityItem)
+    expect(activityRowKey(first as PoolActivityItem, 0)).not.toBe(
+      activityRowKey(second as PoolActivityItem, 1)
+    );
+  });
+
+  /** Soroban rows carry no `application_order` — several flow events of one
+   *  transaction must still key apart. */
+  it('separates two soroban events of one transaction', () => {
+    const hash = 'b'.repeat(64);
+    const row = { transaction_hash: hash, application_order: null };
+    expect(activityRowKey(row as unknown as PoolActivityItem, 0)).not.toBe(
+      activityRowKey(row as unknown as PoolActivityItem, 1)
     );
   });
 });

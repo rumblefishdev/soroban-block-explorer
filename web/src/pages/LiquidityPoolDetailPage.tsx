@@ -91,23 +91,15 @@ export default function LiquidityPoolDetailPage() {
           zero sub-section 404s. */}
       {detail.data != null && (
         <>
-          {/* Charts + activity are CLASSIC-only feeds (snapshots-based USD
-              series; lp_operation_amounts rows) — for a soroban pool the
-              API refuses them explicitly, so don't mount doomed sections
-              (task 0374). Participants works for both worlds. */}
-          {detail.data.pool_kind !== 'soroban' && (
-            <SectionErrorBoundary sectionName="pool-charts">
-              <PoolCharts poolId={poolId} />
-            </SectionErrorBoundary>
-          )}
+          <SectionErrorBoundary sectionName="pool-charts">
+            <PoolCharts poolId={poolId} />
+          </SectionErrorBoundary>
           <SectionErrorBoundary sectionName="pool-participants">
             <PoolParticipants poolId={poolId} />
           </SectionErrorBoundary>
-          {detail.data.pool_kind !== 'soroban' && (
-            <SectionErrorBoundary sectionName="pool-transactions">
-              <PoolActivity poolId={poolId} pool={detail.data} />
-            </SectionErrorBoundary>
-          )}
+          <SectionErrorBoundary sectionName="pool-transactions">
+            <PoolActivity poolId={poolId} pool={detail.data} />
+          </SectionErrorBoundary>
         </>
       )}
     </Stack>
