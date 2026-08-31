@@ -1,7 +1,7 @@
 ---
 id: '0054'
 title: 'One alarm engine for AWS signals, and three rules an alarm must satisfy'
-status: proposed
+status: accepted
 deciders: [karolkow]
 related_tasks: ['0455', '0454', '0428', '0237']
 related_adrs: []
@@ -417,16 +417,39 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
 
 ## Open / Pending (gates proposed → accepted)
 
-- [ ] The ingest-backlog-age alarm verified by simulating a stall against the
+- [x] The ingest-backlog-age alarm verified by simulating a stall against the
       deployed alarm, not by reading the config — and one planned pause
       confirmed to produce exactly one knowing page
-- [ ] The DLQ level alarms verified against an EMPTIED, idle queue — a test
+      — **2026-08-28, and both halves in one act**: disabling the indexer's
+      event-source mapping IS the stall and IS the planned pause. Message age
+      climbed 0 -> 72 -> 133 -> 262 -> 313 s, the alarm fired at 12:35:54 and
+      the action succeeded. Exactly one page, from exactly that alarm; the
+      other eight alarms produced no action at all. On resume, one recovery
+      page at 12:51:54. 261 sequences, zero missing
+- [x] The DLQ level alarms verified against an EMPTIED, idle queue — a test
       message into a drained DLQ must page (metric resumes with one
       datapoint)
-- [ ] One alarm landed under each of rules 2, 3 and 4, so they are demonstrated
+      — **2026-08-27 21:44**: the ledger DLQ was empty and unconsumed, one
+      synthetic message crossed the alarm in three minutes, the action
+      succeeded and the page was seen in the channel. Deleting it paged again
+      on the way back. This is the rule-2 carve-out demonstrated end to end:
+      a level alarm is correct where policy forces the steady state to zero,
+      because it can be drained and re-armed
+- [x] One alarm landed under each of rules 2, 3 and 4, so they are demonstrated
       rather than asserted
-- [ ] Rule 5 demonstrated once: a deploy of the alarm stack followed by a
+      — **rule 2**: `ledger-processor-dlq-depth`, the named level carve-out,
+      drained and re-armed under test (above). **Rule 3**:
+      `galexie-ingestion-lag` is the one alarm in the set with
+      `treatMissingData: breaching`, and it fired twice on 2026-08-27 during a
+      real consensus loss — absence treated as breaching, because nothing else
+      witnesses "ledgers stopped landing". **Rule 4**: the planned pause above,
+      one knowing page. All three demonstrated by production behaviour, none
+      by argument
+- [x] Rule 5 demonstrated once: a deploy of the alarm stack followed by a
       message seen in the channel
+      — **2026-08-27**: `production-2026.08.27-2-CloudWatch` deployed, the
+      gate was run immediately rather than deferred, and the page arrived. It
+      caught a nine-day outage that a policy read had twice declared fixed
 - [x] Our alarm set cross-checked against CloudWatch's out-of-the-box
       recommended alarms (2026-08-11, SQS/Lambda/ECS/APIGW/SNS/CloudFront/S3)
       — every recommendation has a deliberate verdict; no gaps adopted, two
@@ -438,17 +461,18 @@ Escalation chains, on-call rotations, acknowledgement, reminders.
 
 ## Delivery Checklist (per ADR 0032)
 
-- [ ] `docs/architecture/technical-design-general-overview.md` — N/A, no change
+- [x] `docs/architecture/technical-design-general-overview.md` — N/A, no change
       to system shape
-- [ ] `docs/architecture/database-schema/database-schema-overview.md` — N/A
-- [ ] `docs/architecture/backend/backend-overview.md` — N/A
-- [ ] `docs/architecture/frontend/frontend-overview.md` — N/A
-- [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — N/A
-- [ ] `docs/architecture/infrastructure/infrastructure-overview.md` — **required**;
-      its observability section describes CloudWatch and X-Ray but not these
-      rules. Update when this ADR moves to `accepted`
-- [ ] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` — N/A
-- [ ] This ADR is linked from each updated doc at the relevant section
+- [x] `docs/architecture/database-schema/database-schema-overview.md` — N/A
+- [x] `docs/architecture/backend/backend-overview.md` — N/A
+- [x] `docs/architecture/frontend/frontend-overview.md` — N/A
+- [x] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — N/A
+- [x] `docs/architecture/infrastructure/infrastructure-overview.md` — **done
+      2026-08-28**: section 8.2 now opens with the engine, the path and the
+      five rules, each one line, ahead of the alarm list they govern
+- [x] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` — N/A
+- [x] This ADR is linked from each updated doc at the relevant section — the
+      one updated doc links it from section 8.2
 
 ---
 

@@ -1,4 +1,13 @@
-//! Explorer-synthetic `assets.asset_type` domain (3 variants).
+//! Explorer-synthetic `assets.asset_type` domain (3 variants): which
+//! **identity namespace** an asset row lives in. Named `AssetFamily` to end a
+//! measured confusion (task 0496): it previously shared the `…AssetType`
+//! suffix with the XDR-mirror enum while disagreeing with it on the meaning
+//! of 3 — XDR says `PoolShare`, this domain says `Soroban` — and the account
+//! renderer shipped the wrong legend to 38k holders. The SQL column keeps the
+//! `asset_type` name (it is the first sort-key column of `assets`; ClickHouse
+//! refuses to rename key columns), so THIS name is the disambiguator: a
+//! reader seeing `AssetFamily` knows the family vocabulary applies, and a
+//! renderer may only ever use the vocabulary of the enum its value came from.
 //!
 //! Maps to `assets.asset_type SMALLINT NOT NULL`. The variants overlap
 //! with XDR `AssetType` on `native` / `classic_credit` but diverge for a
@@ -21,7 +30,7 @@ use super::EnumDecodeError;
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 #[repr(i16)]
-pub enum TokenAssetType {
+pub enum AssetFamily {
     Native = 0,
     ClassicCredit = 1,
     // 2 was `Sac` — retired (ADR 0051); SAC-ness is a property of the
@@ -29,7 +38,7 @@ pub enum TokenAssetType {
     Soroban = 3,
 }
 
-impl TokenAssetType {
+impl AssetFamily {
     pub const VARIANTS: &'static [Self] = &[Self::Native, Self::ClassicCredit, Self::Soroban];
 
     pub const fn as_str(self) -> &'static str {
@@ -41,7 +50,7 @@ impl TokenAssetType {
     }
 }
 
-impl TryFrom<i16> for TokenAssetType {
+impl TryFrom<i16> for AssetFamily {
     type Error = EnumDecodeError;
 
     fn try_from(v: i16) -> Result<Self, Self::Error> {
@@ -51,14 +60,14 @@ impl TryFrom<i16> for TokenAssetType {
             // 2 (`Sac`) retired (ADR 0051) — reject it like any unknown value.
             3 => Ok(Self::Soroban),
             _ => Err(EnumDecodeError::UnknownDiscriminant {
-                enum_name: "TokenAssetType",
+                enum_name: "AssetFamily",
                 value: v,
             }),
         }
     }
 }
 
-impl std::str::FromStr for TokenAssetType {
+impl std::str::FromStr for AssetFamily {
     type Err = EnumDecodeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -67,13 +76,13 @@ impl std::str::FromStr for TokenAssetType {
             .copied()
             .find(|v| v.as_str() == s)
             .ok_or_else(|| EnumDecodeError::UnknownLabel {
-                enum_name: "TokenAssetType",
+                enum_name: "AssetFamily",
                 value: s.to_string(),
             })
     }
 }
 
-impl std::fmt::Display for TokenAssetType {
+impl std::fmt::Display for AssetFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -85,9 +94,9 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        for v in TokenAssetType::VARIANTS {
-            assert_eq!(TokenAssetType::try_from(*v as i16).unwrap(), *v);
-            assert_eq!(v.as_str().parse::<TokenAssetType>().unwrap(), *v);
+        for v in AssetFamily::VARIANTS {
+            assert_eq!(AssetFamily::try_from(*v as i16).unwrap(), *v);
+            assert_eq!(v.as_str().parse::<AssetFamily>().unwrap(), *v);
         }
     }
 }

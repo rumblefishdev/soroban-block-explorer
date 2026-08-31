@@ -9,7 +9,7 @@
 //!
 //! Notable CH-vs-PG divergences:
 //!
-//! - **`token_asset_type_name()` is a PG SQL function.** CH has no equivalent,
+//! - **`asset_family_name()` is a PG SQL function.** CH has no equivalent,
 //!   so the `asset_type` → label mapping is done in Rust ([`asset_type_name`]),
 //!   identical to the PG migration `20260422000000_enum_label_functions`.
 //! - **`assets a FINAL`** collapses re-ingested asset versions (ReplacingMergeTree
@@ -66,7 +66,7 @@ use super::dto::AssetKeyCursor;
 #[derive(Debug, Clone)]
 pub struct AssetRow {
     pub asset_type: i16,
-    /// Pre-decoded via `token_asset_type_name()` SQL helper. `None` only
+    /// Pre-decoded via `asset_family_name()` SQL helper. `None` only
     /// when the discriminant is outside the schema CHECK range — defensive
     /// against future schema drift.
     pub asset_type_name: Option<String>,
@@ -138,7 +138,7 @@ pub struct ResolvedListParams {
 }
 
 /// `asset_type` SMALLINT → canonical label, matching the PG
-/// `token_asset_type_name` function. `None` for an out-of-range code (the PG
+/// `asset_family_name` function. `None` for an out-of-range code (the PG
 /// `CASE` returns NULL with no `ELSE`).
 fn asset_type_name(asset_type: i16) -> Option<String> {
     match asset_type {

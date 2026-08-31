@@ -680,6 +680,37 @@ to a follow-up monitoring task per task 0216 future work.
 
 ### 8.2 Alerting Surface
 
+**One engine, one path, five rules.** Every AWS-side signal alarms through
+CloudWatch and reaches a human through SNS -> Chatbot -> Slack; no component
+notifies anyone directly, and no second notifier is added for an AWS-side
+signal. The rules below govern every alarm in the list, including ones added
+later — see [ADR 0054](../../../lore/2-adrs/0054_one-alarm-engine-and-three-rules-for-alarms.md)
+for why each was adopted and what it cost:
+
+1. **CloudWatch is the engine, SNS -> Chatbot -> Slack is the path.**
+   Components emit metrics; they do not notify. Thresholds, suppression and
+   routing are declared together so they can be reviewed as a set. Every
+   alarm's description is written for the person it wakes: what is happening,
+   and where the runbook is.
+2. **Alarm on change, not on level**, wherever the condition can persist —
+   CloudWatch pages on transition, so a latched level alarm is silent from its
+   second minute. One carve-out: a level alarm is correct where policy forces
+   the steady state to zero (the DLQs, the 5xx count), because it can be
+   drained and re-armed.
+3. **Absence is `breaching` only where nothing else witnesses the same thing.**
+   One alarm in the set uses it — Galexie ingestion lag, where "no ledgers
+   landed" has no other witness.
+4. **A page caused by planned work the operator just performed is cheap.**
+   Pauses are not machine-readable; one knowing page per pause is the accepted
+   design rather than a suppression mechanism.
+5. **The delivery path is verified on every change to it, before the change is
+   called done** — a deploy of the alarm stack is not finished until one
+   message has travelled the whole chain and been seen in the channel. This
+   rule exists because a topic-policy change once revoked CloudWatch's right
+   to publish and every alarm went mute for nine days while evaluating and
+   transitioning perfectly. Reading the policy declared it fixed twice; only
+   sending something found it.
+
 The deployed alarms (production; authoritative definitions in
 `infra/src/lib/stacks/cloudwatch-stack.ts`):
 

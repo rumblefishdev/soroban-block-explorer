@@ -1104,31 +1104,16 @@ export class CloudWatchStack extends cdk.Stack {
           }),
         ],
         [
-          // The stated dashboard answer for the cost-anomaly alert (the last
-          // open C7 cell). Short on purpose: the graph needs three caveats,
-          // not an essay.
-          new cloudwatch.TextWidget({
-            markdown: [
-              '**Whole account, both projects, month-to-date, cumulative.**',
-              'Not a per-project figure - `EstimatedCharges` carries no tag',
-              'dimension (measured), so the split is Cost Explorer with the',
-              '`Project` tag: see `docs/runbooks/costs.md`.',
-              '',
-              'Publishing lags by hours; a flat tail is missing data, not',
-              'stopped spend.',
-              '',
-              '**The anomaly alert has no widget on purpose** - it already',
-              'pages per-service on a step change. This graph is for the',
-              'creep that never looks like a step and so never pages.',
-            ].join('\n'),
-            width: 12,
-            height: 6,
-          }),
-        ],
-        [
           new cloudwatch.GraphWidget({
+            // The note that used to sit beside this graph was removed
+            // 2026-08-28: three of its four sentences repeated the title, and
+            // the fourth ("the anomaly alert has no widget on purpose")
+            // explains a decision to us, not the graph to a reader - it lives
+            // in the comment above instead. The one caveat a reader cannot
+            // get from the title is the publishing lag, so it moved into the
+            // title itself.
             title:
-              'Account charges, month-to-date (USD, cumulative, both projects)',
+              'Account charges, month-to-date (USD, cumulative, both projects; publishes every ~6 h, so a flat tail is missing data, not stopped spend)',
             left: [
               new cloudwatch.Metric({
                 namespace: 'AWS/Billing',
@@ -1138,6 +1123,41 @@ export class CloudWatchStack extends cdk.Stack {
                 period: cdk.Duration.hours(6),
                 statistic: cloudwatch.Stats.MAXIMUM,
                 label: 'Month-to-date',
+              }),
+            ],
+            width: 12,
+            height: 6,
+          }),
+          new cloudwatch.GraphWidget({
+            // The cumulative graph answers "how much this month"; it cannot
+            // answer "is it rising", because the only signal there is the
+            // slope and nobody remembers last month's. This is the derivative
+            // of the same metric: creep becomes a line that climbs instead of
+            // a curve that steepens imperceptibly, and it does not reset.
+            //
+            // One artefact, stated rather than hidden: EstimatedCharges is
+            // cumulative and resets to zero on the 1st, so the rate carries a
+            // single large negative spike at each month boundary. That is the
+            // reset, not a refund. Left visible on purpose - clipping it with
+            // a MAX() would also clip a genuine drop, and there is no way to
+            // tell CloudWatch "ignore the first datapoint of the month".
+            title:
+              'Daily burn (USD/day, derived; the negative spike on the 1st is the month reset, not a refund)',
+            left: [
+              new cloudwatch.MathExpression({
+                expression: 'RATE(mtd) * 86400',
+                usingMetrics: {
+                  mtd: new cloudwatch.Metric({
+                    namespace: 'AWS/Billing',
+                    metricName: 'EstimatedCharges',
+                    dimensionsMap: { Currency: 'USD' },
+                    region: 'us-east-1',
+                    period: cdk.Duration.hours(6),
+                    statistic: cloudwatch.Stats.MAXIMUM,
+                  }),
+                },
+                label: 'USD/day',
+                period: cdk.Duration.hours(6),
               }),
             ],
             width: 12,

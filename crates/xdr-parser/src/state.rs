@@ -16,7 +16,7 @@ use crate::types::{
     ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
     ExtractedSorobanBalance, NftEvent, SacAssetIdentity,
 };
-use domain::{ContractType, NftEventType, TokenAssetType};
+use domain::{AssetFamily, ContractType, NftEventType};
 
 // ---------------------------------------------------------------------------
 // Step 1 + Step 7: Contract Deployment + SAC Detection
@@ -964,7 +964,7 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
 ///      batch) is logged as a warn and skipped — better to lose one row
 ///      than fabricate identity.
 /// 2. **WASM-based deployments classifying as
-///    [`ContractClassification::Fungible`]** — [`TokenAssetType::Soroban`]
+///    [`ContractClassification::Fungible`]** — [`AssetFamily::Soroban`]
 ///    row; identity is `contract_id` only. Classification uses
 ///    [`classify_contract_from_wasm_spec`] against the deployment's WASM
 ///    interface function list.
@@ -1011,9 +1011,9 @@ pub fn detect_assets(
             //   None               → preimage not in this batch; skip with
             //                        a warn rather than fabricate identity.
             let (asset_type, asset_code, issuer_address) = match &deployment.sac_asset {
-                Some(SacAssetIdentity::Native) => (TokenAssetType::Native, None, None),
+                Some(SacAssetIdentity::Native) => (AssetFamily::Native, None, None),
                 Some(SacAssetIdentity::Credit { code, issuer }) => (
-                    TokenAssetType::ClassicCredit,
+                    AssetFamily::ClassicCredit,
                     Some(code.clone()),
                     Some(issuer.clone()),
                 ),
@@ -1048,7 +1048,7 @@ pub fn detect_assets(
         };
         if verdict_by_hash.get(wasm_hash) == Some(&ContractClassification::Fungible) {
             assets.push(ExtractedAsset {
-                asset_type: TokenAssetType::Soroban,
+                asset_type: AssetFamily::Soroban,
                 asset_code: None,
                 issuer_address: None,
                 contract_id: Some(deployment.contract_id.clone()),
@@ -1143,7 +1143,7 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
             continue;
         }
         assets.push(ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
+            asset_type: AssetFamily::ClassicCredit,
             asset_code: Some(code.to_string()),
             issuer_address: Some(issuer.to_string()),
             contract_id: None,
@@ -1165,7 +1165,7 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
 /// `uidx_assets_native`, so every call after the first is a no-op.
 pub fn native_asset_singleton() -> ExtractedAsset {
     ExtractedAsset {
-        asset_type: TokenAssetType::Native,
+        asset_type: AssetFamily::Native,
         asset_code: None,
         issuer_address: None,
         contract_id: None,
@@ -2761,7 +2761,7 @@ mod tests {
 
         let assets = detect_assets(&deployments, &[]);
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].asset_type, TokenAssetType::ClassicCredit);
+        assert_eq!(assets[0].asset_type, AssetFamily::ClassicCredit);
         assert_eq!(assets[0].contract_id, None);
         assert_eq!(assets[0].sac_contract_id.as_deref(), Some("CSAC456"));
         assert!(assets[0].sac_deployed);
@@ -2789,7 +2789,7 @@ mod tests {
 
         let assets = detect_assets(&deployments, &[]);
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].asset_type, TokenAssetType::Native);
+        assert_eq!(assets[0].asset_type, AssetFamily::Native);
         assert_eq!(assets[0].contract_id, None);
         assert_eq!(assets[0].sac_contract_id.as_deref(), Some("CXLM_SAC"));
         assert!(assets[0].sac_deployed);
@@ -2854,7 +2854,7 @@ mod tests {
 
         let assets = detect_assets(&deployments, &interfaces);
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].asset_type, TokenAssetType::Soroban);
+        assert_eq!(assets[0].asset_type, AssetFamily::Soroban);
         assert_eq!(assets[0].contract_id.as_deref(), Some("CFUN001"));
         assert!(assets[0].asset_code.is_none());
         assert!(assets[0].issuer_address.is_none());
@@ -2957,14 +2957,14 @@ mod tests {
             .iter()
             .find(|a| a.sac_contract_id.as_deref() == Some("CSAC005"))
             .expect("SAC carrier present");
-        assert_eq!(sac.asset_type, TokenAssetType::ClassicCredit);
+        assert_eq!(sac.asset_type, AssetFamily::ClassicCredit);
         assert_eq!(sac.contract_id, None);
         assert!(sac.sac_deployed);
         let fungible = assets
             .iter()
             .find(|a| a.contract_id.as_deref() == Some("CFUN006"))
             .expect("soroban fungible present");
-        assert_eq!(fungible.asset_type, TokenAssetType::Soroban);
+        assert_eq!(fungible.asset_type, AssetFamily::Soroban);
         assert_eq!(fungible.sac_contract_id, None);
     }
 
@@ -3285,7 +3285,7 @@ mod tests {
         )];
         let assets = detect_classic_credit_assets(&changes);
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].asset_type, TokenAssetType::ClassicCredit);
+        assert_eq!(assets[0].asset_type, AssetFamily::ClassicCredit);
         assert_eq!(assets[0].asset_code.as_deref(), Some("USDC"));
         assert_eq!(
             assets[0].issuer_address.as_deref(),
@@ -3423,7 +3423,7 @@ mod tests {
     #[test]
     fn native_singleton_returns_native_asset_no_identity() {
         let asset = native_asset_singleton();
-        assert_eq!(asset.asset_type, TokenAssetType::Native);
+        assert_eq!(asset.asset_type, AssetFamily::Native);
         assert!(asset.asset_code.is_none());
         assert!(asset.issuer_address.is_none());
         assert!(asset.contract_id.is_none());

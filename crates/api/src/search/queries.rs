@@ -122,11 +122,11 @@ impl IncludeFlags {
 /// single partition the `transaction_hash_index` lookup resolved.
 const LEDGER_PARTITION_SIZE: i64 = 500_000;
 
-/// `asset_type` SMALLINT → canonical label, matching the PG `token_asset_type_name`
+/// `asset_type` SMALLINT → canonical label, matching the PG `asset_family_name`
 /// function (same mapping as [`crate::assets::queries`], NOT the
 /// `AssetType`-XDR `asset_type_name` used by accounts). `None` for an
 /// out-of-range code (the PG `CASE` returns NULL with no `ELSE`).
-fn token_asset_type_name(asset_type: i16) -> Option<String> {
+fn asset_family_name(asset_type: i16) -> Option<String> {
     match asset_type {
         0 => Some("native"),
         1 => Some("classic_credit"),
@@ -816,7 +816,7 @@ async fn search_assets(
                     // Display id is the asset code; native (no code) shows XLM,
                     // matching the PG `COALESCE(asset_code, 'XLM')`.
                     identifier: r.asset_code.unwrap_or_else(|| "XLM".to_string()),
-                    label: token_asset_type_name(r.asset_type).unwrap_or_default(),
+                    label: asset_family_name(r.asset_type).unwrap_or_default(),
                     route_token,
                     successful: None,
                     last_activity_at: None,
@@ -925,13 +925,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn token_asset_type_name_matches_pg_function() {
-        assert_eq!(token_asset_type_name(0).as_deref(), Some("native"));
-        assert_eq!(token_asset_type_name(1).as_deref(), Some("classic_credit"));
+    fn asset_family_name_matches_pg_function() {
+        assert_eq!(asset_family_name(0).as_deref(), Some("native"));
+        assert_eq!(asset_family_name(1).as_deref(), Some("classic_credit"));
         // 2 (`sac`) retired — ADR 0051.
-        assert_eq!(token_asset_type_name(2), None);
-        assert_eq!(token_asset_type_name(3).as_deref(), Some("soroban"));
-        assert_eq!(token_asset_type_name(99), None);
+        assert_eq!(asset_family_name(2), None);
+        assert_eq!(asset_family_name(3).as_deref(), Some("soroban"));
+        assert_eq!(asset_family_name(99), None);
     }
 
     #[test]

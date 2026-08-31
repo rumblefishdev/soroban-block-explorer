@@ -2024,7 +2024,7 @@
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`\n| `credit_alphanum12` for classic. Soroban (type-3) rows are also returned\n— identify them via `contract_id`, not this label."
+            "description": "Label in the `AssetFamily` vocabulary: `native` | `classic_credit` |\n`soroban`. (Task 0496: this used to borrow the XDR legend, which calls\n3 `pool_share` — so every Soroban holding read as an LP share. This\nfield's values come from `assets.asset_type`, whose domain is the\nfamily enum, and the label now follows that domain.)"
           },
           "balance": {
             "type": "string",
@@ -2278,7 +2278,7 @@
         "allOf": [
           {
             "type": "object",
-            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
             "required": ["id", "asset_type", "decimals"],
             "properties": {
               "asset_code": {
@@ -2364,7 +2364,7 @@
       },
       "AssetItem": {
         "type": "object",
-        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
         "required": ["id", "asset_type", "decimals"],
         "properties": {
           "asset_code": {
@@ -3679,7 +3679,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
               "required": ["id", "asset_type", "decimals"],
               "properties": {
                 "asset_code": {
@@ -4525,11 +4525,11 @@
           "asset_type": {
             "type": "integer",
             "format": "int32",
-            "description": "Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired."
+            "description": "Raw SMALLINT, XDR `AssetType`: 0=native, 1=credit_alphanum4,\n2=credit_alphanum12. Not the `assets.asset_type` family domain."
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "`native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`\nonly on schema drift."
+            "description": "Label in the **XDR `AssetType`** vocabulary — this is a pool LEG, and\nleg types come from `liquidity_pools.asset_a_type`/`asset_b_type`,\nwhich store the protocol discriminant: `native` |\n`credit_alphanum4` | `credit_alphanum12`. `null` only on schema drift.\n(Task 0496 mirror: this doc used to carry the `AssetFamily` legend,\ndeclaring 2 \"retired\" — while 54 456 production legs carry\n2 = `credit_alphanum12`.)"
           },
           "contract_id": {
             "type": ["string", "null"],
