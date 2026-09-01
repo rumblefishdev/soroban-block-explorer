@@ -1072,7 +1072,35 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // `xdr_parser::pool_router` (same idiom as `detect_nft_events`); this
     // section only maps registrations to registry rows. Idempotent under the
     // RMT key (pool_id, version last_updated_ledger).
+    //
+    // A registration names its pool in the event DATA payload, which the
+    // emitter chooses freely — so the claim is CORROBORATED against the named
+    // pool's own instance storage before it becomes a row (review #438).
+    // The pool contract is the authenticated owner of that entry and records
+    // its `Router` there; the instance is written in the SAME transaction as
+    // `add_pool` (probed on raw meta), so the corroborating fact is always in
+    // this ledger's parse output. Without it, any contract could emit an
+    // `add_pool` naming a REAL pool and replace its registry row wholesale
+    // (RMT keyed on pool_id, versioned by ledger).
+    let declared_router: HashMap<&str, Option<&str>> = pool_instances
+        .iter()
+        .map(|i| (i.state.pool.as_str(), i.state.router.as_deref()))
+        .collect();
     for reg in xdr_parser::pool_router::detect_pool_registrations(events) {
+        match declared_router.get(reg.event.pool.as_str()) {
+            Some(&Some(router)) if router == reg.router => {}
+            found => {
+                tracing::warn!(
+                    ledger_sequence = ledger.sequence,
+                    pool = %reg.event.pool,
+                    emitter = %reg.router,
+                    declared_router = ?found.copied().flatten(),
+                    "add_pool registration refused — the named pool does not declare \
+                     this emitter as its router"
+                );
+                continue;
+            }
+        }
         match pool_registry_row(&reg.event, &reg.router, ledger_sequence_i64) {
             Ok(row) => out.pool_rows.push(row),
             Err(reason) => tracing::error!(

@@ -3029,24 +3029,12 @@ fn prepare_registers_a_pool_from_a_real_add_pool_event() {
         created_at: 1_700_000_000,
     };
     let events = vec![(tx.hash.clone(), vec![ev])];
+    // The pool's own instance, written in the SAME transaction as `add_pool`
+    // on mainnet (probed on raw meta) — it names this router, which is what
+    // lets the registration through the corroboration guard.
+    let instances = [pool_instance_declaring(pool, router)];
 
-    let staged = stage::prepare(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &events,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    )
-    .expect("prepare");
+    let staged = stage_registration(&ledger, &tx, &events, &instances);
 
     // The event row itself still lands — registration is IN ADDITION, never
     // instead of the raw event.
@@ -3166,22 +3154,45 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
     };
     let events = vec![(tx.hash.clone(), vec![ev])];
 
-    let staged = stage::prepare(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &events,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    )
+    // The pool DOES corroborate this router, so the registration reaches the
+    // fee check — without this the refusal below would come from the
+    // corroboration guard and this test would pass for the wrong reason.
+    let instance = xdr_parser::pool_state::ExtractedPoolInstance {
+        state: xdr_parser::pool_state::PoolInstanceState {
+            pool: "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O".into(),
+            token_share: None,
+            plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
+            router: Some(router.to_string()),
+            reserves: Vec::new(),
+        },
+        ledger_sequence: 10,
+    };
+
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &events,
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: std::slice::from_ref(&instance),
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
     .expect("prepare itself succeeds — one refused registration must not fail the ledger");
 
     assert!(
@@ -3271,6 +3282,65 @@ fn stage_registration(
         prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare")
+}
+
+/// The registration names its pool in an attacker-chosen DATA payload, so it
+/// only becomes a row when the NAMED POOL declares that emitter as its router
+/// in its own (ledger-authenticated) instance storage. Review #438: without
+/// this, any contract could emit `add_pool` naming a REAL pool and replace its
+/// registry row wholesale — `liquidity_pools` is RMT keyed on `pool_id`, so a
+/// later ledger wins outright.
+#[test]
+fn prepare_refuses_a_registration_the_pool_does_not_corroborate() {
+    const VICTIM: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const REAL_ROUTER: &str = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+    const ATTACKER: &str = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x71);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![add_pool_event(
+            &tx.hash,
+            ATTACKER,
+            VICTIM,
+            EventSource::TxLevel,
+        )],
+    )];
+    // The victim's own instance names its REAL router, not the attacker.
+    let instances = [pool_instance_declaring(VICTIM, REAL_ROUTER)];
+
+    let staged = stage_registration(&ledger, &tx, &events, &instances);
+
+    assert!(
+        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "a registration the named pool does not corroborate must not become a row"
+    );
+}
+
+/// The corroborated case still registers — the guard must not cost real pools.
+#[test]
+fn prepare_accepts_a_registration_the_pool_corroborates() {
+    const POOL: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const ROUTER: &str = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x72);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![add_pool_event(&tx.hash, ROUTER, POOL, EventSource::TxLevel)],
+    )];
+    let instances = [pool_instance_declaring(POOL, ROUTER)];
+
+    let staged = stage_registration(&ledger, &tx, &events, &instances);
+
+    let row = staged
+        .pool_rows
+        .iter()
+        .find(|r| r.pool_kind == 1)
+        .expect("the corroborated registration stages a registry row");
+    assert_eq!(row.deployment_id, ids::contract_id(ROUTER));
+    assert_eq!(row.fee_bps, 10);
 }
 
 /// The diagnostic container carries copies of events from FAILED transactions
