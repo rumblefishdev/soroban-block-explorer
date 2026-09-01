@@ -575,6 +575,141 @@ pub async fn fetch_pool_usd_analytics(
     })
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct ContractCloseChRow {
+    contract_address: String,
+    close_usd: Option<String>,
+}
+
+/// Last hourly close for BESPOKE token legs, keyed by contract StrKey.
+///
+/// The sibling of [`fetch_last_closes`] for the other half of
+/// [`ChartPriceId`]: a soroban pool's legs are SAC identities (classic, that
+/// function's shape) or bespoke tokens priced under `asset_kind = 'contract'`.
+/// Same window and same two guards — `close_usd > 0` and the in-progress hour
+/// excluded — so a pool cannot be priced by one rule on the chart and another
+/// on its headline.
+async fn fetch_last_contract_closes(
+    client: &clickhouse::Client,
+    addresses: &[&str],
+) -> Result<std::collections::HashMap<String, f64>, clickhouse::error::Error> {
+    if addresses.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let identity_or = std::iter::repeat_n("contract_address = ?", addresses.len())
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let sql = format!(
+        "SELECT contract_address, \
+                toString(nullIf(argMaxIf(close_usd, bucket, close_usd > 0), 0)) AS close_usd \
+         FROM prices.price_usd_series_1h \
+         WHERE asset_kind = 'contract' AND ({identity_or}) \
+           AND bucket >= now() - INTERVAL {carry} SECOND \
+           AND bucket <  toStartOfHour(now()) \
+         GROUP BY contract_address",
+        carry = MAX_PRICE_CARRY_SECONDS,
+    );
+    let mut query = client.query(&sql);
+    for a in addresses {
+        query = query.bind(*a);
+    }
+    let rows = query.fetch_all::<ContractCloseChRow>().await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| Some((r.contract_address, parse_f64(r.close_usd.as_deref()?)?)))
+        .collect())
+}
+
+/// USD value of a SOROBAN pool's reserves, for the list and the detail.
+///
+/// The pool's own chart already priced these exact legs; the headline said
+/// nothing, because the analytics path reads `leg_a`/`leg_b` — the CLASSIC
+/// pair — and a soroban row carries storage defaults there. So every soroban
+/// pool showed a plotted TVL curve above an empty TVL figure. This computes
+/// the figure the same way the chart computes each of its points.
+///
+/// `None` when ANY leg cannot be identified, scaled or priced — the classic
+/// all-or-nothing rule, never a partial sum over the legs that happened to
+/// resolve. Reserves are raw units and are scaled by each leg's own
+/// `decimals`, since a soroban token chooses its own.
+/// Last close for every leg identity on a PAGE of soroban pools — two
+/// queries total, never per row, mirroring how the classic list prices a page.
+pub(crate) async fn fetch_soroban_leg_prices(
+    client: &clickhouse::Client,
+    resolved: &[(i64, Option<SorobanChartLeg>)],
+) -> Result<SorobanLegPrices, clickhouse::error::Error> {
+    let mut classic: Vec<&PriceLeg> = resolved
+        .iter()
+        .filter_map(|(_, l)| match &l.as_ref()?.price {
+            ChartPriceId::Classic(p) => Some(p),
+            ChartPriceId::Contract(_) => None,
+        })
+        .collect();
+    classic
+        .sort_unstable_by(|a, b| (a.kind, &a.code, &a.issuer).cmp(&(b.kind, &b.code, &b.issuer)));
+    classic.dedup();
+    let mut contracts: Vec<&str> = resolved
+        .iter()
+        .filter_map(|(_, l)| match &l.as_ref()?.price {
+            ChartPriceId::Contract(a) => Some(a.as_str()),
+            ChartPriceId::Classic(_) => None,
+        })
+        .collect();
+    contracts.sort_unstable();
+    contracts.dedup();
+
+    let (classic_closes, contract_closes) = tokio::join!(
+        fetch_last_closes(client, &classic),
+        fetch_last_contract_closes(client, &contracts),
+    );
+    Ok(SorobanLegPrices {
+        classic: classic_closes?,
+        contract: contract_closes?,
+    })
+}
+
+/// Last closes for a page's soroban legs, in both identity shapes.
+#[derive(Debug, Default)]
+pub(crate) struct SorobanLegPrices {
+    classic: std::collections::HashMap<PriceLeg, f64>,
+    contract: std::collections::HashMap<String, f64>,
+}
+
+/// USD value of ONE soroban pool's reserves. Pure — the prices come from
+/// [`fetch_soroban_leg_prices`], fetched once for the whole page.
+///
+/// The pool's own chart already priced these exact legs; the headline said
+/// nothing, because the analytics path reads `leg_a`/`leg_b` — the CLASSIC
+/// pair — and a soroban row carries storage defaults there. So every soroban
+/// pool showed a plotted TVL curve above an empty TVL figure. This computes
+/// the figure the same way the chart computes each of its points.
+///
+/// `None` when ANY leg cannot be identified, scaled or priced — the classic
+/// all-or-nothing rule, never a partial sum over the legs that happened to
+/// resolve. Reserves are raw units and are scaled by each leg's own
+/// `decimals`, since a soroban token chooses its own.
+pub(crate) fn soroban_tvl(
+    legs: &[(i64, Option<SorobanChartLeg>)],
+    reserves: &[String],
+    prices: &SorobanLegPrices,
+) -> Option<f64> {
+    if legs.is_empty() || reserves.len() < legs.len() {
+        return None;
+    }
+    legs.iter()
+        .enumerate()
+        .map(|(i, (_, leg))| {
+            let leg = leg.as_ref()?;
+            let price = match &leg.price {
+                ChartPriceId::Classic(p) => prices.classic.get(p).copied()?,
+                ChartPriceId::Contract(a) => prices.contract.get(a).copied()?,
+            };
+            let units = parse_f64(reserves.get(i)?)? * 10f64.powi(-(leg.decimals as i32));
+            Some(units * price)
+        })
+        .sum::<Option<f64>>()
+}
+
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
 struct LastCloseChRow {
@@ -678,7 +813,7 @@ fn parse_f64(s: &str) -> Option<f64> {
 /// so any pool trading less than a few dollars a bucket serialises its
 /// entire fee series as zeros (observed on prod — a pool with real volume
 /// rendered every chart bucket and every axis tick as `$0`).
-fn usd_str(v: f64) -> String {
+pub(crate) fn usd_str(v: f64) -> String {
     let abs = v.abs();
     if abs > 0.0 && abs < 0.01 {
         // Two significant digits: 0.003 → "0.0030", 0.00009 → "0.000090".

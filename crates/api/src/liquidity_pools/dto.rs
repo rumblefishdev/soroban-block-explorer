@@ -313,11 +313,19 @@ pub struct PoolItem {
     pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
-    /// Populated on **both** the list (Phase A2, one batched price lookup
-    /// per page) and the detail endpoint. `tvl` = latest reserves × each
-    /// leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
-    /// stale); `null` unless both legs price (never a one-leg partial) —
-    /// untracked assets and stale pools read `null`.
+    /// Populated on **both** the list (one batched price lookup per page)
+    /// and the detail endpoint, in **both pool worlds**. `tvl` = latest
+    /// reserves × each leg's last hourly USD close
+    /// (`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless EVERY leg
+    /// prices — never a partial sum over the legs that happened to resolve —
+    /// so untracked assets and stale pools read `null`.
+    ///
+    /// Soroban pools sum over their 2–4 `legs`, each scaled by its own
+    /// `decimals`, and price SAC legs by classic identity while bespoke
+    /// tokens key on `asset_kind = 'contract'`. They were `null` until
+    /// review #438: the analytics path read `asset_a`/`asset_b`, which a
+    /// soroban row carries as storage defaults, so every one of them showed a
+    /// plotted TVL curve on its chart above an empty TVL figure.
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced

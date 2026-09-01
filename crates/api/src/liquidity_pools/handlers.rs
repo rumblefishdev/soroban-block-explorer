@@ -179,6 +179,60 @@ struct SorobanView {
     protocol: Option<String>,
 }
 
+/// USD TVL for every soroban row on a page, keyed by pool hex.
+///
+/// Two price queries for the WHOLE page, not per row — the same discipline the
+/// classic list follows. The detail is just a page of one.
+///
+/// Degrades to an empty map on error, like the classic analytics: a missing
+/// `prices.*` grant blanks a figure rather than failing the page.
+async fn soroban_tvls(
+    client: &clickhouse::Client,
+    rows: &[PoolRow],
+    views: &std::collections::HashMap<String, SorobanView>,
+) -> std::collections::HashMap<String, String> {
+    let soroban: Vec<&PoolRow> = rows.iter().filter(|r| r.pool_kind == 1).collect();
+    if soroban.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let all_legs: Vec<i64> = soroban.iter().flat_map(|r| r.legs.clone()).collect();
+    let resolved = match queries::soroban_chart_legs(client, &all_legs).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "DB error resolving soroban legs for TVL");
+            return std::collections::HashMap::new();
+        }
+    };
+    let prices = match queries::fetch_soroban_leg_prices(client, &resolved).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "DB error pricing soroban legs (TVL degraded to NULL)");
+            return std::collections::HashMap::new();
+        }
+    };
+    let by_id: std::collections::HashMap<i64, &Option<queries::SorobanChartLeg>> =
+        resolved.iter().map(|(id, leg)| (*id, leg)).collect();
+
+    soroban
+        .iter()
+        .filter_map(|r| {
+            let view = views.get(&r.pool_id_hex)?;
+            let legs: Vec<(i64, Option<queries::SorobanChartLeg>)> = r
+                .legs
+                .iter()
+                .map(|id| (*id, by_id.get(id).and_then(|l| (*l).clone())))
+                .collect();
+            let reserves: Vec<String> = view
+                .legs
+                .iter()
+                .map(|l| l.reserve.clone().unwrap_or_default())
+                .collect();
+            let tvl = queries::soroban_tvl(&legs, &reserves, &prices)?;
+            Some((r.pool_id_hex.clone(), queries::usd_str(tvl)))
+        })
+        .collect()
+}
+
 fn map_pool_item(row: PoolRow, soroban: Option<SorobanView>) -> PoolItem {
     // A soroban pool's id bytes are a CONTRACT address payload — rendering
     // them as `L...` would produce a well-formed WRONG key, so each kind
@@ -524,10 +578,14 @@ pub async fn list_pools(
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
+    let tvls = soroban_tvls(&state.ch(), &rows, &views).await;
     let data: Vec<PoolItem> = rows
         .into_iter()
-        .map(|r| {
+        .map(|mut r| {
             let view = views.remove(&r.pool_id_hex);
+            if r.pool_kind == 1 {
+                r.tvl = tvls.get(&r.pool_id_hex).cloned();
+            }
             map_pool_item(r, view)
         })
         .collect();
@@ -582,6 +640,12 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
+        // The chart below this page prices these exact legs, so the headline
+        // must not sit empty beside it. Degrades to NULL on error, like the
+        // classic branch — a pool's on-chain data is valid without prices.
+        row.tvl = soroban_tvls(&state.ch(), std::slice::from_ref(&row), &views)
+            .await
+            .remove(&row.pool_id_hex);
         let view = views.remove(&row.pool_id_hex);
         let mut resp = Json(map_pool_item(row, view)).into_response();
         cache_control::attach(&mut resp, cache_control::SHORT);

@@ -4369,7 +4369,7 @@
                 },
                 "tvl": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless both legs price (never a one-leg partial) —\nuntracked assets and stale pools read `null`."
+                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (one batched price lookup per page)\nand the detail endpoint, in **both pool worlds**. `tvl` = latest\nreserves × each leg's last hourly USD close\n(`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless EVERY leg\nprices — never a partial sum over the legs that happened to resolve —\nso untracked assets and stale pools read `null`.\n\nSoroban pools sum over their 2–4 `legs`, each scaled by its own\n`decimals`, and price SAC legs by classic identity while bespoke\ntokens key on `asset_kind = 'contract'`. They were `null` until\nreview #438: the analytics path read `asset_a`/`asset_b`, which a\nsoroban row carries as storage defaults, so every one of them showed a\nplotted TVL curve on its chart above an empty TVL figure."
                 },
                 "volume": {
                   "type": ["string", "null"],
@@ -4691,7 +4691,7 @@
           },
           "tvl": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless both legs price (never a one-leg partial) —\nuntracked assets and stale pools read `null`."
+            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (one batched price lookup per page)\nand the detail endpoint, in **both pool worlds**. `tvl` = latest\nreserves × each leg's last hourly USD close\n(`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless EVERY leg\nprices — never a partial sum over the legs that happened to resolve —\nso untracked assets and stale pools read `null`.\n\nSoroban pools sum over their 2–4 `legs`, each scaled by its own\n`decimals`, and price SAC legs by classic identity while bespoke\ntokens key on `asset_kind = 'contract'`. They were `null` until\nreview #438: the analytics path read `asset_a`/`asset_b`, which a\nsoroban row carries as storage defaults, so every one of them showed a\nplotted TVL curve on its chart above an empty TVL figure."
           },
           "volume": {
             "type": ["string", "null"],
