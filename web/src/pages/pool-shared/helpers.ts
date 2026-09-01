@@ -182,8 +182,14 @@ export function poolLegViews(pool: PoolItem): PoolLegView[] {
   });
 }
 
-/** `XLM / USDC` — the pool's display name, either world. */
-export function poolPairLabel(pool: PoolItem): string {
+/**
+ * `XLM / USDC`, or `XLM / AQUA / USDx` — the pool's display name, either
+ * world. Named for LEGS, not a pair, because it joins however many the pool
+ * has: 3- and 4-leg stable pools are live on mainnet (measured: 491 pools
+ * carry two legs, 7 carry three, 2 carry four). The old `poolPairLabel`
+ * carried the one assumption this model exists to remove.
+ */
+export function poolLegsLabel(pool: PoolItem): string {
   return poolLegViews(pool)
     .map((l) => l.label)
     .join(' / ');

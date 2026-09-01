@@ -19,7 +19,7 @@ import { routes } from '../../router/routes.js';
 import {
   isSorobanPool,
   poolLegViews,
-  poolPairLabel,
+  poolLegsLabel,
   type PoolLegView,
 } from '../pool-shared/helpers.js';
 
@@ -81,7 +81,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
                 variant="bodySmMedium"
                 sx={(theme) => ({ color: theme.palette.text.primary })}
               >
-                {poolPairLabel(row)}
+                {poolLegsLabel(row)}
               </Typography>
               {/* Protocol chip only when the operator is VERIFIED (task
                   0374 T1) — an unlabelled soroban pool stays unlabelled

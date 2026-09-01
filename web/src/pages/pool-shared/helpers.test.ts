@@ -192,7 +192,7 @@ describe('formatCompactAmount', () => {
 
 import type { PoolItem, PoolLegItem } from '@rumblefish/api-types';
 
-import { legItemLabel, poolLegViews, poolPairLabel } from './helpers.js';
+import { legItemLabel, poolLegViews, poolLegsLabel } from './helpers.js';
 
 function makeLegItem(overrides: Partial<PoolLegItem> = {}): PoolLegItem {
   return {
@@ -284,6 +284,6 @@ describe('poolLegViews (soroban)', () => {
       makeLegItem(),
       makeLegItem({ symbol: 'USDx' }),
     ]);
-    expect(poolPairLabel(pool)).toBe('XLM / AQUA / USDx');
+    expect(poolLegsLabel(pool)).toBe('XLM / AQUA / USDx');
   });
 });

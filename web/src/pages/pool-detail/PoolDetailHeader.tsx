@@ -9,7 +9,7 @@ import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 import {
   isSorobanPool,
   poolLegViews,
-  poolPairLabel,
+  poolLegsLabel,
 } from '../pool-shared/helpers.js';
 
 interface PoolDetailHeaderProps {
@@ -18,14 +18,14 @@ interface PoolDetailHeaderProps {
 }
 
 export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
-  const pair = pool ? poolPairLabel(pool) : 'Liquidity pool';
+  const legs = pool ? poolLegsLabel(pool) : 'Liquidity pool';
 
   return (
     <Box>
       <PageBreadcrumb
         items={[
           { label: 'Liquidity Pools', to: routes.pools },
-          { label: pair },
+          { label: legs },
         ]}
       />
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
@@ -36,7 +36,7 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
               The fee stays as a quiet key-value in the Summary card. */}
           <Stack direction="row" spacing={1} alignItems="center">
             <Typography variant="heading5SemiBold" component="h1">
-              {pair}
+              {legs}
             </Typography>
             {/* Verified-operator protocol chip only (task 0374 T1). */}
             {pool?.protocol != null && (
