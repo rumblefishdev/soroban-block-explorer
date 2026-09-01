@@ -769,7 +769,6 @@ pub fn extract_liquidity_pools(
             fee_bps,
             reserves: reserves.clone(),
             total_shares: total_shares.clone(),
-            tvl: None,
             created_at_ledger: if is_creation {
                 Some(change.ledger_sequence)
             } else {
@@ -798,9 +797,6 @@ pub fn extract_liquidity_pools(
             created_at: change.created_at,
             reserves,
             total_shares,
-            tvl: None,
-            volume: None,
-            fee_revenue: None,
         });
     }
 
@@ -820,7 +816,11 @@ pub fn extract_liquidity_pools(
 /// version-less `ReplacingMergeTree`, which would otherwise keep an arbitrary
 /// intra-ledger image. See lore-0356.
 ///
-/// Call once per ledger, after aggregating every transaction's snapshots.
+/// Call once per ledger, after aggregating every transaction's snapshots.///
+/// The `ledger_sequence` in the key never varies today: `ParseOutput` is built
+/// for ONE ledger, so every image here already shares it. It is kept as
+/// belt-and-braces — a future caller that batches ledgers would otherwise
+/// collapse a pool's two ledgers into one, silently.
 pub fn dedup_final_pool_snapshots(
     snapshots: Vec<ExtractedLiquidityPoolSnapshot>,
 ) -> Vec<ExtractedLiquidityPoolSnapshot> {

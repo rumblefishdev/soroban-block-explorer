@@ -23,6 +23,8 @@ pub mod nft;
 pub mod op_participants;
 pub mod op_source;
 pub mod operation;
+pub mod pool_router;
+pub mod pool_state;
 pub mod sac;
 pub mod scval;
 pub mod state;

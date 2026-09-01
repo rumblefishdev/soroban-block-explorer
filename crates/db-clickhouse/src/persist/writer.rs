@@ -92,6 +92,8 @@ struct TableInserts {
     op_pools: Option<Insert<OperationPoolRow>>,
     lp_amounts: Option<Insert<LpOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
+    pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
+    pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
     operations: Option<Insert<OperationAppearanceRow>>,
@@ -261,6 +263,20 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
+            &mut self.inserts.pool_instance_state,
+            "pool_instance_state",
+            &staged.pool_instance_state_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.pool_state_changes,
+            "pool_state_changes",
+            &staged.pool_state_change_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
             &mut self.inserts.snapshots,
             "liquidity_pool_snapshots",
             &staged.snapshot_rows,
@@ -367,36 +383,77 @@ impl PartitionWriter {
         // PG's write order (accounts → wasm → contracts → tx → hash
         // index → participants → pools/snapshots/positions → ops →
         // events → invocations → assets → nfts/ownership → balances).
-        end(self.inserts.accounts).await?;
-        end(self.inserts.account_entry_state).await?;
-        end(self.inserts.wasm).await?;
-        end(self.inserts.contracts).await?;
-        end(self.inserts.metadata).await?;
-        end(self.inserts.transactions).await?;
-        end(self.inserts.hash_index).await?;
-        end(self.inserts.participants).await?;
-        end(self.inserts.op_assets).await?;
-        end(self.inserts.op_pools).await?;
-        end(self.inserts.lp_amounts).await?;
-        end(self.inserts.pools).await?;
-        end(self.inserts.snapshots).await?;
-        end(self.inserts.lp_positions).await?;
-        end(self.inserts.operations).await?;
-        end(self.inserts.events).await?;
-        end(self.inserts.invocations).await?;
-        end(self.inserts.assets).await?;
-        end(self.inserts.asset_sac).await?;
-        end(self.inserts.nfts).await?;
-        end(self.inserts.nft_ownership).await?;
+        //
+        // EXHAUSTIVE destructure, deliberately no `..`: an insert that is
+        // written but never ended buffers its rows and drops them SILENTLY
+        // on drop — the ledgers marker still lands, so the loss is
+        // invisible. That exact bug shipped twice (the instance-state side
+        // table and
+        // pool_state_changes were streamed by `write_ledger` but missing
+        // from this list; caught by the task 0374 full-pipeline e2e, never
+        // by unit tests, which stop at staging). With the destructure the
+        // compiler refuses a new `TableInserts` field until someone decides
+        // where it drains.
+        let TableInserts {
+            accounts,
+            account_entry_state,
+            wasm,
+            contracts,
+            metadata,
+            transactions,
+            hash_index,
+            participants,
+            op_assets,
+            op_pools,
+            lp_amounts,
+            pools,
+            pool_instance_state,
+            pool_state_changes,
+            snapshots,
+            lp_positions,
+            operations,
+            events,
+            invocations,
+            assets,
+            asset_sac,
+            nfts,
+            nft_ownership,
+            nfts_pending,
+            nft_ownership_pending,
+            unified_balances,
+        } = self.inserts;
+        end(accounts).await?;
+        end(account_entry_state).await?;
+        end(wasm).await?;
+        end(contracts).await?;
+        end(metadata).await?;
+        end(transactions).await?;
+        end(hash_index).await?;
+        end(participants).await?;
+        end(op_assets).await?;
+        end(op_pools).await?;
+        end(lp_amounts).await?;
+        end(pools).await?;
+        end(pool_instance_state).await?;
+        end(pool_state_changes).await?;
+        end(snapshots).await?;
+        end(lp_positions).await?;
+        end(operations).await?;
+        end(events).await?;
+        end(invocations).await?;
+        end(assets).await?;
+        end(asset_sac).await?;
+        end(nfts).await?;
+        end(nft_ownership).await?;
         // Task 0217 / 0220 — drain quarantine inserts in the same
         // pre-`ledgers` step. They share the commit-marker guarantee:
         // a partial commit that fails between any of these and the
         // final `ledgers` write produces no `ledgers` row for the
         // partition, so the resume path re-does it cleanly. RMT
         // dedupes the orphan rows on the next merge.
-        end(self.inserts.nfts_pending).await?;
-        end(self.inserts.nft_ownership_pending).await?;
-        end(self.inserts.unified_balances).await?;
+        end(nfts_pending).await?;
+        end(nft_ownership_pending).await?;
+        end(unified_balances).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every
         // buffered row, end the request.
