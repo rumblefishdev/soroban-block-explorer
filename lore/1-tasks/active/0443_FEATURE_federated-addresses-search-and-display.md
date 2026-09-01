@@ -1,8 +1,8 @@
 ---
 id: '0443'
-title: 'FEATURE: resolve SEP-2 federated addresses (name*domain) for accounts that set a home domain'
+title: 'FEATURE: SEP-2 federated addresses — resolve name*domain in search (A), show it on accounts (B)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0188']
 tags:
@@ -18,18 +18,142 @@ history:
       Spawned from external feedback on the live deployment: "if there's a
       federated address tied to this source account, it would be great to show
       it". Not implemented anywhere today — no prior task covers SEP-2.
+  - date: '2026-09-01'
+    status: active
+    who: karolkow
+    note: >
+      Split into two independent scopes after a second external comment asked
+      for the OTHER direction — typing `name*domain` into search. That
+      direction (A) is browser-only, needs no backend and no storage, so it
+      ships first; the original account-page direction (B) keeps the whole
+      enrichment + SSRF cost and stays behind it. Activated for A.
 ---
 
-# FEATURE: SEP-2 federated address reverse lookup
+# FEATURE: SEP-2 federated addresses, both directions
 
-## Summary
+## Two directions, deliberately separated
+
+SEP-2 defines lookups in both directions and external feedback asked for both,
+five weeks apart, using the same words for each. They are not one feature: the
+cost differs by an order of magnitude.
+
+| Scope | Query       | Direction                | Where                   | Cost                             |
+| ----- | ----------- | ------------------------ | ----------------------- | -------------------------------- |
+| **A** | `type=name` | `karol*lobstr.co` → `G…` | global search input     | browser only                     |
+| **B** | `type=id`   | `G…` → `karol*lobstr.co` | account + tx source row | enrichment, storage, SSRF guards |
+
+A shipped first and stands alone. B followed, and turned out to be the same
+shape: the account's `home_domain` is already on the detail response, so the
+browser can make both hops itself. The enrichment step, the stored column and
+the server-side SSRF guards sketched below were **not built** — the request
+never leaves the user's browser, so our infrastructure is not in the path.
+That sketch is kept for the record, marked superseded.
+
+## Scope A — resolve `name*domain` typed into search
+
+Someone types `karol*lobstr.co` into the explorer's search box and lands on
+that account's page.
+
+### Why this is the cheap direction
+
+The domain is typed by the user, in their own browser, and both hops are
+public CORS-enabled GETs. Measured against the live network, 2026-09-01:
+
+```
+GET https://lobstr.co/.well-known/stellar.toml
+  → FEDERATION_SERVER="https://lobstr.co/federation/"     ACAO: *
+GET https://lobstr.co/federation/?q=test*lobstr.co&type=name
+  → {"account_id":"GC526FUILJ6NLFXKCOOGTMDXNRW7MYSEK2UNRJV5FYWOGYDE4LOKXFEM"}
+                                                          ACAO: *
+```
+
+So the browser can do the whole thing. No API route, no ClickHouse column, no
+enrichment step, no server-side outbound fetch — and therefore none of scope
+B's SSRF surface, because our infrastructure never issues the request.
+
+### Where it hooks in
+
+`web/src/search/directRouteFor.ts` is synchronous and stays that way — the
+federation resolve is two network round-trips and cannot live in it. It hooks
+into `web/src/pages/SearchResultsPage.tsx` instead, which is the single point
+every entry path already converges on: the app-shell search bar and the home
+hero both call `directRouteFor(q) ?? routes.search(q)`, and an input shaped
+`name*domain` fails the classifier, so it arrives at `/search?q=…` on its own.
+One hook, three entry points covered, neither caller touched.
+
+### Acceptance criteria — scope A
+
+- [x] `name*domain` typed into search resolves to the account page
+- [x] **HTTPS only**, on both hops. A `FEDERATION_SERVER` that is not
+      `https:` is refused, not fetched.
+- [x] The returned `account_id` is shape-checked as a `G…` StrKey before
+      any navigation. A federation server is operated by the domain owner
+      and can return anything.
+- [x] **A failed resolve says so.** Domain without a toml, toml without a
+      `FEDERATION_SERVER`, server that 404s, CORS refusal, timeout — each
+      surfaces an explicit message. An empty results page would read as
+      "this address does not exist", which is a different and false claim.
+- [x] Bounded: request timeout and a response-size cap, so a hung host
+      cannot leave the input spinning forever.
+- [x] Never fires on ordinary queries — an input without exactly one `*`,
+      or with an unparseable domain, must not trigger a network call.
+- [x] **Docs updated** — N/A, no architectural surface changes (browser-only,
+      no new endpoint, no schema change).
+- [x] **API types regenerated** — N/A, does not touch `crates/api/**`.
+
+### Implementation notes — scope A
+
+Three files, frontend only:
+
+- `web/src/search/federation.ts` (new) — classifier + resolve. Returns a
+  result union, never throws; every failure path carries the sentence the UI
+  shows.
+- `web/src/pages/SearchResultsPage.tsx` — one `useQuery` + one effect. A
+  federated input also short-circuits `useSearchResults` (passes `''`), so
+  `/v1/search` is not called for a query it cannot answer.
+- `web/src/search/GlobalSearchBar.tsx` — the header dropdown skips
+  `/v1/search` for a federated input too. It knows nothing about SEP-2, so it
+  answered zero hits and the dropdown read "No results for karol\*lobstr.co"
+  while Enter went on to resolve that very address. It now says what Enter
+  will do.
+- `web/src/search/federation.test.ts`, `web/src/pages/SearchResultsPage.test.tsx`,
+  `web/src/search/GlobalSearchBar.test.tsx` (new).
+
+**Not given a federated path, deliberately:** the accounts list has no search
+field at all (only a "With domain" toggle — StrKeys are opaque, so a prefix
+filter is useless and exact lookup is the global search's job), and the
+transactions list input is a `filter[...]` on a column, not a search.
+
+### Design decisions — scope A
+
+#### Emerged
+
+1. **Hooked into the results page, not `directRouteFor`.** That file's own
+   doc-comment warns against growing it, and it is synchronous — a two-hop
+   resolve cannot live there. The results page is where all three entry paths
+   already converge, so no caller changed.
+2. **A federated query skips `/v1/search` entirely** rather than running it
+   alongside. The backend knows nothing about SEP-2, so the request can only
+   return zero hits, and an empty results table next to a resolve error reads
+   as a contradiction.
+3. **Failure is loud, in place of results, not beside them.** For a federated
+   input the results card is replaced by the resolve's own state. "No results"
+   would assert the address does not exist; the failure text asserts only what
+   we know — which hop failed.
+4. **Size cap is post-hoc, timeout is the real bound.** A streaming reader for
+   a `stellar.toml` was not worth the code; marked `ponytail:` in the source
+   with the upgrade path.
+5. **Reused `isAccountId` from the UI lib** instead of a local regex, so the
+   shape rule for "is this a Stellar account" stays in one place.
+
+## Scope B — show the federated address on the account page
 
 Where an account has a federated address (`name*domain.com`, SEP-2), show it
 next to the raw `G…` StrKey on the account detail page and in the transaction
 source-account row. Requires a reverse (`type=id`) federation lookup, cached as
 an enrichment field — never resolved on the read path.
 
-## Context
+### Context
 
 Nothing in the codebase performs any federation lookup. Two of the three
 required pieces already exist:
@@ -44,7 +168,7 @@ required pieces already exist:
 Missing: reading `FEDERATION_SERVER` out of the fetched toml and issuing the
 reverse query.
 
-## Implementation sketch
+### Implementation sketch
 
 1. Extend the SEP-1 toml parse to capture `FEDERATION_SERVER`.
 2. New enrichment step: for accounts with a non-empty `home_domain`, call
@@ -53,7 +177,7 @@ reverse query.
 4. Frontend: render `name*domain.com` above the truncated StrKey; StrKey stays
    the copyable canonical value.
 
-## Constraints / risks
+### Constraints / risks
 
 - **Off the read path.** The lookup hits a third-party HTTP server. It must run
   in enrichment with a cached result + TTL, never during a page request.
@@ -70,28 +194,90 @@ reverse query.
   fetch works is how this class of bug ships. The concrete requirements are in
   the acceptance criteria rather than here, so they cannot be read as advice.
 
-## Acceptance criteria
+### Coverage, measured before building — 2026-09-01
 
-- [ ] `FEDERATION_SERVER` parsed from `stellar.toml`
-- [ ] **The URL is validated before it is fetched:** HTTPS only, and the
+The task's own note said to scope coverage first and close the direction if
+the intersection was negligible. Sample: 100 accounts carrying a non-empty
+`home_domain`, taken from `/v1/accounts?filter[with_domain]=true`.
+
+| Step                                                           | Count                   |
+| -------------------------------------------------------------- | ----------------------- |
+| accounts with a home domain (sample)                           | 100                     |
+| …whose domain serves a `stellar.toml` with `FEDERATION_SERVER` | 85 (5 distinct domains) |
+| …that the server actually reverse-resolves to a name           | **33**                  |
+
+Not negligible, so it was built. The 52 that fail are accounts on a
+federation-capable domain that simply have no registered name — the server
+answers `Not found`, which is why the row is absent rather than errored.
+
+### Implementation notes — scope B
+
+- `web/src/search/federation.ts` — `resolveFederatedName(accountId, homeDomain)`.
+  Shares the `stellar.toml → FEDERATION_SERVER` hop with scope A via
+  `federationServerFor`; only the query direction differs.
+- `web/src/pages/accounts/AccountSummary.tsx` — one `useQuery`, one summary
+  row, rendered only when the lookup returns a name.
+- 6 further tests. Verified on the running app against two real mainnet
+  accounts: one that resolves (row present, name matches the federation
+  server's own answer) and one on the same domain that does not (no row).
+
+### Design decisions — scope B
+
+#### Emerged
+
+6. **Both sides must agree.** The returned `stellar_address` is rejected
+   unless it ends in `*<home_domain>`. The account names the domain on-ledger
+   and the domain names the account back inside its own namespace; without
+   the suffix check a domain could claim an account into someone else's.
+7. **Not stored, resolved per view.** The value belongs to the domain and can
+   change at any moment; a cached copy would present a stale claim as a
+   current one. React Query's window is the only caching.
+8. **Silent when absent, unlike scope A.** Nobody asked a question here — the
+   row is an attribute the account may not have, so its absence asserts
+   nothing. In search the user did ask, so silence there would have answered
+   wrongly.
+9. **Never the copyable value, never a link.** The StrKey stays canonical and
+   copyable; the address renders as plain text with a title explaining it is
+   the domain's claim. One real name in the sample is literally
+   `http://…*lobstr.co`, which is exactly why it is not linkified.
+
+### Acceptance criteria — scope B
+
+- [x] `FEDERATION_SERVER` parsed from `stellar.toml`
+- [x] ~~**The URL is validated before it is fetched:**~~ **N/A — superseded.**
+      No server-side fetch exists. The browser fetches, from the user's own
+      machine, a domain the account itself published. The three criteria below
+      guard an enrichment worker that was never built; they return the moment
+      any of this moves server-side.
+      _(original text)_ HTTPS only, and the
       resolved address rejected when it is loopback, link-local, RFC1918 or a
       cloud metadata endpoint. Check after DNS resolution, not on the hostname —
       a hostname resolving to `169.254.169.254` passes any string check.
-- [ ] **Every redirect target re-validated the same way**, and the redirect
-      chain bounded — one allowed hop is enough to reach the metadata service.
-- [ ] **Connect and read timeouts, a response-size cap, and bounded retries**,
-      so a hostile or hung server cannot pin an enrichment worker
-- [ ] Reverse (`type=id`) lookup runs in enrichment, with TTL + negative cache
-- [ ] Resolved address exposed on the account DTO and tx source-account row
-- [ ] Frontend renders it as secondary to the StrKey, not as a replacement
-- [ ] Absent / failed lookup degrades silently to StrKey-only
-- [ ] **Docs updated** — `docs/architecture/**` enrichment pipeline gains one
-      step; update in the same PR per ADR 0032
-- [ ] **API types regenerated** — touches `crates/api/**`; run
-      `npx nx run @rumblefish/api-types:generate`
+- [ ] ~~**Every redirect target re-validated the same way**, and the redirect
+      chain bounded — one allowed hop is enough to reach the metadata service.\*\*~~ N/A, see above.
+- [x] Connect and read timeouts and a response-size cap — kept, they bound the
+      browser's own request (`AbortSignal.timeout`, size check in `getBounded`)
+- [x] Reverse (`type=id`) lookup runs — in the browser, not in enrichment; no
+      TTL or negative cache needed because nothing is persisted
+- [x] ~~Resolved address exposed on the account DTO~~ N/A — `home_domain` is
+      already on the DTO and the browser does the rest, so no API change.
+      Transaction source-account row: **not done**, account detail only
+- [x] Frontend renders it as secondary to the StrKey, not as a replacement
+- [x] Absent / failed lookup degrades silently to StrKey-only
+- [x] **Docs updated** — N/A. The enrichment step the original design would
+      have added does not exist; nothing in `docs/architecture/**` describes
+      browser-side display logic.
+- [x] **API types regenerated** — N/A, no backend change.
+
+## Future work
+
+- The transaction source-account row still shows the bare StrKey. Same helper
+  would serve it, but the tx detail response does not carry `home_domain`, so
+  it needs an API field first — filed separately rather than smuggled in here.
 
 ## Notes
 
-Worth scoping the coverage before building: count accounts with a non-empty
+~~Worth scoping the coverage before building: count accounts with a non-empty
 `home_domain`, then sample how many of those domains actually serve a
-`FEDERATION_SERVER`. If the intersection is negligible, close this instead.
+`FEDERATION_SERVER`. If the intersection is negligible, close this instead.~~
+Done — see _Coverage, measured before building_ above. It was not negligible.
