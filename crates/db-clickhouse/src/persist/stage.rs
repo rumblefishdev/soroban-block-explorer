@@ -2341,6 +2341,11 @@ fn is_diagnostic(src: EventSource) -> bool {
 /// for a concentrated pool and runs second. Folding — not a version column —
 /// is what makes the stored row a deterministic function of the ledger, so a
 /// re-parse still wins simply by landing last (rule 4).
+///
+/// The `ledger_sequence` in the key never varies today: `prepare` stages ONE
+/// ledger, so both writers stamp the same value. It is kept as belt-and-braces
+/// — a future caller that batches ledgers would otherwise collapse a pool's
+/// two ledgers into one, silently.
 fn fold_pool_state_changes(rows: &mut Vec<PoolStateChangeRow>) {
     let mut position: HashMap<([u8; 32], i64), usize> = HashMap::new();
     let mut folded: Vec<PoolStateChangeRow> = Vec::with_capacity(rows.len());

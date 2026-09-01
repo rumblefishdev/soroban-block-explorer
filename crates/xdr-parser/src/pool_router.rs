@@ -71,6 +71,7 @@
 
 use serde_json::Value;
 
+use crate::scval::{address, raw_scalar, symbol, typed_str, vec_elements};
 use crate::types::{EventSource, ExtractedEvent};
 
 /// One pool registration, tied to the router that emitted it.
@@ -212,7 +213,7 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddP
     use AddPoolReject as R;
 
     let topics = topics.as_array().ok_or(R::NotAddPool)?;
-    if symbol_value(topics.first().ok_or(R::NotAddPool)?) != Some("add_pool") {
+    if symbol(topics.first().ok_or(R::NotAddPool)?) != Some("add_pool") {
         return Err(R::NotAddPool);
     }
 
@@ -223,7 +224,7 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddP
         .and_then(vec_elements)
         .ok_or(R::BadTokens)?
         .iter()
-        .map(address_value)
+        .map(|v| address(v).map(str::to_string))
         .collect::<Option<_>>()
         .ok_or(R::BadTokens)?;
     if tokens.is_empty() {
@@ -233,11 +234,11 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddP
     let fields = vec_elements(data).ok_or(R::BadData)?;
     let pool = fields
         .first()
-        .and_then(address_value)
+        .and_then(|v| address(v).map(str::to_string))
         .ok_or(R::BadPoolAddress)?;
     let pool_type = fields
         .get(1)
-        .and_then(symbol_value)
+        .and_then(symbol)
         .ok_or(R::BadPoolType)?
         .to_string();
 
@@ -246,7 +247,7 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddP
     // and its legs are what the registry is for.
     let subpool_salt = fields
         .get(2)
-        .and_then(typed_str("bytes"))
+        .and_then(|v| typed_str(v, "bytes"))
         .and_then(decode_bytes32);
     // Every element is kept. A `filter_map` here would silently shorten the
     // list and change what position 1 means.
@@ -275,49 +276,6 @@ fn decode_bytes32(b64: &str) -> Option<[u8; 32]> {
         .ok()?
         .try_into()
         .ok()
-}
-
-/// Elements of a `{"type":"vec","value":[…]}` payload.
-fn vec_elements(v: &Value) -> Option<&[Value]> {
-    has_type(v, "vec").then_some(())?;
-    v.get("value").and_then(Value::as_array).map(Vec::as_slice)
-}
-
-/// Type-tag check on its own. Kept separate from reading the payload because
-/// `value` is a string for scalars and an array for `vec` — conflating the two
-/// makes every well-formed vec look malformed.
-fn has_type(v: &Value, tag: &str) -> bool {
-    v.get("type").and_then(Value::as_str) == Some(tag)
-}
-
-fn address_value(v: &Value) -> Option<String> {
-    typed_str("address")(v)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn symbol_value(v: &Value) -> Option<&str> {
-    typed_str("sym")(v).filter(|s| !s.is_empty())
-}
-
-/// A scalar ScVal's value as text. Numeric ScVal JSON carries wide types as
-/// strings and narrow ones as JSON numbers; both render the same way here, and
-/// anything unexpected renders as its JSON rather than vanishing.
-fn raw_scalar(v: &Value) -> String {
-    match v.get("value") {
-        Some(Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
-    }
-}
-
-/// Curried string reader for scalar ScVal JSON: `typed_str("address")(v)`
-/// yields the `value` string only when `v` carries that type tag.
-fn typed_str(tag: &'static str) -> impl Fn(&Value) -> Option<&str> {
-    move |v: &Value| {
-        has_type(v, tag).then_some(())?;
-        v.get("value").and_then(Value::as_str)
-    }
 }
 
 #[cfg(test)]

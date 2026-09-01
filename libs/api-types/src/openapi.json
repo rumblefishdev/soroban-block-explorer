@@ -4164,7 +4164,7 @@
                 "first_deposit_ledger": {
                   "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool. `null`\nfor soroban pools — `balances` records current state, not the first\nsighting, and inventing one would be a misleading fallback."
+                  "description": "Ledger this holder's position began.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first. Measured on the busiest share token: 655 of 655\ncurrent holders resolve, the four contract holders included.\n\n`null` only where no acquisition event exists for a current holder,\nwhich no production data shows today."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4477,7 +4477,7 @@
           "first_deposit_ledger": {
             "type": ["integer", "null"],
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool. `null`\nfor soroban pools — `balances` records current state, not the first\nsighting, and inventing one would be a misleading fallback."
+            "description": "Ledger this holder's position began.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first. Measured on the busiest share token: 655 of 655\ncurrent holders resolve, the four contract holders included.\n\n`null` only where no acquisition event exists for a current holder,\nwhich no production data shows today."
           },
           "last_updated_ledger": {
             "type": "integer",

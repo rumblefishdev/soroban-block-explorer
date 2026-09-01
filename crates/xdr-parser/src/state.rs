@@ -816,7 +816,11 @@ pub fn extract_liquidity_pools(
 /// version-less `ReplacingMergeTree`, which would otherwise keep an arbitrary
 /// intra-ledger image. See lore-0356.
 ///
-/// Call once per ledger, after aggregating every transaction's snapshots.
+/// Call once per ledger, after aggregating every transaction's snapshots.///
+/// The `ledger_sequence` in the key never varies today: `ParseOutput` is built
+/// for ONE ledger, so every image here already shares it. It is kept as
+/// belt-and-braces — a future caller that batches ledgers would otherwise
+/// collapse a pool's two ledgers into one, silently.
 pub fn dedup_final_pool_snapshots(
     snapshots: Vec<ExtractedLiquidityPoolSnapshot>,
 ) -> Vec<ExtractedLiquidityPoolSnapshot> {

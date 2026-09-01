@@ -63,14 +63,6 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
   );
 }
 
-/**
- * Reserve-dot colour for a pool leg — the saturated mid-tone of the leg's
- * per-asset colour (`assetColor`), keyed identically to the leg avatar so
- * each reserve row's dot matches its asset's avatar.
- */
-export function reserveDotColor(leg: PoolAssetLeg): string {
-  return assetColor(assetLegLabel(leg)).dot;
-}
 // ---------------------------------------------------------------------------
 // Unified leg views (task 0374): classic pools carry an `asset_a`/`asset_b`
 // PAIR, soroban pools carry 2–4 `legs[]`. Every pool surface renders through

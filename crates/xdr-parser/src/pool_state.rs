@@ -23,6 +23,7 @@
 
 use serde_json::Value;
 
+use crate::scval::typed;
 use crate::types::ExtractedLedgerEntryChange;
 
 /// One plane `PoolData` write: a pool's reserves (and registration facts) as
@@ -259,11 +260,6 @@ pub fn extract_pool_instances(
     out
 }
 
-/// `value` of a house typed-JSON node, iff its `type` tag matches.
-fn typed<'a>(v: &'a Value, tag: &str) -> Option<&'a Value> {
-    (v.get("type")?.as_str()? == tag).then(|| v.get("value"))?
-}
-
 /// `{"type":"vec","value":[{"type":"u128","value":"…"},…]}` → raw decimal
 /// strings, order preserved.
 fn raw_u128_vec(v: &Value) -> Option<Vec<String>> {
@@ -283,6 +279,12 @@ fn raw_u128_vec(v: &Value) -> Option<Vec<String>> {
 /// Input order IS apply order: `process.rs` extends the vector while walking
 /// transactions in their ledger positions, and `extract_plane_pool_data`
 /// preserves change order within a transaction.
+///
+/// The `ledger_sequence` in the key never varies today: `ParseOutput` is built
+/// for ONE ledger, so every write here already shares it. It is kept as
+/// belt-and-braces — a future caller that batches ledgers would otherwise
+/// collapse a pool's two ledgers into one, silently. Same for
+/// `dedup_final_pool_instances` below.
 pub fn dedup_final_plane_writes(
     writes: Vec<ExtractedPlanePoolData>,
 ) -> Vec<ExtractedPlanePoolData> {

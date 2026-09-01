@@ -1873,6 +1873,51 @@ async fn fetch_token_decimals(
     Ok(row.and_then(|r| r.decimals))
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct FirstAcquisitionChRow {
+    holder: String,
+    first_ledger: i64,
+}
+
+/// When each holder FIRST acquired this share token, keyed by holder StrKey.
+///
+/// `balances` cannot answer this — it records current state, not a first
+/// sighting — but the share token's own events can: a holder's position begins
+/// at the first `mint` or incoming `transfer` naming them. Measured on the
+/// busiest share token: 655 of 655 current holders are dated this way, the
+/// four contract holders included.
+///
+/// The recipient is topic 3 for BOTH signatures, verified across every LP
+/// share token on production: 78,539 acquisition events, all three topics,
+/// the third always an `address`. Note this token family's `mint` carries
+/// `[sym, pool, to]` — three topics, not the two a bare SEP-41 `mint` has —
+/// so an index taken from the SEP-41 shape reads the POOL and dates almost
+/// nobody.
+///
+/// Cheap by construction: `soroban_events` is ordered on `contract_id` first,
+/// so this is a primary-key prefix seek over one token's events (the busiest
+/// has ~6.8k).
+async fn fetch_first_acquisition_ledgers(
+    client: &clickhouse::Client,
+    token_id: i64,
+) -> Result<HashMap<String, i64>, clickhouse::error::Error> {
+    let rows = client
+        .query(
+            "SELECT JSONExtractString(topics_xdr, 3, 'value') AS holder, \
+                    min(ledger_sequence)                      AS first_ledger \
+             FROM soroban_events \
+             WHERE contract_id = ? AND signature IN ('mint', 'transfer') \
+             GROUP BY holder HAVING holder != ''",
+        )
+        .bind(token_id)
+        .fetch_all::<FirstAcquisitionChRow>()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.holder, r.first_ledger))
+        .collect())
+}
+
 /// Participants of a SOROBAN pool = current holders of its share token,
 /// from `balances` (task 0374 step 16). Ordered `(amount DESC, holder DESC)`
 /// to mirror the classic participants sort.
@@ -1942,12 +1987,14 @@ pub async fn fetch_soroban_participants(
     // resolving through neither is dropped with the same error contract as
     // the classic path (pagination may terminate early — operator signal).
     let ids: Vec<i64> = rows.iter().map(|r| r.holder_id).collect();
-    let (accounts, contracts, decimals) = tokio::join!(
+    let (accounts, contracts, decimals, first_seen) = tokio::join!(
         crate::common::ch::resolve_accounts(client, ids.clone()),
         crate::common::ch::resolve_contracts(client, ids),
         fetch_token_decimals(client, share_token_id),
+        fetch_first_acquisition_ledgers(client, share_token_id),
     );
-    let (accounts, contracts, decimals) = (accounts?, contracts?, decimals?);
+    let (accounts, contracts, decimals, first_seen) =
+        (accounts?, contracts?, decimals?, first_seen?);
     Ok(rows
         .into_iter()
         .filter_map(|r| {
@@ -1964,6 +2011,7 @@ pub async fn fetch_soroban_participants(
                 );
                 return None;
             };
+            let first_deposit_ledger = first_seen.get(&strkey).copied();
             Some(ParticipantRow {
                 account: strkey,
                 account_id_surrogate: r.holder_id,
@@ -1973,7 +2021,10 @@ pub async fn fetch_soroban_participants(
                 shares: decimals.map(|d| scale_raw_amount(&r.shares, d)),
                 cursor_shares: r.shares,
                 share_percentage: r.share_percentage,
-                first_deposit_ledger: None,
+                // The ledger this holder's position began, from the share
+                // token's own mint/transfer events — `balances` has no such
+                // column, but the events do.
+                first_deposit_ledger,
                 last_updated_ledger: r.last_updated_ledger,
             })
         })

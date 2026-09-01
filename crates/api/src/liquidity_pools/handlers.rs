@@ -233,13 +233,16 @@ fn map_pool_item(row: PoolRow, soroban: Option<SorobanView>) -> PoolItem {
 }
 
 /// `AssetFamily` discriminant → wire label for a soroban-pool leg.
+///
+/// The mapping itself belongs to the domain enum and is NOT repeated here — a
+/// second copy is exactly the drift task 0496 recorded. Only the fallback is
+/// local, because it is not a family: a leg whose surrogate resolved to
+/// nothing has no discriminant to name, and saying so explicitly beats
+/// guessing a family for it.
 fn family_label(family: i16) -> &'static str {
-    match family {
-        0 => "native",
-        1 => "classic_credit",
-        3 => "soroban",
-        _ => "unresolved",
-    }
+    domain::enums::AssetFamily::try_from(family)
+        .map(domain::enums::AssetFamily::as_str)
+        .unwrap_or("unresolved")
 }
 
 /// Assemble the soroban halves for the soroban rows of a page, keyed by
