@@ -1624,18 +1624,22 @@ export type PaginatedParticipantItem = {
      */
     account: string;
     /**
-     * Ledger this holder's position began.
+     * Ledger this holder's position began. Always present, either world.
      *
      * Classic pools read it from `lp_positions`. Soroban pools have no such
      * column — `balances` records current state, not a first sighting — so it
      * comes from the share token's own `mint` / incoming `transfer` events,
-     * whichever came first. Measured on the busiest share token: 655 of 655
-     * current holders resolve, the four contract holders included.
+     * whichever came first.
      *
-     * `null` only where no acquisition event exists for a current holder,
-     * which no production data shows today.
+     * Required rather than nullable because the coverage is STRUCTURAL: every
+     * LP share token was deployed after our event floor (the family's first
+     * mint is L50,639,009 against a floor of L50,457,424), so the event that
+     * gave a current holder their tokens is always one we hold. Measured
+     * 655/655 on the busiest token, contract holders included. A holder we
+     * cannot date is treated as a defect and dropped, like one we cannot
+     * name — never served as an absent field.
      */
-    first_deposit_ledger?: number | null;
+    first_deposit_ledger: number;
     /**
      * Ledger of the most recent change to this position.
      */
@@ -1653,9 +1657,21 @@ export type PaginatedParticipantItem = {
      * Pool-share balance carried as a decimal string preserving the
      * underlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban
      * pools: the share-token balance scaled by the token's on-chain
-     * metadata decimals; `null` when the token never published decimals —
-     * an unknown scale surfaces as absent (`share_percentage`, which is
-     * scale-free, still reports).
+     * metadata decimals.
+     *
+     * **Nullable on purpose, unlike `first_deposit_ledger` beside it.** That
+     * field's coverage rests on a fact about OUR index — the family is newer
+     * than our event floor — which is stable and verifiable. This one rests on
+     * a fact about the VENDOR's contract: that a share token publishes
+     * `decimals`. All 483 on production do, and every one says 7 — but this
+     * PR already found the other half of that lesson, where five deployments
+     * run an older pool contract that publishes no `Router` key at all. A
+     * measurement over today's instances is not a guarantee about a contract
+     * version we have not met.
+     *
+     * So an unknown scale surfaces as absent rather than as a raw integer
+     * posing as a scaled amount, and `share_percentage` — which is scale-free
+     * — still reports, so the row stays useful.
      */
     shares?: string | null;
   }>;
@@ -1905,18 +1921,22 @@ export type ParticipantItem = {
    */
   account: string;
   /**
-   * Ledger this holder's position began.
+   * Ledger this holder's position began. Always present, either world.
    *
    * Classic pools read it from `lp_positions`. Soroban pools have no such
    * column — `balances` records current state, not a first sighting — so it
    * comes from the share token's own `mint` / incoming `transfer` events,
-   * whichever came first. Measured on the busiest share token: 655 of 655
-   * current holders resolve, the four contract holders included.
+   * whichever came first.
    *
-   * `null` only where no acquisition event exists for a current holder,
-   * which no production data shows today.
+   * Required rather than nullable because the coverage is STRUCTURAL: every
+   * LP share token was deployed after our event floor (the family's first
+   * mint is L50,639,009 against a floor of L50,457,424), so the event that
+   * gave a current holder their tokens is always one we hold. Measured
+   * 655/655 on the busiest token, contract holders included. A holder we
+   * cannot date is treated as a defect and dropped, like one we cannot
+   * name — never served as an absent field.
    */
-  first_deposit_ledger?: number | null;
+  first_deposit_ledger: number;
   /**
    * Ledger of the most recent change to this position.
    */
@@ -1934,9 +1954,21 @@ export type ParticipantItem = {
    * Pool-share balance carried as a decimal string preserving the
    * underlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban
    * pools: the share-token balance scaled by the token's on-chain
-   * metadata decimals; `null` when the token never published decimals —
-   * an unknown scale surfaces as absent (`share_percentage`, which is
-   * scale-free, still reports).
+   * metadata decimals.
+   *
+   * **Nullable on purpose, unlike `first_deposit_ledger` beside it.** That
+   * field's coverage rests on a fact about OUR index — the family is newer
+   * than our event floor — which is stable and verifiable. This one rests on
+   * a fact about the VENDOR's contract: that a share token publishes
+   * `decimals`. All 483 on production do, and every one says 7 — but this
+   * PR already found the other half of that lesson, where five deployments
+   * run an older pool contract that publishes no `Router` key at all. A
+   * measurement over today's instances is not a guarantee about a contract
+   * version we have not met.
+   *
+   * So an unknown scale surfaces as absent rather than as a raw integer
+   * posing as a scaled amount, and `share_percentage` — which is scale-free
+   * — still reports, so the row stays useful.
    */
   shares?: string | null;
 };

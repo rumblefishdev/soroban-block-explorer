@@ -4155,16 +4155,20 @@
             "items": {
               "type": "object",
               "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
-              "required": ["account", "last_updated_ledger"],
+              "required": [
+                "account",
+                "first_deposit_ledger",
+                "last_updated_ledger"
+              ],
               "properties": {
                 "account": {
                   "type": "string",
                   "description": "Participant StrKey. Classic pools: always an account (`G...`).\nSoroban pools: a share-token holder — an account (`G...`) OR a\ncontract (`C...`); Aquarius LPs routinely stake their LP tokens, so a\nstaking/locker contract holding most of the supply is normal, not a\ndata error."
                 },
                 "first_deposit_ledger": {
-                  "type": ["integer", "null"],
+                  "type": "integer",
                   "format": "int64",
-                  "description": "Ledger this holder's position began.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first. Measured on the busiest share token: 655 of 655\ncurrent holders resolve, the four contract holders included.\n\n`null` only where no acquisition event exists for a current holder,\nwhich no production data shows today."
+                  "description": "Ledger this holder's position began. Always present, either world.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first.\n\nRequired rather than nullable because the coverage is STRUCTURAL: every\nLP share token was deployed after our event floor (the family's first\nmint is L50,639,009 against a floor of L50,457,424), so the event that\ngave a current holder their tokens is always one we hold. Measured\n655/655 on the busiest token, contract holders included. A holder we\ncannot date is treated as a defect and dropped, like one we cannot\nname — never served as an absent field."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4177,7 +4181,7 @@
                 },
                 "shares": {
                   "type": ["string", "null"],
-                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban\npools: the share-token balance scaled by the token's on-chain\nmetadata decimals; `null` when the token never published decimals —\nan unknown scale surfaces as absent (`share_percentage`, which is\nscale-free, still reports)."
+                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban\npools: the share-token balance scaled by the token's on-chain\nmetadata decimals.\n\n**Nullable on purpose, unlike `first_deposit_ledger` beside it.** That\nfield's coverage rests on a fact about OUR index — the family is newer\nthan our event floor — which is stable and verifiable. This one rests on\na fact about the VENDOR's contract: that a share token publishes\n`decimals`. All 483 on production do, and every one says 7 — but this\nPR already found the other half of that lesson, where five deployments\nrun an older pool contract that publishes no `Router` key at all. A\nmeasurement over today's instances is not a guarantee about a contract\nversion we have not met.\n\nSo an unknown scale surfaces as absent rather than as a raw integer\nposing as a scaled amount, and `share_percentage` — which is scale-free\n— still reports, so the row stays useful."
                 }
               }
             }
@@ -4468,16 +4472,16 @@
       "ParticipantItem": {
         "type": "object",
         "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
-        "required": ["account", "last_updated_ledger"],
+        "required": ["account", "first_deposit_ledger", "last_updated_ledger"],
         "properties": {
           "account": {
             "type": "string",
             "description": "Participant StrKey. Classic pools: always an account (`G...`).\nSoroban pools: a share-token holder — an account (`G...`) OR a\ncontract (`C...`); Aquarius LPs routinely stake their LP tokens, so a\nstaking/locker contract holding most of the supply is normal, not a\ndata error."
           },
           "first_deposit_ledger": {
-            "type": ["integer", "null"],
+            "type": "integer",
             "format": "int64",
-            "description": "Ledger this holder's position began.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first. Measured on the busiest share token: 655 of 655\ncurrent holders resolve, the four contract holders included.\n\n`null` only where no acquisition event exists for a current holder,\nwhich no production data shows today."
+            "description": "Ledger this holder's position began. Always present, either world.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first.\n\nRequired rather than nullable because the coverage is STRUCTURAL: every\nLP share token was deployed after our event floor (the family's first\nmint is L50,639,009 against a floor of L50,457,424), so the event that\ngave a current holder their tokens is always one we hold. Measured\n655/655 on the busiest token, contract holders included. A holder we\ncannot date is treated as a defect and dropped, like one we cannot\nname — never served as an absent field."
           },
           "last_updated_ledger": {
             "type": "integer",
@@ -4490,7 +4494,7 @@
           },
           "shares": {
             "type": ["string", "null"],
-            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban\npools: the share-token balance scaled by the token's on-chain\nmetadata decimals; `null` when the token never published decimals —\nan unknown scale surfaces as absent (`share_percentage`, which is\nscale-free, still reports)."
+            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban\npools: the share-token balance scaled by the token's on-chain\nmetadata decimals.\n\n**Nullable on purpose, unlike `first_deposit_ledger` beside it.** That\nfield's coverage rests on a fact about OUR index — the family is newer\nthan our event floor — which is stable and verifiable. This one rests on\na fact about the VENDOR's contract: that a share token publishes\n`decimals`. All 483 on production do, and every one says 7 — but this\nPR already found the other half of that lesson, where five deployments\nrun an older pool contract that publishes no `Router` key at all. A\nmeasurement over today's instances is not a guarantee about a contract\nversion we have not met.\n\nSo an unknown scale surfaces as absent rather than as a raw integer\nposing as a scaled amount, and `share_percentage` — which is scale-free\n— still reports, so the row stays useful."
           }
         }
       },

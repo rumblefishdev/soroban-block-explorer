@@ -65,17 +65,15 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Since ledger',
     align: 'right',
     width: 120,
-    cell: (row) =>
-      // null for soroban share-token holders — `balances` records current
-      // state, not the first sighting.
-      row.first_deposit_ledger != null ? (
-        <IdentifierDisplay
-          value={String(row.first_deposit_ledger)}
-          type="ledger"
-        />
-      ) : (
-        '—'
-      ),
+    // Always present, either world: classic reads `lp_positions`, soroban the
+    // share token's first mint or incoming transfer. No em-dash branch — the
+    // API stopped being able to omit it.
+    cell: (row) => (
+      <IdentifierDisplay
+        value={String(row.first_deposit_ledger)}
+        type="ledger"
+      />
+    ),
   },
 ];
 

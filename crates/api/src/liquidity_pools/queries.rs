@@ -122,7 +122,7 @@ pub struct ParticipantRow {
     pub share_percentage: Option<String>,
     /// `None` on the soroban path (`balances` records state, not first
     /// sighting).
-    pub first_deposit_ledger: Option<i64>,
+    pub first_deposit_ledger: i64,
     pub last_updated_ledger: i64,
 }
 
@@ -2011,7 +2011,22 @@ pub async fn fetch_soroban_participants(
                 );
                 return None;
             };
-            let first_deposit_ledger = first_seen.get(&strkey).copied();
+            // Every LP share token was deployed AFTER our event floor
+            // (family's first mint L50,639,009 vs floor L50,457,424), so a
+            // current holder's position always began in an event we hold —
+            // this is structural, not luck. A miss therefore means a defect,
+            // not a data gap, and is dropped with the same contract as a
+            // holder that resolves to no account: loudly, and visibly in the
+            // page length.
+            let Some(first_deposit_ledger) = first_seen.get(&strkey).copied() else {
+                tracing::error!(
+                    holder = %strkey,
+                    share_token_id,
+                    "share-token holder has no mint/transfer that gave them the \
+                     token: participant dropped, pagination may terminate early"
+                );
+                return None;
+            };
             Some(ParticipantRow {
                 account: strkey,
                 account_id_surrogate: r.holder_id,
@@ -2155,7 +2170,7 @@ pub async fn fetch_participants(
                 shares: Some(r.shares.clone()),
                 cursor_shares: r.shares,
                 share_percentage: r.share_percentage,
-                first_deposit_ledger: Some(r.first_deposit_ledger),
+                first_deposit_ledger: r.first_deposit_ledger,
                 last_updated_ledger: r.last_updated_ledger,
             })
         })
