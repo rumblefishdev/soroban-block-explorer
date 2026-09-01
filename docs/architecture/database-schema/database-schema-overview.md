@@ -189,11 +189,15 @@ Derived explorer entities:
 - `liquidity_pools` is also the dimension for **Soroban AMM pools** (ADR 0058,
   task 0374): `pool_kind = 1` rows discovered from router `add_pool` events,
   carrying `legs Array(Int64)` (token-contract surrogates, 2–4 legs),
-  `deployment_id` (registering router), `pool_type_raw`, `subpool_salt`,
-  `init_args`. Their id bytes are a CONTRACT address payload (`C...` on the
-  wire, never `L...`)
+  `deployment_id` (registering router), `pool_type_raw` and `fee_bps`.
+  Registration provenance (the subpool salt, raw `init_args` beyond the fee)
+  is deliberately NOT materialised — the `add_pool` event sits complete in
+  `soroban_events`; extract on demand, never copy. Their id bytes are a
+  CONTRACT address payload (`C...` on the wire, never `L...`)
 - `pool_state_changes` — Soroban pool reserves, ONE row per
-  `(pool, ledger)`, `reserves Array(Int128)` verbatim. Same grain and
+  `(pool, plane, ledger)` (the plane is in the key so a forged plane write
+  cannot evict a genuine row — see the DDL comment),
+  `reserves Array(Int128)` verbatim. Same grain and
   mechanism as the classic snapshots: a version-less `ReplacingMergeTree`
   whose determinism comes from folding at stage time, never from a version
   column. Fungible pools write plane `PoolData`; concentrated pools write
@@ -1381,22 +1385,16 @@ Design notes:
 
 ```sql
 CREATE TABLE liquidity_pool_snapshots (
-    id              BIGSERIAL     NOT NULL,
-    pool_id         BYTEA         NOT NULL REFERENCES liquidity_pools(pool_id),  -- ADR 0024
-    ledger_sequence BIGINT        NOT NULL,
-    reserve_a       NUMERIC(28,7) NOT NULL,
-    reserve_b       NUMERIC(28,7) NOT NULL,
-    total_shares    NUMERIC(28,7) NOT NULL,
-    tvl             NUMERIC(28,7),                            -- Lambda 2 enrichment (ADR 0043 / task 0195 §2b — off-chain price oracle)
-    volume          NUMERIC(28,7),                            -- deferred to task 0199 (per-op extraction + USD oracle)
-    fee_revenue     NUMERIC(28,7),                            -- deferred to task 0199 (derived from USD-denominated volume)
-    created_at      TIMESTAMPTZ   NOT NULL,
-    PRIMARY KEY (id, created_at),
-    CONSTRAINT ck_lps_pool_id_len CHECK (octet_length(pool_id) = 32)
-) PARTITION BY RANGE (created_at);
-
-CREATE INDEX idx_lps_pool ON liquidity_pool_snapshots (pool_id, created_at DESC);
-CREATE INDEX idx_lps_tvl  ON liquidity_pool_snapshots (tvl DESC) WHERE tvl IS NOT NULL;
+    pool_id         FixedString(32),
+    ledger_sequence Int64,
+    reserve_a       Decimal128(7),
+    reserve_b       Decimal128(7),
+    total_shares    Decimal128(7),
+    gross_volume_a  Nullable(Decimal128(7))   -- asset-A-unit gross trade volume (task 0261/0266)
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence);
 ```
 
 Purpose:
@@ -1411,18 +1409,19 @@ Design notes:
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
   the schema's balance / amount handling
-- `tvl`, `volume` and `fee_revenue` are **permanently unwritten** — no writer
-  populates them, and none is planned. Task 0199 landed the analytics as
+- `tvl`, `volume` and `fee_revenue` are **removed** (task 0374 distillation;
+  the production `ALTER ... DROP COLUMN` rides the 0374 deploy — see
+  `docs/deployment.md`, where the order is load-bearing for the 0.15 driver).
+  They were written as NULL since task 0199, which landed the analytics as
   **compute-at-read** instead ([ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md)):
   the API multiplies the on-chain quantities in these rows (`reserve_a/b`, and
   `gross_volume_a`) by USD closes read at query time from the prices service's
   in-cluster `prices.*` views. The earlier plan — a Lambda 2 write-back per
   ADR 0043 — was rejected because `liquidity_pool_snapshots` is a
   `ReplacingMergeTree` with no version column, so a per-row write-back is a
-  racy read-modify-write that a later plain insert can silently erase. Keeping
-  the columns unwritten is what keeps this table single-writer (indexer only).
-  They are retained rather than dropped so an eventual materialization has a
-  home; anything reading them today gets NULL by design.
+  racy read-modify-write that a later plain insert can silently erase. An
+  eventual USD materialization gets its own table with its own writer; these
+  columns are not its home.
 - `gross_volume_a` (asset-A-unit gross trade volume per `(pool, ledger)`, from
   PathPayment claim atoms) IS populated — live since task 0261 and backfilled
   by 0266 — and is the on-chain input the read-time USD `volume` multiplies.

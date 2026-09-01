@@ -17,8 +17,9 @@
 //!   skip (count == 0 asserted);
 //! * every parsed plane entry carries non-empty reserves and a non-empty
 //!   pool type;
-//! * every pool instance recognised by the Router+Plane shape yields both
-//!   addresses.
+//! * every pool instance recognised by the `Plane` shape yields the plane
+//!   address; `Router` is OPTIONAL (five older deployments write none — the
+//!   dead-deployment ledgers in this corpus exercise exactly that arm).
 //!
 //! With `POOL_STATE_EMIT=path` the test also writes every extracted plane
 //! row as JSONL, so the dual-source oracle check (plane state vs the

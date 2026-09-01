@@ -250,9 +250,13 @@ Frontend **content** is separate: `deploy-production-web`
   1. **DDL first** (prod is mid-migration: the `liquidity_pools` soroban
      columns are already ALTERed in; the rest is not):
      ```sql
-     -- new tables, definitions in crates/db-clickhouse/schema/init.sql
-     CREATE TABLE pool_state_changes (...);
-     CREATE TABLE pool_instance_state (...);
+     -- new tables: run the definitions VERBATIM from
+     -- crates/db-clickhouse/schema/init.sql (the source of truth — do not
+     -- retype them). Extract with:
+     --   awk '/CREATE TABLE IF NOT EXISTS pool_state_changes/,/^ORDER BY/; /CREATE TABLE IF NOT EXISTS pool_instance_state/,/^ORDER BY/' \
+     --     crates/db-clickhouse/schema/init.sql
+     CREATE TABLE IF NOT EXISTS pool_state_changes (...);   -- from init.sql
+     CREATE TABLE IF NOT EXISTS pool_instance_state (...);  -- from init.sql
      -- load-bearing drops (no-DEFAULT columns the new structs dropped)
      ALTER TABLE liquidity_pool_snapshots
        DROP COLUMN tvl, DROP COLUMN volume, DROP COLUMN fee_revenue;

@@ -145,8 +145,12 @@ what makes reserve provenance checkable. A plane entry names its pool in a key
 payload the writing contract chooses freely, so any contract can publish
 reserves under a victim pool's id; reads of `pool_state_changes` keep only rows
 whose `plane_id` matches what the pool itself declares here. The same review
-added the symmetric write-side rule — a registration is accepted only when the
-named pool's instance declares the emitter as its `Router`. A second side table
+added the symmetric write-side rule — a registration is accepted when the
+named pool's instance declares the emitter as its `Router`; an instance with
+no `Router` key at all (five older deployments, 23 pools, read from chain
+2026-09-01) is accepted UNVERIFIED with a warn, because a missing key is an
+older contract version, not evidence of a forgery, and dropping a real pool
+is the failure the reject taxonomy exists to prevent. A second side table
 was considered and rejected: the facts share a source, a grain and a version
 clock, so one table is the honest shape. Free to do, since nothing had
 deployed.

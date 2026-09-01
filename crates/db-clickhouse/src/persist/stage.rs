@@ -1173,24 +1173,27 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             match (
                 ids::contract_payload(&inst.state.pool),
                 parse_reserves(&inst.state.reserves),
+                inst.state.plane.as_deref(),
             ) {
-                (Some(pool_id), Some(reserves)) => {
+                (Some(pool_id), Some(reserves), Some(plane)) => {
                     pool_state_rows.push(PoolStateChangeRow {
                         pool_id,
                         ledger_sequence: i64::from(inst.ledger_sequence),
                         reserves,
-                        plane_id: inst
-                            .state
-                            .plane
-                            .as_deref()
-                            .map(ids::contract_id)
-                            .unwrap_or(0),
+                        // Never a placeholder 0: the plane is half of the
+                        // provenance check AND part of the fold/sort key —
+                        // a plane-less row would neither match the declared
+                        // plane nor fold with rows that do. Refused below,
+                        // same as the instance-state arm.
+                        plane_id: ids::contract_id(plane),
                     });
                 }
                 _ => tracing::error!(
                     ledger_sequence = inst.ledger_sequence,
                     pool = %inst.state.pool,
-                    "instance reserve write refused — a concentrated snapshot is missing"
+                    "instance reserve write refused — bad pool address, \
+                     non-numeric reserve, or no declared plane; a \
+                     concentrated snapshot is missing"
                 ),
             }
         }

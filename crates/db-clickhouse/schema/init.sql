@@ -689,10 +689,12 @@ ORDER BY (pool_id, plane_id, ledger_sequence);
 -- entry names its pool in an attacker-writable KEY payload — any contract
 -- can publish `[PoolData, Address(victim)]` under its own id. Reads must
 -- therefore keep only reserve rows whose `plane_id` matches the plane the
--- POOL ITSELF declares here. Always populated (both `Router` and `Plane`
--- are required for an instance to be recognised as a pool at all).
--- `share_token_id = 0` is structural for concentrated pools, which never
--- mint one.
+-- POOL ITSELF declares here. `plane_id` is always populated — `Plane` is
+-- the shape key that recognises an instance as a pool at all. `Router` is
+-- OPTIONAL: five older deployments write none (23 pools), and their
+-- registrations are accepted UNVERIFIED with a warn (see the acceptance arm
+-- in `stage.rs`). `share_token_id = 0` is structural for concentrated
+-- pools, which never mint one.
 CREATE TABLE IF NOT EXISTS pool_instance_state (
     pool_id            FixedString(32),
     plane_id           Int64,
