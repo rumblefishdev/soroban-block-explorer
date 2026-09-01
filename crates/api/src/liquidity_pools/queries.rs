@@ -3014,7 +3014,7 @@ pub async fn fetch_pool_list(
              WHERE sequence IN (SELECT last_updated_ledger FROM page) \
              GROUP BY sequence \
          ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
-         ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
+         ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
         filters = filters,
         keyset = keyset,
         order = order,
