@@ -1346,3 +1346,98 @@ default of 4200 silently starves the app) and the stub prices DB needs
 - **32C: duplicate leg codes stay as-is** (EURC × two issuers renders two
   `EURC` labels; the asset link disambiguates). Options A (collision-only
   issuer suffix) and B (issuer domain) recorded here if it ever bites.
+
+## Review of PR #438 closed (2026-09-01) — every finding fixed in-branch
+
+Seven-agent review (correctness, simplify, devil, prod-readiness, security, UX,
+architect) over the whole PR and its foundations, then a judge pass and an
+adversarial re-verification of each P1 in code. Verdict was REQUEST CHANGES:
+the architecture is better and the branch is a net reduction, but it carried a
+class of merge-blockers. Owner's call was to fix everything here rather than
+spawn per-finding tasks. Done.
+
+### The root class, and how far it reached
+
+One root: **an entity's identity taken from a payload the emitting contract
+chooses freely, instead of from the authenticated owner/emitter, with no
+downstream check.** A three-agent sweep graded every entity producer in
+`xdr-parser` and `db-clickhouse/persist` against it.
+
+- **Confined to the new 0374 code.** Every pre-existing producer anchors
+  identity to an authenticated source — ledger-entry owner, event
+  `contract_id`, tx source, or a crypto derivation corroborated against the
+  emitter (`nft.rs`'s `derived_sac == emitter` is the reference).
+- **One pre-existing relative, out of scope here**: `operation_asset_appearances`
+  takes an asset identity from an event topic with no emitter check. Presence
+  only — the value path has read authenticated ledger deltas since 0393 — and
+  it already has a task. Re-verified and recorded in **0410**, which is the
+  only other member of the class.
+- The schema comment that licensed the RMT choice claimed orphan registrations
+  "go to a monitored counter, never into rows". No such counter existed; the
+  comment now describes the guard that does.
+
+### What changed structurally
+
+`pool_share_tokens` became **`pool_instance_state(pool_id, plane_id,
+share_token_id, derived_at_ledger)`** — one table, because both facts come from
+one authenticated source (the pool's own instance storage, where the pool
+contract is the ledger-authenticated owner), read in one pass, on one version
+clock. A second side table was considered and rejected. Free to do: nothing had
+deployed. **ADR 0058 decision 4 amended.**
+
+`plane_id` is the authority the read path checks: all three reserve reads (KPI,
+chart, list activity) keep only `pool_state_changes` rows whose plane matches
+what the pool declares. Symmetrically at write time, a registration becomes a
+row only when the named pool declares that emitter as its `Router`.
+
+### Decisions worth carrying
+
+- **No version column on `pool_state_changes`** — the fold is the fix. A
+  `write_order` column was built and REMOVED: it was keyed on the fold position
+  within a batch, so a narrow re-parse could stamp a lower version than the
+  original wide parse and lose to the stale row, inverting the guarantee
+  `backfills.md` rule 4 rests on. The classic twin `liquidity_pool_snapshots`
+  is version-less for exactly this reason.
+- **`pool_kind = 0` stays in `asset_codes_predicate`** — it reads only the
+  legacy pair columns, which only classic rows fill, so the guard states the
+  function's domain rather than patching a symptom. The more fundamental fix
+  (soroban rows carrying NULL instead of a placeholder `0`) would touch the
+  ~612 call sites bound to that legacy shape; the guard disappears with them.
+- **Search no longer invents a label.** A soroban row's label is `NULL` in SQL
+  and built in Rust from the pool's resolved legs — the same identities the
+  list and detail render — rather than a hardcoded string.
+
+### Verified against sources outside our own code
+
+- **Failed transactions cannot deliver a contract event.** Stellar's docs:
+  consensus contract events are "only populated if the transaction succeeds",
+  while diagnostic events "include events from failed contract calls".
+  Measured on production over 500 ledgers: 2,199 failed soroban transactions
+  carry **only `fee` events** (4,398 = 2 × 2,199), zero contract events. So a
+  failed `add_pool` can only reach us as a diagnostic event, and filtering that
+  container is what excludes it. Note the converse is NOT true — failed
+  transactions do emit consensus `fee` events, correctly, since the fee applied.
+- **Cardinality, measured 2026-09-01** from `add_pool` in `soroban_events`:
+  10 routers, 500 pools, 500 registrations, **no pool registered twice** — so a
+  pool has exactly one router, and `deployment_id` is properly a column rather
+  than a join table. Heavily skewed: one router holds 343 of 500. By type:
+  constant 375, stable 83, concentrated 39, elastic 3 — so **461 pools mint a
+  share token and 39 structurally never do**, which is why `share_token_id = 0`
+  is an answer, not a gap. 438 of 500 have ever emitted a flow event.
+  (Plane count stays at 2 from earlier work — planes emit no events, so it
+  cannot be measured this way until `pool_state_changes` exists on prod.)
+
+### Found while verifying, fixed on develop
+
+`nx typecheck` replayed a cached success while the tree had real type errors.
+Not the known stale-`.tsbuildinfo` trap: the target is inferred with
+`production` inputs, which EXCLUDE `*.test.ts`, while `tsc --build` typechecks
+them — so it checked files its cache key did not track. Reproduced both ways
+and fixed in `nx.json` (commit on develop, since it affects every project and
+the pre-commit gate, not this branch).
+
+### Still open
+
+Production verification, in the order now written into the runbooks: DDL →
+indexer → three catch-up backfills → window-closure check → only then the read
+surfaces. Nothing here is verified on production yet.
