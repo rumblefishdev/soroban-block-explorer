@@ -13,11 +13,12 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { searchPolicy } from '../api/polling.js';
+import { federatedDomain } from './federation.js';
 
 // `/v1/search` returns a flat `SearchResults` payload — task 0271
-// dropped the previous `SearchResponse::Redirect` wire variant. The
-// FE inspects `totalCount` for the singleton-direct-navigation
-// behaviour (see SearchResultsPage useEffect).
+// dropped the previous `SearchResponse::Redirect` wire variant. Task
+// 0527 removed the singleton auto-navigation that used to read
+// `totalCount`; the count is still what the tab badges render.
 
 export const TAB_ORDER: ReadonlyArray<EntityType> = [
   'transaction',
@@ -39,6 +40,13 @@ export const ENTITY_LABEL: Record<EntityType, string> = {
 
 interface UseSearchResultsParams {
   q: string;
+  /**
+   * Search a federated address as plain text instead of classifying it.
+   * The escape hatch behind the results page's "search for this as text"
+   * action — without it a query the classifier claims is a federated address
+   * can never reach the buckets, which is a dead end when the resolve fails.
+   */
+  asText?: boolean;
 }
 
 /**
@@ -65,14 +73,28 @@ export interface SearchResultsState {
   activeTab: EntityType;
   setActiveTab: (t: EntityType) => void;
   hitsForActiveTab: readonly SearchHit[];
+  /**
+   * The domain half when the query is a SEP-2 federated address
+   * (`name*domain`), otherwise `null`. The search itself is suppressed in
+   * that case: `/v1/search` knows nothing about the standard and can only
+   * answer zero hits, which renders as "No results for karol*lobstr.co" —
+   * a claim that the address does not exist, while it is about to resolve.
+   *
+   * Decided here rather than at each caller: both callers needed the same
+   * rule, and a third search bar that forgot it would print that false line
+   * with no warning (task 0443).
+   */
+  federatedDomain: string | null;
 }
 
 export function useSearchResults({
   q,
+  asText = false,
 }: UseSearchResultsParams): SearchResultsState {
   const debouncedRaw = useDebounced(q, DEFAULT_DEBOUNCE_MS);
   const effectiveQuery = debouncedRaw.trim();
-  const enabled = effectiveQuery.length > 0;
+  const federated = asText ? null : federatedDomain(effectiveQuery);
+  const enabled = effectiveQuery.length > 0 && federated == null;
 
   const query = useQuery({
     // Sent explicitly rather than relying on the server default, so the cap
@@ -152,5 +174,6 @@ export function useSearchResults({
     activeTab,
     setActiveTab,
     hitsForActiveTab,
+    federatedDomain: federated,
   };
 }

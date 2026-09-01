@@ -1,14 +1,15 @@
-import { Box } from '@mui/material';
-import { useQuery } from '@tanstack/react-query';
+import { Box, Skeleton, Stack, Tooltip } from '@mui/material';
 
 import type { AccountDetailResponse } from '@rumblefish/api-types';
 import {
+  Chip,
+  CopyButton,
   formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { resolveFederatedName } from '../../search/federation.js';
+import { useFederatedName } from '../../search/useFederation.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 
@@ -26,14 +27,12 @@ export function AccountSummary({
 }: {
   account: AccountDetailResponse;
 }) {
+  // The lookup lives in a named hook with the other queries' seam, so this
+  // card stays presentation over its props. `federationPolicy` carries the
+  // reasoning for the cache window, the missing retry and the suppressed
+  // window-focus refetch, in one place both directions share.
   const homeDomain = account.home_domain ?? '';
-  const federated = useQuery({
-    queryKey: ['federatedName', account.account_id, homeDomain],
-    queryFn: () => resolveFederatedName(account.account_id, homeDomain),
-    enabled: homeDomain.length > 0,
-    retry: false,
-    staleTime: 10 * 60_000,
-  });
+  const federated = useFederatedName(account.account_id, homeDomain);
 
   return (
     <SectionCard title="Summary">
@@ -52,27 +51,39 @@ export function AccountSummary({
           },
         ]}
       />
-      {/* Only when it resolved. The row is an attribute the account may or
-          may not have, so its absence claims nothing — unlike the search
-          path, where the user asked a question and silence would answer it
-          wrongly. */}
-      {federated.data != null && (
+      {/* The row holds its place while the lookup runs, then goes for good if
+          there is nothing to show. Rendering it only on success made the card
+          grow a line under the reader's eye, seconds after the page settled.
+          Its absence claims nothing — unlike the search path, where the user
+          asked a question and silence would answer it wrongly. */}
+      {(federated.isPending || federated.data != null) && (
         <SummaryRow
           cells={[
             {
               label: 'Federated address',
-              value: (
-                <Box
-                  component="span"
-                  // Self-declared: the domain publishes this, we only check
-                  // that the account named the domain first. Never a
-                  // verified identity, and never the copyable canonical
-                  // value — that stays the StrKey above.
-                  title={`Published by ${homeDomain}, which this account names as its home domain. Not a verified identity.`}
-                >
-                  {federated.data}
-                </Box>
-              ),
+              value:
+                federated.data == null ? (
+                  <Skeleton variant="text" width={180} />
+                ) : (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Box component="span">{federated.data}</Box>
+                    {/* The human-readable form is the one people paste into a
+                      wallet, so it gets the same copy affordance as the key. */}
+                    <CopyButton value={federated.data} />
+                    {/* Self-declared, and the caveat has to be visible rather
+                      than hidden behind a hover: the domain publishes this,
+                      we only check that the account named the domain first.
+                      Never a verified identity, and never the copyable
+                      canonical value — that stays the StrKey above. */}
+                    <Tooltip
+                      title={`${homeDomain} publishes this name for the account, and the account names ${homeDomain} as its home domain. Neither statement is verified by the network.`}
+                    >
+                      <Box component="span" sx={{ display: 'inline-flex' }}>
+                        <Chip size="sm" color="neutral" label="self-declared" />
+                      </Box>
+                    </Tooltip>
+                  </Stack>
+                ),
             },
           ]}
         />

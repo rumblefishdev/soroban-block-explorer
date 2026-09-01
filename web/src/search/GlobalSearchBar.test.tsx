@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../test-utils.js';
+import { emptySearchState, renderWithProviders } from '../test-utils.js';
 import { GlobalSearchBar } from './GlobalSearchBar.js';
 import type { SearchResultsState } from './useSearchResults.js';
 
@@ -13,26 +13,7 @@ vi.mock('./useSearchResults.js', async (importOriginal) => {
     ...actual,
     useSearchResults: vi.fn((params: { q: string }): SearchResultsState => {
       seen.push(params.q);
-      return {
-        effectiveQuery: params.q,
-        data: undefined,
-        isFetching: false,
-        isError: false,
-        error: null,
-        refetch: () => undefined,
-        counts: {
-          transaction: 0,
-          account: 0,
-          contract: 0,
-          asset: 0,
-          nft: 0,
-          pool: 0,
-        },
-        totalCount: 0,
-        activeTab: 'transaction',
-        setActiveTab: () => undefined,
-        hitsForActiveTab: [],
-      };
+      return emptySearchState(params.q);
     }),
   };
 });
@@ -56,24 +37,27 @@ describe('GlobalSearchBar — federated addresses (task 0443 scope A)', () => {
     renderBar('karol*lobstr.co');
 
     expect(
-      screen.getByText(
-        /Press Enter to resolve karol\*lobstr\.co with lobstr\.co/
-      )
+      screen.getByText(/Resolve this federated address with lobstr\.co/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/No results/)).not.toBeInTheDocument();
   });
 
-  it('does not query the search API for a federated address', () => {
+  // Suppressing the /v1/search request now belongs to `useSearchResults`
+  // itself (it is mocked here), and is covered by its own test. What this
+  // component still owns is offering the row as a click target, not only as
+  // an Enter shortcut.
+  it('offers the federated hint as a clickable row', () => {
     renderBar('karol*lobstr.co');
 
-    expect(seen).not.toContain('karol*lobstr.co');
+    const row = screen.getByRole('option');
+    expect(row.tagName).toBe('BUTTON');
   });
 
   it('leaves an ordinary query on the normal results view', () => {
     renderBar('kale');
 
     expect(
-      screen.queryByText(/Press Enter to resolve/)
+      screen.queryByText(/Resolve this federated address/)
     ).not.toBeInTheDocument();
     expect(seen).toContain('kale');
   });

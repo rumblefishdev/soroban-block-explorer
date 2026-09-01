@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 
 import type { SearchHit } from '@rumblefish/api-types';
 
-import { federatedDomain } from './federation.js';
+import { routes } from '../router/routes.js';
+
 import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
 import { useSearchResults } from './useSearchResults.js';
@@ -23,13 +24,13 @@ export function GlobalSearchBar({
 }: GlobalSearchBarProps) {
   const navigate = useNavigate();
 
-  // A SEP-2 federated address (`name*domain`) is not a broad-search query.
-  // `/v1/search` knows nothing about the standard, so asking it returns zero
-  // hits and the dropdown renders "No results for karol*lobstr.co" — the one
-  // claim that is false, since Enter goes on to resolve it. Skip the request
-  // and say what Enter will do instead (task 0443 scope A).
-  const federatedFor = federatedDomain(q);
-  const state = useSearchResults({ q: federatedFor == null ? q : '' });
+  // The hook classifies a SEP-2 federated address (`name*domain`) and
+  // suppresses its own request for one: `/v1/search` knows nothing about the
+  // standard, so its zero hits would render as "No results for
+  // karol*lobstr.co" — the one claim that is false, since the results page
+  // goes on to resolve it (task 0443).
+  const state = useSearchResults({ q });
+  const federatedFor = state.federatedDomain;
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
@@ -108,13 +109,42 @@ export function GlobalSearchBar({
           })}
         >
           {federatedFor != null ? (
-            <Box sx={{ px: 2, py: 1.5 }}>
+            // A row, not a sentence: this panel is a listbox of clickable
+            // results, and a static line would be reachable by Enter only —
+            // dead to anyone who got here with the mouse.
+            <Box
+              component="button"
+              type="button"
+              role="option"
+              aria-selected={false}
+              onClick={() => {
+                onDismiss();
+                navigate(routes.search(q.trim()));
+              }}
+              sx={(theme) => ({
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                px: 2,
+                py: 1.5,
+                border: 'none',
+                background: 'none',
+                cursor: 'pointer',
+                '&:hover': { backgroundColor: theme.palette.surface.grayHover },
+              })}
+            >
+              <Typography variant="bodySmMedium" component="span">
+                {q.trim()}
+              </Typography>
               <Typography
-                variant="bodySmRegular"
-                component="p"
-                sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                variant="bodyXsRegular"
+                component="span"
+                sx={(theme) => ({
+                  display: 'block',
+                  color: theme.palette.text.tertiary,
+                })}
               >
-                Press Enter to resolve {q.trim()} with {federatedFor}
+                Resolve this federated address with {federatedFor} — press Enter
               </Typography>
             </Box>
           ) : (

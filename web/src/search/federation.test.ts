@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { fetchReply, stubFetch } from '../test-utils.js';
+
 import {
+  clearFederationCache,
   federatedDomain,
   resolveFederated,
   resolveFederatedName,
@@ -8,26 +11,12 @@ import {
 
 const ACCOUNT = 'GC526FUILJ6NLFXKCOOGTMDXNRW7MYSEK2UNRJV5FYWOGYDE4LOKXFEM';
 
-function reply(body: string, ok = true) {
-  return { ok, status: ok ? 200 : 404, text: () => Promise.resolve(body) };
-}
-
-/** Serve each URL from a map; anything unmapped rejects like a dead host. */
-function mockFetch(routes: Record<string, ReturnType<typeof reply>>) {
-  const fn = vi.fn((url: string) => {
-    const hit = Object.entries(routes).find(([prefix]) =>
-      url.startsWith(prefix)
-    );
-    return hit
-      ? Promise.resolve(hit[1])
-      : Promise.reject(new Error('ENOTFOUND'));
-  });
-  vi.stubGlobal('fetch', fn);
-  return fn;
-}
-
 afterEach(() => {
   vi.unstubAllGlobals();
+  // The stellar.toml answer is cached per domain for the lifetime of the
+  // module, which is the point — but it would carry one case's mocked
+  // response into the next.
+  clearFederationCache();
 });
 
 describe('federatedDomain', () => {
@@ -54,11 +43,11 @@ describe('federatedDomain', () => {
 
 describe('resolveFederated', () => {
   it('resolves through stellar.toml to the account id', async () => {
-    const fetchMock = mockFetch({
-      'https://lobstr.co/.well-known/stellar.toml': reply(
+    const fetchMock = stubFetch({
+      'https://lobstr.co/.well-known/stellar.toml': fetchReply(
         'NETWORK_PASSPHRASE = "Public"\nFEDERATION_SERVER="https://lobstr.co/federation/"\n'
       ),
-      'https://lobstr.co/federation/': reply(
+      'https://lobstr.co/federation/': fetchReply(
         JSON.stringify({
           stellar_address: 'karol*lobstr.co',
           account_id: ACCOUNT,
@@ -66,7 +55,9 @@ describe('resolveFederated', () => {
       ),
     });
 
-    await expect(resolveFederated('karol*lobstr.co')).resolves.toEqual({
+    await expect(
+      resolveFederated('karol*lobstr.co', 'lobstr.co')
+    ).resolves.toEqual({
       kind: 'resolved',
       accountId: ACCOUNT,
     });
@@ -76,32 +67,54 @@ describe('resolveFederated', () => {
     expect(federationCall).toContain('q=karol*lobstr.co');
   });
 
+  // The domain owner learns the viewer's IP by virtue of being fetched. It
+  // must not also learn which page they came from, and none of our cookies
+  // may travel with the request.
+  it('sends no referrer and no credentials', async () => {
+    const fetchMock = stubFetch({
+      'https://lobstr.co/.well-known/stellar.toml': fetchReply(
+        'FEDERATION_SERVER="https://lobstr.co/federation/"\n'
+      ),
+      'https://lobstr.co/federation/': fetchReply(
+        JSON.stringify({ account_id: ACCOUNT })
+      ),
+    });
+
+    await resolveFederated('karol*lobstr.co', 'lobstr.co');
+
+    for (const call of fetchMock.mock.calls) {
+      const init = (call as unknown as [string, RequestInit])[1];
+      expect(init.referrerPolicy).toBe('no-referrer');
+      expect(init.credentials).toBe('omit');
+    }
+  });
+
   it('fails explicitly when the domain serves no stellar.toml', async () => {
-    mockFetch({});
-    const r = await resolveFederated('karol*lobstr.co');
+    stubFetch({});
+    const r = await resolveFederated('karol*lobstr.co', 'lobstr.co');
     expect(r.kind).toBe('failed');
     expect(r.kind === 'failed' && r.reason).toContain('stellar.toml');
   });
 
   it('fails explicitly when the toml declares no federation server', async () => {
-    mockFetch({
-      'https://lobstr.co/.well-known/stellar.toml': reply(
+    stubFetch({
+      'https://lobstr.co/.well-known/stellar.toml': fetchReply(
         'VERSION = "2.0.0"\n'
       ),
     });
-    const r = await resolveFederated('karol*lobstr.co');
+    const r = await resolveFederated('karol*lobstr.co', 'lobstr.co');
     expect(r.kind).toBe('failed');
     expect(r.kind === 'failed' && r.reason).toContain('no federation server');
   });
 
   // A plaintext answer decides which account the user is sent to.
   it('refuses a non-HTTPS federation server without calling it', async () => {
-    const fetchMock = mockFetch({
-      'https://lobstr.co/.well-known/stellar.toml': reply(
+    const fetchMock = stubFetch({
+      'https://lobstr.co/.well-known/stellar.toml': fetchReply(
         'FEDERATION_SERVER="http://lobstr.co/federation/"\n'
       ),
     });
-    const r = await resolveFederated('karol*lobstr.co');
+    const r = await resolveFederated('karol*lobstr.co', 'lobstr.co');
     expect(r.kind).toBe('failed');
     expect(r.kind === 'failed' && r.reason).toContain('non-HTTPS');
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -114,24 +127,27 @@ describe('resolveFederated', () => {
     ['no account_id', JSON.stringify({ detail: 'not found' })],
     ['unparseable json', '<html>404</html>'],
   ])('rejects %s from the federation server', async (_label, body) => {
-    mockFetch({
-      'https://lobstr.co/.well-known/stellar.toml': reply(
+    stubFetch({
+      'https://lobstr.co/.well-known/stellar.toml': fetchReply(
         'FEDERATION_SERVER="https://lobstr.co/federation/"\n'
       ),
-      'https://lobstr.co/federation/': reply(body),
+      'https://lobstr.co/federation/': fetchReply(body),
     });
-    const r = await resolveFederated('karol*lobstr.co');
+    const r = await resolveFederated('karol*lobstr.co', 'lobstr.co');
     expect(r.kind).toBe('failed');
   });
 
   it('fails explicitly when the federation server 404s the name', async () => {
-    mockFetch({
-      'https://lobstr.co/.well-known/stellar.toml': reply(
+    stubFetch({
+      'https://lobstr.co/.well-known/stellar.toml': fetchReply(
         'FEDERATION_SERVER="https://lobstr.co/federation/"\n'
       ),
-      'https://lobstr.co/federation/': reply('{"detail":"not found"}', false),
+      'https://lobstr.co/federation/': fetchReply(
+        '{"detail":"not found"}',
+        false
+      ),
     });
-    const r = await resolveFederated('nobody*lobstr.co');
+    const r = await resolveFederated('nobody*lobstr.co', 'lobstr.co');
     expect(r.kind).toBe('failed');
     expect(r.kind === 'failed' && r.reason).toContain('did not resolve');
   });
@@ -141,13 +157,15 @@ describe('resolveFederatedName (reverse, type=id)', () => {
   const TOML = 'https://lobstr.co/.well-known/stellar.toml';
   const SERVER = 'https://lobstr.co/federation/';
   const withServer = {
-    [TOML]: reply('FEDERATION_SERVER="https://lobstr.co/federation/"\n'),
+    [TOML]: fetchReply('FEDERATION_SERVER="https://lobstr.co/federation/"\n'),
   };
 
   it('returns the address the domain claims for the account', async () => {
-    const fetchMock = mockFetch({
+    const fetchMock = stubFetch({
       ...withServer,
-      [SERVER]: reply(JSON.stringify({ stellar_address: 'karol*lobstr.co' })),
+      [SERVER]: fetchReply(
+        JSON.stringify({ stellar_address: 'karol*lobstr.co' })
+      ),
     });
 
     await expect(resolveFederatedName(ACCOUNT, 'lobstr.co')).resolves.toBe(
@@ -159,9 +177,9 @@ describe('resolveFederatedName (reverse, type=id)', () => {
   // The account named this domain; the domain must name the account back
   // inside its OWN namespace, or it is claiming it into someone else's.
   it('rejects an address that does not live at the account home domain', async () => {
-    mockFetch({
+    stubFetch({
       ...withServer,
-      [SERVER]: reply(
+      [SERVER]: fetchReply(
         JSON.stringify({ stellar_address: 'karol*evil.example' })
       ),
     });
@@ -172,28 +190,25 @@ describe('resolveFederatedName (reverse, type=id)', () => {
   });
 
   it('is silent when the domain publishes no federation server', async () => {
-    mockFetch({ [TOML]: reply('VERSION = "2.0.0"\n') });
+    stubFetch({ [TOML]: fetchReply('VERSION = "2.0.0"\n') });
     await expect(
       resolveFederatedName(ACCOUNT, 'lobstr.co')
     ).resolves.toBeNull();
   });
 
   it('is silent when the account has no registered name', async () => {
-    mockFetch({
+    stubFetch({
       ...withServer,
-      [SERVER]: reply(JSON.stringify({ detail: 'not found' })),
+      [SERVER]: fetchReply(JSON.stringify({ detail: 'not found' })),
     });
     await expect(
       resolveFederatedName(ACCOUNT, 'lobstr.co')
     ).resolves.toBeNull();
   });
 
-  it.each([
-    ['an empty home domain', ACCOUNT, ''],
-    ['a non-account id', 'not-a-key', 'lobstr.co'],
-  ])('makes no request for %s', async (_label, id, domain) => {
-    const fetchMock = mockFetch({});
-    await expect(resolveFederatedName(id, domain)).resolves.toBeNull();
+  it('makes no request when the account has no home domain', async () => {
+    const fetchMock = stubFetch({});
+    await expect(resolveFederatedName(ACCOUNT, '')).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

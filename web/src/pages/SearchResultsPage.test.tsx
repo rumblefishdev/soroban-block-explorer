@@ -3,8 +3,14 @@ import { userEvent } from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../test-utils.js';
+import {
+  emptySearchState,
+  fetchReply,
+  renderWithProviders,
+  stubFetch,
+} from '../test-utils.js';
 import type { SearchResultsState } from '../search/useSearchResults.js';
+import { clearFederationCache } from '../search/federation.js';
 import SearchResultsPage from './SearchResultsPage.js';
 
 /** One account hit, nothing else — the case 0271 used to redirect on. */
@@ -37,39 +43,14 @@ vi.mock('../search/useSearchResults.js', async (importOriginal) => {
     useSearchResults: vi.fn(
       (params: { q: string }): SearchResultsState =>
         params.q === 'one-hit'
-          ? ({
+          ? emptySearchState(params.q, {
               ...ONE_HIT_STATE,
-              effectiveQuery: params.q,
               // `SearchResultsView` renders rows only when `data` is present.
               data: {
                 groups: { accounts: ONE_HIT_STATE.hitsForActiveTab },
               } as SearchResultsState['data'],
-              isFetching: false,
-              isError: false,
-              error: null,
-              refetch: () => undefined,
-              setActiveTab: () => undefined,
-            } as SearchResultsState)
-          : ({
-              effectiveQuery: params.q,
-              data: undefined,
-              isFetching: false,
-              isError: false,
-              error: null,
-              refetch: () => undefined,
-              counts: {
-                transaction: 0,
-                account: 0,
-                contract: 0,
-                asset: 0,
-                nft: 0,
-                pool: 0,
-              },
-              totalCount: 0,
-              activeTab: 'transaction',
-              setActiveTab: () => undefined,
-              hitsForActiveTab: [],
-            } as SearchResultsState)
+            })
+          : emptySearchState(params.q)
     ),
   };
 });
@@ -77,22 +58,6 @@ vi.mock('../search/useSearchResults.js', async (importOriginal) => {
 const ACCOUNT = 'GC526FUILJ6NLFXKCOOGTMDXNRW7MYSEK2UNRJV5FYWOGYDE4LOKXFEM';
 const TOML = 'https://lobstr.co/.well-known/stellar.toml';
 const FEDERATION = 'https://lobstr.co/federation/';
-
-function reply(body: string) {
-  return { ok: true, status: 200, text: () => Promise.resolve(body) };
-}
-
-function mockFetch(routes: Record<string, ReturnType<typeof reply>>) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn((url: string) => {
-      const hit = Object.entries(routes).find(([p]) => url.startsWith(p));
-      return hit
-        ? Promise.resolve(hit[1])
-        : Promise.reject(new Error('ENOTFOUND'));
-    })
-  );
-}
 
 /** `/search` plus a stand-in account page, so a redirect is observable. */
 function renderSearch(q: string) {
@@ -107,13 +72,17 @@ function renderSearch(q: string) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // The per-domain stellar.toml cache outlives a render, which is the point
+  // in the app and a trap here: one case's successful lookup would answer
+  // the next case's question.
+  clearFederationCache();
 });
 
 describe('SearchResultsPage — federated addresses (task 0443 scope A)', () => {
   it('sends a resolved federated address to the account page', async () => {
-    mockFetch({
-      [TOML]: reply('FEDERATION_SERVER="https://lobstr.co/federation/"\n'),
-      [FEDERATION]: reply(JSON.stringify({ account_id: ACCOUNT })),
+    stubFetch({
+      [TOML]: fetchReply('FEDERATION_SERVER="https://lobstr.co/federation/"\n'),
+      [FEDERATION]: fetchReply(JSON.stringify({ account_id: ACCOUNT })),
     });
 
     renderSearch('karol*lobstr.co');
@@ -124,7 +93,7 @@ describe('SearchResultsPage — federated addresses (task 0443 scope A)', () => 
   // An empty results table would read as "this address does not exist",
   // which is a different claim from "we could not resolve it".
   it('states why a federated address could not be resolved', async () => {
-    mockFetch({});
+    stubFetch({});
 
     renderSearch('karol*lobstr.co');
 
@@ -179,5 +148,33 @@ describe('SearchResultsPage — single hit (task 0527 #2)', () => {
       '/accounts/GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ'
     );
     expect(screen.queryByText('account page')).not.toBeInTheDocument();
+  });
+});
+
+describe('SearchResultsPage — federation lookups are debounced', () => {
+  // Typing `bob*lobstr.com` passes through `bob*lobstr.co` — a real domain,
+  // a valid federated shape, and not the one the user meant. Undebounced,
+  // that domain receives a request and with it the viewer's IP.
+  it('does not contact a domain the user was still typing past', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(() => Promise.reject(new Error('ENOTFOUND')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Seeded with a plain query so the collapsed input is already expanded.
+    renderSearch('bob');
+
+    const input = screen.getByLabelText(
+      'Search by TX hash, accounts, contract, token'
+    );
+    await user.type(input, '*lobstr.com');
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    const urls = (fetchMock.mock.calls as unknown as [string][]).map(
+      ([url]) => url
+    );
+    expect(urls.some((u) => u.startsWith('https://lobstr.co/'))).toBe(false);
+    expect(urls.some((u) => u.startsWith('https://lobstr.com/'))).toBe(true);
   });
 });

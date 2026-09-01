@@ -1,21 +1,22 @@
 import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
- * SEP-2 federated address resolution, forward direction (`type=name`):
- * `karol*lobstr.co` → `G…`.
+ * SEP-2 federated addresses, both directions, resolved in the browser.
  *
- * Runs entirely in the browser. Both hops are public GETs that serve
- * `Access-Control-Allow-Origin: *` (SEP-1 requires it for `stellar.toml`,
- * and federation servers follow), so the API never issues the request —
- * which is the whole reason this direction is cheap. The domain is
- * attacker-controlled in the ordinary case (the user types it), so the
- * server-side version of this would carry an SSRF surface; here the
- * request leaves the user's own browser, to a host the user named, and
- * our infrastructure is not in the path at all. See task 0443 scope A.
+ * Forward (`type=name`): `karol*lobstr.co` → `G…`, for the search box.
+ * Reverse (`type=id`): `G…` → `karol*lobstr.co`, for the account page.
  *
- * The reverse direction (`G…` → `name*domain`, scope B) lives here too, in
- * `resolveFederatedName` — measurement showed it can run in the browser for
- * the same reason, so it never grew the backend the task first sketched.
+ * Both hops are public GETs that serve `Access-Control-Allow-Origin: *`
+ * (SEP-1 requires it for `stellar.toml`, and federation servers follow), so
+ * the API never issues the request — which is the whole reason this is cheap.
+ * The domain is attacker-controlled in the ordinary case, so a server-side
+ * version would carry an SSRF surface; here the request leaves the user's own
+ * browser and our infrastructure is not in the path at all. See task 0443.
+ *
+ * The trade that buys: the domain learns the viewer's IP and which account
+ * they are looking at. `no-referrer` keeps our origin and path out of it, but
+ * the IP is inherent to the browser making the call — accepted deliberately,
+ * not overlooked.
  */
 
 /**
@@ -26,12 +27,11 @@ import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
 const FEDERATED =
   /^[^*\s]+\*((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})$/i;
 
+/** Budget for a whole lookup, both hops together. */
 const TIMEOUT_MS = 8_000;
 
-/** ponytail: post-hoc length check, not a streaming cap — the timeout is
- *  what actually bounds a hostile server. Enough to stop a stray large
- *  file from being parsed; swap for a reader if a real abuse case shows up. */
-const MAX_CHARS = 100_000;
+/** How long a domain's `stellar.toml` answer is reused. */
+const TOML_TTL_MS = 10 * 60_000;
 
 const FEDERATION_SERVER =
   /^[ \t]*FEDERATION_SERVER[ \t]*=[ \t]*["']([^"'\n]+)["']/im;
@@ -46,30 +46,73 @@ export function federatedDomain(q: string): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
-async function getBounded(url: string, signal: AbortSignal): Promise<string> {
-  const res = await fetch(url, { signal, redirect: 'follow' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  if (text.length > MAX_CHARS) throw new Error('response too large');
-  return text;
+/**
+ * The caller's cancellation and our own timeout, whichever fires first.
+ * React Query hands a signal down and aborts it when a key is superseded;
+ * without honouring it, every keystroke's lookup runs to completion against
+ * a third-party host after its result has already been thrown away.
+ */
+function budget(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  if (signal == null) return timeout;
+  // `AbortSignal.any` is recent; fall back to the timeout alone rather than
+  // breaking the lookup on an older browser.
+  return typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([signal, timeout])
+    : timeout;
 }
 
+async function getText(url: string, signal: AbortSignal): Promise<string> {
+  const res = await fetch(url, {
+    signal,
+    redirect: 'follow',
+    // Third-party host: it has no business knowing which page asked, and
+    // cookies must never ride along.
+    referrerPolicy: 'no-referrer',
+    credentials: 'omit',
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+type ServerLookup = { server: string } | { kind: 'failed'; reason: string };
+
 /**
- * The federation server a domain publishes, or the reason there is none.
- * The first hop of any federation lookup, whichever way it then queries.
+ * A domain's `stellar.toml` answer, cached per domain.
+ *
+ * This is the first hop of BOTH directions, and the flows chain: resolving
+ * `karol*lobstr.co` in search redirects to the account page, which then asks
+ * the same domain the reverse question. Without the cache that is four
+ * round-trips where two do, and browsing several accounts on one domain
+ * repeats the toml fetch per account.
+ *
+ * Stores the href, not a `URL` — callers append their own query parameters,
+ * and a shared mutable `URL` would leak one lookup's `q` into the next.
  */
+const tomlCache = new Map<string, { at: number; result: ServerLookup }>();
+
 async function federationServerFor(
   domain: string,
   signal: AbortSignal
-): Promise<{ server: URL } | { reason: string }> {
+): Promise<ServerLookup> {
+  const hit = tomlCache.get(domain);
+  if (hit && Date.now() - hit.at < TOML_TTL_MS) return hit.result;
+
+  const result = await lookupServer(domain, signal);
+  tomlCache.set(domain, { at: Date.now(), result });
+  return result;
+}
+
+async function lookupServer(
+  domain: string,
+  signal: AbortSignal
+): Promise<ServerLookup> {
   let toml: string;
   try {
-    toml = await getBounded(
-      `https://${domain}/.well-known/stellar.toml`,
-      signal
-    );
+    toml = await getText(`https://${domain}/.well-known/stellar.toml`, signal);
   } catch {
     return {
+      kind: 'failed',
       reason: `${domain} did not serve a stellar.toml, so its federated addresses cannot be resolved.`,
     };
   }
@@ -77,6 +120,7 @@ async function federationServerFor(
   const declared = FEDERATION_SERVER.exec(toml)?.[1];
   if (declared == null) {
     return {
+      kind: 'failed',
       reason: `${domain} publishes a stellar.toml but no federation server, so it cannot resolve names.`,
     };
   }
@@ -86,6 +130,7 @@ async function federationServerFor(
     server = new URL(declared);
   } catch {
     return {
+      kind: 'failed',
       reason: `${domain} declares a federation server that is not a valid URL.`,
     };
   }
@@ -93,64 +138,62 @@ async function federationServerFor(
   // account the user is sent to, so anyone on the path could redirect them.
   if (server.protocol !== 'https:') {
     return {
+      kind: 'failed',
       reason: `${domain} declares a non-HTTPS federation server, which is not called.`,
     };
   }
-  return { server };
+  return { server: server.href };
+}
+
+/** The federation server's URL for one query, built fresh per lookup. */
+function query(server: string, q: string, type: 'name' | 'id'): string {
+  const url = new URL(server);
+  url.searchParams.set('q', q);
+  url.searchParams.set('type', type);
+  return url.toString();
 }
 
 /**
  * Resolve a federated address to its account id.
  *
- * Never throws: every failure mode comes back as `failed` with a reason the
- * UI shows verbatim. An unresolvable address must not degrade into an empty
- * results page — "no results" is the claim that the address does not exist,
- * which is a different and usually false statement.
+ * `domain` comes from the caller's own `federatedDomain(address)` — the two
+ * always travel together and re-deriving it here would only add a branch no
+ * caller can reach.
+ *
+ * Never throws: every failure comes back as `failed` with a reason the UI
+ * shows verbatim. An unresolvable address must not degrade into an empty
+ * results page — "no results" claims the address does not exist, which is a
+ * different and usually false statement.
  */
 export async function resolveFederated(
-  address: string
+  address: string,
+  domain: string,
+  signal?: AbortSignal
 ): Promise<FederationResolve> {
   const q = address.trim();
-  const domain = federatedDomain(q);
-  if (domain == null) {
-    return { kind: 'failed', reason: `${q} is not a federated address.` };
-  }
+  const budgeted = budget(signal);
 
-  const signal = AbortSignal.timeout(TIMEOUT_MS);
+  const found = await federationServerFor(domain, budgeted);
+  if ('kind' in found) return found;
 
-  const found = await federationServerFor(domain, signal);
-  if ('reason' in found) return { kind: 'failed', reason: found.reason };
-  const { server } = found;
-
-  server.searchParams.set('q', q);
-  server.searchParams.set('type', 'name');
-
-  let body: string;
   try {
-    body = await getBounded(server.toString(), signal);
+    const body = await getText(query(found.server, q, 'name'), budgeted);
+    const accountId = (JSON.parse(body) as { account_id?: unknown }).account_id;
+    // The server is run by the domain owner and can answer with anything.
+    // Shape-check before this value becomes a route.
+    if (typeof accountId === 'string' && isAccountId(accountId)) {
+      return { kind: 'resolved', accountId };
+    }
+    return {
+      kind: 'failed',
+      reason: `The federation server for ${domain} answered with something that is not a Stellar account address.`,
+    };
   } catch {
     return {
       kind: 'failed',
       reason: `The federation server for ${domain} did not resolve ${q}.`,
     };
   }
-
-  let accountId: unknown;
-  try {
-    accountId = (JSON.parse(body) as { account_id?: unknown }).account_id;
-  } catch {
-    accountId = undefined;
-  }
-  // The server is run by the domain owner and can answer with anything.
-  // Shape-check before this value becomes a route.
-  if (typeof accountId !== 'string' || !isAccountId(accountId)) {
-    return {
-      kind: 'failed',
-      reason: `The federation server for ${domain} answered with something that is not a Stellar account address.`,
-    };
-  }
-
-  return { kind: 'resolved', accountId };
 }
 
 /**
@@ -172,22 +215,19 @@ export async function resolveFederated(
  */
 export async function resolveFederatedName(
   accountId: string,
-  homeDomain: string
+  homeDomain: string,
+  signal?: AbortSignal
 ): Promise<string | null> {
   const domain = homeDomain.trim().toLowerCase();
-  if (domain.length === 0 || !isAccountId(accountId)) return null;
+  if (domain.length === 0) return null;
 
-  const signal = AbortSignal.timeout(TIMEOUT_MS);
-  const found = await federationServerFor(domain, signal);
-  if ('reason' in found) return null;
-
-  const { server } = found;
-  server.searchParams.set('q', accountId);
-  server.searchParams.set('type', 'id');
+  const budgeted = budget(signal);
+  const found = await federationServerFor(domain, budgeted);
+  if ('kind' in found) return null;
 
   let address: unknown;
   try {
-    const body = await getBounded(server.toString(), signal);
+    const body = await getText(query(found.server, accountId, 'id'), budgeted);
     address = (JSON.parse(body) as { stellar_address?: unknown })
       .stellar_address;
   } catch {
@@ -196,4 +236,9 @@ export async function resolveFederatedName(
 
   if (typeof address !== 'string') return null;
   return address.toLowerCase().endsWith(`*${domain}`) ? address : null;
+}
+
+/** Test seam: drop the per-domain `stellar.toml` cache. */
+export function clearFederationCache(): void {
+  tomlCache.clear();
 }
