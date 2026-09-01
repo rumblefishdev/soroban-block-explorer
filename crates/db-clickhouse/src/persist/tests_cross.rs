@@ -3191,6 +3191,119 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
     assert_eq!(staged.event_rows.len(), 1, "the raw event still lands");
 }
 
+/// Build an `add_pool` event for `pool`, emitted by `router`, from the
+/// mainnet-verbatim payload shape.
+#[cfg(test)]
+fn add_pool_event(tx_hash: &str, router: &str, pool: &str, source: EventSource) -> ExtractedEvent {
+    ExtractedEvent {
+        transaction_hash: tx_hash.to_string(),
+        event_type: ContractEventType::Contract,
+        source,
+        contract_id: Some(router.to_string()),
+        topics: serde_json::json!([
+            {"type": "sym", "value": "add_pool"},
+            {"type": "vec", "value": [
+                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
+            ]}
+        ]),
+        data: serde_json::json!({"type": "vec", "value": [
+            {"type": "address", "value": pool},
+            {"type": "sym", "value": "constant"},
+            {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
+            {"type": "vec", "value": [{"type": "u32", "value": 10}]}
+        ]}),
+        event_index: 0,
+        op_index: None,
+        stage: None,
+        ledger_sequence: 10,
+        created_at: 1_700_000_000,
+    }
+}
+
+#[cfg(test)]
+fn pool_instance_declaring(
+    pool: &str,
+    router: &str,
+) -> xdr_parser::pool_state::ExtractedPoolInstance {
+    xdr_parser::pool_state::ExtractedPoolInstance {
+        state: xdr_parser::pool_state::PoolInstanceState {
+            pool: pool.into(),
+            token_share: None,
+            plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
+            router: Some(router.into()),
+            reserves: Vec::new(),
+        },
+        ledger_sequence: 10,
+    }
+}
+
+#[cfg(test)]
+fn stage_registration(
+    ledger: &ExtractedLedger,
+    tx: &ExtractedTransaction,
+    events: &[(String, Vec<ExtractedEvent>)],
+    instances: &[xdr_parser::pool_state::ExtractedPoolInstance],
+) -> stage::StagedLedger {
+    stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger,
+        transactions: std::slice::from_ref(tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events,
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: instances,
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
+    .expect("prepare")
+}
+
+/// The diagnostic container carries copies of events from FAILED transactions
+/// (task 0182). A registration that never applied must not become a pool —
+/// every sibling detector filters this container; review #438 found this one
+/// missing the guard.
+#[test]
+fn prepare_ignores_a_registration_from_the_diagnostic_container() {
+    const POOL: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const ROUTER: &str = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x73);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![add_pool_event(
+            &tx.hash,
+            ROUTER,
+            POOL,
+            EventSource::Diagnostic,
+        )],
+    )];
+    // Fully corroborated — ONLY the event source may keep this out.
+    let instances = [pool_instance_declaring(POOL, ROUTER)];
+
+    let staged = stage_registration(&ledger, &tx, &events, &instances);
+
+    assert!(
+        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "a diagnostic-container registration must not become a row"
+    );
+}
+
 #[test]
 fn prepare_stages_plane_writes_and_instance_share_tokens() {
     // Real values end to end: the plane write and instance from registration
