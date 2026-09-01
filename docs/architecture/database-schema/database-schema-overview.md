@@ -192,14 +192,31 @@ Derived explorer entities:
   `deployment_id` (registering router), `pool_type_raw`, `subpool_salt`,
   `init_args`. Their id bytes are a CONTRACT address payload (`C...` on the
   wire, never `L...`)
-- `pool_state_changes` — Soroban pool reserves at the chain's grain
-  `(pool, ledger, tx, change_index)`, `reserves Array(Int128)` verbatim.
-  Fungible pools write plane `PoolData`; concentrated pools write
-  `Reserve0/1` on their own instance. The target state-fact shape — classic
-  snapshot history joins INTO it if the snapshot models unify (ADR 0058 §3)
-- `pool_share_tokens` — pool → share-token relation (side table, `asset_sac`
-  pattern; ADR 0058 §4). A Soroban token IS an LP share exactly when it
-  appears here
+- `pool_state_changes` — Soroban pool reserves, ONE row per
+  `(pool, ledger)`, `reserves Array(Int128)` verbatim. Same grain and
+  mechanism as the classic snapshots: a version-less `ReplacingMergeTree`
+  whose determinism comes from folding at stage time, never from a version
+  column. Fungible pools write plane `PoolData`; concentrated pools write
+  `Reserve0/1` on their own instance, so both writers feed this table and the
+  fold spans them. `plane_id` records WHICH plane wrote the row — reads must
+  filter on it (below). The target state-fact shape — classic snapshot
+  history joins INTO it if the snapshot models unify (ADR 0058 §3)
+- `pool_instance_state` — what a pool declares ABOUT ITSELF, read from its own
+  instance storage (side table, `asset_sac` pattern; ADR 0058 §4): `plane_id`
+  and `share_token_id`, versioned by sighting ledger. The pool contract is the
+  ledger-authenticated owner of that entry, which is what makes it usable as
+  an authority. A Soroban token IS an LP share exactly when it appears here
+  (`share_token_id = 0` is structural for concentrated pools, which never mint
+  one)
+
+**Reserve provenance is a READ-TIME predicate, not just a stored column.** A
+plane entry names its pool in a key payload the writing contract chooses
+freely, so any contract can publish reserves under another pool's id. Reads of
+`pool_state_changes` therefore keep only rows whose `plane_id` matches the
+plane the pool itself declares in `pool_instance_state`; the same rule gates
+the pool list's activity ordering. Symmetrically, a registration is only
+written when the named pool's instance declares the emitter as its `Router`
+(see the indexing-pipeline overview).
 
 High-level relationship sketch:
 
@@ -224,8 +241,8 @@ soroban_contracts
 liquidity_pools                       # classic (pool_kind=0) + soroban AMM (pool_kind=1)
   ├─ liquidity_pool_snapshots (partitioned)   # classic only
   ├─ lp_positions                             # classic only
-  ├─ pool_state_changes (partitioned)         # soroban reserves, chain grain
-  └─ pool_share_tokens                        # soroban pool → share token
+  ├─ pool_state_changes (partitioned)         # soroban reserves, one row per (pool, ledger)
+  └─ pool_instance_state                      # soroban pool's own declaration: plane + share token
 
 accounts
   ├─ account_balances_current

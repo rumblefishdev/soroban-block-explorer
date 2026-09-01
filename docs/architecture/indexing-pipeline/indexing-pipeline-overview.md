@@ -275,12 +275,28 @@ step: `parse_ledger()`'s event sweep detects router `add_pool` registrations
 (`detect_pool_registrations`) and its ledger-entry-change walk extracts pool
 state (`extract_plane_pool_data` for fungible pools' plane `PoolData`,
 `extract_pool_instances` for pool instances — concentrated reserves +
-`TokenShare`). Staging turns these into `liquidity_pools` rows
-(`pool_kind = 1`, whole-row registration — never partially updated on the
-RMT), `pool_state_changes` rows (reserves at chain grain) and
-`pool_share_tokens` rows (side table, `asset_sac` pattern). An unparseable
-fee or reserve REFUSES the row with `tracing::error!` rather than writing a
-plausible default.
+`TokenShare` / `Plane` / `Router`). Staging turns these into
+`liquidity_pools` rows (`pool_kind = 1`, whole-row registration — never
+partially updated on the RMT), `pool_state_changes` rows (one per
+`(pool, ledger)`) and `pool_instance_state` rows (side table, `asset_sac`
+pattern). An unparseable fee or reserve REFUSES the row with
+`tracing::error!` rather than writing a plausible default.
+
+Two staging rules are load-bearing here, both because a registration event
+names its pool in a payload the emitter chooses freely:
+
+- **A registration is corroborated before it becomes a row.** The named pool's
+  own instance storage — where the pool contract is the ledger-authenticated
+  owner — must declare that emitter as its `Router`. The instance is written
+  in the SAME transaction as `add_pool`, so the corroborating fact is always
+  in the same parse output. Without this, any contract could emit an
+  `add_pool` naming a REAL pool and replace its registry row wholesale, since
+  `liquidity_pools` is an RMT keyed on `pool_id` and versioned by ledger.
+- **Both reserve writers are folded together** before insert. The plane arm
+  and the concentrated-instance arm can each emit a row for the same
+  `(pool, ledger)`, and the parser-side folds cannot see each other; a
+  version-less RMT would then keep an arbitrary intra-ledger image. The fold
+  is the cross-writer twin of `dedup_final_pool_snapshots` (lore 0356).
 
 The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) was removed with
 Postgres (task 0244); its ordering rationale is preserved in

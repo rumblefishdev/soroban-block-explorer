@@ -59,7 +59,7 @@ dimension shares its grain (one row = one pool). New columns: `pool_kind`,
 shape; folding them is read-time interpretation). Deliberately NOT columns:
 `subpool_salt` and `init_args` (beyond the fee) are never materialised — the
 `add_pool` event sits complete and forever in `soroban_events`, extract on
-demand; and the share-token relation lives ONLY in `pool_share_tokens` (a
+demand; and the share-token relation lives ONLY in `pool_instance_state` (a
 registry column was dead-on-arrival and removed in the distillation pass).
 
 The 32 id bytes of a soroban pool are a CONTRACT address payload. The API
@@ -106,18 +106,37 @@ snapshot models ever unify — never the reverse. The classic
 `liquidity_pool_snapshots` stays as-is until that unification (trigger
 recorded in task 0374).
 
-### 4. The share-token relation is a SIDE table — `pool_share_tokens`
+### 4. What a pool declares about itself is a SIDE table — `pool_instance_state`
 
-The pool→share-token relation is derived from the pool instance's
-`TokenShare` key (chain state), cross-checked by the SEP-41 mint rule from
-deposit transactions. It lives in `pool_share_tokens (pool_id,
-share_token_id, derived_at_ledger)` — the `asset_sac` pattern — because the
-deriving path knows only `(pool, token)`, and a partial row written into the
-RMT registry would replace the full registration on merge. Versioned by
-sighting ledger so a share-token migration (13 pools re-pointed theirs,
-measured) converges on the newest, matching on-chain `share_id()`.
-Concentrated pools mint nothing and never appear; their positions are NFTs
-(future work).
+A pool's instance storage carries its `TokenShare`, its `Plane` and its
+`Router`, and the pool contract is the ledger-authenticated OWNER of that
+entry — so nothing there can be forged by a third party. Those declarations
+live in `pool_instance_state (pool_id, plane_id, share_token_id,
+derived_at_ledger)` — the `asset_sac` pattern — because the deriving path
+knows only what one instance says, and a partial row written into the RMT
+registry would replace the full registration on merge. Versioned by sighting
+ledger so a share-token migration (13 pools re-pointed theirs, measured)
+converges on the newest, matching on-chain `share_id()`.
+
+The share-token half is cross-checked by the SEP-41 mint rule from deposit
+transactions, which is a demoted cross-check, not a source. Concentrated pools
+mint nothing, so their `share_token_id` is a structural `0`; their positions
+are NFTs (future work). `plane_id` is always populated — an instance is only
+recognised as a pool when it carries both `Router` and `Plane`.
+
+**AMENDED 2026-09-01 (review of PR #438).** This decision originally scoped the
+table to the share-token relation alone (`pool_share_tokens`). It now carries
+`plane_id` as well, and the table is renamed accordingly, because the two facts
+come from ONE authenticated source read in one pass — and because `plane_id` is
+what makes reserve provenance checkable. A plane entry names its pool in a key
+payload the writing contract chooses freely, so any contract can publish
+reserves under a victim pool's id; reads of `pool_state_changes` keep only rows
+whose `plane_id` matches what the pool itself declares here. The same review
+added the symmetric write-side rule — a registration is accepted only when the
+named pool's instance declares the emitter as its `Router`. A second side table
+was considered and rejected: the facts share a source, a grain and a version
+clock, so one table is the honest shape. Free to do, since nothing had
+deployed.
 
 A Soroban token IS an LP share exactly when it appears in this relation —
 never an `assets` column (ADR/task 0496: `AssetFamily` stays
