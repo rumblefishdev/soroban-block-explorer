@@ -816,29 +816,13 @@ pub fn extract_liquidity_pools(
 /// version-less `ReplacingMergeTree`, which would otherwise keep an arbitrary
 /// intra-ledger image. See lore-0356.
 ///
-/// Call once per ledger, after aggregating every transaction's snapshots.///
-/// The `ledger_sequence` in the key never varies today: `ParseOutput` is built
-/// for ONE ledger, so every image here already shares it. It is kept as
-/// belt-and-braces — a future caller that batches ledgers would otherwise
-/// collapse a pool's two ledgers into one, silently.
+/// Call once per ledger, after aggregating every transaction's snapshots
+/// (`crate::fold::keep_last_by_key` carries the shared mechanism and the
+/// belt-and-braces rationale for the `ledger_sequence` key component).
 pub fn dedup_final_pool_snapshots(
     snapshots: Vec<ExtractedLiquidityPoolSnapshot>,
 ) -> Vec<ExtractedLiquidityPoolSnapshot> {
-    use std::collections::HashMap;
-
-    let mut position: HashMap<(String, u32), usize> = HashMap::new();
-    let mut deduped: Vec<ExtractedLiquidityPoolSnapshot> = Vec::with_capacity(snapshots.len());
-    for snapshot in snapshots {
-        let key = (snapshot.pool_id.clone(), snapshot.ledger_sequence);
-        match position.get(&key) {
-            Some(&index) => deduped[index] = snapshot, // keep the last (final) image
-            None => {
-                position.insert(key, deduped.len());
-                deduped.push(snapshot);
-            }
-        }
-    }
-    deduped
+    crate::fold::keep_last_by_key(snapshots, |s| (s.pool_id.clone(), s.ledger_sequence))
 }
 
 // ---------------------------------------------------------------------------

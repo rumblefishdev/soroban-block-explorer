@@ -307,11 +307,13 @@ pub struct LiquidityPoolRow {
 }
 
 /// `pool_state_changes` — pool reserve state, ONE deterministic row per
-/// `(pool, ledger)` (task 0374; grain aligned with the classic snapshots by
-/// decision karolkow 2026-08-30). The collapse happens at parse time in
-/// ledger apply order (`dedup_final_plane_writes` / `_pool_instances` — the
-/// twins of `dedup_final_pool_snapshots`), so no intra-ledger ordering
-/// column is needed and the 0356 LIMIT-1/no-FINAL invariant holds here too.
+/// `(pool, plane, ledger)` (task 0374; grain aligned with the classic
+/// snapshots by decision karolkow 2026-08-30; the plane joined the key so a
+/// forged plane write cannot evict a genuine row — see the DDL comment).
+/// The collapse happens at parse time in ledger apply order
+/// (`fold_pool_state_changes`, the cross-writer twin of
+/// `dedup_final_pool_snapshots`), so no intra-ledger ordering column is
+/// needed and the 0356 LIMIT-1/no-FINAL invariant holds here too.
 /// Intra-ledger history stays reconstructible from `soroban_events`
 /// (`update_reserves` per action, permanent) — storing intermediates
 /// duplicated it; an earlier per-write design needed an `application_order`

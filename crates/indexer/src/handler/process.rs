@@ -359,8 +359,11 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         lp_positions: all_lp_positions,
         contract_metadata_writes: all_contract_metadata_writes,
         soroban_token_balances: all_soroban_token_balances,
-        plane_pool_data: xdr_parser::pool_state::dedup_final_plane_writes(all_plane_pool_data),
-        pool_instances: xdr_parser::pool_state::dedup_final_pool_instances(all_pool_instances),
+        // Plane writes and instance images pass through unfolded: staging
+        // owns the one fold per destination table
+        // (`fold_pool_state_changes` / `fold_pool_instance_state`).
+        plane_pool_data: all_plane_pool_data,
+        pool_instances: all_pool_instances,
         operation_trees: all_operation_trees,
         parse_ms,
         tx_parse_errors,

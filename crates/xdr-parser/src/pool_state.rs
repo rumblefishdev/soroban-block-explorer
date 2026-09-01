@@ -23,7 +23,7 @@
 
 use serde_json::Value;
 
-use crate::scval::typed;
+use crate::scval::{address, map_get, symbol, typed, typed_str};
 use crate::types::ExtractedLedgerEntryChange;
 
 /// One plane `PoolData` write: a pool's reserves (and registration facts) as
@@ -45,25 +45,14 @@ pub struct PlanePoolData {
 /// normal case for every other `ContractData` write on the chain.
 pub fn parse_plane_pool_data(owner: &str, key: &Value, val: &Value) -> Option<PlanePoolData> {
     let parts = typed(key, "vec")?.as_array()?;
-    if typed(parts.first()?, "sym")?.as_str()? != "PoolData" {
+    if symbol(parts.first()?) != Some("PoolData") {
         return None;
     }
-    let pool = typed(parts.get(1)?, "address")?.as_str()?.to_string();
-    let map = typed(val, "map")?.as_array()?;
-    let field = |name: &str| -> Option<&Value> {
-        map.iter()
-            .find(|kv| {
-                kv.get("key")
-                    .and_then(|k| typed(k, "sym"))
-                    .and_then(Value::as_str)
-                    == Some(name)
-            })
-            .and_then(|kv| kv.get("value"))
-    };
+    let pool = address(parts.get(1)?)?.to_string();
     Some(PlanePoolData {
         plane: owner.to_string(),
         pool,
-        reserves: raw_u128_vec(field("reserves")?)?,
+        reserves: raw_u128_vec(map_get(val, "reserves")?)?,
     })
 }
 
@@ -124,12 +113,8 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
     };
     let plane = get("Plane")?;
     let router = get("Router");
-    let addr = |v: &Value| {
-        typed(v, "address")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let u128s = |v: &Value| typed(v, "u128").and_then(Value::as_str).map(str::to_string);
+    let addr = |v: &Value| address(v).map(str::to_string);
+    let u128s = |v: &Value| typed_str(v, "u128").map(str::to_string);
     // Reserve0/Reserve1 is the CONCENTRATED layout; fungible pools use
     // ReserveA/ReserveB, deliberately not read here — the plane is their
     // source, and reading both would double-write snapshots.
@@ -266,65 +251,16 @@ fn raw_u128_vec(v: &Value) -> Option<Vec<String>> {
     typed(v, "vec")?
         .as_array()?
         .iter()
-        .map(|e| typed(e, "u128").and_then(Value::as_str).map(str::to_string))
+        .map(|e| typed_str(e, "u128").map(str::to_string))
         .collect()
 }
 
-/// Collapse plane writes to ONE per (pool, ledger): the LAST image in ledger
-/// apply order — the pool-state twin of `dedup_final_pool_snapshots`
-/// (decision karolkow 2026-08-30: same grain as classic; intra-ledger
-/// history stays reconstructible from `soroban_events` forever, so storing
-/// intermediates duplicated what events already carry).
-///
-/// Input order IS apply order: `process.rs` extends the vector while walking
-/// transactions in their ledger positions, and `extract_plane_pool_data`
-/// preserves change order within a transaction.
-///
-/// The `ledger_sequence` in the key never varies today: `ParseOutput` is built
-/// for ONE ledger, so every write here already shares it. It is kept as
-/// belt-and-braces — a future caller that batches ledgers would otherwise
-/// collapse a pool's two ledgers into one, silently. Same for
-/// `dedup_final_pool_instances` below.
-pub fn dedup_final_plane_writes(
-    writes: Vec<ExtractedPlanePoolData>,
-) -> Vec<ExtractedPlanePoolData> {
-    use std::collections::HashMap;
-    let mut position: HashMap<(String, u32), usize> = HashMap::new();
-    let mut deduped: Vec<ExtractedPlanePoolData> = Vec::with_capacity(writes.len());
-    for w in writes {
-        let key = (w.data.pool.clone(), w.ledger_sequence);
-        match position.get(&key) {
-            Some(&idx) => deduped[idx] = w, // keep the last (final) image
-            None => {
-                position.insert(key, deduped.len());
-                deduped.push(w);
-            }
-        }
-    }
-    deduped
-}
-
-/// Same collapse for pool-instance images. Every image carries the FULL
-/// instance storage (TokenShare included), so keeping only the last one
-/// loses neither the share-token relation nor the concentrated reserves.
-pub fn dedup_final_pool_instances(
-    instances: Vec<ExtractedPoolInstance>,
-) -> Vec<ExtractedPoolInstance> {
-    use std::collections::HashMap;
-    let mut position: HashMap<(String, u32), usize> = HashMap::new();
-    let mut deduped: Vec<ExtractedPoolInstance> = Vec::with_capacity(instances.len());
-    for i in instances {
-        let key = (i.state.pool.clone(), i.ledger_sequence);
-        match position.get(&key) {
-            Some(&idx) => deduped[idx] = i,
-            None => {
-                position.insert(key, deduped.len());
-                deduped.push(i);
-            }
-        }
-    }
-    deduped
-}
+// NO parser-side fold for either stream (decision karolkow 2026-09-01):
+// plane writes and instance images both collapse in STAGING, one fold per
+// destination table (`fold_pool_state_changes` / `fold_pool_instance_state`
+// in db-clickhouse), symmetric and in one home. A parser-side pre-fold was
+// a second copy with zero effect — staging order preserves ledger apply
+// order end-to-end, so the stage folds see the same last-wins sequence.
 
 #[cfg(test)]
 mod tests {

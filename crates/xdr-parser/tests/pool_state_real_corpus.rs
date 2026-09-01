@@ -123,9 +123,14 @@ fn every_corpus_ledger_extracts_cleanly() {
             }
             for inst in extract_pool_instances(&changes) {
                 instance_rows += 1;
+                // Plane is the shape key and must survive; Router is OPTIONAL
+                // (five older deployments write none — 23 real pools; the
+                // acceptance arm in stage.rs takes them UNVERIFIED). The
+                // corpus's dead-deployment ledgers exercise exactly that arm,
+                // so asserting router here would fail on real history.
                 assert!(
-                    inst.state.plane.is_some() && inst.state.router.is_some(),
-                    "ledger {seq}: family instance without plane/router for {}",
+                    inst.state.plane.is_some(),
+                    "ledger {seq}: family instance without a plane for {}",
                     inst.state.pool
                 );
                 if let Some(f) = emit_file.as_mut() {

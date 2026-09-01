@@ -1134,8 +1134,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // tokens (the deposit⇄mint detector remains only as a cross-check, per
     // the same reasoning that demoted update_reserves in T4). Unparseable
     // coordinates are refused loudly — a silent skip is a pool going dark.
+    //
+    // Rows accumulate in locals and land in `out` FOLDED (one per key) — the
+    // single dedup home for both soroban state tables (decision karolkow
+    // 2026-09-01: fold in stage, symmetric for both, no parser-side pre-fold).
+    let mut pool_state_rows: Vec<PoolStateChangeRow> = Vec::new();
+    let mut instance_state_rows: Vec<PoolInstanceStateRow> = Vec::new();
     for pw in plane_pool_data {
-        let Some(pool_id) = contract_payload(&pw.data.pool) else {
+        let Some(pool_id) = ids::contract_payload(&pw.data.pool) else {
             tracing::error!(
                 ledger_sequence = pw.ledger_sequence,
                 pool = %pw.data.pool,
@@ -1143,26 +1149,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             );
             continue;
         };
-        let mut reserves = Vec::with_capacity(pw.data.reserves.len());
-        let mut bad = false;
-        for r in &pw.data.reserves {
-            match r.parse::<i128>() {
-                Ok(v) => reserves.push(v),
-                Err(_) => {
-                    bad = true;
-                    break;
-                }
-            }
-        }
-        if bad {
+        let Some(reserves) = parse_reserves(&pw.data.reserves) else {
             tracing::error!(
                 ledger_sequence = pw.ledger_sequence,
                 pool = %pw.data.pool,
                 "plane write refused: non-numeric reserve — a snapshot is missing"
             );
             continue;
-        }
-        out.pool_state_change_rows.push(PoolStateChangeRow {
+        };
+        pool_state_rows.push(PoolStateChangeRow {
             pool_id,
             ledger_sequence: i64::from(pw.ledger_sequence),
             reserves,
@@ -1176,15 +1171,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // here by construction, so no double-write against the plane rows.
         if !inst.state.reserves.is_empty() {
             match (
-                contract_payload(&inst.state.pool),
-                inst.state
-                    .reserves
-                    .iter()
-                    .map(|r| r.parse::<i128>())
-                    .collect::<Result<Vec<_>, _>>(),
+                ids::contract_payload(&inst.state.pool),
+                parse_reserves(&inst.state.reserves),
             ) {
-                (Some(pool_id), Ok(reserves)) => {
-                    out.pool_state_change_rows.push(PoolStateChangeRow {
+                (Some(pool_id), Some(reserves)) => {
+                    pool_state_rows.push(PoolStateChangeRow {
                         pool_id,
                         ledger_sequence: i64::from(inst.ledger_sequence),
                         reserves,
@@ -1208,11 +1199,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // rows against (review #438) — while `share_token_id = 0` stays
         // structural for concentrated pools, which never mint one.
         match (
-            contract_payload(&inst.state.pool),
+            ids::contract_payload(&inst.state.pool),
             inst.state.plane.as_deref(),
         ) {
             (Some(pool_id), Some(plane)) => {
-                out.pool_instance_state_rows.push(PoolInstanceStateRow {
+                instance_state_rows.push(PoolInstanceStateRow {
                     pool_id,
                     plane_id: ids::contract_id(plane),
                     share_token_id: inst
@@ -1232,10 +1223,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             ),
         }
     }
-    // ONE row per (pool, ledger). Both writers above feed
-    // `pool_state_change_rows` and can collide on a pool's registration
-    // ledger, and neither parser-side fold can see the other.
-    fold_pool_state_changes(&mut out.pool_state_change_rows);
+    // ONE row per key for both state tables — the folds' doc comments carry
+    // the key rationale (plane in the state key; version ties within a
+    // ledger for the instance table).
+    out.pool_state_change_rows = fold_pool_state_changes(pool_state_rows);
+    out.pool_instance_state_rows = fold_pool_instance_state(instance_state_rows);
 
     // ---- liquidity_pool_snapshots ----
     // Per-(pool, ledger) asset-A trade volume from claim atoms (0261 extractor).
@@ -2325,41 +2317,50 @@ fn is_diagnostic(src: EventSource) -> bool {
     matches!(src, EventSource::Diagnostic)
 }
 
-/// Collapse `pool_state_changes` to ONE row per (pool, ledger) — the
-/// cross-writer twin of `dedup_final_pool_snapshots` (lore-0356).
+/// Collapse `pool_state_changes` to ONE row per (pool, plane, ledger) — the
+/// cross-writer twin of `dedup_final_pool_snapshots` (lore-0356), via the
+/// shared `keep_last_by_key` fold. This is the ONLY fold on this vector: the
+/// plane arm and the concentrated-instance arm can collide on a pool's
+/// registration ledger, and emitting both would leave the surviving row to a
+/// version-less `ReplacingMergeTree` — the hazard backfills.md rule 4 names.
 ///
-/// The parser already folds each SOURCE independently
-/// (`dedup_final_plane_writes` / `dedup_final_pool_instances`), but neither
-/// can see the other, so a plane write and an instance write for the same
-/// pool and ledger both survive to here. Emitting both would leave the
-/// surviving row to a version-less `ReplacingMergeTree`, which keeps an
-/// arbitrary intra-ledger image — the hazard backfills.md rule 4 names as
-/// "two rows for one key inside a single insert", and the defect class task
-/// 0463 measured on `balances` (1.24M keys).
+/// `plane_id` is IN the key (three-lens review, 2026-09-01): a forged plane
+/// entry naming a real pool would otherwise EVICT the pool's genuine row at
+/// this fold (and at the table's RMT key) — the read-side declared-plane
+/// filter would then hide the forgery but serve a stale ledger's reserves as
+/// current. With the plane in the key a forged row lands in its own key
+/// space, dies at the read filter, and stays visible to the divergence
+/// monitor (see the `pool_state_changes` DDL comment). Genuine collisions
+/// still fold: both arms stamp the pool's own declared plane.
 ///
 /// Last-wins in staging order: the instance arm is the more specific source
 /// for a concentrated pool and runs second. Folding — not a version column —
 /// is what makes the stored row a deterministic function of the ledger, so a
-/// re-parse still wins simply by landing last (rule 4).
-///
-/// The `ledger_sequence` in the key never varies today: `prepare` stages ONE
-/// ledger, so both writers stamp the same value. It is kept as belt-and-braces
-/// — a future caller that batches ledgers would otherwise collapse a pool's
-/// two ledgers into one, silently.
-fn fold_pool_state_changes(rows: &mut Vec<PoolStateChangeRow>) {
-    let mut position: HashMap<([u8; 32], i64), usize> = HashMap::new();
-    let mut folded: Vec<PoolStateChangeRow> = Vec::with_capacity(rows.len());
-    for row in rows.drain(..) {
-        let key = (row.pool_id, row.ledger_sequence);
-        match position.get(&key) {
-            Some(&idx) => folded[idx] = row,
-            None => {
-                position.insert(key, folded.len());
-                folded.push(row);
-            }
-        }
-    }
-    *rows = folded;
+/// re-parse still wins simply by landing last (rule 4). The `ledger_sequence`
+/// component is belt-and-braces for a future batching caller
+/// (`xdr_parser::fold`).
+fn fold_pool_state_changes(rows: Vec<PoolStateChangeRow>) -> Vec<PoolStateChangeRow> {
+    xdr_parser::fold::keep_last_by_key(rows, |r| (r.pool_id, r.plane_id, r.ledger_sequence))
+}
+
+/// Collapse instance-state rows to ONE per (pool, ledger) — the last image
+/// in apply order. Load-bearing, not theoretical: 29 of 259 real
+/// (pool, ledger) keys in the raw corpus carry more than one instance image
+/// (up to 5 in one ledger — every pool action rewrites the instance), and
+/// the table's RMT version (`derived_at_ledger`) TIES within a ledger, so an
+/// unfolded insert would leave the surviving image to an arbitrary merge —
+/// the 0463 defect class. Every image carries the FULL instance storage, so
+/// keeping only the last loses nothing.
+fn fold_pool_instance_state(rows: Vec<PoolInstanceStateRow>) -> Vec<PoolInstanceStateRow> {
+    xdr_parser::fold::keep_last_by_key(rows, |r| (r.pool_id, r.derived_at_ledger))
+}
+
+/// Raw decimal reserve strings → `i128`, all-or-nothing: one unparseable
+/// element refuses the whole vector, because a partial reserve set is a
+/// snapshot lying about its own arity. Shared by the plane and the
+/// concentrated-instance arm.
+fn parse_reserves(raw: &[String]) -> Option<Vec<i128>> {
+    raw.iter().map(|r| r.parse::<i128>().ok()).collect()
 }
 
 /// Registry row for one decoded `add_pool` registration.
@@ -2379,7 +2380,8 @@ fn pool_registry_row(
     router_strkey: &str,
     ledger_sequence: i64,
 ) -> Result<LiquidityPoolRow, &'static str> {
-    let pool_id = contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
+    let pool_id =
+        ids::contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
     // Position 0 is a u32 fee in EVERY shape measured on mainnet (497/497,
     // pinned by the corpus test). A shape where it is missing or unparseable
     // is a new vocabulary nobody has seen — refuse it loudly rather than
@@ -2404,14 +2406,6 @@ fn pool_registry_row(
         deployment_id: ids::contract_id(router_strkey),
         pool_type_raw: reg.pool_type.clone(),
     })
-}
-
-/// 32-byte payload of a C… contract strkey, or `None` when it is not one.
-fn contract_payload(strkey: &str) -> Option<[u8; 32]> {
-    match stellar_strkey::Strkey::from_string(strkey) {
-        Ok(stellar_strkey::Strkey::Contract(c)) => Some(c.0),
-        _ => None,
-    }
 }
 
 fn extract_event_signature(topics: &Value) -> Option<String> {

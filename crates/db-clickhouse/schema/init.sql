@@ -597,9 +597,10 @@ ORDER BY (contract_id, token_id);
 -- contract pool_id, and the soroban arm accepts a registration only when the
 -- named pool's OWN instance storage names the emitter as its `Router`
 -- (`stage.rs`), so a third party cannot register — or overwrite — a pool it
--- does not own. Before review #438 this comment claimed orphan sightings went
--- to "a monitored counter": no such counter existed, and the arm pushed every
--- shape-matching event straight into a row.
+-- does not own, EXCEPT pools whose instance declares no router (older
+-- contract versions, 23 measured, all event-silent): those are accepted
+-- UNVERIFIED with a warn, and their registry row is forgeable — see the
+-- acceptance arm in `stage.rs` for the bounded residual.
 --
 -- Registration provenance (the router's subpool salt, raw init_args beyond
 -- the fee) is NOT materialised: the add_pool event itself sits complete and
@@ -631,8 +632,8 @@ ORDER BY (pool_id);
 
 -- Pool reserve state (task 0374 step 7) — THE reserve source (T4: event
 -- arithmetic failed its oracle 6/49). ONE deterministic row per
--- (pool, ledger), collapsed at parse time in ledger apply order — the same
--- grain and mechanism as the classic snapshots (decision 2026-08-30), so
+-- (pool, plane, ledger), collapsed at parse time in ledger apply order — the
+-- same grain and mechanism as the classic snapshots (decision 2026-08-30), so
 -- the 0356 LIMIT-1/no-FINAL invariant holds and the future unification is
 -- a plain union. Intra-ledger history lives in soroban_events forever.
 -- Two on-chain layouts feed it: fungible pools write plane PoolData
@@ -641,14 +642,28 @@ ORDER BY (pool_id);
 -- a family prefix on purpose: classic history joins HERE if the snapshot
 -- models unify — never the reverse (ADR 0058).
 --
+-- `plane_id` is IN the sort key (three-lens review, 2026-09-01): a plane
+-- entry names its pool in an attacker-writable payload, so keying on
+-- (pool, ledger) alone would let a forged write EVICT the pool's genuine
+-- row on RMT merge — the read-side declared-plane filter would then hide
+-- the forgery but serve a stale ledger's reserves as current. With the
+-- plane in the key a forged row keeps its own key space, dies at the read
+-- filter (which joins `pool_instance_state`'s declared plane), and stays
+-- visible as evidence. Standing monitor for both forgery attempts and a
+-- plane migration (which would orphan pre-migration history — the
+-- share-token column of `pool_instance_state` measured 13 such
+-- re-pointings, so "planes never migrate" must fail loudly):
+--   SELECT pool_id, uniqExact(plane_id) AS planes
+--   FROM pool_state_changes GROUP BY pool_id HAVING planes > 1
+--
 -- Version-less RMT, exactly like its classic twin `liquidity_pool_snapshots`:
 -- the row is made a deterministic function of the ledger by folding at STAGE
 -- time (`fold_pool_state_changes`), not by a version column. Two writers feed
 -- this table — the plane arm and the concentrated-instance arm — and the fold
--- is what collapses their (pool, ledger) collision; per backfills.md rule 4 a
--- re-parse then wins on its own, because it lands last. A version column keyed
--- on anything batch-local would BREAK that: a narrow re-parse could stamp a
--- lower version than the original wide parse and lose to the stale row.
+-- collapses their collision; per backfills.md rule 4 a re-parse then wins on
+-- its own, because it lands last. A version column keyed on anything
+-- batch-local would BREAK that: a narrow re-parse could stamp a lower version
+-- than the original wide parse and lose to the stale row.
 CREATE TABLE IF NOT EXISTS pool_state_changes (
     pool_id          FixedString(32),
     ledger_sequence  Int64,
@@ -657,7 +672,7 @@ CREATE TABLE IF NOT EXISTS pool_state_changes (
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 5000000)
-ORDER BY (pool_id, ledger_sequence);
+ORDER BY (pool_id, plane_id, ledger_sequence);
 
 -- What a pool declares ABOUT ITSELF, from its own instance storage — the
 -- pool contract is the ledger-authenticated owner of that entry, so these

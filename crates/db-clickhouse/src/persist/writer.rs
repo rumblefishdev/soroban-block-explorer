@@ -177,137 +177,173 @@ impl PartitionWriter {
         // Hold the ledger row(s) back as commit marker.
         self.ledger_rows.append(&mut staged.ledger_rows);
 
+        // EXHAUSTIVE destructure — the other half of `commit()`'s invariant
+        // (three-lens review, 2026-09-01): a future `StagedLedger` row-vec
+        // that never reaches a `write_rows` call refuses to compile here,
+        // instead of being staged and dropped silently one hop upstream of
+        // the bug class the 0374 e2e caught in `commit()`.
+        let StagedLedger {
+            ledger_sequence: _,
+            ledger_rows: _,
+            account_rows,
+            account_entry_state_rows,
+            wasm_rows,
+            contract_rows,
+            metadata_rows,
+            transaction_rows,
+            hash_index_rows,
+            participant_rows,
+            pool_rows,
+            pool_instance_state_rows,
+            pool_state_change_rows,
+            snapshot_rows,
+            lp_position_rows,
+            op_rows,
+            op_asset_rows,
+            op_pool_rows,
+            lp_amount_rows,
+            event_rows,
+            invocation_rows,
+            asset_rows,
+            asset_sac_rows,
+            nft_rows,
+            nft_ownership_rows,
+            nft_pending_rows,
+            nft_ownership_pending_rows,
+            unified_balance_rows,
+        } = staged;
+
         write_rows(
             &self.client,
             &mut self.inserts.accounts,
             "accounts",
-            &staged.account_rows,
+            &account_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.account_entry_state,
             "account_entry_state",
-            &staged.account_entry_state_rows,
+            &account_entry_state_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.wasm,
             "wasm_interface_metadata",
-            &staged.wasm_rows,
+            &wasm_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.contracts,
             "soroban_contracts",
-            &staged.contract_rows,
+            &contract_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.metadata,
             "soroban_contract_metadata",
-            &staged.metadata_rows,
+            &metadata_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.transactions,
             "transactions",
-            &staged.transaction_rows,
+            &transaction_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.hash_index,
             "transaction_hash_index",
-            &staged.hash_index_rows,
+            &hash_index_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.participants,
             "transaction_participants",
-            &staged.participant_rows,
+            &participant_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.op_assets,
             "operation_asset_appearances",
-            &staged.op_asset_rows,
+            &op_asset_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.op_pools,
             "operation_pools",
-            &staged.op_pool_rows,
+            &op_pool_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.lp_amounts,
             "lp_operation_amounts",
-            &staged.lp_amount_rows,
+            &lp_amount_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.pools,
             "liquidity_pools",
-            &staged.pool_rows,
+            &pool_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.pool_instance_state,
             "pool_instance_state",
-            &staged.pool_instance_state_rows,
+            &pool_instance_state_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.pool_state_changes,
             "pool_state_changes",
-            &staged.pool_state_change_rows,
+            &pool_state_change_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.snapshots,
             "liquidity_pool_snapshots",
-            &staged.snapshot_rows,
+            &snapshot_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.lp_positions,
             "lp_positions",
-            &staged.lp_position_rows,
+            &lp_position_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.operations,
             "operations_appearances",
-            &staged.op_rows,
+            &op_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.events,
             "soroban_events",
-            &staged.event_rows,
+            &event_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.invocations,
             "soroban_invocations_appearances",
-            &staged.invocation_rows,
+            &invocation_rows,
         )
         .await?;
 
@@ -315,29 +351,23 @@ impl PartitionWriter {
             &self.client,
             &mut self.inserts.assets,
             "assets",
-            &staged.asset_rows,
+            &asset_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.asset_sac,
             "asset_sac",
-            &staged.asset_sac_rows,
+            &asset_sac_rows,
         )
         .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.nfts,
-            "nfts",
-            &staged.nft_rows,
-        )
-        .await?;
+        write_rows(&self.client, &mut self.inserts.nfts, "nfts", &nft_rows).await?;
 
         write_rows(
             &self.client,
             &mut self.inserts.nft_ownership,
             "nft_ownership",
-            &staged.nft_ownership_rows,
+            &nft_ownership_rows,
         )
         .await?;
         // Task 0217 / 0220 — quarantine inserts. Slot stays `None` (and
@@ -347,21 +377,21 @@ impl PartitionWriter {
             &self.client,
             &mut self.inserts.nfts_pending,
             "nfts_pending",
-            &staged.nft_pending_rows,
+            &nft_pending_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.nft_ownership_pending,
             "nft_ownership_pending",
-            &staged.nft_ownership_pending_rows,
+            &nft_ownership_pending_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.unified_balances,
             "balances",
-            &staged.unified_balance_rows,
+            &unified_balance_rows,
         )
         .await?;
 

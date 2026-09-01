@@ -71,7 +71,7 @@
 
 use serde_json::Value;
 
-use crate::scval::{address, raw_scalar, symbol, typed_str, vec_elements};
+use crate::scval::{address, raw_scalar, symbol, vec_elements};
 use crate::types::{EventSource, ExtractedEvent};
 
 /// One pool registration, tied to the router that emitted it.
@@ -103,11 +103,17 @@ pub fn detect_pool_registrations(
             if matches!(ev.source, EventSource::Diagnostic) {
                 continue;
             }
-            let Some(router) = ev.contract_id.clone() else {
+            // `as_deref`, not `clone`: this runs for EVERY event on the
+            // chain, and the overwhelming majority are not registrations —
+            // the allocation belongs in the match arm that keeps one.
+            let Some(router) = ev.contract_id.as_deref() else {
                 continue;
             };
             match parse_add_pool(&ev.topics, &ev.data) {
-                Ok(event) => out.push(PoolRegistration { router, event }),
+                Ok(event) => out.push(PoolRegistration {
+                    router: router.to_string(),
+                    event,
+                }),
                 Err(AddPoolReject::NotAddPool) => {}
                 Err(reason) => tracing::warn!(
                     ledger_sequence = ev.ledger_sequence,
@@ -144,23 +150,13 @@ pub struct AddPoolEvent {
     /// Pool legs, in the order the router registered them. This order is the
     /// one the pool's own `get_tokens()` reports, so reserve vectors line up
     /// with it index-for-index and need no reordering.
+    ///
+    /// The `subpool_salt` at data position 2 (the router's slot key — NOT a
+    /// pool identity and NOT a WASM hash; see task 0374 step 1b) is
+    /// deliberately not decoded: nothing consumes it, and the schema rule for
+    /// registration provenance is "extract on demand, never copy" — the event
+    /// sits complete in `soroban_events` forever.
     pub tokens: Vec<String>,
-    /// `subpool_salt` — the slot key the router addresses this pool by, within
-    /// one token set: the contract's own spec takes exactly this value as the
-    /// lookup key in `get_pools(tokens) -> Map<BytesN<32>, Address>` and
-    /// `pool_type(tokens, pool_index: BytesN<32>) -> Symbol`.
-    ///
-    /// **It does not identify a pool.** Measured over all 497 registrations:
-    /// only **81 distinct salts**, and 47 `(tokens, salt)` slots were
-    /// registered more than once — one of them seven times, each naming a
-    /// different pool contract. A slot gets re-pointed when a pool is
-    /// redeployed, so the current pool for a slot is the newest registration
-    /// and the older contracts are superseded, not duplicates.
-    ///
-    /// **Not a WASM hash** — joining it against `soroban_contracts.wasm_hash`
-    /// matches nothing, or matches wrongly.
-    /// `None` when absent or not 32 bytes.
-    pub subpool_salt: Option<[u8; 32]>,
     /// `init_args` — the construction arguments, as raw decoded strings in
     /// emitted order.
     ///
@@ -194,15 +190,10 @@ pub struct AddPoolEvent {
 pub enum AddPoolReject {
     /// Not a registration at all. Expected, and not worth counting.
     NotAddPool,
-    /// Claims to be a registration, but the legs are missing, malformed, or
-    /// empty.
-    BadTokens,
-    /// The data payload is not the expected tuple.
-    BadData,
-    /// The pool address is missing or not an address.
-    BadPoolAddress,
-    /// The pool type is missing or not a symbol.
-    BadPoolType,
+    /// Claims to be a registration and could not be read — a pool is
+    /// missing. The message names which part was wrong; one variant
+    /// suffices because the only consumer is the warn log.
+    Malformed(&'static str),
 }
 
 /// Decode an `add_pool` event from its topics and data payloads.
@@ -222,35 +213,32 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddP
     let tokens: Vec<String> = topics
         .get(1)
         .and_then(vec_elements)
-        .ok_or(R::BadTokens)?
+        .ok_or(R::Malformed("legs missing or not a vec of addresses"))?
         .iter()
         .map(|v| address(v).map(str::to_string))
         .collect::<Option<_>>()
-        .ok_or(R::BadTokens)?;
+        .ok_or(R::Malformed("legs missing or not a vec of addresses"))?;
     if tokens.is_empty() {
-        return Err(R::BadTokens);
+        return Err(R::Malformed("empty leg list"));
     }
 
-    let fields = vec_elements(data).ok_or(R::BadData)?;
+    let fields = vec_elements(data).ok_or(R::Malformed("data is not the expected tuple"))?;
     let pool = fields
         .first()
         .and_then(|v| address(v).map(str::to_string))
-        .ok_or(R::BadPoolAddress)?;
+        .ok_or(R::Malformed("pool address missing or not an address"))?;
     let pool_type = fields
         .get(1)
         .and_then(symbol)
-        .ok_or(R::BadPoolType)?
+        .ok_or(R::Malformed("pool type missing or not a symbol"))?
         .to_string();
 
-    // Remaining fields are positional and have been stable across all history,
-    // but a shorter payload is a decodable registration all the same: the pool
-    // and its legs are what the registry is for.
-    let subpool_salt = fields
-        .get(2)
-        .and_then(|v| typed_str(v, "bytes"))
-        .and_then(decode_bytes32);
-    // Every element is kept. A `filter_map` here would silently shorten the
-    // list and change what position 1 means.
+    // Remaining fields (the subpool salt at position 2, init_args at 3) are
+    // positional and have been stable across all history, but a shorter
+    // payload is a decodable registration all the same: the pool and its legs
+    // are what the registry is for. The salt is not decoded — see `tokens`.
+    // Every init_args element is kept. A `filter_map` here would silently
+    // shorten the list and change what position 1 means.
     let init_args = fields
         .get(3)
         .and_then(vec_elements)
@@ -261,21 +249,8 @@ pub fn parse_add_pool(topics: &Value, data: &Value) -> Result<AddPoolEvent, AddP
         pool,
         pool_type,
         tokens,
-        subpool_salt,
         init_args,
     })
-}
-
-/// Base64 → exactly 32 bytes. A payload of any other length is not the salt
-/// the vendor's `BytesN<32>` promises; truncating or padding one would produce
-/// a value that looks usable and identifies the wrong pool slot.
-fn decode_bytes32(b64: &str) -> Option<[u8; 32]> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .ok()?
-        .try_into()
-        .ok()
 }
 
 #[cfg(test)]
@@ -319,7 +294,6 @@ mod tests {
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
         );
         assert_eq!(ev.init_args, vec!["10"]);
-        assert!(ev.subpool_salt.is_some(), "32-byte subpool salt decodes");
     }
 
     /// Verbatim from mainnet — a `stable` pool, three `init_args`
@@ -352,7 +326,6 @@ mod tests {
             vec!["4", "85", "0"],
             "all three arguments survive, in order and unparsed"
         );
-        assert!(ev.subpool_salt.is_some(), "32-byte slot key decodes");
     }
 
     /// Four-leg pools are real — two of them, both `stable`. A decoder capped
@@ -454,17 +427,6 @@ mod tests {
         assert!(!ev.pool.is_empty(), "the pool itself must not be dropped");
     }
 
-    /// A hash of the wrong length must not be truncated into one that would
-    /// join against some other contract.
-    #[test]
-    fn refuses_a_wrong_length_salt() {
-        let (topics, mut data) = constant_pool_event();
-        data["value"][2] = json!({"type": "bytes", "value": "AAAA"});
-
-        let ev = parse_add_pool(&topics, &data).expect("registration still decodes");
-        assert_eq!(ev.subpool_salt, None);
-    }
-
     #[test]
     fn rejects_other_events() {
         let (_, data) = constant_pool_event();
@@ -503,7 +465,7 @@ mod tests {
         ]);
         assert_eq!(
             parse_add_pool(&topics, &data),
-            Err(AddPoolReject::BadTokens)
+            Err(AddPoolReject::Malformed("empty leg list"))
         );
     }
 }
