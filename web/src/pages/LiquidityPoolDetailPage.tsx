@@ -1,6 +1,7 @@
 import { Stack } from '@mui/material';
 import {
   DetailErrorState,
+  isContractId,
   isPoolId,
   NotFoundState,
   SectionErrorBoundary,
@@ -41,11 +42,12 @@ export default function LiquidityPoolDetailPage() {
   // never actually observed at runtime.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
-  // Pool ids must be a CAP-38 `L...` strkey (56 chars, base32). Validate
-  // up-front so a malformed id renders the entity-specific NotFoundState
-  // instead of firing a doomed request. `usePoolDetail` is hardcoded to
-  // skip the network when the id is empty.
-  const validPoolId = isPoolId(poolId);
+  // Pool ids are a CAP-38 `L...` strkey (classic) OR a `C...` contract
+  // strkey (soroban AMM pool, task 0374). Validate up-front so a malformed
+  // id renders the entity-specific NotFoundState instead of firing a doomed
+  // request. `usePoolDetail` is hardcoded to skip the network when the id
+  // is empty.
+  const validPoolId = isPoolId(poolId) || isContractId(poolId);
   const detail = usePoolDetail(validPoolId ? poolId : '');
   if (!validPoolId) {
     return <NotFoundState entity="liquidity-pool" identifier={poolId} />;

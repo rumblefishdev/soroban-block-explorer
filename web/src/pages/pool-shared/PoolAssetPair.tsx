@@ -1,24 +1,21 @@
 import { Box } from '@mui/material';
-import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { AssetIcon } from '../assets/AssetIcon.js';
-import { assetLegLabel } from './helpers.js';
+import type { PoolLegView } from './helpers.js';
 
 /**
- * A liquidity pool is two assets. Render each leg with the shared
- * `AssetIcon`, which colours itself per asset identity (`assetColor`) — the
- * same asset reads the same colour here, on its detail page, and in the
- * reserve dots. Laid out as an overlapping coin pair: the 2px ring +
- * negative margin live here, in the pair layout, so `AssetIcon` stays a
- * plain single-asset avatar.
+ * A pool's legs as overlapping coin avatars — 2 for every classic pool,
+ * 2–4 for soroban AMM pools (task 0374). Each leg colours itself per asset
+ * identity (`assetColor`), so the same asset reads the same colour here, on
+ * its detail page, and in the reserve dots. The 2px ring + negative margin
+ * live here, in the pair layout, so `AssetIcon` stays a plain single-asset
+ * avatar.
  */
 export function PoolAssetPair({
-  a,
-  b,
+  legs,
   size = 32,
 }: {
-  a: PoolAssetLeg;
-  b: PoolAssetLeg;
+  legs: readonly PoolLegView[];
   size?: number;
 }) {
   return (
@@ -39,8 +36,14 @@ export function PoolAssetPair({
         '& .MuiAvatar-root:not(:first-of-type)': { marginLeft: '-8px' },
       })}
     >
-      <AssetIcon code={assetLegLabel(a)} iconUrl={a.icon_url} size={size} />
-      <AssetIcon code={assetLegLabel(b)} iconUrl={b.icon_url} size={size} />
+      {legs.map((leg, i) => (
+        <AssetIcon
+          key={`${leg.label}-${i}`}
+          code={leg.label}
+          iconUrl={leg.iconUrl ?? undefined}
+          size={size}
+        />
+      ))}
     </Box>
   );
 }

@@ -7,6 +7,22 @@ export interface SummaryCell {
 }
 
 /**
+ * A flat cell list laid out two-per-row — the pairing lives HERE, beside the
+ * 2-cell row contract it derives from, so callers with a variable number of
+ * cells (a 3/4-leg soroban pool's reserves) don't each re-implement the
+ * chunking. An odd tail renders as a single half-width cell.
+ */
+export function SummaryRows({ cells }: { cells: SummaryCell[] }) {
+  return (
+    <>
+      {Array.from({ length: Math.ceil(cells.length / 2) }, (_, i) => (
+        <SummaryRow key={i} cells={cells.slice(i * 2, i * 2 + 2)} />
+      ))}
+    </>
+  );
+}
+
+/**
  * One row of a summary card. Pass a single cell for a full-width row, or two
  * cells for a side-by-side row (e.g. "First seen ledger" / "Last seen ledger").
  */

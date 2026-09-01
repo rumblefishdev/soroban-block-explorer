@@ -1,8 +1,8 @@
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 import { formatCompactAmount } from '@rumblefish/soroban-block-explorer-ui';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { assetLegLabel, isPoolStale, legHref } from './helpers.js';
+import { assetLegLabel, legHref } from './helpers.js';
 
 function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
   return {
@@ -114,38 +114,6 @@ describe('assetLegLabel', () => {
   });
 });
 
-describe('isPoolStale', () => {
-  beforeEach(() => {
-    // Pin "now" so the freshness math is deterministic.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-29T12:00:00Z'));
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('returns true when no snapshot timestamp is provided', () => {
-    expect(isPoolStale(null)).toBe(true);
-    expect(isPoolStale(undefined)).toBe(true);
-    expect(isPoolStale('')).toBe(true);
-  });
-
-  it('returns false within the 7-day freshness window', () => {
-    expect(isPoolStale('2026-05-29T11:00:00Z')).toBe(false); // 1h ago
-    expect(isPoolStale('2026-05-23T13:00:00Z')).toBe(false); // ~6 days ago
-  });
-
-  it('returns true once the snapshot is older than 7 days', () => {
-    expect(isPoolStale('2026-05-22T11:59:00Z')).toBe(true);
-    expect(isPoolStale('2026-05-01T00:00:00Z')).toBe(true);
-  });
-
-  it('returns true on unparseable timestamps', () => {
-    expect(isPoolStale('not a date')).toBe(true);
-  });
-});
-
 describe('formatCompactAmount', () => {
   it('returns em-dash for null, undefined, and non-numeric input', () => {
     expect(formatCompactAmount(null)).toBe('—');
@@ -162,5 +130,107 @@ describe('formatCompactAmount', () => {
     expect(formatCompactAmount(1_500)).toBe('1.5K');
     expect(formatCompactAmount(1_200_000)).toBe('1.2M');
     expect(formatCompactAmount('753982100.00')).toBe('754M');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unified leg views (task 0374)
+// ---------------------------------------------------------------------------
+
+import type { PoolItem, PoolLegItem } from '@rumblefish/api-types';
+
+import { legItemLabel, poolLegViews, poolLegsLabel } from './helpers.js';
+
+function makeLegItem(overrides: Partial<PoolLegItem> = {}): PoolLegItem {
+  return {
+    family: 'soroban',
+    asset_code: null,
+    issuer: null,
+    contract_id: 'CC5PU23MKXHUFJKGG5FAUG7MFZX2KMWXPNZP26DDYW76VCB26UWMPEI6',
+    symbol: 'AQUA',
+    name: 'Aquarius',
+    decimals: 7,
+    reserve: '250000000000',
+    ...overrides,
+  };
+}
+
+function makeSorobanPool(legs: PoolLegItem[]): PoolItem {
+  return {
+    pool_id: 'CDJ2WSFTWIINF4NGP4RIBHT5QSSTHOJ2LA6HN5ZI53CL23LI4MZTQNWY',
+    pool_kind: 'soroban',
+    protocol: 'aquarius',
+    pool_type: 'constant',
+    legs,
+    asset_a: null,
+    asset_b: null,
+    fee_bps: 10,
+    fee_percent: '0.1',
+    created_at_ledger: 63893403,
+    participant_count: null,
+    latest_snapshot_ledger: null,
+    reserve_a: null,
+    reserve_b: null,
+    total_shares: null,
+    tvl: null,
+    volume: null,
+    fee_revenue: null,
+    latest_snapshot_at: null,
+  };
+}
+
+describe('legItemLabel', () => {
+  it('follows the precedence native → code → symbol → truncated contract', () => {
+    expect(legItemLabel(makeLegItem({ family: 'native', symbol: null }))).toBe(
+      'XLM'
+    );
+    expect(
+      legItemLabel(
+        makeLegItem({ family: 'classic_credit', asset_code: 'USDC' })
+      )
+    ).toBe('USDC');
+    expect(legItemLabel(makeLegItem())).toBe('AQUA');
+    expect(legItemLabel(makeLegItem({ symbol: null }))).toBe('CC5P…PEI6');
+  });
+
+  it('renders an unresolved leg as an explicit question mark, never a guess', () => {
+    expect(
+      legItemLabel(
+        makeLegItem({
+          family: 'unresolved',
+          symbol: null,
+          contract_id: null,
+        })
+      )
+    ).toBe('?');
+  });
+});
+
+describe('poolLegViews (soroban)', () => {
+  it('scales raw reserves by the leg decimals — exactly, including 18dp', () => {
+    const views = poolLegViews(
+      makeSorobanPool([
+        makeLegItem({ reserve: '4112908590', decimals: 7 }),
+        makeLegItem({ reserve: '1', decimals: 18, symbol: 'BIG' }),
+      ])
+    );
+    expect(views[0].reserve).toBe('411.290859');
+    expect(views[1].reserve).toBe('0.000000000000000001');
+  });
+
+  it('null decimals → null reserve (unknown scale must not render raw units)', () => {
+    const views = poolLegViews(
+      makeSorobanPool([makeLegItem({ decimals: null })])
+    );
+    expect(views[0].reserve).toBeNull();
+  });
+
+  it('joins leg labels into the pair label, 3-leg pools included', () => {
+    const pool = makeSorobanPool([
+      makeLegItem({ family: 'native', symbol: null }),
+      makeLegItem(),
+      makeLegItem({ symbol: 'USDx' }),
+    ]);
+    expect(poolLegsLabel(pool)).toBe('XLM / AQUA / USDx');
   });
 });

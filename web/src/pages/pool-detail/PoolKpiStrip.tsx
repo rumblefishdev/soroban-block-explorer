@@ -1,5 +1,5 @@
 import { Stack } from '@mui/material';
-import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import type { PoolItem } from '@rumblefish/api-types';
 import {
   formatCompactAmount,
   formatInteger,
@@ -9,47 +9,48 @@ import type { ReactNode } from 'react';
 
 import { KpiCell } from '../detail/KpiCell.js';
 
-import {
-  assetLegLabel,
-  isPoolStale,
-  legHref,
-  reserveDotColor,
-} from '../pool-shared/helpers.js';
-
-const STALE_SUBTITLE = 'no recent snapshot';
+import { poolLegViews, type PoolLegView } from '../pool-shared/helpers.js';
 
 interface PoolKpiStripProps {
   pool: PoolItem;
 }
 
 /**
- * Four-cell KPI strip above the Summary card on the LP detail page —
- * Total shares, per-leg reserves, and participant count. Reserves render
- * with compact notation (`1.2M`, `480K`); the subtitle carries the asset
- * code so the value reads cleanly without units stacked on top.
+ * KPI strip above the Summary card on the LP detail page — Total shares,
+ * per-leg reserves (2 for classic pairs, up to 4 for soroban stable
+ * pools), and participant count. Reserves render with compact notation
+ * (`1.2M`, `480K`); the subtitle carries the asset label so the value reads
+ * cleanly without units stacked on top.
  *
- * Stale pools (no fresh snapshot in 7 days) come back with null reserves
- * and shares — those cells render as "—". `participant_count` stays
- * accurate regardless of freshness (per task 0246).
+ * **No staleness caption, deliberately.** An earlier strip captioned the
+ * reserves "no recent snapshot" whenever the newest snapshot was over a week
+ * old, which reads as "these numbers may be out of date". It is the opposite:
+ * a classic pool writes a snapshot on every change, so an old snapshot means
+ * the pool has been IDLE and the reserves beside it are exactly current. It
+ * was also the majority state — 60% of classic pools last changed over a week
+ * ago, the median 35 days — so the warning fired on most of the list while
+ * saying nothing true. Removed rather than reworded: the judgement was never
+ * ours to make, and the age is not a fact this endpoint carries.
+ *
+ * `participant_count` is computed from the live positions table (task 0246);
+ * for soroban pools it is null (counted by the participants section, not per
+ * row) and renders as "—", never as 0.
  */
-function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
-  const href = legHref(leg);
-  if (!href) return code;
+function legSubtitle(leg: PoolLegView): ReactNode {
+  if (!leg.href) return leg.label;
   return (
     <IdentifierDisplay
-      value={code}
+      value={leg.label}
       type="asset"
       truncate={false}
-      href={href}
+      href={leg.href}
       fontSize="inherit"
     />
   );
 }
 
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
-  const codeA = assetLegLabel(pool.asset_a);
-  const codeB = assetLegLabel(pool.asset_b);
-  const stale = isPoolStale(pool.latest_snapshot_at);
+  const legs = poolLegViews(pool);
 
   return (
     <Stack
@@ -60,23 +61,24 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       <KpiCell
         label="Total shares"
         value={formatCompactAmount(pool.total_shares)}
-        caption={stale ? STALE_SUBTITLE : 'shares outstanding'}
+        caption="shares outstanding"
       />
-      <KpiCell
-        label={`${codeA} reserve`}
-        value={formatCompactAmount(pool.reserve_a)}
-        caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_a, codeA)}
-        valueColor={reserveDotColor(pool.asset_a)}
-      />
-      <KpiCell
-        label={`${codeB} reserve`}
-        value={formatCompactAmount(pool.reserve_b)}
-        caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_b, codeB)}
-        valueColor={reserveDotColor(pool.asset_b)}
-      />
+      {legs.map((leg, i) => (
+        <KpiCell
+          key={`${leg.label}-${i}`}
+          label={`${leg.label} reserve`}
+          value={leg.reserve != null ? formatCompactAmount(leg.reserve) : '—'}
+          caption={legSubtitle(leg)}
+          valueColor={leg.dotColor}
+        />
+      ))}
       <KpiCell
         label="Participants"
-        value={formatInteger(pool.participant_count)}
+        value={
+          pool.participant_count != null
+            ? formatInteger(pool.participant_count)
+            : '—'
+        }
         caption="liquidity providers"
       />
     </Stack>

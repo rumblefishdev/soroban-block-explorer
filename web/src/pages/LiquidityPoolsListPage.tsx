@@ -21,18 +21,20 @@ type Filters = NonNullable<ListPoolsData['query']>;
 export default function LiquidityPoolsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
     useCursorPagination({
-      filterKeys: ['asset', 'min_tvl'],
+      filterKeys: ['asset', 'min_tvl', 'kind'],
     });
   const asset = state.filters.asset ?? '';
   const minTvl = state.filters.min_tvl ?? '';
-  const hasFilters = asset !== '' || minTvl !== '';
+  const poolKind = state.filters.kind ?? '';
+  const hasFilters = asset !== '' || minTvl !== '' || poolKind !== '';
 
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
     if (asset) filters['filter[asset_code]'] = asset;
     if (minTvl) filters['filter[min_tvl]'] = minTvl;
+    if (poolKind) filters['filter[pool_kind]'] = poolKind;
     return filters;
-  }, [asset, minTvl]);
+  }, [asset, minTvl, poolKind]);
 
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     usePoolsList(cursor, queryFilters);
@@ -51,6 +53,10 @@ export default function LiquidityPoolsListPage() {
     (value: string) => setFilter('min_tvl', value || null),
     [setFilter]
   );
+  const handlePoolKindChange = useCallback(
+    (value: string) => setFilter('kind', value || null),
+    [setFilter]
+  );
 
   return (
     <Stack spacing={3}>
@@ -63,8 +69,10 @@ export default function LiquidityPoolsListPage() {
           <PoolsFilterBar
             asset={asset}
             minTvl={minTvl}
+            poolKind={poolKind}
             onAssetChange={handleAssetChange}
             onMinTvlChange={handleMinTvlChange}
+            onPoolKindChange={handlePoolKindChange}
           />
         }
         columnCount={POOL_COLUMN_COUNT}

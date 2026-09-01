@@ -1,10 +1,14 @@
-import type { PoolAssetLeg } from '@rumblefish/api-types';
+import type {
+  PoolAssetLeg,
+  PoolItem,
+  PoolLegItem,
+} from '@rumblefish/api-types';
+
+import { scaleByDecimals } from '@rumblefish/soroban-block-explorer-ui';
 
 import { assetColor } from '../assets/assetColor.js';
 import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
 import { routes } from '../../router/routes.js';
-
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Resolve the cross-entity link target for a pool asset leg (task 0263).
@@ -59,25 +63,124 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
   );
 }
 
-/**
- * Reserve-dot colour for a pool leg — the saturated mid-tone of the leg's
- * per-asset colour (`assetColor`), keyed identically to the leg avatar so
- * each reserve row's dot matches its asset's avatar.
- */
-export function reserveDotColor(leg: PoolAssetLeg): string {
-  return assetColor(assetLegLabel(leg)).dot;
+// ---------------------------------------------------------------------------
+// Unified leg views (task 0374): classic pools carry an `asset_a`/`asset_b`
+// PAIR, soroban pools carry 2–4 `legs[]`. Every pool surface renders through
+// this one view so the two shapes cannot drift apart per component.
+// ---------------------------------------------------------------------------
+
+export interface PoolLegView {
+  /** Display label — code / symbol / truncated contract / explicit `?`. */
+  label: string;
+  /** Asset-detail link, when the leg resolves to a linkable identity. */
+  href?: string;
+  /** Reserve-dot / KPI colour, keyed by label like the avatars. */
+  dotColor: string;
+  /** Leg avatar icon (classic legs only — soroban tokens have none yet). */
+  iconUrl?: string | null;
+  /**
+   * Display-ready decimal reserve. Classic: pre-scaled DB-side
+   * (Decimal128(7) → string). Soroban: raw units scaled here by the leg's
+   * on-chain `decimals`; `null` when the reserve OR the scale is unknown —
+   * an unknown scale must never render a raw integer as if it were scaled.
+   */
+  reserve: string | null;
+  /**
+   * Scale for RAW amounts of this leg (activity feed): the on-chain token
+   * `decimals` for a soroban leg, `7` for every classic leg (stroops).
+   * `null` when unknown — callers must skip, never show raw units.
+   */
+  decimals: number | null;
 }
+
+export function isSorobanPool(pool: Pick<PoolItem, 'pool_kind'>): boolean {
+  return pool.pool_kind === 'soroban';
+}
+
 /**
- * A pool is "stale" when its newest snapshot is older than 7 days (matches
- * the freshness window enforced by `18_get_liquidity_pools_list.sql` and
- * the participants endpoint). Stale pools come back with `null` reserves,
- * TVL, volume, and fee revenue. `participant_count` stays accurate
- * regardless of freshness (per 0246).
+ * Display label for a SOROBAN pool leg. Precedence: native → XLM; classic
+ * credit → its code; soroban token → on-chain symbol, else truncated
+ * contract; unresolved → literal `?` — kept EXPLICIT on purpose (house
+ * rule: no plausible-looking fallback for a leg we failed to resolve).
  */
-export function isPoolStale(
-  latestSnapshotAt: string | null | undefined
-): boolean {
-  if (!latestSnapshotAt) return true;
-  const ageMs = Date.now() - new Date(latestSnapshotAt).getTime();
-  return Number.isNaN(ageMs) || ageMs > SEVEN_DAYS_MS;
+export function legItemLabel(leg: PoolLegItem): string {
+  if (leg.family === 'native') return NATIVE_ASSET_CODE;
+  // Classic identity outranks a metadata symbol: a classic-credit leg's
+  // code IS its name everywhere else in the app; symbols only name
+  // bespoke soroban tokens (their code is empty).
+  if (leg.asset_code) return leg.asset_code;
+  if (leg.symbol) return leg.symbol;
+  if (leg.contract_id) {
+    return `${leg.contract_id.slice(0, 4)}…${leg.contract_id.slice(-4)}`;
+  }
+  return '?';
+}
+
+/** Asset-detail link for a soroban pool leg — same precedence family as
+ *  [`legHref`]: native token page / classic composite / token contract. */
+export function legItemHref(leg: PoolLegItem): string | undefined {
+  if (leg.family === 'native') return routes.asset('native');
+  if (leg.asset_code && leg.issuer) {
+    return routes.asset(`${leg.asset_code}-${leg.issuer}`);
+  }
+  if (leg.family === 'soroban' && leg.contract_id) {
+    return routes.asset(leg.contract_id);
+  }
+  return undefined;
+}
+
+/**
+ * The pool's legs as uniform views, either world.
+ *
+ * Classic rows without their pair legs are a broken backend contract —
+ * throw into the section boundary rather than render a half-pool.
+ */
+export function poolLegViews(pool: PoolItem): PoolLegView[] {
+  if (isSorobanPool(pool)) {
+    return (pool.legs ?? []).map((leg) => {
+      const label = legItemLabel(leg);
+      return {
+        label,
+        href: legItemHref(leg),
+        dotColor: assetColor(label).dot,
+        reserve:
+          leg.reserve != null && leg.decimals != null
+            ? scaleByDecimals(leg.reserve, leg.decimals)
+            : null,
+        decimals: leg.decimals ?? null,
+      };
+    });
+  }
+  if (pool.asset_a == null || pool.asset_b == null) {
+    throw new Error('poolLegViews: classic pool without its asset pair');
+  }
+  return (
+    [
+      [pool.asset_a, pool.reserve_a],
+      [pool.asset_b, pool.reserve_b],
+    ] as const
+  ).map(([leg, reserve]) => {
+    const label = assetLegLabel(leg);
+    return {
+      label,
+      href: legHref(leg),
+      dotColor: assetColor(label).dot,
+      iconUrl: leg.icon_url,
+      reserve: reserve ?? null,
+      decimals: 7,
+    };
+  });
+}
+
+/**
+ * `XLM / USDC`, or `XLM / AQUA / USDx` — the pool's display name, either
+ * world. Named for LEGS, not a pair, because it joins however many the pool
+ * has: 3- and 4-leg stable pools are live on mainnet (measured: 491 pools
+ * carry two legs, 7 carry three, 2 carry four). The old `poolPairLabel`
+ * carried the one assumption this model exists to remove.
+ */
+export function poolLegsLabel(pool: PoolItem): string {
+  return poolLegViews(pool)
+    .map((l) => l.label)
+    .join(' / ');
 }

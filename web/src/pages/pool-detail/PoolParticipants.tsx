@@ -37,7 +37,9 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
         variant="bodySmMedium"
         sx={(theme) => ({ color: theme.palette.text.primary })}
       >
-        {formatAmount(row.shares)}
+        {/* null = unknown scale (a soroban share token that never published
+            decimals) — em-dash; Share % is scale-free and still reports. */}
+        {row.shares != null ? formatAmount(row.shares) : '—'}
       </Typography>
     ),
   },
@@ -63,6 +65,9 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Since ledger',
     align: 'right',
     width: 120,
+    // Always present, either world: classic reads `lp_positions`, soroban the
+    // share token's first mint or incoming transfer. No em-dash branch — the
+    // API stopped being able to omit it.
     cell: (row) => (
       <IdentifierDisplay
         value={String(row.first_deposit_ledger)}
@@ -74,6 +79,22 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
 
 interface PoolParticipantsProps {
   poolId: string;
+}
+
+/**
+ * The API refuses participants for a soroban pool with no known share
+ * token — a DELIBERATE 400 (`INVALID_FILTER`), not a transient failure.
+ * Rendering it as "Something went wrong / Try again" lies twice: retry can
+ * never succeed, and a permanent refusal reads as an outage (ADR 0058 §5
+ * promises an explanatory state instead).
+ */
+function isNoShareTokenRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const { status, body } = error as Error & {
+    status?: number;
+    body?: { code?: string };
+  };
+  return status === 400 && body?.code === 'INVALID_FILTER';
 }
 
 /**
@@ -108,6 +129,14 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
         rowKey={(row) => row.account}
         loading
         skeletonRows={20}
+      />
+    );
+  } else if (isError && isNoShareTokenRefusal(error)) {
+    body = (
+      <EmptyState
+        icon={<GroupIcon />}
+        title="Participants not indexed for this pool"
+        description="No share token is known for this pool — either not yet derived, or a concentrated pool whose positions are not share-token balances."
       />
     );
   } else if (isError) {

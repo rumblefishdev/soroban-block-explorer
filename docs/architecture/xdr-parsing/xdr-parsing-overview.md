@@ -635,6 +635,49 @@ register their account operands as participants but are excluded from the fungib
 asset index — that identity is ambiguous and tracked separately by the NFT path
 above.
 
+### 5.7 AMM Pool Registrations and State (`pool_router` / `pool_state`)
+
+Router-family AMM pools (Aquarius's shape; ADR 0058, lore task 0374) are
+decoded by two sibling modules:
+
+- **`pool_router.rs`** — `parse_add_pool` decodes a registration event
+  (pool, verbatim `pool_type` sym, 2–4 token legs, `subpool_salt`, raw
+  `init_args` — three arg vocabularies exist and are stored verbatim);
+  `detect_pool_registrations` sweeps a ledger's events SHAPE-first, from any
+  deployment (an address list loses ~6% of live pools, measured), skipping the
+  diagnostic container — which carries copies of events from FAILED
+  transactions, and would otherwise register pools whose registration never
+  applied. Shape alone does not make a registration trustworthy: the pool
+  named in the payload is corroborated against its own instance state at
+  staging (see the indexing-pipeline overview). The deposit⇄mint share-token
+  rule is NOT part of this module — it is a demoted cross-check living with
+  its corpus oracle in `tests/`, because instance state is the primary source.
+  Verified against the full mainnet population: 497/497 registrations decode,
+  0 false positives on a 307-event all-signatures negative corpus.
+- **`pool_state.rs`** — reserves from ledger-entry changes, two layouts:
+  `parse_plane_pool_data` reads the deployment's shared plane contract's
+  `PoolData[pool]` entries (fungible pools; reserves vector VERBATIM);
+  `parse_pool_instance` reads a pool instance's `TokenShare` / `Plane` /
+  `Router` keys plus `Reserve0`/`Reserve1` — `Plane` is the key that makes it a
+  pool, while `Router` is absent on an older contract version (five of the ten
+  live deployments, measured on chain) and is therefore optional (concentrated pools keep reserves
+  on their own instance — the plane holds their `PoolData` only at
+  registration). Extraction mirrors the token-balance extractors: state
+  images from created/updated/restored changes only. Verified by a
+  bidirectional anti-test against the routers' own `update_reserves` events
+  (0 missing, 0 foreign captures, last-write-per-ledger values 17/17).
+
+Note the asymmetry between the two, which the storage contract depends on:
+`parse_pool_instance` keys on the entry's OWNER (the pool contract itself), so
+a pool can only ever describe itself, while `parse_plane_pool_data` takes the
+pool identity from the entry's KEY PAYLOAD and uses the owner only as the
+`plane` attribution. That is why the plane's claim is authoritative for
+reserves only once a read pairs it with the plane the pool itself declares.
+
+Both feed `persist::stage`, which writes the `liquidity_pools` registry rows
+(`pool_kind = 1`), `pool_state_changes` and `pool_instance_state` (see the
+database-schema overview and ADR 0058).
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR

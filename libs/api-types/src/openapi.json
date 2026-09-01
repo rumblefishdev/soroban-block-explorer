@@ -1147,6 +1147,15 @@
             "schema": {
               "type": ["string", "null"]
             }
+          },
+          {
+            "name": "filter[pool_kind]",
+            "in": "query",
+            "description": "`classic` | `soroban` — restrict the union list to one pool world\n(task 0374). Omitted = both. Validated in the handler so a bad value\ngets this API's error envelope with the allowed list.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
           }
         ],
         "responses": {
@@ -1191,7 +1200,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1252,7 +1261,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract).",
             "required": true,
             "schema": {
               "type": "string"
@@ -1341,7 +1350,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract).",
             "required": true,
             "schema": {
               "type": "string"
@@ -1427,7 +1436,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form.",
             "required": true,
             "schema": {
               "type": "string"
@@ -2526,7 +2535,7 @@
           },
           "pool_id": {
             "type": "string",
-            "description": "Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the\nclient supplied in the path."
+            "description": "Echoed pool ID — 56-char StrKey (`L...` classic / `C...` soroban),\nsame form the client supplied in the path."
           },
           "to": {
             "type": "string",
@@ -4148,19 +4157,18 @@
               "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
               "required": [
                 "account",
-                "shares",
                 "first_deposit_ledger",
                 "last_updated_ledger"
               ],
               "properties": {
                 "account": {
                   "type": "string",
-                  "description": "Participant account StrKey (G...)."
+                  "description": "Participant StrKey. Classic pools: always an account (`G...`).\nSoroban pools: a share-token holder — an account (`G...`) OR a\ncontract (`C...`); Aquarius LPs routinely stake their LP tokens, so a\nstaking/locker contract holding most of the supply is normal, not a\ndata error."
                 },
                 "first_deposit_ledger": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool."
+                  "description": "Ledger this holder's position began. Always present, either world.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first.\n\nRequired rather than nullable because the coverage is STRUCTURAL: every\nLP share token was deployed after our event floor (the family's first\nmint is L50,639,009 against a floor of L50,457,424), so the event that\ngave a current holder their tokens is always one we hold. Measured\n655/655 on the busiest token, contract holders included. A holder we\ncannot date is treated as a defect and dropped, like one we cannot\nname — never served as an absent field."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4169,11 +4177,11 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`). Soroban pools:\n`100 * balance / sum(all positive balances)` of the share token."
                 },
                 "shares": {
-                  "type": "string",
-                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+                  "type": ["string", "null"],
+                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban\npools: the share-token balance scaled by the token's on-chain\nmetadata decimals.\n\n**Nullable on purpose, unlike `first_deposit_ledger` beside it.** That\nfield's coverage rests on a fact about OUR index — the family is newer\nthan our event floor — which is stable and verifiable. This one rests on\na fact about the VENDOR's contract: that a share token publishes\n`decimals`. All 483 on production do, and every one says 7 — but this\nPR already found the other half of that lesson, where five deployments\nrun an older pool contract that publishes no `Router` key at all. A\nmeasurement over today's instances is not a guarantee about a contract\nversion we have not met.\n\nSo an unknown scale surfaces as absent rather than as a raw integer\nposing as a scaled amount, and `share_percentage` — which is scale-free\n— still reports, so the row stays useful."
                 }
               }
             }
@@ -4196,7 +4204,6 @@
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
-                "application_order",
                 "source_account",
                 "created_at"
               ],
@@ -4209,9 +4216,9 @@
                   "type": ["string", "null"]
                 },
                 "application_order": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
+                  "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482). `null` on the soroban feed —\ncontract events have no per-op anchor, and a `0` sentinel would both\nbuild a dangling `#op-0` link and collide row keys when one\ntransaction emits several flow events."
                 },
                 "created_at": {
                   "type": "string",
@@ -4232,10 +4239,17 @@
                   "type": "integer",
                   "format": "int64"
                 },
+                "leg_amounts": {
+                  "type": ["array", "null"],
+                  "items": {
+                    "$ref": "#/components/schemas/PoolLegAmount"
+                  },
+                  "description": "SOROBAN pools only: per-leg movements, `leg_index` into the pool's\n`legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool\ncan have 3–4 legs, and a trade touches exactly two of them by token\naddress). Amounts are RAW token units as signed decimal strings from\nthe POOL's perspective (positive entered the pool) — scale by the\nmatching leg's `decimals` at render. `null` on classic rows."
+                },
                 "pools_crossed": {
                   "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`."
+                  "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`.\nAlways `null` on the soroban feed (its rows are single-pool contract\nevents by construction)."
                 },
                 "source_account": {
                   "type": "string",
@@ -4262,22 +4276,35 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".\n\nSince task 0374 the list is a UNION of both pool worlds, discriminated\nby `pool_kind`:\n- `\"classic\"` — CAP-38 pools: `asset_a`/`asset_b` populated, `legs` null.\n- `\"soroban\"` — AMM-contract pools: `legs[]` populated (2–4 entries),\n  `asset_a`/`asset_b` null, `protocol`/`pool_type` describe the AMM.",
               "required": [
                 "pool_id",
-                "asset_a",
-                "asset_b",
+                "pool_kind",
                 "fee_bps",
                 "fee_percent",
-                "created_at_ledger",
-                "participant_count"
+                "created_at_ledger"
               ],
               "properties": {
                 "asset_a": {
-                  "$ref": "#/components/schemas/PoolAssetLeg"
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PoolAssetLeg",
+                      "description": "Classic pools only; `null` for soroban pools (use `legs`)."
+                    }
+                  ]
                 },
                 "asset_b": {
-                  "$ref": "#/components/schemas/PoolAssetLeg"
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PoolAssetLeg"
+                    }
+                  ]
                 },
                 "created_at_ledger": {
                   "type": "integer",
@@ -4303,14 +4330,33 @@
                   "type": ["integer", "null"],
                   "format": "int64"
                 },
+                "legs": {
+                  "type": ["array", "null"],
+                  "items": {
+                    "$ref": "#/components/schemas/PoolLegItem"
+                  },
+                  "description": "Soroban pools only: the token legs in emission order. `null` for\nclassic pools (use `asset_a`/`asset_b`)."
+                },
                 "participant_count": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL). `null` for soroban pools:\ntheir participants are share-token holders, and counting them per\nlist row is a full `balances` scan per pool — the participants\nendpoint answers it per pool instead. `null` ≠ 0."
                 },
                 "pool_id": {
                   "type": "string",
-                  "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+                  "description": "SEP-23 strkey (`L...`, 56 chars) for classic pools; the pool\nCONTRACT's `C...` strkey for soroban pools (its id bytes are a\ncontract address payload, and rendering them as `L...` would produce\na well-formed WRONG key). DB stores 32 bytes per ADR 0024."
+                },
+                "pool_kind": {
+                  "type": "string",
+                  "description": "`classic` | `soroban` — which world this row comes from and which\nleg representation it carries. See struct doc."
+                },
+                "pool_type": {
+                  "type": ["string", "null"],
+                  "description": "Verbatim pool-type symbol from the registration event\n(`constant` | `stable` | `concentrated` | ...). Un-normalised on\npurpose — three vendor vocabularies exist for one shape; folding\nthem is read-time interpretation. `null` for classic pools."
+                },
+                "protocol": {
+                  "type": ["string", "null"],
+                  "description": "Protocol label of the registering router, resolved at read time from\nthe deployment (task 0374 T1): `aquarius` for the vendor-documented\nrouter. `null` for classic pools AND for router deployments whose\noperator is unverified — an unlabelled live router shares Aquarius's\ncode with fully disjoint admin roles, and labelling it \"aquarius\"\nwould be attribution we cannot back."
                 },
                 "reserve_a": {
                   "type": ["string", "null"]
@@ -4323,11 +4369,11 @@
                 },
                 "tvl": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless both legs price (never a one-leg partial) —\nuntracked assets and stale pools read `null`."
+                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (one batched price lookup per page)\nand the detail endpoint, in **both pool worlds**. `tvl` = latest\nreserves × each leg's last hourly USD close\n(`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless EVERY leg\nprices — never a partial sum over the legs that happened to resolve —\nso untracked assets and stale pools read `null`.\n\nSoroban pools sum over their 2–4 `legs`, each scaled by its own\n`decimals`, and price SAC legs by classic identity while bespoke\ntokens key on `asset_kind = 'contract'`. They were `null` until\nreview #438: the analytics path read `asset_a`/`asset_b`, which a\nsoroban row carries as storage defaults, so every one of them showed a\nplotted TVL curve on its chart above an empty TVL figure."
                 },
                 "volume": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only**, both\npool worlds — a per-pool source a list page cannot afford.\n\nClassic pools sum `gross_volume_a` from the snapshots and price it at\nthe leg-A last hourly close. Soroban pools have no such column, so they\nsum their own `trade` events over the window and price each hop by its\nin-token's leg — the source their chart already aggregates per bucket.\n`null` when the pool is unpriceable, or when any hop cannot be priced\nor parsed; a pool with no trades in the window is a genuine `0`."
                 }
               }
             }
@@ -4426,21 +4472,16 @@
       "ParticipantItem": {
         "type": "object",
         "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
-        "required": [
-          "account",
-          "shares",
-          "first_deposit_ledger",
-          "last_updated_ledger"
-        ],
+        "required": ["account", "first_deposit_ledger", "last_updated_ledger"],
         "properties": {
           "account": {
             "type": "string",
-            "description": "Participant account StrKey (G...)."
+            "description": "Participant StrKey. Classic pools: always an account (`G...`).\nSoroban pools: a share-token holder — an account (`G...`) OR a\ncontract (`C...`); Aquarius LPs routinely stake their LP tokens, so a\nstaking/locker contract holding most of the supply is normal, not a\ndata error."
           },
           "first_deposit_ledger": {
             "type": "integer",
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool."
+            "description": "Ledger this holder's position began. Always present, either world.\n\nClassic pools read it from `lp_positions`. Soroban pools have no such\ncolumn — `balances` records current state, not a first sighting — so it\ncomes from the share token's own `mint` / incoming `transfer` events,\nwhichever came first.\n\nRequired rather than nullable because the coverage is STRUCTURAL: every\nLP share token was deployed after our event floor (the family's first\nmint is L50,639,009 against a floor of L50,457,424), so the event that\ngave a current holder their tokens is always one we hold. Measured\n655/655 on the busiest token, contract holders included. A holder we\ncannot date is treated as a defect and dropped, like one we cannot\nname — never served as an absent field."
           },
           "last_updated_ledger": {
             "type": "integer",
@@ -4449,11 +4490,11 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`). Soroban pools:\n`100 * balance / sum(all positive balances)` of the share token."
           },
           "shares": {
-            "type": "string",
-            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+            "type": ["string", "null"],
+            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). Soroban\npools: the share-token balance scaled by the token's on-chain\nmetadata decimals.\n\n**Nullable on purpose, unlike `first_deposit_ledger` beside it.** That\nfield's coverage rests on a fact about OUR index — the family is newer\nthan our event floor — which is stable and verifiable. This one rests on\na fact about the VENDOR's contract: that a share token publishes\n`decimals`. All 483 on production do, and every one says 7 — but this\nPR already found the other half of that lesson, where five deployments\nrun an older pool contract that publishes no `Router` key at all. A\nmeasurement over today's instances is not a guarantee about a contract\nversion we have not met.\n\nSo an unknown scale surfaces as absent rather than as a raw integer\nposing as a scaled amount, and `share_percentage` — which is scale-free\n— still reports, so the row stays useful."
           }
         }
       },
@@ -4463,7 +4504,6 @@
         "required": [
           "transaction_hash",
           "ledger_sequence",
-          "application_order",
           "source_account",
           "created_at"
         ],
@@ -4476,9 +4516,9 @@
             "type": ["string", "null"]
           },
           "application_order": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
+            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482). `null` on the soroban feed —\ncontract events have no per-op anchor, and a `0` sentinel would both\nbuild a dangling `#op-0` link and collide row keys when one\ntransaction emits several flow events."
           },
           "created_at": {
             "type": "string",
@@ -4499,10 +4539,17 @@
             "type": "integer",
             "format": "int64"
           },
+          "leg_amounts": {
+            "type": ["array", "null"],
+            "items": {
+              "$ref": "#/components/schemas/PoolLegAmount"
+            },
+            "description": "SOROBAN pools only: per-leg movements, `leg_index` into the pool's\n`legs[]`. Published instead of `amount_a`/`amount_b` (a soroban pool\ncan have 3–4 legs, and a trade touches exactly two of them by token\naddress). Amounts are RAW token units as signed decimal strings from\nthe POOL's perspective (positive entered the pool) — scale by the\nmatching leg's `decimals` at render. `null` on classic rows."
+          },
           "pools_crossed": {
             "type": ["integer", "null"],
             "format": "int64",
-            "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`."
+            "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`.\nAlways `null` on the soroban feed (its rows are single-pool contract\nevents by construction)."
           },
           "source_account": {
             "type": "string",
@@ -4551,22 +4598,35 @@
       },
       "PoolItem": {
         "type": "object",
-        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".\n\nSince task 0374 the list is a UNION of both pool worlds, discriminated\nby `pool_kind`:\n- `\"classic\"` — CAP-38 pools: `asset_a`/`asset_b` populated, `legs` null.\n- `\"soroban\"` — AMM-contract pools: `legs[]` populated (2–4 entries),\n  `asset_a`/`asset_b` null, `protocol`/`pool_type` describe the AMM.",
         "required": [
           "pool_id",
-          "asset_a",
-          "asset_b",
+          "pool_kind",
           "fee_bps",
           "fee_percent",
-          "created_at_ledger",
-          "participant_count"
+          "created_at_ledger"
         ],
         "properties": {
           "asset_a": {
-            "$ref": "#/components/schemas/PoolAssetLeg"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PoolAssetLeg",
+                "description": "Classic pools only; `null` for soroban pools (use `legs`)."
+              }
+            ]
           },
           "asset_b": {
-            "$ref": "#/components/schemas/PoolAssetLeg"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PoolAssetLeg"
+              }
+            ]
           },
           "created_at_ledger": {
             "type": "integer",
@@ -4592,14 +4652,33 @@
             "type": ["integer", "null"],
             "format": "int64"
           },
+          "legs": {
+            "type": ["array", "null"],
+            "items": {
+              "$ref": "#/components/schemas/PoolLegItem"
+            },
+            "description": "Soroban pools only: the token legs in emission order. `null` for\nclassic pools (use `asset_a`/`asset_b`)."
+          },
           "participant_count": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL). `null` for soroban pools:\ntheir participants are share-token holders, and counting them per\nlist row is a full `balances` scan per pool — the participants\nendpoint answers it per pool instead. `null` ≠ 0."
           },
           "pool_id": {
             "type": "string",
-            "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+            "description": "SEP-23 strkey (`L...`, 56 chars) for classic pools; the pool\nCONTRACT's `C...` strkey for soroban pools (its id bytes are a\ncontract address payload, and rendering them as `L...` would produce\na well-formed WRONG key). DB stores 32 bytes per ADR 0024."
+          },
+          "pool_kind": {
+            "type": "string",
+            "description": "`classic` | `soroban` — which world this row comes from and which\nleg representation it carries. See struct doc."
+          },
+          "pool_type": {
+            "type": ["string", "null"],
+            "description": "Verbatim pool-type symbol from the registration event\n(`constant` | `stable` | `concentrated` | ...). Un-normalised on\npurpose — three vendor vocabularies exist for one shape; folding\nthem is read-time interpretation. `null` for classic pools."
+          },
+          "protocol": {
+            "type": ["string", "null"],
+            "description": "Protocol label of the registering router, resolved at read time from\nthe deployment (task 0374 T1): `aquarius` for the vendor-documented\nrouter. `null` for classic pools AND for router deployments whose\noperator is unverified — an unlabelled live router shares Aquarius's\ncode with fully disjoint admin roles, and labelling it \"aquarius\"\nwould be attribution we cannot back."
           },
           "reserve_a": {
             "type": ["string", "null"]
@@ -4612,11 +4691,69 @@
           },
           "tvl": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless both legs price (never a one-leg partial) —\nuntracked assets and stale pools read `null`."
+            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (one batched price lookup per page)\nand the detail endpoint, in **both pool worlds**. `tvl` = latest\nreserves × each leg's last hourly USD close\n(`prices.price_usd_series_1h`, ≤ ~2h stale); `null` unless EVERY leg\nprices — never a partial sum over the legs that happened to resolve —\nso untracked assets and stale pools read `null`.\n\nSoroban pools sum over their 2–4 `legs`, each scaled by its own\n`decimals`, and price SAC legs by classic identity while bespoke\ntokens key on `asset_kind = 'contract'`. They were `null` until\nreview #438: the analytics path read `asset_a`/`asset_b`, which a\nsoroban row carries as storage defaults, so every one of them showed a\nplotted TVL curve on its chart above an empty TVL figure."
           },
           "volume": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only**, both\npool worlds — a per-pool source a list page cannot afford.\n\nClassic pools sum `gross_volume_a` from the snapshots and price it at\nthe leg-A last hourly close. Soroban pools have no such column, so they\nsum their own `trade` events over the window and price each hop by its\nin-token's leg — the source their chart already aggregates per bucket.\n`null` when the pool is unpriceable, or when any hop cannot be priced\nor parsed; a pool with no trades in the window is a genuine `0`."
+          }
+        }
+      },
+      "PoolLegAmount": {
+        "type": "object",
+        "description": "One leg's movement inside a soroban pool event (see\n[`PoolActivityItem::leg_amounts`]).",
+        "required": ["leg_index", "amount"],
+        "properties": {
+          "amount": {
+            "type": "string",
+            "description": "Signed raw units from the pool's perspective, as a decimal string."
+          },
+          "leg_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index into the pool's `legs[]` (emission order).",
+            "minimum": 0
+          }
+        }
+      },
+      "PoolLegItem": {
+        "type": "object",
+        "description": "One leg of a SOROBAN pool (task 0374). Pools registered by AMM routers\ncarry 2–4 token-contract legs in emission order (`get_tokens()` order) —\na pair cannot represent them, so soroban pools publish `legs[]` instead\nof `asset_a`/`asset_b`.\n\n`family == \"unresolved\"` is a real state, not an error: a leg surrogate\nthat resolves through neither the SAC facet nor a bespoke-token `assets`\nrow must surface explicitly rather than as a plausible empty asset\n(house rule: no misleading fallbacks).",
+        "required": ["family"],
+        "properties": {
+          "asset_code": {
+            "type": ["string", "null"],
+            "description": "Classic asset code; `null` for native, soroban and unresolved legs."
+          },
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "C-strkey of the leg's token CONTRACT — the address `add_pool`\nregistered. For a classic-family leg this is the deployed SAC; for a\nsoroban leg the token itself. `null` only when unresolved."
+          },
+          "decimals": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Display scale for `reserve`. `7` for every classic-family leg\n(protocol-fixed); a soroban token's from its on-chain metadata.\n`null` = token never published metadata — render amounts as\nunresolved, never with a guessed scale (an 18-decimal token shown at\na default 7 is 10^11 off and looks like data, not like a bug).",
+            "minimum": 0
+          },
+          "family": {
+            "type": "string",
+            "description": "`native` | `classic_credit` | `soroban` | `unresolved` — the\n`AssetFamily` of the resolved asset (task 0496), NOT the XDR\n`AssetType` vocabulary the classic pair legs use."
+          },
+          "issuer": {
+            "type": ["string", "null"],
+            "description": "Classic issuer StrKey (`G...`); `null` outside `classic_credit`."
+          },
+          "name": {
+            "type": ["string", "null"],
+            "description": "On-chain SEP-41 name; same sourcing as `symbol`."
+          },
+          "reserve": {
+            "type": ["string", "null"],
+            "description": "Latest reserve of this leg in RAW token units, as a decimal string\n(scale by `decimals` to render). From the pool's latest ledger-state\nwrite (`pool_state_changes`); `null` until state is indexed."
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "On-chain SEP-41 symbol (soroban tokens; from contract metadata)."
           }
         }
       },

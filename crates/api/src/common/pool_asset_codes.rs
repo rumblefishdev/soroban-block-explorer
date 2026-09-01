@@ -57,15 +57,23 @@ fn leg(side: char) -> String {
 /// `USDC/USDC` means the 72 pools with USDC on both sides, not the 2 912 with
 /// USDC anywhere. Same for a needle that is a prefix of the other
 /// (`USD/USDC`) — one asset must not satisfy both halves of the query.
+///
+/// **Classic pools only** (`pool_kind = 0`). The pair columns this predicate
+/// reads are defaults on soroban rows — `asset_a_type = 0` there is a
+/// placeholder, not native, so without the guard the `if(type = 0, 'XLM', …)`
+/// arm reads EVERY soroban pool as `XLM/XLM` (497 false positives measured on
+/// prod, review #438 F2). Soroban legs are surrogate ids; matching them by
+/// code is a join to the asset dimensions and lands with the legs migration,
+/// not here.
 pub fn asset_codes_predicate(codes: &[String]) -> Option<(String, Vec<String>)> {
     match codes {
         [one] => Some((
-            format!("({} OR {})", leg('a'), leg('b')),
+            format!("(lp.pool_kind = 0 AND ({} OR {}))", leg('a'), leg('b')),
             vec![one.clone(), one.clone()],
         )),
         [first, second] => Some((
             format!(
-                "(({a} AND {b}) OR ({a} AND {b}))",
+                "(lp.pool_kind = 0 AND (({a} AND {b}) OR ({a} AND {b})))",
                 a = leg('a'),
                 b = leg('b'),
             ),
@@ -123,7 +131,17 @@ mod tests {
         assert_eq!(binds, vec!["KALE", "KALE"]);
         assert_eq!(sql.matches('?').count(), 2);
         assert!(sql.contains(" OR "));
-        assert!(!sql.contains(" AND "));
+    }
+
+    #[test]
+    fn predicate_is_gated_to_classic_pools() {
+        // Soroban registry rows carry the pair columns at defaults, so
+        // `asset_a_type = 0` there is a placeholder, not native — without
+        // this gate every soroban pool matches `XLM/XLM` (review #438 F2).
+        for raw in ["xlm", "xlm/usdc"] {
+            let (sql, _) = asset_codes_predicate(&codes(raw)).expect("clause");
+            assert!(sql.starts_with("(lp.pool_kind = 0 AND "), "{sql}");
+        }
     }
 
     #[test]

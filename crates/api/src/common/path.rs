@@ -123,18 +123,28 @@ pub fn strkey(value: &str, prefix: char, param: &str) -> Result<(), Response> {
 /// `strkey` helper for accounts/contracts: pool decode is CRC-strict
 /// because the internal DB form is the hash, not the strkey itself).
 pub fn pool_id_strkey(value: &str, param: &str) -> Result<String, Response> {
-    match stellar_strkey::LiquidityPool::from_string(value) {
-        Ok(stellar_strkey::LiquidityPool(bytes)) => Ok(hex::encode(bytes)),
+    // Two id worlds share the pool routes (task 0374): classic pools are
+    // addressed by the SEP-23 `L...` strkey, soroban AMM pools by their
+    // CONTRACT's `C...` strkey — the id bytes ARE a contract address
+    // payload, and an `L...` render of them would be a well-formed WRONG
+    // key, so the API never mints one. Both decode to the stored 32 bytes.
+    if let Ok(stellar_strkey::LiquidityPool(bytes)) =
+        stellar_strkey::LiquidityPool::from_string(value)
+    {
+        return Ok(hex::encode(bytes));
+    }
+    match stellar_strkey::Contract::from_string(value) {
+        Ok(stellar_strkey::Contract(bytes)) => Ok(hex::encode(bytes)),
         Err(_) => Err(errors::bad_request_with_details(
             errors::INVALID_POOL_ID,
             format!(
-                "{param} must be a 56-character Stellar StrKey starting with 'L' (SEP-23 canonical form)"
+                "{param} must be a 56-character Stellar StrKey: 'L...' (classic pool, SEP-23) or 'C...' (soroban pool contract)"
             ),
             serde_json::json!({
                 "param": param,
                 "received": value,
-                "expected_prefix": "L",
-                "hint": "use the strkey (L...) returned by /v1/liquidity-pools or shown in stellar.expert; hex form is no longer accepted",
+                "expected_prefix": "L or C",
+                "hint": "use the strkey returned by /v1/liquidity-pools; hex form is no longer accepted",
             }),
         )),
     }
@@ -321,7 +331,7 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["code"], "invalid_pool_id");
         assert_eq!(json["details"]["param"], "pool_id");
-        assert_eq!(json["details"]["expected_prefix"], "L");
+        assert_eq!(json["details"]["expected_prefix"], "L or C");
     }
 
     #[tokio::test]

@@ -12,7 +12,11 @@
 
 pub mod dto;
 mod handlers;
-mod queries;
+mod protocol_labels;
+// `queries` is crate-visible, not public: global search resolves a soroban
+// pool's leg identities through `resolve_leg_assets` so a pool is named the
+// same way on every surface (review #438 F2).
+pub(crate) mod queries;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;

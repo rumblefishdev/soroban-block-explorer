@@ -604,6 +604,45 @@ detectable tie. The arbiter is the network:
 This is the same tooling as the one-off 0463 seed; the seed is one-off, the
 reconciliation is not.
 
+## Soroban-AMM pool passes (task 0374)
+
+Run only AFTER the 0374 DDL + indexer deploy (see the deploy-order gotcha in
+[deployment.md](./deployment.md) — reversing the order is the 0310 outage
+class). Three catch-ups, then one closure check:
+
+1. **Pool registry** — one-off generator, deliberately not in the tree
+   (a one-off is not a maintained surface). Resurrect verbatim:
+   ```bash
+   git show 082ee364:crates/db-clickhouse/src/bin/gen_pool_registry_backfill.rs
+   ```
+   Emits `liquidity_pools` rows (pool_kind=1) from the `add_pool` events
+   already in `soroban_events`; idempotent, safe to re-run.
+2. **Reserve history + instance state** — historical re-parse of the soroban
+   window with the new indexer (`backfill-runner run` over the range),
+   filling `pool_state_changes` + `pool_instance_state` from ledger state.
+   `pool_instance_state.plane_id` is load-bearing: reserve reads keep only
+   rows whose plane matches what the pool itself declares, so a pool with no
+   instance row shows no reserves until this pass covers it.
+3. **Classic `legs` backfill** — one-shot pass reading the legacy pair
+   columns and emitting rows with `legs` filled, versioned on each row's own
+   `last_updated_ledger` (task 0374 legs-migration step 2).
+
+**Window-closure check (mandatory)** — proves no registration slipped between
+the backfill's snapshot and the live writer's start:
+
+```sql
+SELECT
+  (SELECT uniqExact(JSONExtractString(data_xdr,'value',1,'value'))
+     FROM soroban_events WHERE signature = 'add_pool')      AS events,
+  (SELECT uniqExact(pool_id) FROM liquidity_pools
+     WHERE pool_kind = 1)                                   AS in_registry,
+  events - in_registry                                      AS missing  -- MUST be 0
+```
+
+Non-zero `missing` → re-run the generator (idempotent) and re-check.
+Verification criteria for the deployed result live in task 0374's
+final-phase notes.
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)

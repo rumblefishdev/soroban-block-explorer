@@ -25,7 +25,7 @@ use crate::contracts::dto::{
     InterfaceResponse, InvocationItem, SacAsset,
 };
 use crate::liquidity_pools::dto::{
-    ChartDataPoint, ChartResponse, PoolActivityItem, PoolAssetLeg, PoolEvent, PoolItem,
+    ChartDataPoint, ChartResponse, PoolActivityItem, PoolAssetLeg, PoolEvent, PoolItem, PoolLegItem,
 };
 use crate::nfts::dto::{NftItem, NftTransferItem};
 use crate::runtime_enrichment::stellar_archive::dto::{
@@ -134,6 +134,7 @@ impl Modify for SecurityAddon {
         Paginated<PoolItem>,
         PoolItem,
         PoolAssetLeg,
+        PoolLegItem,
         Paginated<PoolActivityItem>,
         PoolActivityItem,
         PoolEvent,
