@@ -1082,6 +1082,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // this ledger's parse output. Without it, any contract could emit an
     // `add_pool` naming a REAL pool and replace its registry row wholesale
     // (RMT keyed on pool_id, versioned by ledger).
+    //
+    // An older contract version writes no `Router` key at all (read from chain
+    // 2026-09-01: five of the ten deployments, 23 pools). Those instances are
+    // real pools and cannot be authenticated — the chain simply never recorded
+    // who registered them — so they are ACCEPTED and counted, never refused: a
+    // missing key is an older contract, not a forgery, and dropping a real pool
+    // is the failure this module's reject taxonomy exists to prevent. The
+    // residual is bounded and worth stating: the registry row of a pool whose
+    // instance declares no router is forgeable. Every such pool measured is a
+    // dead deployment with no flow event ever.
     let declared_router: HashMap<&str, Option<&str>> = pool_instances
         .iter()
         .map(|i| (i.state.pool.as_str(), i.state.router.as_deref()))
@@ -1089,6 +1099,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     for reg in xdr_parser::pool_router::detect_pool_registrations(events) {
         match declared_router.get(reg.event.pool.as_str()) {
             Some(&Some(router)) if router == reg.router => {}
+            Some(&None) => tracing::warn!(
+                ledger_sequence = ledger.sequence,
+                pool = %reg.event.pool,
+                emitter = %reg.router,
+                "add_pool registration accepted UNVERIFIED — the named pool's \
+                 instance declares no router (older contract version)"
+            ),
             found => {
                 tracing::warn!(
                     ledger_sequence = ledger.sequence,

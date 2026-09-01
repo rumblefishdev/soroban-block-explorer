@@ -3420,6 +3420,42 @@ fn prepare_accepts_a_registration_the_pool_corroborates() {
     assert_eq!(row.fee_bps, 10);
 }
 
+/// A pool from an OLDER deployment declares no `Router` (five of the ten
+/// deployments on chain, 23 pools — read 2026-09-01). It cannot be
+/// corroborated, because the chain never recorded who registered it, so it is
+/// ACCEPTED rather than dropped: a missing key is an older contract version,
+/// not a forgery. Its instance state must still stage, since `plane_id` is
+/// what makes its reserves readable at all.
+#[test]
+fn a_registration_for_a_pool_that_declares_no_router_is_accepted() {
+    const POOL: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const ROUTER: &str = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+    const PLANE: &str = "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x75);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![add_pool_event(&tx.hash, ROUTER, POOL, EventSource::TxLevel)],
+    )];
+    let mut legacy = pool_instance_declaring(POOL, ROUTER);
+    legacy.state.router = None; // the older contract shape
+    let instances = [legacy];
+
+    let staged = stage_registration(&ledger, &tx, &events, &instances);
+
+    assert!(
+        staged.pool_rows.iter().any(|r| r.pool_kind == 1),
+        "an unverifiable pool is still a real pool — it must not be dropped"
+    );
+    let inst = staged
+        .pool_instance_state_rows
+        .iter()
+        .find(|r| r.plane_id == ids::contract_id(PLANE))
+        .expect("its plane must stage — reserve reads filter on it");
+    assert_eq!(inst.plane_id, ids::contract_id(PLANE));
+}
+
 /// The diagnostic container carries copies of events from FAILED transactions
 /// (task 0182). A registration that never applied must not become a pool —
 /// every sibling detector filters this container; review #438 found this one

@@ -121,8 +121,21 @@ converges on the newest, matching on-chain `share_id()`.
 The share-token half is cross-checked by the SEP-41 mint rule from deposit
 transactions, which is a demoted cross-check, not a source. Concentrated pools
 mint nothing, so their `share_token_id` is a structural `0`; their positions
-are NFTs (future work). `plane_id` is always populated — an instance is only
-recognised as a pool when it carries both `Router` and `Plane`.
+are NFTs (future work). `plane_id` is always populated — `Plane` is the key an
+instance must carry to be recognised as a pool at all.
+
+**`Router` is NOT guaranteed** (read from chain 2026-09-01, correcting an
+earlier generalisation): five of the ten deployments run an older contract
+whose instance carries `Plane`, `TokenShare` and reserves but no `Router` key —
+23 real pools. The original rule ("carries both") was measured on live
+creations and generalised to the whole population. Nothing states a guarantee
+either way: the protocol docs say nothing about trusting entry contents, the
+vendor's docs describe the roles without promising the key, and the vendor's
+source is unreachable. So those pools are indexed and their registrations
+accepted UNVERIFIED rather than refused — a missing key is an older contract
+version, not a forgery. Residual, stated rather than hidden: the registry row
+of a pool that declares no router is forgeable; every such pool measured is a
+dead deployment with no flow event ever.
 
 **AMENDED 2026-09-01 (review of PR #438).** This decision originally scoped the
 table to the share-token relation alone (`pool_share_tokens`). It now carries

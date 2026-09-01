@@ -93,8 +93,25 @@ pub struct PoolInstanceState {
 /// JSON: `[{"key":{"type":"vec","value":[{"type":"sym",…}]},"value":…},…]`).
 ///
 /// Returns `None` unless the instance IS a router-family pool — recognised by
-/// shape: it carries both `Router` and `Plane` keys (measured on live
-/// creations; no other contract family writes that pair).
+/// shape: it carries a `Plane` key, the deployment scoreboard every pool of
+/// this family reports to.
+///
+/// **`Router` is NOT required, and requiring it was wrong.** The earlier rule
+/// ("carries both `Router` and `Plane`") was measured on live creations only
+/// and generalised to the whole population. Read from chain 2026-09-01: five
+/// of the ten deployments run an older contract whose instance has `Plane`,
+/// `TokenShare`, `ReserveA/B` and no `Router` key at all — 23 real pools.
+/// Nothing states a guarantee either way: Stellar's docs say nothing about
+/// trusting event or entry contents, the vendor's docs describe the roles
+/// without promising the key, and the vendor's source is unreachable (404,
+/// re-checked 2026-09-01). So a missing `Router` is an observed fact about an
+/// older contract version, not evidence of a forgery, and must not be treated
+/// as one.
+///
+/// Relaxing the shape test is safe because this decode is keyed on the entry's
+/// OWNER: a foreign contract that writes a `Plane` key describes only itself,
+/// and nothing reads an instance row for a pool that never reached the
+/// registry.
 pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceState> {
     let entries = storage.as_array()?;
     let get = |name: &str| -> Option<&Value> {
@@ -104,8 +121,8 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
             is.then(|| kv.get("value"))?
         })
     };
-    let router = get("Router")?;
     let plane = get("Plane")?;
+    let router = get("Router");
     let addr = |v: &Value| {
         typed(v, "address")
             .and_then(Value::as_str)
@@ -126,7 +143,7 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
         pool: pool.to_string(),
         token_share: get("TokenShare").and_then(&addr),
         plane: addr(plane),
-        router: addr(router),
+        router: router.and_then(&addr),
         reserves,
     })
 }
@@ -416,7 +433,50 @@ mod tests {
         assert_eq!(got.token_share, None);
     }
 
-    /// A random contract's instance (no Router+Plane pair) is not a pool.
+    /// Verbatim shape of an OLDER deployment's pool, read from chain
+    /// 2026-09-01 (`CD2X3JY7…`, one of five such deployments): `Plane`,
+    /// `TokenShare` and reserves, but NO `Router` key. These are real pools;
+    /// requiring `Router` dropped 23 of them.
+    #[test]
+    fn an_older_pool_without_a_router_key_is_still_a_pool() {
+        let storage = json!([
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Admin"}]},
+             "value": {"type": "address", "value": "GAV5FBMKD2ZF4X2MGWDNQYUP7KFL7MRM6HZBY7HKQLB4BRHSCCX5J6VS"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Plane"}]},
+             "value": {"type": "address", "value": "CDYX2OSS4XYZUT2LWWH2NXOQMEFF4JSARGSF3NEB7RM5VOMUHE3X2UN2"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "TokenShare"}]},
+             "value": {"type": "address", "value": "CC5PU23MKXHUFJKGG5FAUG7MFZX2KMWXPNZP26DDYW76VCB26UWMPEI6"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "TotalShares"}]}, "value": {"type": "u128", "value": "5"}}
+        ]);
+        let got = parse_pool_instance(
+            "CD2X3JY7PWJBXUU6PB52K3O547L2NX35XUUKKKGYED3UF6FWFTV5NI3N",
+            &storage,
+        )
+        .expect("an older pool is still a pool");
+        assert_eq!(
+            got.plane.as_deref(),
+            Some("CDYX2OSS4XYZUT2LWWH2NXOQMEFF4JSARGSF3NEB7RM5VOMUHE3X2UN2"),
+            "the plane is what makes reserve provenance checkable — it must survive"
+        );
+        assert_eq!(
+            got.router, None,
+            "absent, and reported as absent — never invented"
+        );
+        assert!(got.token_share.is_some());
+    }
+
+    /// An instance with no `Plane` is not of this family — the plane is the
+    /// one key the shape test still rests on.
+    #[test]
+    fn an_instance_without_a_plane_is_not_a_pool() {
+        let storage = json!([
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Router"}]},
+             "value": {"type": "address", "value": "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK"}}
+        ]);
+        assert_eq!(parse_pool_instance("CNOPLANE", &storage), None);
+    }
+
+    /// A random contract's instance (no `Plane`) is not a pool.
     #[test]
     fn a_foreign_instance_is_rejected_by_shape() {
         let storage = json!([

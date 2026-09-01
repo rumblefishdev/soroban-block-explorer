@@ -658,7 +658,9 @@ decoded by two sibling modules:
   `parse_plane_pool_data` reads the deployment's shared plane contract's
   `PoolData[pool]` entries (fungible pools; reserves vector VERBATIM);
   `parse_pool_instance` reads a pool instance's `TokenShare` / `Plane` /
-  `Router` keys plus `Reserve0`/`Reserve1` (concentrated pools keep reserves
+  `Router` keys plus `Reserve0`/`Reserve1` — `Plane` is the key that makes it a
+  pool, while `Router` is absent on an older contract version (five of the ten
+  live deployments, measured on chain) and is therefore optional (concentrated pools keep reserves
   on their own instance — the plane holds their `PoolData` only at
   registration). Extraction mirrors the token-balance extractors: state
   images from created/updated/restored changes only. Verified by a
