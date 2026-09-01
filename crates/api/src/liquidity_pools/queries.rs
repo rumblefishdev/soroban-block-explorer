@@ -710,6 +710,79 @@ pub(crate) fn soroban_tvl(
         .sum::<Option<f64>>()
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct SorobanTradeChRow {
+    token_in: String,
+    amount_sum: f64,
+    bad: i64,
+}
+
+/// 24h gross trade volume of a SOROBAN pool, in USD.
+///
+/// The classic sibling reads `liquidity_pool_snapshots.gross_volume_a`, a
+/// column soroban never writes — so this reads the pool's own `trade` events
+/// instead, the source its chart already aggregates per bucket. Same shape as
+/// that aggregation with a 24h window and no bucketing: sum the in-token
+/// amounts, price each by its leg's last close, scaled by that leg's decimals.
+///
+/// DETAIL only, matching the classic contract — a per-pool events read has no
+/// place in a list page.
+///
+/// `None` when any trade cannot be priced or parsed: the chart's poison rule,
+/// never a partial sum over the hops that happened to resolve. A pool with no
+/// trades in the window is a genuine zero, not an unknown.
+pub(crate) async fn fetch_soroban_volume_24h(
+    client: &clickhouse::Client,
+    pool_strkey: &str,
+    legs: &[(i64, Option<SorobanChartLeg>)],
+    prices: &SorobanLegPrices,
+) -> Result<Option<f64>, clickhouse::error::Error> {
+    let emitter = ids::contract_id(pool_strkey);
+    let rows = client
+        .query(&format!(
+            "WITH ev AS ( \
+                 SELECT ledger_sequence, \
+                        JSONExtractString(topics_xdr, 2, 'value') AS token_in, \
+                        toFloat64OrNull(JSONExtractString(data_xdr, 'value', 1, 'value')) AS amount \
+                 FROM soroban_events \
+                 WHERE contract_id = {emitter} AND signature = 'trade' \
+                 LIMIT 1 BY ledger_sequence, transaction_id, event_index \
+             ) \
+             SELECT ev.token_in AS token_in, \
+                    sum(coalesce(ev.amount, 0)) AS amount_sum, \
+                    toInt64(countIf(ev.amount IS NULL)) AS bad \
+             FROM ev \
+             INNER JOIN (SELECT sequence, any(closed_at) AS closed_at FROM ledgers \
+                         WHERE sequence IN (SELECT ledger_sequence FROM ev) GROUP BY sequence) l \
+                    ON l.sequence = ev.ledger_sequence \
+             WHERE l.closed_at >= now() - INTERVAL 24 HOUR \
+             GROUP BY token_in"
+        ))
+        .fetch_all::<SorobanTradeChRow>()
+        .await?;
+    if rows.is_empty() {
+        return Ok(Some(0.0));
+    }
+    Ok(rows
+        .iter()
+        .map(|t| {
+            if t.bad > 0 {
+                return None;
+            }
+            // Token → leg by SURROGATE against the registry's own legs, never
+            // via the contracts dimension — the chart's rule.
+            let id = ids::contract_id(&t.token_in);
+            let i = legs.iter().position(|(l, _)| *l == id)?;
+            let leg = legs.get(i)?.1.as_ref()?;
+            let price = match &leg.price {
+                ChartPriceId::Classic(p) => prices.classic.get(p).copied()?,
+                ChartPriceId::Contract(a) => prices.contract.get(a).copied()?,
+            };
+            Some(t.amount_sum * 10f64.powi(-(leg.decimals as i32)) * price)
+        })
+        .sum::<Option<f64>>())
+}
+
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
 struct LastCloseChRow {
@@ -828,7 +901,7 @@ pub(crate) fn usd_str(v: f64) -> String {
 /// `volume × fee_bps / 10000` — the pool's cut of the traded volume.
 /// `fee_bps` is basis points (30 = 0.30%), so the divisor is 10 000, not
 /// 100. Shared by chart and detail so the two cannot drift.
-fn fee_revenue_usd(volume_usd: f64, fee_bps: i32) -> f64 {
+pub(crate) fn fee_revenue_usd(volume_usd: f64, fee_bps: i32) -> f64 {
     volume_usd * f64::from(fee_bps) / 10_000.0
 }
 

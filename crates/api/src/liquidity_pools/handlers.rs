@@ -233,6 +233,42 @@ async fn soroban_tvls(
         .collect()
 }
 
+/// 24h volume + fee revenue for ONE soroban pool, detail only — the same
+/// scope the classic branch has, since both read per-pool sources a list page
+/// cannot afford.
+///
+/// The classic path prices `gross_volume_a` from the snapshots table, which
+/// soroban never writes; this prices the pool's own `trade` events, the source
+/// its chart already aggregates. Degrades to NULL on error rather than failing
+/// the page.
+async fn soroban_flow_analytics(client: &clickhouse::Client, row: &mut PoolRow) {
+    let resolved = match queries::soroban_chart_legs(client, &row.legs).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "DB error resolving legs for soroban volume");
+            return;
+        }
+    };
+    let prices = match queries::fetch_soroban_leg_prices(client, &resolved).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "DB error pricing legs for soroban volume");
+            return;
+        }
+    };
+    let pool_strkey = crate::common::strkey::contract_hex_to_strkey(&row.pool_id_hex);
+    match queries::fetch_soroban_volume_24h(client, &pool_strkey, &resolved, &prices).await {
+        Ok(Some(vol)) => {
+            row.volume = Some(queries::usd_str(vol));
+            row.fee_revenue = Some(queries::usd_str(queries::fee_revenue_usd(vol, row.fee_bps)));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "DB error in fetch_soroban_volume_24h");
+        }
+    }
+}
+
 fn map_pool_item(row: PoolRow, soroban: Option<SorobanView>) -> PoolItem {
     // A soroban pool's id bytes are a CONTRACT address payload — rendering
     // them as `L...` would produce a well-formed WRONG key, so each kind
@@ -646,6 +682,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         row.tvl = soroban_tvls(&state.ch(), std::slice::from_ref(&row), &views)
             .await
             .remove(&row.pool_id_hex);
+        soroban_flow_analytics(&state.ch(), &mut row).await;
         let view = views.remove(&row.pool_id_hex);
         let mut resp = Json(map_pool_item(row, view)).into_response();
         cache_control::attach(&mut resp, cache_control::SHORT);

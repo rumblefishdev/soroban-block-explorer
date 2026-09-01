@@ -327,9 +327,15 @@ pub struct PoolItem {
     /// soroban row carries as storage defaults, so every one of them showed a
     /// plotted TVL curve on its chart above an empty TVL figure.
     pub tvl: Option<String>,
-    /// USD, decimal string rounded to cents. **Detail endpoint only.**
-    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
+    /// USD, decimal string rounded to cents. **Detail endpoint only**, both
+    /// pool worlds — a per-pool source a list page cannot afford.
+    ///
+    /// Classic pools sum `gross_volume_a` from the snapshots and price it at
+    /// the leg-A last hourly close. Soroban pools have no such column, so they
+    /// sum their own `trade` events over the window and price each hop by its
+    /// in-token's leg — the source their chart already aggregates per bucket.
+    /// `null` when the pool is unpriceable, or when any hop cannot be priced
+    /// or parsed; a pool with no trades in the window is a genuine `0`.
     pub volume: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.

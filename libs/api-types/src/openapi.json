@@ -4373,7 +4373,7 @@
                 },
                 "volume": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only**, both\npool worlds — a per-pool source a list page cannot afford.\n\nClassic pools sum `gross_volume_a` from the snapshots and price it at\nthe leg-A last hourly close. Soroban pools have no such column, so they\nsum their own `trade` events over the window and price each hop by its\nin-token's leg — the source their chart already aggregates per bucket.\n`null` when the pool is unpriceable, or when any hop cannot be priced\nor parsed; a pool with no trades in the window is a genuine `0`."
                 }
               }
             }
@@ -4695,7 +4695,7 @@
           },
           "volume": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only**, both\npool worlds — a per-pool source a list page cannot afford.\n\nClassic pools sum `gross_volume_a` from the snapshots and price it at\nthe leg-A last hourly close. Soroban pools have no such column, so they\nsum their own `trade` events over the window and price each hop by its\nin-token's leg — the source their chart already aggregates per bucket.\n`null` when the pool is unpriceable, or when any hop cannot be priced\nor parsed; a pool with no trades in the window is a genuine `0`."
           }
         }
       },
