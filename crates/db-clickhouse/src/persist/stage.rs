@@ -1203,6 +1203,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
+    // ONE row per (pool, ledger). Both writers above feed
+    // `pool_state_change_rows` and can collide on a pool's registration
+    // ledger, and neither parser-side fold can see the other.
+    fold_pool_state_changes(&mut out.pool_state_change_rows);
+
     // ---- liquidity_pool_snapshots ----
     // Per-(pool, ledger) asset-A trade volume from claim atoms (0261 extractor).
     // Live ingest now derives it directly (previously backfill-only); the 0266
@@ -2289,6 +2294,38 @@ fn is_strkey_account(s: &str) -> bool {
 
 fn is_diagnostic(src: EventSource) -> bool {
     matches!(src, EventSource::Diagnostic)
+}
+
+/// Collapse `pool_state_changes` to ONE row per (pool, ledger) — the
+/// cross-writer twin of `dedup_final_pool_snapshots` (lore-0356).
+///
+/// The parser already folds each SOURCE independently
+/// (`dedup_final_plane_writes` / `dedup_final_pool_instances`), but neither
+/// can see the other, so a plane write and an instance write for the same
+/// pool and ledger both survive to here. Emitting both would leave the
+/// surviving row to a version-less `ReplacingMergeTree`, which keeps an
+/// arbitrary intra-ledger image — the hazard backfills.md rule 4 names as
+/// "two rows for one key inside a single insert", and the defect class task
+/// 0463 measured on `balances` (1.24M keys).
+///
+/// Last-wins in staging order: the instance arm is the more specific source
+/// for a concentrated pool and runs second. Folding — not a version column —
+/// is what makes the stored row a deterministic function of the ledger, so a
+/// re-parse still wins simply by landing last (rule 4).
+fn fold_pool_state_changes(rows: &mut Vec<PoolStateChangeRow>) {
+    let mut position: HashMap<([u8; 32], i64), usize> = HashMap::new();
+    let mut folded: Vec<PoolStateChangeRow> = Vec::with_capacity(rows.len());
+    for row in rows.drain(..) {
+        let key = (row.pool_id, row.ledger_sequence);
+        match position.get(&key) {
+            Some(&idx) => folded[idx] = row,
+            None => {
+                position.insert(key, folded.len());
+                folded.push(row);
+            }
+        }
+    }
+    *rows = folded;
 }
 
 /// Registry row for one decoded `add_pool` registration.

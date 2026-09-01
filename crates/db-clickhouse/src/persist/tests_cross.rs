@@ -3284,6 +3284,83 @@ fn stage_registration(
     .expect("prepare")
 }
 
+/// Two writers feed `pool_state_changes` — the plane arm and the
+/// concentrated-instance arm — and they collide on a pool's registration
+/// ledger. Emitting both would leave the winner to a version-less RMT's
+/// arbitrary intra-ledger pick (the defect class task 0463 measured on
+/// `balances`). Staging folds them to ONE row per (pool, ledger) — the same
+/// mechanism the classic twin `liquidity_pool_snapshots` uses.
+#[test]
+fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
+    use xdr_parser::pool_state::{
+        ExtractedPlanePoolData, ExtractedPoolInstance, PlanePoolData, PoolInstanceState,
+    };
+    const POOL: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const PLANE: &str = "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x74);
+    // Same pool, same ledger, both arms: the plane writes it, and the pool's
+    // own instance also carries Reserve0/Reserve1.
+    let plane_write = ExtractedPlanePoolData {
+        data: PlanePoolData {
+            plane: PLANE.into(),
+            pool: POOL.into(),
+            reserves: vec!["100".into(), "200".into()],
+        },
+        ledger_sequence: 10,
+    };
+    let instance = ExtractedPoolInstance {
+        state: PoolInstanceState {
+            pool: POOL.into(),
+            token_share: None,
+            plane: Some(PLANE.into()),
+            router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
+            reserves: vec!["777".into(), "888".into()],
+        },
+        ledger_sequence: 10,
+    };
+
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        plane_pool_data: std::slice::from_ref(&plane_write),
+        pool_instances: std::slice::from_ref(&instance),
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
+    .expect("prepare");
+
+    assert_eq!(
+        staged.pool_state_change_rows.len(),
+        1,
+        "one (pool, ledger) = one row, whichever writers produced it"
+    );
+    let row = &staged.pool_state_change_rows[0];
+    assert_eq!(
+        row.reserves,
+        vec![777i128, 888i128],
+        "the instance arm runs second and is the more specific source"
+    );
+}
+
 /// The registration names its pool in an attacker-chosen DATA payload, so it
 /// only becomes a row when the NAMED POOL declares that emitter as its router
 /// in its own (ledger-authenticated) instance storage. Review #438: without
