@@ -244,10 +244,10 @@ fn column_order_pool_state_changes() {
 }
 
 #[test]
-fn column_order_pool_share_tokens() {
-    assert_columns::<PoolShareTokenRow>(
-        "pool_share_tokens",
-        &["pool_id", "share_token_id", "derived_at_ledger"],
+fn column_order_pool_instance_state() {
+    assert_columns::<PoolInstanceStateRow>(
+        "pool_instance_state",
+        &["pool_id", "plane_id", "share_token_id", "derived_at_ledger"],
     );
 }
 
@@ -3483,7 +3483,8 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         },
         ledger_sequence: 10,
     };
-    // A concentrated-style instance (no share token) must stage NOTHING.
+    // A concentrated-style instance (no share token) stages its PLANE, with
+    // the structural share_token_id = 0.
     let conc = ExtractedPoolInstance {
         state: PoolInstanceState {
             pool: "CC642QYWXXR2HUZDNJ6KYN5LV5JFPFPT4Q6YNKLZLYEFWZZZ5SJYLA5G".into(),
@@ -3547,13 +3548,25 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         "the two rows belong to two different pools"
     );
 
+    // BOTH instances stage a row: `plane_id` is the reserve-provenance
+    // authority and every pool declares one. Only the fungible pool carries a
+    // share token; the concentrated one keeps the structural 0.
     assert_eq!(
-        staged.pool_share_token_rows.len(),
-        1,
-        "one fungible instance = one relation row; the concentrated one stages nothing"
+        staged.pool_instance_state_rows.len(),
+        2,
+        "every pool instance declares a plane, so every one stages a row"
     );
-    assert_eq!(
-        staged.pool_share_token_rows[0].share_token_id,
-        ids::contract_id(SHARE)
+    let fungible = staged
+        .pool_instance_state_rows
+        .iter()
+        .find(|r| r.share_token_id != 0)
+        .expect("the fungible instance stages its share token");
+    assert_eq!(fungible.share_token_id, ids::contract_id(SHARE));
+    assert!(
+        staged
+            .pool_instance_state_rows
+            .iter()
+            .all(|r| r.plane_id != 0),
+        "plane_id is load-bearing for reserve provenance — never 0"
     );
 }

@@ -1200,7 +1200,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1261,7 +1261,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract).",
             "required": true,
             "schema": {
               "type": "string"
@@ -1350,7 +1350,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract).",
             "required": true,
             "schema": {
               "type": "string"
@@ -1436,7 +1436,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form.",
             "required": true,
             "schema": {
               "type": "string"
@@ -2535,7 +2535,7 @@
           },
           "pool_id": {
             "type": "string",
-            "description": "Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the\nclient supplied in the path."
+            "description": "Echoed pool ID — 56-char StrKey (`L...` classic / `C...` soroban),\nsame form the client supplied in the path."
           },
           "to": {
             "type": "string",

@@ -84,6 +84,22 @@ interface PoolParticipantsProps {
 }
 
 /**
+ * The API refuses participants for a soroban pool with no known share
+ * token — a DELIBERATE 400 (`INVALID_FILTER`), not a transient failure.
+ * Rendering it as "Something went wrong / Try again" lies twice: retry can
+ * never succeed, and a permanent refusal reads as an outage (ADR 0058 §5
+ * promises an explanatory state instead).
+ */
+function isNoShareTokenRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const { status, body } = error as Error & {
+    status?: number;
+    body?: { code?: string };
+  };
+  return status === 400 && body?.code === 'INVALID_FILTER';
+}
+
+/**
  * "Pool participants" section of the LP detail page — a paginated list
  * of liquidity providers ordered by shares DESC. Fetched independently
  * of the rest of the page so failures stay scoped.
@@ -115,6 +131,14 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
         rowKey={(row) => row.account}
         loading
         skeletonRows={20}
+      />
+    );
+  } else if (isError && isNoShareTokenRefusal(error)) {
+    body = (
+      <EmptyState
+        icon={<GroupIcon />}
+        title="Participants not indexed for this pool"
+        description="No share token is known for this pool — either not yet derived, or a concentrated pool whose positions are not share-token balances."
       />
     );
   } else if (isError) {

@@ -63,10 +63,10 @@ fn parse_ledger_surfaces_pool_state() {
         )
         .expect("staging");
         eprintln!(
-            "ledger {}: staged pool_state_change_rows={} pool_share_token_rows={}",
+            "ledger {}: staged pool_state_change_rows={} pool_instance_state_rows={}",
             parsed.ledger.sequence,
             staged.pool_state_change_rows.len(),
-            staged.pool_share_token_rows.len(),
+            staged.pool_instance_state_rows.len(),
         );
         assert!(
             !staged.pool_state_change_rows.is_empty(),

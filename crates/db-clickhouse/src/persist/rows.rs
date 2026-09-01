@@ -326,22 +326,33 @@ pub struct PoolStateChangeRow {
     pub pool_id: [u8; 32],
     pub ledger_sequence: i64,
     pub reserves: Vec<i128>,
+    /// The plane contract that wrote these reserves — the provenance a read
+    /// checks against the pool's own declared plane (review #438). For the
+    /// concentrated arm the pool writes its own reserves, so this carries the
+    /// plane the instance declares.
     pub plane_id: i64,
 }
 
-/// `pool_share_tokens` — the pool→share-token relation, derived per the T6
-/// rule from deposit transactions (task 0374, step 15).
+/// `pool_instance_state` — what a pool declares ABOUT ITSELF, read from its
+/// own instance storage (task 0374 step 15; extended by review #438).
 ///
-/// A SIDE table, deliberately (the `asset_sac` pattern): the deposit path
-/// knows only `(pool, token)`, and a partial row written into the RMT
-/// registry would replace the full registration on merge — legs, type and
-/// deployment gone to defaults (Karol caught this, 2026-08-28). Keyed on
-/// `pool_id` with the sighting ledger as version, so a share-token migration
-/// (13 pools re-pointed their token; measured) converges on the newest —
-/// exactly what `share_id()` returns on chain.
+/// The pool contract is the ledger-authenticated OWNER of that entry, so
+/// nothing here can be forged by a third party — which is what makes
+/// `plane_id` usable as the reserve-provenance authority.
+///
+/// A SIDE table, deliberately (the `asset_sac` pattern): a partial row in the
+/// RMT registry would clobber the full registration on merge, and these facts
+/// move on a different clock than the registration. Versioned by sighting
+/// ledger, so a share-token migration converges on the newest — exactly what
+/// `share_id()` returns on chain.
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct PoolShareTokenRow {
+pub struct PoolInstanceStateRow {
     pub pool_id: [u8; 32],
+    /// The plane this pool reports its reserves to. Always populated: an
+    /// instance is only recognised as a pool when it carries `Plane`.
+    pub plane_id: i64,
+    /// `0` is STRUCTURAL for concentrated pools, which never mint a share
+    /// token (`share_id()` returns the pool itself).
     pub share_token_id: i64,
     pub derived_at_ledger: i64,
 }

@@ -230,7 +230,7 @@ impl PartitionWriterHandle {
                     // Task 0374 step 7 — pool state rides the shared
                     // `process.rs` extraction exactly like token balances
                     // above, so the historical re-parse emits
-                    // `pool_state_changes` / `pool_share_tokens` for free.
+                    // `pool_state_changes` / `pool_instance_state` for free.
                     plane_pool_data: &parsed.plane_pool_data,
                     pool_instances: &parsed.pool_instances,
                     sac_classic: &sac_classic,

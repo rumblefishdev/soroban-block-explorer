@@ -223,7 +223,7 @@ pub struct StagedLedger {
     pub hash_index_rows: Vec<TransactionHashIndexRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
     pub pool_rows: Vec<LiquidityPoolRow>,
-    pub pool_share_token_rows: Vec<PoolShareTokenRow>,
+    pub pool_instance_state_rows: Vec<PoolInstanceStateRow>,
     pub pool_state_change_rows: Vec<PoolStateChangeRow>,
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
@@ -1186,23 +1186,35 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 ),
             }
         }
-        let Some(token) = inst.state.token_share.as_deref() else {
-            continue; // structural for concentrated pools
-        };
-        match contract_payload(&inst.state.pool) {
-            Some(pool_id) => out.pool_share_token_rows.push(PoolShareTokenRow {
-                pool_id,
-                share_token_id: ids::contract_id(token),
-                derived_at_ledger: i64::from(inst.ledger_sequence),
-            }),
-            None => tracing::error!(
+        // What the pool declares about ITSELF. `plane_id` is written for
+        // EVERY instance — it is the provenance authority reads check reserve
+        // rows against (review #438) — while `share_token_id = 0` stays
+        // structural for concentrated pools, which never mint one.
+        match (
+            contract_payload(&inst.state.pool),
+            inst.state.plane.as_deref(),
+        ) {
+            (Some(pool_id), Some(plane)) => {
+                out.pool_instance_state_rows.push(PoolInstanceStateRow {
+                    pool_id,
+                    plane_id: ids::contract_id(plane),
+                    share_token_id: inst
+                        .state
+                        .token_share
+                        .as_deref()
+                        .map(ids::contract_id)
+                        .unwrap_or(0),
+                    derived_at_ledger: i64::from(inst.ledger_sequence),
+                });
+            }
+            _ => tracing::error!(
                 ledger_sequence = inst.ledger_sequence,
                 pool = %inst.state.pool,
-                "instance write refused: pool address is not a valid C… strkey"
+                "instance write refused: pool address is not a valid C… strkey, \
+                 or the instance declares no plane"
             ),
         }
     }
-
     // ONE row per (pool, ledger). Both writers above feed
     // `pool_state_change_rows` and can collide on a pool's registration
     // ledger, and neither parser-side fold can see the other.
@@ -2335,7 +2347,7 @@ fn fold_pool_state_changes(rows: &mut Vec<PoolStateChangeRow>) {
 /// zero (Karol, 2026-08-28: error, not warn-and-default) — either way the
 /// registration is refused loudly and lands in the missing-pool alarm.
 ///
-/// The share-token relation lives ONLY in `pool_share_tokens` (side table;
+/// The share-token relation lives ONLY in `pool_instance_state` (side table;
 /// a registry column for it was dead-on-arrival and removed). No venue label
 /// is stored anywhere: labels resolve from `deployment_id` at read time. The salt and raw
 /// init_args are NOT materialised — the add_pool event itself sits complete

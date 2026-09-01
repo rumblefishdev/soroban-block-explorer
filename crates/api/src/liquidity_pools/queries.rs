@@ -1207,13 +1207,25 @@ pub(crate) async fn fetch_latest_soroban_reserves(
         .map(|h| format!("unhex('{h}')"))
         .collect::<Vec<_>>()
         .join(",");
+    // PROVENANCE (review #438): a plane entry names its pool in a KEY payload
+    // the writing contract chooses freely, so any contract can publish
+    // reserves under a victim pool's id — and `argMax` by ledger would then
+    // serve them, deterministically, because a later ledger always wins. Keep
+    // only rows whose `plane_id` matches the plane the POOL ITSELF declares in
+    // its own instance storage, where the pool contract is the
+    // ledger-authenticated owner and a third party cannot write.
     let rows = client
         .query(&format!(
-            "SELECT lower(hex(pool_id)) AS pool_id_hex, \
-                    argMax(reserves, ledger_sequence) AS reserves \
-             FROM pool_state_changes \
-             WHERE pool_id IN ({in_list}) \
-             GROUP BY pool_id"
+            "SELECT lower(hex(psc.pool_id)) AS pool_id_hex, \
+                    argMax(psc.reserves, psc.ledger_sequence) AS reserves \
+             FROM pool_state_changes psc \
+             INNER JOIN ( \
+                 SELECT pool_id, argMax(plane_id, derived_at_ledger) AS plane_id \
+                 FROM pool_instance_state WHERE pool_id IN ({in_list}) \
+                 GROUP BY pool_id \
+             ) pis ON pis.pool_id = psc.pool_id AND pis.plane_id = psc.plane_id \
+             WHERE psc.pool_id IN ({in_list}) \
+             GROUP BY psc.pool_id"
         ))
         .fetch_all::<PoolReservesChRow>()
         .await?;
@@ -1238,7 +1250,7 @@ struct PoolKindShareChRow {
 /// `None` = pool unknown (404). `share_token_id = 0` = no share token known
 /// (relation not yet derived, or a concentrated pool that never mints one).
 ///
-/// The relation lives in the `pool_share_tokens` SIDE table (asset_sac
+/// The relation lives in the `pool_instance_state` SIDE table (asset_sac
 /// pattern — a partial row in the RMT registry would clobber the full
 /// registration); versioned by sighting ledger so a share-token migration
 /// converges on the newest, matching on-chain `share_id()`.
@@ -1253,7 +1265,7 @@ pub async fn fetch_pool_kind_share(
              FROM liquidity_pools lp FINAL \
              LEFT JOIN ( \
                  SELECT pool_id, toNullable(argMax(share_token_id, derived_at_ledger)) AS tok \
-                 FROM pool_share_tokens WHERE pool_id = unhex(?) GROUP BY pool_id \
+                 FROM pool_instance_state WHERE pool_id = unhex(?) GROUP BY pool_id \
              ) st ON st.pool_id = lp.pool_id \
              WHERE lp.pool_id = unhex(?) LIMIT 1",
         )
@@ -1641,9 +1653,13 @@ pub async fn fetch_soroban_pool_chart(
     // still price. Ledger→time via a bounded ledgers seek; the pre-window
     // history is aggregated in CH, never shipped.
     let reserve_sql = format!(
-        "WITH pts AS ( \
+        "WITH plane AS ( \
+             SELECT argMax(plane_id, derived_at_ledger) AS plane_id \
+             FROM pool_instance_state WHERE pool_id = unhex('{pool_id_hex}') \
+         ), pts AS ( \
              SELECT ledger_sequence, argMax(reserves, ledger_sequence) AS reserves \
              FROM pool_state_changes WHERE pool_id = unhex('{pool_id_hex}') \
+               AND plane_id = (SELECT plane_id FROM plane) \
              GROUP BY ledger_sequence \
          ), tpts AS ( \
              SELECT toInt64(toUnixTimestamp(l.closed_at)) AS ts, pts.reserves AS reserves \
@@ -2704,7 +2720,15 @@ struct PoolListChRow {
 /// driven by the box-measured read cost (`liquidity_pool_snapshots` = 268 M
 /// rows):
 ///
-/// - **Order key = `last_updated_ledger` (NOT `created_at_ledger`).** PG keys
+/// - **Order key = activity (`greatest(last_updated_ledger, latest
+///   pool_state_changes ledger)`), NOT `created_at_ledger`.** For classic
+///   pools `last_updated_ledger` already means "last trade"; for soroban it
+///   means "registered", which buried live Aquarius pools under ~26.5k
+///   classic ones (review #438 F6 — 491/500 below the classic median while
+///   144 traded). The `act` CTE folds `pool_state_changes` to its max per
+///   pool, gated on the plane the pool itself declares so a forged reserve
+///   row cannot lift a pool's ranking. Empty-shell soroban pools (no event
+///   ever) sort by their registration ledger and sink naturally. PG keys
 ///   on `created_at_ledger` (pool creation). CH `liquidity_pools` dropped that
 ///   column (PR #175); its only in-window proxy — `min(snapshot
 ///   ledger_sequence)` — is clamped to the frozen backfill floor (≈ L50.4M)
@@ -2745,8 +2769,8 @@ pub async fn fetch_pool_list(
     // A tampered/non-hex cursor degrades to "no keyset" (first page).
     let keyset = match params.cursor.as_ref() {
         Some(c) if is_hex_pool_id(&c.pool_id_hex) => format!(
-            "AND ((lp.last_updated_ledger {op} {cl}) \
-                  OR (lp.last_updated_ledger = {cl} \
+            "AND ((activity_ledger {op} {cl}) \
+                  OR (activity_ledger = {cl} \
                       AND lower(hex(lp.pool_id)) {op} '{ph}'))",
             op = op,
             cl = c.created_at_ledger,
@@ -2860,17 +2884,28 @@ pub async fn fetch_pool_list(
     // SAC match).
     let sql = format!(
         "WITH \
+         act AS ( \
+             SELECT psc.pool_id AS pool_id, max(psc.ledger_sequence) AS act_ledger \
+             FROM pool_state_changes psc \
+             INNER JOIN ( \
+                 SELECT pool_id, argMax(plane_id, derived_at_ledger) AS plane_id \
+                 FROM pool_instance_state GROUP BY pool_id \
+             ) pis ON pis.pool_id = psc.pool_id AND pis.plane_id = psc.plane_id \
+             GROUP BY psc.pool_id \
+         ), \
          page AS ( \
              SELECT lp.pool_id AS pool_id, lp.asset_a_type AS asset_a_type, \
                     lp.asset_a_code AS asset_a_code, lp.asset_a_issuer_id AS asset_a_issuer_id, \
                     lp.asset_b_type AS asset_b_type, lp.asset_b_code AS asset_b_code, \
                     lp.asset_b_issuer_id AS asset_b_issuer_id, lp.fee_bps AS fee_bps, \
                     lp.last_updated_ledger AS last_updated_ledger, \
+                    greatest(lp.last_updated_ledger, act.act_ledger) AS activity_ledger, \
                     lp.pool_kind AS pool_kind, lp.deployment_id AS deployment_id, \
                     lp.pool_type_raw AS pool_type_raw, lp.legs AS legs \
              FROM liquidity_pools lp FINAL \
+             LEFT JOIN act ON act.pool_id = lp.pool_id \
              WHERE 1 = 1{filters} {keyset} \
-             ORDER BY last_updated_ledger {order}, pool_id {order} \
+             ORDER BY activity_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
          band AS ( \
@@ -2923,7 +2958,7 @@ pub async fn fetch_pool_list(
              sac_b.icon_url                                  AS asset_b_icon_url, \
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
-             lp.last_updated_ledger                          AS cursor_ledger, \
+             lp.activity_ledger                              AS cursor_ledger, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \

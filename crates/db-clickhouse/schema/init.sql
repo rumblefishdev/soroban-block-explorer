@@ -592,9 +592,14 @@ ORDER BY (contract_id, token_id);
 -- keep pool_kind=0 and their soroban columns at defaults; Soroban AMM pools
 -- are rows with pool_kind=1. One user-facing concept, one table — the same
 -- reasoning ADR 0056 applies to positions. Engine stays RMT: whole-row
--- replace is safe because each row has exactly ONE writer (the classic arm
--- never touches a contract pool_id and vice versa; orphan sightings go to a
--- monitored counter, never into rows).
+-- replace is safe because each row has exactly ONE writer — the classic arm
+-- reads authenticated `LiquidityPoolEntry` ledger entries and never touches a
+-- contract pool_id, and the soroban arm accepts a registration only when the
+-- named pool's OWN instance storage names the emitter as its `Router`
+-- (`stage.rs`), so a third party cannot register — or overwrite — a pool it
+-- does not own. Before review #438 this comment claimed orphan sightings went
+-- to "a monitored counter": no such counter existed, and the arm pushed every
+-- shape-matching event straight into a row.
 --
 -- Registration provenance (the router's subpool salt, raw init_args beyond
 -- the fee) is NOT materialised: the add_pool event itself sits complete and
@@ -619,7 +624,7 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
     legs                 Array(Int64)           DEFAULT [], -- PER-KIND id space (pool_kind says which): kind 1 = token-contract surrogates in emission order (= get_tokens(); == assets.id only for bespoke type-3 — SAC legs resolve via asset_sac); kind 0 = ASSET surrogates (pool_leg_asset_id, the lp_operation_amounts join key) — legs-migration step 2. 3- and 4-leg pools exist, so never a pair
     deployment_id        Int64                  DEFAULT 0,  -- soroban_contracts.id surrogate of the registering router; 0 = classic. Two live router deployments share Aquarius's code and only one is Aquarius (task 0374 T1) — labels resolve from this id at read time, so a new pool is labelled the moment it registers, with no editorial UPDATE to re-run
     pool_type_raw        LowCardinality(String) DEFAULT ''  -- verbatim sym from add_pool (constant|stable|concentrated|...); un-normalised on purpose: three vocabularies exist for one shape and folding them is read-time interpretation
-    -- share_token_id was removed from the write path before any deploy: the relation lives ONLY in pool_share_tokens (a registry column would clobber the full row on RMT merge, and a permanent 0 misleads). Prod (which received the column via the registry backfill ALTER) drops it with: ALTER TABLE liquidity_pools DROP COLUMN share_token_id
+    -- share_token_id was removed from the write path before any deploy: the relation lives ONLY in pool_instance_state (a registry column would clobber the full row on RMT merge, and a permanent 0 misleads). Prod (which received the column via the registry backfill ALTER) drops it with: ALTER TABLE liquidity_pools DROP COLUMN share_token_id
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
@@ -635,6 +640,15 @@ ORDER BY (pool_id);
 -- concentrated pools write Reserve0/1 on their own instance. Named without
 -- a family prefix on purpose: classic history joins HERE if the snapshot
 -- models unify — never the reverse (ADR 0058).
+--
+-- Version-less RMT, exactly like its classic twin `liquidity_pool_snapshots`:
+-- the row is made a deterministic function of the ledger by folding at STAGE
+-- time (`fold_pool_state_changes`), not by a version column. Two writers feed
+-- this table — the plane arm and the concentrated-instance arm — and the fold
+-- is what collapses their (pool, ledger) collision; per backfills.md rule 4 a
+-- re-parse then wins on its own, because it lands last. A version column keyed
+-- on anything batch-local would BREAK that: a narrow re-parse could stamp a
+-- lower version than the original wide parse and lose to the stale row.
 CREATE TABLE IF NOT EXISTS pool_state_changes (
     pool_id          FixedString(32),
     ledger_sequence  Int64,
@@ -645,14 +659,28 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 5000000)
 ORDER BY (pool_id, ledger_sequence);
 
--- Pool → share token, derived per the T6 rule (task 0374 step 15). A SIDE
--- table (the asset_sac pattern): the deposit path knows only (pool, token),
--- and a partial row in the RMT registry would clobber the full registration
--- on merge. Versioned by sighting ledger so a share-token migration (13
--- pools re-pointed theirs; measured) converges on the newest — matching
--- share_id() on chain. Concentrated pools never mint, so they never appear.
-CREATE TABLE IF NOT EXISTS pool_share_tokens (
+-- What a pool declares ABOUT ITSELF, from its own instance storage — the
+-- pool contract is the ledger-authenticated owner of that entry, so these
+-- values cannot be forged by a third party. A SIDE table (the asset_sac
+-- pattern): a partial row in the RMT registry would clobber the full
+-- registration on merge, and these facts arrive on a DIFFERENT clock than
+-- the registration (instance rewrites, share-token migrations) which one
+-- RMT version column on `liquidity_pools` could not track. Versioned by
+-- sighting ledger so a migration (13 pools re-pointed their share token;
+-- measured) converges on the newest — matching share_id() on chain.
+--
+-- `plane_id` is the AUTHORITY for reserve provenance (review #438). Reserve
+-- rows in `pool_state_changes` carry the plane that wrote them, but a plane
+-- entry names its pool in an attacker-writable KEY payload — any contract
+-- can publish `[PoolData, Address(victim)]` under its own id. Reads must
+-- therefore keep only reserve rows whose `plane_id` matches the plane the
+-- POOL ITSELF declares here. Always populated (both `Router` and `Plane`
+-- are required for an instance to be recognised as a pool at all).
+-- `share_token_id = 0` is structural for concentrated pools, which never
+-- mint one.
+CREATE TABLE IF NOT EXISTS pool_instance_state (
     pool_id            FixedString(32),
+    plane_id           Int64,
     share_token_id     Int64,
     derived_at_ledger  Int64
 )

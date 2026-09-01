@@ -125,24 +125,45 @@ describe('isPoolStale', () => {
     vi.useRealTimers();
   });
 
+  /** A classic pool carrying the given snapshot timestamp. */
+  const classic = (latest_snapshot_at: string | null | undefined) =>
+    ({ pool_kind: 'classic', latest_snapshot_at } as Pick<
+      PoolItem,
+      'pool_kind' | 'latest_snapshot_at'
+    >);
+
   it('returns true when no snapshot timestamp is provided', () => {
-    expect(isPoolStale(null)).toBe(true);
-    expect(isPoolStale(undefined)).toBe(true);
-    expect(isPoolStale('')).toBe(true);
+    expect(isPoolStale(classic(null))).toBe(true);
+    expect(isPoolStale(classic(undefined))).toBe(true);
+    expect(isPoolStale(classic(''))).toBe(true);
   });
 
   it('returns false within the 7-day freshness window', () => {
-    expect(isPoolStale('2026-05-29T11:00:00Z')).toBe(false); // 1h ago
-    expect(isPoolStale('2026-05-23T13:00:00Z')).toBe(false); // ~6 days ago
+    expect(isPoolStale(classic('2026-05-29T11:00:00Z'))).toBe(false); // 1h ago
+    expect(isPoolStale(classic('2026-05-23T13:00:00Z'))).toBe(false); // ~6 days
   });
 
   it('returns true once the snapshot is older than 7 days', () => {
-    expect(isPoolStale('2026-05-22T11:59:00Z')).toBe(true);
-    expect(isPoolStale('2026-05-01T00:00:00Z')).toBe(true);
+    expect(isPoolStale(classic('2026-05-22T11:59:00Z'))).toBe(true);
+    expect(isPoolStale(classic('2026-05-01T00:00:00Z'))).toBe(true);
   });
 
   it('returns true on unparseable timestamps', () => {
-    expect(isPoolStale('not a date')).toBe(true);
+    expect(isPoolStale(classic('not a date'))).toBe(true);
+  });
+
+  it('never calls a soroban pool stale', () => {
+    // Soroban reserves come from `pool_state_changes` (live ledger state),
+    // so `latest_snapshot_at` is null for the whole kind — deriving
+    // staleness from it captioned live reserves "no recent snapshot" on
+    // 100% of soroban pools (review #438 UX-F1).
+    const soroban = (latest_snapshot_at: string | null) =>
+      ({ pool_kind: 'soroban', latest_snapshot_at } as Pick<
+        PoolItem,
+        'pool_kind' | 'latest_snapshot_at'
+      >);
+    expect(isPoolStale(soroban(null))).toBe(false);
+    expect(isPoolStale(soroban('2026-05-01T00:00:00Z'))).toBe(false);
   });
 });
 

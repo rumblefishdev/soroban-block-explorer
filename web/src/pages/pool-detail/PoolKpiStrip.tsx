@@ -49,7 +49,7 @@ function legSubtitle(leg: PoolLegView): ReactNode {
 
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
   const legs = poolLegViews(pool);
-  const stale = isPoolStale(pool.latest_snapshot_at);
+  const stale = isPoolStale(pool);
 
   return (
     <Stack
@@ -67,7 +67,17 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
           key={`${leg.label}-${i}`}
           label={`${leg.label} reserve`}
           value={leg.reserve != null ? formatCompactAmount(leg.reserve) : '—'}
-          caption={stale ? STALE_SUBTITLE : legSubtitle(leg)}
+          // Staleness must not swallow the asset link (review #438 UX-F1) —
+          // the caption keeps the navigation and gains the warning.
+          caption={
+            stale ? (
+              <>
+                {legSubtitle(leg)} — {STALE_SUBTITLE}
+              </>
+            ) : (
+              legSubtitle(leg)
+            )
+          }
           valueColor={leg.dotColor}
         />
       ))}

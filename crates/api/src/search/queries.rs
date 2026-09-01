@@ -64,7 +64,7 @@ use serde::Deserialize;
 
 use crate::common::ch::millis_to_utc;
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
-use crate::common::strkey::pool_id_hex_to_strkey;
+use crate::common::strkey::{contract_hex_to_strkey, pool_id_hex_to_strkey};
 
 use super::classifier::Classified;
 use super::dto::{EntityType, SearchHit};
@@ -303,7 +303,9 @@ async fn search_transactions(
 #[derive(Debug, Row, Deserialize)]
 struct PoolRow {
     pool_hex: String,
-    label: String,
+    label: Option<String>,
+    pool_kind: u8,
+    legs: Vec<i64>,
 }
 
 /// The pool's display name, identical in both arms — a hit found by id and the
@@ -318,10 +320,15 @@ struct PoolRow {
 ///
 /// Byte-identical output, verified before the change: over all 75 218 rows,
 /// zero disagree on either leg. Nothing on the wire moves.
-const POOL_LABEL_SQL: &str = "concat( \
+/// The CLASSIC pair label. `NULL` for a soroban pool — deliberately, not as a
+/// placeholder: its legs are surrogate ids in `legs`, and the pair columns are
+/// defaults there (`asset_a_type = 0` is not native, review #438 F2), so any
+/// label built from them would be a confident lie. `pool_label` fills those in
+/// from the resolved legs, the same identities the list and detail render.
+const POOL_LABEL_SQL: &str = "if(pool_kind = 0, concat( \
      if(asset_a_type = 0, 'XLM', toString(asset_a_code)), ' / ', \
      if(asset_b_type = 0, 'XLM', toString(asset_b_code)) \
- ) AS label";
+ ), NULL) AS label";
 
 /// Two shapes, one entity.
 ///
@@ -385,7 +392,7 @@ async fn search_pools_by_asset_code(
     };
 
     let sql = format!(
-        "SELECT pool_hex, {POOL_LABEL_SQL} \
+        "SELECT pool_hex, {POOL_LABEL_SQL}, pool_kind, legs \
          FROM ( \
             SELECT \
                 lower(hex(pool_id)) AS pool_hex, \
@@ -393,6 +400,8 @@ async fn search_pools_by_asset_code(
                 argMax(asset_a_code, last_updated_ledger) AS asset_a_code, \
                 argMax(asset_b_type, last_updated_ledger) AS asset_b_type, \
                 argMax(asset_b_code, last_updated_ledger) AS asset_b_code, \
+                argMax(pool_kind, last_updated_ledger) AS pool_kind, \
+                argMax(legs, last_updated_ledger) AS legs, \
                 max(last_updated_ledger) AS newest \
             FROM liquidity_pools \
             GROUP BY pool_id \
@@ -407,8 +416,29 @@ async fn search_pools_by_asset_code(
         query = query.bind(bind);
     }
     let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;
+    let legs = resolve_hit_legs(client, &rows).await?;
 
-    Ok(rows.into_iter().map(|p| pool_hit(&p)).collect())
+    Ok(rows.iter().map(|p| pool_hit(p, &legs)).collect())
+}
+
+/// One batched leg resolve for a page of pool hits — classic rows contribute
+/// nothing, so a classic-only page costs no extra round trip.
+async fn resolve_hit_legs(
+    client: &clickhouse::Client,
+    rows: &[PoolRow],
+) -> Result<
+    std::collections::HashMap<i64, crate::liquidity_pools::queries::ResolvedLeg>,
+    clickhouse::error::Error,
+> {
+    let leg_ids: Vec<i64> = rows
+        .iter()
+        .filter(|p| p.label.is_none())
+        .flat_map(|p| p.legs.iter().copied())
+        .collect();
+    if leg_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    crate::liquidity_pools::queries::resolve_leg_assets(client, &leg_ids).await
 }
 
 /// Fires only for a hash-shaped query. `pool_id` is the full ORDER BY key, so
@@ -424,7 +454,7 @@ async fn search_pool_by_id(
 
     let row = client
         .query(&format!(
-            "SELECT lower(hex(pool_id)) AS pool_hex, {POOL_LABEL_SQL} \
+            "SELECT lower(hex(pool_id)) AS pool_hex, {POOL_LABEL_SQL}, pool_kind, legs \
              FROM liquidity_pools \
              WHERE pool_id = unhex(?) \
              ORDER BY last_updated_ledger DESC \
@@ -436,22 +466,74 @@ async fn search_pool_by_id(
     let Some(p) = row else {
         return Ok(Vec::new());
     };
+    let legs = resolve_hit_legs(client, std::slice::from_ref(&p)).await?;
 
-    Ok(vec![pool_hit(&p)])
+    Ok(vec![pool_hit(&p, &legs)])
+}
+
+/// One soroban leg's display label — the SAME precedence the pool list and
+/// detail use (`family` native → `XLM`, then the classic code, then the token
+/// symbol, then a truncated contract). A leg that resolves to nothing renders
+/// as an explicit `?` rather than a plausible-looking guess.
+fn soroban_leg_label(leg: &crate::liquidity_pools::queries::ResolvedLeg) -> String {
+    if leg.family == 0 {
+        return "XLM".to_string();
+    }
+    if !leg.asset_code.is_empty() {
+        return leg.asset_code.clone();
+    }
+    if let Some(symbol) = leg.symbol.as_deref().filter(|s| !s.is_empty()) {
+        return symbol.to_string();
+    }
+    match leg.contract_strkey.as_deref() {
+        Some(c) if c.len() > 8 => format!("{}…{}", &c[..4], &c[c.len() - 4..]),
+        Some(c) => c.to_string(),
+        None => "?".to_string(),
+    }
+}
+
+/// A pool's display label. Classic pools carry it from the query
+/// (`POOL_LABEL_SQL`); soroban pools have `NULL` there and get it from their
+/// resolved legs, so search names a pool the same way every other surface
+/// does. An unresolvable soroban pool yields `None` — the caller renders the
+/// identifier alone rather than inventing a name.
+fn pool_label(
+    p: &PoolRow,
+    legs: &std::collections::HashMap<i64, crate::liquidity_pools::queries::ResolvedLeg>,
+) -> Option<String> {
+    if let Some(label) = p.label.as_ref() {
+        return Some(label.clone());
+    }
+    let parts: Vec<String> = p
+        .legs
+        .iter()
+        .filter_map(|id| legs.get(id))
+        .map(soroban_leg_label)
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" / "))
 }
 
 /// Shared by both pool arms so an id hit and a code hit cannot describe the
 /// same pool differently.
-fn pool_hit(p: &PoolRow) -> (String, SearchHit) {
+fn pool_hit(
+    p: &PoolRow,
+    legs: &std::collections::HashMap<i64, crate::liquidity_pools::queries::ResolvedLeg>,
+) -> (String, SearchHit) {
     (
         "pool".to_string(),
         SearchHit {
             entity_type: EntityType::Pool,
-            // Wire identifier is the canonical `L…` strkey (ADR 0008 / task
+            // Wire identifier is the canonical strkey (ADR 0008 / task
             // 0264); the column projects raw hex — convert at the boundary,
-            // same as the PG row-mapper.
-            identifier: pool_id_hex_to_strkey(&p.pool_hex),
-            label: p.label.clone(),
+            // same as the PG row-mapper. Kind-aware since #438 review F2:
+            // a soroban row's bytes are a CONTRACT address payload, and an
+            // `L…` render of them is a well-formed WRONG key.
+            identifier: if p.pool_kind == 0 {
+                pool_id_hex_to_strkey(&p.pool_hex)
+            } else {
+                contract_hex_to_strkey(&p.pool_hex)
+            },
+            label: pool_label(p, legs).unwrap_or_default(),
             route_token: None,
             successful: None,
             last_activity_at: None,

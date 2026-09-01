@@ -92,7 +92,7 @@ struct TableInserts {
     op_pools: Option<Insert<OperationPoolRow>>,
     lp_amounts: Option<Insert<LpOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
-    pool_share_tokens: Option<Insert<PoolShareTokenRow>>,
+    pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
@@ -263,9 +263,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.pool_share_tokens,
-            "pool_share_tokens",
-            &staged.pool_share_token_rows,
+            &mut self.inserts.pool_instance_state,
+            "pool_instance_state",
+            &staged.pool_instance_state_rows,
         )
         .await?;
         write_rows(
@@ -387,7 +387,8 @@ impl PartitionWriter {
         // EXHAUSTIVE destructure, deliberately no `..`: an insert that is
         // written but never ended buffers its rows and drops them SILENTLY
         // on drop — the ledgers marker still lands, so the loss is
-        // invisible. That exact bug shipped twice (pool_share_tokens and
+        // invisible. That exact bug shipped twice (the instance-state side
+        // table and
         // pool_state_changes were streamed by `write_ledger` but missing
         // from this list; caught by the task 0374 full-pipeline e2e, never
         // by unit tests, which stop at staging). With the destructure the
@@ -406,7 +407,7 @@ impl PartitionWriter {
             op_pools,
             lp_amounts,
             pools,
-            pool_share_tokens,
+            pool_instance_state,
             pool_state_changes,
             snapshots,
             lp_positions,
@@ -433,7 +434,7 @@ impl PartitionWriter {
         end(op_pools).await?;
         end(lp_amounts).await?;
         end(pools).await?;
-        end(pool_share_tokens).await?;
+        end(pool_instance_state).await?;
         end(pool_state_changes).await?;
         end(snapshots).await?;
         end(lp_positions).await?;

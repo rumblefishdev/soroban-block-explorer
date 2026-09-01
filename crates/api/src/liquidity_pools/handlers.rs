@@ -33,7 +33,7 @@ use crate::common::strkey::contract_hex_to_strkey;
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -540,7 +540,7 @@ pub async fn list_pools(
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form."),
     ),
     responses(
         (status = 200, description = "Pool detail", body = PoolItem),
@@ -656,7 +656,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract)."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -827,7 +827,7 @@ fn interval_seconds(interval: &str) -> i64 {
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract)."),
         ChartParams,
     ),
     responses(

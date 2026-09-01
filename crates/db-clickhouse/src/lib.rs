@@ -173,8 +173,9 @@ mod tests {
         // task 0463: added `account_entry_state` — signers + thresholds side table
         // (issue #377); side table, not columns on `accounts`, because that
         // table takes whole-row writes from more than one path. 33 → 34:
-        // pool_share_tokens (task 0374 step 15, the asset_sac-pattern side
-        // table) and pool_state_changes (step 7, plane-state reserves).
+        // pool_instance_state (task 0374 step 15, the asset_sac-pattern side
+        // table: what a pool declares about itself) and pool_state_changes
+        // (step 7, plane-state reserves).
         // 34 → 35.
         assert_eq!(
             stmts.len(),

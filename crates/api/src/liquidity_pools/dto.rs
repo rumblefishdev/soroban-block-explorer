@@ -551,8 +551,8 @@ pub struct ChartDataPoint {
 /// `GET /v1/liquidity-pools/:id/chart` response.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartResponse {
-    /// Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
-    /// client supplied in the path.
+    /// Echoed pool ID — 56-char StrKey (`L...` classic / `C...` soroban),
+    /// same form the client supplied in the path.
     pub pool_id: String,
     pub interval: String,
     pub from: DateTime<Utc>,

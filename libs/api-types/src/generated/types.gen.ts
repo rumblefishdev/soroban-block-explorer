@@ -424,8 +424,8 @@ export type ChartResponse = {
   from: string;
   interval: string;
   /**
-   * Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
-   * client supplied in the path.
+   * Echoed pool ID — 56-char StrKey (`L...` classic / `C...` soroban),
+   * same form the client supplied in the path.
    */
   pool_id: string;
   to: string;
@@ -3302,7 +3302,7 @@ export type GetPoolData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
+     * Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form.
      */
     pool_id: string;
   };
@@ -3340,7 +3340,7 @@ export type ListPoolActivityData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     * Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract).
      */
     pool_id: string;
   };
@@ -3393,7 +3393,7 @@ export type GetPoolChartData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     * Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract).
      */
     pool_id: string;
   };
@@ -3448,7 +3448,7 @@ export type ListParticipantsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
+     * Pool ID — 56-char StrKey: `L...` (classic pool, SEP-23) or `C...` (soroban pool contract). Internal DB form is hex (ADR 0024); the strkey is the canonical wire form.
      */
     pool_id: string;
   };

@@ -102,9 +102,9 @@ fn raw_registration_ledger_stages_the_exact_rows() {
     .expect("staging the raw ledger succeeds");
 
     eprintln!(
-        "\n--- staged from raw: {} snapshot rows, {} share rows ---",
+        "\n--- staged from raw: {} snapshot rows, {} instance-state rows ---",
         staged.pool_state_change_rows.len(),
-        staged.pool_share_token_rows.len()
+        staged.pool_instance_state_rows.len()
     );
 
     // Every extracted plane write must survive staging — a refused row here
@@ -127,12 +127,17 @@ fn raw_registration_ledger_stages_the_exact_rows() {
     assert_eq!(snap.ledger_sequence, i64::from(seq_out));
 
     // The share relation, from STATE, no deposit involved.
-    let share = staged
-        .pool_share_token_rows
+    let inst = staged
+        .pool_instance_state_rows
         .iter()
         .find(|r| r.pool_id == want_pool)
-        .expect("the share relation staged from the instance");
-    assert_eq!(share.share_token_id, ids::contract_id(SHARE));
+        .expect("the instance state staged from the instance entry");
+    assert_eq!(inst.share_token_id, ids::contract_id(SHARE));
+    assert_eq!(
+        inst.plane_id,
+        ids::contract_id(PLANE),
+        "the pool's declared plane — the authority reserve reads filter on"
+    );
 }
 
 fn payload(strkey: &str) -> [u8; 32] {

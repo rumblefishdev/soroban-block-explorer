@@ -9,7 +9,7 @@ import {
   type TimeSeriesCurve,
   type TimeSeriesPoint,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import {
   periodBucketMs,
@@ -242,11 +242,26 @@ interface PoolChartsProps {
 function PoolChartsContent({ poolId }: { poolId: string }) {
   const [metric, setMetric] = useState<ChartMetric>('tvl');
   const [period, setPeriod] = useState<ChartPeriod>('1D');
+  const [userPicked, setUserPicked] = useState(false);
 
   const { data, isLoading, isError, error, refetch } = usePoolChart(
     poolId,
     period
   );
+
+  // Auto-widen the INITIAL window (review #438 F7): a pool whose last
+  // activity predates the default 1D returned zero buckets, so the chart
+  // opened on "No activity in this period" while the trades table right
+  // below was full — a confident wrong first impression. Step through the
+  // presets until a bucket appears (or 1Y, where the empty state is
+  // honest). Only until the user touches the pills; their choice is never
+  // overridden.
+  useEffect(() => {
+    if (userPicked || isLoading || isError || !data) return;
+    if (data.data_points.length > 0) return;
+    const next = PERIODS[PERIODS.indexOf(period) + 1];
+    if (next) setPeriod(next);
+  }, [data, isLoading, isError, userPicked, period]);
 
   // See `toChartPoints` — TVL (a state, argMax over the bucket) is stamped
   // at bucket END; volume / fees (flows) keep the bucket-start label.
@@ -322,7 +337,10 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
           <IntervalPills
             intervals={PERIODS}
             active={period}
-            onChange={setPeriod}
+            onChange={(next) => {
+              setUserPicked(true);
+              setPeriod(next);
+            }}
           />
         </Box>
       </Box>
