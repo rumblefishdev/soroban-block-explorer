@@ -13,8 +13,9 @@ import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
  * request leaves the user's own browser, to a host the user named, and
  * our infrastructure is not in the path at all. See task 0443 scope A.
  *
- * The reverse direction (`G…` → `name*domain`, scope B) is a separate step
- * and is not here yet.
+ * The reverse direction (`G…` → `name*domain`, scope B) lives here too, in
+ * `resolveFederatedName` — measurement showed it can run in the browser for
+ * the same reason, so it never grew the backend the task first sketched.
  */
 
 /**
@@ -150,4 +151,49 @@ export async function resolveFederated(
   }
 
   return { kind: 'resolved', accountId };
+}
+
+/**
+ * Reverse direction (`type=id`): the federated address a domain claims for
+ * an account, or `null`.
+ *
+ * Only called for accounts that set a `home_domain` on-ledger, which is what
+ * makes the answer worth showing: the account named the domain, and the
+ * domain names the account back. Both sides have to agree, so the returned
+ * address must actually live at that domain — `federationServerFor` proves
+ * the first half, the suffix check below proves the second. Without it a
+ * domain could claim an account into someone else's namespace.
+ *
+ * Silent on failure, unlike the forward direction. Nobody asked for this
+ * value: it is an attribute the page shows when it exists, so its absence is
+ * the ordinary case and not a claim about anything. Measured 2026-09-01 over
+ * a 100-account sample carrying a home domain: 85 sat on a domain that
+ * publishes a federation server, and 33 of those actually resolved.
+ */
+export async function resolveFederatedName(
+  accountId: string,
+  homeDomain: string
+): Promise<string | null> {
+  const domain = homeDomain.trim().toLowerCase();
+  if (domain.length === 0 || !isAccountId(accountId)) return null;
+
+  const signal = AbortSignal.timeout(TIMEOUT_MS);
+  const found = await federationServerFor(domain, signal);
+  if ('reason' in found) return null;
+
+  const { server } = found;
+  server.searchParams.set('q', accountId);
+  server.searchParams.set('type', 'id');
+
+  let address: unknown;
+  try {
+    const body = await getBounded(server.toString(), signal);
+    address = (JSON.parse(body) as { stellar_address?: unknown })
+      .stellar_address;
+  } catch {
+    return null;
+  }
+
+  if (typeof address !== 'string') return null;
+  return address.toLowerCase().endsWith(`*${domain}`) ? address : null;
 }

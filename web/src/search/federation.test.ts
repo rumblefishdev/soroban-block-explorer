@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { federatedDomain, resolveFederated } from './federation.js';
+import {
+  federatedDomain,
+  resolveFederated,
+  resolveFederatedName,
+} from './federation.js';
 
 const ACCOUNT = 'GC526FUILJ6NLFXKCOOGTMDXNRW7MYSEK2UNRJV5FYWOGYDE4LOKXFEM';
 
@@ -130,5 +134,66 @@ describe('resolveFederated', () => {
     const r = await resolveFederated('nobody*lobstr.co');
     expect(r.kind).toBe('failed');
     expect(r.kind === 'failed' && r.reason).toContain('did not resolve');
+  });
+});
+
+describe('resolveFederatedName (reverse, type=id)', () => {
+  const TOML = 'https://lobstr.co/.well-known/stellar.toml';
+  const SERVER = 'https://lobstr.co/federation/';
+  const withServer = {
+    [TOML]: reply('FEDERATION_SERVER="https://lobstr.co/federation/"\n'),
+  };
+
+  it('returns the address the domain claims for the account', async () => {
+    const fetchMock = mockFetch({
+      ...withServer,
+      [SERVER]: reply(JSON.stringify({ stellar_address: 'karol*lobstr.co' })),
+    });
+
+    await expect(resolveFederatedName(ACCOUNT, 'lobstr.co')).resolves.toBe(
+      'karol*lobstr.co'
+    );
+    expect(fetchMock.mock.calls[1]?.[0] as string).toContain('type=id');
+  });
+
+  // The account named this domain; the domain must name the account back
+  // inside its OWN namespace, or it is claiming it into someone else's.
+  it('rejects an address that does not live at the account home domain', async () => {
+    mockFetch({
+      ...withServer,
+      [SERVER]: reply(
+        JSON.stringify({ stellar_address: 'karol*evil.example' })
+      ),
+    });
+
+    await expect(
+      resolveFederatedName(ACCOUNT, 'lobstr.co')
+    ).resolves.toBeNull();
+  });
+
+  it('is silent when the domain publishes no federation server', async () => {
+    mockFetch({ [TOML]: reply('VERSION = "2.0.0"\n') });
+    await expect(
+      resolveFederatedName(ACCOUNT, 'lobstr.co')
+    ).resolves.toBeNull();
+  });
+
+  it('is silent when the account has no registered name', async () => {
+    mockFetch({
+      ...withServer,
+      [SERVER]: reply(JSON.stringify({ detail: 'not found' })),
+    });
+    await expect(
+      resolveFederatedName(ACCOUNT, 'lobstr.co')
+    ).resolves.toBeNull();
+  });
+
+  it.each([
+    ['an empty home domain', ACCOUNT, ''],
+    ['a non-account id', 'not-a-key', 'lobstr.co'],
+  ])('makes no request for %s', async (_label, id, domain) => {
+    const fetchMock = mockFetch({});
+    await expect(resolveFederatedName(id, domain)).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,10 @@
-import { Box, ClickAwayListener, Paper } from '@mui/material';
+import { Box, ClickAwayListener, Paper, Typography } from '@mui/material';
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { SearchHit } from '@rumblefish/api-types';
 
+import { federatedDomain } from './federation.js';
 import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
 import { useSearchResults } from './useSearchResults.js';
@@ -22,7 +23,13 @@ export function GlobalSearchBar({
 }: GlobalSearchBarProps) {
   const navigate = useNavigate();
 
-  const state = useSearchResults({ q });
+  // A SEP-2 federated address (`name*domain`) is not a broad-search query.
+  // `/v1/search` knows nothing about the standard, so asking it returns zero
+  // hits and the dropdown renders "No results for karol*lobstr.co" — the one
+  // claim that is false, since Enter goes on to resolve it. Skip the request
+  // and say what Enter will do instead (task 0443 scope A).
+  const federatedFor = federatedDomain(q);
+  const state = useSearchResults({ q: federatedFor == null ? q : '' });
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
@@ -100,13 +107,25 @@ export function GlobalSearchBar({
             overflow: 'hidden',
           })}
         >
-          <SearchResultsView
-            state={state}
-            highlightedIndex={highlightedIndex}
-            onRowMouseEnter={setHighlightedIndex}
-            onRowClick={onDismiss}
-            maxListHeight={480}
-          />
+          {federatedFor != null ? (
+            <Box sx={{ px: 2, py: 1.5 }}>
+              <Typography
+                variant="bodySmRegular"
+                component="p"
+                sx={(theme) => ({ color: theme.palette.text.tertiary })}
+              >
+                Press Enter to resolve {q.trim()} with {federatedFor}
+              </Typography>
+            </Box>
+          ) : (
+            <SearchResultsView
+              state={state}
+              highlightedIndex={highlightedIndex}
+              onRowMouseEnter={setHighlightedIndex}
+              onRowClick={onDismiss}
+              maxListHeight={480}
+            />
+          )}
         </Paper>
       </Box>
     </ClickAwayListener>

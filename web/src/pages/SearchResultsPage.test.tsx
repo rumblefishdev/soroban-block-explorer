@@ -1,4 +1,5 @@
 import { screen, waitFor } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -145,6 +146,25 @@ describe('SearchResultsPage — federated addresses (task 0443 scope A)', () => 
     for (const [url] of fetchSpy.mock.calls as unknown as [string][]) {
       expect(url).not.toContain('stellar.toml');
     }
+  });
+});
+
+describe('SearchResultsPage — query input (task 0527 #1)', () => {
+  it('leaves the caret where it is when editing mid-query', async () => {
+    const user = userEvent.setup();
+    renderSearch('kale');
+
+    const input = screen.getByLabelText(
+      'Search by TX hash, accounts, contract, token'
+    ) as HTMLInputElement;
+    // Put the caret between "ka" and "le" and type one character there.
+    await user.type(input, 'X', {
+      initialSelectionStart: 2,
+      initialSelectionEnd: 2,
+    });
+
+    expect(input.value).toBe('kaXle');
+    expect(input.selectionStart).toBe(3);
   });
 });
 

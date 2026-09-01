@@ -1,6 +1,6 @@
 import { Box, CircularProgress, Paper, Stack, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
@@ -15,6 +15,25 @@ export default function SearchResultsPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const q = params.get('q') ?? '';
+
+  // The input is driven by local state, not by the URL. Controlling it
+  // directly off `params` put the value one render behind the keystroke, so
+  // React re-assigned `input.value` afterwards and the browser dropped the
+  // caret at the end — editing mid-query was impossible. The URL is still
+  // written on every change and is still the shareable value; it just is no
+  // longer what the field reads back (task 0527 #1).
+  const [text, setText] = useState(q);
+  useEffect(() => {
+    setText(q);
+  }, [q]);
+
+  function writeQuery(next: string) {
+    setText(next);
+    const nextParams = new URLSearchParams(params);
+    if (next.length > 0) nextParams.set('q', next);
+    else nextParams.delete('q');
+    setParams(nextParams, { replace: true });
+  }
   const federatedFor = federatedDomain(q);
   // A federated input is not a broad-search query — skip `/v1/search`
   // entirely rather than paying for a request whose answer is always empty.
@@ -82,18 +101,9 @@ export default function SearchResultsPage() {
       <Box sx={{ maxWidth: 628 }}>
         <SearchInput
           size="lg"
-          value={q}
-          onChange={(next) => {
-            const nextParams = new URLSearchParams(params);
-            if (next.length > 0) nextParams.set('q', next);
-            else nextParams.delete('q');
-            setParams(nextParams, { replace: true });
-          }}
-          onClear={() => {
-            const nextParams = new URLSearchParams(params);
-            nextParams.delete('q');
-            setParams(nextParams, { replace: true });
-          }}
+          value={text}
+          onChange={writeQuery}
+          onClear={() => writeQuery('')}
         />
       </Box>
 
