@@ -52,7 +52,7 @@ use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
-use crate::common::cursor::{Direction, keyset_sql_desc};
+use crate::common::cursor::{Direction, SortOrder, keyset_sql, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::AssetKeyCursor;
@@ -664,7 +664,30 @@ const SEEK_OVERFETCH: i64 = 8;
 /// (0 or 4). The trailing `LIMIT` is inlined. Only `sac_only` / search pull side
 /// tables into the seek; the default page is a pure `assets` PK walk.
 fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> String {
-    let (op, order) = keyset_sql_desc(direction);
+    // A code search flips the walk to ASC so native XLM comes first (task 0485).
+    // Native is stored as `asset_type = 0` with an EMPTY code, which is the
+    // MINIMUM of the identity 4-tuple this keyset walks — under the default DESC
+    // it sorts onto the LAST page, so `filter[code]=xlm` answered with `zXLMr,
+    // zXLM, …` and the one asset everybody meant was unreachable. ASC pins it to
+    // row 1 for any needle that matches it, at the same cost: the order is still
+    // the `assets` primary key, so the page stays a PK-prefix walk.
+    //
+    // Safe against the cursor: `SortOrder` is a sticky query param and is NOT
+    // encoded in the cursor (see `common::cursor`), and `filter[code]` is sticky
+    // the same way — the client re-sends it on every page, so the walk keeps one
+    // direction for the whole search. `op` comes from the same call, so the
+    // comparator always points into the walk.
+    //
+    // ponytail: direction, not relevance. A tier ranking like the search
+    // endpoint's (exact > prefix > substring) would have to carry the rank in
+    // the cursor; add that when someone asks for an order other than
+    // alphabetical.
+    let sort = if params.asset_code.is_some() {
+        SortOrder::Asc
+    } else {
+        SortOrder::Desc
+    };
+    let (op, order) = keyset_sql(sort, direction);
     let lim_over = params.limit * SEEK_OVERFETCH;
 
     let type_clause = params
@@ -1272,6 +1295,43 @@ mod tests {
         );
         // The bare form is what made native unfindable — it must not come back.
         assert!(!sql.contains("positionCaseInsensitive(a.asset_code, ?)"));
+    }
+
+    #[test]
+    fn code_search_walks_ascending_so_native_is_first() {
+        // Task 0485. Native XLM is `asset_type = 0` with an empty code — the
+        // MINIMUM of the identity 4-tuple this keyset walks — so the default
+        // DESC page order buries it on the LAST page (measured on production:
+        // page 1 of `filter[code]=xlm` was `zXLMr, zXLMr, zXLM, zXLM, zXLM`).
+        // Only the search flips; the unfiltered browse list stays newest-type
+        // first.
+        let mut params = ResolvedListParams {
+            limit: 10,
+            cursor: Some(AssetKeyCursor {
+                asset_type: 1,
+                asset_code: "XLM".to_string(),
+                issuer_id: 1,
+                contract_id: 0,
+            }),
+            asset_type: None,
+            asset_code: Some("xlm".to_string()),
+            sac_only: false,
+        };
+        let searching = build_list_seek_sql(&params, Direction::Next);
+        assert!(
+            searching.contains("ORDER BY a.asset_type ASC"),
+            "{searching}"
+        );
+        // The comparator must point INTO the walk, or the cursor pages backwards.
+        assert!(searching.contains(") > (?, ?, ?, ?)"), "{searching}");
+
+        params.asset_code = None;
+        let browsing = build_list_seek_sql(&params, Direction::Next);
+        assert!(
+            browsing.contains("ORDER BY a.asset_type DESC"),
+            "{browsing}"
+        );
+        assert!(browsing.contains(") < (?, ?, ?, ?)"), "{browsing}");
     }
 
     #[test]
