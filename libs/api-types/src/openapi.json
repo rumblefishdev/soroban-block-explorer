@@ -2968,6 +2968,10 @@
                 "type": ["string", "null"],
                 "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
               },
+              "source_account_home_domain": {
+                "type": ["string", "null"],
+                "description": "The source account's on-chain `home_domain` (SEP-1 anchor domain),\n`null` when it sets none. The frontend asks that domain for the SEP-2\nfederated address it claims for this account (task 0443, issue #363)."
+              },
               "successful": {
                 "type": "boolean"
               }
@@ -4822,6 +4826,10 @@
           "source_account": {
             "type": ["string", "null"],
             "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
+          },
+          "source_account_home_domain": {
+            "type": ["string", "null"],
+            "description": "The source account's on-chain `home_domain` (SEP-1 anchor domain),\n`null` when it sets none. The frontend asks that domain for the SEP-2\nfederated address it claims for this account (task 0443, issue #363)."
           },
           "successful": {
             "type": "boolean"

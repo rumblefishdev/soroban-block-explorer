@@ -36,7 +36,9 @@ history:
       direction is one resolver, one hook and one summary row. Live sample of
       8 random accounts carrying `home_domain = lobstr.co`: 7 resolved to a
       name, so the row is worth showing. The transaction source-account
-      surface stays in Future work — that response carries no `home_domain`.
+      surface followed the same day: the detail query already seeks the
+      accounts row, so `home_domain` came along as one more column rather
+      than the separate API task it looked like.
 ---
 
 # FEATURE: SEP-2 federated addresses, both directions
@@ -281,9 +283,16 @@ answers `Not found`, which is why the row is absent rather than errored.
 
 ## Future work
 
-- The transaction source-account row still shows the bare StrKey. Same helper
-  would serve it, but the tx detail response does not carry `home_domain`, so
-  it needs an API field first — filed separately rather than smuggled in here.
+- ~~The transaction source-account row still shows the bare StrKey.~~ **Done
+  2026-09-02.** The API field turned out to be nearly free: the detail path
+  already key-seeks `accounts` for the source StrKey, so `home_domain` rides
+  the same seek as `source_account_home_domain`. It needs `argMax(home_domain,
+  last_seen_ledger)` rather than the shared `resolve_accounts` helper — that
+  one dedups ReplacingMergeTree versions with `LIMIT 1 BY id`, exact only for
+  columns immutable across versions, which `home_domain` is not. Measured on a
+  `GA22%` slice: 195 of 3603 accounts carry more than one version, none with a
+  differing `home_domain` today — so the wrong dedup would not bite yet, but
+  it is one domain change away from doing so.
 
 ## Notes
 
