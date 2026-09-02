@@ -211,12 +211,28 @@ Against production ClickHouse, running the exact `ORDER BY` the code emits:
 
 `cargo test -p api --lib` 261 passed, clippy clean.
 
-### NOT verified yet
+### Verified on a real read, not only on the SQL
 
-The HTTP round trip. Only the SQL and the Rust were checked separately, and
-the bind count is exactly the class of defect that split misses. Needs
-`cargo run -p api --bin local` against production CH — blocked on staging the
-mTLS cert/key, which is the operator's to do.
+The remaining risk was that the SQL and the Rust were checked separately —
+and the search statement's 7 placeholders against its 7 `.bind(q)` calls is
+exactly the class of defect that split misses. Closed WITHOUT production
+credentials: the repo's own dockerised ClickHouse already carries 3,726
+assets including native, and the CH-gated smokes run `fetch_search` /
+`fetch_list` end to end against it.
+
+Two smokes added, one per surface. Each was shown to fail for the right
+reason by putting the defect back:
+
+| surface | defect restored     | first row then |
+| ------- | ------------------- | -------------- |
+| search  | tier order inverted | `UltraXLM`     |
+| list    | walk back to DESC   | `yXLMFISH`     |
+
+Full suite against that CH: 263 passed, clippy clean.
+
+The mTLS run against production CH is therefore NOT needed for this change —
+the local corpus exercises the same code path, and the ranking itself is
+already measured on production data.
 
 ### Deliberately not done
 
