@@ -48,11 +48,13 @@ every Stellar AMM, integrates exactly those three. Measured 2026-08-27:
 | **Phoenix**                              |                        **14** | **1 969 860** | **29 %** |
 | Soroswap                                 |      191 trading of 232 pairs |       578 921 |      8 % |
 
-**Phoenix is second, not third** — 3.4x Soroswap's flow across 14 contracts
-rather than 232. An earlier estimate put Soroswap second; it was measured only
-over contracts carrying Soroswap metadata and missed Phoenix entirely, because
-Phoenix's events decode to nothing (see 0517) and so were invisible to a
-signature-based count.
+**Correction 2026-09-02: the event counts above are RAW EVENTS and mislead on
+flow.** Phoenix publishes 6-8 events per swap (one per field), Soroswap one —
+so per TRUE swap Soroswap leads in both eras (48,334 vs 5,526 in a fresh
+1M-ledger window; details in the adapters section below). The original note
+("Phoenix is second") stood on this artefact; the Soroswap-was-invisible
+observation stays true (its events decoded to nothing before 0517), but the
+ranking it produced is reversed.
 
 **Read [0008](../archive/0008_RESEARCH_event-interpreter-patterns/README.md)
 before starting.** It already documents Soroswap's and Phoenix's event shapes
