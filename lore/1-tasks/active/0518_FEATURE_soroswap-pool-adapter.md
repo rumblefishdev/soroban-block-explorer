@@ -61,12 +61,12 @@ assets, so holders come from `balances` with the usual dedup.
 
 ## Four-oracle table — fill before implementing
 
-| #   | Oracle                                                       | Status                                                                                                                                                            |
-| --- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Soroswap's own API                                           | **unknown — check first.** Their aggregator docs exist; a pool/pair endpoint has not been confirmed. If absent, say so: it removes the independent volume check.  |
-| 2   | pair contract via RPC (`get_reserves`, `token_0`, `token_1`) | available                                                                                                                                                         |
-| 3   | checkpoint snapshots                                         | available; the only historical oracle                                                                                                                             |
-| 4   | independent aggregator                                       | **unreliable for this protocol** — one major aggregator reports it at protocol level with a per-pool feed that omits it entirely. Do not use as a coverage check. |
+| #   | Oracle                                                       | Status                                                                                                                                                                                                                               |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Soroswap's own API                                           | **EXISTS, behind an API key** (probed 2026-09-02: `api.soroswap.finance` live, Swagger at `/docs`, `/pools` answers 403). Usable once a key is obtained; until then the independent volume check falls to #2/#3 — stated scope risk. |
+| 2   | pair contract via RPC (`get_reserves`, `token_0`, `token_1`) | available                                                                                                                                                                                                                            |
+| 3   | checkpoint snapshots                                         | available; the only historical oracle                                                                                                                                                                                                |
+| 4   | independent aggregator                                       | **unreliable for this protocol** — one major aggregator reports it at protocol level with a per-pool feed that omits it entirely. Do not use as a coverage check.                                                                    |
 
 ## Pre-adapter probes (2026-09-02) — the decisive seams are already settled
 
@@ -138,13 +138,46 @@ Measured before implementation, settling the backfill question with evidence:
   value not in the DB — the live writer fills it on a pair's next
   activity; an optional one-shot RPC pass covers the rest.
 
+## Write path implemented + local e2e record (2026-09-02)
+
+Branch `feat/0518_soroswap-pool-adapter`, five commits. Shape: new parser
+module `pool_soroswap.rs` (the u32-discriminant instance reader is
+deliberately separate from the symbol-keyed Aquarius one) + stage arms into
+the SAME three tables and folds — adding the protocol touched no shared
+table shape, the 0516 umbrella promise holding in practice.
+
+- **Registration**: `new_pair` corroborated by the pair's own factory
+  pointer (DataKey 4) AND instance CREATION in the registering ledger; no
+  UNVERIFIED arm (the pointer is part of the recognition shape). Raw-ledger
+  e2e over three eras / both factory generations validated the same-tx
+  creation assumption on real history.
+- **State**: owner, stamp and declaration coincide — `plane_id` and
+  `share_token_id` are the pair's own id; `total_shares` from the SEP-41
+  `TotalSupply`.
+- **Verified on a full 64k-ledger real partition (55.36-55.42M) through the
+  real runner into a fresh DB**: structural 1,563/1,563 one-row-per-key,
+  self-property 11/11, multi-plane monitor 0, bidirectional sync↔state
+  anti-test **1,563/1,563 values equal with zero remainders both ways**
+  (this is what makes decision 63's history-from-sync seam sound), and a
+  production cross against the independent old-code ingestion **1,563/1,563
+  exact**.
+- **The e2e caught a real dialect bug no unit test could**: `TotalSupply`
+  rides a VEC-WRAPPED sym key (token-SDK enum encoding) while `METADATA` is
+  bare — the fixture came from a stellar-CLI dump whose dialect flattens
+  the wrap, so supply read 0 on every active pair. Fixed, re-proven on a
+  re-indexed slice: the recovered value equals the raw ledger to the unit
+  (2,070,830,028,682 on the native-USDC pair).
+- Backfill runbook: `docs/backfills.md` § "Soroswap pool passes" — both
+  passes are in-DB (no S3) via small Rust one-offs (surrogates are not SQL-
+  computable), closure from the vendor's own counter.
+
 ## Acceptance Criteria
 
-- [ ] four-oracle table completed with evidence, absences stated
-- [ ] deployments enumerated by shape and classified
-- [ ] pools discovered, reconciled against an independent count
-- [ ] reserves from `sync`, verified against `get_reserves()` on a sample
-- [ ] volume from `swap`
-- [ ] holders from `balances` on the pair asset, deduped
-- [ ] unioned into the pool list under its own deployment label
-- [ ] backfill in-DB, no S3 re-parse
+- [x] four-oracle table completed with evidence, absences stated (#1 keyed, risk stated)
+- [x] deployments enumerated by shape and classified (4 factories, 3 dead early)
+- [x] pools discovered, reconciled against an independent count (vendor counters gapless 1..N per factory; 0 orphan emitters)
+- [x] reserves — SUPERSEDED source per the probes: the pair's own instance STATE (self-authenticated); `sync` demoted to the monitored cross-check and proven value-identical 1,563/1,563 both directions in the local e2e
+- [x] volume from `swap` — already in `soroban_events` with signatures post-0517; read-half consumes it (no write-side work, depth-first)
+- [ ] holders from `balances` on the pair asset, deduped — READ-HALF (mechanism settled: the pair IS the LP token)
+- [ ] unioned into the pool list under its own deployment label — READ-HALF (deferred to the end of the roadmap by owner decision)
+- [x] backfill in-DB, no S3 re-parse — runbook written; execution is the deploy window's

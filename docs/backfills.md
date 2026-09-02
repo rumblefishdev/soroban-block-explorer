@@ -682,6 +682,39 @@ Any `missing_pool` → re-run the generator (idempotent) and re-check. Any
 `extra_pool` → investigate before proceeding (a row nothing on chain
 registered should not exist).
 
+## Soroswap pool passes (task 0518)
+
+Run only AFTER the 0518 indexer deploy (writer-first, same reasoning as the
+0374 passes). Everything is derivable in-DB — no S3 re-parse — but BOTH
+passes are small one-off Rust generators, not pure SQL: the surrogate ids
+are `cityhash_102_128` (NOT ClickHouse's `cityHash64`), so SQL cannot
+compute `pool_id`/`plane_id`/leg surrogates.
+
+1. **Pair registry** — harvest the `new_pair` corpus (the exact chq command
+   sits in `crates/xdr-parser/tests/soroswap_real_corpus.rs` module docs),
+   run it through a one-off generator built on `parse_new_pair` +
+   `soroswap_registry_row` (mirror `gen_pool_registry_backfill`, task
+   0374). 235 pairs measured 2026-09-02; idempotent.
+   **Closure check, two layers, both free:** per factory the vendor's own
+   monotone counter — `max(new_pairs_length) == count()` — plus the
+   base32Decode set reconciliation from the 0374 section, `pool_kind = 1`
+   both times.
+2. **Reserve history** — `sync` events carry ABSOLUTE reserves and the
+   local e2e proved them value-identical to instance state on every one of
+   1,563 (pair, ledger) keys, both directions — so history comes from
+   `sync` and the live writer's state rows continue seamlessly (task 0518
+   decision 63). One-off Rust pass over the harvested sync corpus
+   (per-partition chq slices, same quota rule as the 0517 backfill),
+   emitting `pool_state_changes` rows with `plane_id = the pair's own
+surrogate`. Idempotent under the RMT key.
+   **Check:** re-run the bidirectional sync↔rows comparison per partition —
+   compared == equal, both remainders zero.
+3. **Declarations (`pool_instance_state`) need NO history pass** — it is a
+   current-state table; the live writer refreshes a pair on its next
+   activity. The one gap: `total_shares` of DORMANT pairs stays 0 until
+   touched — an optional one-shot RPC pass over the registry closes it
+   (235 reads), or accept the lag.
+
 ## Event-name backfill (task 0517) — in-DB, per partition
 
 Fills `soroban_events.signature` for the ~3.8M historical rows whose name
