@@ -247,8 +247,19 @@ Frontend **content** is separate: `deploy-production-web`
   indexer's soroban arm runs unconditionally, so deploying it against an
   un-migrated schema is an outage, not a degradation. Order:
 
-  1. **DDL first** (prod is mid-migration: the `liquidity_pools` soroban
-     columns are already ALTERed in; the rest is not):
+  0. **Pause the indexer first** (`indexerLambdaConcurrency = 0`): the
+     RUNNING (pre-0374) writer still names `tvl`/`volume`/`fee_revenue` in
+     its snapshot inserts (verified on `origin/master`
+     `LiquidityPoolSnapshotRow`), so dropping them under a live writer
+     fails every snapshot insert — doorbell retries drain toward the DLQ
+     until the new code deploys. Doorbells accumulate durably while paused
+     (see §3.1); the reconcile catches up after unpause. `CREATE TABLE` x2
+     and the `share_token_id` drop need no pause (nothing running writes or
+     reads them — verified against master's structs and SQL), but batch
+     everything inside the one pause window anyway.
+  1. **DDL next** (prod is mid-migration: the `liquidity_pools` soroban
+     columns are already ALTERed in — verified live 2026-09-02, five
+     columns present with correct defaults; the rest is not):
      ```sql
      -- new tables: run the definitions VERBATIM from
      -- crates/db-clickhouse/schema/init.sql (the source of truth — do not
