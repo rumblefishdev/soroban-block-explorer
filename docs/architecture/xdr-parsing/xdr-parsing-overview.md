@@ -678,6 +678,22 @@ Both feed `persist::stage`, which writes the `liquidity_pools` registry rows
 (`pool_kind = 1`), `pool_state_changes` and `pool_instance_state` (see the
 database-schema overview and ADR 0058).
 
+**`pool_soroswap.rs` (task 0518)** is the second adapter, proving the ADR's
+adapter-not-redesign consequence: same three tables, no shared shape change.
+Differences worth knowing: discovery is the factory's `new_pair` event
+(String label + Symbol name — the 0517 label convention; the vendor's
+`new_pairs_length` counter is gapless per factory and doubles as the
+backfill closure check); the pair's instance keys are BARE u32 enum
+DISCRIMINANTS (0/1 = leg tokens, 2/3 = reserves, 4 = the deploying factory
+— the corroboration authority), deliberately a separate reader from the
+symbol-keyed Aquarius one, with the composite shape's false-positive rate
+measured at zero over the raw corpus; and the SEP-41 half MIXES key
+spellings in one instance (`METADATA` bare sym, `TotalSupply` VEC-WRAPPED —
+the token-SDK enum encoding; a CLI dump flattens the wrap, which is exactly
+how a wrong fixture passed unit tests and was caught by the local e2e).
+The pair is its own LP token, so owner, stamp and declaration coincide —
+`plane_id = share_token_id =` the pair itself.
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR

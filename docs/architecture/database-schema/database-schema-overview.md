@@ -194,6 +194,11 @@ Derived explorer entities:
   is deliberately NOT materialised — the `add_pool` event sits complete in
   `soroban_events`; extract on demand, never copy. Their id bytes are a
   CONTRACT address payload (`C...` on the wire, never `L...`)
+- Soroswap pairs (task 0518) are `pool_kind = 1` rows in the same registry —
+  `deployment_id` = the factory, `fee_bps` = the vendor's compiled-in 30,
+  `pool_type_raw` empty (the vendor emits no type). The pair is its own LP
+  token: in `pool_instance_state` its `plane_id` and `share_token_id` are
+  the pair itself, `total_shares` from the SEP-41 `TotalSupply`.
 - `pool_state_changes` — Soroban pool reserves, ONE row per
   `(pool, plane, ledger)` (the plane is in the key so a forged plane write
   cannot evict a genuine row — see the DDL comment),
