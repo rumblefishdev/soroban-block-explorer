@@ -1,11 +1,20 @@
 ---
 id: '0531'
-title: 'Tier-1 MIN columns corrupt on LIVE ingest — fix the storage semantics, then drop every dead column in one window'
+title: 'DUPLICATE of 0497 / 0232 / 0421 — Tier-1 MIN columns corrupt on live ingest'
 type: BUG
-status: backlog
+status: completed
 related_adr: ['0040', '0044', '0045']
-related_tasks: ['0528', '0529', '0322', '0228', '0310']
-tags: ['clickhouse', 'data-integrity', 'api', 'indexer', 'ops', 'effort-large']
+related_tasks: ['0497', '0232', '0421', '0528', '0529', '0322', '0228', '0310']
+tags:
+  [
+    'clickhouse',
+    'data-integrity',
+    'api',
+    'indexer',
+    'ops',
+    'duplicate',
+    'superseded',
+  ]
 links: []
 history:
   - date: '2026-09-01'
@@ -31,7 +40,36 @@ history:
       once, not twice.
 ---
 
-# Tier-1 MIN columns corrupt on live ingest — fix storage, then drop the dead columns
+# DUPLICATE of 0497 / 0232 / 0421 — do not work this task
+
+> **Filed in error.** Three tasks already owned this defect when 0531 was
+> created:
+>
+> - **0497** — `RESEARCH: retire repair-tier1 — move every MIN-semantics copy off
+RMT state tables`. The parent. Its "Questions to answer" are precisely what
+>   this session measured, and **the measurements have been moved there** under
+>   "Findings — session of 2026-09-01/02".
+> - **0232** — per-column live-mode drift mitigation for all six columns; already
+>   defers to 0497 in premise.
+> - **0421** — the `accounts` instance, and wider than the MIN problem: it covers
+>   `sequence_number` and `home_domain` on the same whole-row write, with a
+>   measured 61.71% of active accounts carrying `sequence_number = 0`, and it
+>   already proposes the `AggregatingMergeTree` route with a schema sketch.
+>
+> **How the duplicate happened**, recorded so the failure is reusable: the
+> pre-filing search was run, but its output was truncated with `head -8` and the
+> visible rows were all archived files, so the conclusion "nothing tracks this"
+> was drawn from a cut-off list. `0421` has `first_seen_ledger` in its filename
+> and would have been the first hit without the truncation. A search whose output
+> is truncated has not answered the question.
+>
+> **What this session did produce that was genuinely new** — and which now lives
+> in 0497, not here: the corruption measured per column, the read-time and
+> write-time cost measurements that sink two routes, the experiment proving a
+> materialised view does not fire on `ATTACH PART`, and task **0528**, which
+> shipped the first column off RMT and is therefore 0497's first landed instance.
+>
+> The body below is kept unedited for traceability only. Read 0497 instead.
 
 ## Summary
 
