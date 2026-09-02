@@ -181,3 +181,47 @@ Making hits distinguishable (441 rows all displaying `USDC`) — split to
 others apart. It turned out to be frontend-only: the issuer already ships
 inside `route_token`. Options 2-3 there (TOML domain, holder count) would
 need this task's backend work and can ride along with it.
+
+---
+
+## Implementation — buckets 1 and 4, 2026-09-02
+
+Two commits, one file each, no wire change (`extract_openapi` output is
+byte-identical to the committed spec, so the api-types gate stays green).
+
+**Bucket 1** — `aea53f01` reverse-applied onto `crates/api/src/search/queries.rs`,
+unchanged except the task number in its comments. 7 placeholders now (3 in the
+`WHERE`, 4 in the `multiIf` tier), matched by 7 `.bind(q)`.
+
+**Bucket 4** — `build_list_seek_sql` picks `SortOrder::Asc` when a code filter
+is present, `Desc` otherwise. One test (`code_search_walks_ascending_so_native_
+is_first`) pins both arms AND the comparator, because an order that flips
+without its comparator pages backwards silently.
+
+### Verified
+
+Against production ClickHouse, running the exact `ORDER BY` the code emits:
+
+| needle                    | first row                                                                               |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| `xlm`                     | native XLM, 9,943,802 holders — ahead of seven credit assets minted under the same code |
+| `usdc`                    | Circle's USDC, 690,936 holders vs 3,093 for the runner-up                               |
+| `AqUa`                    | AQUA — case-insensitive both ways                                                       |
+| `filter[code]=xlm` (list) | the native row, where page 1 previously started `zXLMr, zXLMr, zXLM`                    |
+
+`cargo test -p api --lib` 261 passed, clippy clean.
+
+### NOT verified yet
+
+The HTTP round trip. Only the SQL and the Rust were checked separately, and
+the bind count is exactly the class of defect that split misses. Needs
+`cargo run -p api --bin local` against production CH — blocked on staging the
+mTLS cert/key, which is the operator's to do.
+
+### Deliberately not done
+
+Extracting the tests out of the two touched files, which both exceed the
+~800-line limit (`assets/queries.rs` 1,385, `search/queries.rs` 1,167). No
+`*_tests.rs` file exists anywhere in the repo yet, so doing it here would
+introduce a new file convention inside a 46-line bugfix. Belongs to the
+incremental god-file backlog, not to this PR.
