@@ -61,6 +61,44 @@ assets, so holders come from `balances` with the usual dedup.
 | 3   | checkpoint snapshots                                         | available; the only historical oracle                                                                                                                             |
 | 4   | independent aggregator                                       | **unreliable for this protocol** — one major aggregator reports it at protocol level with a per-pool feed that omits it entirely. Do not use as a coverage check. |
 
+## Pre-adapter probes (2026-09-02) — the decisive seams are already settled
+
+Probed live before any code, after the 0517 rule made the events readable:
+
+1. **Reserves live in the pair's OWN instance storage** — read verbatim from
+   mainnet (`stellar contract read` on pair `CAM7DY53…`, the native-USDC
+   pair): Soroswap's `DataKey` is a plain enum, so instance keys are u32
+   DISCRIMINANTS, not symbols: `0` = token0 address, `1` = token1 address,
+   `2`/`3` = Reserve0/Reserve1 as `i128`, `4` = the FACTORY address
+   (`CA4HEQTL…7AW2` — exactly the archived factory), plus SEP-41
+   `METADATA`/`TotalSupply`/`name`/`symbol` — the pair IS the LP token, with
+   on-chain metadata ("native-USDC Soroswap LP Token").
+   **Consequences:** (a) the reserve source is self-authenticated ledger
+   STATE (owner == pool) — the ADR 0058 doctrine fits with no new tables;
+   `sync` demotes to the monitored cross-check, exactly `update_reserves`'
+   fate; (b) the pair's own factory pointer gives the registration
+   corroboration the same class of authenticity as Aquarius's `Router` key;
+   (c) the parser needs a u32-discriminant reader (not symbol-keyed) — the
+   discriminants must be anchored in vendor source per deployment WASM, per
+   the umbrella's shape-not-name rule.
+2. **True-swap flow re-measured — Soroswap first** (recorded in 0516):
+   48,334 vs Phoenix 5,526 per 1M fresh ledgers (8.7x), both eras ahead.
+3. **`new_pair` shape fetched from current vendor source** (factory
+   `event.rs`): topics `[String("SoroswapFactory"), Symbol("new_pair")]`
+   (0517 arm 2 → signature `new_pair`), data
+   `{token_0, token_1, pair, new_pairs_length}` — the registration carries
+   the pair address in DATA from an authenticated emitter, and
+   `new_pairs_length` is a free monotone counter for the discovery
+   closure check. Discovery counts to reconcile: 191 label-emitting pairs
+   (measured, = the 0516 "trading" count) vs 253 `…Soroswap…` metadata
+   names (drift from 248) vs factory `all_pairs_length` (RPC).
+4. **Vendor API (oracle #1) EXISTS but is keyed**: `api.soroswap.finance`
+   is live (NestJS), `/docs` serves a Swagger UI, and `/pools` answers
+   **403 Forbidden** — the endpoint exists behind an API key. Scope line
+   for the four-oracle table: oracle #1 available IF a key is obtained;
+   otherwise the independent volume check falls to the #2/#3 oracles and
+   must be stated as the 0516 scope risk.
+
 ## Acceptance Criteria
 
 - [ ] four-oracle table completed with evidence, absences stated

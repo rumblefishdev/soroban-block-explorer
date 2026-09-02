@@ -190,16 +190,22 @@ Copy into each adapter task:
 
 ## Adapters
 
-| Protocol               | Task                                                                         | State                                      |
-| ---------------------- | ---------------------------------------------------------------------------- | ------------------------------------------ |
-| Router-registry family | [0374](../active/0374_FEATURE_lp-native-leg-and-soroban-amm-completeness.md) | active, first adapter                      |
-| **Phoenix**            | —                                                                            | **next after 0374**; spawn when 0517 lands |
-| Soroswap               | [0518](./0518_FEATURE_soroswap-pool-adapter.md)                              | after Phoenix; blocked on 0517             |
+| Protocol               | Task                                                                         | State                                     |
+| ---------------------- | ---------------------------------------------------------------------------- | ----------------------------------------- |
+| Router-registry family | [0374](../active/0374_FEATURE_lp-native-leg-and-soroban-amm-completeness.md) | active, first adapter                     |
+| **Soroswap**           | [0518](./0518_FEATURE_soroswap-pool-adapter.md)                              | **next after 0374** (0517 fix in PR #443) |
+| Phoenix                | —                                                                            | after Soroswap; spawn then                |
 
-**Order reversed 2026-08-27 on measurement.** Phoenix carries 3.4x the swap
-flow of Soroswap across 14 contracts instead of 232 — more of the market for
-less of the work, and both are unblocked by the same fix (0517). Nothing about
-Soroswap changed; it simply is not second.
+**Order reversed 2026-08-27 on measurement — and REVERSED BACK 2026-09-02 on a
+better one (karolkow).** The 3.4x figure counted raw EVENTS, but Phoenix
+publishes 6-8 events per swap (one per field) while Soroswap publishes one —
+the ratio was an artefact of the publishing convention. Counted per TRUE swap
+(the one `sender` event per Phoenix swap vs Soroswap pair `swap` rows):
+Soroswap leads **48,334 vs 5,526 (8.7x)** in a fresh 1M-ledger window and
+45,135 vs 23,499 (1.9x) in a historical one — Soroswap ahead in both eras and
+the gap GROWING. It also wins on decode difficulty (one struct vs cross-event
+correlation), on discovery evidence in hand (factory + pair storage probed,
+see 0518), and it is what issue #405 asks for by name.
 
 ## Acceptance Criteria
 
