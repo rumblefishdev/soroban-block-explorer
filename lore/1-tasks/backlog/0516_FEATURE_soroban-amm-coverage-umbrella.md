@@ -215,3 +215,11 @@ see 0518), and it is what issue #405 asks for by name.
 - [ ] four-oracle table filled in for every adapter task
 - [ ] protocol + deployment filter on the pool list
 - [ ] adding an adapter touches no shared table shape
+- [ ] account-page display decided (LAST, once positions are indexed): how a
+      holder's LP participation shows on the account page — concentrated
+      positions AND classic `lp_positions` (neither is visible there today;
+      fungible soroban share tokens already appear in the Assets card as
+      plain tokens). Direction recorded 2026-09-02: a separate "Liquidity
+      positions" section, never rows squeezed into the Assets card — a
+      position is not a token balance; no valuation until a portfolio-value
+      feature exists and the amount conversion passes an on-chain check.
