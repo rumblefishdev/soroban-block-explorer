@@ -1,8 +1,10 @@
-import { Box, ClickAwayListener, Paper } from '@mui/material';
+import { Box, ClickAwayListener, Paper, Typography } from '@mui/material';
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { SearchHit } from '@rumblefish/api-types';
+
+import { routes } from '../router/routes.js';
 
 import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
@@ -22,7 +24,13 @@ export function GlobalSearchBar({
 }: GlobalSearchBarProps) {
   const navigate = useNavigate();
 
+  // The hook classifies a SEP-2 federated address (`name*domain`) and
+  // suppresses its own request for one: `/v1/search` knows nothing about the
+  // standard, so its zero hits would render as "No results for
+  // karol*lobstr.co" — the one claim that is false, since the results page
+  // goes on to resolve it (task 0443).
   const state = useSearchResults({ q });
+  const federatedFor = state.federatedDomain;
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
@@ -100,13 +108,63 @@ export function GlobalSearchBar({
             overflow: 'hidden',
           })}
         >
-          <SearchResultsView
-            state={state}
-            highlightedIndex={highlightedIndex}
-            onRowMouseEnter={setHighlightedIndex}
-            onRowClick={onDismiss}
-            maxListHeight={480}
-          />
+          {federatedFor != null ? (
+            // A row, not a sentence: this panel is a listbox of clickable
+            // results, and a static line would be reachable by Enter only —
+            // dead to anyone who got here with the mouse.
+            <Box
+              component="button"
+              type="button"
+              role="option"
+              aria-selected={false}
+              onClick={() => {
+                onDismiss();
+                navigate(routes.search(q.trim()));
+              }}
+              sx={(theme) => ({
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                px: 2,
+                py: 1.5,
+                border: 'none',
+                background: 'none',
+                cursor: 'pointer',
+                '&:hover': { backgroundColor: theme.palette.surface.grayHover },
+                // Same ring as SearchResultRow — this synthetic row is a
+                // button, so it must draw its own.
+                '&:focus-visible': {
+                  outline: `2px solid ${theme.palette.stroke.action}`,
+                  outlineOffset: -2,
+                },
+              })}
+            >
+              <Typography variant="bodySmMedium" component="span">
+                {q.trim()}
+              </Typography>
+              <Typography
+                variant="bodyXsRegular"
+                component="span"
+                sx={(theme) => ({
+                  display: 'block',
+                  color: theme.palette.text.tertiary,
+                })}
+              >
+                {/* "press Enter" is honoured two files away: the submit
+                    handlers in AppShell/HomeHero fall through to
+                    routes.search(q), where the results page resolves. */}
+                Resolve this federated address with {federatedFor} — press Enter
+              </Typography>
+            </Box>
+          ) : (
+            <SearchResultsView
+              state={state}
+              highlightedIndex={highlightedIndex}
+              onRowMouseEnter={setHighlightedIndex}
+              onRowClick={onDismiss}
+              maxListHeight={480}
+            />
+          )}
         </Paper>
       </Box>
     </ClickAwayListener>

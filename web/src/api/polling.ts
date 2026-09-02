@@ -93,3 +93,22 @@ export const searchPolicy = {
   staleTime: 0,
   gcTime: 0,
 } as const;
+
+/**
+ * Policy for the two SEP-2 federation lookups (task 0443). They differ from
+ * every other query here: the host is a third party the account or the user
+ * named, not our API.
+ *
+ * - `retry: false` — a federation server that says "not found" means it, and
+ *   a hostile or dead one must not be dialled twice.
+ * - `refetchOnWindowFocus: false` — the global default is `true`, which would
+ *   re-run both hops against someone else's server every time the tab regains
+ *   focus, for a value that changes on a human timescale.
+ * - `staleTime` matches the global `gcTime` (5 min); a longer window would be
+ *   unreachable, since the entry is evicted at `gcTime` anyway.
+ */
+export const federationPolicy = {
+  staleTime: 5 * 60_000,
+  retry: false,
+  refetchOnWindowFocus: false,
+} as const;
