@@ -32,11 +32,22 @@ import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
  * internationalized domain (`münchen.de`) classifies; `fetch` converts it to
  * punycode itself.
  *
- * Deliberately STRICTER than the spec in one place: SEP-2 allows "any valid
- * RFC 1035 domain name", which includes single-label names like `localhost`.
- * Those are rejected — this regex is the gate on spending two network
- * round-trips, and a dotless string is far more likely to be someone's search
- * term than an anchor domain.
+ * Deliberately STRICTER than the spec in two places, both load-bearing:
+ *
+ * 1. **At least one dot.** SEP-2 allows "any valid RFC 1035 domain name",
+ *    which includes single-label names. In a browser a single label resolves
+ *    against the VIEWER'S OWN network — `localhost`, or an intranet host like
+ *    `wiki` or `nas` — so accepting them would turn a search box into a probe
+ *    of the user's LAN. Nothing real is lost: all 7488 accounts whose
+ *    `home_domain` has no dot hold free text like `NUMBERLAND` or
+ *    `Quantum Stellar Network` (measured 2026-09-02), and a single-label host
+ *    cannot serve a public HTTPS `stellar.toml` anyway.
+ *
+ * 2. **A two-letter minimum TLD.** RFC 1035 permits a one-character label, but
+ *    no such TLD has ever been delegated and ICANN policy forbids one. The
+ *    minimum is what stops a dial at `lobstr.c` on the way to `.co` or `.com`:
+ *    every character this regex accepts early is a request sent to a domain
+ *    the user may not have finished typing.
  */
 const DOMAIN_SRC =
   '(?:[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?\\.)+\\p{L}{2,}';
