@@ -709,8 +709,9 @@ struct IssuerRow {
 /// never be a substring of a ≤12-char asset code, so hash mode is provably
 /// empty). Step 1 pages matching assets — `asset_code` substring or the
 /// `native`/`xlm` special-case — joining the smaller `soroban_contracts` for the
-/// contract StrKey. Step 2 resolves the page's issuer surrogates → G-StrKey via
-/// a bloom-pruned `accounts WHERE id IN (...)` seek (NEVER a full-table
+/// contract StrKey, RANKED by match tier then holder count (task 0485; see the
+/// statement comment). Step 2 resolves the page's issuer surrogates → G-StrKey
+/// via a bloom-pruned `accounts WHERE id IN (...)` seek (NEVER a full-table
 /// `accounts` join — the Code 241 trap). `route_token` is then composed in Rust.
 async fn search_assets(
     client: &clickhouse::Client,
@@ -740,6 +741,35 @@ async fn search_assets(
     // (lore-0420): page-scoped CTE 1,896,766 rows / 37.8 MiB, this form
     // 1,118,154 rows / 28.5 MiB — cheaper even than the un-deduped original
     // (1,151,738 / 32.0 MiB).
+    //
+    // RELEVANCE (task 0485, first written under 0472 and reverted with it in
+    // `aea53f01`). Before this the statement ended in a bare `LIMIT`
+    // with NO `ORDER BY`, so it returned whichever ten rows the scan reached
+    // first — `q=USDC` answered with ten `IUSDC` rows and no USDC at all, and
+    // two identical calls could disagree. Ranking is expressed as a tier
+    // (exact > prefix > substring anywhere) rather than a scoring formula:
+    // the order follows from what matched, not from a weighting we invented.
+    //
+    // Within a tier the tie-break is holder count — 441 assets carry the code
+    // `USDC` (distinct issuers) and the signal separates them cleanly (613,691
+    // holders for Circle's, 3,098 for the runner-up). It lives in
+    // `balance_aggregates` (task 0331) — `assets` has no holder column at all
+    // any more, task 0310 dropped the dead `holder_count` / `total_supply` /
+    // `icon_url` trio from prod on 2026-08-13.
+    // Joined bare: the table is 1:1 on `asset_id` (339,793 rows / 339,793
+    // distinct), so the usual `GROUP BY` collapse is pure cost here (measured
+    // 93 ms → 71 ms without it). It cannot be page-scoped like the list's join
+    // (`assets/queries.rs`) because the ranking needs holders BEFORE the limit.
+    //
+    // The trailing PK columns make the order total: holder counts are NULL for
+    // most rows, and "same query, same answer" is half of what this fixes.
+    //
+    // Case-insensitive throughout, which costs a full scan: `lower()` on the
+    // sort-key column forfeits primary-key pruning (measured 13 ms/51k rows
+    // case-sensitive vs 41 ms/497k folded). Predictable matching wins — a
+    // search where "usdc" misses "USDC" is broken however fast it is. The
+    // index-backed alternative (materialised `lower(asset_code)` + projection)
+    // needs a production DDL and is recorded in the task, not smuggled here.
     let sql = format!(
         "SELECT \
             a.asset_type AS asset_type, \
@@ -751,13 +781,27 @@ async fn search_assets(
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts GROUP BY id \
          ) sc ON sc.id = a.contract_id \
+         LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
          WHERE (length(a.asset_code) > 0 \
                 AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
             OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
+         ORDER BY \
+             multiIf( \
+                 a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native'), 0, \
+                 lower(toString(a.asset_code)) = lower(?), 0, \
+                 startsWith(lower(toString(a.asset_code)), lower(?)), 1, \
+                 2 \
+             ) ASC, \
+             bagg.holder_count DESC NULLS LAST, \
+             a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
          LIMIT {per_group_limit}"
     );
     let rows = client
         .query(&sql)
+        .bind(q)
+        .bind(q)
+        .bind(q)
+        .bind(q)
         .bind(q)
         .bind(q)
         .bind(q)
