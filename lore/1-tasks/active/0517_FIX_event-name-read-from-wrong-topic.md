@@ -83,6 +83,46 @@ against the other convention anyway.
 - Backfill is in-DB: `topics_xdr` already holds the decoded vector, so this is
   `INSERT … SELECT`, not an S3 re-parse.
 
+## Pre-implementation research (2026-09-02) — the plan's rule was insufficient
+
+Re-measured the NULL population on two 1M-ledger windows (fresh 63.3M+,
+historical 55-56M; shapes identical in both). Three findings that changed
+the implementation:
+
+1. **The planned sym-fallback alone would miss the whole Phoenix family.**
+   Phoenix publishes `("swap", "sender")` as plain `&str`s — BOTH topics are
+   String, so "take the Symbol from topics[1]" resolves nothing there. The
+   family (`swap` 188k in the historical window, plus `bond`/`unbond`/
+   `provide_liquidity`/`withdraw_rewards` from their stake contracts) needs a
+   third arm: a String first topic with no Symbol second IS the name.
+2. **A new label-convention protocol appeared: BlendStrategy** — 67k rows in
+   the fresh window, more than DeFindex. The convention is spreading, which
+   is what the monitored-counter AC is for.
+3. **100% of the measured NULL population has a String first topic and zero
+   have empty topics** — so the unresolved-warn arm is quiet today and any
+   noise from it is a genuinely new convention.
+
+**Decision (karolkow): the protocol label is NOT lifted into a column** —
+it sits verbatim in `topics_xdr` forever; extract on demand, never copy
+(the subpool_salt rule). Revisit only if 0518's discovery design measures a
+need for the filter.
+
+## Implementation notes
+
+- `extract_event_signature` (stage.rs) — four arms: Symbol first topic
+  (unchanged); String label + Symbol name; String name (Phoenix family,
+  known compromise documented: a future String-label + String-name protocol
+  would lift the label — wrong but visible, unlike the silent NULL);
+  anything else non-empty warns ("task 0517 monitor" — the warn IS the
+  monitored counter, surfacing in CloudWatch like every parser warn) and
+  keeps NULL. Empty topic vectors stay silently NULL.
+- Unit tests pin all four arms with verbatim production shapes, including
+  single-String and String+bytes variants.
+- Backfill: in-DB `INSERT … SELECT` per partition (~300-420M rows each,
+  quota-safe; the bare NULL filter would scan 10G+ rows) — the exact SQL,
+  mirroring the Rust rule, lives in `docs/backfills.md` § "Event-name
+  backfill (task 0517)", with its zero-check.
+
 ## Acceptance Criteria
 
 - [ ] Soroswap pair events carry names (`sync`, `swap`, `deposit`, `withdraw`,

@@ -47,6 +47,7 @@ use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::asset_appearances::AssetRef;
+use xdr_parser::scval;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
@@ -2455,16 +2456,56 @@ fn pool_registry_row(
     })
 }
 
+/// Event NAME, lifted from the topics into the `signature` column (the cheap
+/// `WHERE signature = 'transfer'` filter).
+///
+/// Three publishing conventions exist on mainnet (task 0517; measured
+/// 2026-09-02 on two 1M-ledger windows of the then-NULL population, shapes
+/// identical in both):
+///
+/// 1. `[Symbol(name), …]` — the dominant convention (SEP-41, the router
+///    family, …). Unchanged.
+/// 2. `[String(label), Symbol(name), …]` — a protocol label first, the name
+///    second (SoroswapPair/Router/Aggregator, DeFindexVault, BlendStrategy).
+///    The label is NOT copied anywhere: it sits verbatim in `topics_xdr`
+///    forever — extract on demand, never copy.
+/// 3. `[String(name), …]` where `topics[1]` is NOT a Symbol — the
+///    Phoenix-family plain-&str convention (`("swap","sender")` publishes
+///    two Strings): the FIRST topic is the name, the second discriminates
+///    the field and stays in the topics for the protocol's decoder.
+///
+/// Known compromise in arm 3: a future protocol publishing
+/// `[String(label), String(name)]` would get its label lifted as the name —
+/// wrong but visible and verifiable per protocol, unlike the silent NULL it
+/// replaces.
+///
+/// Anything else with a non-empty topic vector resolves nowhere: it keeps
+/// NULL **and warns**, so the next convention surfaces as a count, never as
+/// absence (the 0517 monitor; 100% of the measured NULL population had a
+/// String first topic, so this arm is quiet today). An EMPTY topic vector
+/// stays a silent NULL — there is no name to resolve.
 fn extract_event_signature(topics: &Value) -> Option<String> {
-    let first = topics.as_array()?.first()?.as_object()?;
-    if first.get("type").and_then(Value::as_str)? != "sym" {
-        return None;
+    let arr = topics.as_array()?;
+    let first = arr.first()?;
+    let nonempty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    if let Some(name) = scval::typed_str(first, "sym").and_then(nonempty) {
+        return Some(name);
     }
-    first
-        .get("value")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    if let Some(label_or_name) = scval::typed_str(first, "string").and_then(nonempty) {
+        if let Some(name) = arr
+            .get(1)
+            .and_then(|t| scval::typed_str(t, "sym"))
+            .and_then(nonempty)
+        {
+            return Some(name);
+        }
+        return Some(label_or_name);
+    }
+    tracing::warn!(
+        topics = %topics,
+        "event name unresolved — unknown topic convention (task 0517 monitor)"
+    );
+    None
 }
 
 fn tx_has_soroban_map(operations: &[(String, Vec<ExtractedOperation>)]) -> HashMap<String, bool> {
@@ -3229,5 +3270,72 @@ mod balance_tests {
             ids::contract_id("CTOKEN3"),
             "type-3 unchanged"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // extract_event_signature — the three mainnet topic conventions plus
+    // the monitored fourth arm (task 0517). Shapes are verbatim from the
+    // production measurement of 2026-09-02.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn signature_from_a_symbol_first_topic() {
+        let topics = serde_json::json!([
+            {"type": "sym", "value": "transfer"},
+            {"type": "address", "value": "GAAAA"}
+        ]);
+        assert_eq!(
+            extract_event_signature(&topics).as_deref(),
+            Some("transfer")
+        );
+    }
+
+    #[test]
+    fn signature_from_the_label_convention() {
+        // SoroswapPair / DeFindexVault / BlendStrategy: a String protocol
+        // label first, the Symbol name second. The label is NOT lifted.
+        let topics = serde_json::json!([
+            {"type": "string", "value": "SoroswapPair"},
+            {"type": "sym", "value": "sync"}
+        ]);
+        assert_eq!(extract_event_signature(&topics).as_deref(), Some("sync"));
+    }
+
+    #[test]
+    fn signature_from_the_phoenix_plain_str_convention() {
+        // Phoenix publishes ("swap", "sender") as two Strings — the FIRST
+        // is the name, the second discriminates the field.
+        let topics = serde_json::json!([
+            {"type": "string", "value": "swap"},
+            {"type": "string", "value": "sender"}
+        ]);
+        assert_eq!(extract_event_signature(&topics).as_deref(), Some("swap"));
+        // Single-String and String+bytes variants of the same family.
+        let single = serde_json::json!([{"type": "string", "value": "Message"}]);
+        assert_eq!(extract_event_signature(&single).as_deref(), Some("Message"));
+        let with_bytes = serde_json::json!([
+            {"type": "string", "value": "OrderCreated"},
+            {"type": "bytes", "value": "AAAA"}
+        ]);
+        assert_eq!(
+            extract_event_signature(&with_bytes).as_deref(),
+            Some("OrderCreated")
+        );
+    }
+
+    #[test]
+    fn an_unknown_convention_keeps_null_and_an_empty_vector_stays_silent() {
+        // A hypothetical fourth convention (non-sym, non-string first
+        // topic) resolves nowhere — NULL plus the monitor warn.
+        let unknown = serde_json::json!([
+            {"type": "u64", "value": "7"},
+            {"type": "sym", "value": "name_here_is_not_taken"}
+        ]);
+        assert_eq!(extract_event_signature(&unknown), None);
+        // No topics — nothing to resolve, silently.
+        assert_eq!(extract_event_signature(&serde_json::json!([])), None);
+        // Empty strings never become names.
+        let empty = serde_json::json!([{"type": "string", "value": ""}]);
+        assert_eq!(extract_event_signature(&empty), None);
     }
 }

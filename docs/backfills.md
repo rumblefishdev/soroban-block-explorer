@@ -681,6 +681,66 @@ FROM liquidity_pools WHERE pool_kind = 1
 Any `missing_pool` → re-run the generator (idempotent) and re-check. Any
 `extra_pool` → investigate before proceeding (a row nothing on chain
 registered should not exist).
+
+## Event-name backfill (task 0517) — in-DB, per partition
+
+Fills `soroban_events.signature` for the ~3.8M historical rows whose name
+lives under a non-Symbol first topic (the Soroswap/DeFindex/Blend label
+convention and the Phoenix plain-&str convention). Pure `INSERT … SELECT`
+over `topics_xdr` — flavour A, no re-parse, no S3. The SQL mirrors
+`extract_event_signature` (stage.rs) exactly; version-less RMT keeps the
+last insert per key (rule 4), so re-running a slice is harmless.
+
+**Run it per partition** — a bare `WHERE signature IS NULL` scans all 10G+
+rows in one query, which blows the hourly read quota; the partition key is
+`intDiv(ledger_sequence, 500000)` and each partition is ~300-420M rows, so
+one partition per query prunes cleanly (~4-5/hour under quota, or loop them
+all as the box operator where no quota applies). Partition ids:
+`SELECT DISTINCT partition FROM system.parts WHERE table='soroban_events' AND active`.
+
+```sql
+-- one slice; substitute {P} with a partition id and iterate
+INSERT INTO soroban_events
+SELECT
+    contract_id, transaction_id, ledger_sequence, event_index, event_type,
+    multiIf(
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+          AND JSONExtractString(topics_xdr,2,'value') != '',
+            JSONExtractString(topics_xdr,2,'value'),
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,1,'value') != '',
+            JSONExtractString(topics_xdr,1,'value'),
+        CAST(NULL, 'Nullable(String)')
+    ) AS signature,
+    topics_xdr, data_xdr
+FROM soroban_events
+WHERE signature IS NULL
+  AND intDiv(ledger_sequence, 500000) = {P}
+  AND multiIf(
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+          AND JSONExtractString(topics_xdr,2,'value') != '',
+            JSONExtractString(topics_xdr,2,'value'),
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,1,'value') != '',
+            JSONExtractString(topics_xdr,1,'value'),
+        CAST(NULL, 'Nullable(String)')
+    ) IS NOT NULL
+```
+
+The trailing filter keeps still-unresolvable rows OUT of the insert — their
+NULL row already exists, and re-inserting an identical NULL row would only
+churn the merge. **Verification** (after all partitions):
+
+```sql
+-- the resolvable NULL population MUST be zero
+SELECT count() FROM soroban_events
+WHERE signature IS NULL
+  AND JSONExtractString(topics_xdr,1,'type') = 'string'
+  AND JSONExtractString(topics_xdr,1,'value') != ''
+```
+
 Verification criteria for the deployed result live in task 0374's
 final-phase notes.
 
