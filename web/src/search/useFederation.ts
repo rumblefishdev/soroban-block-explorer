@@ -6,7 +6,11 @@ import { useQuery } from '@tanstack/react-query';
 
 import { federationPolicy } from '../api/polling.js';
 
-import { federatedDomain, resolveFederated } from './federation.js';
+import {
+  federatedDomain,
+  resolveFederated,
+  resolveFederatedName,
+} from './federation.js';
 import type { FederationResolve } from './federation.js';
 
 /**
@@ -46,4 +50,23 @@ export function useFederatedAddress(address: string): {
     ...federationPolicy,
   });
   return { domain, data: query.data };
+}
+
+/**
+ * Reverse: an account and its on-ledger home domain → the address that domain
+ * claims for it, `null` when there is none, `undefined` while it is being
+ * asked. No debounce here — the input is an account id from a loaded page,
+ * not something being typed.
+ */
+export function useFederatedName(
+  accountId: string,
+  homeDomain: string
+): string | null | undefined {
+  return useQuery({
+    queryKey: ['federatedName', accountId, homeDomain],
+    queryFn: ({ signal }) =>
+      resolveFederatedName(accountId, homeDomain, signal),
+    enabled: homeDomain.length > 0,
+    ...federationPolicy,
+  }).data;
 }

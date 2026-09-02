@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchReply, stubFetch } from '../test-utils.js';
 
-import { federatedDomain, resolveFederated } from './federation.js';
+import {
+  federatedDomain,
+  resolveFederated,
+  resolveFederatedName,
+} from './federation.js';
 
 const ACCOUNT = 'GC526FUILJ6NLFXKCOOGTMDXNRW7MYSEK2UNRJV5FYWOGYDE4LOKXFEM';
 
@@ -142,5 +146,58 @@ describe('resolveFederated', () => {
     const r = await resolveFederated('nobody*lobstr.co', 'lobstr.co');
     expect(r.kind).toBe('failed');
     expect(r.kind === 'failed' && r.reason).toContain('did not resolve');
+  });
+});
+
+describe('resolveFederatedName (reverse, type=id)', () => {
+  const TOML = 'https://lobstr.co/.well-known/stellar.toml';
+  const SERVER = 'https://lobstr.co/federation/';
+  const withServer = {
+    [TOML]: fetchReply('FEDERATION_SERVER="https://lobstr.co/federation/"\n'),
+  };
+
+  it('returns the address the domain claims for the account', async () => {
+    const fetchMock = stubFetch({
+      ...withServer,
+      [SERVER]: fetchReply(
+        JSON.stringify({ stellar_address: 'karol*lobstr.co' })
+      ),
+    });
+
+    await expect(resolveFederatedName(ACCOUNT, 'lobstr.co')).resolves.toBe(
+      'karol*lobstr.co'
+    );
+    expect(fetchMock.mock.calls[1]?.[0] as string).toContain('type=id');
+  });
+
+  // The account named this domain; the domain must name the account back
+  // inside its OWN namespace, or it is claiming it into someone else's.
+  it('rejects an address that does not live at the account home domain', async () => {
+    stubFetch({
+      ...withServer,
+      [SERVER]: fetchReply(
+        JSON.stringify({ stellar_address: 'karol*evil.example' })
+      ),
+    });
+
+    await expect(
+      resolveFederatedName(ACCOUNT, 'lobstr.co')
+    ).resolves.toBeNull();
+  });
+
+  it('is silent when the account has no registered name', async () => {
+    stubFetch({
+      ...withServer,
+      [SERVER]: fetchReply(JSON.stringify({ detail: 'not found' })),
+    });
+    await expect(
+      resolveFederatedName(ACCOUNT, 'lobstr.co')
+    ).resolves.toBeNull();
+  });
+
+  it('makes no request when the account has no home domain', async () => {
+    const fetchMock = stubFetch({});
+    await expect(resolveFederatedName(ACCOUNT, '')).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

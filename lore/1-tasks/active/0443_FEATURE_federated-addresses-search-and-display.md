@@ -27,6 +27,16 @@ history:
       direction (A) is browser-only, needs no backend and no storage, so it
       ships first; the original account-page direction (B) keeps the whole
       enrichment + SSRF cost and stays behind it. Activated for A.
+  - date: '2026-09-02'
+    status: active
+    who: karolkow
+    note: >
+      B rewritten from scratch on the search branch instead of shipping
+      separately: the same two hops already existed for A, so the reverse
+      direction is one resolver, one hook and one summary row. Live sample of
+      8 random accounts carrying `home_domain = lobstr.co`: 7 resolved to a
+      name, so the row is worth showing. The transaction source-account
+      surface stays in Future work — that response carries no `home_domain`.
 ---
 
 # FEATURE: SEP-2 federated addresses, both directions

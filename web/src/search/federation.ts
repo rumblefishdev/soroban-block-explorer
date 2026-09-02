@@ -116,11 +116,11 @@ async function lookupServer(
   return { server: server.href };
 }
 
-/** The federation server's URL for one forward query, built fresh per lookup. */
-function query(server: string, q: string): string {
+/** The federation server's URL for one query, built fresh per lookup. */
+function query(server: string, q: string, type: 'name' | 'id'): string {
   const url = new URL(server);
   url.searchParams.set('q', q);
-  url.searchParams.set('type', 'name');
+  url.searchParams.set('type', type);
   return url.toString();
 }
 
@@ -148,7 +148,7 @@ export async function resolveFederated(
   if ('kind' in found) return found;
 
   try {
-    const body = await getText(query(found.server, q), budgeted);
+    const body = await getText(query(found.server, q, 'name'), budgeted);
     const accountId = (JSON.parse(body) as { account_id?: unknown }).account_id;
     // The server is run by the domain owner and can answer with anything.
     // Shape-check before this value becomes a route.
@@ -164,5 +164,43 @@ export async function resolveFederated(
       kind: 'failed',
       reason: `The federation server for ${domain} did not resolve ${q}.`,
     };
+  }
+}
+
+/**
+ * Reverse (`type=id`): the federated address a domain claims for an account,
+ * or `null` when there is none.
+ *
+ * Only asked for accounts that set a `home_domain` on-ledger, which is what
+ * makes the answer trustworthy: the account names the domain, and the domain
+ * must name the account back inside its OWN namespace — without the suffix
+ * check any domain could claim an account into someone else's.
+ *
+ * Silent on failure, unlike the forward direction. Nobody typed this: it is
+ * an attribute the page shows when it exists, so its absence is the ordinary
+ * case and not a claim about anything (issue #363).
+ */
+export async function resolveFederatedName(
+  accountId: string,
+  homeDomain: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const domain = homeDomain.trim().toLowerCase();
+  if (domain.length === 0) return null;
+
+  const budgeted = budget(signal);
+  const found = await lookupServer(domain, budgeted);
+  if ('kind' in found) return null;
+
+  try {
+    const body = await getText(query(found.server, accountId, 'id'), budgeted);
+    const address = (JSON.parse(body) as { stellar_address?: unknown })
+      .stellar_address;
+    return typeof address === 'string' &&
+      address.toLowerCase().endsWith(`*${domain}`)
+      ? address
+      : null;
+  } catch {
+    return null;
   }
 }
