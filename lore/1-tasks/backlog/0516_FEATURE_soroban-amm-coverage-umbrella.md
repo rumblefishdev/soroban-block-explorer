@@ -209,6 +209,53 @@ the gap GROWING. It also wins on decode difficulty (one struct vs cross-event
 correlation), on discovery evidence in hand (factory + pair storage probed,
 see 0518), and it is what issue #405 asks for by name.
 
+## Sibling recon — stellar-prices-api (develop, read 2026-09-02)
+
+The prices project indexes the SAME three venues for OHLCV, events-only
+(no ledger state, `sync` skipped, no reserves). Their archive is a paid-for
+trap list for exactly our next steps; recorded here so no trap is walked
+twice. Their design also VALIDATES ours by contrast: multiple silent-zero
+incidents trace to events-as-the-only-source (their 0096: 536k Soroswap
+swaps → 0 candles, 0 alerts, because decoder AND guard keyed the same
+wrong topic) — our state-first-with-event-cross-checks stands.
+
+**Traps recorded there that hit OUR roadmap:**
+
+- **Phoenix grouping (their 0097/0099)**: group per-field events by
+  contiguity per (transaction, contract) and validate by PRESENCE of the
+  four required fields (sell_token, offer_amount, buy_token,
+  return_amount), capped at one swap's worth — NEVER by event count: a
+  `len >= 8` gate silently discarded 5,175 real 7-event swaps (~2.1%; the
+  `actual received amount` field is optional). Liquidity groups reject on
+  absent required fields.
+- **Phoenix has TWO XYK WASM hashes with identical interfaces** (their
+  0032/0034) — keying dispatch or discovery on wasm_hash silently drops a
+  pool family member. Phoenix stable pools: zero on mainnet, they keep a
+  periodic re-survey instead of dead code.
+- **Aquarius router `swap` SUMMARY events** (their 0087): recognizable by
+  an address-Vec at topic[1]; counting them alongside pool `trade` events
+  double-counts volume. Any event-side cross-check of ours must
+  discriminate the same way.
+- **Soroswap `/pools` API**: bearer-key auth, in ACTIVE use by that team —
+  the oracle-#1 key for 0518 exists in-house; ask them before asking the
+  vendor. Their registry-seed from it stayed a stopgap (current-set-only,
+  misses dead pools) — event discovery remained necessary.
+
+**Adopted into our method (0516-level):**
+
+1. An `unresolved_pools`-style GUARD TABLE: any pool-shaped activity from
+   a contract absent from the registry gets a row (contract, venue guess,
+   count, ledger range), with the invariant "empty after a clean forward
+   run". Generalises our per-vendor closure checks to every venue and
+   future factory. CRITICAL amendment from their 0096 post-mortem: the
+   guard's shape predicate must be derived INDEPENDENTLY of the decoder's
+   (theirs shared it, so one bug blinded both).
+2. Their live/backfill single-seam rule confirms ours (backfill-runner and
+   the indexer already share `parse_ledger` by construction) — keep it a
+   stated invariant.
+3. Real-sample fixtures for every extractor (their `dump-swap-events`
+   tool) — already our house practice; keep matching it per venue.
+
 ## Acceptance Criteria
 
 - [ ] shared model items 1–5 implemented and used by at least two adapters
