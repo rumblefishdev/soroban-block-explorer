@@ -171,6 +171,18 @@ table shape, the 0516 umbrella promise holding in practice.
   passes are in-DB (no S3) via small Rust one-offs (surrogates are not SQL-
   computable), closure from the vendor's own counter.
 
+## Deferred by decision (karolkow, 2026-09-02): one write-seam at the THIRD protocol
+
+Today each family rides its own `ParseOutput`/`StageInputs` field
+(`pool_instances`, `factory_pairs`) — N families, N fields, every seam
+compiler-forced by the exhaustive destructures. Decision 4a: DO NOT unify
+now; when the Phoenix adapter lands (third family), collapse the per-family
+vectors into one `Vec<PoolFamilyWrite>` enum seam and let stage match on
+the variant — the rule of three, and the depth-first principle's own
+mechanism ("the next protocol updates the model when its turn comes, and
+the diff then shows exactly what differed"). Recorded here AND in the
+wayfinder map so the Phoenix task inherits it as a step, not a rediscovery.
+
 ## Acceptance Criteria
 
 - [x] four-oracle table completed with evidence, absences stated (#1 keyed, risk stated)
