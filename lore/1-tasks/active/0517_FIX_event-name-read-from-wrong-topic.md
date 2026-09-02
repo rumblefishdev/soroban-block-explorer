@@ -123,6 +123,26 @@ need for the filter.
   mirroring the Rust rule, lives in `docs/backfills.md` § "Event-name
   backfill (task 0517)", with its zero-check.
 
+## Rule verified against production (2026-09-02, post-merge of PR #443)
+
+The rule was executed as SQL over the NULL population in three 1M-ledger
+windows (~987k rows, ~26% of the population, three eras):
+
+| Window (ledgers) | arm 2 (label+sym) | arm 3 (String name) | unresolved |
+| ---------------- | ----------------: | ------------------: | ---------: |
+| 63.3-64.3M       |           264,001 |              52,426 |      **0** |
+| 58.5-59.5M       |           114,803 |             232,509 |        442 |
+| 55-56M           |           128,253 |             195,112 |         23 |
+
+The 465 unresolved rows were inspected individually: their first topic is a
+MAP (`{allowee: …}` / `{assignee: …}` — a permissions protocol, 441+153
+rows across windows) or a bare ADDRESS — there is no name to lift, so NULL
+is the honest value and they land in the monitored arm by design. That
+protocol emits nothing in the fresh window, so the live warn stays quiet.
+The backfill SQL's `t0='string'` filter excludes them from the insert.
+Net: 100% of everything that HAS a name resolves; the residue is nameless
+by construction.
+
 ## Acceptance Criteria
 
 - [ ] Soroswap pair events carry names (`sync`, `swap`, `deposit`, `withdraw`,
