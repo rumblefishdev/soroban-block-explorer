@@ -20,6 +20,18 @@ describe('federatedDomain', () => {
     expect(federatedDomain('  a*sub.example.org  ')).toBe('sub.example.org');
   });
 
+  // The name shapes SEP-2 lists verbatim as valid: an email address and an
+  // E.164 phone number both carry characters a naive `\w+` would drop.
+  it.each([
+    ['a plain name', 'jed*stellar.org', 'stellar.org'],
+    ['an email as the name', 'bob@gmail.com*stellar.org', 'stellar.org'],
+    ['an E.164 phone number', '+14155550100*stellar.org', 'stellar.org'],
+    ['an internationalized domain', 'karol*münchen.de', 'münchen.de'],
+    ['a punycode domain', 'karol*xn--mnchen-3ya.de', 'xn--mnchen-3ya.de'],
+  ])('accepts %s', (_label, input, domain) => {
+    expect(federatedDomain(input)).toBe(domain);
+  });
+
   // The classifier is the gate on spending a network round-trip, so every
   // near-miss below must stay a miss.
   it.each([
@@ -28,6 +40,10 @@ describe('federatedDomain', () => {
     ['two stars', 'a*b*c.co'],
     ['no domain dot', 'karol*localhost'],
     ['hyphenated but dotless domain', 'not*a-domain'],
+    // SEP-2 excludes `>` from the username outright.
+    ['a `>` in the name', 'bo>b*stellar.org'],
+    // Stricter than SEP-2 on purpose — see the FEDERATED doc comment.
+    ['a single-label domain', 'karol*localhost'],
     ['numeric tld', 'karol*example.12'],
     ['whitespace inside', 'kar ol*lobstr.co'],
     ['empty name', '*lobstr.co'],

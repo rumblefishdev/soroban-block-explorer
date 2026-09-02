@@ -24,9 +24,22 @@ import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
  * `name*domain.tld`. Exactly one `*`, no whitespace, and a domain with at
  * least one dot and a plausible TLD — a query that merely contains a star
  * must not cost a network round-trip.
+ *
+ * Against SEP-2 verbatim: the username is "printable UTF-8 with whitespace
+ * and the following characters excluded: `*`, `>`" — hence `[^*\s>]`, which
+ * keeps the `@` of an email and the `+` of an E.164 phone number, both of
+ * which the spec lists as valid names. Unicode letters are matched so an
+ * internationalized domain (`münchen.de`) classifies; `fetch` converts it to
+ * punycode itself.
+ *
+ * Deliberately STRICTER than the spec in one place: SEP-2 allows "any valid
+ * RFC 1035 domain name", which includes single-label names like `localhost`.
+ * Those are rejected — this regex is the gate on spending two network
+ * round-trips, and a dotless string is far more likely to be someone's search
+ * term than an anchor domain.
  */
 const FEDERATED =
-  /^[^*\s]+\*((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})$/i;
+  /^[^*\s>]+\*((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+\p{L}{2,})$/iu;
 
 /** Budget for a whole lookup, both hops together. */
 const TIMEOUT_MS = 8_000;
