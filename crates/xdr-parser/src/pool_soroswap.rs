@@ -184,9 +184,17 @@ pub fn parse_soroswap_pair(pair: &str, storage: &Value) -> Option<SoroswapPairSt
             is.then(|| kv.get("value"))?
         })
     };
+    // The SEP-41 half mixes TWO key spellings in ONE instance (read from a
+    // real 55.4M-era ledger): `METADATA` is a BARE sym, while `TotalSupply`
+    // is a VEC-WRAPPED sym — the token-SDK enum-variant encoding, the same
+    // wrap Aquarius uses for every key. Accept both.
     let sym_key = |name: &str| -> Option<&Value> {
         entries.iter().find_map(|kv| {
-            let is = symbol(kv.get("key")?) == Some(name);
+            let k = kv.get("key")?;
+            let is = symbol(k) == Some(name)
+                || typed(k, "vec")
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| a.len() == 1 && symbol(&a[0]) == Some(name));
             is.then(|| kv.get("value"))?
         })
     };
@@ -369,7 +377,11 @@ mod tests {
             {"key": {"type": "u32", "value": 4},
              "value": {"type": "address", "value": "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2"}},
             {"key": {"type": "u32", "value": 7}, "value": {"type": "u32", "value": 0}},
-            {"key": {"type": "sym", "value": "TotalSupply"}, "value": {"type": "i128", "value": "1387420389"}},
+            // VEC-WRAPPED, verbatim from ledger 55,423,809 — the token-SDK
+            // enum encoding; a bare sym here was the fixture bug the local
+            // e2e caught (total_shares = 0 on every active pair).
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "TotalSupply"}]},
+             "value": {"type": "i128", "value": "1387420389"}},
             {"key": {"type": "sym", "value": "name"}, "value": {"type": "string", "value": "native-USDC Soroswap LP Token"}}
         ])
     }
