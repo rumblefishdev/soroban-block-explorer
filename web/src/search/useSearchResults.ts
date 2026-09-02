@@ -40,13 +40,6 @@ export const ENTITY_LABEL: Record<EntityType, string> = {
 
 interface UseSearchResultsParams {
   q: string;
-  /**
-   * Search a federated address as plain text instead of classifying it.
-   * The escape hatch behind the results page's "search for this as text"
-   * action — without it a query the classifier claims is a federated address
-   * can never reach the buckets, which is a dead end when the resolve fails.
-   */
-  asText?: boolean;
 }
 
 /**
@@ -89,11 +82,10 @@ export interface SearchResultsState {
 
 export function useSearchResults({
   q,
-  asText = false,
 }: UseSearchResultsParams): SearchResultsState {
   const debouncedRaw = useDebounced(q, DEFAULT_DEBOUNCE_MS);
   const effectiveQuery = debouncedRaw.trim();
-  const federated = asText ? null : federatedDomain(effectiveQuery);
+  const federated = federatedDomain(effectiveQuery);
   const enabled = effectiveQuery.length > 0 && federated == null;
 
   const query = useQuery({

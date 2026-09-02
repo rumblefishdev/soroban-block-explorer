@@ -32,27 +32,20 @@ export default function SearchResultsPage() {
     const nextParams = new URLSearchParams(params);
     if (next.length > 0) nextParams.set('q', next);
     else nextParams.delete('q');
-    // A new query starts classified again.
-    nextParams.delete('text');
     setParams(nextParams, { replace: true });
   }
-
-  // Escape hatch for the "search this as text" action below. Carried in the
-  // URL like the query itself — a shared /search link reproduces what the
-  // sender saw, and `writeQuery` drops the flag on any new query.
-  const asText = params.get('text') === '1';
 
   // The search hook classifies the query too and suppresses its own request
   // for a federated address, so the two never disagree about what the buckets
   // should be asked.
-  const state = useSearchResults({ q, asText });
+  const state = useSearchResults({ q });
 
   // SEP-2 federated address (`name*domain`) typed into search — task 0443.
   // `directRouteFor` cannot carry this: it is synchronous, and the resolve is
   // two network round-trips. It hooks in here instead, the one point the
   // app-shell bar, the home hero and a pasted `/search?q=` URL all converge
   // on, so neither caller needs to change.
-  const federated = useFederatedAddress(asText ? '' : q);
+  const federated = useFederatedAddress(q);
   const federatedFor = federated.domain;
   const failure =
     federated.data?.kind === 'failed' ? federated.data.reason : null;
@@ -159,32 +152,6 @@ export default function SearchResultsPage() {
                 {failure ?? `Resolving ${q.trim()} with ${federatedFor}…`}
               </Typography>
             </Stack>
-            {/* A failed resolve otherwise leaves a dead end: no results, no
-                next step. The obvious remaining action is the one the input
-                shape took away — search for the text itself. */}
-            {failure != null && (
-              <Box
-                component="button"
-                type="button"
-                onClick={() => {
-                  const nextParams = new URLSearchParams(params);
-                  nextParams.set('text', '1');
-                  setParams(nextParams, { replace: true });
-                }}
-                sx={(theme) => ({
-                  alignSelf: 'flex-start',
-                  background: 'none',
-                  border: 'none',
-                  p: 0,
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  font: 'inherit',
-                  color: theme.palette.text.primary,
-                })}
-              >
-                Search for “{q.trim()}” as text instead
-              </Box>
-            )}
           </Stack>
         )}
       </Paper>

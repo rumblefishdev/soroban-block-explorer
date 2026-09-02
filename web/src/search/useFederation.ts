@@ -1,7 +1,4 @@
-import {
-  DEFAULT_DEBOUNCE_MS,
-  useDebounced,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { useDebounced } from '@rumblefish/soroban-block-explorer-ui';
 import { useQuery } from '@tanstack/react-query';
 
 import { federationPolicy } from '../api/polling.js';
@@ -25,9 +22,18 @@ import type { FederationResolve } from './federation.js';
  */
 
 /**
+ * Longer than `DEFAULT_DEBOUNCE_MS` (300) on purpose — see the note on
+ * `useFederatedAddress`.
+ */
+const FEDERATION_DEBOUNCE_MS = 500;
+
+/**
  * Forward: a federated address the user typed → the account it names.
  *
- * Debounces and classifies here rather than taking both from the caller.
+ * Debounces and classifies here rather than taking both from the caller, and
+ * waits longer than the app-wide 300 ms: this is the one query that leaves for
+ * a host the typed text chooses, so a pause mid-word must not be enough to
+ * dial it.
  * Typing `bob*lobstr.com` passes through `bob*lobstr.co` — a real domain, a
  * valid federated shape, and not the one the user meant; undebounced it
  * receives a request and with it the viewer's IP. Owning the delay means no
@@ -41,7 +47,7 @@ export function useFederatedAddress(address: string): {
   domain: string | null;
   data: FederationResolve | undefined;
 } {
-  const settled = useDebounced(address, DEFAULT_DEBOUNCE_MS).trim();
+  const settled = useDebounced(address, FEDERATION_DEBOUNCE_MS).trim();
   const domain = federatedDomain(settled);
   const query = useQuery({
     queryKey: ['federatedAddress', settled],

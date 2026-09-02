@@ -8,6 +8,7 @@ import { routes } from '../router/routes.js';
 
 import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
+import { useFederatedAddress } from './useFederation.js';
 import { useSearchResults } from './useSearchResults.js';
 
 interface GlobalSearchBarProps {
@@ -30,7 +31,18 @@ export function GlobalSearchBar({
   // karol*lobstr.co" — the one claim that is false, since the results page
   // goes on to resolve it (task 0443).
   const state = useSearchResults({ q });
-  const federatedFor = state.federatedDomain;
+
+  // Resolved here rather than only on the results page: every other input in
+  // this bar shows what it found once typing settles, and a row saying "press
+  // Enter" was the one place that asked for a second step. The hook waits
+  // 500 ms instead of the usual 300 — this request goes to a host the typed
+  // text chooses, so a pause mid-word must not be enough to dial it.
+  const federated = useFederatedAddress(q);
+  const federatedFor = federated.domain;
+  const resolved =
+    federated.data?.kind === 'resolved' ? federated.data.accountId : null;
+  const failure =
+    federated.data?.kind === 'failed' ? federated.data.reason : null;
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
@@ -47,6 +59,11 @@ export function GlobalSearchBar({
 
   useEffect(() => {
     registerEnterHandler(() => {
+      if (resolved != null) {
+        navigate(routes.account(resolved));
+        onDismiss();
+        return true;
+      }
       const picked = state.hitsForActiveTab[highlightedIndex];
       if (picked) {
         selectHitByKeyboard(picked);
@@ -56,6 +73,9 @@ export function GlobalSearchBar({
     });
   }, [
     registerEnterHandler,
+    resolved,
+    navigate,
+    onDismiss,
     state.hitsForActiveTab,
     highlightedIndex,
     selectHitByKeyboard,
@@ -111,15 +131,19 @@ export function GlobalSearchBar({
           {federatedFor != null ? (
             // A row, not a sentence: this panel is a listbox of clickable
             // results, and a static line would be reachable by Enter only —
-            // dead to anyone who got here with the mouse.
+            // dead to anyone who got here with the mouse. The row is disabled
+            // until there is somewhere to go, so a click mid-resolve cannot
+            // land on the wrong page.
             <Box
               component="button"
               type="button"
               role="option"
               aria-selected={false}
+              disabled={resolved == null}
               onClick={() => {
+                if (resolved == null) return;
                 onDismiss();
-                navigate(routes.search(q.trim()));
+                navigate(routes.account(resolved));
               }}
               sx={(theme) => ({
                 display: 'block',
@@ -129,8 +153,13 @@ export function GlobalSearchBar({
                 py: 1.5,
                 border: 'none',
                 background: 'none',
-                cursor: 'pointer',
-                '&:hover': { backgroundColor: theme.palette.surface.grayHover },
+                cursor: resolved == null ? 'default' : 'pointer',
+                '&:hover': {
+                  backgroundColor:
+                    resolved == null
+                      ? 'transparent'
+                      : theme.palette.surface.grayHover,
+                },
                 // Same ring as SearchResultRow — this synthetic row is a
                 // button, so it must draw its own.
                 '&:focus-visible': {
@@ -140,20 +169,24 @@ export function GlobalSearchBar({
               })}
             >
               <Typography variant="bodySmMedium" component="span">
-                {q.trim()}
+                {resolved ?? q.trim()}
               </Typography>
               <Typography
                 variant="bodyXsRegular"
                 component="span"
+                role="status"
                 sx={(theme) => ({
                   display: 'block',
-                  color: theme.palette.text.tertiary,
+                  color:
+                    failure != null
+                      ? theme.palette.text.error
+                      : theme.palette.text.tertiary,
                 })}
               >
-                {/* "press Enter" is honoured two files away: the submit
-                    handlers in AppShell/HomeHero fall through to
-                    routes.search(q), where the results page resolves. */}
-                Resolve this federated address with {federatedFor} — press Enter
+                {failure ??
+                  (resolved != null
+                    ? `${q.trim()} · ${federatedFor}`
+                    : `Resolving ${q.trim()} with ${federatedFor}…`)}
               </Typography>
             </Box>
           ) : (
