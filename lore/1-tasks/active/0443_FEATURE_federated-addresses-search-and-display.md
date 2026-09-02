@@ -296,6 +296,34 @@ answers `Not found`, which is why the row is absent rather than errored.
       browser-side display logic.
 - [x] **API types regenerated** — N/A, no backend change.
 
+## Measured limitation — federation servers that omit CORS
+
+SEP-2 requires `Access-Control-Allow-Origin: *` on **every** federation
+response. Not every server obeys, and a browser-only implementation simply
+gets nothing from those: the request is blocked before our code sees it, so
+the address silently has no name.
+
+Measured 2026-09-02 with real GET requests (a HEAD probe is useless — several
+of these reject HEAD):
+
+| Domain | Federation server | CORS |
+|---|---|---|
+| `lobstr.co` | `lobstr.co/federation/` | yes, on 200 and 404 |
+| `staging.lobstr.co` | `staging.lobstr.co/federation/` | yes |
+| `sl8.online` | `stellar.sl8.online/sep2` | yes |
+| `stellarterm.com` | `fed.stellarterm.com/federation/` | **no** |
+| `sanbeban.com` | `wallet.sanbeban.com/api/federation/` | **no** |
+| `bitgo.com` | `www.bitgo.com/api/v2/xlm/federation` | no response at all |
+
+Weighted by accounts carrying that `home_domain`, the two compliant domains
+cover 881 118 of the 1 055 369 accounts that declare one — about 84%.
+`stellarterm.com` (15 343), `bitgo.com` (25 428) and `sanbeban.com` (5 326)
+are the visible losses, roughly 4%.
+
+The only fix is a server-side proxy, which re-introduces exactly the SSRF
+surface scope A was designed to avoid, for a few percent of accounts. Not
+worth it today; recorded so the gap is known rather than mistaken for a bug.
+
 ## Future work
 
 - ~~The transaction source-account row still shows the bare StrKey.~~ **Done
