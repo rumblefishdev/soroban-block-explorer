@@ -45,8 +45,8 @@ history:
 > **Filed in error.** Three tasks already owned this defect when 0531 was
 > created:
 >
-> - **0497** — `RESEARCH: retire repair-tier1 — move every MIN-semantics copy off
-RMT state tables`. The parent. Its "Questions to answer" are precisely what
+> - **0497** — the parent: "retire repair-tier1 — move every MIN-semantics copy
+>   off RMT state tables". Its "Questions to answer" are precisely what
 >   this session measured, and **the measurements have been moved there** under
 >   "Findings — session of 2026-09-01/02".
 > - **0232** — per-column live-mode drift mitigation for all six columns; already
