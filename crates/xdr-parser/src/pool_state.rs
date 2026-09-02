@@ -189,6 +189,12 @@ pub fn extract_plane_pool_data(
 pub struct ExtractedPoolInstance {
     pub state: PoolInstanceState,
     pub ledger_sequence: u32,
+    /// The entry was CREATED in this ledger (vs updated/restored). Load-bearing
+    /// for the router-less registration arm: a genuine registration deploys
+    /// and initialises the pool in ONE transaction (497/497 measured), so its
+    /// instance is always a creation — while an attacker inducing a same-ledger
+    /// instance write on an existing victim pool can only produce an update.
+    pub created: bool,
 }
 
 /// Extract router-family pool instances from ledger-entry changes.
@@ -239,6 +245,7 @@ pub fn extract_pool_instances(
             out.push(ExtractedPoolInstance {
                 state,
                 ledger_sequence: change.ledger_sequence,
+                created: change.change_type == "created",
             });
         }
     }

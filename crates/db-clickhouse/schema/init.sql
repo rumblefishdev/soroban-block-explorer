@@ -692,7 +692,8 @@ ORDER BY (pool_id, plane_id, ledger_sequence);
 -- POOL ITSELF declares here. `plane_id` is always populated — `Plane` is
 -- the shape key that recognises an instance as a pool at all. `Router` is
 -- OPTIONAL: five older deployments write none (23 pools), and their
--- registrations are accepted UNVERIFIED with a warn (see the acceptance arm
+-- registrations are accepted UNVERIFIED with a warn, and only when the
+-- instance is CREATED in the registering ledger (see the acceptance arm
 -- in `stage.rs`). `share_token_id = 0` is structural for concentrated
 -- pools, which never mint one.
 CREATE TABLE IF NOT EXISTS pool_instance_state (

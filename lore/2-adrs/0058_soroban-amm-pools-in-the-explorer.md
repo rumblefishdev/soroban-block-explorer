@@ -133,9 +133,15 @@ either way: the protocol docs say nothing about trusting entry contents, the
 vendor's docs describe the roles without promising the key, and the vendor's
 source is unreachable. So those pools are indexed and their registrations
 accepted UNVERIFIED rather than refused — a missing key is an older contract
-version, not a forgery. Residual, stated rather than hidden: the registry row
-of a pool that declares no router is forgeable; every such pool measured is a
-dead deployment with no flow event ever.
+version, not a forgery. The acceptance is gated on the instance being CREATED
+in the registering ledger (decision 2026-09-02): every genuine registration
+creates it there (497/497 measured), while the induced forgery — touch an
+existing router-less pool, emit a forged `add_pool` in the same transaction —
+can only produce an update, and is refused as exactly that signature. The
+remaining residual is self-description only: a NEW router-less contract
+truthfully describing itself can still register as junk, which permissionless
+listing cannot prevent; every router-less pool measured is a dead deployment
+with no flow event ever.
 
 **AMENDED 2026-09-01 (review of PR #438).** This decision originally scoped the
 table to the share-token relation alone (`pool_share_tokens`). It now carries
@@ -148,7 +154,10 @@ whose `plane_id` matches what the pool itself declares here. The same review
 added the symmetric write-side rule — a registration is accepted when the
 named pool's instance declares the emitter as its `Router`; an instance with
 no `Router` key at all (five older deployments, 23 pools, read from chain
-2026-09-01) is accepted UNVERIFIED with a warn, because a missing key is an
+2026-09-01) is accepted UNVERIFIED with a warn — but only when the instance
+is CREATED in the registering ledger (497/497 measured registrations are
+creations; a merely-touched instance is the induced-forgery signature and is
+refused, decision 2026-09-02) — because a missing key is an
 older contract version, not evidence of a forgery, and dropping a real pool
 is the failure the reject taxonomy exists to prevent. A second side table
 was considered and rejected: the facts share a source, a grain and a version

@@ -3166,6 +3166,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
             reserves: Vec::new(),
         },
         ledger_sequence: 10,
+        created: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3246,6 +3247,7 @@ fn pool_instance_declaring(
             reserves: Vec::new(),
         },
         ledger_sequence: 10,
+        created: true,
     }
 }
 
@@ -3319,6 +3321,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
             reserves: vec!["777".into(), "888".into()],
         },
         ledger_sequence: 10,
+        created: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3456,6 +3459,52 @@ fn a_registration_for_a_pool_that_declares_no_router_is_accepted() {
     assert_eq!(inst.plane_id, ids::contract_id(PLANE));
 }
 
+/// The induced-forgery signature (decision karolkow 2026-09-02): a
+/// router-less pool whose instance was only TOUCHED this ledger — not
+/// created — is exactly what an attacker produces by poking an existing
+/// victim pool in the same transaction as a forged `add_pool`. No genuine
+/// registration ever looks like this (497/497 measured registrations create
+/// the instance in the registering transaction), so the registration is
+/// refused. The instance STATE still stages — the declaration is authentic
+/// regardless of who emitted the event.
+#[test]
+fn a_routerless_registration_with_a_merely_touched_instance_is_refused() {
+    const VICTIM: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
+    const ATTACKER: &str = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
+    const PLANE: &str = "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY";
+
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x76);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![add_pool_event(
+            &tx.hash,
+            ATTACKER,
+            VICTIM,
+            EventSource::TxLevel,
+        )],
+    )];
+    let mut touched = pool_instance_declaring(VICTIM, ATTACKER);
+    touched.state.router = None; // the older, router-less contract shape
+    touched.created = false; // an UPDATE — the victim already existed
+    let instances = [touched];
+
+    let staged = stage_registration(&ledger, &tx, &events, &instances);
+
+    assert!(
+        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "a touched-not-created router-less registration is the forgery \
+         signature and must not become a registry row"
+    );
+    assert!(
+        staged
+            .pool_instance_state_rows
+            .iter()
+            .any(|r| r.plane_id == ids::contract_id(PLANE)),
+        "the pool's own declaration still stages — it is authentic state"
+    );
+}
+
 /// The diagnostic container carries copies of events from FAILED transactions
 /// (task 0182). A registration that never applied must not become a pool —
 /// every sibling detector filters this container; review #438 found this one
@@ -3518,6 +3567,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             reserves: Vec::new(),
         },
         ledger_sequence: 10,
+        created: true,
     };
     // A concentrated-style instance (no share token) stages its PLANE, with
     // the structural share_token_id = 0.
@@ -3532,6 +3582,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             reserves: vec!["4112908590".into(), "250000000000".into()],
         },
         ledger_sequence: 10,
+        created: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {

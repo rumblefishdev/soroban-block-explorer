@@ -293,8 +293,11 @@ names its pool in a payload the emitter chooses freely:
   `add_pool` naming a REAL pool and replace its registry row wholesale, since
   `liquidity_pools` is an RMT keyed on `pool_id` and versioned by ledger.
   One documented exception: an instance with no `Router` key at all (five
-  older deployments, 23 pools) is accepted UNVERIFIED with a warn — a
-  missing key is an older contract version, not evidence of a forgery.
+  older deployments, 23 pools) is accepted UNVERIFIED with a warn, and only
+  when the instance is CREATED in the registering ledger — every genuine
+  registration creates it there (497/497 measured), while a merely-touched
+  instance is the induced-forgery signature and is refused. A missing key is
+  an older contract version, not evidence of a forgery.
 - **Both reserve writers are folded together** before insert. The plane arm
   and the concentrated-instance arm can each emit a row for the same
   `(pool, ledger)`, and the parser-side folds cannot see each other; a

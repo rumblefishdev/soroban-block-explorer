@@ -1088,30 +1088,56 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // real pools and cannot be authenticated — the chain simply never recorded
     // who registered them — so they are ACCEPTED and counted, never refused: a
     // missing key is an older contract, not a forgery, and dropping a real pool
-    // is the failure this module's reject taxonomy exists to prevent. The
-    // residual is bounded and worth stating: the registry row of a pool whose
-    // instance declares no router is forgeable. Every such pool measured is a
-    // dead deployment with no flow event ever.
-    let declared_router: HashMap<&str, Option<&str>> = pool_instances
-        .iter()
-        .map(|i| (i.state.pool.as_str(), i.state.router.as_deref()))
-        .collect();
+    // is the failure this module's reject taxonomy exists to prevent.
+    //
+    // The acceptance is gated on the instance being CREATED in this ledger
+    // (decision karolkow 2026-09-02): a genuine registration deploys and
+    // initialises the pool in one transaction (497/497 measured, dead
+    // deployments included), so its instance is always a creation. Without
+    // the gate the arm was inducibly forgeable — one transaction could touch
+    // an existing router-less pool (forcing an `updated` instance write) and
+    // emit a forged `add_pool` naming it. A router-less registration whose
+    // instance was merely touched is exactly that signature and is refused.
+    // The map ORs `created` across the ledger's writes, so a creation
+    // followed by a same-ledger update still qualifies.
+    let declared_router: HashMap<&str, (Option<&str>, bool)> = {
+        let mut m: HashMap<&str, (Option<&str>, bool)> = HashMap::new();
+        for i in pool_instances {
+            let e = m.entry(i.state.pool.as_str()).or_insert((None, false));
+            e.0 = i.state.router.as_deref();
+            e.1 |= i.created;
+        }
+        m
+    };
     for reg in xdr_parser::pool_router::detect_pool_registrations(events) {
         match declared_router.get(reg.event.pool.as_str()) {
-            Some(&Some(router)) if router == reg.router => {}
-            Some(&None) => tracing::warn!(
+            Some(&(Some(router), _)) if router == reg.router => {}
+            Some(&(None, true)) => tracing::warn!(
                 ledger_sequence = ledger.sequence,
                 pool = %reg.event.pool,
                 emitter = %reg.router,
                 "add_pool registration accepted UNVERIFIED — the named pool's \
-                 instance declares no router (older contract version)"
+                 instance declares no router (older contract version) and was \
+                 created in this ledger"
             ),
+            Some(&(None, false)) => {
+                tracing::warn!(
+                    ledger_sequence = ledger.sequence,
+                    pool = %reg.event.pool,
+                    emitter = %reg.router,
+                    "add_pool registration refused — router-less pool's \
+                     instance was only TOUCHED this ledger, not created: the \
+                     induced-forgery signature (no genuine registration ever \
+                     looks like this)"
+                );
+                continue;
+            }
             found => {
                 tracing::warn!(
                     ledger_sequence = ledger.sequence,
                     pool = %reg.event.pool,
                     emitter = %reg.router,
-                    declared_router = ?found.copied().flatten(),
+                    declared_router = ?found.and_then(|f| f.0),
                     "add_pool registration refused — the named pool does not declare \
                      this emitter as its router"
                 );
