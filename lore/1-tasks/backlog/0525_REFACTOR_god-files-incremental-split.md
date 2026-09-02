@@ -49,7 +49,7 @@ Measured 2026-08-31 (production lines, tests already excluded where split):
 | `crates/xdr-parser/src/invocation.rs`                         |                                        1,580 |
 | `crates/enrichment-shared/src/nft_token_uri/client.rs`        |                                        1,572 |
 | `crates/api/src/assets/queries.rs`                            |                                        1,362 |
-| `crates/api/src/liquidity_pools/handlers.rs`                  |          ~1,240 (tests extracted in 0374) |
+| `crates/api/src/liquidity_pools/handlers.rs`                  |             ~1,240 (tests extracted in 0374) |
 | `crates/api/src/contracts/queries.rs`                         |                                        1,245 |
 | `web/src/pages/transaction-detail/op-card/ExecutionTrace.tsx` |                                        1,000 |
 
