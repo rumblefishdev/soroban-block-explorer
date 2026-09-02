@@ -2,7 +2,7 @@
 id: '0517'
 title: 'Event name is read from topics[0]; protocols that label there lose it'
 type: FIX
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0516', '0518', '0008']
 tags: [backend, xdr-parser, clickhouse, priority-high, effort-medium]
@@ -15,6 +15,16 @@ history:
       Measured on production while scoping 0516. Correctness bug for all
       Soroban events, not only AMMs — filed separately so it is not gated on
       AMM work. Shape was documented in 0008 before the parser was written.
+  - date: '2026-09-02'
+    status: active
+    who: karolkow
+    note: >
+      Activated after 0374's write half shipped. Pre-implementation research
+      re-measured the NULL population on two 1M-ledger windows: the planned
+      sym-fallback rule alone would miss the whole Phoenix family (both
+      topics are String there), and a NEW label-convention protocol
+      (BlendStrategy) appeared. Rule extended to four arms; the protocol
+      label stays in topics_xdr (extract on demand, never copy).
 ---
 
 # Event name read from the wrong topic
