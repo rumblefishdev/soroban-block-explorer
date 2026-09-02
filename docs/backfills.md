@@ -604,6 +604,86 @@ detectable tie. The arbiter is the network:
 This is the same tooling as the one-off 0463 seed; the seed is one-off, the
 reconciliation is not.
 
+## Soroban-AMM pool passes (task 0374)
+
+Run only AFTER the 0374 DDL + indexer deploy (see the deploy-order gotcha in
+[deployment.md](./deployment.md) — reversing the order is the 0310 outage
+class). Three catch-ups, then one closure check:
+
+1. **Pool registry** — one-off generator, deliberately not in the tree
+   (a one-off is not a maintained surface). Full workflow — restore, harvest,
+   generate, insert:
+
+   ```bash
+   # restore the generator source verbatim
+   git show 082ee364:crates/db-clickhouse/src/bin/gen_pool_registry_backfill.rs \
+     > crates/db-clickhouse/src/bin/gen_pool_registry_backfill.rs
+   # harvest the corpus AFTER the live writer is deployed (step-4 ordering
+   # rule: the corpus must cover everything up to the writer's start)
+   chq "SELECT ledger_sequence, event_index, topics_xdr, data_xdr
+        FROM soroban_events WHERE signature='add_pool'
+        ORDER BY ledger_sequence, event_index
+        FORMAT JSONEachRow" > /tmp/add_pool_corpus.jsonl
+   # generate the INSERT, then run it via chq / clickhouse-client
+   cargo run -p db-clickhouse --bin gen_pool_registry_backfill \
+     /tmp/add_pool_corpus.jsonl > /tmp/pool_registry_backfill.sql
+   ```
+
+   Two adjustments the resurrected source needs before running (it predates
+   later schema decisions):
+
+   - drop `share_token_id` from its INSERT column list — the column is
+     removed from `liquidity_pools` by the 0374 DDL;
+   - make it REFUSE duplicate registrations (one GROUP BY on the pool
+     address): the generator cannot perform the live writer's router
+     corroboration (instance storage is not in `soroban_events`), so a
+     forged duplicate `add_pool` naming an already-registered pool would
+     beat the genuine row on RMT merge. Zero duplicates measured
+     2026-09-01; this guards the window between that measurement and the
+     writer's start.
+
+   Emits `liquidity_pools` rows (pool_kind=1); idempotent, safe to re-run.
+
+2. **Reserve history + instance state** — historical re-parse of the soroban
+   window with the new indexer (`backfill-runner run` over the range),
+   filling `pool_state_changes` + `pool_instance_state` from ledger state.
+   `pool_instance_state.plane_id` is load-bearing: reserve reads keep only
+   rows whose plane matches what the pool itself declares, so a pool with no
+   instance row shows no reserves until this pass covers it.
+3. **Classic `legs` backfill** — one-shot pass reading the legacy pair
+   columns and emitting rows with `legs` filled, versioned on each row's own
+   `last_updated_ledger` (task 0374 legs-migration step 2).
+
+**Window-closure check (mandatory)** — proves no registration slipped between
+the backfill's snapshot and the live writer's start. A cardinality diff is
+blind to substitution (one missing + one extra = 0), so the check reconciles
+the canonical pool-id SETS in both directions — a pool's registry `pool_id`
+is the 32-byte payload of its `C...` address, which ClickHouse can derive
+(`base32Decode`, strkey layout: 1 version byte + 32 payload + 2 checksum):
+
+```sql
+-- registered on chain but missing from the registry — MUST return 0 rows
+SELECT DISTINCT JSONExtractString(data_xdr,'value',1,'value') AS missing_pool
+FROM soroban_events WHERE signature = 'add_pool'
+  AND toFixedString(substring(base32Decode(
+        JSONExtractString(data_xdr,'value',1,'value')), 2, 32), 32)
+      NOT IN (SELECT pool_id FROM liquidity_pools WHERE pool_kind = 1);
+
+-- in the registry but never registered on chain — MUST return 0 rows
+SELECT hex(pool_id) AS extra_pool
+FROM liquidity_pools WHERE pool_kind = 1
+  AND pool_id NOT IN (
+    SELECT toFixedString(substring(base32Decode(
+             JSONExtractString(data_xdr,'value',1,'value')), 2, 32), 32)
+    FROM soroban_events WHERE signature = 'add_pool');
+```
+
+Any `missing_pool` → re-run the generator (idempotent) and re-check. Any
+`extra_pool` → investigate before proceeding (a row nothing on chain
+registered should not exist).
+Verification criteria for the deployed result live in task 0374's
+final-phase notes.
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)

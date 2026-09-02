@@ -92,6 +92,8 @@ struct TableInserts {
     op_pools: Option<Insert<OperationPoolRow>>,
     lp_amounts: Option<Insert<LpOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
+    pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
+    pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
     operations: Option<Insert<OperationAppearanceRow>>,
@@ -175,123 +177,173 @@ impl PartitionWriter {
         // Hold the ledger row(s) back as commit marker.
         self.ledger_rows.append(&mut staged.ledger_rows);
 
+        // EXHAUSTIVE destructure — the other half of `commit()`'s invariant
+        // (three-lens review, 2026-09-01): a future `StagedLedger` row-vec
+        // that never reaches a `write_rows` call refuses to compile here,
+        // instead of being staged and dropped silently one hop upstream of
+        // the bug class the 0374 e2e caught in `commit()`.
+        let StagedLedger {
+            ledger_sequence: _,
+            ledger_rows: _,
+            account_rows,
+            account_entry_state_rows,
+            wasm_rows,
+            contract_rows,
+            metadata_rows,
+            transaction_rows,
+            hash_index_rows,
+            participant_rows,
+            pool_rows,
+            pool_instance_state_rows,
+            pool_state_change_rows,
+            snapshot_rows,
+            lp_position_rows,
+            op_rows,
+            op_asset_rows,
+            op_pool_rows,
+            lp_amount_rows,
+            event_rows,
+            invocation_rows,
+            asset_rows,
+            asset_sac_rows,
+            nft_rows,
+            nft_ownership_rows,
+            nft_pending_rows,
+            nft_ownership_pending_rows,
+            unified_balance_rows,
+        } = staged;
+
         write_rows(
             &self.client,
             &mut self.inserts.accounts,
             "accounts",
-            &staged.account_rows,
+            &account_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.account_entry_state,
             "account_entry_state",
-            &staged.account_entry_state_rows,
+            &account_entry_state_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.wasm,
             "wasm_interface_metadata",
-            &staged.wasm_rows,
+            &wasm_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.contracts,
             "soroban_contracts",
-            &staged.contract_rows,
+            &contract_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.metadata,
             "soroban_contract_metadata",
-            &staged.metadata_rows,
+            &metadata_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.transactions,
             "transactions",
-            &staged.transaction_rows,
+            &transaction_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.hash_index,
             "transaction_hash_index",
-            &staged.hash_index_rows,
+            &hash_index_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.participants,
             "transaction_participants",
-            &staged.participant_rows,
+            &participant_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.op_assets,
             "operation_asset_appearances",
-            &staged.op_asset_rows,
+            &op_asset_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.op_pools,
             "operation_pools",
-            &staged.op_pool_rows,
+            &op_pool_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.lp_amounts,
             "lp_operation_amounts",
-            &staged.lp_amount_rows,
+            &lp_amount_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.pools,
             "liquidity_pools",
-            &staged.pool_rows,
+            &pool_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.pool_instance_state,
+            "pool_instance_state",
+            &pool_instance_state_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.pool_state_changes,
+            "pool_state_changes",
+            &pool_state_change_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.snapshots,
             "liquidity_pool_snapshots",
-            &staged.snapshot_rows,
+            &snapshot_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.lp_positions,
             "lp_positions",
-            &staged.lp_position_rows,
+            &lp_position_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.operations,
             "operations_appearances",
-            &staged.op_rows,
+            &op_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.events,
             "soroban_events",
-            &staged.event_rows,
+            &event_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.invocations,
             "soroban_invocations_appearances",
-            &staged.invocation_rows,
+            &invocation_rows,
         )
         .await?;
 
@@ -299,29 +351,23 @@ impl PartitionWriter {
             &self.client,
             &mut self.inserts.assets,
             "assets",
-            &staged.asset_rows,
+            &asset_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.asset_sac,
             "asset_sac",
-            &staged.asset_sac_rows,
+            &asset_sac_rows,
         )
         .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.nfts,
-            "nfts",
-            &staged.nft_rows,
-        )
-        .await?;
+        write_rows(&self.client, &mut self.inserts.nfts, "nfts", &nft_rows).await?;
 
         write_rows(
             &self.client,
             &mut self.inserts.nft_ownership,
             "nft_ownership",
-            &staged.nft_ownership_rows,
+            &nft_ownership_rows,
         )
         .await?;
         // Task 0217 / 0220 — quarantine inserts. Slot stays `None` (and
@@ -331,21 +377,21 @@ impl PartitionWriter {
             &self.client,
             &mut self.inserts.nfts_pending,
             "nfts_pending",
-            &staged.nft_pending_rows,
+            &nft_pending_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.nft_ownership_pending,
             "nft_ownership_pending",
-            &staged.nft_ownership_pending_rows,
+            &nft_ownership_pending_rows,
         )
         .await?;
         write_rows(
             &self.client,
             &mut self.inserts.unified_balances,
             "balances",
-            &staged.unified_balance_rows,
+            &unified_balance_rows,
         )
         .await?;
 
@@ -367,36 +413,77 @@ impl PartitionWriter {
         // PG's write order (accounts → wasm → contracts → tx → hash
         // index → participants → pools/snapshots/positions → ops →
         // events → invocations → assets → nfts/ownership → balances).
-        end(self.inserts.accounts).await?;
-        end(self.inserts.account_entry_state).await?;
-        end(self.inserts.wasm).await?;
-        end(self.inserts.contracts).await?;
-        end(self.inserts.metadata).await?;
-        end(self.inserts.transactions).await?;
-        end(self.inserts.hash_index).await?;
-        end(self.inserts.participants).await?;
-        end(self.inserts.op_assets).await?;
-        end(self.inserts.op_pools).await?;
-        end(self.inserts.lp_amounts).await?;
-        end(self.inserts.pools).await?;
-        end(self.inserts.snapshots).await?;
-        end(self.inserts.lp_positions).await?;
-        end(self.inserts.operations).await?;
-        end(self.inserts.events).await?;
-        end(self.inserts.invocations).await?;
-        end(self.inserts.assets).await?;
-        end(self.inserts.asset_sac).await?;
-        end(self.inserts.nfts).await?;
-        end(self.inserts.nft_ownership).await?;
+        //
+        // EXHAUSTIVE destructure, deliberately no `..`: an insert that is
+        // written but never ended buffers its rows and drops them SILENTLY
+        // on drop — the ledgers marker still lands, so the loss is
+        // invisible. That exact bug shipped twice (the instance-state side
+        // table and
+        // pool_state_changes were streamed by `write_ledger` but missing
+        // from this list; caught by the task 0374 full-pipeline e2e, never
+        // by unit tests, which stop at staging). With the destructure the
+        // compiler refuses a new `TableInserts` field until someone decides
+        // where it drains.
+        let TableInserts {
+            accounts,
+            account_entry_state,
+            wasm,
+            contracts,
+            metadata,
+            transactions,
+            hash_index,
+            participants,
+            op_assets,
+            op_pools,
+            lp_amounts,
+            pools,
+            pool_instance_state,
+            pool_state_changes,
+            snapshots,
+            lp_positions,
+            operations,
+            events,
+            invocations,
+            assets,
+            asset_sac,
+            nfts,
+            nft_ownership,
+            nfts_pending,
+            nft_ownership_pending,
+            unified_balances,
+        } = self.inserts;
+        end(accounts).await?;
+        end(account_entry_state).await?;
+        end(wasm).await?;
+        end(contracts).await?;
+        end(metadata).await?;
+        end(transactions).await?;
+        end(hash_index).await?;
+        end(participants).await?;
+        end(op_assets).await?;
+        end(op_pools).await?;
+        end(lp_amounts).await?;
+        end(pools).await?;
+        end(pool_instance_state).await?;
+        end(pool_state_changes).await?;
+        end(snapshots).await?;
+        end(lp_positions).await?;
+        end(operations).await?;
+        end(events).await?;
+        end(invocations).await?;
+        end(assets).await?;
+        end(asset_sac).await?;
+        end(nfts).await?;
+        end(nft_ownership).await?;
         // Task 0217 / 0220 — drain quarantine inserts in the same
         // pre-`ledgers` step. They share the commit-marker guarantee:
         // a partial commit that fails between any of these and the
         // final `ledgers` write produces no `ledgers` row for the
         // partition, so the resume path re-does it cleanly. RMT
         // dedupes the orphan rows on the next merge.
-        end(self.inserts.nfts_pending).await?;
-        end(self.inserts.nft_ownership_pending).await?;
-        end(self.inserts.unified_balances).await?;
+        end(nfts_pending).await?;
+        end(nft_ownership_pending).await?;
+        end(unified_balances).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every
         // buffered row, end the request.

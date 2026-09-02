@@ -441,7 +441,6 @@ pub struct ExtractedLiquidityPool {
     pub fee_bps: i32,
     pub reserves: serde_json::Value,
     pub total_shares: String,
-    pub tvl: Option<String>,
     /// Set on pool creation only. `None` for updates.
     pub created_at_ledger: Option<u32>,
     /// Updated on every change. Watermark column.
@@ -459,9 +458,6 @@ pub struct ExtractedLiquidityPoolSnapshot {
     pub created_at: i64,
     pub reserves: serde_json::Value,
     pub total_shares: String,
-    pub tvl: Option<String>,
-    pub volume: Option<String>,
-    pub fee_revenue: Option<String>,
 }
 
 /// Detected asset from contract deployments or classic assets.
