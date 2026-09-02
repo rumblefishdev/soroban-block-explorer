@@ -5,7 +5,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
 
 import { directRouteFor } from '../search/directRouteFor.js';
-import { routeForHit } from '../search/routeForHit.js';
 import { SearchResultsView } from '../search/SearchResultsView.js';
 import { useSearchResults } from '../search/useSearchResults.js';
 
@@ -28,17 +27,14 @@ export default function SearchResultsPage() {
     }
   }, [q, navigate]);
 
-  // Singleton auto-navigation (task 0271): when broad search returns
-  // exactly one hit across all entity buckets, treat it as a redirect
-  // and navigate straight to the detail page. `routeForHit` already
-  // handles every entity type (asset uses route_token, NFT uses
-  // composite contract_id+token_id, others use identifier).
-  useEffect(() => {
-    if (state.isFetching || state.totalCount !== 1) return;
-    const [singleton] = state.hitsForActiveTab;
-    if (!singleton) return;
-    navigate(routeForHit(singleton), { replace: true });
-  }, [state.isFetching, state.totalCount, state.hitsForActiveTab, navigate]);
+  // No singleton auto-navigation. Task 0271 sent a one-hit broad search
+  // straight to that hit; 0527 withdrew it — it took the page away before
+  // the match could be read, and `replace: true` meant Back could not bring
+  // it back. Accepted cost: a pasted full tx hash or StrKey also matched
+  // exactly one row and rode this effect, so it now stops on a one-row
+  // results page — one click from the detail page. Only a bare ledger
+  // sequence still redirects directly (`directRouteFor` above); /v1/search
+  // has had no redirect branch since 0271.
 
   return (
     <Stack spacing={3} sx={{ py: 2 }}>
