@@ -64,6 +64,11 @@ pub struct PoolInstanceState {
     /// `TokenShare` — the share token as state. `None` is STRUCTURAL for
     /// concentrated pools, which have no such key.
     pub token_share: Option<String>,
+    /// `TotalShares` — the outstanding share supply, raw u128, same entry and
+    /// same clock as the share token (write half of the "Total shares: —"
+    /// gap, ranked item 1). `None` where the key is absent: structural for
+    /// concentrated pools (nothing minted) and for the elastic layout.
+    pub total_shares: Option<String>,
     /// The deployment's plane this pool reports to.
     pub plane: Option<String>,
     /// The registering router, as the pool itself records it.
@@ -128,6 +133,7 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
     Some(PoolInstanceState {
         pool: pool.to_string(),
         token_share: get("TokenShare").and_then(&addr),
+        total_shares: get("TotalShares").and_then(u128s),
         plane: addr(plane),
         router: router.and_then(&addr),
         reserves,
@@ -408,6 +414,11 @@ mod tests {
             "absent, and reported as absent — never invented"
         );
         assert!(got.token_share.is_some());
+        assert_eq!(
+            got.total_shares.as_deref(),
+            Some("5"),
+            "TotalShares rides the same entry — raw u128, no scaling"
+        );
     }
 
     /// An instance with no `Plane` is not of this family — the plane is the

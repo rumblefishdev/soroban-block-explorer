@@ -247,7 +247,13 @@ fn column_order_pool_state_changes() {
 fn column_order_pool_instance_state() {
     assert_columns::<PoolInstanceStateRow>(
         "pool_instance_state",
-        &["pool_id", "plane_id", "share_token_id", "derived_at_ledger"],
+        &[
+            "pool_id",
+            "plane_id",
+            "share_token_id",
+            "total_shares",
+            "derived_at_ledger",
+        ],
     );
 }
 
@@ -3161,6 +3167,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         state: xdr_parser::pool_state::PoolInstanceState {
             pool: "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O".into(),
             token_share: None,
+            total_shares: None,
             plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
             router: Some(router.to_string()),
             reserves: Vec::new(),
@@ -3242,6 +3249,7 @@ fn pool_instance_declaring(
         state: xdr_parser::pool_state::PoolInstanceState {
             pool: pool.into(),
             token_share: None,
+            total_shares: None,
             plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
             router: Some(router.into()),
             reserves: Vec::new(),
@@ -3316,6 +3324,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         state: PoolInstanceState {
             pool: POOL.into(),
             token_share: None,
+            total_shares: None,
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
             reserves: vec!["777".into(), "888".into()],
@@ -3562,6 +3571,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         state: PoolInstanceState {
             pool: POOL.into(),
             token_share: Some(SHARE.into()),
+            total_shares: None,
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
             reserves: Vec::new(),
@@ -3575,6 +3585,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         state: PoolInstanceState {
             pool: "CC642QYWXXR2HUZDNJ6KYN5LV5JFPFPT4Q6YNKLZLYEFWZZZ5SJYLA5G".into(),
             token_share: None,
+            total_shares: None,
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
             // Real values from the hot-ledger probe: concentrated reserves

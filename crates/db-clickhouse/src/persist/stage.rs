@@ -1232,6 +1232,23 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             inst.state.plane.as_deref(),
         ) {
             (Some(pool_id), Some(plane)) => {
+                // A PRESENT-but-unparseable TotalShares is refused loudly —
+                // writing 0 for it would be the misleading-fallback class
+                // (0 must mean "key absent", never "we failed to read it").
+                let total_shares = match inst.state.total_shares.as_deref() {
+                    None => 0,
+                    Some(raw) => match raw.parse::<i128>() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            tracing::error!(
+                                ledger_sequence = inst.ledger_sequence,
+                                pool = %inst.state.pool,
+                                "instance write refused: non-numeric TotalShares"
+                            );
+                            continue;
+                        }
+                    },
+                };
                 instance_state_rows.push(PoolInstanceStateRow {
                     pool_id,
                     plane_id: ids::contract_id(plane),
@@ -1241,6 +1258,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                         .as_deref()
                         .map(ids::contract_id)
                         .unwrap_or(0),
+                    total_shares,
                     derived_at_ledger: i64::from(inst.ledger_sequence),
                 });
             }

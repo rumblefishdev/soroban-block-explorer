@@ -356,6 +356,11 @@ pub struct PoolInstanceStateRow {
     /// `0` is STRUCTURAL for concentrated pools, which never mint a share
     /// token (`share_id()` returns the pool itself).
     pub share_token_id: i64,
+    /// Outstanding share supply, raw u128 from the instance's `TotalShares`
+    /// (same entry, same pass, same clock as the share token — the write half
+    /// of the soroban "Total shares" gap). `0` where the key is absent:
+    /// structural for concentrated pools and the elastic layout.
+    pub total_shares: i128,
     pub derived_at_ledger: i64,
 }
 

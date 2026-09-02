@@ -700,6 +700,7 @@ CREATE TABLE IF NOT EXISTS pool_instance_state (
     pool_id            FixedString(32),
     plane_id           Int64,
     share_token_id     Int64,
+    total_shares       Int128,  -- raw u128 from instance TotalShares; 0 = key absent (structural: concentrated + elastic). Read half of the soroban "Total shares" gap
     derived_at_ledger  Int64
 )
 ENGINE = ReplacingMergeTree(derived_at_ledger)
