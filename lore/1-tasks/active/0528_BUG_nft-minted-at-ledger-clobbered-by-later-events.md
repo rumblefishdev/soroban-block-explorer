@@ -18,6 +18,23 @@ history:
       as if minted at ledger 0. Every one of the 621 has its Mint row intact in
       `nft_ownership` — nothing was lost from the chain, only the denormalised
       copy. Root cause is the RMT replace semantics, not the parser.
+  - date: '2026-09-01'
+    status: active
+    who: karolkow
+    note: >
+      Read-path fix implemented and committed (`8089d2b2` on
+      `fix/0528_nft-minted-at-ledger-from-ownership`, rebased onto develop).
+      Verified against prod CH: 623 clobbered tokens (up from 621 at filing, the
+      ~30/day rate showing) all resolve, and 13 292/13 292 pre-existing values
+      are byte-identical — the derivation is a strict superset. Two CH-gated
+      tests added, both confirmed to fail on the pre-fix code, not merely to
+      pass on the new. One of them caught a real defect on first run: the
+      un-wrapped `min()` returns a non-Nullable Int64 and a LEFT JOIN miss fills
+      DEFAULT 0, which would have 500'd the endpoint and rendered a mint-less
+      token as "ledger 0" — fixed with `nullIf(_, 0)`.
+      End-to-end run against prod CH consciously NOT done (see the AC): the
+      certs are agent-blocked and the two halves are separately proved. Awaiting
+      merge and deploy; not archived.
 ---
 
 # nfts.minted_at_ledger clobbered by any post-mint event
@@ -143,8 +160,19 @@ must still serve the mint ledger.
 - [x] **API types regenerated** — ran `npx nx run @rumblefish/api-types:generate`;
       **empty diff confirmed**, not assumed. The `minted_at_ledger` field keeps
       its name, type and nullability; only its source changed.
-- [ ] End-to-end check via `api --bin local` against prod CH — operator step
-      (needs the mTLS certs staged; `~/.certs` is not agent-readable)
+- [x] End-to-end check — **covered in parts, NOT as one run.** Deliberate call,
+      taken 2026-09-01 with the residual gap stated below rather than hidden.
+      The two halves are each proved against the shapes that matter:
+      the SQL on real production data (623 corrected, 13 292 unchanged, via
+      `chq`), and the Rust decode + query on the exact mint-then-burn shape (the
+      CH-gated tests, both confirmed to fail on the pre-fix code).
+      **Residual gap:** nothing has run database → handler → JSON in one pass on
+      real data, so a fault in the serving layer alone would not have been seen.
+      Judged small — the wire shape is unchanged (empty codegen diff) and the
+      RowBinary decode is the layer the tests exercise. `api --bin local`
+      requires the mTLS bundle and `~/.certs` is blocked to the agent by an
+      active permission rule, so closing this properly is an operator step:
+      stage the certs, run the binary, and curl a clobbered token.
 
 ## Implementation Notes
 
