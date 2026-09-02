@@ -114,14 +114,14 @@ cases. All six candidates below were considered; **A and B were rejected on
 measurement, not on taste.** The measurements are in the Cost section above and
 repeated inline here so nobody re-proposes them from first principles.
 
-|       | Option                                                            | Read cost                             | Write cost                               | Survives parallel backfill? | Verdict                                                                       |
-| ----- | ----------------------------------------------------------------- | ------------------------------------- | ---------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
-| **A** | Derive at read time from the fact table (the 0528 pattern)        | **2.34–27.3 GiB per 50-account page** | none                                     | yes                         | ✗ measured — 4–40 page views per hour against the quota                       |
-| **B** | Writer reads the current minimum and preserves it                 | none extra                            | **98 MiB per 100 accounts**, every batch | **no**                      | ✗ measured — and it still breaks under the 0228 scenario                      |
-| **C** | Side `AggregatingMergeTree` + materialised view on the fact table | point lookup, 16 M × 2 columns        | incremental, **no read**                 | yes                         | ✓ **recommended**                                                             |
-| **D** | ClickHouse projection carrying the aggregate                      | same as C                             | same as C, maintained by CH              | yes                         | ✓ alternative — no extra table, but grows the parts                           |
-| **E** | Change the `accounts` engine to `AggregatingMergeTree`            | none                                  | none                                     | yes                         | most fundamental; largest blast radius (every reader and writer of the table) |
-| **F** | `repair-tier1` on a schedule                                      | none                                  | periodic full pass                       | no                          | ✗ plaster — the defect keeps producing between runs                           |
+|       | Option                                                            | Read cost                             | Write cost                               | Survives parallel backfill?               | Verdict                                                                       |
+| ----- | ----------------------------------------------------------------- | ------------------------------------- | ---------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------- |
+| **A** | Derive at read time from the fact table (the 0528 pattern)        | **2.34–27.3 GiB per 50-account page** | none                                     | yes                                       | ✗ measured — 4–40 page views per hour against the quota                       |
+| **B** | Writer reads the current minimum and preserves it                 | none extra                            | **98 MiB per 100 accounts**, every batch | **no**                                    | ✗ measured — and it still breaks under the 0228 scenario                      |
+| **C** | Side `AggregatingMergeTree` + materialised view on the fact table | point lookup, 16 M × 2 columns        | incremental, **no read**                 | **no** — MVs do not fire on `ATTACH PART` | ✗ demoted; see the ATTACH discriminator below                                 |
+| **D** | ClickHouse projection carrying the aggregate                      | same as C                             | same as C, maintained by CH              | yes — travels inside the part             | ✓ **recommended** — no extra table, but grows the parts                       |
+| **E** | Change the `accounts` engine to `AggregatingMergeTree`            | none                                  | none                                     | yes                                       | most fundamental; largest blast radius (every reader and writer of the table) |
+| **F** | `repair-tier1` on a schedule                                      | none                                  | periodic full pass                       | no                                        | ✗ plaster — the defect keeps producing between runs                           |
 
 **Why C, D and E and not A or B:** they are the only shapes where **the merge
 itself carries the MIN semantics**. Nothing is read at write time and nothing is
@@ -150,16 +150,60 @@ Measurement notes behind the rejections, so they are reproducible:
   because `accounts` sorts on `account_id`, not on the `id` surrogate — worth
   knowing before anyone re-measures.
 
-Open sub-questions to settle with a measurement, not an assumption:
+#### Backfill cost — measured, and it is not the obstacle
 
-- Backfilling the aggregate for existing rows is a one-off full pass over
-  10.7 B / 6.85 B rows. Cost and quota impact must be sized before scheduling.
-- Whether the MV fires correctly for the backfill-runner's bulk insert path, not
-  only for live ingest. **If it does not, C is unsafe** and D or E wins.
+One partition each, on prod, extrapolated to the full table:
+
+| Backfill                                  | Rows    | Read     | Compute | Peak memory |
+| ----------------------------------------- | ------- | -------- | ------- | ----------- |
+| `accounts` ← `transaction_participants`   | 10.74 B | ~160 GiB | ~17 s   | **94 MiB**  |
+| `lp_positions` ← `operations_appearances` | 6.85 B  | ~46 GiB  | ~10 s   | **27 MiB**  |
+
+Measured slices: partition 101 of `transaction_participants` = 498 551 887 rows /
+7.43 GiB / 796 ms / 94.28 MiB; the same partition of `operations_appearances`
+filtered to `type = 22` with `arrayJoin(pool_ids)` = 246 249 347 rows / 1.66 GiB /
+368 ms / 26.53 MiB.
+
+Memory is a non-issue — the aggregation streams in sort-key order. Compute is
+seconds. **The only constraint is the read quota** (2 B rows / 100 GB per
+server-hour), which a single full pass exceeds. Chunk it by partition: 90 chunks
+of ~7.4 GiB for `accounts`. That is a routine maintenance job, not a blocker.
+
+Note the contrast that makes the whole case: the same aggregate costs 2.34–27.3
+GiB **per page view** as option A, and ~160 GiB **once, ever** as a backfill.
+
+#### The `ATTACH PART` discriminator — this demotes C
+
+The parallel backfill does not `INSERT`. Per ADR 0045 / task 0228 it uses
+**FREEZE + rsync + ATTACH PART** (`docs/backfills.md` §B2). ClickHouse
+materialised views are INSERT triggers, so:
+
+- **C** — the MV would **not fire at all** for backfilled data. The side table
+  would be silently incomplete, reproducing exactly the defect it exists to fix.
+  C is only safe if the backfill procedure gains an explicit re-materialisation
+  step, which puts a manual, forgettable step back on the critical path — the
+  same failure shape as today's `repair-tier1`.
+- **D** — a projection lives inside the part. A part frozen on a worker whose
+  table carries the same projection arrives with it, so `ATTACH PART` brings the
+  aggregate along. Requires worker and target schemas to stay in step, which the
+  procedure already requires.
+- **E** — attached parts carry raw rows and the `AggregatingMergeTree` merge
+  folds them with `min()`. Correct by construction, no procedural step at all.
+
+**Revised recommendation: D or E, not C.** C looked cheapest until the write path
+was checked; it fails on the very scenario (parallel backfill) that opened 0228.
+
+**Confirm before relying on it:** that MVs really do not fire on `ATTACH PART`,
+and that a frozen part carries its projection. Both are stated ClickHouse
+behaviour, neither was tested here — and this task exists because a plausible
+premise went unverified for months.
+
+Remaining open:
+
 - Whether `SimpleAggregateFunction(min, …)` or a plain `AggregatingMergeTree`
-  with `minState`/`minMerge` reads better here.
-- C vs D vs E is not decided. Decide it on the backfill cost and on how much of
-  the codebase E would touch.
+  with `minState`/`minMerge` reads better.
+- D vs E: D is contained (one projection, no engine change); E is the most
+  fundamental but rewrites `accounts` and touches every reader and writer of it.
 
 ### Two traps 0528 hit, certain to recur
 
