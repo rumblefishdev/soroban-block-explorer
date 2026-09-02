@@ -99,6 +99,38 @@ Probed live before any code, after the 0517 rule made the events readable:
    otherwise the independent volume check falls to the #2/#3 oracles and
    must be stated as the 0516 scope risk.
 
+## In-DB completeness PROVEN + decisions (karolkow, 2026-09-02)
+
+Measured before implementation, settling the backfill question with evidence:
+
+- **Four factory deployments** share the `SoroswapFactory` label: the
+  documented `CA4HEQTL…7AW2` (214 pairs, counter 1→214 GAPLESS,
+  50.75M→63.8M) plus three dead early deployments (11/6/4 pairs, eras
+  50.69-50.75M, each counter complete 1→N) — the Aquarius ten-routers story
+  again. 235/235 registrations, 235 distinct pairs, no pair registered
+  twice.
+- **`min(new_pairs_length) = 1` per factory** — every factory's FIRST pair
+  postdates the ingest floor; no pre-floor gap exists for this protocol.
+- **Orphan emitters: 0** — every `SoroswapPair`-labelled emitter in history
+  is in the registered set.
+- Therefore: registry (identity + legs from `new_pair` data), reserve
+  history (`sync`, absolute values) and volume (`swap`) are ALL fully
+  derivable in-DB. **Decision 63: backfill is in-DB (option A)**, and the
+  closure check comes free from the vendor's own monotone counter:
+  `max(new_pairs_length) == count()` per factory — stronger than set
+  reconciliation.
+- **Decision 64: `pool_type_raw` stays `''`** — the vendor emits no type
+  (one fixed constant-product mode); an invented label would be our
+  interpretation, not a verbatim value.
+- Reserve SOURCE per the probes above: live = the pair's own instance
+  storage (self-authenticated; `plane_id` = the pair's own id — stamp,
+  declaration and owner coincide); history = `sync`-derived rows; the
+  live/history seam is verified by the bidirectional anti-test on the
+  overlap. `sync` thereafter stays the monitored cross-check.
+- Minor, recorded: current `total_shares` for DORMANT pairs is the one
+  value not in the DB — the live writer fills it on a pair's next
+  activity; an optional one-shot RPC pass covers the rest.
+
 ## Acceptance Criteria
 
 - [ ] four-oracle table completed with evidence, absences stated
