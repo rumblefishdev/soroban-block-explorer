@@ -107,13 +107,30 @@ scattered across the whole key space, so the seek touches granules everywhere.
 | `nfts_pending.minted_at_ledger`                        | `min(ledger_sequence)` over `nft_ownership_pending WHERE event_type = 0`                                                           |
 | `soroban_contracts.deployed_at_ledger` + `deployer_id` | `min(wasm_uploaded_at_ledger)` + `argMin(deployer_id, …)` over rows with a non-NULL deployer — self-contained in a 185 k-row table |
 
-### Large fact tables → maintained MIN aggregate
+### Large fact tables — the six options, and why four of them lose
 
-`accounts.first_seen_ledger` and `lp_positions.first_deposit_ledger` need the
-minimum to be **maintained on write**, not recomputed on read. The shape that
-expresses MIN correctly under merges — which plain RMT cannot — is an
-`AggregatingMergeTree` keyed by the entity, fed by a materialised view on the
-fact table's inserts:
+`accounts.first_seen_ledger` and `lp_positions.first_deposit_ledger` are the hard
+cases. All six candidates below were considered; **A and B were rejected on
+measurement, not on taste.** The measurements are in the Cost section above and
+repeated inline here so nobody re-proposes them from first principles.
+
+|       | Option                                                            | Read cost                             | Write cost                               | Survives parallel backfill? | Verdict                                                                       |
+| ----- | ----------------------------------------------------------------- | ------------------------------------- | ---------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| **A** | Derive at read time from the fact table (the 0528 pattern)        | **2.34–27.3 GiB per 50-account page** | none                                     | yes                         | ✗ measured — 4–40 page views per hour against the quota                       |
+| **B** | Writer reads the current minimum and preserves it                 | none extra                            | **98 MiB per 100 accounts**, every batch | **no**                      | ✗ measured — and it still breaks under the 0228 scenario                      |
+| **C** | Side `AggregatingMergeTree` + materialised view on the fact table | point lookup, 16 M × 2 columns        | incremental, **no read**                 | yes                         | ✓ **recommended**                                                             |
+| **D** | ClickHouse projection carrying the aggregate                      | same as C                             | same as C, maintained by CH              | yes                         | ✓ alternative — no extra table, but grows the parts                           |
+| **E** | Change the `accounts` engine to `AggregatingMergeTree`            | none                                  | none                                     | yes                         | most fundamental; largest blast radius (every reader and writer of the table) |
+| **F** | `repair-tier1` on a schedule                                      | none                                  | periodic full pass                       | no                          | ✗ plaster — the defect keeps producing between runs                           |
+
+**Why C, D and E and not A or B:** they are the only shapes where **the merge
+itself carries the MIN semantics**. Nothing is read at write time and nothing is
+aggregated at read time, so there is no window in which a later event can
+overwrite the historic minimum. That missing capability — RMT replacing a row
+wholesale instead of folding it column-wise — is the root of the defect in all
+six columns, so fixing it at the engine level fixes the class, not an instance.
+
+Sketch for C:
 
 ```
 account_first_seen (account_id, first_seen SimpleAggregateFunction(min, Int64))
@@ -121,21 +138,28 @@ account_first_seen (account_id, first_seen SimpleAggregateFunction(min, Int64))
   ← MV on transaction_participants inserts
 ```
 
-Read cost becomes a point lookup on a table with one row per entity (16 M rows,
-two columns) instead of an aggregate over 10.7 B. The merge itself carries the
-MIN semantics, so nothing can clobber it and no repair pass is ever needed again.
+Measurement notes behind the rejections, so they are reproducible:
 
-**This is the fundamental fix.** It is also the one that retires `repair-tier1`
-entirely rather than reducing its scope.
+- **A** was measured twice on independent prod slices (2.34 GiB / 413 ms and
+  27.29 GiB / 2 708 ms for 50 accounts). The sort key does not rescue it — a
+  page's ids are scattered across the whole key space.
+- **B** was measured with 100 **literal** StrKeys, i.e. the shape the indexer
+  would actually issue: 1.74 M rows / 98 MiB / 24 ms. The sparse index pulls a
+  whole granule per key, so the cost does not fall with batch size the way a
+  point lookup would. An earlier `WHERE id IN (…)` variant read 17.8 M rows
+  because `accounts` sorts on `account_id`, not on the `id` surrogate — worth
+  knowing before anyone re-measures.
 
 Open sub-questions to settle with a measurement, not an assumption:
 
 - Backfilling the aggregate for existing rows is a one-off full pass over
   10.7 B / 6.85 B rows. Cost and quota impact must be sized before scheduling.
 - Whether the MV fires correctly for the backfill-runner's bulk insert path, not
-  only for live ingest.
+  only for live ingest. **If it does not, C is unsafe** and D or E wins.
 - Whether `SimpleAggregateFunction(min, …)` or a plain `AggregatingMergeTree`
   with `minState`/`minMerge` reads better here.
+- C vs D vs E is not decided. Decide it on the backfill cost and on how much of
+  the codebase E would touch.
 
 ### Two traps 0528 hit, certain to recur
 
@@ -207,6 +231,12 @@ the window to zero. **Verify against the driver before relying on it.**
 
 - [ ] Every one of the six columns is either served from a correct source, or has
       a written decision recording why not and what replaces it
+- [ ] The C / D / E choice for the large fact tables is recorded with the
+      backfill measurement that decided it — A and B stay rejected unless a new
+      measurement overturns them
+- [ ] Option B from "How to present a value the chain never recorded" is shipped
+      or explicitly declined: a mint ledger the chain never carried reads as
+      "not recorded on chain", not as an empty field
 - [ ] `accounts` list and detail measured before/after — no page-latency or
       read-quota regression on the hot path
 - [ ] The maintained aggregate proven correct against a fact-table sample, and
@@ -233,6 +263,27 @@ event encodings the contract used (map-shaped and scalar-shaped) — and the
 parser dropped nothing, 17 events producing 17 rows. The contract was deployed at
 ledger 60 908 576, far above our floor of 50 457 424, so coverage is not the
 cause: it simply never emitted a creation event for those tokens.
+
+### How to present a value the chain never recorded
+
+Four options were weighed:
+
+|       | Option                                                                   | Verdict                                                       |
+| ----- | ------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| **A** | Serve NULL, render blank (behaviour since 0528)                          | ✓ correct, already shipped                                    |
+| **B** | A, plus the UI says **"not recorded on chain"** instead of a blank field | ✓ **recommended addition**                                    |
+| **C** | Fall back to the earliest ownership row                                  | ✗ reports a transfer ledger as a mint ledger                  |
+| **D** | Ask the chain over RPC                                                   | ✗ not possible — the contract's state is archived (see below) |
+
+**B matters more than the `nfts` count suggests.** One token in `nfts`, but
+**66 of 277 (24%) in `nfts_pending`** — and pending rows get promoted. A blank
+field reads as "no value"; "not recorded on chain" states the actual fact, which
+is that the chain never carried it. This is the same rule the project already
+applies elsewhere: an empty section must say why it is empty, never impersonate a
+real empty value.
+
+Scope note: B is a small frontend + DTO change and can ship independently of the
+storage work in this task. Do not let it block steps 2–5.
 
 Serving NULL there is correct and must stay correct — an invented `0` is worse
 than an honest blank. Do not "fix" these by falling back to the earliest
