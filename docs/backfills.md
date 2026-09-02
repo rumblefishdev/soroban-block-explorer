@@ -691,9 +691,9 @@ are `cityhash_102_128` (NOT ClickHouse's `cityHash64`), so SQL cannot
 compute `pool_id`/`plane_id`/leg surrogates.
 
 1. **Pair registry** — harvest the `new_pair` corpus (the exact chq command
-   sits in `crates/xdr-parser/tests/soroswap_real_corpus.rs` module docs),
+   sits in `crates/xdr-parser/tests/pair_factory_real_corpus.rs` module docs),
    run it through a one-off generator built on `parse_new_pair` +
-   `soroswap_registry_row` (mirror `gen_pool_registry_backfill`, task
+   `factory_pair_registry_row` (mirror `gen_pool_registry_backfill`, task
    0374). 235 pairs measured 2026-09-02; idempotent.
    **Closure check, two layers, both free:** per factory the vendor's own
    monotone counter — `max(new_pairs_length) == count()` — plus the

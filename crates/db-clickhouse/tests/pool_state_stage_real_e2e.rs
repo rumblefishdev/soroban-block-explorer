@@ -93,7 +93,7 @@ fn raw_registration_ledger_stages_the_exact_rows() {
         soroban_token_balances: &[],
         plane_pool_data: &planes,
         pool_instances: &instances,
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),

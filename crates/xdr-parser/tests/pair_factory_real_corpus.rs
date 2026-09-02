@@ -3,7 +3,7 @@
 //!
 //! Two corpora, each skipped (passes trivially) when its env is unset:
 //!
-//! - `SOROSWAP_NEW_PAIR_CORPUS` — JSONEachRow harvest of ALL `new_pair`
+//! - `FACTORY_PAIR_CORPUS` — JSONEachRow harvest of ALL `new_pair`
 //!   events with their emitting factory. Harvest with:
 //!
 //!   ```sh
@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 use stellar_xdr::{LedgerCloseMetaBatch, Limits, ReadXdr};
-use xdr_parser::pool_soroswap::{extract_soroswap_pairs, parse_new_pair};
+use xdr_parser::pool_pair_factory::{extract_factory_pairs, parse_new_pair};
 
 #[derive(serde::Deserialize)]
 struct Row {
@@ -43,7 +43,7 @@ struct Row {
 }
 
 fn load_corpus() -> Option<Vec<Row>> {
-    let path = std::env::var("SOROSWAP_NEW_PAIR_CORPUS").ok()?;
+    let path = std::env::var("FACTORY_PAIR_CORPUS").ok()?;
     let raw = std::fs::read_to_string(&path).expect("corpus readable");
     Some(
         raw.lines()
@@ -56,7 +56,7 @@ fn load_corpus() -> Option<Vec<Row>> {
 #[test]
 fn every_registration_in_history_decodes_and_every_counter_is_gapless() {
     let Some(rows) = load_corpus() else {
-        eprintln!("SOROSWAP_NEW_PAIR_CORPUS unset — skipping (see module docs)");
+        eprintln!("FACTORY_PAIR_CORPUS unset — skipping (see module docs)");
         return;
     };
     let mut pairs: HashSet<String> = HashSet::new();
@@ -107,9 +107,7 @@ fn the_u32_sieve_claims_no_foreign_instance_in_the_raw_corpus() {
         return;
     };
     let Some(rows) = load_corpus() else {
-        eprintln!(
-            "SOROSWAP_NEW_PAIR_CORPUS unset — the FP check needs the registered set; skipping"
-        );
+        eprintln!("FACTORY_PAIR_CORPUS unset — the FP check needs the registered set; skipping");
         return;
     };
     let registered: HashSet<String> = rows
@@ -159,7 +157,7 @@ fn the_u32_sieve_claims_no_foreign_instance_in_the_raw_corpus() {
             for (i, meta) in metas.iter().enumerate() {
                 let hash = format!("{i:064x}");
                 let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
-                for pair in extract_soroswap_pairs(&changes) {
+                for pair in extract_factory_pairs(&changes) {
                     extracted += 1;
                     if !registered.contains(&pair.state.pair) {
                         foreign.push(format!("{} @ {}", pair.state.pair, seq));

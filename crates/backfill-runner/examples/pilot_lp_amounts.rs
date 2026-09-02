@@ -57,7 +57,7 @@ fn main() {
                 pool_snapshots: &parsed.pool_snapshots,
                 plane_pool_data: &parsed.plane_pool_data,
                 pool_instances: &parsed.pool_instances,
-                soroswap_pairs: &[],
+                factory_pairs: &[],
                 assets: &parsed.assets,
                 nfts: &parsed.nfts,
                 nft_events: &parsed.nft_events,

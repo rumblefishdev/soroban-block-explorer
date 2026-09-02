@@ -678,7 +678,7 @@ Both feed `persist::stage`, which writes the `liquidity_pools` registry rows
 (`pool_kind = 1`), `pool_state_changes` and `pool_instance_state` (see the
 database-schema overview and ADR 0058).
 
-**`pool_soroswap.rs` (task 0518)** is the second adapter, proving the ADR's
+**`pool_pair_factory.rs` (task 0518)** is the second adapter, proving the ADR's
 adapter-not-redesign consequence: same three tables, no shared shape change.
 Differences worth knowing: discovery is the factory's `new_pair` event
 (String label + Symbol name — the 0517 label convention; the vendor's

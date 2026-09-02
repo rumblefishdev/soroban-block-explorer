@@ -304,7 +304,7 @@ pub struct StageInputs<'a> {
     /// Soroswap pair-instance writes (task 0518) — reserve source AND
     /// declaration for that family: the pair's own instance carries its leg
     /// tokens, reserves, deploying factory and LP-token supply.
-    pub soroswap_pairs: &'a [xdr_parser::pool_soroswap::ExtractedSoroswapPair],
+    pub factory_pairs: &'a [xdr_parser::pool_pair_factory::ExtractedFactoryPair],
     /// Task 0331 + ADR 0051 — SAC contract surrogate → wrapped classic/native
     /// `asset_id` (from `asset_sac`, via [`crate::persist::fetch_sac_classic_map`]).
     /// [`build_balance_rows`] keys a contract-held SAC balance onto the classic
@@ -365,7 +365,7 @@ pub fn prepare(
         contract_metadata_writes: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         soroban_token_balances: &[],
         sac_classic: &HashMap::new(),
         sac_overrides: &[],
@@ -557,7 +557,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         soroban_token_balances,
         plane_pool_data,
         pool_instances,
-        soroswap_pairs,
+        factory_pairs,
         sac_classic,
         sac_overrides,
         prior_wasm_verdicts,
@@ -1174,7 +1174,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // the recognition shape, so a pair without one is not a pair.
     let declared_factory: HashMap<&str, (&str, bool)> = {
         let mut m: HashMap<&str, (&str, bool)> = HashMap::new();
-        for sp in soroswap_pairs {
+        for sp in factory_pairs {
             let e = m
                 .entry(sp.state.pair.as_str())
                 .or_insert((sp.state.factory.as_str(), false));
@@ -1183,7 +1183,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
         m
     };
-    for reg in xdr_parser::pool_soroswap::detect_pair_registrations(events) {
+    for reg in xdr_parser::pool_pair_factory::detect_pair_registrations(events) {
         match declared_factory.get(reg.event.pair.as_str()) {
             Some(&(factory, true)) if factory == reg.factory => {}
             found => {
@@ -1198,7 +1198,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             }
         }
-        match soroswap_registry_row(&reg, ledger_sequence_i64) {
+        match factory_pair_registry_row(&reg, ledger_sequence_i64) {
             Ok(row) => out.pool_rows.push(row),
             Err(reason) => tracing::error!(
                 ledger_sequence = ledger.sequence,
@@ -1332,7 +1332,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // SEP-41 LP token). `total_shares = 0` before the first mint is a TRUE
     // zero (nothing outstanding), not a fallback; a present-but-unparseable
     // value refuses the row loudly, same as every sibling arm.
-    for sp in soroswap_pairs {
+    for sp in factory_pairs {
         let Some(pool_id) = ids::contract_payload(&sp.state.pair) else {
             tracing::error!(
                 ledger_sequence = sp.ledger_sequence,
@@ -2530,8 +2530,8 @@ fn parse_reserves(raw: &[String]) -> Option<Vec<i128>> {
 /// 2026-09-02) = 30 bps. Legs are the pair's leg TOKENS in vendor order
 /// (token_0, token_1); the share token is NOT a registry column — the pair
 /// is its own LP token and the relation lives in `pool_instance_state`.
-fn soroswap_registry_row(
-    reg: &xdr_parser::pool_soroswap::PairRegistration,
+fn factory_pair_registry_row(
+    reg: &xdr_parser::pool_pair_factory::PairRegistration,
     ledger_sequence: i64,
 ) -> Result<LiquidityPoolRow, &'static str> {
     let pool_id =

@@ -1609,7 +1609,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
@@ -1771,7 +1771,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1815,7 +1815,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1861,7 +1861,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1919,7 +1919,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
@@ -1975,7 +1975,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2130,7 +2130,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2239,7 +2239,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2319,7 +2319,7 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3204,7 +3204,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: std::slice::from_ref(&instance),
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3295,7 +3295,7 @@ fn stage_registration(
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: instances,
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3363,7 +3363,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         soroban_token_balances: &[],
         plane_pool_data: std::slice::from_ref(&plane_write),
         pool_instances: std::slice::from_ref(&instance),
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3627,7 +3627,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         soroban_token_balances: &[],
         plane_pool_data: std::slice::from_ref(&plane_write),
         pool_instances: &[instance, conc],
-        soroswap_pairs: &[],
+        factory_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3724,13 +3724,13 @@ fn new_pair_event(tx_hash: &str, factory: &str, pair: &str) -> ExtractedEvent {
 }
 
 #[cfg(test)]
-fn soroswap_pair_instance(
+fn factory_pair_instance(
     reserves: Option<(&str, &str)>,
     total_supply: Option<&str>,
     created: bool,
-) -> xdr_parser::pool_soroswap::ExtractedSoroswapPair {
-    xdr_parser::pool_soroswap::ExtractedSoroswapPair {
-        state: xdr_parser::pool_soroswap::SoroswapPairState {
+) -> xdr_parser::pool_pair_factory::ExtractedFactoryPair {
+    xdr_parser::pool_pair_factory::ExtractedFactoryPair {
+        state: xdr_parser::pool_pair_factory::FactoryPairState {
             pair: SORO_PAIR.into(),
             token_0: SORO_T0.into(),
             token_1: SORO_T1.into(),
@@ -3744,11 +3744,11 @@ fn soroswap_pair_instance(
 }
 
 #[cfg(test)]
-fn stage_soroswap(
+fn stage_factory_pair(
     ledger: &ExtractedLedger,
     tx: &ExtractedTransaction,
     events: &[(String, Vec<ExtractedEvent>)],
-    pairs: &[xdr_parser::pool_soroswap::ExtractedSoroswapPair],
+    pairs: &[xdr_parser::pool_pair_factory::ExtractedFactoryPair],
 ) -> stage::StagedLedger {
     stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
@@ -3769,7 +3769,7 @@ fn stage_soroswap(
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
-        soroswap_pairs: pairs,
+        factory_pairs: pairs,
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3790,9 +3790,9 @@ fn a_corroborated_new_pair_registers_with_the_pairs_own_facts() {
         tx.hash.clone(),
         vec![new_pair_event(&tx.hash, SORO_FACTORY, SORO_PAIR)],
     )];
-    let pairs = [soroswap_pair_instance(None, None, true)];
+    let pairs = [factory_pair_instance(None, None, true)];
 
-    let staged = stage_soroswap(&ledger, &tx, &events, &pairs);
+    let staged = stage_factory_pair(&ledger, &tx, &events, &pairs);
 
     let row = staged
         .pool_rows
@@ -3831,8 +3831,8 @@ fn uncorroborated_or_touched_new_pairs_are_refused() {
     )];
     // The pair's instance names the REAL factory — the attacker's event
     // must not become a row.
-    let pairs = [soroswap_pair_instance(None, None, true)];
-    let staged = stage_soroswap(&ledger, &tx, &events, &pairs);
+    let pairs = [factory_pair_instance(None, None, true)];
+    let staged = stage_factory_pair(&ledger, &tx, &events, &pairs);
     assert!(staged.pool_rows.iter().all(|r| r.pool_kind == 0));
 
     // Genuine factory as emitter, but the instance was only touched — the
@@ -3842,8 +3842,8 @@ fn uncorroborated_or_touched_new_pairs_are_refused() {
         tx2.hash.clone(),
         vec![new_pair_event(&tx2.hash, SORO_FACTORY, SORO_PAIR)],
     )];
-    let touched = [soroswap_pair_instance(None, None, false)];
-    let staged2 = stage_soroswap(&ledger, &tx2, &events2, &touched);
+    let touched = [factory_pair_instance(None, None, false)];
+    let staged2 = stage_factory_pair(&ledger, &tx2, &events2, &touched);
     assert!(staged2.pool_rows.iter().all(|r| r.pool_kind == 0));
 }
 
@@ -3854,13 +3854,13 @@ fn uncorroborated_or_touched_new_pairs_are_refused() {
 fn a_pair_write_stages_self_stamped_reserves_and_supply() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x84);
-    let pairs = [soroswap_pair_instance(
+    let pairs = [factory_pair_instance(
         Some(("3362421101426", "585980063616")),
         Some("1387420389"),
         false,
     )];
 
-    let staged = stage_soroswap(&ledger, &tx, &[], &pairs);
+    let staged = stage_factory_pair(&ledger, &tx, &[], &pairs);
 
     let state = staged
         .pool_state_change_rows

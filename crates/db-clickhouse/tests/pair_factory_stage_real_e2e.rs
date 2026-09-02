@@ -4,7 +4,7 @@
 //! pair in the registering transaction, so every genuine `new_pair` has a
 //! same-ledger CREATED pair instance pointing back at the emitter.
 //!
-//! Skipped when `SOROSWAP_REG_LEDGERS` is unset — a directory of raw
+//! Skipped when `FACTORY_PAIR_REG_LEDGERS` is unset — a directory of raw
 //! `LedgerCloseMetaBatch` files named `<seq>.xdr`, fetched straight from the
 //! public archive over HTTPS (no AWS tooling):
 //!
@@ -31,13 +31,13 @@
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::stage;
 use stellar_xdr::{LedgerCloseMetaBatch, Limits, ReadXdr};
-use xdr_parser::pool_soroswap::{detect_pair_registrations, extract_soroswap_pairs};
+use xdr_parser::pool_pair_factory::{detect_pair_registrations, extract_factory_pairs};
 use xdr_parser::types::{ExtractedLedger, ExtractedTransaction};
 
 #[test]
 fn raw_registration_ledgers_stage_corroborated_registry_rows() {
-    let Ok(dir) = std::env::var("SOROSWAP_REG_LEDGERS") else {
-        eprintln!("SOROSWAP_REG_LEDGERS unset — skipping (see module docs)");
+    let Ok(dir) = std::env::var("FACTORY_PAIR_REG_LEDGERS") else {
+        eprintln!("FACTORY_PAIR_REG_LEDGERS unset — skipping (see module docs)");
         return;
     };
     let mut files: Vec<_> = std::fs::read_dir(&dir)
@@ -46,7 +46,10 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
         .filter(|p| p.extension().is_some_and(|e| e == "xdr"))
         .collect();
     files.sort();
-    assert!(!files.is_empty(), "no .xdr files in SOROSWAP_REG_LEDGERS");
+    assert!(
+        !files.is_empty(),
+        "no .xdr files in FACTORY_PAIR_REG_LEDGERS"
+    );
 
     for path in &files {
         let bytes = std::fs::read(path).expect("ledger readable");
@@ -61,7 +64,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             let mut per_tx = |seq: u32, i: usize, meta: &stellar_xdr::TransactionMeta| {
                 let hash = format!("{i:064x}");
                 let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
-                pairs.extend(extract_soroswap_pairs(&changes));
+                pairs.extend(extract_factory_pairs(&changes));
                 events.push((
                     hash.clone(),
                     xdr_parser::extract_events(meta, &hash, seq, 0),
@@ -157,7 +160,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             soroban_token_balances: &[],
             plane_pool_data: &[],
             pool_instances: &[],
-            soroswap_pairs: &pairs,
+            factory_pairs: &pairs,
             sac_classic: &std::collections::HashMap::new(),
             sac_overrides: &[],
             prior_wasm_verdicts: &std::collections::HashMap::new(),

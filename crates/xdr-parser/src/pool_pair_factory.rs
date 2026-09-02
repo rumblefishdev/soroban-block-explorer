@@ -148,7 +148,7 @@ pub fn detect_pair_registrations(
 
 /// The slice of a Soroswap pair's instance storage this task consumes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SoroswapPairState {
+pub struct FactoryPairState {
     /// The pair contract whose instance this is — pool identity and LP
     /// token in one.
     pub pair: String,
@@ -176,7 +176,7 @@ pub struct SoroswapPairState {
 /// the symbol-keyed Aquarius one. The composite is the sieve; its
 /// false-positive rate against every instance write in the raw corpus is
 /// measured by the corpus test, per 0516's shape-not-name rule.
-pub fn parse_soroswap_pair(pair: &str, storage: &Value) -> Option<SoroswapPairState> {
+pub fn parse_factory_pair(pair: &str, storage: &Value) -> Option<FactoryPairState> {
     let entries = storage.as_array()?;
     let u32_key = |n: u64| -> Option<&Value> {
         entries.iter().find_map(|kv| {
@@ -212,7 +212,7 @@ pub fn parse_soroswap_pair(pair: &str, storage: &Value) -> Option<SoroswapPairSt
         _ => return None,
     };
 
-    Some(SoroswapPairState {
+    Some(FactoryPairState {
         pair: pair.to_string(),
         token_0,
         token_1,
@@ -224,8 +224,8 @@ pub fn parse_soroswap_pair(pair: &str, storage: &Value) -> Option<SoroswapPairSt
 
 /// One pair-instance write.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtractedSoroswapPair {
-    pub state: SoroswapPairState,
+pub struct ExtractedFactoryPair {
+    pub state: FactoryPairState,
     pub ledger_sequence: u32,
     /// The entry was CREATED in this ledger. Load-bearing for registration
     /// corroboration, same reasoning as the router family's created gate:
@@ -239,9 +239,7 @@ pub struct ExtractedSoroswapPair {
 /// Extract Soroswap pair instances from ledger-entry changes. Mirrors
 /// `extract_pool_instances`: only `created`/`updated`/`restored` carry a
 /// value; the `state` pre-image and `removed` record nothing.
-pub fn extract_soroswap_pairs(
-    changes: &[ExtractedLedgerEntryChange],
-) -> Vec<ExtractedSoroswapPair> {
+pub fn extract_factory_pairs(changes: &[ExtractedLedgerEntryChange]) -> Vec<ExtractedFactoryPair> {
     let mut out = Vec::new();
     for change in changes {
         if change.entry_type != "contract_data" {
@@ -274,8 +272,8 @@ pub fn extract_soroswap_pairs(
         else {
             continue;
         };
-        if let Some(state) = parse_soroswap_pair(pair, storage) {
-            out.push(ExtractedSoroswapPair {
+        if let Some(state) = parse_factory_pair(pair, storage) {
+            out.push(ExtractedFactoryPair {
                 state,
                 ledger_sequence: change.ledger_sequence,
                 created: change.change_type == "created",
@@ -388,7 +386,7 @@ mod tests {
 
     #[test]
     fn decodes_a_real_pair_instance() {
-        let got = parse_soroswap_pair(
+        let got = parse_factory_pair(
             "CAM7DY53G63XA4AJRS24Z6VFYAFSSF76C3RZ45BE5YU3FQS5255OOABP",
             &real_pair_storage(),
         )
@@ -417,7 +415,7 @@ mod tests {
             {"key": {"type": "u32", "value": 4},
              "value": {"type": "address", "value": "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2"}}
         ]);
-        let got = parse_soroswap_pair(
+        let got = parse_factory_pair(
             "CAM7DY53G63XA4AJRS24Z6VFYAFSSF76C3RZ45BE5YU3FQS5255OOABP",
             &storage,
         )
@@ -438,20 +436,20 @@ mod tests {
             {"key": {"type": "u32", "value": 4},
              "value": {"type": "address", "value": "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2"}}
         ]);
-        assert_eq!(parse_soroswap_pair("CPAIR", &half), None);
+        assert_eq!(parse_factory_pair("CPAIR", &half), None);
         // An Aquarius pool instance (vec-wrapped symbol keys) is a different
         // dialect and must not match the u32 sieve.
         let aquarius = json!([
             {"key": {"type": "vec", "value": [{"type": "sym", "value": "Plane"}]},
              "value": {"type": "address", "value": "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY"}}
         ]);
-        assert_eq!(parse_soroswap_pair("CPOOL", &aquarius), None);
+        assert_eq!(parse_factory_pair("CPOOL", &aquarius), None);
         // A random u32-keyed enum contract missing the triple is not a pair.
         let other = json!([
             {"key": {"type": "u32", "value": 0}, "value": {"type": "u64", "value": "9"}},
             {"key": {"type": "u32", "value": 4},
              "value": {"type": "address", "value": "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2"}}
         ]);
-        assert_eq!(parse_soroswap_pair("COTHER", &other), None);
+        assert_eq!(parse_factory_pair("COTHER", &other), None);
     }
 }
