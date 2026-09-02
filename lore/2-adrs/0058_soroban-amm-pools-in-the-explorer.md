@@ -121,8 +121,13 @@ converges on the newest, matching on-chain `share_id()`.
 The share-token half is cross-checked by the SEP-41 mint rule from deposit
 transactions, which is a demoted cross-check, not a source. Concentrated pools
 mint nothing, so their `share_token_id` is a structural `0`; their positions
-are NFTs (future work). `plane_id` is always populated — `Plane` is the key an
-instance must carry to be recognised as a pool at all.
+live in pool storage keyed `(owner, tick_lower, tick_upper)` — no share
+token, no position NFT, no numeric position id (vendor docs, read
+2026-09-02; task 0374's `position_update` decision of 2026-08-26).
+Indexing them is future work (task 0516). An earlier revision of this
+sentence called the positions NFTs — chain- and vendor-refuted.
+`plane_id` is always populated — `Plane` is the key an instance must
+carry to be recognised as a pool at all.
 
 **`Router` is NOT guaranteed** (read from chain 2026-09-01, correcting an
 earlier generalisation): five of the ten deployments run an older contract

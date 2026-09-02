@@ -1618,3 +1618,14 @@ changes, absent from soroban_events. Zero tables to save. The audit adds
 one thing: `total_shares Int128` on `pool_instance_state` (same entry, same
 pass, same clock) — the write half of ranked-inconsistency item 1, belongs
 in the same pre-backfill DDL.
+
+## Correction (2026-09-02) — concentrated positions are NOT NFTs
+
+ADR 0058 (and a code comment on the feature branch) said concentrated
+positions "are NFTs". Vendor docs and this task's own step-17 decision
+(2026-08-26) refute it: a position is the storage entry keyed
+`(owner, tick_lower, tick_upper)` — no share token, no NFT, no numeric
+position id; `position_update` is the indexing source. The phrase entered on
+2026-08-29 as an unsourced aside in the read-path commit (a Uniswap-v3
+pattern carried over) and was copied into the ADR the same day. ADR fixed;
+the branch comment corrected in place. Indexing stays deferred to 0516.
