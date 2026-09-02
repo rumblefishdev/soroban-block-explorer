@@ -1382,6 +1382,47 @@ mod decode_smoke {
         contract_surrogate: i64,
     }
 
+    /// Task 0485. The ranking that puts native XLM first is a SORT DIRECTION,
+    /// and a direction is invisible to the SQL-shape tests — they pin the
+    /// string, not what comes back. This runs the real read and looks at row 1.
+    #[tokio::test]
+    async fn code_search_returns_native_first() {
+        let Some(ch) = crate::common::ch::test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping assets native-first smoke");
+            return;
+        };
+        let has_native: u64 = ch
+            .query("SELECT count() FROM assets WHERE asset_type = 0")
+            .fetch_one()
+            .await
+            .expect("native probe must run");
+        if has_native == 0 {
+            eprintln!("no native row in this CH — native-first smoke not exercised");
+            return;
+        }
+
+        let params = ResolvedListParams {
+            limit: 10,
+            cursor: None,
+            asset_type: None,
+            asset_code: Some("xlm".to_string()),
+            sac_only: false,
+        };
+        let page = fetch_list(&ch, &params, Direction::Next)
+            .await
+            .expect("code-search page decodes");
+
+        let first = page
+            .first()
+            .expect("a corpus with native XLM cannot be empty");
+        assert_eq!(
+            first.asset_type, 0,
+            "`xlm` answered with {:?} first — native XLM is the MINIMUM of the \
+             identity 4-tuple, so a DESC walk buries it on the last page",
+            first.asset_code
+        );
+    }
+
     #[tokio::test]
     async fn asset_tx_keyset_union_decodes() {
         let Some(ch) = crate::common::ch::test_client_from_env() else {

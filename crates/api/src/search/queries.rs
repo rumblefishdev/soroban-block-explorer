@@ -1090,6 +1090,46 @@ mod decode_smoke {
         .expect("transaction/pool bucket rows must decode");
     }
 
+    /// Task 0485. The tier ranking is only visible in the ORDER of the rows,
+    /// so the SQL-shape tests cannot see it — this runs the real read and
+    /// looks at the first asset hit. It also exercises the statement's 7
+    /// placeholders against the 7 `.bind(q)` calls; a mismatch is a runtime
+    /// failure no offline test reaches.
+    #[tokio::test]
+    async fn native_xlm_is_the_first_asset_hit_for_xlm() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping asset ranking smoke");
+            return;
+        };
+        let has_native: u64 = ch
+            .query("SELECT count() FROM assets WHERE asset_type = 0")
+            .fetch_one()
+            .await
+            .expect("native probe must run");
+        if has_native == 0 {
+            eprintln!("no native row in this CH — ranking smoke not exercised");
+            return;
+        }
+
+        let all = IncludeFlags::all();
+        let hits = fetch_search(&ch, "xlm", &classifier::classify("xlm"), &all, 20)
+            .await
+            .expect("ranked asset search decodes");
+
+        let first = hits
+            .iter()
+            .find(|(bucket, _)| bucket == "asset")
+            .map(|(_, hit)| hit)
+            .expect("a corpus with native XLM must yield an asset hit for `xlm`");
+        assert_eq!(
+            first.label, "native",
+            "`xlm` answered with {:?} first — before the ranking this bucket \
+             returned whichever look-alike codes the scan reached first and \
+             native XLM never made the page",
+            first.identifier
+        );
+    }
+
     /// A needle longer than a Stellar asset code cannot match a pool, so the
     /// scan must not run at all. Guards the gate that keeps every account- and
     /// contract-shaped search off the pools table (task 0470 review).
