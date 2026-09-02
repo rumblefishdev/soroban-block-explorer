@@ -193,17 +193,54 @@ materialised views are INSERT triggers, so:
 **Revised recommendation: D or E, not C.** C looked cheapest until the write path
 was checked; it fails on the very scenario (parallel backfill) that opened 0228.
 
-**Confirm before relying on it:** that MVs really do not fire on `ATTACH PART`,
-and that a frozen part carries its projection. Both are stated ClickHouse
-behaviour, neither was tested here — and this task exists because a plausible
-premise went unverified for months.
+#### Verified by experiment, not by documentation
+
+Run on a local ClickHouse 26.3, reproducing the FREEZE → copy → `ATTACH PART`
+sequence the backfill actually uses.
+
+**1. A materialised view does NOT fire on `ATTACH PART`.**
+`src` (MergeTree) with an MV into `mvtarget`. Control first: `INSERT` of 3 rows
+→ `mvtarget` = 3, so the MV works. Then 5 rows written to a separate `worker`
+table, `FREEZE`, part copied into `src/detached/`, `ATTACH PART`:
+
+|            | before | after ATTACH |
+| ---------- | ------ | ------------ |
+| `src`      | 3      | **8**        |
+| `mvtarget` | 3      | **3**        |
+
+The rows arrived; the view never ran. **Option C is dead** — its side table would
+be silently short by exactly the backfilled range.
+
+**2. A projection travels inside the frozen part and arrives usable.**
+`p1` with `PROJECTION pmin (SELECT id, min(seq) GROUP BY id)`; the frozen part
+contains a `pmin.proj` subdirectory. Copied into `p2` (same projection declared)
+and attached: `system.projection_parts` lists `pmin` for `p2`, the aggregate
+returns the correct minima, and the query still succeeds under
+`SETTINGS force_optimize_projection = 1` — so it is genuinely used, not merely
+present. **Option D holds.**
+
+**3. `AggregatingMergeTree` folds correctly, and is right even before merging.**
+Three separate parts carrying `first_seen` values 900, 100, 500 for the same key.
+Reading **without** `FINAL` already returns 100; after `OPTIMIZE FINAL` the table
+holds one row with 100.
+
+That last point matters more than it looks. Prod RMT tables are chronically
+un-merged (task 0420), so anything that depends on merges having run is fragile
+here. A `min` aggregate does not: unmerged parts produce extra rows that the
+query's own `min()` folds correctly. **Option E is robust against the exact
+un-merged-parts condition that already bites this cluster.**
 
 Remaining open:
 
-- Whether `SimpleAggregateFunction(min, …)` or a plain `AggregatingMergeTree`
-  with `minState`/`minMerge` reads better.
-- D vs E: D is contained (one projection, no engine change); E is the most
-  fundamental but rewrites `accounts` and touches every reader and writer of it.
+- `SimpleAggregateFunction(min, …)` was the shape tested and it behaved
+  correctly; `minState`/`minMerge` was not compared.
+- **D vs E is the only decision left.** Both survive `ATTACH PART`, both were
+  verified working. D is contained — one projection, no engine change, no
+  migration of `accounts`. E is more fundamental: the table itself stops being
+  able to express a wrong minimum, and it needs no `FINAL`, which is worth real
+  money on a cluster whose RMT tables do not merge. E costs a full rewrite of
+  `accounts` and touches every reader and writer of it.
+- Decide on blast radius, not on correctness — correctness is settled for both.
 
 ### Two traps 0528 hit, certain to recur
 
