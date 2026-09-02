@@ -13,10 +13,11 @@
   never by layer ("all queries of the module" is how god files grow).
 - Tests always live in a sibling file, never inline: Rust `foo_tests.rs`
   via `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`, TS `foo.test.ts(x)`.
-  Verification-only code (oracles, corpus checks) goes to `tests/` entirely.
+- Verification-only code (oracles, corpus checks) belongs in the crate's
+  `tests/` directory, not in the production module it verifies.
 - Touching a file that exceeds the limit? Extract at least its tests in the
   same PR. New files must not be born over the limit.
-- Existing god files shrink incrementally — task 0526 tracks the backlog —
+- The existing stock shrinks incrementally — task 0525 tracks the backlog —
   never in a big-bang refactor.
 
 ## File Deletion Policy
@@ -32,18 +33,6 @@ mv <file> "$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
 committed. Move files to the **main checkout's** `.trash/`, never a worktree's:
 removing a merged or abandoned worktree deletes its trash with it, and the
 policy is then satisfied in letter while the file is gone.
-
-## File Size & Test Placement
-
-- Production module ≤ ~800 lines. Split BY TOPIC (one concern per file),
-  never by layer ("all queries of the module" is how god files grow).
-- Tests always live in a sibling file, never inline: Rust `foo_tests.rs`
-  via `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`, TS `foo.test.ts(x)`.
-- Verification-only code (oracles, corpus checks) belongs in the crate's
-  `tests/` directory, not in the production module it verifies.
-- Touching a file that exceeds the limit? Extract at least its tests in the
-  same PR. New files must not be born over the limit.
-- The existing stock shrinks incrementally — task 0525, never a big bang.
 
 ## Task-Gated Development
 

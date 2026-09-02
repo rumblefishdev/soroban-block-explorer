@@ -8,6 +8,18 @@ related_tasks: ['0374']
 tags: ['phase-future', 'effort-medium', 'priority-low', 'code-health']
 links: []
 history:
+  - date: '2026-09-02'
+    status: backlog
+    who: karolkow
+    note: >
+      Absorbed 0526, which was the same task filed twice on the same day from
+      the same 0374 simplify round — same subject, same parent, both in
+      backlog. 0526's file is retired rather than left as a second task on one
+      subject (the 0470/0471 precedent). Everything it carried that this one
+      did not is folded in below: `contracts/queries.rs` in the table, the
+      per-PR method, and the pure-move commit convention. The repo `CLAUDE.md`
+      carried the same section twice for the same reason, one half pointing at
+      each id; deduplicated in this commit and pointed at 0525.
   - date: 2026-08-31
     status: backlog
     who: claude
@@ -37,7 +49,8 @@ Measured 2026-08-31 (production lines, tests already excluded where split):
 | `crates/xdr-parser/src/invocation.rs`                         |                                        1,580 |
 | `crates/enrichment-shared/src/nft_token_uri/client.rs`        |                                        1,572 |
 | `crates/api/src/assets/queries.rs`                            |                                        1,362 |
-| `crates/api/src/liquidity_pools/handlers.rs`                  |                                       ~1,240 |
+| `crates/api/src/liquidity_pools/handlers.rs`                  |             ~1,240 (tests extracted in 0374) |
+| `crates/api/src/contracts/queries.rs`                         |                                        1,245 |
 | `web/src/pages/transaction-detail/op-card/ExecutionTrace.tsx` |                                        1,000 |
 
 The TS side is healthier (max 1k, tests in `*.test.tsx` siblings) — the rule
@@ -59,8 +72,22 @@ siblings and moved the share-token oracle out of `pool_router.rs` into
 - Verification-only code (oracles, corpus tests) moves to the crate's
   `tests/` directory, out of the production module — the `pool_router.rs`
   share-token oracle move is the pattern.
+- A split is its own `refactor(...)` commit: pure moves, zero behaviour
+  change, so the review is `git diff --color-moved`. Never fold a split into
+  the feature commit that happened to touch the file.
 - Update the table above as files shrink; close the task when nothing
   production exceeds the CLAUDE.md limit.
+
+### Open question, first hit 2026-09-02 (task 0485)
+
+`*_tests.rs` does not exist ANYWHERE in this repo yet — 0374 extracted the LP
+module's tests, but that work sits on an unmerged branch, so on `develop` the
+convention is still unwritten. 0485 touched `assets/queries.rs` (1,422) and
+`search/queries.rs` (1,167) and deliberately did NOT extract: neither file
+would have come under 800 afterwards, so the only gain would have been
+establishing a repo-wide file convention inside a 46-line bugfix. Decided by
+karolkow. If the convention is to be set, it deserves its own PR where the
+move IS the whole diff.
 
 ## Acceptance Criteria
 
