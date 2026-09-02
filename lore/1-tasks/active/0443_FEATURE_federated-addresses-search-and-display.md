@@ -31,6 +31,19 @@ history:
     status: active
     who: karolkow
     note: >
+      Read SEP-1 and SEP-2 at the source and checked the implementation
+      against them. Four corrections: internationalized domains were not
+      classified at all; `>` was accepted in a username the spec excludes;
+      federation answers were cached for five minutes against an explicit
+      "should not be cached"; and the response-size cap two acceptance
+      criteria claimed did not exist. Also gated the reverse direction on the
+      domain shape — 7484 accounts carry a dotless `home_domain` (`Bankless`,
+      `Indonesia`, `localhost:4000`, `1`, a bare space), every one of which
+      was dialled before.
+  - date: '2026-09-02'
+    status: active
+    who: karolkow
+    note: >
       B rewritten from scratch on the search branch instead of shipping
       separately: the same two hops already existed for A, so the reverse
       direction is one resolver, one hook and one summary row. Live sample of
@@ -105,7 +118,9 @@ One hook, three entry points covered, neither caller touched.
       `FEDERATION_SERVER`, server that 404s, CORS refusal, timeout — each
       surfaces an explicit message. An empty results page would read as
       "this address does not exist", which is a different and false claim.
-- [x] Bounded: request timeout and a response-size cap, so a hung host
+- [x] Bounded: request timeout and a response-size cap (the cap was claimed
+      here before it existed — `res.text()` read the whole body; added
+      2026-09-02), so a hung host
       cannot leave the input spinning forever.
 - [x] Never fires on ordinary queries — an input without exactly one `*`,
       or with an unparseable domain, must not trigger a network call.

@@ -211,9 +211,19 @@ describe('resolveFederatedName (reverse, type=id)', () => {
     ).resolves.toBeNull();
   });
 
-  it('makes no request when the account has no home domain', async () => {
+  // `home_domain` is free text on the ledger. Measured in production: 7484
+  // accounts carry one with no dot in it, so this gate is the difference
+  // between a quiet account page and one that dials a host that cannot exist.
+  it.each([
+    ['empty', ''],
+    ['a label with no dot', 'Bankless'],
+    ['a country name', 'Indonesia'],
+    ['a host with a port', 'localhost:4000'],
+    ['a bare digit', '1'],
+    ['a space', ' '],
+  ])('makes no request for %s', async (_label, homeDomain) => {
     const fetchMock = stubFetch({});
-    await expect(resolveFederatedName(ACCOUNT, '')).resolves.toBeNull();
+    await expect(resolveFederatedName(ACCOUNT, homeDomain)).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

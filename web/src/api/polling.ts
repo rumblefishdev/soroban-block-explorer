@@ -104,11 +104,16 @@ export const searchPolicy = {
  * - `refetchOnWindowFocus: false` — the global default is `true`, which would
  *   re-run both hops against someone else's server every time the tab regains
  *   focus, for a value that changes on a human timescale.
- * - `staleTime` matches the global `gcTime` (5 min); a longer window would be
- *   unreachable, since the entry is evicted at `gcTime` anyway.
+ * - No caching at all, matching `searchPolicy`. SEP-2 is explicit: "Federation
+ *   responses should not be cached. Some organizations may generate random IDs
+ *   to protect their users' privacy. Those IDs may change over time." A cached
+ *   forward answer could send someone to an account the anchor has since
+ *   rotated away from, which is the one failure worth paying an extra request
+ *   to avoid.
  */
 export const federationPolicy = {
-  staleTime: 5 * 60_000,
+  staleTime: 0,
+  gcTime: 0,
   retry: false,
   refetchOnWindowFocus: false,
 } as const;

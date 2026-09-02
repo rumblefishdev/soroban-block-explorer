@@ -38,8 +38,20 @@ import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
  * round-trips, and a dotless string is far more likely to be someone's search
  * term than an anchor domain.
  */
-const FEDERATED =
-  /^[^*\s>]+\*((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+\p{L}{2,})$/iu;
+const DOMAIN_SRC =
+  '(?:[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?\\.)+\\p{L}{2,}';
+
+const FEDERATED = new RegExp(`^[^*\\s>]+\\*(${DOMAIN_SRC})$`, 'iu');
+
+/**
+ * The domain half on its own, for `home_domain` — which is free text written
+ * by the account holder, not a validated field. Measured in production:
+ * 7484 accounts carry a `home_domain` with no dot in it at all, the commonest
+ * being `Bankless`, `Indonesia`, `localhost:4000`, `1` and a bare space.
+ * Without this gate every one of those account pages would dial a host that
+ * cannot exist.
+ */
+const DOMAIN = new RegExp(`^${DOMAIN_SRC}$`, 'iu');
 
 /** Budget for a whole lookup, both hops together. */
 const TIMEOUT_MS = 8_000;
@@ -68,6 +80,14 @@ function budget(signal?: AbortSignal): AbortSignal {
   return signal == null ? timeout : AbortSignal.any([signal, timeout]);
 }
 
+/**
+ * A `stellar.toml` is a config file and a federation answer is one small JSON
+ * object. Anything past this is a host trying to fill the tab's memory — and
+ * the request timeout does NOT bound bytes, since a fast server can stream a
+ * great deal in eight seconds.
+ */
+const MAX_BYTES = 256 * 1024;
+
 async function getText(url: string, signal: AbortSignal): Promise<string> {
   const res = await fetch(url, {
     signal,
@@ -78,7 +98,27 @@ async function getText(url: string, signal: AbortSignal): Promise<string> {
     credentials: 'omit',
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+
+  // `body` is absent when the response arrives already buffered — nothing to
+  // cap in that case.
+  const body = res.body;
+  if (body == null) return res.text();
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BYTES) {
+      await reader.cancel();
+      throw new Error('response too large');
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 // No cache below this line on purpose: React Query already caches the whole
@@ -199,7 +239,7 @@ export async function resolveFederatedName(
   signal?: AbortSignal
 ): Promise<string | null> {
   const domain = homeDomain.trim().toLowerCase();
-  if (domain.length === 0) return null;
+  if (!DOMAIN.test(domain)) return null;
 
   const budgeted = budget(signal);
   const found = await lookupServer(domain, budgeted);
