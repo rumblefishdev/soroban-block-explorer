@@ -54,6 +54,7 @@ fn parse_ledger_surfaces_pool_state() {
                 soroban_token_balances: &parsed.soroban_token_balances,
                 plane_pool_data: &parsed.plane_pool_data,
                 pool_instances: &parsed.pool_instances,
+                soroswap_pairs: &parsed.soroswap_pairs,
                 sac_classic: &std::collections::HashMap::new(),
                 sac_overrides: &parsed.sac_overrides,
                 prior_wasm_verdicts: &std::collections::HashMap::new(),

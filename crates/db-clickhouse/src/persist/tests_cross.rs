@@ -1609,6 +1609,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
@@ -1770,6 +1771,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1813,6 +1815,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1858,6 +1861,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -1915,6 +1919,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
@@ -1970,6 +1975,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2124,6 +2130,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2232,6 +2239,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -2311,6 +2319,7 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3195,6 +3204,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: std::slice::from_ref(&instance),
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3285,6 +3295,7 @@ fn stage_registration(
         soroban_token_balances: &[],
         plane_pool_data: &[],
         pool_instances: instances,
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3352,6 +3363,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         soroban_token_balances: &[],
         plane_pool_data: std::slice::from_ref(&plane_write),
         pool_instances: std::slice::from_ref(&instance),
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3615,6 +3627,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         soroban_token_balances: &[],
         plane_pool_data: std::slice::from_ref(&plane_write),
         pool_instances: &[instance, conc],
+        soroswap_pairs: &[],
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
@@ -3667,4 +3680,205 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             .all(|r| r.plane_id != 0),
         "plane_id is load-bearing for reserve provenance — never 0"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Soroswap staging (task 0518): new_pair corroboration + the pair's own
+// instance as reserve source and declaration. Addresses are real mainnet
+// ones (the first pair in history + the documented factory).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+const SORO_FACTORY: &str = "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2";
+#[cfg(test)]
+const SORO_PAIR: &str = "CDMC44BMEGF5GMJHNP6NQA3LLBMWLONQFV37E2J5NWYYBBEXNMYMKRBO";
+#[cfg(test)]
+const SORO_T0: &str = "CAINX4EAMVB5DJLM3TP7Z5AZIKEYBA6LKURSBF75C6MS35NDY3FYLV6Y";
+#[cfg(test)]
+const SORO_T1: &str = "CAVXDPJ2M6BWRVTJ3VOVSE3U7QISFS4ET3XA3ONS3UD47X6TA54PIXFJ";
+
+#[cfg(test)]
+fn new_pair_event(tx_hash: &str, factory: &str, pair: &str) -> ExtractedEvent {
+    ExtractedEvent {
+        transaction_hash: tx_hash.to_string(),
+        event_type: ContractEventType::Contract,
+        source: EventSource::TxLevel,
+        contract_id: Some(factory.to_string()),
+        topics: serde_json::json!([
+            {"type": "string", "value": "SoroswapFactory"},
+            {"type": "sym", "value": "new_pair"}
+        ]),
+        data: serde_json::json!({"type": "map", "value": [
+            {"key": {"type": "sym", "value": "new_pairs_length"},
+             "value": {"type": "u32", "value": 1}},
+            {"key": {"type": "sym", "value": "pair"}, "value": {"type": "address", "value": pair}},
+            {"key": {"type": "sym", "value": "token_0"}, "value": {"type": "address", "value": SORO_T0}},
+            {"key": {"type": "sym", "value": "token_1"}, "value": {"type": "address", "value": SORO_T1}}
+        ]}),
+        ledger_sequence: 10,
+        event_index: 0,
+        op_index: None,
+        stage: None,
+        created_at: 1_700_000_000,
+    }
+}
+
+#[cfg(test)]
+fn soroswap_pair_instance(
+    reserves: Option<(&str, &str)>,
+    total_supply: Option<&str>,
+    created: bool,
+) -> xdr_parser::pool_soroswap::ExtractedSoroswapPair {
+    xdr_parser::pool_soroswap::ExtractedSoroswapPair {
+        state: xdr_parser::pool_soroswap::SoroswapPairState {
+            pair: SORO_PAIR.into(),
+            token_0: SORO_T0.into(),
+            token_1: SORO_T1.into(),
+            factory: SORO_FACTORY.into(),
+            reserves: reserves.map(|(a, b)| (a.to_string(), b.to_string())),
+            total_supply: total_supply.map(str::to_string),
+        },
+        ledger_sequence: 10,
+        created,
+    }
+}
+
+#[cfg(test)]
+fn stage_soroswap(
+    ledger: &ExtractedLedger,
+    tx: &ExtractedTransaction,
+    events: &[(String, Vec<ExtractedEvent>)],
+    pairs: &[xdr_parser::pool_soroswap::ExtractedSoroswapPair],
+) -> stage::StagedLedger {
+    stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger,
+        transactions: std::slice::from_ref(tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events,
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        plane_pool_data: &[],
+        pool_instances: &[],
+        soroswap_pairs: pairs,
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
+    .expect("prepare")
+}
+
+/// A corroborated, created-in-ledger registration stages the full registry
+/// row: kind 1, both leg tokens, the factory as deployment, the vendor's
+/// compiled-in 30 bps fee, and an EMPTY pool_type_raw (decision 64).
+#[test]
+fn a_corroborated_new_pair_registers_with_the_pairs_own_facts() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x81);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![new_pair_event(&tx.hash, SORO_FACTORY, SORO_PAIR)],
+    )];
+    let pairs = [soroswap_pair_instance(None, None, true)];
+
+    let staged = stage_soroswap(&ledger, &tx, &events, &pairs);
+
+    let row = staged
+        .pool_rows
+        .iter()
+        .find(|r| r.pool_kind == 1)
+        .expect("the corroborated registration stages a registry row");
+    assert_eq!(row.deployment_id, ids::contract_id(SORO_FACTORY));
+    assert_eq!(
+        row.legs,
+        vec![ids::contract_id(SORO_T0), ids::contract_id(SORO_T1)]
+    );
+    assert_eq!(row.fee_bps, 30);
+    assert_eq!(row.pool_type_raw, "");
+    // A newborn pair has no reserves yet — no state row, but the
+    // declaration (self plane, self share token) MUST stage.
+    assert!(staged.pool_state_change_rows.is_empty());
+    let decl = staged
+        .pool_instance_state_rows
+        .first()
+        .expect("the declaration stages at birth");
+    assert_eq!(decl.plane_id, ids::contract_id(SORO_PAIR));
+    assert_eq!(decl.share_token_id, ids::contract_id(SORO_PAIR));
+    assert_eq!(decl.total_shares, 0);
+}
+
+/// The two forgery signatures: an emitter the pair does not declare, and a
+/// pair instance that was merely TOUCHED (not created) this ledger.
+#[test]
+fn uncorroborated_or_touched_new_pairs_are_refused() {
+    const ATTACKER: &str = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x82);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![new_pair_event(&tx.hash, ATTACKER, SORO_PAIR)],
+    )];
+    // The pair's instance names the REAL factory — the attacker's event
+    // must not become a row.
+    let pairs = [soroswap_pair_instance(None, None, true)];
+    let staged = stage_soroswap(&ledger, &tx, &events, &pairs);
+    assert!(staged.pool_rows.iter().all(|r| r.pool_kind == 0));
+
+    // Genuine factory as emitter, but the instance was only touched — the
+    // induced-forgery signature. Refused the same way.
+    let tx2 = synthetic_tx(0x83);
+    let events2 = vec![(
+        tx2.hash.clone(),
+        vec![new_pair_event(&tx2.hash, SORO_FACTORY, SORO_PAIR)],
+    )];
+    let touched = [soroswap_pair_instance(None, None, false)];
+    let staged2 = stage_soroswap(&ledger, &tx2, &events2, &touched);
+    assert!(staged2.pool_rows.iter().all(|r| r.pool_kind == 0));
+}
+
+/// A live pair write stages the reserve row stamped with the pair's OWN id
+/// as plane (owner, stamp and declaration coincide) plus the refreshed
+/// declaration carrying the LP-token supply.
+#[test]
+fn a_pair_write_stages_self_stamped_reserves_and_supply() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x84);
+    let pairs = [soroswap_pair_instance(
+        Some(("3362421101426", "585980063616")),
+        Some("1387420389"),
+        false,
+    )];
+
+    let staged = stage_soroswap(&ledger, &tx, &[], &pairs);
+
+    let state = staged
+        .pool_state_change_rows
+        .first()
+        .expect("reserves stage from the pair's own instance");
+    assert_eq!(
+        state.reserves,
+        vec![3_362_421_101_426_i128, 585_980_063_616]
+    );
+    assert_eq!(
+        state.plane_id,
+        ids::contract_id(SORO_PAIR),
+        "the stamp is the pair itself — the provenance filter passes by construction"
+    );
+    let decl = staged
+        .pool_instance_state_rows
+        .first()
+        .expect("declaration");
+    assert_eq!(decl.total_shares, 1_387_420_389);
+    assert_eq!(decl.share_token_id, ids::contract_id(SORO_PAIR));
 }

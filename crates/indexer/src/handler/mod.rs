@@ -412,6 +412,7 @@ async fn persist_with_retry(
                 &parsed.soroban_token_balances,
                 &parsed.plane_pool_data,
                 &parsed.pool_instances,
+                &parsed.soroswap_pairs,
                 &parsed.sac_overrides,
                 classification_cache,
             )

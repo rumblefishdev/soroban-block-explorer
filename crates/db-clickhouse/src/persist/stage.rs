@@ -301,6 +301,10 @@ pub struct StageInputs<'a> {
     /// supersedes the deposit⇄mint detector as primary (it stays a
     /// cross-check).
     pub pool_instances: &'a [xdr_parser::pool_state::ExtractedPoolInstance],
+    /// Soroswap pair-instance writes (task 0518) — reserve source AND
+    /// declaration for that family: the pair's own instance carries its leg
+    /// tokens, reserves, deploying factory and LP-token supply.
+    pub soroswap_pairs: &'a [xdr_parser::pool_soroswap::ExtractedSoroswapPair],
     /// Task 0331 + ADR 0051 — SAC contract surrogate → wrapped classic/native
     /// `asset_id` (from `asset_sac`, via [`crate::persist::fetch_sac_classic_map`]).
     /// [`build_balance_rows`] keys a contract-held SAC balance onto the classic
@@ -361,6 +365,7 @@ pub fn prepare(
         contract_metadata_writes: &[],
         plane_pool_data: &[],
         pool_instances: &[],
+        soroswap_pairs: &[],
         soroban_token_balances: &[],
         sac_classic: &HashMap::new(),
         sac_overrides: &[],
@@ -552,6 +557,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         soroban_token_balances,
         plane_pool_data,
         pool_instances,
+        soroswap_pairs,
         sac_classic,
         sac_overrides,
         prior_wasm_verdicts,
@@ -1156,6 +1162,53 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
+    // Soroswap-family registrations (task 0518): the factory's `new_pair`,
+    // corroborated by the PAIR's own instance — the pair records its
+    // deploying factory at DataKey 4 in storage IT owns, and the factory
+    // deploys + initialises the pair in the registering transaction, so a
+    // genuine registration always has a same-ledger CREATED instance
+    // pointing back at the emitter. Anything else — no instance, a foreign
+    // factory, or a merely TOUCHED instance (the induced-forgery signature,
+    // same class the router family's created gate closes) — is refused
+    // loudly. No UNVERIFIED arm exists here: the factory pointer is part of
+    // the recognition shape, so a pair without one is not a pair.
+    let declared_factory: HashMap<&str, (&str, bool)> = {
+        let mut m: HashMap<&str, (&str, bool)> = HashMap::new();
+        for sp in soroswap_pairs {
+            let e = m
+                .entry(sp.state.pair.as_str())
+                .or_insert((sp.state.factory.as_str(), false));
+            e.0 = sp.state.factory.as_str();
+            e.1 |= sp.created;
+        }
+        m
+    };
+    for reg in xdr_parser::pool_soroswap::detect_pair_registrations(events) {
+        match declared_factory.get(reg.event.pair.as_str()) {
+            Some(&(factory, true)) if factory == reg.factory => {}
+            found => {
+                tracing::warn!(
+                    ledger_sequence = ledger.sequence,
+                    pair = %reg.event.pair,
+                    emitter = %reg.factory,
+                    declared = ?found,
+                    "new_pair registration refused — the named pair's instance does \
+                     not declare this emitter as its factory at creation"
+                );
+                continue;
+            }
+        }
+        match soroswap_registry_row(&reg, ledger_sequence_i64) {
+            Ok(row) => out.pool_rows.push(row),
+            Err(reason) => tracing::error!(
+                ledger_sequence = ledger.sequence,
+                pair = %reg.event.pair,
+                reason,
+                "new_pair registration refused — a pair is missing from the registry"
+            ),
+        }
+    }
+
     // Pool state from ledger entries (task 0374, step 7): plane writes are
     // THE reserve source; instance writes are the STATE source for share
     // tokens (the deposit⇄mint detector remains only as a cross-check, per
@@ -1271,6 +1324,62 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             ),
         }
     }
+    // Soroswap pairs (task 0518): the pair's OWN instance is both the
+    // reserve source and the declaration — owner, stamp and declaration
+    // COINCIDE, so `plane_id` is the pair's own id: the read-side provenance
+    // filter passes by construction, a forged foreign write still lands in
+    // its own key space, and `share_token_id` is the pair too (it IS its own
+    // SEP-41 LP token). `total_shares = 0` before the first mint is a TRUE
+    // zero (nothing outstanding), not a fallback; a present-but-unparseable
+    // value refuses the row loudly, same as every sibling arm.
+    for sp in soroswap_pairs {
+        let Some(pool_id) = ids::contract_payload(&sp.state.pair) else {
+            tracing::error!(
+                ledger_sequence = sp.ledger_sequence,
+                pair = %sp.state.pair,
+                "pair write refused: address is not a valid C… strkey"
+            );
+            continue;
+        };
+        let self_id = ids::contract_id(&sp.state.pair);
+        if let Some((r0, r1)) = &sp.state.reserves {
+            match (r0.parse::<i128>(), r1.parse::<i128>()) {
+                (Ok(a), Ok(b)) => pool_state_rows.push(PoolStateChangeRow {
+                    pool_id,
+                    ledger_sequence: i64::from(sp.ledger_sequence),
+                    reserves: vec![a, b],
+                    plane_id: self_id,
+                }),
+                _ => tracing::error!(
+                    ledger_sequence = sp.ledger_sequence,
+                    pair = %sp.state.pair,
+                    "pair reserve write refused: non-numeric reserve — a snapshot is missing"
+                ),
+            }
+        }
+        let total_shares = match sp.state.total_supply.as_deref() {
+            None => 0,
+            Some(raw) => match raw.parse::<i128>() {
+                Ok(v) => v,
+                Err(_) => {
+                    tracing::error!(
+                        ledger_sequence = sp.ledger_sequence,
+                        pair = %sp.state.pair,
+                        "pair write refused: non-numeric TotalSupply"
+                    );
+                    continue;
+                }
+            },
+        };
+        instance_state_rows.push(PoolInstanceStateRow {
+            pool_id,
+            plane_id: self_id,
+            share_token_id: self_id,
+            total_shares,
+            derived_at_ledger: i64::from(sp.ledger_sequence),
+        });
+    }
+
     // ONE row per key for both state tables — the folds' doc comments carry
     // the key rationale (plane in the state key; version ties within a
     // ledger for the instance table).
@@ -2409,6 +2518,42 @@ fn fold_pool_instance_state(rows: Vec<PoolInstanceStateRow>) -> Vec<PoolInstance
 /// concentrated-instance arm.
 fn parse_reserves(raw: &[String]) -> Option<Vec<i128>> {
     raw.iter().map(|r| r.parse::<i128>().ok()).collect()
+}
+
+/// Registry row for one corroborated `new_pair` registration (task 0518).
+///
+/// `pool_type_raw` stays EMPTY: the vendor emits no type — Soroswap is one
+/// fixed constant-product mode — and an invented label would be our
+/// interpretation, not a verbatim value (decision 64). The fee is the
+/// vendor's compiled-in constant: 3/1000 on every swap ("Constant product
+/// AMM with a .3% swap fee", `soroswap/core` pair source, fetched
+/// 2026-09-02) = 30 bps. Legs are the pair's leg TOKENS in vendor order
+/// (token_0, token_1); the share token is NOT a registry column — the pair
+/// is its own LP token and the relation lives in `pool_instance_state`.
+fn soroswap_registry_row(
+    reg: &xdr_parser::pool_soroswap::PairRegistration,
+    ledger_sequence: i64,
+) -> Result<LiquidityPoolRow, &'static str> {
+    let pool_id =
+        ids::contract_payload(&reg.event.pair).ok_or("pair address is not a valid C… strkey")?;
+    Ok(LiquidityPoolRow {
+        pool_id,
+        asset_a_type: 0,
+        asset_a_code: String::new(),
+        asset_a_issuer_id: 0,
+        asset_b_type: 0,
+        asset_b_code: String::new(),
+        asset_b_issuer_id: 0,
+        fee_bps: 30,
+        last_updated_ledger: ledger_sequence,
+        pool_kind: 1,
+        legs: vec![
+            ids::contract_id(&reg.event.token_0),
+            ids::contract_id(&reg.event.token_1),
+        ],
+        deployment_id: ids::contract_id(&reg.factory),
+        pool_type_raw: String::new(),
+    })
 }
 
 /// Registry row for one decoded `add_pool` registration.

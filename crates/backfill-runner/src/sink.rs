@@ -233,6 +233,7 @@ impl PartitionWriterHandle {
                     // `pool_state_changes` / `pool_instance_state` for free.
                     plane_pool_data: &parsed.plane_pool_data,
                     pool_instances: &parsed.pool_instances,
+                    soroswap_pairs: &parsed.soroswap_pairs,
                     sac_classic: &sac_classic,
                     sac_overrides: &parsed.sac_overrides,
                     // Task 0283 live G1/G9 are for the live indexer path only.
