@@ -300,6 +300,14 @@ SELECT pool_id, reserve_a, reserve_b, ledger_sequence FROM liquidity_pool_snapsh
 52,733 rows out, no scan per refresh. One heavy pass over history is needed to
 seed it; that one is unavoidable.
 
+**Filter on `pool_kind = 0`** — and note that 52,733 is exactly the classic pool
+count, so the figure above already assumes it. Production carries 497 registered
+Soroban-AMM pools (`pool_kind = 1`, task 0374) and **zero** reserve snapshots for
+them today, so the MV as written is correct by accident. The moment 0374 starts
+persisting their reserves, an unfiltered version double-counts: a Soroban pool
+holds its reserves AS a contract, so ADR 0051 already sums them into `balances`.
+Source #3 is the NATIVE `LiquidityPoolEntry` and nothing else.
+
 ### 4. The planned synthetic-`balances` rows would corrupt `holder_count`
 
 The 2026-07-02 plan writes synthetic `balances` rows (holder = pool id /
