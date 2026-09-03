@@ -1,4 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+import { routes } from '../router/routes.js';
 
 import { federationPolicy } from '../api/polling.js';
 
@@ -80,4 +84,61 @@ export function useFederatedName(
     enabled: homeDomain.length > 0,
     ...federationPolicy,
   }).data;
+}
+
+/** What both search surfaces need to draw and drive a federated lookup. */
+export interface FederatedLookup {
+  /** The domain being offered or asked, `null` when `q` is not an address. */
+  domain: string | null;
+  /** True once the user has asked. Until then nothing has left the browser. */
+  armed: boolean;
+  /** Ask the domain about the current query. */
+  ask: () => void;
+  /** Why the lookup failed, verbatim for the user, or `null`. */
+  failure: string | null;
+}
+
+/**
+ * The whole forward flow behind one call: classify, hold the "may we ask yet"
+ * decision, and go to the account when the answer arrives.
+ *
+ * Both surfaces run this. They differ in exactly one thing — whether the
+ * query they were handed has already been asked for — so that is the one
+ * parameter. The header dropdown starts unarmed, because its text is being
+ * typed. The results page starts armed, because arriving at `/search?q=…` is
+ * itself the act of asking: the user pressed Enter, picked the row, or pasted
+ * the link. Editing disarms either of them, since arming is keyed to the
+ * exact query and `bob*lobstr.com` passes through `bob*lobstr.co` — a real
+ * domain with a different owner.
+ *
+ * Classification runs on the live text: it only decides which panel to draw,
+ * costs a regex and reaches no network. Asking runs on the armed text.
+ */
+export function useFederatedLookup(
+  q: string,
+  { askOnMount, onResolved }: { askOnMount: boolean; onResolved?: () => void }
+): FederatedLookup {
+  const trimmed = q.trim();
+  const navigate = useNavigate();
+  const [askedFor, setAskedFor] = useState<string | null>(() =>
+    askOnMount ? trimmed : null
+  );
+  const armed = askedFor != null && askedFor === trimmed;
+  const { domain, data } = useFederatedAddress(q, armed);
+
+  const resolved = armed && data?.kind === 'resolved' ? data.accountId : null;
+  const failure = armed && data?.kind === 'failed' ? data.reason : null;
+
+  useEffect(() => {
+    if (resolved == null) return;
+    onResolved?.();
+    navigate(routes.account(resolved), { replace: askOnMount });
+  }, [resolved, navigate, onResolved, askOnMount]);
+
+  return {
+    domain,
+    armed,
+    ask: useCallback(() => setAskedFor(trimmed), [trimmed]),
+    failure,
+  };
 }

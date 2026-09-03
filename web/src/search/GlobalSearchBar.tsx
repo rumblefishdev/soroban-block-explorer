@@ -4,11 +4,10 @@ import { useNavigate } from 'react-router-dom';
 
 import type { SearchHit } from '@rumblefish/api-types';
 
-import { routes } from '../router/routes.js';
-
+import { FederationStatus } from './FederationStatus.js';
 import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
-import { useFederatedAddress } from './useFederation.js';
+import { useFederatedLookup } from './useFederation.js';
 import { useSearchResults } from './useSearchResults.js';
 
 interface GlobalSearchBarProps {
@@ -33,33 +32,17 @@ export function GlobalSearchBar({
   const state = useSearchResults({ q });
 
   // Resolved here rather than only on the results page, so a federated
-  // address ends where every other query ends — a row in this dropdown.
+  // address ends where every other query ends — a row in this dropdown. The
+  // flow itself is shared with the results page (`useFederatedLookup`), so
+  // the two cannot drift on when they may ask or where they land.
   //
-  // Nothing leaves the browser until the row is picked. Resolving as you type
-  // would dial whatever the half-typed text happens to name, and `lobstr.co`
-  // is a real domain on the way to `lobstr.com` (22 such prefix pairs in our
-  // own data, several with different owners). Arming is keyed to the exact
-  // query, so editing the text takes it back.
-  const [armedFor, setArmedFor] = useState<string | null>(null);
-  const armed = armedFor != null && armedFor === q.trim();
-  const federated = useFederatedAddress(q, armed);
+  // Unarmed at mount: the text in this bar is being typed.
+  const federated = useFederatedLookup(q, {
+    askOnMount: false,
+    onResolved: onDismiss,
+  });
   const federatedFor = federated.domain;
-  const resolved =
-    armed && federated.data?.kind === 'resolved'
-      ? federated.data.accountId
-      : null;
-  const failure =
-    armed && federated.data?.kind === 'failed' ? federated.data.reason : null;
 
-  const arm = useCallback(() => setArmedFor(q.trim()), [q]);
-
-  // Landing on the account is the point of the row; once the two hops answer,
-  // go, rather than making the user click the same row a second time.
-  useEffect(() => {
-    if (resolved == null) return;
-    onDismiss();
-    navigate(routes.account(resolved));
-  }, [resolved, navigate, onDismiss]);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
@@ -79,7 +62,7 @@ export function GlobalSearchBar({
       // Enter is an explicit act, so it arms the lookup — and stays on the
       // page while the two hops run, instead of handing off to /search.
       if (federatedFor != null) {
-        arm();
+        federated.ask();
         return true;
       }
       const picked = state.hitsForActiveTab[highlightedIndex];
@@ -92,7 +75,7 @@ export function GlobalSearchBar({
   }, [
     registerEnterHandler,
     federatedFor,
-    arm,
+    federated,
     state.hitsForActiveTab,
     highlightedIndex,
     selectHitByKeyboard,
@@ -154,8 +137,8 @@ export function GlobalSearchBar({
               type="button"
               role="option"
               aria-selected={false}
-              disabled={armed}
-              onClick={arm}
+              disabled={federated.armed}
+              onClick={federated.ask}
               sx={(theme) => ({
                 display: 'block',
                 width: '100%',
@@ -164,9 +147,9 @@ export function GlobalSearchBar({
                 py: 1.5,
                 border: 'none',
                 background: 'none',
-                cursor: armed ? 'default' : 'pointer',
+                cursor: federated.armed ? 'default' : 'pointer',
                 '&:hover': {
-                  backgroundColor: armed
+                  backgroundColor: federated.armed
                     ? 'transparent'
                     : theme.palette.surface.grayHover,
                 },
@@ -181,23 +164,12 @@ export function GlobalSearchBar({
               <Typography variant="bodySmMedium" component="span">
                 {q.trim()}
               </Typography>
-              <Typography
-                variant="bodyXsRegular"
-                component="span"
-                role="status"
-                sx={(theme) => ({
-                  display: 'block',
-                  color:
-                    failure != null
-                      ? theme.palette.text.error
-                      : theme.palette.text.tertiary,
-                })}
-              >
-                {failure ??
-                  (armed
-                    ? `Asking ${federatedFor}…`
-                    : `Federated address — look it up with ${federatedFor}`)}
-              </Typography>
+              <FederationStatus
+                address={q.trim()}
+                domain={federatedFor}
+                armed={federated.armed}
+                failure={federated.failure}
+              />
             </Box>
           ) : (
             <SearchResultsView

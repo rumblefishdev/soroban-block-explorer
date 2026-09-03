@@ -4,11 +4,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
 
-import { routes } from '../router/routes.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { SearchResultsView } from '../search/SearchResultsView.js';
-import { federatedDomain } from '../search/federation.js';
-import { useFederatedAddress } from '../search/useFederation.js';
+import { FederationStatus } from '../search/FederationStatus.js';
+import { useFederatedLookup } from '../search/useFederation.js';
 import { useSearchResults } from '../search/useSearchResults.js';
 
 export default function SearchResultsPage() {
@@ -47,29 +46,15 @@ export default function SearchResultsPage() {
   // app-shell bar, the home hero and a pasted `/search?q=` URL all converge
   // on, so neither caller needs to change.
   //
-  // Classified from the LIVE text, not from a settled copy: this only decides
-  // which panel to draw, costs a regex, and reaches no network. Deciding it
-  // late left a window in which `useSearchResults` had already suppressed its
-  // request while this page still believed the query was ordinary — so the
-  // view rendered `No results for "karol*lobstr.co"`, the one claim the whole
-  // feature exists to prevent.
-  const federatedFor = federatedDomain(q.trim());
-
-  // Asking, on the other hand, waits for an explicit act — the same rule the
-  // dropdown follows. Arriving at /search?q=… IS that act, so the value the
-  // page mounted with is armed; anything typed afterwards is not, because
-  // `bob*lobstr.com` passes through `bob*lobstr.co`, a real domain with a
-  // different owner. Enter re-arms.
-  const [armedFor, setArmedFor] = useState(() => q.trim());
-  const armed = armedFor === q.trim();
-  const federated = useFederatedAddress(q, armed);
-  const failure =
-    armed && federated.data?.kind === 'failed' ? federated.data.reason : null;
-
-  useEffect(() => {
-    if (federated.data?.kind !== 'resolved') return;
-    navigate(routes.account(federated.data.accountId), { replace: true });
-  }, [federated.data, navigate]);
+  // The same flow the header dropdown runs (`useFederatedLookup`), so the two
+  // cannot disagree about when a domain may be asked or where the answer
+  // lands. This surface differs in one thing: arriving at /search?q=… is
+  // itself the act of asking — the user pressed Enter, picked the row, or
+  // pasted the link — so the query the page mounts with is already armed.
+  // Anything typed afterwards is not.
+  const federated = useFederatedLookup(q, { askOnMount: true });
+  const federatedFor = federated.domain;
+  const failure = federated.failure;
 
   // Deep-link / paste path (`/search?q=...`) bypasses the AppShell +
   // HomeHero submit handlers that normally call `directRouteFor`
@@ -153,34 +138,24 @@ export default function SearchResultsPage() {
                   centres itself in a full-width 80px block, which is right
                   for an empty results panel and wrong beside a line of
                   text. */}
-              {armed && failure == null && (
+              {federated.armed && failure == null && (
                 <CircularProgress size={16} thickness={5} />
               )}
-              <Typography
-                variant="bodySmRegular"
-                component="p"
-                role="status"
-                sx={(theme) => ({
-                  color:
-                    failure != null
-                      ? theme.palette.text.error
-                      : theme.palette.text.tertiary,
-                })}
-              >
-                {failure ??
-                  (armed
-                    ? `Asking ${federatedFor}…`
-                    : `Federated address — look it up with ${federatedFor}`)}
-              </Typography>
+              <FederationStatus
+                address={q.trim()}
+                domain={federatedFor}
+                armed={federated.armed}
+                failure={failure}
+              />
             </Stack>
             {/* Unarmed, or a failure the user may want to retry after the
                 domain comes back: the same button covers both, because both
                 are "ask this domain now". */}
-            {!armed || failure != null ? (
+            {!federated.armed || failure != null ? (
               <Box
                 component="button"
                 type="button"
-                onClick={() => setArmedFor(q.trim())}
+                onClick={federated.ask}
                 sx={(theme) => ({
                   alignSelf: 'flex-start',
                   background: 'none',
