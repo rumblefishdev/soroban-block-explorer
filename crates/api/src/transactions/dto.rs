@@ -135,6 +135,10 @@ pub struct TransactionDetailLight {
     /// `null` for Variant A `parse_error` transactions whose envelope
     /// could not be decoded (lore-0209).
     pub source_account: Option<String>,
+    /// The source account's on-chain `home_domain` (SEP-1 anchor domain),
+    /// `null` when it sets none. The frontend asks that domain for the SEP-2
+    /// federated address it claims for this account (task 0443, issue #363).
+    pub source_account_home_domain: Option<String>,
     /// Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
     /// there is no `decimals` field — the frontend scales by 1e7.
     pub fee_charged: i64,

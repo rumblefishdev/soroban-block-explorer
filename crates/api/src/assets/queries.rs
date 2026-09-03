@@ -123,6 +123,7 @@ pub struct AssetTxRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
+    pub values: Vec<crate::transactions::dto::TransactionValue>,
 }
 
 /// Resolved, validated `GET /v1/assets` list params handed to `fetch_list`.
@@ -176,9 +177,13 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // LEFT JOIN for ALL asset types. `total_supply` = Σ per-holder `amount` over G+C
 // holders: a mint always credits a holder balance (often a contract treasury,
 // summed because we sum contracts too), so the sum equals the token's real
-// supply; the narrow residue (TTL-archived tail + true rebasing) is the accepted
-// non-100% cost of one universal method — no per-token `TotalSupply` key read
-// (see the task 0331 Option-A decision). RAW `Int128` (the API returns it raw;
+// supply; the narrow residue is the accepted non-100% cost of one universal
+// method — no per-token `TotalSupply` key read (see the task 0331 Option-A
+// decision). The residue is everything the chain holds WITHOUT a holder, since
+// this sum is keyed by one: native LP reserves + claimable balances (task 0210,
+// measured 0.001% on USDT0 but unbounded for an AMM-heavy asset), plus the
+// TTL-archived tail and true rebasing. Soroban-DEX reserves are contract-held,
+// so ADR 0051 already counts them. RAW `Int128` (the API returns it raw;
 // clients scale by `decimals`, classic = 7). `Nullable` columns, so a JOIN miss
 // (no holders — reads NULL under the readonly `api_reader`, where
 // `join_use_nulls = 0` defaults a Nullable to NULL) renders "—", not a fake 0.
@@ -1205,9 +1210,16 @@ pub async fn fetch_transactions(
         let Some(row) = by_id.remove(tx_id) else {
             continue;
         };
-        let operation_types = aggregates
-            .get(tx_id)
-            .map(|a| a.operation_types.clone())
+        let agg = aggregates.get(tx_id);
+        let operation_types = agg.map(|a| a.operation_types.clone()).unwrap_or_default();
+        let values = agg
+            .map(|a| {
+                a.values
+                    .iter()
+                    .cloned()
+                    .map(crate::transactions::dto::TransactionValue::from)
+                    .collect()
+            })
             .unwrap_or_default();
         out.push(AssetTxRow {
             id: row.id,
@@ -1224,6 +1236,7 @@ pub async fn fetch_transactions(
             operation_count: row.operation_count,
             has_soroban: row.has_soroban,
             operation_types,
+            values,
         });
     }
     Ok(out)

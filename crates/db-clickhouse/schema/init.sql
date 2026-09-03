@@ -455,7 +455,17 @@ ORDER BY (asset_id);
 -- no measurable gain: a mint always credits a holder balance (often a contract
 -- treasury, summed under Path A G+C holders), so `balance_aggregates.total_supply`
 -- (Σ amount, MV-refreshed) equals the real supply. ONE universal method; the
--- narrow residue (TTL-archived tail + true rebasing) is the accepted non-100% cost.
+-- narrow residue is the accepted non-100% cost.
+--
+-- What the residue actually is (measured on USDT0, 2026-09-03 — task 0210):
+-- everything the chain holds WITHOUT a holder, because this sum is keyed by
+-- holder. Native LP reserves (`LiquidityPoolEntry` — the depositor holds shares,
+-- not the asset) and claimable balances (`ClaimableBalanceEntry` — off the
+-- sender, not yet the receiver), plus the TTL-archived tail and true rebasing.
+-- On USDT0 the first two are the ENTIRE gap: 24.5064194 + 0.3070000 of
+-- 2,595,050.05, i.e. 0.001%. An AMM-heavy asset will show far worse. Soroban-DEX
+-- pool reserves are NOT in this list — a Soroban pool holds its reserves as a
+-- contract, so ADR 0051 already sums them.
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,

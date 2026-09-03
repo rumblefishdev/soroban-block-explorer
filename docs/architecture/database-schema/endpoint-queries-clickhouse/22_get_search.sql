@@ -25,6 +25,7 @@
 --   ------------------------   --------------------------------------------
 --   hash_bytes (hex / L-key)   transaction, pool
 --   strkey_prefix (G… / C…)    account, contract(prefix), asset, nft
+--   code_issuer (CODE:ISSUER)  asset (exact), contract(name), nft
 --   plain text                 contract(name), asset, nft
 --
 -- Intentional divergence from PG: in hash_bytes mode the small-table substring
@@ -125,6 +126,21 @@ LIMIT :per_group_limit;
 -- Step 1: page matching assets (small state table, FINAL). Join the SMALLER
 -- soroban_contracts in-statement for the contract StrKey; do NOT join accounts.
 --
+-- CODE:ISSUER mode (task 0534) takes its own arm: the pair names exactly one
+-- asset, so it is an equality lookup with NO ranking and no holder join — the
+-- most precise query is also the cheapest. The issuer resolves through the
+-- `accounts` ORDER BY key (point seek, never the ~23M-row hash join).
+SELECT a.asset_type,
+       nullIf(a.asset_code, '')   AS asset_code,
+       nullIf(sc.contract_id, '') AS contract_strkey,
+       a.issuer_id
+FROM assets a FINAL
+LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
+WHERE lower(toString(a.asset_code)) = lower(:code)
+  AND a.issuer_id IN (SELECT id FROM accounts WHERE account_id = :issuer)
+LIMIT :per_group_limit;
+
+-- Every other mode takes the substring arm below.
 -- RANKED (task 0485). Before it, this ended in a bare LIMIT with no ORDER BY,
 -- so `USDC` answered with ten `IUSDC` rows and no USDC, and two identical calls
 -- could disagree. The tier is exact code > prefix > anywhere — the order
@@ -155,8 +171,27 @@ ORDER BY multiIf(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lo
 LIMIT :per_group_limit;
 -- Step 2: resolve the page's issuer surrogates → G-StrKey (bloom-pruned seek).
 SELECT id, account_id FROM accounts WHERE id IN (:page_issuer_ids) LIMIT 1 BY id;
--- → identifier = COALESCE(asset_code, 'XLM'); label = token_asset_type_name;
+-- → identifier = COALESCE(asset_code, 'XLM'); label = asset_family_name;
 --   route_token = contract StrKey | CODE-ISSUER | native (composed in Rust).
+
+-- ── asset bucket, code_issuer mode (CODE:ISSUER / CODE-ISSUER) ───────────────
+-- A fully-qualified asset names exactly one row, so this arm is an equality
+-- lookup and needs no ranking — whatever ordering 0485 adds to the substring
+-- arm above does not apply here. The classifier only sets this mode when the issuer
+-- decodes as a CRC-valid G-StrKey, so a typo falls back to the substring arm
+-- above rather than answering with a confidently empty page.
+-- accounts is keyed ORDER BY account_id, making the subquery a point seek and
+-- never the ~23M-row hash join that OOMs (Code 241).
+SELECT a.asset_type,
+       nullIf(a.asset_code, '')   AS asset_code,
+       nullIf(sc.contract_id, '') AS contract_strkey,
+       a.issuer_id
+FROM assets a FINAL
+LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
+WHERE lower(toString(a.asset_code)) = lower(:code)
+  AND a.issuer_id IN (SELECT id FROM accounts WHERE account_id = :issuer)
+LIMIT :per_group_limit;
+-- Step 2 (issuer resolve) and the route_token composition are unchanged.
 
 -- ── nft bucket (strkey_prefix OR plain-text mode) ────────────────────────────
 -- Name + collection come from nft_enrichment (argMax); contract surrogate →

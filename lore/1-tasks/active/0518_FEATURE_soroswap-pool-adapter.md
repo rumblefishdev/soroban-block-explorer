@@ -2,7 +2,7 @@
 id: '0518'
 title: 'Soroswap pool adapter — reserves from sync, volume from swap'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0516', '0517', '0374', '0008']
 tags:
@@ -17,6 +17,13 @@ history:
       Second AMM adapter under 0516. HARD DEPENDENCY on 0517 — until event
       names resolve, every Soroswap event reads as NULL and nothing here is
       reachable.
+  - date: '2026-09-02'
+    status: active
+    who: karolkow
+    note: >
+      Activated after 0517's rule landed (PR #443) and the pre-adapter
+      probes settled every architecture seam. Ordering re-reversed to
+      Soroswap-first on the per-swap re-measurement (see 0516).
 ---
 
 # Soroswap pool adapter

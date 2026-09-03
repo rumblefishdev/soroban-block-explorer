@@ -2441,7 +2441,8 @@
           "created_at",
           "operation_count",
           "has_soroban",
-          "operation_types"
+          "operation_types",
+          "values"
         ],
         "properties": {
           "created_at": {
@@ -2479,6 +2480,13 @@
           },
           "successful": {
             "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionValue"
+            },
+            "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
           }
         }
       },
@@ -2967,6 +2975,10 @@
               "source_account": {
                 "type": ["string", "null"],
                 "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
+              },
+              "source_account_home_domain": {
+                "type": ["string", "null"],
+                "description": "The source account's on-chain `home_domain` (SEP-1 anchor domain),\n`null` when it sets none. The frontend asks that domain for the SEP-2\nfederated address it claims for this account (task 0443, issue #363)."
               },
               "successful": {
                 "type": "boolean"
@@ -3769,7 +3781,8 @@
                 "created_at",
                 "operation_count",
                 "has_soroban",
-                "operation_types"
+                "operation_types",
+                "values"
               ],
               "properties": {
                 "created_at": {
@@ -3807,6 +3820,13 @@
                 },
                 "successful": {
                   "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionValue"
+                  },
+                  "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
                 }
               }
             }
@@ -4822,6 +4842,10 @@
           "source_account": {
             "type": ["string", "null"],
             "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
+          },
+          "source_account_home_domain": {
+            "type": ["string", "null"],
+            "description": "The source account's on-chain `home_domain` (SEP-1 anchor domain),\n`null` when it sets none. The frontend asks that domain for the SEP-2\nfederated address it claims for this account (task 0443, issue #363)."
           },
           "successful": {
             "type": "boolean"

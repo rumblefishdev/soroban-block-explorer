@@ -10,6 +10,7 @@ import {
   StatusChip,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { useFederatedName } from '../../../search/useFederation.js';
 import { FeeCell } from '../../detail/FeeCell.js';
 import { SectionCard } from '../../detail/SectionCard.js';
 import { SummaryRow } from '../../detail/SummaryRow.js';
@@ -100,6 +101,10 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
   const memo = tx.heavy?.memo;
   const heavyUnavailable = tx.heavy == null;
   const failReason = tx.successful ? null : opFailReason(tx);
+  const federatedName = useFederatedName(
+    tx.source_account ?? '',
+    tx.source_account_home_domain ?? ''
+  );
 
   return (
     <SectionCard
@@ -209,11 +214,24 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             label: 'Source account',
             value:
               tx.source_account != null ? (
-                <IdentifierWithCopy
-                  value={tx.source_account}
-                  type="account"
-                  truncate={false}
-                />
+                <Stack spacing={0.25}>
+                  <IdentifierWithCopy
+                    value={tx.source_account}
+                    type="account"
+                    truncate={false}
+                  />
+                  {/* SEP-2 name the account's own home domain claims for it —
+                      secondary to the StrKey, never a replacement, and absent
+                      unless both sides agree (issue #363). */}
+                  {federatedName != null && (
+                    <Typography
+                      variant="bodyXsRegular"
+                      sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                    >
+                      {federatedName}
+                    </Typography>
+                  )}
+                </Stack>
               ) : (
                 <Dash />
               ),
