@@ -175,9 +175,13 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // LEFT JOIN for ALL asset types. `total_supply` = Σ per-holder `amount` over G+C
 // holders: a mint always credits a holder balance (often a contract treasury,
 // summed because we sum contracts too), so the sum equals the token's real
-// supply; the narrow residue (TTL-archived tail + true rebasing) is the accepted
-// non-100% cost of one universal method — no per-token `TotalSupply` key read
-// (see the task 0331 Option-A decision). RAW `Int128` (the API returns it raw;
+// supply; the narrow residue is the accepted non-100% cost of one universal
+// method — no per-token `TotalSupply` key read (see the task 0331 Option-A
+// decision). The residue is everything the chain holds WITHOUT a holder, since
+// this sum is keyed by one: native LP reserves + claimable balances (task 0210,
+// measured 0.001% on USDT0 but unbounded for an AMM-heavy asset), plus the
+// TTL-archived tail and true rebasing. Soroban-DEX reserves are contract-held,
+// so ADR 0051 already counts them. RAW `Int128` (the API returns it raw;
 // clients scale by `decimals`, classic = 7). `Nullable` columns, so a JOIN miss
 // (no holders — reads NULL under the readonly `api_reader`, where
 // `join_use_nulls = 0` defaults a Nullable to NULL) renders "—", not a fake 0.
