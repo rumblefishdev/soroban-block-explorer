@@ -80,6 +80,24 @@ accounts**.
 → **Budget a `repair-tier1` pass after every parallel or `--reindex` backfill.**
 `repair-tier1` itself requires the indexer stopped (see the table below).
 
+> **This is NOT only a backfill trap — it also happens on ordinary live
+> ingest** (task 0531, measured 2026-09-01). The indexer sees only its current
+> batch, so any later event for an entity carries no historic minimum and the
+> RMT replace erases whatever was stored. No parallel run is required.
+>
+> - `nfts.minted_at_ledger` — 643 of 13 932 tokens were wrong, growing **~30 per
+>   day**. Served correctly since task 0528, which reads the value from the
+>   append-only `nft_ownership` instead of the stored column.
+> - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
+>   of them later than the true first appearance. Still wrong today, and it is
+>   rendered on the account page and the account list.
+> - `soroban_contracts.deployed_at_ledger` — **1 597 of 146 397 diverge (1.1%)**.
+>
+> So a clean `repair-tier1` after a backfill does **not** mean the Tier-1 columns
+> stay correct: they start drifting again immediately. Treat the pass as
+> point-in-time cleanup, not as a guarantee. Task 0531 replaces it with storage
+> that carries MIN semantics natively, and retires this rule.
+
 **Unless the run writes one table that has no such column.** A re-parse whose
 only purpose is to populate a NEW derived table does not need to re-emit the
 other twenty-odd — and if it does, it re-arms this trap for nothing. Task 0266
@@ -681,6 +699,66 @@ FROM liquidity_pools WHERE pool_kind = 1
 Any `missing_pool` → re-run the generator (idempotent) and re-check. Any
 `extra_pool` → investigate before proceeding (a row nothing on chain
 registered should not exist).
+
+## Event-name backfill (task 0517) — in-DB, per partition
+
+Fills `soroban_events.signature` for the ~3.8M historical rows whose name
+lives under a non-Symbol first topic (the Soroswap/DeFindex/Blend label
+convention and the Phoenix plain-&str convention). Pure `INSERT … SELECT`
+over `topics_xdr` — flavour A, no re-parse, no S3. The SQL mirrors
+`extract_event_signature` (stage.rs) exactly; version-less RMT keeps the
+last insert per key (rule 4), so re-running a slice is harmless.
+
+**Run it per partition** — a bare `WHERE signature IS NULL` scans all 10G+
+rows in one query, which blows the hourly read quota; the partition key is
+`intDiv(ledger_sequence, 500000)` and each partition is ~300-420M rows, so
+one partition per query prunes cleanly (~4-5/hour under quota, or loop them
+all as the box operator where no quota applies). Partition ids:
+`SELECT DISTINCT partition FROM system.parts WHERE table='soroban_events' AND active`.
+
+```sql
+-- one slice; substitute {P} with a partition id and iterate
+INSERT INTO soroban_events
+SELECT
+    contract_id, transaction_id, ledger_sequence, event_index, event_type,
+    multiIf(
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+          AND JSONExtractString(topics_xdr,2,'value') != '',
+            JSONExtractString(topics_xdr,2,'value'),
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,1,'value') != '',
+            JSONExtractString(topics_xdr,1,'value'),
+        CAST(NULL, 'Nullable(String)')
+    ) AS signature,
+    topics_xdr, data_xdr
+FROM soroban_events
+WHERE signature IS NULL
+  AND intDiv(ledger_sequence, 500000) = {P}
+  AND multiIf(
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+          AND JSONExtractString(topics_xdr,2,'value') != '',
+            JSONExtractString(topics_xdr,2,'value'),
+        JSONExtractString(topics_xdr,1,'type') = 'string'
+          AND JSONExtractString(topics_xdr,1,'value') != '',
+            JSONExtractString(topics_xdr,1,'value'),
+        CAST(NULL, 'Nullable(String)')
+    ) IS NOT NULL
+```
+
+The trailing filter keeps still-unresolvable rows OUT of the insert — their
+NULL row already exists, and re-inserting an identical NULL row would only
+churn the merge. **Verification** (after all partitions):
+
+```sql
+-- the resolvable NULL population MUST be zero
+SELECT count() FROM soroban_events
+WHERE signature IS NULL
+  AND JSONExtractString(topics_xdr,1,'type') = 'string'
+  AND JSONExtractString(topics_xdr,1,'value') != ''
+```
+
 Verification criteria for the deployed result live in task 0374's
 final-phase notes.
 

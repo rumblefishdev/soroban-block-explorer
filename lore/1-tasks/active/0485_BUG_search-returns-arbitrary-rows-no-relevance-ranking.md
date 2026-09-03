@@ -2,13 +2,27 @@
 id: '0485'
 title: 'BUG: search returns arbitrary rows — no relevance ranking in three of four buckets'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0472', '0470', '0318']
 tags: [backend, search, clickhouse, priority-high, effort-medium]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
+  - date: '2026-09-02'
+    status: active
+    who: karolkow
+    note: >
+      Activated for the assets bucket only. Re-measured on production the same
+      day: `q=xlm` still answers with `ISHXLM, ISSXLM, ITFXLM, IXLM x15` and
+      native XLM is absent from the page entirely (the one `asset_type = 0` row
+      exists; the bare `LIMIT` cuts it). Scope this round: re-apply the ranking
+      reverted in `aea53f01`, plus a fourth surface found while measuring — the
+      `/assets` list search (`filter[code]`) sorts the identity 4-tuple DESC, and
+      native is that tuple's MINIMUM (`asset_type = 0`, empty code), so it lands
+      on the LAST page: first page of `xlm` is `zXLMr, zXLMr, zXLM, zXLM, zXLM`.
+      The contracts-text and NFT buckets stay open — the NFT one needs the
+      collections redesign, not a sort.
   - date: '2026-08-13'
     status: backlog
     who: karolkow
@@ -125,10 +139,32 @@ routing to the collection view. That view only became addressable in 0472
 (`/nfts?contract={C…}`); there is still no dedicated collection page. Ranking
 then falls out trivially: exact name > prefix, tie-break by collection size.
 
+## Bucket 4 — the `/assets` list search: one line, not a ranking
+
+Found 2026-09-02 while measuring the global box. Different endpoint
+(`crates/api/src/assets/queries.rs`, `build_list_seek_sql`), same user
+complaint. The list is a keyset walk over the identity 4-tuple
+`(asset_type, asset_code, issuer_id, contract_id)` in **DESC**, and native is
+that tuple's MINIMUM — `asset_type = 0` with an empty code — so it sorts dead
+last. Measured on prod, page 1 of `filter[code]=xlm`: `zXLMr, zXLMr, zXLM,
+zXLM, zXLM`.
+
+Fix is the sort direction, not a ranking: `SortOrder::Asc` while a code filter
+is present. `SortOrder` is documented as a sticky query param that is NOT
+encoded in the cursor, and `filter[code]` is sticky the same way, so the
+cursor shape is untouched and the page stays a PK-prefix walk at the same
+cost. Verified on prod: ASC returns the native row first for `xlm`.
+
+A real tier ranking here (exact > prefix > substring, as in bucket 1) would
+have to carry the rank in the cursor. Not done — nobody has asked for an order
+other than alphabetical, and the ask was "native first".
+
 ## Acceptance criteria
 
 - [ ] Assets bucket ranked (re-apply the reverted work); `q=USDC` returns USDC
       first, `q=XLM` returns XLM, `q=AqUa` behaves like `q=aqua`
+- [ ] `/assets` list search puts native first — `filter[code]=xlm` returns
+      XLM on page 1 (bucket 4)
 - [ ] Contracts text bucket ranked; exact name wins; deterministic tail
 - [ ] NFT bucket decision recorded: collections vs tokens. If collections —
       match `collection_name`, route to the collection view
