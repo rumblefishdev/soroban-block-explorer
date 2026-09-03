@@ -124,14 +124,34 @@ LIMIT :per_group_limit;
 -- ── asset bucket (strkey_prefix OR plain-text mode), two-step ────────────────
 -- Step 1: page matching assets (small state table, FINAL). Join the SMALLER
 -- soroban_contracts in-statement for the contract StrKey; do NOT join accounts.
+--
+-- RANKED (task 0485). Before it, this ended in a bare LIMIT with no ORDER BY,
+-- so `USDC` answered with ten `IUSDC` rows and no USDC, and two identical calls
+-- could disagree. The tier is exact code > prefix > anywhere — the order
+-- follows from what MATCHED, not from an invented weighting — with holder
+-- count breaking ties inside a tier (441 assets carry the code `USDC`; the
+-- real one has ~691k holders vs ~3k for the runner-up), and the trailing key
+-- columns making the order total.
+--
+-- Both the match and the tier compare the DISPLAYED code: native XLM stores an
+-- empty code and renders as `XLM`. `native` is folded onto `XLM` before the
+-- query is built, so no arm here carries a special case for it. The rule is
+-- ONE builder (`common::asset_match`), shared with 08_get_assets_list.sql and
+-- with the pools predicate.
 SELECT a.asset_type,
        nullIf(a.asset_code, '')   AS asset_code,
        nullIf(sc.contract_id, '') AS contract_strkey,
        a.issuer_id
 FROM assets a FINAL
 LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
-WHERE (length(a.asset_code) > 0 AND positionCaseInsensitive(toString(a.asset_code), :q) > 0)
-   OR (a.asset_type = 0 AND (lower(:q) = 'xlm' OR lower(:q) = 'native'))
+LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id
+WHERE position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))), lower(:q)) > 0
+ORDER BY multiIf(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lower(:q), 0,
+                 startsWith(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
+                            lower(:q)), 1,
+                 2) ASC,
+         bagg.holder_count DESC NULLS LAST,
+         a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC
 LIMIT :per_group_limit;
 -- Step 2: resolve the page's issuer surrogates → G-StrKey (bloom-pruned seek).
 SELECT id, account_id FROM accounts WHERE id IN (:page_issuer_ids) LIMIT 1 BY id;

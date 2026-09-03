@@ -51,6 +51,7 @@ use serde::Deserialize;
 
 use chrono::{DateTime, Utc};
 
+use crate::common::asset_match;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
@@ -723,17 +724,25 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // deduping via `GROUP BY id` measured +30ms on EVERY search (44→78ms) to fix a
     // near-unreachable edge (assets max versions = 4). Revisit (dedup, or a search
     // over-fetch bump) if version bloat grows (task 0364 audit F1).
+    // The code test comes from `common::asset_match` — one rule, shared with
+    // the `/v1/search` bucket and the pools predicate (task 0485). Name and
+    // symbol stay local: they are free text from on-chain metadata, not asset
+    // codes, so the native alias and the tier have nothing to say about them.
+    let shown = asset_match::shown_code("a.asset_type", "a.asset_code");
     let (search_join, code_clause) = if params.asset_code.is_some() {
         (
             " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
               LEFT JOIN (SELECT contract_id, name, symbol FROM soroban_contract_metadata FINAL) m \
                   ON m.contract_id = sc.contract_id",
-            " AND (positionCaseInsensitive(if(a.asset_type = 0, 'XLM', toString(a.asset_code)), ?) > 0 \
-               OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
-               OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
+            format!(
+                " AND ({matches} \
+                   OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
+                   OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
+                matches = asset_match::matches_sql(&shown)
+            ),
         )
     } else {
-        ("", "")
+        ("", String::new())
     };
     // RELEVANCE (task 0485). A code search ranks by MATCH TIER — exact code
     // (and native, which displays as `XLM`) first, then prefix, then a match
@@ -755,19 +764,16 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // everyone sees.
     let (rank_select, rank_order, rank_keyset) = if params.asset_code.is_some() {
         (
-            " , multiIf( \
-                   a.asset_type = 0 AND lower(?) IN ('xlm', 'native'), 0, \
-                   lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lower(?), 0, \
-                   startsWith(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))), \
-                              lower(?)), 1, \
-                   2 \
-               ) AS rank_tier \
-              , -toInt64(coalesce(bagg.holder_count, 0)) AS holders_neg",
+            format!(
+                " , {tier} AS rank_tier \
+                  , -toInt64(coalesce(bagg.holder_count, 0)) AS holders_neg",
+                tier = asset_match::tier_sql(&shown)
+            ),
             true,
             "rank_tier, holders_neg, ",
         )
     } else {
-        ("", false, "")
+        (String::new(), false, "")
     };
     let cursor_clause = if params.cursor.is_some() {
         let vals = if rank_order {
@@ -812,31 +818,13 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     )
 }
 
-/// The match tier the seek's `multiIf` computes, in Rust — the cursor has to
-/// carry the tier of the page's last row, and the handler only ever sees the
-/// hydrated row, never the SQL expression.
+/// The tier of a hydrated row, for the cursor the handler mints — it only ever
+/// sees the finished row, never the SQL that ordered it.
 ///
-/// Kept deliberately dumb and total so it can be read against the SQL side by
-/// side. `code_search_page_walk_has_no_gaps` (CH-gated) is what proves the two
-/// still agree: if they drift, a page boundary starts skipping or repeating
-/// rows, and that walk sees it.
+/// Thin on purpose: the rule itself is `common::asset_match`, shared with the
+/// SQL above, so there is nothing here to drift except which column is fed in.
 pub(super) fn match_tier(needle: &str, asset_type: i16, asset_code: Option<&str>) -> u8 {
-    let display = if asset_type == 0 {
-        "XLM"
-    } else {
-        asset_code.unwrap_or_default()
-    };
-    let needle = needle.to_lowercase();
-    let display = display.to_lowercase();
-    // The SQL writes tier 0 as two `multiIf` arms — the native alias, then the
-    // exact code. One condition here, same meaning; clippy refuses the pair.
-    if (asset_type == 0 && (needle == "xlm" || needle == "native")) || display == needle {
-        0
-    } else if display.starts_with(&needle) {
-        1
-    } else {
-        2
-    }
+    asset_match::tier(needle, asset_match::shown_code_of(asset_type, asset_code))
 }
 
 /// **Read-cost caveat:** the keyset/`ORDER BY` is the identity 4-tuple — which
@@ -853,16 +841,10 @@ pub async fn fetch_list(
     let mut query = client.query(&sql);
     if let Some(code) = &params.asset_code {
         // Placeholders in textual order, which is the order the driver fills
-        // them: three in `rank_select` (the native alias, the exact-code arm,
-        // the prefix arm), then three in `code_clause` (asset_code, m.name,
-        // m.symbol). All six take the same needle.
-        query = query
-            .bind(code)
-            .bind(code)
-            .bind(code)
-            .bind(code)
-            .bind(code)
-            .bind(code);
+        // them: two in `rank_select` (the tier's exact and prefix arms), then
+        // three in `code_clause` (the shared code test, m.name, m.symbol).
+        // All five take the same needle, already normalised by the handler.
+        query = query.bind(code).bind(code).bind(code).bind(code).bind(code);
     }
     if let Some(c) = &params.cursor {
         // The keyset carries the rank ahead of the identity 4-tuple whenever
@@ -1358,11 +1340,11 @@ mod tests {
         // Classic enrichment names (ae.name) are intentionally NOT matched —
         // substring-matching them adds noise ("Opulent Insolvent" ~ "solv").
         assert!(!sql.contains("coalesce(ae.name, '')"));
-        // 6 needle placeholders — 3 in the rank expression (native alias,
-        // exact, prefix) and 3 in the predicate (code + m.name + m.symbol);
-        // the LIMIT is inlined, so this MUST equal the 6×`.bind(code)` in
+        // 5 needle placeholders — 2 in the rank expression (exact, prefix)
+        // and 3 in the predicate (the shared code test + m.name + m.symbol);
+        // the LIMIT is inlined, so this MUST equal the 5×`.bind(code)` in
         // `fetch_list`. A drift here is a runtime-only failure.
-        assert_eq!(sql.matches('?').count(), 6);
+        assert_eq!(sql.matches('?').count(), 5);
     }
 
     #[test]
@@ -1385,7 +1367,7 @@ mod tests {
         };
         let sql = build_list_seek_sql(&params, Direction::Next);
         assert!(
-            sql.contains("if(a.asset_type = 0, 'XLM', toString(a.asset_code))"),
+            sql.contains(&asset_match::shown_code("a.asset_type", "a.asset_code")),
             "the needle must be matched against the DISPLAYED code, so native \
              XLM is reachable; got: {sql}"
         );
@@ -1463,10 +1445,11 @@ issuer_id, contract_id) > (?, ?, ?, ?, ?, ?)"
 
     #[test]
     fn match_tier_mirrors_the_sql_shelves() {
-        // Native answers to both spellings, and to its DISPLAY code, never to
-        // its stored one (which is empty).
+        // Native is matched on its DISPLAY code, never on its stored one
+        // (which is empty). The needle arrives already normalised — the
+        // handler folds `native` onto `XLM` at the door, so nothing here
+        // carries a special case for it (`common::asset_match`).
         assert_eq!(match_tier("xlm", 0, None), 0);
-        assert_eq!(match_tier("NATIVE", 0, None), 0);
         assert_eq!(match_tier("XLM", 0, None), 0);
         // Exact beats prefix beats anywhere, case-insensitively both ways.
         assert_eq!(match_tier("usdc", 1, Some("USDC")), 0);

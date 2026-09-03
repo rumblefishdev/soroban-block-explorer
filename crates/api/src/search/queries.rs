@@ -62,8 +62,11 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
+use crate::common::asset_match;
 use crate::common::ch::millis_to_utc;
-use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
+use crate::common::pool_asset_codes::{
+    asset_codes_predicate, asset_codes_rank, normalize_asset_codes,
+};
 use crate::common::strkey::pool_id_hex_to_strkey;
 
 use super::classifier::Classified;
@@ -383,6 +386,12 @@ async fn search_pools_by_asset_code(
     let Some((clause, binds)) = asset_codes_predicate(&codes) else {
         return Ok(Vec::new());
     };
+    // Rank before freshness (task 0485), the same tier the pools list and the
+    // assets list use — `XLM` must not answer with a busy `yXLM` pool ahead of
+    // the real ones. Recency still orders within a tier. The binds go AFTER
+    // the predicate's: the expression sits in the `ORDER BY`, textually last.
+    let (rank, rank_binds) =
+        asset_codes_rank(&codes, "lp").unwrap_or_else(|| ("0".to_string(), Vec::new()));
 
     let sql = format!(
         "SELECT pool_hex, {POOL_LABEL_SQL} \
@@ -398,12 +407,12 @@ async fn search_pools_by_asset_code(
             GROUP BY pool_id \
          ) AS lp \
          WHERE {clause} \
-         ORDER BY newest DESC \
+         ORDER BY {rank} DESC, newest DESC \
          LIMIT ?"
     );
 
     let mut query = client.query(&sql);
-    for bind in &binds {
+    for bind in binds.iter().chain(rank_binds.iter()) {
         query = query.bind(bind);
     }
     let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;
@@ -770,6 +779,21 @@ async fn search_assets(
     // search where "usdc" misses "USDC" is broken however fast it is. The
     // index-backed alternative (materialised `lower(asset_code)` + projection)
     // needs a production DDL and is recorded in the task, not smuggled here.
+    // Matching and ranking both come from `common::asset_match` (task 0485), so
+    // this bucket, the `/v1/assets` list and the pools predicate answer "does
+    // this match" and "how well" with ONE rule. They used to be three spellings
+    // that agreed by accident — this one compared the RAW `asset_code` and
+    // carried a native special-case on the side, which is why it needed seven
+    // binds to say what now takes three.
+    //
+    // `native` is folded onto `XLM` at the door, so no arm below knows about
+    // it, and the comparison is against the DISPLAYED code — which is also why
+    // `xl` now reaches native XLM, where before only the exact words `xlm` and
+    // `native` did.
+    let needle = asset_match::normalize_needle(q);
+    let shown = asset_match::shown_code("a.asset_type", "a.asset_code");
+    let matches = asset_match::matches_sql(&shown);
+    let tier = asset_match::tier_sql(&shown);
     let sql = format!(
         "SELECT \
             a.asset_type AS asset_type, \
@@ -782,29 +806,18 @@ async fn search_assets(
              FROM soroban_contracts GROUP BY id \
          ) sc ON sc.id = a.contract_id \
          LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-         WHERE (length(a.asset_code) > 0 \
-                AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
-            OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
-         ORDER BY \
-             multiIf( \
-                 a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native'), 0, \
-                 lower(toString(a.asset_code)) = lower(?), 0, \
-                 startsWith(lower(toString(a.asset_code)), lower(?)), 1, \
-                 2 \
-             ) ASC, \
+         WHERE {matches} \
+         ORDER BY {tier} ASC, \
              bagg.holder_count DESC NULLS LAST, \
              a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
          LIMIT {per_group_limit}"
     );
+    // One bind for the match, two for the tier — left to right, same needle.
     let rows = client
         .query(&sql)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .bind(q)
+        .bind(&needle)
+        .bind(&needle)
+        .bind(&needle)
         .fetch_all::<AssetPhase1Row>()
         .await?;
     if rows.is_empty() {

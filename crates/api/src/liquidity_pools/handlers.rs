@@ -322,6 +322,7 @@ pub async fn list_pools(
         |dir, r| {
             cursor::encode(
                 &PoolListCursor {
+                    rank_neg: r.rank_neg,
                     created_at_ledger: r.cursor_ledger,
                     pool_id_hex: r.pool_id_hex.clone(),
                 },
@@ -812,6 +813,8 @@ mod map_pool_item_tests {
 
     fn base_row() -> PoolRow {
         PoolRow {
+            // Ranked pages only; a unit row is unranked, so the best tier.
+            rank_neg: 0,
             pool_id_hex: "0".repeat(64),
             asset_a_type: 0,
             asset_a_type_name: Some("native".into()),
