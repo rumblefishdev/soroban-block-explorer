@@ -812,9 +812,7 @@ pub async fn fetch_detail(
             .as_ref()
             .map(|s| s.account_id.clone())
             .filter(|s| !s.is_empty()),
-        source_account_home_domain: source
-            .and_then(|s| s.home_domain)
-            .filter(|s| !s.is_empty()),
+        source_account_home_domain: source.and_then(|s| s.home_domain).filter(|s| !s.is_empty()),
         fee_charged: raw.fee_charged,
         inner_tx_hash: raw.inner_tx_hash.filter(|s| !s.is_empty()),
         successful: raw.successful,
