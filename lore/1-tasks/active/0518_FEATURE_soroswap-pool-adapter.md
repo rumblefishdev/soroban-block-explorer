@@ -193,3 +193,89 @@ wayfinder map so the Phoenix task inherits it as a step, not a rediscovery.
 - [ ] holders from `balances` on the pair asset, deduped — READ-HALF (mechanism settled: the pair IS the LP token)
 - [ ] unioned into the pool list under its own deployment label — READ-HALF (deferred to the end of the roadmap by owner decision)
 - [x] backfill in-DB, no S3 re-parse — runbook written; execution is the deploy window's
+
+## Third adapter in the SAME PR: the config-factory family (2026-09-03)
+
+Owner decision: PR #447 does not merge alone — the Phoenix-family adapter
+rides the same PR. Naming decision 70:A — mechanism name
+`pool_config_factory` (pools whose state lives under a `CONFIG` key);
+order decision 71:A — the 4a seam refactor lands FIRST, the adapter on the
+clean seam.
+
+### Decision 4a EXECUTED (commit `9ae66b27`)
+
+The three parallel family slices (`plane_pool_data`, `pool_instances`,
+`factory_pairs`) collapsed into one `Vec<PoolFamilyWrite>` enum threaded
+extraction→staging; stage partitions by variant. No behavior change — 646
+tests + both raw-ledger staging e2es unchanged. Adding this third family
+was then a variant + an arm, proving the seam's point on day one.
+
+### Research settled on real data before code (all measured)
+
+- **Discovery**: ONE factory in all of history (`CB4SVAWJ…`, its own
+  `initialize` event at 51,572,024 is IN our events — coverage from
+  birth). Registration event `[String("create"), String("liquidity_pool")]`
+  with a bare pool address as data — no tokens, NO counter. 14 events,
+  14 distinct pools.
+- **State**: decoded the raw creation ledger (64,030,567). Per-key
+  PERSISTENT entries on the pool: `CONFIG` sym → map (token_a, token_b,
+  share_token, stake_contract, pool_type u32, total_fee_bps i64 —
+  per-pool fee, 50 on the newest), u32 discriminants `0`=TotalShares,
+  `1`/`2`=ReserveA/B (i128), `3`=Admin, plus an `XYK_POOL` marker; the
+  contract INSTANCE itself carries no storage. Everything written in the
+  registering transaction (created gate holds; reserves/shares are TRUE
+  zeros).
+- **No factory back-pointer exists** (unlike the pair family's DataKey 4),
+  so corroboration = created gate + the pool's own full CONFIG in the
+  registering ledger. Shape-not-brand: no hardcoded factory address.
+- **Reserve co-occurrence (the one open risk) closed decoder-independently**:
+  raw-JSON walk over 10 pool-transactions across three eras (52.0M, 58.0M,
+  64.25M) — ReserveA and ReserveB always written together (TotalShares
+  joins on provide/withdraw). Both-or-neither is a measured rule, not an
+  assumption.
+- **Stable pools**: none on mainnet (0/14). The stable contract source
+  shares the key names; the reader takes `pool_type` from CONFIG, so the
+  first stable pool flows through with its own discriminant.
+
+### Design decisions
+
+- `pool_state_changes` rows are self-stamped (`plane_id` = pool's own id) —
+  owner, stamp and declaration coincide, same construction as the pair arm.
+- **`pool_instance_state` row ONLY when the tx wrote CONFIG** (creation +
+  admin changes): the table is RMT whole-row keyed on `pool_id`, and a
+  per-op TotalShares write arrives config-less — staging it would clobber
+  `share_token_id` to 0 (the misleading-fallback class). Consequence,
+  recorded for the read half: for THIS family `total_shares` in the table
+  is a config-write-time snapshot; the live supply is the share token's
+  own tracked supply (a separate SEP-41 contract on the generic pipeline).
+- `pool_type_raw` stores the vendor `PairType` discriminant verbatim ("0");
+  `fee_bps` from CONFIG's per-pool `total_fee_bps` (creation-time snapshot,
+  mutable via `update_config` — same caveat as both siblings).
+
+### Evidence so far
+
+- Parser module `pool_config_factory.rs`: 9 unit tests on verbatim mainnet
+  payloads (CONFIG map, registration event, grouping, half-pair refusal,
+  foreign-contract sieve).
+- Stage cross tests: corroborated registration stages the pool's own facts;
+  unconfigured/touched refused; config-less op write stages reserves and
+  does NOT clobber the declaration. 655 tests green, clippy clean.
+- `config_pool_real_corpus`: 14/14 registrations decode, 0 duplicates;
+  keyed-entry sieve over a rebuilt 32-raw-ledger corpus (14 registration
+  ledgers + 3 eras of swap ledgers + a 10-ledger hot window): 27
+  extractions, **0 foreign** — FP=0. (The old shared 79-ledger corpus dir
+  was session-scratch and is gone; the new dir is
+  `config_pool_corpus_dir`, recipe in the test docs.)
+- `config_pool_stage_real_e2e`: **the entire registration population**
+  (14/14 ledgers, 4 pool-wasm generations) through full staging — every
+  registration corroborates (created + CONFIG) and stages registry +
+  reserve + declaration rows with the pool's own facts.
+
+### Discovery: the factory's live list is MUTABLE — closure is ⊆, not =
+
+RPC `query_pools()` returns 13 pools; history has 14. The missing one
+(`CAZ6W4WH…`, third-ever registration, 25,873 events, traded until 63.77M)
+was DELISTED from the factory's vector but is a real pool with real
+history. Event-append-only discovery is therefore the correct source, and
+the backfill closure check must be **RPC ⊆ ours**, never set-equality. (A
+query_pools-seeded registry silently loses this pool's entire history.)
