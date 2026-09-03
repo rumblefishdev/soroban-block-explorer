@@ -201,10 +201,36 @@ Two alternatives were measured and rejected:
   **181,388** assets. Capping the page reintroduces exactly the arbitrary cut
   this task removes, one order of magnitude higher.
 
-So the cost stands as the price of correctness. Context for whoever revisits it:
-the asset bucket was **already** the slowest of the six, at p50 166 ms / p95
-414 ms over the last week (contract 138, nft 56) — with a 10.3 s outlier that
-nothing in this task explains and that is worth its own look.
+So the cost stands as the price of correctness — and it lands in a better place
+than first reported.
+
+**Correction to an earlier reading in this file.** The initial latency figures
+(asset p50 166 / p95 414 ms, "already the slowest of the six", a 10.3 s outlier)
+came from a `query LIKE '%assets a FINAL%'` filter that matched **any** query
+using that alias, mixing API traffic with people's ad-hoc analysis. The 10.3 s
+query was not the search bucket at all: it was a `dev_read` session joining
+`operation_asset_appearances` → `transactions` → `ledgers` → `assets` →
+`soroban_events` → `transaction_participants` → `accounts`, 36.9 bn rows /
+208 GiB, hunting USDT0 movements for one account. Some of the 1 s rows were this
+task's own probes running as `default`.
+
+Filtered to the actual bucket (`positionCaseInsensitive(toString(a.asset_code)`)
+and to `api_reader`, the six buckets over 7 days are:
+
+| bucket      | n   | p50 | p95     | max  |
+| ----------- | --- | --- | ------- | ---- |
+| pool        | 140 | 66  | 527     | 1766 |
+| contract    | 417 | 113 | 341     | 1147 |
+| nft         | 144 | 161 | 206     | 716  |
+| **asset**   | 112 | 114 | **136** | 746  |
+| transaction | 29  | 9   | 11      | 11   |
+| account     | 27  | 4   | 10      | 13   |
+
+The asset bucket is **fourth**, not first. At +52% it goes to roughly 200 ms p95,
+still under `contract` and well under `pool` — and since the buckets run
+concurrently under `tokio::try_join!`, the endpoint's p95 is set by `pool` (527
+ms) and does not move at all. Whoever wants a faster search should start there,
+not here.
 
 Holder count is refreshed by `balance_aggregates_mv` every 2 minutes, so the
 ranking is eventually consistent. That is the right trade — a two-minute-stale
