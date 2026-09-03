@@ -756,8 +756,14 @@ async fn search_assets(
     // the top of the page.
     // Native has no code, so key 1 never fires for the `xlm`/`native` branch; it
     // needs no special case because XLM outranks every same-code asset on key 2.
-    let sql = format!(
-        "SELECT \
+    //
+    // A fully-qualified `CODE:ISSUER` (task 0534) takes a different arm: the pair
+    // names exactly one asset, so it is an equality lookup, needs no ranking, and
+    // skips the `balance_aggregates` join entirely — the most precise query is
+    // also the cheapest one. The issuer StrKey resolves through `accounts`, whose
+    // `ORDER BY account_id` primary key makes it a point seek rather than the
+    // ~23M-row hash join that OOMs (Code 241).
+    const ASSET_HEAD: &str = "SELECT \
             a.asset_type AS asset_type, \
             nullIf(a.asset_code, '') AS asset_code, \
             nullIf(sc.contract_id, '') AS contract_strkey, \
@@ -766,23 +772,40 @@ async fn search_assets(
          LEFT JOIN ( \
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts GROUP BY id \
-         ) sc ON sc.id = a.contract_id \
-         LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-         WHERE (length(a.asset_code) > 0 \
-                AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
-            OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
-         ORDER BY (lower(toString(a.asset_code)) = lower(?)) DESC, \
-                  bagg.holder_count DESC NULLS LAST \
-         LIMIT {per_group_limit}"
-    );
-    let rows = client
-        .query(&sql)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .fetch_all::<AssetPhase1Row>()
-        .await?;
+         ) sc ON sc.id = a.contract_id ";
+    let rows = if let Some((code, issuer)) = classified.code_issuer.as_ref() {
+        let sql = format!(
+            "{ASSET_HEAD} \
+             WHERE lower(toString(a.asset_code)) = lower(?) \
+               AND a.issuer_id IN (SELECT id FROM accounts WHERE account_id = ?) \
+             LIMIT {per_group_limit}"
+        );
+        client
+            .query(&sql)
+            .bind(code)
+            .bind(issuer)
+            .fetch_all::<AssetPhase1Row>()
+            .await?
+    } else {
+        let sql = format!(
+            "{ASSET_HEAD} \
+             LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
+             WHERE (length(a.asset_code) > 0 \
+                    AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
+                OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
+             ORDER BY (lower(toString(a.asset_code)) = lower(?)) DESC, \
+                      bagg.holder_count DESC NULLS LAST \
+             LIMIT {per_group_limit}"
+        );
+        client
+            .query(&sql)
+            .bind(q)
+            .bind(q)
+            .bind(q)
+            .bind(q)
+            .fetch_all::<AssetPhase1Row>()
+            .await?
+    };
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -1284,5 +1307,62 @@ mod decode_smoke {
              {expected:?} — ranking regressed",
             top.route_token,
         );
+
+        // ── `CODE:ISSUER` (task 0534, step 2) ───────────────────────────────
+        // Addressed by the LEAST-held issuer of the same code, deliberately: it
+        // is the row ranking pushes to the bottom, so a hit proves the exact
+        // arm ran rather than the ranked substring arm agreeing by luck.
+        let worst = ranked
+            .last()
+            .expect("ranked page is non-empty by construction");
+        let Some(worst_issuer) = ({
+            let ids = worst.issuer_id;
+            if ids == 0 {
+                None
+            } else {
+                ch.query(
+                    "SELECT id AS id, account_id AS account_id \
+                     FROM accounts WHERE id = ? LIMIT 1 BY id",
+                )
+                .bind(ids)
+                .fetch_optional::<IssuerRow>()
+                .await
+                .expect("issuer resolve must run")
+                .map(|r| r.account_id)
+            }
+        }) else {
+            eprintln!("probed code has no resolvable issuer — skipping CODE:ISSUER arm");
+            return;
+        };
+
+        for q in [
+            format!("{code}:{worst_issuer}"),
+            format!("{code}-{worst_issuer}"),
+        ] {
+            let hits = fetch_search(&ch, &q, &classifier::classify(&q), &IncludeFlags::all(), 10)
+                .await
+                .unwrap_or_else(|e| panic!("search failed for {q:?}: {e}"));
+            let assets: Vec<&SearchHit> = hits
+                .iter()
+                .filter(|(bucket, _)| bucket == "asset")
+                .map(|(_, hit)| hit)
+                .collect();
+
+            assert_eq!(
+                assets.len(),
+                1,
+                "{q:?} must resolve to exactly one asset, got {assets:?}"
+            );
+            assert_eq!(
+                assets[0].route_token,
+                asset_route_token(
+                    worst.contract_strkey.as_deref(),
+                    worst.asset_code.as_deref(),
+                    Some(worst_issuer.as_str()),
+                    worst.asset_type,
+                ),
+                "{q:?} resolved to the wrong asset",
+            );
+        }
     }
 }

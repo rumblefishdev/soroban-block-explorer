@@ -124,6 +124,27 @@ own `/assets/:id` routes emit, so users will paste it back.
 `search_assets` then does an exact `asset_code = ? AND issuer = ?` lookup
 instead of the substring scan.
 
+**DONE.** The exact arm also **skips the `balance_aggregates` join** — a
+qualified pair names one row, so there is nothing to rank. The most precise
+query ends up the cheapest one, which is the opposite of where it started.
+
+Issuer resolution goes through `a.issuer_id IN (SELECT id FROM accounts WHERE
+account_id = ?)`; `accounts` is keyed `ORDER BY account_id`, so that is a point
+seek and never the ~23M-row hash join that OOMs (Code 241).
+
+The checksum is validated in full rather than the shape being pattern-matched:
+a typo'd key falls back to the ordinary substring search instead of answering
+with a confidently empty page.
+
+Two fixture bugs this caught, both worth knowing before writing a similar test:
+
+- `FULL_G` in the existing classifier tests is **shape-only, not CRC-valid** —
+  fine for the prefix arm, which never decodes, but this arm does, so it needed
+  a real key. Same trap in the local seed data.
+- `PublicKey::to_string()` is an inherent method returning `heapless::String`,
+  not `std::String` (`common::strkey` documents the same trap). `format!` avoids
+  the double-`to_string()` dance.
+
 ### Step 3 — tests
 
 `classifier.rs` already has a table-driven test module — extend it: both
@@ -133,19 +154,28 @@ the highest-holder asset first.
 
 ## Acceptance Criteria
 
-- [ ] Searching `USDC` returns Circle's
-      `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` first
-- [ ] Searching `USDT0` returns `GATISXX…` above the three impostors
-- [ ] `USDT0:GATISXX…` and `USDT0-GATISXX…` both resolve to exactly one asset hit
-- [ ] A `CODE:ISSUER` whose issuer fails checksum degrades to today's behaviour,
-      not a 500
-- [ ] **Docs updated** — `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`
-      carries the new ORDER BY and the `CODE:ISSUER` branch. Other
+Verified by running each query against production data (2026-09-03); the
+end-to-end assertion through the deployed API waits on the deploy.
+
+- [x] Searching `USDC` returns Circle's
+      `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` first —
+      row 1 with a 200× holder lead
+- [x] Searching `USDT0` returns `GATISXX…` above the impostors — row 1 at 95
+      holders, the other four at 1–2. Note there are now **five** USDT0 issuers,
+      not the four recorded above; one appeared during this task, which is the
+      argument for ranking rather than a curated list
+- [x] `USDT0:GATISXX…` and `USDT0-GATISXX…` both resolve to exactly one asset
+      hit — both separators covered by the live-CH smoke, and the exact arm
+      returns a single row on production data
+- [x] A `CODE:ISSUER` whose issuer fails checksum degrades to today's behaviour,
+      not a 500 — `code_issuer_rejects_a_bad_issuer_checksum`; classification
+      falls through to the substring arm, so the request is an ordinary 200
+- [x] **Docs updated** — `22_get_search.sql` carries the ORDER BY, the new
+      `code_issuer` classifier mode and the exact-lookup arm. Other
       `docs/architecture/**` N/A: no new table, endpoint or pipeline step.
-- [ ] **API types regenerated** — required (touches `crates/api/**`);
-      `npx nx run @rumblefish/api-types:generate` in the same commit if the
-      response shape moves. If only SQL changes, the diff is empty — say so
-      rather than skipping the run.
+- [x] **API types regenerated** — `npx nx run @rumblefish/api-types:generate`
+      run; the diff is **empty**, as expected. `Classified` is internal and no
+      response shape moved, so `openapi.json` and `generated/` are untouched.
 
 ## Notes
 
