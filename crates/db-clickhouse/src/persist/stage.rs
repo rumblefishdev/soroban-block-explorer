@@ -295,16 +295,15 @@ pub struct StageInputs<'a> {
     /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
     /// legacy callers.
     pub soroban_token_balances: &'a [ExtractedSorobanBalance],
-    /// Plane `PoolData` writes (task 0374 step 7) — the reserve source.
-    pub plane_pool_data: &'a [xdr_parser::pool_state::ExtractedPlanePoolData],
-    /// Pool-instance writes — the STATE source for share tokens and planes;
-    /// supersedes the deposit⇄mint detector as primary (it stays a
-    /// cross-check).
-    pub pool_instances: &'a [xdr_parser::pool_state::ExtractedPoolInstance],
-    /// Soroswap pair-instance writes (task 0518) — reserve source AND
-    /// declaration for that family: the pair's own instance carries its leg
-    /// tokens, reserves, deploying factory and LP-token supply.
-    pub factory_pairs: &'a [xdr_parser::pool_pair_factory::ExtractedFactoryPair],
+    /// Every family's pool state writes behind ONE seam (task 0518,
+    /// decision 4a): router-family plane `PoolData` (the fungible reserve
+    /// source, task 0374 step 7) and pool instances (the STATE source for
+    /// share tokens and planes; supersedes the deposit⇄mint detector as
+    /// primary — it stays a cross-check), and pair-factory instances (reserve
+    /// source AND declaration: leg tokens, deploying factory, LP supply).
+    /// Staging partitions by variant; adding a family adds a variant + an
+    /// arm, never a field.
+    pub pool_family_writes: &'a [xdr_parser::pool_family::PoolFamilyWrite],
     /// Task 0331 + ADR 0051 — SAC contract surrogate → wrapped classic/native
     /// `asset_id` (from `asset_sac`, via [`crate::persist::fetch_sac_classic_map`]).
     /// [`build_balance_rows`] keys a contract-held SAC balance onto the classic
@@ -363,9 +362,7 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_metadata_writes: &[],
-        plane_pool_data: &[],
-        pool_instances: &[],
-        factory_pairs: &[],
+        pool_family_writes: &[],
         soroban_token_balances: &[],
         sac_classic: &HashMap::new(),
         sac_overrides: &[],
@@ -555,9 +552,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         lp_positions,
         contract_metadata_writes,
         soroban_token_balances,
-        plane_pool_data,
-        pool_instances,
-        factory_pairs,
+        pool_family_writes,
         sac_classic,
         sac_overrides,
         prior_wasm_verdicts,
@@ -1075,6 +1070,22 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
+    // One family seam (task 0518, decision 4a): partition the unified write
+    // collection back into per-family views for the arms below. The views are
+    // borrows — no clones, no reordering, the fold stays the single dedup
+    // home downstream.
+    use xdr_parser::pool_family::PoolFamilyWrite;
+    let mut plane_pool_data: Vec<&xdr_parser::pool_state::ExtractedPlanePoolData> = Vec::new();
+    let mut pool_instances: Vec<&xdr_parser::pool_state::ExtractedPoolInstance> = Vec::new();
+    let mut factory_pairs: Vec<&xdr_parser::pool_pair_factory::ExtractedFactoryPair> = Vec::new();
+    for write in pool_family_writes {
+        match write {
+            PoolFamilyWrite::RouterPlane(w) => plane_pool_data.push(w),
+            PoolFamilyWrite::RouterPool(w) => pool_instances.push(w),
+            PoolFamilyWrite::FactoryPair(w) => factory_pairs.push(w),
+        }
+    }
+
     // Soroban pool registrations (task 0374): the semantic decode lives in
     // `xdr_parser::pool_router` (same idiom as `detect_nft_events`); this
     // section only maps registrations to registry rows. Idempotent under the
@@ -1109,7 +1120,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // followed by a same-ledger update still qualifies.
     let declared_router: HashMap<&str, (Option<&str>, bool)> = {
         let mut m: HashMap<&str, (Option<&str>, bool)> = HashMap::new();
-        for i in pool_instances {
+        for i in &pool_instances {
             let e = m.entry(i.state.pool.as_str()).or_insert((None, false));
             e.0 = i.state.router.as_deref();
             e.1 |= i.created;
@@ -1174,7 +1185,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // the recognition shape, so a pair without one is not a pair.
     let declared_factory: HashMap<&str, (&str, bool)> = {
         let mut m: HashMap<&str, (&str, bool)> = HashMap::new();
-        for sp in factory_pairs {
+        for sp in &factory_pairs {
             let e = m
                 .entry(sp.state.pair.as_str())
                 .or_insert((sp.state.factory.as_str(), false));

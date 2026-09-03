@@ -74,6 +74,16 @@ fn raw_registration_ledger_stages_the_exact_rows() {
     let ops: Vec<(String, Vec<xdr_parser::ExtractedOperation>)> =
         txs.iter().map(|t| (t.hash.clone(), vec![])).collect();
 
+    let writes: Vec<xdr_parser::pool_family::PoolFamilyWrite> = planes
+        .iter()
+        .cloned()
+        .map(xdr_parser::pool_family::PoolFamilyWrite::RouterPlane)
+        .chain(
+            instances
+                .into_iter()
+                .map(xdr_parser::pool_family::PoolFamilyWrite::RouterPool),
+        )
+        .collect();
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger: &ledger,
         transactions: &txs,
@@ -91,9 +101,7 @@ fn raw_registration_ledger_stages_the_exact_rows() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
-        plane_pool_data: &planes,
-        pool_instances: &instances,
-        factory_pairs: &[],
+        pool_family_writes: &writes,
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),

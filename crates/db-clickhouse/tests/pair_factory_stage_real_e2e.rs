@@ -141,6 +141,11 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
         let ops: Vec<(String, Vec<xdr_parser::ExtractedOperation>)> =
             txs.iter().map(|t| (t.hash.clone(), vec![])).collect();
 
+        let writes: Vec<xdr_parser::pool_family::PoolFamilyWrite> = pairs
+            .iter()
+            .cloned()
+            .map(xdr_parser::pool_family::PoolFamilyWrite::FactoryPair)
+            .collect();
         let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
             ledger: &ledger,
             transactions: &txs,
@@ -158,9 +163,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             lp_positions: &[],
             contract_metadata_writes: &[],
             soroban_token_balances: &[],
-            plane_pool_data: &[],
-            pool_instances: &[],
-            factory_pairs: &pairs,
+            pool_family_writes: &writes,
             sac_classic: &std::collections::HashMap::new(),
             sac_overrides: &[],
             prior_wasm_verdicts: &std::collections::HashMap::new(),
