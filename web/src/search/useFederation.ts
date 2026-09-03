@@ -10,11 +10,11 @@ import {
 import type { FederationResolve } from './federation.js';
 
 /**
- * The SEP-2 forward lookup as a named hook, so fetching stays out of the
+ * The SEP-2 lookups as named hooks, so fetching stays out of the
  * components that render it — the seam every other query in this app already
  * uses (`web/src/api/hooks/`). It lives here rather than there because it
- * does not talk to our API at all; its policy is in `api/polling.ts` as
- * `federationPolicy`. The reverse hook (account page) ships with PR #440.
+ * do not talk to our API at all, and their policy lives in `api/polling.ts` as
+ * `federationPolicy`.
  *
  * Passes React Query's `AbortSignal` down. Without it a superseded lookup
  * keeps running against a third-party host after its result is discarded.

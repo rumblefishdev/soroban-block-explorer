@@ -2,12 +2,10 @@ import type {
   E3ResponseTransactionDetailLight,
   XdrOperationDto,
 } from '@rumblefish/api-types';
-import { QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
-import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
+import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { makeTestQueryClient } from '../../../test-utils.js';
+import { renderWithProviders } from '../../../test-utils.js';
 
 import { opFailReason, TransactionSummary } from './TransactionSummary.js';
 
@@ -68,14 +66,10 @@ describe('opFailReason', () => {
 
 describe('TransactionSummary failed strip', () => {
   it('shows the per-op reason on the strip', () => {
-    render(
-      <QueryClientProvider client={makeTestQueryClient()}>
-        <ExplorerThemeProvider>
-          <TransactionSummary
-            tx={tx([op('create_account', 1, 'LowReserve')])}
-          />
-        </ExplorerThemeProvider>
-      </QueryClientProvider>
+    renderWithProviders(
+      <>
+        <TransactionSummary tx={tx([op('create_account', 1, 'LowReserve')])} />
+      </>
     );
     expect(screen.getByText(/Create Account #1 — LOW_RESERVE/)).toBeTruthy();
   });
@@ -97,12 +91,10 @@ describe('TransactionSummary with no archive data', () => {
   }
 
   it('marks the memo unavailable instead of dashing it', () => {
-    render(
-      <QueryClientProvider client={makeTestQueryClient()}>
-        <ExplorerThemeProvider>
-          <TransactionSummary tx={heavyless(true)} />
-        </ExplorerThemeProvider>
-      </QueryClientProvider>
+    renderWithProviders(
+      <>
+        <TransactionSummary tx={heavyless(true)} />
+      </>
     );
 
     // Two cells resolve to the marker: memo and, via inner_tx_hash, fee source.
@@ -112,24 +104,20 @@ describe('TransactionSummary with no archive data', () => {
   });
 
   it('says the fail reason is unavailable rather than implying a validation failure', () => {
-    render(
-      <QueryClientProvider client={makeTestQueryClient()}>
-        <ExplorerThemeProvider>
-          <TransactionSummary tx={heavyless(false)} />
-        </ExplorerThemeProvider>
-      </QueryClientProvider>
+    renderWithProviders(
+      <>
+        <TransactionSummary tx={heavyless(false)} />
+      </>
     );
 
     expect(screen.getByText(/reason unavailable/)).toBeTruthy();
   });
 
   it('keeps a real memo-less transaction on the plain dash', () => {
-    render(
-      <QueryClientProvider client={makeTestQueryClient()}>
-        <ExplorerThemeProvider>
-          <TransactionSummary tx={tx([], true)} />
-        </ExplorerThemeProvider>
-      </QueryClientProvider>
+    renderWithProviders(
+      <>
+        <TransactionSummary tx={tx([], true)} />
+      </>
     );
 
     expect(screen.queryByText('Not available')).toBeNull();

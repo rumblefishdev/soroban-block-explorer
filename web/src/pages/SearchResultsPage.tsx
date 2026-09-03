@@ -2,18 +2,13 @@ import { Box, CircularProgress, Paper, Stack, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import {
-  SearchInput,
-  useDebounced,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../router/routes.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { SearchResultsView } from '../search/SearchResultsView.js';
-import {
-  FEDERATION_SETTLE_MS,
-  useFederatedAddress,
-} from '../search/useFederation.js';
+import { federatedDomain } from '../search/federation.js';
+import { useFederatedAddress } from '../search/useFederation.js';
 import { useSearchResults } from '../search/useSearchResults.js';
 
 export default function SearchResultsPage() {
@@ -50,19 +45,26 @@ export default function SearchResultsPage() {
   // `directRouteFor` cannot carry this: it is synchronous, and the resolve is
   // two network round-trips. It hooks in here instead, the one point the
   // app-shell bar, the home hero and a pasted `/search?q=` URL all converge
-  // on, so neither caller needs to change. Armed unconditionally: landing on
-  // /search?q=… is itself the explicit act — the user pressed Enter, clicked
-  // the row, or pasted the link. The dropdown is where arming is withheld.
+  // on, so neither caller needs to change.
   //
-  // Settled first, because this page's input stays editable after the commit:
-  // typing `bob*lobstr.com` here passes through `bob*lobstr.co`, a real
-  // domain. `useDebounced` starts at its input, so a pasted link still
-  // resolves at once and only later edits wait.
-  const settled = useDebounced(q, FEDERATION_SETTLE_MS);
-  const federated = useFederatedAddress(settled, true);
-  const federatedFor = federated.domain;
+  // Classified from the LIVE text, not from a settled copy: this only decides
+  // which panel to draw, costs a regex, and reaches no network. Deciding it
+  // late left a window in which `useSearchResults` had already suppressed its
+  // request while this page still believed the query was ordinary — so the
+  // view rendered `No results for "karol*lobstr.co"`, the one claim the whole
+  // feature exists to prevent.
+  const federatedFor = federatedDomain(q.trim());
+
+  // Asking, on the other hand, waits for an explicit act — the same rule the
+  // dropdown follows. Arriving at /search?q=… IS that act, so the value the
+  // page mounted with is armed; anything typed afterwards is not, because
+  // `bob*lobstr.com` passes through `bob*lobstr.co`, a real domain with a
+  // different owner. Enter re-arms.
+  const [armedFor, setArmedFor] = useState(() => q.trim());
+  const armed = armedFor === q.trim();
+  const federated = useFederatedAddress(q, armed);
   const failure =
-    federated.data?.kind === 'failed' ? federated.data.reason : null;
+    armed && federated.data?.kind === 'failed' ? federated.data.reason : null;
 
   useEffect(() => {
     if (federated.data?.kind !== 'resolved') return;
@@ -151,7 +153,9 @@ export default function SearchResultsPage() {
                   centres itself in a full-width 80px block, which is right
                   for an empty results panel and wrong beside a line of
                   text. */}
-              {failure == null && <CircularProgress size={16} thickness={5} />}
+              {armed && failure == null && (
+                <CircularProgress size={16} thickness={5} />
+              )}
               <Typography
                 variant="bodySmRegular"
                 component="p"
@@ -163,9 +167,34 @@ export default function SearchResultsPage() {
                       : theme.palette.text.tertiary,
                 })}
               >
-                {failure ?? `Resolving ${q.trim()} with ${federatedFor}…`}
+                {failure ??
+                  (armed
+                    ? `Asking ${federatedFor}…`
+                    : `Federated address — look it up with ${federatedFor}`)}
               </Typography>
             </Stack>
+            {/* Unarmed, or a failure the user may want to retry after the
+                domain comes back: the same button covers both, because both
+                are "ask this domain now". */}
+            {!armed || failure != null ? (
+              <Box
+                component="button"
+                type="button"
+                onClick={() => setArmedFor(q.trim())}
+                sx={(theme) => ({
+                  alignSelf: 'flex-start',
+                  background: 'none',
+                  border: 'none',
+                  p: 0,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  font: 'inherit',
+                  color: theme.palette.text.primary,
+                })}
+              >
+                {failure != null ? 'Try again' : `Ask ${federatedFor}`}
+              </Box>
+            ) : null}
           </Stack>
         )}
       </Paper>

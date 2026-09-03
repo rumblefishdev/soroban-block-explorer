@@ -101,8 +101,7 @@ describe('SearchResultsPage — federated addresses (task 0443 scope A)', () => 
   });
 
   it('leaves an ordinary query alone — no federation request', () => {
-    const fetchSpy = vi.fn(() => Promise.reject(new Error('no call expected')));
-    vi.stubGlobal('fetch', fetchSpy);
+    const fetchSpy = stubFetch({});
 
     renderSearch('kale');
 
@@ -147,29 +146,55 @@ describe('SearchResultsPage — single hit (task 0527 #2)', () => {
 });
 
 describe('SearchResultsPage — federation lookups are debounced', () => {
-  // Typing `bob*lobstr.com` passes through `bob*lobstr.co` — a real domain,
-  // a valid federated shape, and not the one the user meant. Undebounced,
-  // that domain receives a request and with it the viewer's IP.
-  it('does not contact a domain the user was still typing past', async () => {
+  // Typing `bob*lobstr.com` passes through `bob*lobstr.co` — a real domain, a
+  // valid federated shape, and not the one the user meant. Arriving at
+  // /search?q=… is the explicit act that arms a lookup; nothing typed after
+  // that is, so editing the box reaches no host at all until the user asks
+  // again. The earlier version of this test typed `*lobstr.com` and asserted
+  // that `lobstr.co` was never called, which passed for the wrong reason:
+  // `userEvent` types faster than the settle window, so the case it named was
+  // never actually exercised. Asserting zero calls cannot pass by being fast.
+  it('reaches no host for anything typed after arrival', async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.fn(() => Promise.reject(new Error('ENOTFOUND')));
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = stubFetch({});
 
-    // Seeded with a plain query so the collapsed input is already expanded.
-    renderSearch('bob');
+    // Seeded one keystroke short of being an address at all: a one-character
+    // TLD does not classify, so the page mounts unarmed and the edit under
+    // test is what turns the text into `bob*lobstr.co`. Seeding the finished
+    // address instead would arm at mount - arriving at /search?q= IS the
+    // explicit act - and would test the opposite of what this names.
+    renderSearch('bob*lobstr.c');
 
     const input = screen.getByLabelText(
       'Search by TX hash, accounts, contract, token'
     );
-    await user.type(input, '*lobstr.com');
+    await user.type(input, 'o');
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalled();
-    });
+    // The panel offers the lookup rather than performing it.
+    expect(
+      await screen.findByText(/look it up with lobstr\.co/)
+    ).toBeInTheDocument();
+    // Not even the domain it arrived armed for: the text changed, so the
+    // arming went with it.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('asks the domain once the offer is taken', async () => {
+    const user = userEvent.setup();
+    const fetchMock = stubFetch({});
+
+    renderSearch('bob*lobstr.c');
+    const input = screen.getByLabelText(
+      'Search by TX hash, accounts, contract, token'
+    );
+    await user.type(input, 'o');
+    await user.click(await screen.findByRole('button', { name: /Ask lobstr/ }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const urls = (fetchMock.mock.calls as unknown as [string][]).map(
       ([url]) => url
     );
-    expect(urls.some((u) => u.startsWith('https://lobstr.co/'))).toBe(false);
-    expect(urls.some((u) => u.startsWith('https://lobstr.com/'))).toBe(true);
+    // The domain it asks is the one on screen, never one passed through.
+    expect(urls.some((u) => u.startsWith('https://lobstr.co/'))).toBe(true);
   });
 });

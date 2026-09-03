@@ -9,7 +9,6 @@ import type { ReactElement, ReactNode } from 'react';
 import { vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-import { federatedDomain } from './search/federation.js';
 import type { SearchResultsState } from './search/useSearchResults.js';
 
 interface RenderWithProvidersOptions extends Omit<RenderOptions, 'wrapper'> {
@@ -100,11 +99,7 @@ export function stubFetch(
   return fn;
 }
 
-/**
- * A `SearchResultsState` with nothing found, for tests that mock the hook.
- * `federatedDomain` runs the real classifier so a mocked state cannot
- * disagree with the code under test about what a federated address is.
- */
+/** A `SearchResultsState` with nothing found, for tests that mock the hook. */
 export function emptySearchState(
   q: string,
   overrides: Partial<SearchResultsState> = {}
@@ -128,7 +123,6 @@ export function emptySearchState(
     activeTab: 'transaction',
     setActiveTab: () => undefined,
     hitsForActiveTab: [],
-    federatedDomain: federatedDomain(q),
     ...overrides,
   };
 }

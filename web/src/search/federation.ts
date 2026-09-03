@@ -1,11 +1,11 @@
 import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
- * SEP-2 federated addresses, resolved in the browser.
+ * SEP-2 federated addresses, both directions, resolved in the browser.
  *
  * Forward (`type=name`): `karol*lobstr.co` → `G…`, for the search box.
- * The reverse direction (`type=id`, for the account page) ships separately
- * with PR #440 on feat/0443_sep2-federated-addresses.
+ * Reverse (`type=id`): `G…` → the name a domain claims for it, for the
+ * account and transaction pages.
  *
  * Both hops are public GETs that serve `Access-Control-Allow-Origin: *`
  * (SEP-1 requires it for `stellar.toml`, and federation servers follow), so
@@ -103,6 +103,10 @@ async function getText(url: string, signal: AbortSignal): Promise<string> {
   const res = await fetch(url, {
     signal,
     redirect: 'follow',
+    // SEP-2: "Federation responses should not be cached." Telling React Query
+    // is not enough — without this the browser's own HTTP cache would still
+    // honour whatever `Cache-Control` the third party sent.
+    cache: 'no-store',
     // Third-party host: it has no business knowing which page asked, and
     // cookies must never ride along.
     referrerPolicy: 'no-referrer',

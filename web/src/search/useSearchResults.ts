@@ -66,18 +66,6 @@ export interface SearchResultsState {
   activeTab: EntityType;
   setActiveTab: (t: EntityType) => void;
   hitsForActiveTab: readonly SearchHit[];
-  /**
-   * The domain half when the query is a SEP-2 federated address
-   * (`name*domain`), otherwise `null`. The search itself is suppressed in
-   * that case: `/v1/search` knows nothing about the standard and can only
-   * answer zero hits, which renders as "No results for karol*lobstr.co" —
-   * a claim that the address does not exist, while it is about to resolve.
-   *
-   * Decided here rather than at each caller: both callers needed the same
-   * rule, and a third search bar that forgot it would print that false line
-   * with no warning (task 0443).
-   */
-  federatedDomain: string | null;
 }
 
 export function useSearchResults({
@@ -85,8 +73,13 @@ export function useSearchResults({
 }: UseSearchResultsParams): SearchResultsState {
   const debouncedRaw = useDebounced(q, DEFAULT_DEBOUNCE_MS);
   const effectiveQuery = debouncedRaw.trim();
-  const federated = federatedDomain(effectiveQuery);
-  const enabled = effectiveQuery.length > 0 && federated == null;
+  // `/v1/search` knows nothing about SEP-2, so for a federated address it can
+  // only answer zero hits, which renders as "No results for karol*lobstr.co" —
+  // a claim that the address does not exist. Suppressed here, on the hook that
+  // issues the request, so the gate and the request cannot disagree about what
+  // the query is.
+  const enabled =
+    effectiveQuery.length > 0 && federatedDomain(effectiveQuery) == null;
 
   const query = useQuery({
     // Sent explicitly rather than relying on the server default, so the cap
@@ -166,6 +159,5 @@ export function useSearchResults({
     activeTab,
     setActiveTab,
     hitsForActiveTab,
-    federatedDomain: federated,
   };
 }
