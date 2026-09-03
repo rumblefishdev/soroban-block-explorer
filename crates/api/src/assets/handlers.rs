@@ -176,6 +176,10 @@ pub async fn list_assets(
 
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
+    // The needle also decides the page ORDER (task 0485), so the cursor has to
+    // carry the rank of the row it stopped on — kept here because `resolved`
+    // takes ownership of it below.
+    let needle = params.filter_code.clone();
     let resolved = ResolvedListParams {
         limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
@@ -200,6 +204,10 @@ pub async fn list_assets(
         |dir, r| {
             cursor::encode(
                 &AssetKeyCursor {
+                    rank_tier: needle.as_deref().map_or(0, |n| {
+                        queries::match_tier(n, r.asset_type, r.asset_code.as_deref())
+                    }),
+                    holders_neg: -i64::from(r.holder_count.unwrap_or(0)),
                     asset_type: r.asset_type,
                     asset_code: r.asset_code.clone().unwrap_or_default(),
                     issuer_id: r.issuer_id,

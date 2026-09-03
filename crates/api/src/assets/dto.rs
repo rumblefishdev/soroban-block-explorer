@@ -132,6 +132,16 @@ pub struct AssetTransactionItem {
 /// cursor (ADR 0008), so it lives on the DTO boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetKeyCursor {
+    /// Match tier of the page's last row when the page was RANKED (a code
+    /// search): 0 exact / native, 1 prefix, 2 anywhere. `#[serde(default)]`
+    /// so cursors minted before ranking existed still decode — they resume an
+    /// unranked walk, where the field is ignored.
+    #[serde(default)]
+    pub rank_tier: u8,
+    /// Holder count of that row, NEGATED, so the whole keyset runs one
+    /// direction and stays a single tuple comparison. Ranked pages only.
+    #[serde(default)]
+    pub holders_neg: i64,
     pub asset_type: i16,
     pub asset_code: String,
     pub issuer_id: i64,

@@ -742,21 +742,108 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     } else {
         ("", "")
     };
+    // RELEVANCE (task 0485). A code search ranks by MATCH TIER — exact code
+    // (and native, which displays as `XLM`) first, then prefix, then a match
+    // anywhere — with holder count breaking ties inside a tier. Same rule as
+    // the `/v1/search` asset bucket, so the two surfaces agree on what "best"
+    // means; see `search::queries::search_assets` for the measurements behind
+    // the tie-break (441 assets carry the code `USDC`; holders separate them).
+    //
+    // The tier is computed ONCE in a subquery instead of being repeated in the
+    // keyset comparison and the `ORDER BY`. `holders_neg` is the NEGATED count
+    // so every sort column runs the same direction — a mixed-direction keyset
+    // cannot be expressed as one tuple comparison, and expanding it by hand is
+    // how off-by-one page bugs get written. Unknown holder count sorts as 0,
+    // which negates to the LARGEST value and therefore lands last.
+    //
+    // Only the SEARCH path pays for this. The unfiltered browse list keeps its
+    // bare `assets` PK walk — no subquery, no join, no ranking — because its
+    // order is not a relevance question and changing it would change the page
+    // everyone sees.
+    let (rank_select, rank_order, rank_keyset) = if params.asset_code.is_some() {
+        (
+            " , multiIf( \
+                   a.asset_type = 0 AND lower(?) IN ('xlm', 'native'), 0, \
+                   lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lower(?), 0, \
+                   startsWith(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))), \
+                              lower(?)), 1, \
+                   2 \
+               ) AS rank_tier \
+              , -toInt64(coalesce(bagg.holder_count, 0)) AS holders_neg",
+            true,
+            "rank_tier, holders_neg, ",
+        )
+    } else {
+        ("", false, "")
+    };
     let cursor_clause = if params.cursor.is_some() {
-        format!(" AND (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) {op} (?, ?, ?, ?)")
+        let vals = if rank_order {
+            "?, ?, ?, ?, ?, ?"
+        } else {
+            "?, ?, ?, ?"
+        };
+        format!(" AND ({rank_keyset}asset_type, asset_code, issuer_id, contract_id) {op} ({vals})")
     } else {
         String::new()
     };
+    let order_by = if rank_order {
+        format!(
+            "rank_tier {order}, holders_neg {order}, asset_type {order}, \
+             asset_code {order}, issuer_id {order}, contract_id {order}"
+        )
+    } else {
+        format!(
+            "asset_type {order}, asset_code {order}, \
+             issuer_id {order}, contract_id {order}"
+        )
+    };
+    let holder_join = if rank_order {
+        " LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id"
+    } else {
+        ""
+    };
 
+    // The projection is wrapped so the tier is named once and both the keyset
+    // and the `ORDER BY` refer to that name. The predicate stays INSIDE, so the
+    // scan is unchanged; only the cursor filter moves out.
     format!(
-        "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
-                a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
-         FROM assets a{search_join} \
-         WHERE 1{type_clause}{sac_clause}{code_clause}{cursor_clause} \
-         ORDER BY a.asset_type {order}, a.asset_code {order}, \
-                  a.issuer_id {order}, a.contract_id {order} \
+        "SELECT asset_type, asset_code, issuer_id, contract_id, id FROM ( \
+             SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
+                    a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id\
+                    {rank_select} \
+             FROM assets a{search_join}{holder_join} \
+             WHERE 1{type_clause}{sac_clause}{code_clause} \
+         ) WHERE 1{cursor_clause} \
+         ORDER BY {order_by} \
          LIMIT {lim_over}"
     )
+}
+
+/// The match tier the seek's `multiIf` computes, in Rust — the cursor has to
+/// carry the tier of the page's last row, and the handler only ever sees the
+/// hydrated row, never the SQL expression.
+///
+/// Kept deliberately dumb and total so it can be read against the SQL side by
+/// side. `code_search_page_walk_has_no_gaps` (CH-gated) is what proves the two
+/// still agree: if they drift, a page boundary starts skipping or repeating
+/// rows, and that walk sees it.
+pub(super) fn match_tier(needle: &str, asset_type: i16, asset_code: Option<&str>) -> u8 {
+    let display = if asset_type == 0 {
+        "XLM"
+    } else {
+        asset_code.unwrap_or_default()
+    };
+    let needle = needle.to_lowercase();
+    let display = display.to_lowercase();
+    // The SQL writes tier 0 as two `multiIf` arms — the native alias, then the
+    // exact code. One condition here, same meaning; clippy refuses the pair.
+    if (asset_type == 0 && (needle == "xlm" || needle == "native")) || display == needle {
+        0
+    } else if display.starts_with(&needle) {
+        1
+    } else {
+        2
+    }
 }
 
 /// **Read-cost caveat:** the keyset/`ORDER BY` is the identity 4-tuple — which
@@ -772,10 +859,24 @@ pub async fn fetch_list(
 
     let mut query = client.query(&sql);
     if let Some(code) = &params.asset_code {
-        // Three placeholders in `code_clause`: asset_code, m.name, m.symbol.
-        query = query.bind(code).bind(code).bind(code);
+        // Placeholders in textual order, which is the order the driver fills
+        // them: three in `rank_select` (the native alias, the exact-code arm,
+        // the prefix arm), then three in `code_clause` (asset_code, m.name,
+        // m.symbol). All six take the same needle.
+        query = query
+            .bind(code)
+            .bind(code)
+            .bind(code)
+            .bind(code)
+            .bind(code)
+            .bind(code);
     }
     if let Some(c) = &params.cursor {
+        // The keyset carries the rank ahead of the identity 4-tuple whenever
+        // the page is ranked — the order it resumes must be the order it left.
+        if params.asset_code.is_some() {
+            query = query.bind(c.rank_tier).bind(c.holders_neg);
+        }
         query = query
             .bind(c.asset_type)
             .bind(&c.asset_code)
@@ -1264,9 +1365,11 @@ mod tests {
         // Classic enrichment names (ae.name) are intentionally NOT matched —
         // substring-matching them adds noise ("Opulent Insolvent" ~ "solv").
         assert!(!sql.contains("coalesce(ae.name, '')"));
-        // 3 needle placeholders (code + m.name + m.symbol); the LIMIT is now
-        // inlined, so MUST equal the 3×`.bind(code)` in `fetch_list`.
-        assert_eq!(sql.matches('?').count(), 3);
+        // 6 needle placeholders — 3 in the rank expression (native alias,
+        // exact, prefix) and 3 in the predicate (code + m.name + m.symbol);
+        // the LIMIT is inlined, so this MUST equal the 6×`.bind(code)` in
+        // `fetch_list`. A drift here is a runtime-only failure.
+        assert_eq!(sql.matches('?').count(), 6);
     }
 
     #[test]
@@ -1308,6 +1411,8 @@ mod tests {
         let mut params = ResolvedListParams {
             limit: 10,
             cursor: Some(AssetKeyCursor {
+                rank_tier: 1,
+                holders_neg: -5,
                 asset_type: 1,
                 asset_code: "XLM".to_string(),
                 issuer_id: 1,
@@ -1318,19 +1423,29 @@ mod tests {
             sac_only: false,
         };
         let searching = build_list_seek_sql(&params, Direction::Next);
+        // Ranked: tier leads, holders break ties, the identity 4-tuple makes
+        // the order total. Every column ASC — a mixed-direction keyset cannot
+        // be one tuple comparison.
         assert!(
-            searching.contains("ORDER BY a.asset_type ASC"),
+            searching.contains("ORDER BY rank_tier ASC, holders_neg ASC, asset_type ASC"),
             "{searching}"
         );
-        // The comparator must point INTO the walk, or the cursor pages backwards.
-        assert!(searching.contains(") > (?, ?, ?, ?)"), "{searching}");
+        // The comparator must point INTO the walk, or the cursor pages
+        // backwards, and it must resume on the SAME columns it ordered by.
+        assert!(
+            searching.contains(
+                "(rank_tier, holders_neg, asset_type, asset_code, \
+issuer_id, contract_id) > (?, ?, ?, ?, ?, ?)"
+            ),
+            "{searching}"
+        );
 
         params.asset_code = None;
         let browsing = build_list_seek_sql(&params, Direction::Next);
-        assert!(
-            browsing.contains("ORDER BY a.asset_type DESC"),
-            "{browsing}"
-        );
+        // Browsing is NOT a relevance question: no rank, no join, DESC as before.
+        assert!(browsing.contains("ORDER BY asset_type DESC"), "{browsing}");
+        assert!(!browsing.contains("rank_tier"), "{browsing}");
+        assert!(!browsing.contains("balance_aggregates"), "{browsing}");
         assert!(browsing.contains(") < (?, ?, ?, ?)"), "{browsing}");
     }
 
@@ -1349,6 +1464,23 @@ mod tests {
         // (the LIMIT is inlined).
         assert!(!sql.contains("JOIN"));
         assert_eq!(sql.matches('?').count(), 0);
+    }
+
+    #[test]
+    fn match_tier_mirrors_the_sql_shelves() {
+        // Native answers to both spellings, and to its DISPLAY code, never to
+        // its stored one (which is empty).
+        assert_eq!(match_tier("xlm", 0, None), 0);
+        assert_eq!(match_tier("NATIVE", 0, None), 0);
+        assert_eq!(match_tier("XLM", 0, None), 0);
+        // Exact beats prefix beats anywhere, case-insensitively both ways.
+        assert_eq!(match_tier("usdc", 1, Some("USDC")), 0);
+        assert_eq!(match_tier("USDC", 1, Some("usdc")), 0);
+        assert_eq!(match_tier("xlm", 1, Some("XLMFISH")), 1);
+        assert_eq!(match_tier("xlm", 1, Some("yXLM")), 2);
+        // A row matched on its on-chain name/symbol, not its code, still gets
+        // an answer — the tier is total.
+        assert_eq!(match_tier("spiko", 3, None), 2);
     }
 }
 
@@ -1420,6 +1552,80 @@ mod decode_smoke {
             "`xlm` answered with {:?} first — native XLM is the MINIMUM of the \
              identity 4-tuple, so a DESC walk buries it on the last page",
             first.asset_code
+        );
+    }
+
+    /// Task 0485. The ranked order is computed in SQL; the cursor that resumes
+    /// it is built in Rust from `match_tier`. Two expressions of one rule, in
+    /// two languages — and if they drift, a page boundary silently SKIPS rows.
+    ///
+    /// Weak invariants do not catch that: a walk that jumps straight from tier
+    /// 0 to tier 2 still has no repeats and still never goes backwards. So the
+    /// oracle here is the whole page — three pages of two must equal one page
+    /// of six, row for row.
+    #[tokio::test]
+    async fn code_search_page_walk_equals_one_shot() {
+        let Some(ch) = crate::common::ch::test_client_from_env() else {
+            eprintln!("CH_URL unset — skipping assets page-walk smoke");
+            return;
+        };
+        // `xlm` is the needle that crosses tiers: native and every exact `XLM`
+        // credit asset sit on tier 0, `XLMFISH`-style codes on 1, `yXLM` on 2.
+        // The PAGE SIZE matters as much as the needle — a walk that never
+        // leaves tier 0 cannot see a tier bug, and the exact-code set is large
+        // (36 rows locally, thousands on production). 30×3 clears it.
+        let needle = "xlm";
+        const PAGE: i64 = 30;
+        const PAGES: usize = 3;
+        let total = PAGE as usize * PAGES;
+        let one_shot = fetch_list(
+            &ch,
+            &ResolvedListParams {
+                limit: total as i64,
+                cursor: None,
+                asset_type: None,
+                asset_code: Some(needle.to_string()),
+                sac_only: false,
+            },
+            Direction::Next,
+        )
+        .await
+        .expect("one-shot page decodes");
+        if one_shot.len() < total {
+            eprintln!("corpus holds <{total} `xlm` assets — page-walk not exercised");
+            return;
+        }
+
+        let mut params = ResolvedListParams {
+            limit: PAGE,
+            cursor: None,
+            asset_type: None,
+            asset_code: Some(needle.to_string()),
+            sac_only: false,
+        };
+        let mut walked: Vec<i64> = Vec::new();
+        for page_no in 1..=PAGES {
+            let page = fetch_list(&ch, &params, Direction::Next)
+                .await
+                .unwrap_or_else(|e| panic!("page {page_no} failed: {e}"));
+            let last = page.last().expect("page must not be empty").clone();
+            walked.extend(page.iter().map(|r| r.id));
+            params.cursor = Some(AssetKeyCursor {
+                rank_tier: match_tier(needle, last.asset_type, last.asset_code.as_deref()),
+                holders_neg: -i64::from(last.holder_count.unwrap_or(0)),
+                asset_type: last.asset_type,
+                asset_code: last.asset_code.clone().unwrap_or_default(),
+                issuer_id: last.issuer_id,
+                contract_id: last.contract_surrogate_id,
+            });
+        }
+
+        let expected: Vec<i64> = one_shot.iter().map(|r| r.id).collect();
+        assert_eq!(
+            walked, expected,
+            "paging through the ranked list did not reproduce the unpaginated \
+             page — the Rust cursor and the SQL ORDER BY disagree, so a page \
+             boundary is skipping or repeating rows"
         );
     }
 
