@@ -1,4 +1,4 @@
-import { Box, Link, Typography } from '@mui/material';
+import { Box, Link, Stack, Tooltip, Typography } from '@mui/material';
 import type { TransactionValue } from '@rumblefish/api-types';
 import {
   Chip,
@@ -46,17 +46,37 @@ export function OperationCell({ types }: { types: readonly string[] }) {
  * column cannot list every asset, so the rest collapse into the count. `Dash`
  * when nothing net-settled. (Per-asset breakdown on the transaction detail page
  * is a planned follow-up — not built here.)
+ *
+ * Pre-backfill honesty: the indexer writes `net_settled` live since ledger
+ * 63,699,653 (first non-NULL row on prod, 2026-07-29); everything earlier is
+ * NULL until the S3 re-ingest (task 0419) runs. An empty `values` on an older
+ * transaction therefore means "not computed yet", not "nothing moved" — render
+ * `n/a`, never a dash that reads as an empty value.
  */
-export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
+const NET_SETTLED_LIVE_FLOOR = 63_699_653;
+
+export function ValueCell({
+  values,
+  ledgerSequence,
+}: {
+  values: readonly TransactionValue[];
+  ledgerSequence: number;
+}) {
+  if (values.length === 0 && ledgerSequence < NET_SETTLED_LIVE_FLOOR) {
+    return (
+      <Typography
+        component="span"
+        variant="bodySmRegular"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
+        n/a
+      </Typography>
+    );
+  }
   if (values.length === 0) return <Dash />;
   const [first, ...rest] = values;
-  // `XLM` only for native; a bespoke token with no on-chain symbol has a null
-  // `asset_code` and must NOT be mislabeled as XLM (its `asset` C-StrKey still
-  // links correctly).
-  const code = isNativeAssetString(first.asset)
-    ? NATIVE_ASSET_CODE
-    : first.asset_code ?? '';
-  return (
+  const code = valueCode(first);
+  const cell = (
     <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5 }}>
       <Typography component="span" variant="bodySmRegular">
         {formatAmount(scaleByDecimals(first.net_settled, first.decimals), 2)}
@@ -66,7 +86,7 @@ export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
         to={routes.asset(first.asset)}
         underline="hover"
         variant="bodySmRegular"
-        sx={(theme) => ({ color: theme.palette.text.secondary })}
+        sx={(theme) => ({ color: theme.palette.surface.primaryMainAlt })}
       >
         {code}
       </Link>
@@ -80,6 +100,36 @@ export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
       )}
     </Box>
   );
+  if (rest.length === 0) return cell;
+  // Multi-asset transaction: the collapsed `+N` expands on hover to the full
+  // per-asset list, one line each.
+  return (
+    <Tooltip
+      title={
+        <Stack spacing={0.25}>
+          {values.map((v) => (
+            <span key={v.asset}>
+              {formatAmount(scaleByDecimals(v.net_settled, v.decimals), 2)}{' '}
+              {valueCode(v)}
+            </span>
+          ))}
+        </Stack>
+      }
+    >
+      {cell}
+    </Tooltip>
+  );
+}
+
+/**
+ * Display code for a net-settled entry: `XLM` only for native; a bespoke token
+ * with no on-chain symbol has a null `asset_code` and must NOT be mislabeled
+ * as XLM (its `asset` C-StrKey still links correctly).
+ */
+function valueCode(value: TransactionValue): string {
+  return isNativeAssetString(value.asset)
+    ? NATIVE_ASSET_CODE
+    : value.asset_code ?? '';
 }
 
 /**

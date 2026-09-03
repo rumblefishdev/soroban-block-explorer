@@ -2441,7 +2441,8 @@
           "created_at",
           "operation_count",
           "has_soroban",
-          "operation_types"
+          "operation_types",
+          "values"
         ],
         "properties": {
           "created_at": {
@@ -2479,6 +2480,13 @@
           },
           "successful": {
             "type": "boolean"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionValue"
+            },
+            "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
           }
         }
       },
@@ -3769,7 +3777,8 @@
                 "created_at",
                 "operation_count",
                 "has_soroban",
-                "operation_types"
+                "operation_types",
+                "values"
               ],
               "properties": {
                 "created_at": {
@@ -3807,6 +3816,13 @@
                 },
                 "successful": {
                   "type": "boolean"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionValue"
+                  },
+                  "description": "Net-settled \"value moved\" per asset the transaction touched (task 0393);\nsee `TransactionValue`. Raw amounts + `decimals` — the frontend scales."
                 }
               }
             }
