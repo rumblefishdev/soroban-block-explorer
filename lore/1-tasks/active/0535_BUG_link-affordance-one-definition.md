@@ -2,7 +2,7 @@
 id: '0535'
 title: 'BUG: a link in content is indistinguishable from plain text, and the app carries two definitions of one'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0062', '0467', '0472']
 tags:
@@ -18,6 +18,13 @@ history:
       link in `text.primary` with `textDecoration: none`, so the only signal is
       the mouse cursor. Scope is the shared component and the rule, not that one
       chip.
+  - date: 2026-09-03
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active. No research phase needed — the defect and the two
+      competing link definitions are both located in the code, and the open
+      question is the rule, which is settled in the body.
 ---
 
 # BUG: a link in content is indistinguishable from plain text
