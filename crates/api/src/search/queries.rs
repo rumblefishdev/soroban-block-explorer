@@ -740,8 +740,16 @@ async fn search_assets(
     // (lore-0420): page-scoped CTE 1,896,766 rows / 37.8 MiB, this form
     // 1,118,154 rows / 28.5 MiB — cheaper even than the un-deduped original
     // (1,151,738 / 32.0 MiB).
-    let sql = format!(
-        "SELECT \
+    //
+    // A fully-qualified `CODE:ISSUER` (task 0485) takes a different arm: the pair
+    // names exactly one asset, so it is an equality lookup and needs no ranking —
+    // the most precise query is also the cheapest one. The issuer StrKey resolves
+    // through `accounts`, whose `ORDER BY account_id` primary key makes it a point
+    // seek rather than the ~23M-row hash join that OOMs (Code 241).
+    //
+    // The substring arm below still has no `ORDER BY`, so its `LIMIT` cuts scan
+    // order — that is the relevance-ranking half of 0485 and it lands separately.
+    const ASSET_HEAD: &str = "SELECT \
             a.asset_type AS asset_type, \
             nullIf(a.asset_code, '') AS asset_code, \
             nullIf(sc.contract_id, '') AS contract_strkey, \
@@ -750,19 +758,36 @@ async fn search_assets(
          LEFT JOIN ( \
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts GROUP BY id \
-         ) sc ON sc.id = a.contract_id \
-         WHERE (length(a.asset_code) > 0 \
-                AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
-            OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
-         LIMIT {per_group_limit}"
-    );
-    let rows = client
-        .query(&sql)
-        .bind(q)
-        .bind(q)
-        .bind(q)
-        .fetch_all::<AssetPhase1Row>()
-        .await?;
+         ) sc ON sc.id = a.contract_id ";
+    let rows = if let Some((code, issuer)) = classified.code_issuer.as_ref() {
+        let sql = format!(
+            "{ASSET_HEAD} \
+             WHERE lower(toString(a.asset_code)) = lower(?) \
+               AND a.issuer_id IN (SELECT id FROM accounts WHERE account_id = ?) \
+             LIMIT {per_group_limit}"
+        );
+        client
+            .query(&sql)
+            .bind(code)
+            .bind(issuer)
+            .fetch_all::<AssetPhase1Row>()
+            .await?
+    } else {
+        let sql = format!(
+            "{ASSET_HEAD} \
+             WHERE (length(a.asset_code) > 0 \
+                    AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
+                OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
+             LIMIT {per_group_limit}"
+        );
+        client
+            .query(&sql)
+            .bind(q)
+            .bind(q)
+            .bind(q)
+            .fetch_all::<AssetPhase1Row>()
+            .await?
+    };
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -1118,6 +1143,113 @@ mod decode_smoke {
                     hit.identifier,
                 );
             }
+        }
+    }
+
+    /// Task 0485: the canonical `CODE:ISSUER` (and our own `CODE-ISSUER` route
+    /// token) used to classify as nothing, so the asset arm hunted a 60+
+    /// character needle through <=12 character codes — provably empty — and the
+    /// most precise query a user can type answered with a blank page.
+    ///
+    /// Only testable against a real corpus: what is asserted is which row
+    /// survives, which no fixture-free unit test can observe. The target is a
+    /// code carried by SEVERAL assets, addressed by the one the scan reaches
+    /// LAST, so a hit cannot come from the substring arm returning the first row
+    /// it happened to touch.
+    #[tokio::test]
+    async fn code_issuer_resolves_to_exactly_that_asset() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping CODE:ISSUER smoke");
+            return;
+        };
+
+        #[derive(Debug, Row, Deserialize)]
+        struct CodeRow {
+            asset_code: String,
+        }
+
+        let probe = ch
+            .query(
+                "SELECT toString(a.asset_code) AS asset_code \
+                 FROM assets a FINAL \
+                 WHERE length(a.asset_code) > 0 AND a.issuer_id != 0 \
+                 GROUP BY a.asset_code \
+                 HAVING count() > 1 \
+                 LIMIT 1",
+            )
+            .fetch_optional::<CodeRow>()
+            .await
+            .expect("corpus probe must run");
+        let Some(CodeRow { asset_code: code }) = probe else {
+            eprintln!("no asset code shared by two issuers — skipping");
+            return;
+        };
+
+        let same_code = ch
+            .query(
+                "SELECT a.asset_type AS asset_type, \
+                        nullIf(a.asset_code, '') AS asset_code, \
+                        nullIf(sc.contract_id, '') AS contract_strkey, \
+                        a.issuer_id AS issuer_id \
+                 FROM assets a FINAL \
+                 LEFT JOIN ( \
+                     SELECT id, any(contract_id) AS contract_id \
+                     FROM soroban_contracts GROUP BY id \
+                 ) sc ON sc.id = a.contract_id \
+                 WHERE lower(toString(a.asset_code)) = lower(?) \
+                 LIMIT 16",
+            )
+            .bind(&code)
+            .fetch_all::<AssetPhase1Row>()
+            .await
+            .expect("same-code query must run");
+        let target = same_code
+            .last()
+            .unwrap_or_else(|| panic!("no asset row for probed code {code:?}"));
+
+        let Some(issuer) = ch
+            .query(
+                "SELECT id AS id, account_id AS account_id \
+                 FROM accounts WHERE id = ? LIMIT 1 BY id",
+            )
+            .bind(target.issuer_id)
+            .fetch_optional::<IssuerRow>()
+            .await
+            .expect("issuer resolve must run")
+            .map(|r| r.account_id)
+        else {
+            eprintln!("probed asset has no resolvable issuer — skipping");
+            return;
+        };
+
+        let want = asset_route_token(
+            target.contract_strkey.as_deref(),
+            target.asset_code.as_deref(),
+            Some(issuer.as_str()),
+            target.asset_type,
+        );
+
+        // Both separators: `:` is the canonical SEP / SDK form, `-` is what our
+        // own `/assets/:id` routes emit and users paste back.
+        for q in [format!("{code}:{issuer}"), format!("{code}-{issuer}")] {
+            let hits = fetch_search(&ch, &q, &classifier::classify(&q), &IncludeFlags::all(), 10)
+                .await
+                .unwrap_or_else(|e| panic!("search failed for {q:?}: {e}"));
+            let assets: Vec<&SearchHit> = hits
+                .iter()
+                .filter(|(bucket, _)| bucket == "asset")
+                .map(|(_, hit)| hit)
+                .collect();
+
+            assert_eq!(
+                assets.len(),
+                1,
+                "{q:?} must resolve to exactly one asset, got {assets:?}"
+            );
+            assert_eq!(
+                assets[0].route_token, want,
+                "{q:?} resolved to the wrong asset",
+            );
         }
     }
 }
