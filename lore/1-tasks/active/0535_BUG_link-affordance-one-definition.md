@@ -138,7 +138,7 @@ not this task.
 
 - [x] A linked identifier is distinguishable from an unlinked one **without
       hovering** — `IdentifierDisplay.test.tsx` asserts `textDecoration:
-    underline` when `linked` and `none` when not, in jsdom (not a rendering
+underline` when `linked` and `none` when not, in jsdom (not a rendering
       approximation — a real assertion on computed style)
 - [x] The transactions list, where every row carries a linked hash, still reads
       as a table rather than a wall of underlines — verified visually (see
