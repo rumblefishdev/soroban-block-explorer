@@ -241,3 +241,48 @@ Extracting the tests out of the two touched files, which both exceed the
 `*_tests.rs` file exists anywhere in the repo yet, so doing it here would
 introduce a new file convention inside a 46-line bugfix. Belongs to the
 incremental god-file backlog, not to this PR.
+
+### Bucket 4 went from a direction flip to a real ranking (2026-09-03)
+
+The ASC flip was correct but partial: it put native XLM at row 1 and left
+everything behind it alphabetical, so `filter[code]=usdc` still answered with
+whichever `USDC` sorted first rather than the one 691,439 people hold. The
+list now carries the SAME tier ranking as bucket 1, so the two surfaces agree
+on what "best match" means.
+
+Two consequences worth recording:
+
+- **The cursor grew.** A keyset must resume in the order it walked, so
+  `AssetKeyCursor` carries `rank_tier` + `holders_neg` (both
+  `#[serde(default)]`, so older cursors still decode). `holders_neg` is
+  NEGATED rather than sorted DESC — a mixed-direction keyset is not one tuple
+  comparison, and hand-expanding it is how page-boundary bugs get written.
+- **The tier now exists in two languages** (`multiIf` in SQL, `match_tier` in
+  Rust for the cursor). That drift is silent: it skips rows at a page
+  boundary. Guard is `code_search_page_walk_equals_one_shot` — three pages of
+  thirty must equal one page of ninety. The weaker invariants (no repeats,
+  tier never decreasing) were tried FIRST and passed with a deliberately
+  broken `match_tier`; they are recorded here as insufficient so nobody
+  re-invents them. The page size is load-bearing too: the exact-code set for
+  `xlm` is 36 rows locally, so a short walk never leaves tier 0 and sees
+  nothing.
+
+Cost on production, ranked vs the plain PK walk: `xlm` 240 ms vs 174 ms,
+`a` (171,048 matching rows) 222 ms vs 171 ms, against a ~330 ms endpoint
+baseline. Only the search path pays; the unfiltered browse list keeps its bare
+`assets` PK walk untouched.
+
+### Liquidity pools: measured, NOT needed (2026-09-03)
+
+Checked whether the same defect hides in `/liquidity-pools`, which takes the
+same kind of asset-code filter. It does not, and the reason is structural: a
+pool has two or more legs, so there is no single "the native pool" to bury.
+The list orders by `last_updated_ledger DESC` (activity), and measured on
+production, page 1 of `filter[asset_codes]=XLM` is **20 of 25 real
+native-leg pools**, 5 substring look-alikes — the native pools are the busiest
+ones, so activity already surfaces them. The search endpoint's pool bucket
+reads the same table with the same order, so it inherits the same answer.
+
+A tier ranking there (exact leg beats substring leg) is still a coherent idea
+and 0485's original text asks for it, but nothing user-visible is broken
+today, so it is not being built.
