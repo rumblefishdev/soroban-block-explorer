@@ -24,6 +24,7 @@ pub mod nft;
 pub mod op_participants;
 pub mod op_source;
 pub mod operation;
+pub mod pool_config_factory;
 pub mod pool_family;
 pub mod pool_pair_factory;
 pub mod pool_router;

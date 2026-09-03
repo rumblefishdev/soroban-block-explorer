@@ -3873,3 +3873,223 @@ fn a_pair_write_stages_self_stamped_reserves_and_supply() {
     assert_eq!(decl.total_shares, 1_387_420_389);
     assert_eq!(decl.share_token_id, ids::contract_id(SORO_PAIR));
 }
+
+// ---------------------------------------------------------------------------
+// Config-factory staging (task 0518, third adapter): create/liquidity_pool
+// corroboration via the pool's OWN full CONFIG + created gate, keyed
+// persistent entries as reserve source, and the instance-row-only-on-config
+// clobber protection. Addresses are real mainnet ones (the Phoenix-family
+// factory + its newest pool, creation ledger 64,030,567).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+const CFG_FACTORY: &str = "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI";
+#[cfg(test)]
+const CFG_POOL: &str = "CCPPPTDWJIWXQUQ2CN64S5JYQ7GYWVZIT7YWUUTH75HKIZX53Z2CE3XI";
+#[cfg(test)]
+const CFG_TA: &str = "CBZ7M5B3Y4WWBZ5XK5UZCAFOEZ23KSSZXYECYX3IXM6E2JOLQC52DK32";
+#[cfg(test)]
+const CFG_TB: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+#[cfg(test)]
+const CFG_SHARE: &str = "CA3KLIRAM6BKPN6BPPKTDX3CSY2DSM4YZAX54KZLER25X2QRK3FGDXR6";
+
+#[cfg(test)]
+fn liquidity_pool_created_event(tx_hash: &str, factory: &str, pool: &str) -> ExtractedEvent {
+    ExtractedEvent {
+        transaction_hash: tx_hash.to_string(),
+        event_type: ContractEventType::Contract,
+        source: EventSource::TxLevel,
+        contract_id: Some(factory.to_string()),
+        topics: serde_json::json!([
+            {"type": "string", "value": "create"},
+            {"type": "string", "value": "liquidity_pool"}
+        ]),
+        data: serde_json::json!({"type": "address", "value": pool}),
+        ledger_sequence: 10,
+        event_index: 0,
+        op_index: None,
+        stage: None,
+        created_at: 1_700_000_000,
+    }
+}
+
+#[cfg(test)]
+fn config_pool_write(
+    with_config: bool,
+    reserves: Option<(&str, &str)>,
+    total_shares: Option<&str>,
+    created: bool,
+) -> xdr_parser::pool_config_factory::ExtractedConfigPool {
+    xdr_parser::pool_config_factory::ExtractedConfigPool {
+        state: xdr_parser::pool_config_factory::ConfigPoolState {
+            pool: CFG_POOL.into(),
+            config: with_config.then(|| xdr_parser::pool_config_factory::PoolConfig {
+                token_a: CFG_TA.into(),
+                token_b: CFG_TB.into(),
+                share_token: CFG_SHARE.into(),
+                pool_type: 0,
+                total_fee_bps: 50,
+            }),
+            reserves: reserves.map(|(a, b)| (a.to_string(), b.to_string())),
+            total_shares: total_shares.map(str::to_string),
+        },
+        ledger_sequence: 10,
+        created,
+    }
+}
+
+#[cfg(test)]
+fn stage_config_pool(
+    ledger: &ExtractedLedger,
+    tx: &ExtractedTransaction,
+    events: &[(String, Vec<ExtractedEvent>)],
+    pools: &[xdr_parser::pool_config_factory::ExtractedConfigPool],
+) -> stage::StagedLedger {
+    let writes: Vec<xdr_parser::pool_family::PoolFamilyWrite> = pools
+        .iter()
+        .cloned()
+        .map(xdr_parser::pool_family::PoolFamilyWrite::ConfigPool)
+        .collect();
+    stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger,
+        transactions: std::slice::from_ref(tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events,
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        pool_family_writes: &writes,
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
+    .expect("staging succeeds — refusals must not fail the ledger")
+}
+
+/// The genuine creation signature: event + the pool's own CONFIG + created
+/// instance, all in one ledger. Every registry fact comes from the CONFIG.
+#[test]
+fn a_corroborated_liquidity_pool_registers_with_the_pools_own_config() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x85);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![liquidity_pool_created_event(
+            &tx.hash,
+            CFG_FACTORY,
+            CFG_POOL,
+        )],
+    )];
+    // The creation transaction writes config, zero reserves and zero shares.
+    let pools = [config_pool_write(true, Some(("0", "0")), Some("0"), true)];
+
+    let staged = stage_config_pool(&ledger, &tx, &events, &pools);
+
+    let row = staged
+        .pool_rows
+        .iter()
+        .find(|r| r.pool_kind == 1)
+        .expect("the corroborated registration stages a registry row");
+    assert_eq!(row.deployment_id, ids::contract_id(CFG_FACTORY));
+    assert_eq!(
+        row.legs,
+        vec![ids::contract_id(CFG_TA), ids::contract_id(CFG_TB)]
+    );
+    assert_eq!(row.fee_bps, 50, "the per-pool fee comes from CONFIG");
+    assert_eq!(
+        row.pool_type_raw, "0",
+        "the PairType discriminant, verbatim"
+    );
+    // Creation stages the TRUE-zero reserve pair and the declaration with
+    // the SEPARATE share token.
+    let state = staged.pool_state_change_rows.first().expect("reserve row");
+    assert_eq!(state.reserves, vec![0_i128, 0]);
+    assert_eq!(state.plane_id, ids::contract_id(CFG_POOL));
+    let decl = staged
+        .pool_instance_state_rows
+        .first()
+        .expect("the declaration stages at birth");
+    assert_eq!(decl.plane_id, ids::contract_id(CFG_POOL));
+    assert_eq!(decl.share_token_id, ids::contract_id(CFG_SHARE));
+    assert_eq!(decl.total_shares, 0);
+}
+
+/// The two refusal signatures: a named pool that never wrote its CONFIG
+/// this ledger, and one whose entries were written without an instance
+/// CREATION (the induced-forgery signature).
+#[test]
+fn unconfigured_or_touched_liquidity_pools_are_refused() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x86);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![liquidity_pool_created_event(
+            &tx.hash,
+            CFG_FACTORY,
+            CFG_POOL,
+        )],
+    )];
+    // Reserves only, no CONFIG — the shape never fully declared itself.
+    let unconfigured = [config_pool_write(false, Some(("1", "2")), None, true)];
+    let staged = stage_config_pool(&ledger, &tx, &events, &unconfigured);
+    assert!(staged.pool_rows.iter().all(|r| r.pool_kind == 0));
+
+    // Full CONFIG but the instance was only TOUCHED, not created.
+    let tx2 = synthetic_tx(0x87);
+    let events2 = vec![(
+        tx2.hash.clone(),
+        vec![liquidity_pool_created_event(
+            &tx2.hash,
+            CFG_FACTORY,
+            CFG_POOL,
+        )],
+    )];
+    let touched = [config_pool_write(true, None, None, false)];
+    let staged2 = stage_config_pool(&ledger, &tx2, &events2, &touched);
+    assert!(staged2.pool_rows.iter().all(|r| r.pool_kind == 0));
+}
+
+/// A per-operation write (reserves + TotalShares, NO config) stages the
+/// self-stamped reserve row and NOTHING into `pool_instance_state` — the
+/// table is RMT whole-row keyed on pool_id, and a config-less row would
+/// clobber `share_token_id` to 0.
+#[test]
+fn a_config_pool_operation_stages_reserves_without_clobbering_the_declaration() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x88);
+    let pools = [config_pool_write(
+        false,
+        Some(("123456789", "987654321")),
+        Some("55555"),
+        false,
+    )];
+
+    let staged = stage_config_pool(&ledger, &tx, &[], &pools);
+
+    let state = staged
+        .pool_state_change_rows
+        .first()
+        .expect("reserves stage from the pool's own keyed entries");
+    assert_eq!(state.reserves, vec![123_456_789_i128, 987_654_321]);
+    assert_eq!(
+        state.plane_id,
+        ids::contract_id(CFG_POOL),
+        "the stamp is the pool itself — the provenance filter passes by construction"
+    );
+    assert!(
+        staged.pool_instance_state_rows.is_empty(),
+        "a config-less write must NOT stage an instance row — RMT whole-row \
+         replace would zero the share token"
+    );
+}
