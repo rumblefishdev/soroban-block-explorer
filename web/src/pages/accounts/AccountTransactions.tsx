@@ -20,6 +20,7 @@ import {
   ledgerColumn,
   OperationCell,
   statusColumn,
+  ValueCell,
 } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
@@ -33,6 +34,14 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
   statusColumn<AccountTransactionItem>(),
+  {
+    id: 'net_settled',
+    header: 'Net settled',
+    width: 170,
+    cell: (row) => (
+      <ValueCell values={row.values} ledgerSequence={row.ledger_sequence} />
+    ),
+  },
   {
     id: 'fee',
     header: 'Fee',
