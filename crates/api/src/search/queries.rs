@@ -740,6 +740,22 @@ async fn search_assets(
     // (lore-0420): page-scoped CTE 1,896,766 rows / 37.8 MiB, this form
     // 1,118,154 rows / 28.5 MiB — cheaper even than the un-deduped original
     // (1,151,738 / 32.0 MiB).
+    //
+    // ORDER BY is load-bearing, not cosmetic (task 0534). A code is not unique on
+    // Stellar — 468 assets carry one containing "USDC", 4 carry "USDT0" — so
+    // without ordering the `LIMIT` keeps 10 arbitrary rows in scan order and
+    // Circle's USDC (691k holders) was simply absent from its own search. Two
+    // keys, in this order:
+    //   1. exact code match first, so `USDC` outranks `BitstampUSDC`;
+    //   2. then `holder_count`, which is what separates the real issuer from an
+    //      impersonator.
+    // NOT supply: supply is the field an impostor inflates for free (a USDT0
+    // clone claims 30 quadrillion with one holder), while holders cost real
+    // trustlines. `NULLS LAST` is required, not decorative — ClickHouse sorts
+    // NULL first under DESC, so a JOIN miss (no holders) would otherwise take
+    // the top of the page.
+    // Native has no code, so key 1 never fires for the `xlm`/`native` branch; it
+    // needs no special case because XLM outranks every same-code asset on key 2.
     let sql = format!(
         "SELECT \
             a.asset_type AS asset_type, \
@@ -751,13 +767,17 @@ async fn search_assets(
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts GROUP BY id \
          ) sc ON sc.id = a.contract_id \
+         LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
          WHERE (length(a.asset_code) > 0 \
                 AND positionCaseInsensitive(toString(a.asset_code), ?) > 0) \
             OR (a.asset_type = 0 AND (lower(?) = 'xlm' OR lower(?) = 'native')) \
+         ORDER BY (lower(toString(a.asset_code)) = lower(?)) DESC, \
+                  bagg.holder_count DESC NULLS LAST \
          LIMIT {per_group_limit}"
     );
     let rows = client
         .query(&sql)
+        .bind(q)
         .bind(q)
         .bind(q)
         .bind(q)
@@ -1119,5 +1139,150 @@ mod decode_smoke {
                 );
             }
         }
+    }
+
+    /// Task 0534: an asset code is not unique, so the bucket's `LIMIT` has to
+    /// cut a ranked list — unranked it cut ClickHouse scan order, and on
+    /// production the 691k-holder USDC fell outside the default page of its own
+    /// search while five 0-holder namesakes made it in.
+    ///
+    /// Only testable against a real corpus: the defect is entirely about which
+    /// rows survive the cut, which no fixture-free unit test can observe. The
+    /// expected winner is derived independently (max `holder_count` for the
+    /// code) and turned into a route token by the same helper the read path
+    /// uses, so this asserts the ordering contract rather than restating the
+    /// query.
+    #[tokio::test]
+    async fn asset_bucket_ranks_the_most_held_issuer_first() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping asset ranking smoke");
+            return;
+        };
+
+        #[derive(Debug, Row, Deserialize)]
+        struct CodeRow {
+            asset_code: String,
+        }
+
+        // A code carried by several assets whose holder counts differ — the only
+        // shape where ordering is observable at all. Probed from the corpus so
+        // this runs anywhere populated, not just against production.
+        let probe = ch
+            .query(
+                "SELECT toString(a.asset_code) AS asset_code \
+                 FROM assets a FINAL \
+                 LEFT JOIN balance_aggregates b ON b.asset_id = a.id \
+                 WHERE length(a.asset_code) > 0 \
+                 GROUP BY a.asset_code \
+                 HAVING count() > 1 \
+                    AND max(coalesce(b.holder_count, 0)) > min(coalesce(b.holder_count, 0)) \
+                 ORDER BY max(b.holder_count) DESC \
+                 LIMIT 1",
+            )
+            .fetch_optional::<CodeRow>()
+            .await
+            .expect("corpus probe must run");
+        let Some(CodeRow { asset_code: code }) = probe else {
+            eprintln!("no shared asset code with differing holder counts — skipping");
+            return;
+        };
+
+        #[derive(Debug, Row, Deserialize)]
+        struct RankedRow {
+            asset_type: i16,
+            asset_code: Option<String>,
+            contract_strkey: Option<String>,
+            issuer_id: i64,
+            holder_count: Option<i32>,
+        }
+
+        // Every asset tied for the top holder count, not just one: two assets on
+        // the same count leave the read path free to return either, and an
+        // equality assertion would flake on a corpus small enough for a tie.
+        let ranked = ch
+            .query(
+                "SELECT a.asset_type AS asset_type, \
+                        nullIf(a.asset_code, '') AS asset_code, \
+                        nullIf(sc.contract_id, '') AS contract_strkey, \
+                        a.issuer_id AS issuer_id, \
+                        b.holder_count AS holder_count \
+                 FROM assets a FINAL \
+                 LEFT JOIN ( \
+                     SELECT id, any(contract_id) AS contract_id \
+                     FROM soroban_contracts GROUP BY id \
+                 ) sc ON sc.id = a.contract_id \
+                 LEFT JOIN balance_aggregates b ON b.asset_id = a.id \
+                 WHERE lower(toString(a.asset_code)) = lower(?) \
+                 ORDER BY b.holder_count DESC NULLS LAST \
+                 LIMIT 16",
+            )
+            .bind(&code)
+            .fetch_all::<RankedRow>()
+            .await
+            .expect("expected-winner query must run");
+        let best = ranked
+            .first()
+            .unwrap_or_else(|| panic!("no asset row for probed code {code:?}"))
+            .holder_count;
+        let winners: Vec<&RankedRow> = ranked
+            .iter()
+            .take_while(|r| r.holder_count == best)
+            .collect();
+
+        // Issuers resolved the same two-step way the read path resolves them —
+        // an id seek, never a bare `accounts` join (the Code 241 trap).
+        let ids: BTreeSet<i64> = winners
+            .iter()
+            .map(|r| r.issuer_id)
+            .filter(|&i| i != 0)
+            .collect();
+        let issuers: HashMap<i64, String> = if ids.is_empty() {
+            HashMap::new()
+        } else {
+            let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            ch.query(&format!(
+                "SELECT id AS id, account_id AS account_id \
+                 FROM accounts WHERE id IN ({in_list}) LIMIT 1 BY id"
+            ))
+            .fetch_all::<IssuerRow>()
+            .await
+            .expect("issuer resolve must run")
+            .into_iter()
+            .map(|r| (r.id, r.account_id))
+            .collect()
+        };
+        let expected: Vec<Option<String>> = winners
+            .iter()
+            .map(|r| {
+                asset_route_token(
+                    r.contract_strkey.as_deref(),
+                    r.asset_code.as_deref(),
+                    issuers.get(&r.issuer_id).map(String::as_str),
+                    r.asset_type,
+                )
+            })
+            .collect();
+
+        let hits = fetch_search(
+            &ch,
+            &code,
+            &classifier::classify(&code),
+            &IncludeFlags::all(),
+            1,
+        )
+        .await
+        .expect("search decodes");
+        let top = hits
+            .iter()
+            .find(|(bucket, _)| bucket == "asset")
+            .map(|(_, hit)| hit)
+            .unwrap_or_else(|| panic!("no asset hit for {code:?}"));
+
+        assert!(
+            expected.contains(&top.route_token),
+            "top asset for {code:?} is {:?}, not one of the {best:?}-holder assets \
+             {expected:?} — ranking regressed",
+            top.route_token,
+        );
     }
 }

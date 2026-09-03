@@ -104,6 +104,15 @@ USDC is row 1 with a 200× holder lead over row 2.
 Deliberately **not** ranking by supply: supply is the field the impostors
 inflate (30 quadrillion, one holder). Holders cost real trustlines.
 
+**DONE.** Shipped with a live-CH smoke (`asset_bucket_ranks_the_most_held_issuer_first`,
+skips without `CH_URL` like its neighbours). The test was checked in both
+directions against a seeded local ClickHouse: it fails without the `ORDER BY` and
+passes with it. That check mattered — the first seed had the winner first in
+scan order anyway, so the test passed either way and proved nothing until the
+fixture was rebuilt to put the winner LAST in the table's sort key. The fixture
+also pins key 1 independently: `XTEST` carries more holders than `TEST` and still
+must lose to it on an exact-code search. Cost measured, not assumed — see Notes.
+
 ### Step 2 — classify `CODE:ISSUER`
 
 Split on the last `:` or `-`; if the right-hand side is a full G-strkey and the
@@ -140,13 +149,36 @@ the highest-holder asset first.
 
 ## Notes
 
+**The join is NOT free — that guess was wrong.** Measured on production, both
+forms back-to-back on the `USDC` needle:
+
+| form          | rows      | read      | ms  |
+| ------------- | --------- | --------- | --- |
+| before        | 845,458   | 25.18 MiB | 91  |
+| with the join | 1,456,830 | 37.75 MiB | 138 |
+
++72% rows, +52% wall clock. `balance_aggregates` is 447k rows and the whole
+table is built into the hash side, since no predicate can prune it before the
+asset scan resolves.
+
+Two alternatives were measured and rejected:
+
+- **Narrowing the right side** to `holder_count > 0` — 354k of 447k rows qualify,
+  so it saves nothing and the extra filter made it _worse_: 144 ms.
+- **Ranking in Rust** (page, then seek `balance_aggregates` by id — the pattern
+  Step 2 already uses for issuers, and the seek itself is cheap at 7 ms) — needs
+  the full match set in memory to rank correctly, and a one-letter needle matches
+  **181,388** assets. Capping the page reintroduces exactly the arbitrary cut
+  this task removes, one order of magnitude higher.
+
+So the cost stands as the price of correctness. Context for whoever revisits it:
+the asset bucket was **already** the slowest of the six, at p50 166 ms / p95
+414 ms over the last week (contract 138, nft 56) — with a 10.3 s outlier that
+nothing in this task explains and that is worth its own look.
+
 Holder count is refreshed by `balance_aggregates_mv` every 2 minutes, so the
 ranking is eventually consistent. That is the right trade — a two-minute-stale
 holder count still separates 691,406 from 0.
-
-The join adds one small-table lookup to a bucket that already does a `FINAL`
-scan of `assets`; measure before assuming it is free, but 146k rows against a
-1:1 aggregate is not the expensive half of this query.
 
 Adjacent, not covered here: [0370](../archive/) made type-3 assets findable by
 metadata name. This task does not touch name matching — an impostor that copies
