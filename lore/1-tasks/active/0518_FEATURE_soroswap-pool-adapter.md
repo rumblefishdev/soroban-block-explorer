@@ -279,3 +279,24 @@ was DELISTED from the factory's vector but is a real pool with real
 history. Event-append-only discovery is therefore the correct source, and
 the backfill closure check must be **RPC ⊆ ours**, never set-equality. (A
 query_pools-seeded registry silently loses this pool's entire history.)
+
+### Full-runner e2e record (2026-09-03) — third adapter proven end-to-end
+
+Fresh DB from the branch `init.sql` (35 tables) in the local docker CH; the
+RELEASE runner (production write path, all families in one pass) over two
+real slices:
+
+- **Registration slice** 64,030,400–64,030,700 (301 ledgers): the
+  `CCPPPTDW…` registration staged exactly — registry row `pool_kind=1,
+fee_bps=50, pool_type_raw="0"`, `pool_id` equal to the contract payload
+  byte-for-byte, declaration row with the SEPARATE share token and
+  `total_shares=0`, creation reserve row `[0,0]` self-stamped.
+- **Swap slice** 64,164,300–64,167,400 (3,101 ledgers): **36/36
+  (pool, ledger) keys — exact set equality with production events**, per
+  pool 22+12+1+1 with matching first/last ledgers; ONE `plane_id` across
+  all rows (the pool's own surrogate); spot value check against the raw
+  ledger 64,167,385: staged `[145735138754, 25897770547]` equals the
+  entry's `updated` values exactly.
+- Operational note for the deploy-window backfill: the NEWEST 64k S3
+  partition can lag (observed 63,505/64,000 files — the runner skips it
+  with a warn); slices must stay behind the last complete partition.
