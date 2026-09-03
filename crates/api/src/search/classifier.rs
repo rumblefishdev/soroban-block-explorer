@@ -58,7 +58,7 @@ pub fn classify(q: &str) -> Classified {
     // the asset arm then hunted a 60+ character needle through ≤12 character
     // codes (provably empty) and the account arm never fired because the string
     // does not start with `G`. The most specific query returned a blank page
-    // while the vaguest one returned impostors (task 0534).
+    // while the vaguest one returned impostors (task 0485).
     if let Some(pair) = split_code_issuer(q) {
         out.code_issuer = Some(pair);
         return out;

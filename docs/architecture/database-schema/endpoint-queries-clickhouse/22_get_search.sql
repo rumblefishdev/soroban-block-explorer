@@ -126,25 +126,17 @@ LIMIT :per_group_limit;
 -- Step 1: page matching assets (small state table, FINAL). Join the SMALLER
 -- soroban_contracts in-statement for the contract StrKey; do NOT join accounts.
 --
--- The ORDER BY is required, not cosmetic (task 0534). An asset code is not
--- unique — 468 assets on mainnet carry one containing "USDC" — so an unordered
--- LIMIT cut ten arbitrary rows in scan order and Circle's 691k-holder USDC was
--- absent from its own search. Rank exact-code matches first, then holder_count;
--- NOT total_supply, which an impostor inflates for free (a USDT0 clone claims
--- 30 quadrillion with one holder) while holders cost real trustlines.
--- NULLS LAST is load-bearing: ClickHouse orders NULL FIRST under DESC, so a
--- join miss (no holders) would otherwise take the top of the page.
+-- NOTE: this arm still has no ORDER BY, so the LIMIT cuts ClickHouse scan order
+-- and an asset code is not unique (468 mainnet assets carry one containing
+-- "USDC"). Relevance ranking for this bucket is task 0485.
 SELECT a.asset_type,
        nullIf(a.asset_code, '')   AS asset_code,
        nullIf(sc.contract_id, '') AS contract_strkey,
        a.issuer_id
 FROM assets a FINAL
 LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
-LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id
 WHERE (length(a.asset_code) > 0 AND positionCaseInsensitive(toString(a.asset_code), :q) > 0)
    OR (a.asset_type = 0 AND (lower(:q) = 'xlm' OR lower(:q) = 'native'))
-ORDER BY (lower(toString(a.asset_code)) = lower(:q)) DESC,
-         bagg.holder_count DESC NULLS LAST
 LIMIT :per_group_limit;
 -- Step 2: resolve the page's issuer surrogates → G-StrKey (bloom-pruned seek).
 SELECT id, account_id FROM accounts WHERE id IN (:page_issuer_ids) LIMIT 1 BY id;
@@ -153,8 +145,8 @@ SELECT id, account_id FROM accounts WHERE id IN (:page_issuer_ids) LIMIT 1 BY id
 
 -- ── asset bucket, code_issuer mode (CODE:ISSUER / CODE-ISSUER) ───────────────
 -- A fully-qualified asset names exactly one row, so this arm is an equality
--- lookup: no ranking, and no balance_aggregates join — the most precise query
--- is also the cheapest. The classifier only sets this mode when the issuer
+-- lookup and needs no ranking — whatever ordering 0485 adds to the substring
+-- arm above does not apply here. The classifier only sets this mode when the issuer
 -- decodes as a CRC-valid G-StrKey, so a typo falls back to the substring arm
 -- above rather than answering with a confidently empty page.
 -- accounts is keyed ORDER BY account_id, making the subquery a point seek and
